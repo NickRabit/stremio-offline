@@ -335,8 +335,10 @@ object Streams {
    * copies, the remote versions and the addon rows together by that rank. The server already
    * puts a local copy first only when the rule uses the viewer's order, so this list does not
    * prepend one. Without a verdict the copies still lead, then the remote versions, then the
-   * addon rows. Size and addon sorts are unchanged. [origins], the item's own versions, stay
-   * ahead of that merge under a rule sort and use the same rank order among themselves.
+   * addon rows. A size sort ranks by size and breaks a tie as local, then remote, then addon,
+   * with [origins] ahead of those three. An addon sort concatenates in that same order.
+   * [origins], the item's own versions, stay ahead of the rule merge and use the same rank
+   * order among themselves.
    *
    * [local] is the copies the caller did not already hand over as [origins], so a file the detail
    * holds and the viewer's library both know is one row of the list, not two.
@@ -377,7 +379,7 @@ object Streams {
       byRule(origins.rows) + byRule(merged)
     }
     else -> arrangeStreams(
-      origins.rows + remote.flatMap { it.streams } + addon + local,
+      origins.rows + local + remote.flatMap { it.streams } + addon,
       StreamFilters(sort = filters.sort),
       preferredLanguage,
       priority,

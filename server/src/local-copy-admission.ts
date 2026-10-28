@@ -43,6 +43,20 @@ export interface ExistingLocalCopyReference {
   actualSize: number;
 }
 
+export type ExistingLocalCopyLookupResult =
+  | { status: "present"; copy: ExistingLocalCopyReference }
+  | { status: "absent" }
+  | { status: "unresolved"; reason: "lookupFailed" | "inspectionIncomplete" };
+
+type PresenceResult =
+  | { status: "present"; copy: PresentCopy }
+  | { status: "absent" }
+  | { status: "unresolved" };
+type PresenceCheckResult =
+  | { status: "present" }
+  | { status: "absent" }
+  | { status: "unresolved" };
+
 export interface ExistingLocalCopyDeps {
   users: () => readonly UserRecord[];
   libraries: () => readonly LibraryRecord[];
@@ -69,6 +83,11 @@ interface PresentCopy extends LocalCopy {
   mtimeMs: number;
 }
 
+const isMissingPathError = (error: unknown): boolean => {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+};
+
 const unknownFact = <T>(): SourceFact<T> => ({ evidence: "unknown" });
 const inspectedFact = <T>(value: T): SourceFact<T> => ({ evidence: "inspected", value });
 
@@ -81,6 +100,7 @@ const unknownFacts = (size: number): SourceEvidenceFactsV1 => ({
   externalSubtitles: unknownFact(),
   bytes: inspectedFact(size),
   durationSeconds: unknownFact(),
+  debridReady: unknownFact(),
   heightPixels: unknownFact(),
   releaseKind: unknownFact(),
   sampleOrTrailer: unknownFact(),
@@ -103,6 +123,7 @@ const inspectedFacts = (
   durationSeconds: info.duration !== undefined && Number.isFinite(info.duration)
     ? inspectedFact(info.duration)
     : unknownFact(),
+  debridReady: unknownFact(),
   heightPixels: (() => {
     const resolution = videoResolutionClass(info.video?.width, info.video?.height);
     return resolution === undefined ? unknownFact() : inspectedFact(resolution);
@@ -162,7 +183,18 @@ export function listedLocalCopyEvidence(
 export async function findAdequateExistingLocalCopy(
   input: ExistingLocalCopyInput,
   deps: ExistingLocalCopyDeps,
-): Promise<ExistingLocalCopyReference | undefined> {
+): Promise<ExistingLocalCopyLookupResult> {
+  try {
+    return await inspectExistingLocalCopy(input, deps);
+  } catch {
+    return { status: "unresolved", reason: "lookupFailed" };
+  }
+}
+
+async function inspectExistingLocalCopy(
+  input: ExistingLocalCopyInput,
+  deps: ExistingLocalCopyDeps,
+): Promise<ExistingLocalCopyLookupResult> {
   const stat = deps.stat ?? statPath;
   const resolve = deps.resolveLibraryPath ?? resolveConfiguredLibraryPath;
   const sidecars = deps.subtitleSidecars ?? readSubtitleSidecars;
@@ -179,17 +211,17 @@ export async function findAdequateExistingLocalCopy(
   };
 
   const initialScope = currentScope();
-  if (!initialScope) return undefined;
+  if (!initialScope) return { status: "absent" };
 
   let files: FoundFile[];
   let units: TitleUnit[];
   try {
     [files, units] = await Promise.all([deps.libraryFiles(), deps.libraryUnits()]);
   } catch {
-    return undefined;
+    return { status: "unresolved", reason: "lookupFailed" };
   }
   const afterWalkScope = currentScope();
-  if (!afterWalkScope) return undefined;
+  if (!afterWalkScope) return { status: "unresolved", reason: "lookupFailed" };
 
   const candidates = (libraries: LibraryRecord[], records: Record<string, LibraryMetaRecord>) =>
     localCopies({
@@ -208,85 +240,96 @@ export async function findAdequateExistingLocalCopy(
       && candidates(current.libraries, deps.qualifiedMeta()).some((copy) => copy.key === key);
   };
 
-  const present = async (copy: LocalCopy): Promise<PresentCopy | undefined> => {
+  const present = async (copy: LocalCopy): Promise<PresenceResult> => {
     const scope = currentScope();
-    if (!scope || !scope.libraries.some((library) => library.id === copy.libraryId)) return undefined;
+    if (!scope || !scope.libraries.some((library) => library.id === copy.libraryId)) {
+      return { status: "unresolved" };
+    }
     let resolved: ResolvedPath | undefined;
     try {
       resolved = await resolve(scope.libraries, copy.key);
     } catch {
-      return undefined;
+      return { status: "unresolved" };
     }
-    if (!resolved || resolved.key !== copy.key) return undefined;
+    if (!resolved || resolved.key !== copy.key) return { status: "unresolved" };
     try {
       const info = await stat(resolved.absolute);
-      if (!info.isFile() || info.size <= 0) return undefined;
+      if (!info.isFile() || info.size <= 0) return { status: "absent" };
       return {
-        ...copy,
-        absolute: resolved.absolute,
-        actualSize: info.size,
-        ino: info.ino,
-        dev: info.dev,
-        mtimeMs: info.mtimeMs,
+        status: "present",
+        copy: {
+          ...copy,
+          absolute: resolved.absolute,
+          actualSize: info.size,
+          ino: info.ino,
+          dev: info.dev,
+          mtimeMs: info.mtimeMs,
+        },
       };
-    } catch {
-      return undefined;
+    } catch (error) {
+      return isMissingPathError(error) ? { status: "absent" } : { status: "unresolved" };
     }
   };
 
-  const remainsPresent = async (copy: PresentCopy): Promise<boolean> => {
+  const remainsPresent = async (copy: PresentCopy): Promise<PresenceCheckResult> => {
     let scope = currentScope();
-    if (!scope || !scope.libraries.some((library) => library.id === copy.libraryId)) return false;
-    if (!stillBound(copy.key, scope)) return false;
+    if (!scope || !scope.libraries.some((library) => library.id === copy.libraryId)) {
+      return { status: "unresolved" };
+    }
+    if (!stillBound(copy.key, scope)) return { status: "absent" };
 
     let first: ResolvedPath | undefined;
     try {
       first = await resolve(scope.libraries, copy.key);
     } catch {
-      return false;
+      return { status: "unresolved" };
     }
-    if (!first || first.absolute !== copy.absolute) return false;
+    if (!first || first.absolute !== copy.absolute) return { status: "absent" };
 
     scope = currentScope();
-    if (!scope || !scope.libraries.some((library) => library.id === copy.libraryId)) return false;
-    if (!stillBound(copy.key, scope)) return false;
+    if (!scope || !scope.libraries.some((library) => library.id === copy.libraryId)) {
+      return { status: "unresolved" };
+    }
+    if (!stillBound(copy.key, scope)) return { status: "absent" };
 
     let firstInfo;
     try {
       firstInfo = await stat(first.absolute);
-    } catch {
-      return false;
+    } catch (error) {
+      return isMissingPathError(error) ? { status: "absent" } : { status: "unresolved" };
     }
     if (!firstInfo.isFile()
       || firstInfo.size !== copy.actualSize
       || firstInfo.ino !== copy.ino
       || firstInfo.dev !== copy.dev
-      || firstInfo.mtimeMs !== copy.mtimeMs) return false;
+      || firstInfo.mtimeMs !== copy.mtimeMs) return { status: "absent" };
 
     let finalResolved: ResolvedPath | undefined;
     try {
       finalResolved = await resolve(scope.libraries, copy.key);
     } catch {
-      return false;
+      return { status: "unresolved" };
     }
-    if (!finalResolved || finalResolved.absolute !== copy.absolute) return false;
+    if (!finalResolved || finalResolved.absolute !== copy.absolute) return { status: "absent" };
 
     let finalInfo;
     try {
       finalInfo = await stat(finalResolved.absolute);
-    } catch {
-      return false;
+    } catch (error) {
+      return isMissingPathError(error) ? { status: "absent" } : { status: "unresolved" };
     }
     if (!finalInfo.isFile()
       || finalInfo.size !== copy.actualSize
       || finalInfo.ino !== copy.ino
       || finalInfo.dev !== copy.dev
-      || finalInfo.mtimeMs !== copy.mtimeMs) return false;
+      || finalInfo.mtimeMs !== copy.mtimeMs) return { status: "absent" };
 
     const finalScope = currentScope();
     return finalScope !== undefined
       && finalScope.libraries.some((library) => library.id === copy.libraryId)
-      && stillBound(copy.key, finalScope);
+      && stillBound(copy.key, finalScope)
+      ? { status: "present" as const }
+      : { status: "unresolved" as const };
   };
 
   const currentExternalSubtitles = async (
@@ -296,8 +339,12 @@ export async function findAdequateExistingLocalCopy(
       const adjacent = await sidecars(copy.absolute);
       const present: Array<string | undefined> = [];
       for (const name of adjacent.names) {
-        const info = await stat(path.join(path.dirname(copy.absolute), name));
-        if (info.isFile() && info.size > 0) present.push(sidecarLanguage(name));
+        try {
+          const info = await stat(path.join(path.dirname(copy.absolute), name));
+          if (info.isFile() && info.size > 0) present.push(sidecarLanguage(name));
+        } catch (error) {
+          if (!isMissingPathError(error)) return unknownFact();
+        }
       }
       return inspectedFact(present);
     } catch {
@@ -309,34 +356,47 @@ export async function findAdequateExistingLocalCopy(
     copy: PresentCopy,
     index: number,
     info: MediaInfo,
-  ): Promise<boolean> => {
-    if (!await remainsPresent(copy)) return false;
+  ): Promise<PresenceCheckResult> => {
+    const firstPresence = await remainsPresent(copy);
+    if (firstPresence.status !== "present") return firstPresence;
     let externalSubtitles = await currentExternalSubtitles(copy);
-    if (evaluateSourceCandidate(
+    const firstEvaluation = evaluateSourceCandidate(
       input.sourceAdmission,
       evidenceCandidate(copy, index, inspectedFacts(copy.actualSize, info, externalSubtitles)),
       "existingLocalCopy",
-    ).status !== "eligible") return false;
+    );
+    if (firstEvaluation.status !== "eligible") {
+      // A probed file that still cannot prove a fact never will: it is not an adequate copy.
+      return { status: "absent" };
+    }
 
-    if (!await remainsPresent(copy)) return false;
+    const secondPresence = await remainsPresent(copy);
+    if (secondPresence.status !== "present") return secondPresence;
     externalSubtitles = await currentExternalSubtitles(copy);
-    if (evaluateSourceCandidate(
+    const finalEvaluation = evaluateSourceCandidate(
       input.sourceAdmission,
       evidenceCandidate(copy, index, inspectedFacts(copy.actualSize, info, externalSubtitles)),
       "existingLocalCopy",
-    ).status !== "eligible") return false;
+    );
+    if (finalEvaluation.status !== "eligible") {
+      return { status: "absent" };
+    }
 
     const finalScope = currentScope();
     return finalScope !== undefined
       && finalScope.libraries.some((library) => library.id === copy.libraryId)
-      && stillBound(copy.key, finalScope);
+      && stillBound(copy.key, finalScope)
+      ? { status: "present" }
+      : { status: "unresolved" };
   };
 
   const presentCopies: PresentCopy[] = [];
+  let unresolved = false;
   const initialCandidates = candidates(afterWalkScope.libraries, deps.qualifiedMeta());
   for (const copy of initialCandidates) {
     const found = await present(copy);
-    if (found) presentCopies.push(found);
+    if (found.status === "present") presentCopies.push(found.copy);
+    else if (found.status === "unresolved") unresolved = true;
   }
 
   if (input.sourceAdmission.policy.existingLocalCopy === "any") {
@@ -346,15 +406,26 @@ export async function findAdequateExistingLocalCopy(
         evidenceCandidate(copy, index, unknownFacts(copy.actualSize)),
         "existingLocalCopy",
       );
-      if (evaluation.status === "eligible" && await remainsPresent(copy)) {
-        return { key: copy.key, libraryId: copy.libraryId, actualSize: copy.actualSize };
+      if (evaluation.status === "eligible") {
+        const presence = await remainsPresent(copy);
+        if (presence.status === "present") {
+          return {
+            status: "present",
+            copy: { key: copy.key, libraryId: copy.libraryId, actualSize: copy.actualSize },
+          };
+        }
+        if (presence.status === "unresolved") unresolved = true;
       }
     }
-    return undefined;
+    return unresolved
+      ? { status: "unresolved", reason: "inspectionIncomplete" }
+      : { status: "absent" };
   }
 
   let probed = 0;
   for (const [index, copy] of presentCopies.entries()) {
+    // Past the probe budget, or when a probe cannot read or prove a file, the copy is not
+    // adequate: those are lasting conditions, and deferring on them would never download.
     if (probed >= EXISTING_LOCAL_COPY_PROBE_LIMIT) break;
     probed += 1;
 
@@ -375,20 +446,27 @@ export async function findAdequateExistingLocalCopy(
     );
     if (evaluation.status !== "eligible") continue;
     if (input.sourceAdmission.policy.constraints.subtitles.mode === "required") {
-      if (await remainsAdequateWithRequiredSubtitles(copy, index, info)) {
-        return { key: copy.key, libraryId: copy.libraryId, actualSize: copy.actualSize };
+      const adequate = await remainsAdequateWithRequiredSubtitles(copy, index, info);
+      if (adequate.status === "present") {
+        return {
+          status: "present",
+          copy: { key: copy.key, libraryId: copy.libraryId, actualSize: copy.actualSize },
+        };
       }
-    } else if (await remainsPresent(copy)) {
-      return { key: copy.key, libraryId: copy.libraryId, actualSize: copy.actualSize };
+      if (adequate.status === "unresolved") unresolved = true;
+    } else {
+      const presence = await remainsPresent(copy);
+      if (presence.status === "present") {
+        return {
+          status: "present",
+          copy: { key: copy.key, libraryId: copy.libraryId, actualSize: copy.actualSize },
+        };
+      }
+      if (presence.status === "unresolved") unresolved = true;
     }
   }
 
-  return undefined;
-}
-
-export async function hasAdequateExistingLocalCopy(
-  input: ExistingLocalCopyInput,
-  deps: ExistingLocalCopyDeps,
-): Promise<boolean> {
-  return await findAdequateExistingLocalCopy(input, deps) !== undefined;
+  return unresolved
+    ? { status: "unresolved", reason: "inspectionIncomplete" }
+    : { status: "absent" };
 }

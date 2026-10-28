@@ -894,7 +894,9 @@ private fun EpisodeRow(
     itemsIndexed(detail.files, key = { _, file -> file.path }) { index, file ->
       // The card the actions' DOWN lands on keeps the caller's requester; every other card owns
       // one, so a panel opened from it comes back to exactly that card.
-      val card = if (index == startIndex) focusRequester else cardFocuses.getOrPut(file.path) { FocusRequester() }
+      val card = remember(file.path, startIndex, focusRequester) {
+        if (index == startIndex) focusRequester else cardFocuses.getOrPut(file.path) { FocusRequester() }
+      }
       WideCard(
         label = episodeLabel(file),
         imageUrl = imageUrl(file.wide ?: file.poster),

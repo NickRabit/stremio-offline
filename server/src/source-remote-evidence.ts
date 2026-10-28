@@ -96,6 +96,7 @@ export function remoteSourceEvidence(input: {
       durationSeconds: version.durationTicks === undefined
         ? unknown()
         : { evidence: "providerMetadata", value: version.durationTicks / 10_000_000 },
+      debridReady: unknown(),
       heightPixels: heightPixels === undefined
         ? unknown()
         : { evidence: "providerMetadata", value: heightPixels },

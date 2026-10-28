@@ -5,6 +5,7 @@ package cz.stremiooffline.tv.ui.player
 import androidx.compose.foundation.background
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -61,13 +62,14 @@ class PlayerOverlayTest {
     reclaimFocus: Int = 0,
   ) {
     compose.setContent {
+      val playFocus = remember { FocusRequester() }
       PlayerOverlayShell(
         position = position,
         duration = duration,
         playing = playing,
         title = "It",
         eyebrow = "Direct play",
-        playFocus = FocusRequester(),
+        playFocus = playFocus,
         initiallyShown = initiallyShown,
         showControls = showControls,
         seekKept = seekKept,
@@ -76,7 +78,7 @@ class PlayerOverlayTest {
         onTogglePause = { pauses++ },
         onExit = { exits++ },
       ) {
-        val video = androidx.compose.runtime.remember { FocusRequester() }
+        val video = remember { FocusRequester() }
         Box(
           Modifier
             .fillMaxSize()
@@ -100,13 +102,14 @@ class PlayerOverlayTest {
     playing: Boolean = true,
   ) {
     compose.setContent {
+      val playFocus = remember { FocusRequester() }
       PlayerOverlayShell(
         position = position,
         duration = duration,
         playing = playing,
         title = "It",
         eyebrow = "Direct play",
-        playFocus = FocusRequester(),
+        playFocus = playFocus,
         initiallyShown = true,
         onSeek = { seeks += it },
         onTogglePause = { pauses++ },
@@ -120,13 +123,14 @@ class PlayerOverlayTest {
   /** The OSD up on a video that cannot hold focus, so the remote sits on the Play control. */
   private fun mountWithControlsUp(position: Double = 100.0, duration: Double = 1_000.0) {
     compose.setContent {
+      val playFocus = remember { FocusRequester() }
       PlayerOverlayShell(
         position = position,
         duration = duration,
         playing = true,
         title = "It",
         eyebrow = "Direct play",
-        playFocus = FocusRequester(),
+        playFocus = playFocus,
         initiallyShown = true,
         onSeek = { seeks += it },
         onTogglePause = { pauses++ },

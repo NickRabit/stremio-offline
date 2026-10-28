@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -50,13 +51,14 @@ class PlayerBackTest {
         backEnabled = !playerOpen,
       )
       if (playerOpen) {
+        val playFocus = remember { FocusRequester() }
         PlayerOverlayShell(
           position = 10.0,
           duration = 100.0,
           playing = false,
           title = "It",
           eyebrow = "Direct play",
-          playFocus = FocusRequester(),
+          playFocus = playFocus,
           initiallyShown = true,
           onSeek = {},
           onTogglePause = {},

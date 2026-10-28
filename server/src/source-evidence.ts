@@ -28,6 +28,7 @@ export interface SourceEvidenceFactsV1 {
   readonly externalSubtitles: SourceFact<readonly (string | undefined)[]>;
   readonly bytes: SourceFact<number>;
   readonly durationSeconds: SourceFact<number>;
+  readonly debridReady: SourceFact<boolean>;
   readonly heightPixels: SourceFact<number>;
   readonly releaseKind: SourceFact<ReleaseKind | null>;
   readonly sampleOrTrailer: SourceFact<boolean>;
@@ -365,6 +366,16 @@ export const rankingBytes = (candidate: SourceEvidenceCandidateV1): SourceFact<n
   return typeof hint === "number" && Number.isFinite(hint) && hint >= 0
     ? { evidence: "listed", value: hint }
     : { evidence: "unknown" };
+};
+
+export const compareDebridReady = (
+  left: SourceEvidenceCandidateV1,
+  right: SourceEvidenceCandidateV1,
+): number => {
+  if (left.sourceKind !== "torrent" || right.sourceKind !== "torrent") return 0;
+  const ready = (candidate: SourceEvidenceCandidateV1): number =>
+    candidate.facts.debridReady.evidence !== "unknown" && candidate.facts.debridReady.value ? 0 : 1;
+  return ready(left) - ready(right);
 };
 
 const compareIdentifiers = (left: string, right: string): number =>

@@ -12,7 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -269,11 +269,11 @@ fun NativeQueuePanel(
   }
 
   if (step == Step.Version) {
-    val context = LocalContext.current
+    val resources = LocalResources.current
     val labels = nativeVersionLabels(copyable, stringResource(R.string.tv_version)) { number ->
       // The catalogue's own text keeps the placeholder a string, so the number is handed over
       // as one.
-      context.getString(R.string.media_server_version_number, number.toString())
+      resources.getString(R.string.media_server_version_number, number.toString())
     }
     SidePanel(
       title = stringResource(R.string.media_server_versions),

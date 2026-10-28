@@ -78,12 +78,14 @@ const stream = (
 const candidate = (
   item: StreamItem,
   providerKey = "addon:one",
+  debridReady?: (infoHash: string) => boolean,
 ): SourceEvidenceCandidateV1 => {
   const value = listedAddonSourceEvidence({
     providerKey,
     stream: item,
     providerResponseIndex: 0,
     available: true,
+    ...(debridReady === undefined ? {} : { debridReady }),
   });
   assert.ok(value);
   return value;
@@ -655,6 +657,66 @@ test("torrents open only after an HTTP pool has no verified source and Real-Debr
   }
 });
 
+test("a remembered-ready torrent wins an otherwise equal download tie", async () => {
+  const unreadyHash = "a".repeat(40);
+  const readyHash = "b".repeat(40);
+  const unready = candidate(stream("English 1080p", { infoHash: unreadyHash, fileIdx: 1 }));
+  const remembered = candidate(
+    stream("English 1080p", { infoHash: readyHash, fileIdx: 1 }),
+    "addon:one",
+    (hash) => hash === readyHash,
+  );
+  assert.deepEqual(remembered.facts.debridReady, { evidence: "listed", value: true });
+  assert.deepEqual(unready.facts.debridReady, { evidence: "unknown" });
+
+  const result = await verifyRulesCandidates({
+    snapshot: snapshot({
+      torrents: true,
+      resolution: { min: 720, max: 1080 },
+      preference: ["resolutionHigher"],
+    }),
+    candidates: [unready, remembered],
+    inspect: async () => {
+      throw new Error("a torrent is chosen from its listing");
+    },
+    shouldContinue: () => true,
+    scopeStamp: "ready-tie",
+    hasRealDebrid: true,
+  });
+
+  assert.equal(result.status, "selected");
+  if (result.status === "selected") assert.equal(result.selection.candidate.sourceId, remembered.sourceId);
+});
+
+test("remembered readiness does not beat a higher-resolution torrent", async () => {
+  const readyHash = "c".repeat(40);
+  const low = candidate(
+    stream("English 720p", { infoHash: readyHash, fileIdx: 1 }),
+    "addon:one",
+    (hash) => hash === readyHash,
+  );
+  const high = candidate(stream("English 1080p", { infoHash: "d".repeat(40), fileIdx: 1 }));
+  assert.deepEqual(low.facts.debridReady, { evidence: "listed", value: true });
+
+  const result = await verifyRulesCandidates({
+    snapshot: snapshot({
+      torrents: true,
+      resolution: { min: 720, max: 1080 },
+      preference: ["resolutionHigher"],
+    }),
+    candidates: [low, high],
+    inspect: async () => {
+      throw new Error("a torrent is chosen from its listing");
+    },
+    shouldContinue: () => true,
+    scopeStamp: "ready-resolution",
+    hasRealDebrid: true,
+  });
+
+  assert.equal(result.status, "selected");
+  if (result.status === "selected") assert.equal(result.selection.candidate.sourceId, high.sourceId);
+});
+
 test("strict torrents need a listed preferred language and episodes need fileIdx", async () => {
   const unclaimed = stream("1080p", { infoHash: "b".repeat(40), fileIdx: 1 });
   const claimed = stream("English 1080p", { infoHash: "c".repeat(40), fileIdx: 1 });
@@ -715,6 +777,24 @@ test("strict torrents do not treat a blank field filled from the title as a lang
     },
     shouldContinue: () => true,
     scopeStamp: "strict-torrent-title-fallback",
+    hasRealDebrid: true,
+  });
+  assert.equal(result.status, "noMatch");
+});
+
+test("a torrent without a listed resolution is not selected under a resolution range", async () => {
+  const torrent = candidate(stream("English", {
+    infoHash: "f".repeat(40),
+    fileIdx: 1,
+  }));
+  const result = await verifyRulesCandidates({
+    snapshot: snapshot({ torrents: true, resolution: { min: 720, max: 1080 } }),
+    candidates: [torrent],
+    inspect: async () => {
+      throw new Error("a torrent is chosen from its listing");
+    },
+    shouldContinue: () => true,
+    scopeStamp: "unknown-torrent-resolution",
     hasRealDebrid: true,
   });
   assert.equal(result.status, "noMatch");

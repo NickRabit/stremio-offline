@@ -7,7 +7,7 @@ import type { FoundFile } from "./library.js";
 import { libraryPath, type LibraryRecord } from "./libraries.js";
 import { listVideos } from "./library.js";
 import { titleUnits, type LibraryMetaRecord } from "./library-match.js";
-import { findAdequateExistingLocalCopy, hasAdequateExistingLocalCopy } from "./local-copy-admission.js";
+import { findAdequateExistingLocalCopy } from "./local-copy-admission.js";
 import type { MediaInfo } from "./probe.js";
 import { type SourceAdmissionSnapshotV1 } from "./source-admission.js";
 import type { AudioMode, ExistingLocalCopyPolicy, SubtitleMode } from "./source-policy.js";
@@ -132,8 +132,8 @@ const setup = async (type: "movie" | "series" = "movie") => {
     return file;
   };
 
-  const has = (admission: SourceAdmissionSnapshotV1, videoId: string) =>
-    hasAdequateExistingLocalCopy(
+  const has = async (admission: SourceAdmissionSnapshotV1, videoId: string) =>
+    await findAdequateExistingLocalCopy(
       { ownerUserId: OWNER_ID, type, videoId, sourceAdmission: admission },
       {
         users: () => state.users,
@@ -147,7 +147,7 @@ const setup = async (type: "movie" | "series" = "movie") => {
           return state.probeInfo;
         },
       },
-    );
+    ).then((result) => result.status === "present");
   const find = (admission: SourceAdmissionSnapshotV1, videoId: string) =>
     findAdequateExistingLocalCopy(
       { ownerUserId: OWNER_ID, type, videoId, sourceAdmission: admission },
@@ -204,9 +204,12 @@ test("an adequate local copy returns its qualified key, library and actual size"
     await harness.write("Show/S01E01.mkv", 1234);
     bindSeries(harness);
     assert.deepEqual(await harness.find(snapshot({ existingLocalCopy: "any" }), "tt1:1:1"), {
-      key: libraryPath(LIBRARY_ID, "Show/S01E01.mkv"),
-      libraryId: LIBRARY_ID,
-      actualSize: 1234,
+      status: "present",
+      copy: {
+        key: libraryPath(LIBRARY_ID, "Show/S01E01.mkv"),
+        libraryId: LIBRARY_ID,
+        actualSize: 1234,
+      },
     });
     assert.deepEqual(harness.probeCalls, []);
   } finally {
@@ -319,7 +322,7 @@ test("a required sidecar is checked as a file again after the video revalidation
     await unlink(sidecar);
     releaseFinalRead.release();
 
-    assert.equal(await result, undefined);
+    assert.equal((await result).status, "absent");
     assert.equal(probes, 1);
   } finally {
     await harness.cleanup();
@@ -333,10 +336,38 @@ test("failed probes and unknown required facts do not establish adequacy", async
     bindSeries(harness);
     harness.state.probeInfo = undefined;
     assert.equal(await harness.has(snapshot({ height: 480 }), "tt1:1:1"), false);
+    assert.equal((await harness.find(snapshot({ height: 480 }), "tt1:1:1")).status, "absent");
 
     harness.state.probeInfo = videoInfo();
     harness.state.probeInfo.video = { codec: "h264" };
     assert.equal(await harness.has(snapshot({ height: 480 }), "tt1:1:1"), false);
+    assert.equal((await harness.find(snapshot({ height: 480 }), "tt1:1:1")).status, "absent");
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("a failed library walk is unresolved rather than proof that no copy exists", async () => {
+  const harness = await setup();
+  try {
+    const result = await findAdequateExistingLocalCopy(
+      {
+        ownerUserId: OWNER_ID,
+        type: "movie",
+        videoId: "tt1",
+        sourceAdmission: snapshot(),
+      },
+      {
+        users: () => harness.state.users,
+        libraries: () => harness.state.libraries,
+        libraryFiles: async () => { throw new Error("library offline"); },
+        libraryUnits: async () => [],
+        qualifiedMeta: () => harness.state.records,
+        mayDownloadToLibrary: (user) => user.role === "admin" || user.permissions.downloadToLibrary,
+        probe: async () => videoInfo(),
+      },
+    );
+    assert.deepEqual(result, { status: "unresolved", reason: "lookupFailed" });
   } finally {
     await harness.cleanup();
   }
@@ -426,7 +457,7 @@ test("revocation or deletion during a deferred probe prevents a skip", async () 
     while (!probing) await new Promise((resolve) => setTimeout(resolve, 5));
     revoked.state.users[0]!.disabled = true;
     release.release();
-    assert.equal(await result, undefined);
+    assert.equal((await result).status, "unresolved");
   } finally {
     await revoked.cleanup();
   }
@@ -438,7 +469,7 @@ test("revocation or deletion during a deferred probe prevents a skip", async () 
     const entered = deferred();
     const release = deferred();
     let probing = false;
-    const result = hasAdequateExistingLocalCopy(
+    const result = findAdequateExistingLocalCopy(
       { ownerUserId: OWNER_ID, type: "series", videoId: "tt1:1:1", sourceAdmission: snapshot({ height: 480 }) },
       {
         users: () => deleted.state.users,
@@ -458,7 +489,7 @@ test("revocation or deletion during a deferred probe prevents a skip", async () 
     while (!probing) await new Promise((resolve) => setTimeout(resolve, 5));
     await unlink(file);
     release.release();
-    assert.equal(await result, false);
+    assert.equal((await result).status, "absent");
   } finally {
     await deleted.cleanup();
   }
@@ -494,7 +525,7 @@ test("a same-size replacement during a deferred probe is not adequate", async ()
     const replacementStat = await stat(file);
     assert.notEqual(replacementStat.ino, originalStat.ino);
     release.release();
-    assert.equal(await result, undefined);
+    assert.equal((await result).status, "absent");
   } finally {
     release.release();
     await harness.cleanup();

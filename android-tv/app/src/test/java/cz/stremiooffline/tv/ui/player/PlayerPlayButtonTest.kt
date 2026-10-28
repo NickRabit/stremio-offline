@@ -2,6 +2,7 @@
 
 package cz.stremiooffline.tv.ui.player
 
+import androidx.compose.runtime.remember
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -25,6 +26,7 @@ class PlayerPlayButtonTest {
 
   private fun mount(playing: Boolean, pauseShown: Boolean) {
     compose.setContent {
+      val playFocus = remember { FocusRequester() }
       PlayerOverlayShell(
         position = 0.0,
         duration = 100.0,
@@ -35,7 +37,7 @@ class PlayerPlayButtonTest {
         onExit = {},
         title = "It",
         eyebrow = "",
-        playFocus = FocusRequester(),
+        playFocus = playFocus,
         onTracks = {},
         tracksText = "CZ",
         tracksLabel = "Audio and subtitles",

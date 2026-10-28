@@ -34,6 +34,7 @@ export interface SelectProviderPriorityDownloadInput {
   readonly tried: readonly string[];
   readonly episode: boolean;
   readonly hasRealDebrid: boolean;
+  readonly debridReady?: (infoHash: string) => boolean;
   readonly inspect: (stream: StreamItem) => Promise<MediaInfo | undefined>;
   readonly shouldContinue: () => boolean;
 }
@@ -146,6 +147,7 @@ export async function selectProviderPriorityDownloadSource(
       available: true,
       ...(input.titleLanguage === undefined ? {} : { titleLanguage: input.titleLanguage }),
       externalSubtitles: input.externalSubtitles,
+      ...(input.debridReady === undefined ? {} : { debridReady: input.debridReady }),
     });
     if (!candidate) continue;
 

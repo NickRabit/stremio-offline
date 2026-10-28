@@ -18,6 +18,10 @@
   <string name="tv_server_address">Server address</string>
   <string name="tv_server_found">Stremio Offline %1$s</string>
   <string name="tv_signin_note">Accounts and the first administrator are set up in the web interface. The password is never stored on the television.</string>
+  <string name="tv_local_network_title">Local network access</string>
+  <string name="tv_local_network_text">Stremio Offline needs local network access to connect to your server and play media.</string>
+  <string name="tv_local_network_denied">Local network access is off. Allow Stremio Offline in system settings, then try again.</string>
+  <string name="tv_local_network_allow">Allow access</string>
   <string name="tv_err_unreachable">The server is not answering. Check the address and that the server is running.</string>
   <string name="tv_err_incompatible">This address answers, but it is not a Stremio Offline server.</string>
   <string name="tv_err_bad_credentials">Wrong username or password.</string>

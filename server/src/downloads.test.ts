@@ -1195,6 +1195,78 @@ test("a torrent waits on Real-Debrid then downloads over HTTP without taking a s
   }
 });
 
+test("a torrent downloaded on its first status read is remembered", async () => {
+  const payload = Buffer.alloc(16 * 1024, 7);
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+    res.end(payload);
+  });
+  const remembered: string[] = [];
+  const { directory, queue } = await tempQueue({
+    rememberDebridReady: (infoHash) => { remembered.push(infoHash); },
+    debrid: {
+      configured: () => true,
+      advance: async (input) => {
+        await input.onFirstStatus?.("downloaded");
+        return {
+          ready: true,
+          torrentId: "rd1",
+          url: `http://127.0.0.1:${port}/movie.mp4`,
+          filename: "Movie.mkv",
+        };
+      },
+    },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await waitFor(queue, () => queue.list()[0]?.status === "completed");
+    assert.deepEqual(remembered, [HASH]);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a torrent that reported downloading is not remembered when it later becomes ready", async () => {
+  const payload = Buffer.alloc(16 * 1024, 8);
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+    res.end(payload);
+  });
+  const remembered: string[] = [];
+  let ready = false;
+  const { directory, queue } = await tempQueue({
+    debridPollMs: 20,
+    rememberDebridReady: (infoHash) => { remembered.push(infoHash); },
+    debrid: {
+      configured: () => true,
+      advance: async (input) => {
+        await input.onFirstStatus?.(ready ? "downloaded" : "downloading");
+        return ready
+          ? {
+            ready: true,
+            torrentId: "rd1",
+            url: `http://127.0.0.1:${port}/movie.mp4`,
+            filename: "Movie.mkv",
+          }
+          : { ready: false, torrentId: "rd1", progress: 10, status: "downloading" };
+      },
+    },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await waitFor(queue, () => queue.get(queue.list()[0]!.id)?.debridProgress === 10);
+    ready = true;
+    await waitFor(queue, () => queue.list()[0]?.status === "completed");
+    assert.deepEqual(remembered, []);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("the same infoHash is not queued twice", async () => {
   const { directory, queue } = await tempQueue({
     debrid: { configured: () => true, advance: async () => ({ ready: false, torrentId: "rd1", progress: 1, status: "queued" }) },
@@ -2006,6 +2078,8 @@ test("a job's follow survives a save and a load", async () => {
   const { directory, queue } = await tempQueue();
   try {
     const job = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "u1", { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
+    assert.equal(job?.outcome, "queued");
+    assert.ok(job && job.outcome === "queued");
     await queue.stop();
     const downloads = path.join(directory, "downloads");
     const reopened = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
@@ -2014,7 +2088,7 @@ test("a job's follow survives a save and a load", async () => {
     });
     await reopened.load();
     try {
-      assert.deepEqual(reopened.get(job!.id)?.follow, { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
+      assert.deepEqual(reopened.get(job.job.id)?.follow, { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
     } finally {
       await reopened.stop();
     }
@@ -2535,11 +2609,14 @@ test("a queued profile job completes by reference from a copy that appeared afte
   const { directory, queue, downloads } = await tempQueue({
     existingLocalCopy: async () => {
       admissionLookups += 1;
-      return false;
+      return { status: "absent" };
     },
     existingLocalCopyForQueue: async (input) => {
       queueAdmissions.push(input);
-      return { key: relative, libraryId: LIBRARY_ID, actualSize: 321 };
+      return {
+        status: "present",
+        copy: { key: relative, libraryId: LIBRARY_ID, actualSize: 321 },
+      };
     },
   });
   const existing = queuedFile(downloads, relative);
@@ -2565,9 +2642,10 @@ test("a queued profile job completes by reference from a copy that appeared afte
       follow,
       queueAdmission(),
     );
-    assert.ok(queued);
-    await waitFor(queue, () => queue.get(queued.id)?.status === "completed");
-    const job = queue.get(queued.id)!;
+    assert.ok(queued && queued.outcome === "queued");
+    const queuedId = queued.job.id;
+    await waitFor(queue, () => queue.get(queuedId)?.status === "completed");
+    const job = queue.get(queuedId)!;
     assert.equal(admissionLookups, 1);
     assert.equal(queueAdmissions[0]?.ownerUserId, "usr_00000001");
     assert.deepEqual(queueAdmissions[0]?.source, { type: "movie", videoId: "tt-existing", tried: [] });
@@ -2609,9 +2687,9 @@ test("a queued profile job completes by reference from a copy that appeared afte
     });
     await reopened.load();
     try {
-      assert.equal(reopened.get(queued.id)?.status, "completed");
-      assert.equal(reopened.get(queued.id)?.reusedLocalCopy, true);
-      assert.equal(reopened.get(queued.id)?.pending, false);
+      assert.equal(reopened.get(queuedId)?.status, "completed");
+      assert.equal(reopened.get(queuedId)?.reusedLocalCopy, true);
+      assert.equal(reopened.get(queuedId)?.pending, false);
       assert.deepEqual(reopened.history(), []);
     } finally {
       await reopened.stop();
@@ -2667,9 +2745,12 @@ test("reuse clears exhausted Travel continuation state instead of failing the qu
     libraries: () => [library],
     defaultLibrary: () => library,
     existingLocalCopyForQueue: async () => ({
-      key: `${LIBRARY_ID}/Film/Existing.mkv`,
-      libraryId: LIBRARY_ID,
-      actualSize: 77,
+      status: "present",
+      copy: {
+        key: `${LIBRARY_ID}/Film/Existing.mkv`,
+        libraryId: LIBRARY_ID,
+        actualSize: 77,
+      },
     }),
   });
   try {
@@ -2716,7 +2797,9 @@ test("a copy revoked while an earlier write is pending is re-proved before reuse
         firstProofEntered.release();
         await releaseFirstProof.promise;
       }
-      return copyPresent ? { key: relative, libraryId: LIBRARY_ID, actualSize: 41 } : undefined;
+      return copyPresent
+        ? { status: "present", copy: { key: relative, libraryId: LIBRARY_ID, actualSize: 41 } }
+        : { status: "absent" };
     },
   });
   const existing = queuedFile(downloads, relative);
@@ -2773,7 +2856,10 @@ test("a cancellation during the queued local-copy lookup prevents reuse completi
     existingLocalCopyForQueue: async () => {
       entered.release();
       await release.promise;
-      return { key: relative, libraryId: LIBRARY_ID, actualSize: 16 };
+      return {
+        status: "present",
+        copy: { key: relative, libraryId: LIBRARY_ID, actualSize: 16 },
+      };
     },
   });
   queue.setResolver(async () => {
@@ -2814,7 +2900,7 @@ test("no queued local-copy proof and a legacy job both keep the normal resolver 
   const { directory, queue } = await tempQueue({
     existingLocalCopyForQueue: async () => {
       lookups += 1;
-      return undefined;
+      return { status: "absent" };
     },
   });
   queue.setTravelResolver(async () => {
@@ -2884,7 +2970,10 @@ test("a failed reuse completion write leaves no completed job in memory", async 
     existingLocalCopyForQueue: async () => {
       entered.release();
       await release.promise;
-      return { key: relative, libraryId: LIBRARY_ID, actualSize: 32 };
+      return {
+        status: "present",
+        copy: { key: relative, libraryId: LIBRARY_ID, actualSize: 32 },
+      };
     },
   });
   try {

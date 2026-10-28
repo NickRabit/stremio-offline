@@ -641,47 +641,64 @@ export function sourceProfilesForViewer(catalogue: SourceProfileCatalogue): Publ
 
   const usableAddons = allowedAddons([...catalogue.addons], viewer)
     .filter((addon) => addon.enabled && addon.role !== "catalog" && declaresStream(addon));
-  const usableAddonKeys = new Set(usableAddons.map((addon) => `addon:${addon.key}`));
-  const hasAddonPath = usableAddons.length > 0;
   const hasLocalPath = visibleLibraries([...catalogue.libraries], viewer)
     .some((library) => library.enabled);
-  const hasRemotePath = catalogue.remoteLibraries
-    .some((library) => remoteLibraryVisibleTo(catalogue.mediaConnections, library, viewer));
+  const usableRemoteKeys = [...catalogue.remoteLibraries]
+    .sort((left, right) => left.order - right.order)
+    .flatMap((library) => remoteLibraryVisibleTo(catalogue.mediaConnections, library, viewer)
+      ? [`remote:${library.id}`]
+      : []);
+
+  const availableProviderKeys = (policy: SourcePolicyV1): string[] => {
+    const kinds = new Set(policy.constraints.sourceKinds);
+    return [
+      ...(kinds.has("localFile") && hasLocalPath ? ["local"] : []),
+      ...(kinds.has("mediaServerOriginal") ? usableRemoteKeys : []),
+      ...(kinds.has("http") || kinds.has("torrent")
+        ? usableAddons.map((addon) => `addon:${addon.key}`)
+        : []),
+    ];
+  };
 
   return catalogue.profiles.flatMap((profile) => {
     const storedPolicy = buildTemplatePolicy(profile.template, profile.parameters);
     let policy = copyPolicy(storedPolicy);
-    let addonPath = hasAddonPath;
+    const available = availableProviderKeys(policy);
+    const selected = policy.scope.mode === "allAvailable"
+      ? available
+      : available.filter((key) => policy.scope.mode === "selected"
+        && policy.scope.providerKeys.includes(key));
+    if (!selected.length) return [];
     if (policy.scope.mode === "selected") {
-      const selected = policy.scope.providerKeys.filter((key) => usableAddonKeys.has(key));
-      if (!selected.length) return [];
-      const selectedSet = new Set(selected);
       policy.scope = { mode: "selected", providerKeys: selected };
-      policy.criteria = policy.criteria.map((criterion) => {
-        if (criterion.kind !== "providerOrder" || !("keys" in criterion)) return criterion;
-        const ordered = criterion.keys.filter((key) => selectedSet.has(key));
-        const seen = new Set(ordered);
-        return { kind: "providerOrder", keys: [...ordered, ...selected.filter((key) => !seen.has(key))] };
-      });
-      addonPath = selected.length > 0;
     }
+    const selectedSet = new Set(selected);
     policy.criteria = policy.criteria.map((criterion) =>
       criterion.kind === "providerOrder" && "keys" in criterion
-        ? { kind: "providerOrder", keys: criterion.keys.filter((key) => usableAddonKeys.has(key)) }
+        ? {
+            kind: "providerOrder",
+            keys: [
+              ...criterion.keys.filter((key) => selectedSet.has(key)),
+              ...selected.filter((key) => !criterion.keys.includes(key)),
+            ],
+          }
         : criterion);
 
-    const kinds = new Set(policy.constraints.sourceKinds);
-    const addonDownloadPath = addonPath && (kinds.has("http") || kinds.has("torrent"));
-    const localPath = policy.scope.mode === "allAvailable" && hasLocalPath && kinds.has("localFile");
-    const remotePath = policy.scope.mode === "allAvailable" && hasRemotePath && kinds.has("mediaServerOriginal");
+    const addonPath = selected.some((key) => key.startsWith("addon:"));
+    const localPath = selected.includes("local");
+    const remotePath = selected.some((key) => key.startsWith("remote:"));
     const playPath = addonPath || localPath || remotePath;
+    const addonDownloadPath = addonPath && isExecutableDownloadProfile(profile);
+    const remoteDownloadPath = remotePath
+      && profile.template === "rules"
+      && isExecutableDownloadProfile(profile);
 
     const operations = OPERATIONS.filter((operation) => {
       if (operation === "play") return playPath;
       if (operation === "downloadToLibrary") {
-        return mayDownloadToLibrary(viewer) && addonDownloadPath && isExecutableDownloadProfile(profile);
+        return mayDownloadToLibrary(viewer) && (addonDownloadPath || remoteDownloadPath);
       }
-      return mayDownloadToDevice(viewer) && (addonDownloadPath || localPath || remotePath);
+      return mayDownloadToDevice(viewer) && (addonPath || localPath || remotePath);
     });
     if (!operations.length) return [];
 

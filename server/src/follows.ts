@@ -5,6 +5,7 @@ import { rulesAudioMode } from "./download-rules.js";
 import type { DownloadSelection } from "./downloads.js";
 import { AppError } from "./errors.js";
 import { renameWithRetry } from "./fs-retry.js";
+import type { ExistingLocalCopyReference } from "./local-copy-admission.js";
 import { parseLibraryPath, type Viewer } from "./libraries.js";
 import { log } from "./logger.js";
 import type { MediaInfo } from "./naming.js";
@@ -83,6 +84,8 @@ export interface EpisodeDownload {
   graceUntil?: string;
   /** The library key the completed download wrote, remembered when the job finished. */
   target?: string;
+  /** Private identity of the adequate file that marked this episode complete without a job. */
+  localCopy?: ExistingLocalCopyReference;
   /** ISO UTC, set when the file was deleted by retention; the state stays `completed`. */
   removedAt?: string;
   removedReason?: "retention";
@@ -1027,7 +1030,13 @@ export interface FollowQueue {
     ownerUserId: string,
     follow: { followId: string; episodeKey: string; intent: string },
     sourceAdmission?: SourceAdmissionSnapshotV1,
-  ): Promise<{ id: string } | undefined>;
+  ): Promise<
+    | { outcome: "queued"; job: { id: string } }
+    | { outcome: "presentLocally"; copy: ExistingLocalCopyReference }
+    | { outcome: "unresolved" }
+    | { id: string }
+    | undefined
+  >;
   findActiveEpisode(ownerUserId: string, type: string, videoId: string): { id: string } | undefined;
   adopt(id: string, follow: { followId: string; episodeKey: string; intent: string }): Promise<void>;
   followJobs(): FollowJob[];
@@ -1418,7 +1427,7 @@ export class FollowService {
     const jobAdmission = sourceAdmission === undefined
       ? undefined
       : effectiveRulesAdmission(sourceAdmission, episode, this.deps.now(), sourceGraceDays);
-    const job = await this.deps.queue.addPending(
+    const added = await this.deps.queue.addPending(
       this.jobTitle(follow, episode),
       { type: follow.type, videoId: episode.videoId, selection },
       this.episodeMedia(follow, episode),
@@ -1428,6 +1437,30 @@ export class FollowService {
     );
     follow = this.admittable(followId, revision);
     if (!follow) return;
+    const outcome = added
+      ? "outcome" in added
+        ? added
+        : { outcome: "queued" as const, job: added }
+      : undefined;
+    if (outcome?.outcome === "presentLocally") {
+      await this.setDownload(followId, episodeKey, {
+        state: "completed", intent, generation, attempts: 0, localCopy: outcome.copy,
+        reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, ...frozen, updatedAt: "",
+      });
+      return;
+    }
+    if (outcome?.outcome === "unresolved") {
+      const scheduled = Date.parse(follow.nextCheckAt);
+      const nextAttemptAt = Number.isFinite(scheduled) && scheduled > this.deps.now()
+        ? follow.nextCheckAt
+        : new Date(this.deps.now() + FIRST_FAILURE_MS).toISOString();
+      await this.setDownload(followId, episodeKey, {
+        state: "waiting", intent, generation, attempts: 0, nextAttemptAt,
+        reasonKey: undefined, reasonVars: undefined, ...frozen, updatedAt: "",
+      });
+      return;
+    }
+    const job = outcome?.outcome === "queued" ? outcome.job : undefined;
     const existing = job ? undefined : this.deps.queue.findActiveEpisode(follow.ownerUserId, follow.type, episode.videoId);
     // The owner had already queued this episode by hand: the job takes this intent, so the
     // reconciliation, its completion and its removal all find it like one the follow queued.

@@ -1,8 +1,5 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-
 plugins {
   alias(libs.plugins.android.application)
-  alias(libs.plugins.kotlin.android)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.kotlin.serialization)
 }
@@ -26,13 +23,13 @@ val hasReleaseKey = listOf(releaseKeystore, releaseStorePassword, releaseKeyAlia
 
 android {
   namespace = "cz.stremiooffline.tv"
-  compileSdk = 35
-  buildToolsVersion = "35.0.0"
+  compileSdk = 37
+  buildToolsVersion = "37.0.0"
 
   defaultConfig {
     applicationId = "cz.stremiooffline.tv"
     minSdk = 24
-    targetSdk = 35
+    targetSdk = 37
     versionCode = sharedVersionCode
     versionName = sharedVersion
   }
@@ -87,15 +84,10 @@ android {
   }
 }
 
-kotlin {
-  compilerOptions {
-    jvmTarget = JvmTarget.JVM_17
-  }
-}
-
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.appcompat)
+  implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.compose.foundation)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)

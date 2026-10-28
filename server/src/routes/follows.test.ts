@@ -716,7 +716,7 @@ test("a rules profile accepts grace only for preferred audio and admits with a s
   }
 });
 
-test("a follow episode view never exposes its admission snapshot", async () => {
+test("a follow episode view never exposes private admission or local-copy identity", async () => {
   const h = await mount();
   try {
     const follow = await (await api(h.base, "/api/follows", {
@@ -737,6 +737,11 @@ test("a follow episode view never exposes its admission snapshot", async () => {
           jobId: "job-1",
           attempts: 0,
           sourceAdmission: snapshot,
+          localCopy: {
+            key: "lib_00000001/Show/S01E01.mkv",
+            libraryId: "lib_00000001",
+            actualSize: 42,
+          },
           updatedAt: "2024-01-01T00:00:00.000Z",
         },
       };
@@ -744,7 +749,9 @@ test("a follow episode view never exposes its admission snapshot", async () => {
 
     const response = await api(h.base, `/api/follows/${follow.id}/episodes`, { as: "A" });
     assert.equal(response.status, 200);
-    assert.doesNotMatch(await response.text(), /sourceAdmission/);
+    const body = await response.text();
+    assert.doesNotMatch(body, /sourceAdmission/);
+    assert.doesNotMatch(body, /localCopy/);
   } finally { await h.close(); }
 });
 
