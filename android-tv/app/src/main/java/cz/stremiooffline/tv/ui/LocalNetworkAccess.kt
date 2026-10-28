@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +36,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.components.BrandMark
@@ -52,11 +56,23 @@ private const val Android17 = 37
 @Composable
 fun LocalNetworkAccessGate(content: @Composable () -> Unit) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   var granted by remember { mutableStateOf(hasLocalNetworkAccess(context)) }
   var denied by remember { mutableStateOf(false) }
   val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
     granted = allowed
     denied = !allowed
+  }
+  DisposableEffect(lifecycleOwner, context) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        val allowed = hasLocalNetworkAccess(context)
+        granted = allowed
+        if (allowed) denied = false
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
   }
 
   fun allow() {
