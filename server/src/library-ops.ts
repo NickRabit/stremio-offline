@@ -100,6 +100,7 @@ export class LibraryOps {
   private pumping = false;
   private saveTail = Promise.resolve();
   private wakeTimer?: ReturnType<typeof setTimeout>;
+  private stopped = false;
   private pumped: Promise<void> = Promise.resolve();
   private notified = new Set<string>();
   /** Jobs whose `finished` hook is under way. They read as still running, so nobody hears
@@ -218,7 +219,7 @@ export class LibraryOps {
   }
 
   private pump() {
-    if (this.pumping) return;
+    if (this.pumping || this.stopped) return;
     this.pumping = true;
     this.pumped = this.run().finally(() => { this.pumping = false; });
     void this.pumped.catch(() => undefined);
@@ -231,6 +232,16 @@ export class LibraryOps {
   async settled() {
     await this.pumped.catch(() => undefined);
     await this.saveTail.catch(() => undefined);
+  }
+
+  /** Stops the queue for good: a paused job no longer wakes up and nothing new is walked.
+   *  `settled()` afterwards covers what was already under way. A paused job re-checks its
+   *  blocker on a timer, so without this a wake can land after `settled()` and write into a
+   *  directory that is being removed. */
+  stop() {
+    this.stopped = true;
+    clearTimeout(this.wakeTimer);
+    this.wakeTimer = undefined;
   }
 
   private async run() {
