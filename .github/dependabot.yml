@@ -1,0 +1,52 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /e2e
+      - /desktop/linux-preview
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      docker-images:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: gradle
+    directory: /android-tv
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      android-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
