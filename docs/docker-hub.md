@@ -21,6 +21,12 @@ right to use.
   VAAPI on compatible Linux hosts.
 - Audio tracks, embedded subtitles and subtitle addons.
 - Persistent downloads with resume support, disk-space handling and save rules.
+- Download rules for seasons and whole shows: resolution, size, audio and
+  subtitle language, chosen when each episode's turn comes.
+- Following series and films, with a release calendar and optional automatic
+  downloads.
+- A personal Home page and one search across addons, libraries and media
+  servers.
 - Multiple local libraries, metadata, artwork, favorites and continue watching.
 - Jellyfin and Emby libraries with local favorites and watch history.
 - Administrator and user accounts with per-user library and addon access.

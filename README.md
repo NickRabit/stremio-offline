@@ -2,22 +2,30 @@
 
 [![CI](https://github.com/NickRabit/stremio-offline/actions/workflows/ci.yml/badge.svg)](https://github.com/NickRabit/stremio-offline/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Image](https://img.shields.io/badge/ghcr.io-stremio--offline-2496ed?logo=docker&logoColor=white)](https://github.com/NickRabit/stremio-offline/pkgs/container/stremio-offline)
+[![Docker Hub](https://img.shields.io/badge/docker%20hub-nickrabit%2Fstremio--offline-2496ed?logo=docker&logoColor=white)](https://hub.docker.com/r/nickrabit/stremio-offline)
+[![GHCR](https://img.shields.io/badge/ghcr.io-stremio--offline-2496ed?logo=github&logoColor=white)](https://github.com/NickRabit/stremio-offline/pkgs/container/stremio-offline)
 
 Self-hosted web client for standard [Stremio](https://www.stremio.com/) addons.
 It reads catalog and stream manifests, aggregates streams and subtitles, plays
 HTTP sources through a compatible HLS layer, and saves direct streams into a
 persistent download queue and a local library.
 
-It runs in four ways:
+The server runs in four ways:
 
 - **Docker**, the primary target — a host that is always on, a Synology NAS in
-  particular — used from a browser on any device on the home network.
+  particular — used from a browser on any device on the home network. The image
+  is on [Docker Hub](https://hub.docker.com/r/nickrabit/stremio-offline) and
+  [GHCR](https://github.com/NickRabit/stremio-offline/pkgs/container/stremio-offline)
+  for amd64 and arm64.
 - **A macOS app** for Apple Silicon, which runs the server on the Mac or opens
   one elsewhere, such as the NAS.
 - **A Windows app** for Windows 10 and 11 (x64), which does the same.
 - **A Linux app** for x64 PCs with glibc 2.35 or newer, distributed as a
   `.deb` and an AppImage, with the same local and remote server modes.
+
+On a television, **an Android TV app** connects to any of them and is driven
+with the remote. Phones and tablets use the browser, which can add the app to
+the Home Screen.
 
 > Unofficial. Not affiliated with Stremio or Smart Code Ltd.
 > The app provides, hosts and searches no content: everything it shows comes
@@ -28,7 +36,13 @@ It runs in four ways:
 
 ## What it does
 
+- **A Home page of your own**: continue watching, new episodes of what you
+  follow, your libraries and rows from addon catalogs. Each account chooses
+  which rows show and in what order.
 - **Catalogs and metadata** from any standard addon manifest, Cinemeta included.
+- **Search everywhere**: one search across addon catalogs, local libraries and
+  Jellyfin or Emby servers, narrowed to films or series, in the browser and on
+  the TV.
 - **Playback that costs what it has to.** Direct play when the browser can
   handle the file, remux when only the container is wrong, a real transcode only
   as a last resort — in hardware when there is some: Intel QuickSync on a NAS,
@@ -40,6 +54,14 @@ It runs in four ways:
   Range, and pauses itself when the disk fills up. Each addon has a rule for
   where its files go, and a single download can be sent to another library or
   folder.
+- **Download rules** for seasons, whole shows and follows: Balanced, Best
+  quality, Smaller files or My language only, which administrators can adjust
+  or copy. The source is chosen when an episode's turn comes, by resolution,
+  size, audio and subtitle language.
+- **Following series and films**: new episodes appear in the Library and on a
+  calendar you can subscribe to, and can download automatically — new
+  releases only, from a chosen episode, or a few episodes ahead of where you
+  are watching.
 - **Saving to a device**: a file goes straight to the phone or laptop you are
   using, through the server, and **Downloads** shows the transfer while it runs.
 - **A local library** of what you downloaded, with artwork, continue watching,
@@ -58,8 +80,12 @@ It runs in four ways:
 - **Accounts, created on first run.** No default password, no anonymous access.
   An administrator adds one per person and decides which libraries and addons
   each of them sees.
-- **Diagnostics in the UI** — grouped errors, a filterable log, and what
-  playback actually failed on.
+- **An Android TV app** for the same server: Home, Catalog, Library, Search
+  everywhere, playback with audio and subtitle choice, and season downloads
+  by download rules, all with the remote.
+- **Statistics and diagnostics** for administrators — traffic per day, what is
+  playing now, recent activity per user, grouped errors, a filterable log, and
+  what playback actually failed on.
 
 Personalized addon URLs that already resolve through a debrid service work.
 A raw torrent needs a Real-Debrid API token in Settings; the app never runs a
@@ -67,19 +93,24 @@ torrent engine. See [Addons and downloads](docs/downloads.md#real-debrid-and-oth
 
 ## Screenshots
 
-| Library | Download queue |
+| Home | Library |
 | --- | --- |
-| ![Downloaded films in the library, with posters and descriptions](docs/images/library.jpg) | ![One film downloading, another waiting in the queue](docs/images/downloads.jpg) |
+| ![Home with continue watching, a row from the library and an addon catalog](docs/images/home.jpg) | ![Downloaded films in the library, with posters and descriptions](docs/images/library.jpg) |
 
-![The player with subtitles from an addon](docs/images/player.jpg)
+| Following with automatic downloads | Download queue |
+| --- | --- |
+| ![Following a series: start a few episodes ahead and pick download rules](docs/images/follow.jpg) | ![One film downloading, another waiting in the queue](docs/images/downloads.jpg) |
+
+![The player with subtitles](docs/images/player.jpg)
 
 <p>
-  <img src="docs/images/mobile-catalog.jpg" alt="The catalog on a phone" width="260">
+  <img src="docs/images/mobile-home.jpg" alt="Home on a phone" width="260">
   <img src="docs/images/mobile-library.jpg" alt="The library on a phone" width="260">
 </p>
 
-The films shown are Blender Foundation open movies (CC BY), served by a small
-local test addon, and public-domain classics. The app ships with no content.
+The films and the series shown are Blender Foundation open movies (CC BY),
+*Pioneer One* (CC BY-SA) and public-domain classics, served by a small local
+test addon from the Internet Archive. The app ships with no content.
 
 ## Quick start
 
@@ -104,6 +135,12 @@ To run a prebuilt image instead of building locally:
 docker compose -f compose.pull.yml pull
 docker compose -f compose.pull.yml up -d
 ```
+
+The same image is published as
+[`nickrabit/stremio-offline`](https://hub.docker.com/r/nickrabit/stremio-offline)
+on Docker Hub, whose page has a self-contained Compose file for a fresh
+directory. Both registries carry `latest`, every release version and every
+commit.
 
 ### On a Synology NAS
 
@@ -181,7 +218,7 @@ on demand, so a catalogue the provider adds later still shows up. See
 | [Phones and tablets](docs/mobile.md) | iPhone, iPad and Android, Home Screen setup, server access |
 | [Playback](docs/playback.md) | Direct play vs. remux vs. transcode, seeking, tracks, subtitles |
 | [Trailers](docs/trailers.md) | Where the trailer comes from, and how secure mode plays it |
-| [Addons and downloads](docs/downloads.md) | Debrid addons, the queue, save rules, saving to a device, config backup |
+| [Addons and downloads](docs/downloads.md) | Debrid addons, the queue, download rules, following series and films, save rules, saving to a device, config backup |
 | [Backing up and restoring](docs/backup.md) | What is in the data folder, what to copy, how to restore |
 | [Libraries](docs/libraries.md) | Several roots, types, artwork per library, splitting the download folder |
 | [Library identification](docs/library-metadata.md) | How folders become titles, the scan, suggestions and Identify |
@@ -193,7 +230,7 @@ on demand, so a catalogue the provider adds later still shows up. See
 | [Installing the Windows app](docs/install-windows.md) | SmartScreen, the notification area, firewall, updating and removing it |
 | [Installing the Linux app](docs/install-linux.md) | .deb or AppImage, VA-API/NVENC or the system's FFmpeg, firewall, updating and removing it |
 | [Installing the Android TV app](docs/install-android-tv.md) | The APK, Obtainium updates, the Downloader app, adb, updating over an older install |
-| [Building and releasing](docs/building.md) | Local builds, GHCR, version tags, macOS, Windows and Linux hosts |
+| [Building and releasing](docs/building.md) | Local builds, GHCR and Docker Hub, version tags, macOS, Windows and Linux hosts |
 | [Licensing](docs/licensing.md) | What each distribution contains, FFmpeg's licence and source |
 | [Testing](docs/testing.md) | What belongs in which test layer, and how to run each |
 | [Roadmap](docs/roadmap.md) | What is done, what is next, what is out of scope |

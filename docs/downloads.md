@@ -139,41 +139,64 @@ Three things are easy to confuse with a state but are not:
 
 ### Seasons and whole shows
 
-Downloading a season or a whole show opens a selection dialog. Choose one or
-more stream addons and arrange them in priority order, then select the required
-audio language and an optional fallback. Subtitles can be disabled, preferred,
-or required, with their own language and fallback.
+**To library** on a single source saves exactly that file. Downloading a season
+or a whole show, or following a title with automatic downloads, does not pick
+files up front: it asks which **download rules** to use and where to save the
+files, and each episode enters the queue as a small job that carries those rules.
+Only when an episode reaches the front does the queue ask the addons for current
+sources and choose one.
 
-Each episode enters the queue as a small rule rather than a preselected URL.
-Only when that episode reaches the front does the queue ask the selected addons
-for current streams and inspect the real audio and text-subtitle tracks. The
-dialog can either respect the selected addon order or ignore that order and
-choose the largest matching file across all enabled sources. Either way, a
-source whose own name or title already names the wanted audio language is
-checked before one that does not -- ffprobe is the only way to learn a
-source's real tracks, and that round trip is slow, so a likely match is worth
-trying first even under "largest". A primary-language match anywhere in the
-chosen sources wins over a fallback match; addon order (or, under "largest",
-size) decides between otherwise equivalent matches. Unknown or missing audio
-metadata is not treated as a match, and a source shorter than a minute is
-skipped outright once its duration is known -- almost always a sample, a
-trailer, or a fake.
+### Download rules
 
-Optional subtitles never displace a source with the preferred audio. When only
-fallback audio is available, a matching embedded subtitle track is preferred
-over a source without subtitles. Required
-subtitles make the queue try another source when neither a usable embedded
-track nor an external subtitle from an addon is available. External SRT and
-WebVTT subtitles are saved as a language-tagged `.vtt` sidecar next to the
-video. The queue shows the resolved languages and whether a fallback was used.
+Download rules describe which source counts as a good one. Four are ready on a
+new server:
 
-A dead link -- an expired debrid cache entry, a torrent with no seeders -- is
-ruled out with a one-byte range request before ffprobe is ever started, and a
-source ffprobe can reach but not open (refused, timed out, a 4xx/5xx) skips
-the slower deep probe instead of retrying it. Resolving one episode also gives
-up after checking 15 candidates rather than working through an addon's whole
-list, so an obscure title with mostly dead or wrong-language sources still
-fails in bounded time instead of stalling the queue.
+| Rules | Resolution | Audio | Size limit |
+| --- | --- | --- | --- |
+| **Balanced** | 720p–1080p | prefer my language | ~4 GB per episode, ~15 GB per film |
+| **Best quality** | 1080p–2160p | prefer my language | none |
+| **Smaller files** | 480p–720p | prefer my language | ~1.5 GB per episode, ~5 GB per film |
+| **My language only** | 720p–1080p | my language only | ~4 GB per episode, ~15 GB per film |
+
+"My language" is the audio language in each person's own settings, so one set of
+rules serves everyone. All four skip cinema copies (CAM, TS) and use the addons
+each person may use, in that person's addon order.
+
+Administrators adjust, duplicate, add and delete rules in **Settings → Download
+rules**. One set of rules holds:
+
+- **Sources** -- all allowed addons or only selected ones, each person's addon
+  order or a fixed one, and whether torrents may go through Real-Debrid.
+- **Quality and size** -- a resolution range and an approximate size range per
+  episode and per film. Resolution is compared as a class, so a 1920x800 film
+  counts as 1080p. Size is judged on the size an addon lists: a known size
+  outside the range rules the source out, an unknown size does not.
+- **Language** -- audio in any language, preferred or only, either "my
+  language" or a chosen one, with an optional fallback language; subtitles off,
+  when available or required, in "my language" or a chosen one.
+- **What to prefer** -- the order in which the remaining sources are compared:
+  my language, higher or lower resolution, smaller or larger file, addon order.
+
+A change applies to downloads and follows saved afterwards; jobs already in the
+queue keep the rules they were admitted with. Everyone picks from the rules the
+administrator offers, and the download dialog can remember the choice as the
+default for manual downloads or for follows.
+
+When an episode's turn comes, sources that break the rules are dropped and the
+rest are ranked by the preference order. Only probing a file with ffprobe tells
+its real audio and subtitle tracks, and that is slow, so a source whose name
+already promises the wanted language is checked first. A dead link -- an
+expired debrid cache entry, a torrent with no seeders -- is ruled out with a
+one-byte range request before ffprobe starts, and resolving one episode stops
+after inspecting 15 candidates, so an obscure title with mostly dead or
+wrong-language sources fails in bounded time instead of stalling the queue.
+
+Unknown or missing audio metadata never counts as a language match. A fallback
+language is used only when no source has the preferred one. Required subtitles
+make the queue try another source when neither an embedded track nor an
+external subtitle from an addon is available. External SRT and WebVTT subtitles
+are saved as a language-tagged `.vtt` sidecar next to the video. The queue shows
+the resolved languages and whether a fallback was used.
 
 ### Following series and films
 
@@ -205,19 +228,19 @@ A film's date is its **digital release** (when sources usually appear); a film
 only in cinemas waits until one is announced.
 
 The follow dialog pauses a title, checks it now (once a minute at most) and
-switches **automatic downloads** on or off. For a series the setup is the
-season dialog above, with addon priority as the default and one more choice:
-start with episodes released from now on, or from a chosen episode, with a
-count of what would download straight away. The library is pinned when you
-save, so a later change to an addon's rule does not move the title.
+switches **automatic downloads** on or off. Automatic downloads use
+[download rules](#download-rules) like a season download, plus a choice of where
+to start, with a count of what would download straight away. The library is
+pinned when you save, so a later change to an addon's storage rule does not
+move the title.
 
 - **Start**: episodes released from now on, from a chosen episode, or **N
   episodes ahead of where you are watching** -- the next N episodes after the
   one you last finished are kept downloaded (older seasons included) and the
   window slides as you watch.
-- **Wait for the preferred audio**: for up to 3, 7 or 14 days after release
-  only a source with the preferred audio is taken; when the window closes the
-  episode is tried again with the fallback language too.
+- **Wait for audio in my language** (rules that prefer a language): for up to
+  1, 2, 3, 7 or 14 days after release only a source with that audio is taken;
+  when the window closes the episode is tried again with the rest of the rules.
 - **After watching** (administrators only, off by default): delete the files
   the follow downloaded 1, 7 or 30 days after you watched past them. It never
   deletes anything else, waits while a file is playing, goes through the same
@@ -229,7 +252,7 @@ save, so a later change to an addon's rule does not move the title.
   and it is not tried before its release date.
 - Removing a queued or running automatic job skips that episode for good;
   **Retry** brings it back. Clearing a *failed* job only tidies the queue: the
-  episode keeps waiting. Saving new rules retries waiting episodes at once.
+  episode keeps waiting. Saving the follow again retries waiting episodes at once.
   Deleting a downloaded file does not download it again, and clearing the
   queue history keeps the record.
 - An episode with no release date, or with providers that disagree about it, is
