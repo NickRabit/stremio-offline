@@ -644,9 +644,10 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     // The button queues the row through the destination its own source projects; the arrow beside
     // it is the one that asks, which is the dialog this journey is about.
     await detail.locator(".library-detail-save .split-button-toggle").click();
+    // The arrow opens the rules dialog for this title; the picked source is its first, selected choice.
     const save = page.getByRole("dialog");
-    await expect(save).toBeVisible();
-    await save.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    await expect(save.getByRole("radio", { name: /Vybraný zdroj/ })).toBeChecked();
+    await save.getByRole("button", { name: "Přidat do fronty", exact: true }).click();
     await expect(save).toHaveCount(0);
     expect(copies).toHaveLength(1);
     expect(copies[0]).toMatchObject({ sourceId: "addon-copy-exact", media: { id: "tt1234567", kind: "movie" } });
