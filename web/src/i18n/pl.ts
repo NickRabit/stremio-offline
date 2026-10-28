@@ -615,6 +615,7 @@ export const pl: Catalog = {
   "rules.summary.upToMovie": "do ~{size} GB na film",
   "rules.summaryJoin": "{first} · {second}",
   "rules.sources": "Źródła",
+  "rules.localLibrary": "Biblioteka lokalna (tylko odtwarzanie)",
   "rules.qualitySize": "Jakość i rozmiar",
   "rules.language": "Język",
   "rules.audioAny": "Dowolny język",

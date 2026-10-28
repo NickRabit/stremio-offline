@@ -650,6 +650,7 @@ export const en = {
   "rules.summary.upToMovie": "up to ~{size} GB per film",
   "rules.summaryJoin": "{first} · {second}",
   "rules.sources": "Sources",
+  "rules.localLibrary": "Local library (playback only)",
   "rules.qualitySize": "Quality and size",
   "rules.language": "Language",
   "rules.audioAny": "Any language",

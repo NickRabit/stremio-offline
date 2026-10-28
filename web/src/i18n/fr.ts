@@ -615,6 +615,7 @@ export const fr: Catalog = {
   "rules.summary.upToMovie": "jusqu’à ~{size} Go par film",
   "rules.summaryJoin": "{first} · {second}",
   "rules.sources": "Sources",
+  "rules.localLibrary": "Bibliothèque locale (lecture uniquement)",
   "rules.qualitySize": "Qualité et taille",
   "rules.language": "Langue",
   "rules.audioAny": "N’importe quelle langue",

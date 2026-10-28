@@ -615,6 +615,7 @@ export const ptBR: Catalog = {
   "rules.summary.upToMovie": "até ~{size} GB por filme",
   "rules.summaryJoin": "{first} · {second}",
   "rules.sources": "Fontes",
+  "rules.localLibrary": "Biblioteca local (só reprodução)",
   "rules.qualitySize": "Qualidade e tamanho",
   "rules.language": "Idioma",
   "rules.audioAny": "Qualquer idioma",
