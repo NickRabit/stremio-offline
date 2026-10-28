@@ -2499,6 +2499,12 @@ export function App() {
     if (type === "movie" || type === "series") setPlayingCatalogue({ type, id });
     setPlayerSubject((current) => current ? { ...current, title: `${baseDownloadTitle} · ${episodeLabel(episode)}`, ...(current.key ? { key: `${type}:${id}` } : {}) } : current);
   };
+  const catalogPlaybackTarget = (type: string | undefined, titleId: string, playbackId: string | undefined) => {
+    const anchor = { kind: "catalog" as const, key: `${type || "movie"}:${titleId}` };
+    const catalogue: { type: "movie" | "series"; id: string } | null = type === "movie" || type === "series" ? { type, id: playbackId ?? titleId } : null;
+    const key = `${type ?? "movie"}:${playbackId ?? titleId}`;
+    return { anchor, catalogue, key };
+  };
   /** Remote hand-off: the same library and version, or that episode's own selector. */
   const playNextRemoteEpisode = async (type: string, id: string, current: Stream, episode: Video, nameHint: string | undefined) => {
     const libraryId = current.remoteItem!.libraryId;
@@ -2554,22 +2560,30 @@ export function App() {
     setSelectedVideo(nextCatalogEpisode); setEpisodesOpen(false); setSourcesLoaded(false); setBusy(true);
     followEpisode(type, id, nextCatalogEpisode);
     setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0); pickedRef.current = false;
-    // The new episode's local copies are looked up too; they must not change what is about to
-    // play, and the repick guard on `playerOpen` keeps the playing source in place.
+    // A rule sort chooses from the new episode's local copies and addon rows; other sorts pick
+    // from the addon rows as before and only fill the library list.
     setLocalLoading(true);
-    void api.localStreams(type, id)
-      .then((found) => { if (!stale()) setLocalStreams(found.filter(isLocalStream)); })
+    const localRequest = api.localStreams(type, id).then((found) => found.filter(isLocalStream));
+    void localRequest
+      .then((found) => { if (!stale()) setLocalStreams(found); })
       .catch(() => undefined)
       .finally(() => { if (!stale()) setLocalLoading(false); });
     try {
+      const ruleId = sortRuleId(defaultStreamSort);
       const prefetched = nextEpisodePrefetchRef.current;
-      let { streams: nextStreams, subtitles: nextSubtitles } = prefetched?.id === id
-        ? await prefetched.promise.catch(() => fetchEpisodeSources(type, id))
-        : await fetchEpisodeSources(type, id);
+      const addonRequest = prefetched?.id === id
+        ? prefetched.promise.catch(() => fetchEpisodeSources(type, id))
+        : fetchEpisodeSources(type, id);
+      // Both lookups run side by side; the library one only holds up the pick under a rule.
+      const [addonAnswer, localRows] = await Promise.all([
+        addonRequest,
+        ruleId ? localRequest.catch(() => [] as Stream[]) : Promise.resolve([] as Stream[]),
+      ]);
+      let { streams: nextStreams, subtitles: nextSubtitles } = addonAnswer;
       if (stale()) return false;
       const currentLanguage = playbackPreferences.audioLanguage ?? (currentStream ? streamLanguages(currentStream, metaLanguage)[0] : undefined);
       const preferredLanguage = currentLanguage ?? settings.audioLanguage;
-      let nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort) ?? null;
+      let nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort, localRows) ?? null;
       // A listing comes back without the addon that is playing when its request failed or the
       // provider was busy. Asking that one on its own keeps the viewer with the provider they
       // chose instead of moving a binge to another one, in another language.
@@ -2578,14 +2592,30 @@ export function App() {
         if (stale()) return false;
         if (again.length) {
           nextStreams = [...nextStreams, ...again];
-          nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort) ?? nextStream;
+          nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort, localRows) ?? nextStream;
         }
       }
-      if (currentStream && nextStream && nextStream.addonKey !== currentStream.addonKey) {
+      if (currentStream && nextStream && !isLocalStream(nextStream) && nextStream.addonKey !== currentStream.addonKey) {
         report("INFO", "The addon that was playing has no source for the next episode", { addon: currentStream.addonName, using: nextStream.addonName });
       }
       setSubtitles(nextSubtitles);
       setStreams(nextStreams); setSelectedStream(nextStream); setPendingSources(0); setSourcesLoaded(true);
+      if (nextStream && isLocalStream(nextStream) && nextStream.localPath) {
+        const target = catalogPlaybackTarget(type, selected.id, id);
+        setDetailPlaying(null);
+        setPlayingCatalogue(target.catalogue);
+        void playLocal(
+          `${baseDownloadTitle} · ${episodeLabel(nextCatalogEpisode)}`,
+          nextStream.localPath,
+          selected.poster,
+          true,
+          target.anchor,
+          false,
+          target.catalogue ?? undefined,
+          { key: target.key, panel: true },
+        );
+        return true;
+      }
       return Boolean(nextStream?.playable);
     } catch (error) {
       if (!stale()) { fail(error); setSourcesLoaded(true); }
@@ -2621,11 +2651,9 @@ export function App() {
       return;
     }
     const stream = playback.stream;
-    const anchor = { kind: "catalog" as const, key: `${selected.type || "movie"}:${selected.id}` };
-    const catalogue: { type: "movie" | "series"; id: string } | null = selected.type === "movie" || selected.type === "series" ? { type: selected.type, id: videoId ?? selected.id } : null;
+    const { anchor, catalogue, key } = catalogPlaybackTarget(selected.type, selected.id, videoId);
     // The panel's own title is the subject of every play it starts, local row or not: the header
     // shows it and the progress is written under it for as long as the player stays open.
-    const key = `${selected.type ?? "movie"}:${videoId}`;
     const subject: PlayerSubject = { title: videoTitle, ...(selected.poster ? { poster: selected.poster } : {}), episode: Boolean(selectedVideo), key, panel: true };
     // The panel's own play is never the shared detail's.
     setDetailPlaying(null);

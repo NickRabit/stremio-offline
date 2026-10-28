@@ -157,11 +157,14 @@ export function catalogSourceRows(
 
 /** A rule sort with verdicts chooses like Play; other sorts keep the current provider and
  *  choose its best language and nearest size variant. */
-export function pickNextEpisodeStream(streams: Stream[], current: Stream | null, preferredLanguage: string, priority: Map<string, number>, titleLanguage: string | undefined, sort: StreamOrder): Stream | undefined {
+export function pickNextEpisodeStream(streams: Stream[], current: Stream | null, preferredLanguage: string, priority: Map<string, number>, titleLanguage: string | undefined, sort: StreamOrder, localRows: Stream[] = []): Stream | undefined {
   const ranked = arrangeStreams(streams.filter((stream) => stream.playable), { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
   const ruleId = sortRuleId(sort);
-  if (ruleId && ranked.some((stream) => stream.rules?.[ruleId])) {
-    return pickDefaultStream(catalogSourceRows([], ranked, "", sort, preferredLanguage, priority, titleLanguage), ruleId);
+  if (ruleId) {
+    const local = localRows.filter((stream) => stream.playable);
+    if ([...local, ...ranked].some((stream) => stream.rules?.[ruleId])) {
+      return pickDefaultStream(catalogSourceRows(local, ranked, "", sort, preferredLanguage, priority, titleLanguage), ruleId);
+    }
   }
   const sameAddon = ranked.filter((stream) => Boolean(current) && (
     (current?.addonKey && stream.addonKey === current.addonKey)

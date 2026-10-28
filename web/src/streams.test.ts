@@ -393,6 +393,27 @@ describe("pickNextEpisodeStream", () => {
     expect(pickNextEpisodeStream([breaking], current, "cs", new Map(), undefined, "rule:balanced")).toBeUndefined();
   });
 
+  it("ranks local copies with addon sources when the active rule has verdicts", () => {
+    const current = stream({ addonKey: "same", addonName: "Same" });
+    const local = stream({ name: "local meets", kind: "library", localPath: "lib/next.mkv", rules: { balanced: verdict([0]) } });
+    const addon = stream({ name: "addon meets", addonKey: "same", addonName: "Same", rules: { balanced: verdict([1]) } });
+    expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(local);
+  });
+
+  it("prefers an addon that meets the active rule over a local copy that breaks it", () => {
+    const current = stream({ addonKey: "same", addonName: "Same" });
+    const local = stream({ name: "local breaks", kind: "library", localPath: "lib/next.mkv", rules: { balanced: verdict([0], "breaks") } });
+    const addon = stream({ name: "addon meets", addonKey: "same", addonName: "Same", rules: { balanced: verdict([1]) } });
+    expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(addon);
+  });
+
+  it("ignores local copies when no rule sort is active", () => {
+    const current = stream({ addonKey: "same", addonName: "Same" });
+    const local = stream({ name: "local", kind: "library", localPath: "lib/next.mkv", rules: { balanced: verdict([0]) } });
+    const addon = stream({ name: "addon", addonKey: "same", addonName: "Same", rules: { balanced: verdict([1]) } });
+    expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "recommended", [local])).toBe(addon);
+  });
+
   it("keeps the current addon and nearest size under explicit sorts even when verdicts exist", () => {
     const current = stream({ addonKey: "same", addonName: "Same", title: "3 GB" });
     const close = stream({ name: "close", addonKey: "same", addonName: "Same", title: "3.2 GB", rules: { balanced: verdict([2], "breaks") } });
