@@ -144,6 +144,13 @@ describe("SeriesDownloadDialog", () => {
     expect(host.querySelector('select[aria-label="Wait for audio in English"]')).not.toBeNull();
   });
 
+  it("writes the chosen language in lower case inside a Czech label", async () => {
+    setLocale("cs");
+    setupFetch([english, balanced]);
+    await renderDialog({ follow: { followId: "f1" }, followSourceProfileId: "english" });
+    expect(host.querySelector('select[aria-label="Čekat na zvukovou stopu: angličtina"]')).not.toBeNull();
+  });
+
   it("shows the legacy note and saves the preselected profile", async () => {
     const legacy: FollowAutoDownload = {
       enabledAt: "2024-01-01T00:00:00.000Z", startMode: "new",

@@ -1,5 +1,7 @@
 package cz.stremiooffline.tv.data
 
+import java.text.DecimalFormatSymbols
+import java.util.Locale
 import kotlinx.serialization.Serializable
 
 /** The fields of one `GET /api/downloads` job the TVs Home summary reads. */
@@ -127,12 +129,16 @@ internal fun ruleSummaryParts(policy: SourceProfilePolicyDto?): List<RuleSummary
   return parts
 }
 
-/** Gigabytes to one decimal, the unit the rules store (`bytes / 1e9`). Whole numbers drop the decimal. */
-internal fun formatRuleGigabytes(bytes: Long): String {
+/**
+ * Gigabytes to one decimal, the unit the rules store (`bytes / 1e9`), with the decimal separator of
+ * [locale] ("1,5" in Czech, "1.5" in English). Whole numbers drop the decimal.
+ */
+internal fun formatRuleGigabytes(bytes: Long, locale: Locale): String {
   val tenths = if (bytes <= 0L) 0L else (bytes + 50_000_000L) / 100_000_000L
   val whole = tenths / 10
   val fraction = (tenths % 10).toInt()
-  return if (fraction == 0) whole.toString() else "$whole.$fraction"
+  if (fraction == 0) return whole.toString()
+  return "$whole${DecimalFormatSymbols.getInstance(locale).decimalSeparator}$fraction"
 }
 
 @Serializable

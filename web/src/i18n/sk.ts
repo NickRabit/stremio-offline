@@ -620,6 +620,7 @@ export const sk: Catalog = {
   "rules.audioLanguage": "Jazyk zvuku",
   "rules.audioLanguageMine": "Môj jazyk (z nastavení)",
   "rules.sizeRange": "Veľkosť súboru, približne (GB)",
+  "rules.sizeMinAboveMax": "Veľkosť „od“ nesmie byť väčšia ako „do“.",
   "rules.sizeEpisodeFrom": "Epizóda od",
   "rules.sizeEpisodeTo": "Epizóda do",
   "rules.sizeMovieFrom": "Film od",

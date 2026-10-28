@@ -1,4 +1,4 @@
-import { languageName, localeTag, t, type Key } from "./i18n";
+import { inlineLanguageName, localeTag, t, type Key } from "./i18n";
 import type { DownloadRules, SourceProfile } from "./types";
 
 const PRESET_NAMES = {
@@ -33,7 +33,7 @@ const audioSummary = (mode: DownloadRules["audio"]["mode"], language: string | u
     return lowerFirst(t(mode === "prefer" ? "rules.audioPrefer" : "rules.audioOnly"));
   }
   return t(mode === "prefer" ? "rules.summary.preferLanguage" : "rules.summary.onlyLanguage", {
-    language: languageName(language),
+    language: inlineLanguageName(language),
   });
 };
 

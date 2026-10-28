@@ -560,6 +560,12 @@ fun contentLanguageLabel(code: String, uiLanguage: String?): String {
   return label.replaceFirstChar { if (it.isLowerCase()) it.titlecase(display) else it.toString() }
 }
 
+/** The language's name as it reads inside a sentence: "angličtina" in Czech, "English" in English. */
+fun inlineContentLanguageLabel(code: String, uiLanguage: String?): String {
+  val label = Locale.forLanguageTag(code).getDisplayLanguage(Locale.forLanguageTag(uiLanguage ?: "en"))
+  return label.ifBlank { code.uppercase(Locale.ROOT) }
+}
+
 @Composable
 private fun SettingsRow(
   label: String,

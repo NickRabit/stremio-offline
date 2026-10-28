@@ -118,6 +118,12 @@ export function languageName(code: string): string {
   catch { return code.toUpperCase(); }
 }
 
+/** The language's name as it reads inside a sentence: "angličtina" in Czech, "English" in English. */
+export function inlineLanguageName(code: string): string {
+  try { return new Intl.DisplayNames([current], { type: "language" }).of(code) ?? code.toUpperCase(); }
+  catch { return code.toUpperCase(); }
+}
+
 const LOCALE_TAGS: Record<Locale, string> = {
   en: "en-GB", cs: "cs-CZ", sk: "sk-SK", de: "de-DE", es: "es-ES", fr: "fr-FR",
   it: "it-IT", pl: "pl-PL", "pt-BR": "pt-BR", ru: "ru-RU",

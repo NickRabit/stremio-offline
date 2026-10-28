@@ -13,6 +13,8 @@ import cz.stremiooffline.tv.data.SourceProfileRangeDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.data.formatRuleGigabytes
 import cz.stremiooffline.tv.data.ruleSummaryParts
+import cz.stremiooffline.tv.ui.settings.inlineContentLanguageLabel
+import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -110,9 +112,10 @@ class SeriesDownloadTest {
       emptyList<RuleSummaryPart>(),
       ruleSummaryParts(SourceProfilePolicyDto(SourceProfileConstraintsDto(audio = SourceProfileAudioDto("listed")))),
     )
-    assertEquals("1.5", formatRuleGigabytes(1_500_000_000))
-    assertEquals("4", formatRuleGigabytes(4_000_000_000))
-    assertEquals("0.1", formatRuleGigabytes(100_000_000))
+    assertEquals("1.5", formatRuleGigabytes(1_500_000_000, Locale.ENGLISH))
+    assertEquals("1,5", formatRuleGigabytes(1_500_000_000, Locale.forLanguageTag("cs")))
+    assertEquals("4", formatRuleGigabytes(4_000_000_000, Locale.forLanguageTag("cs")))
+    assertEquals("0.1", formatRuleGigabytes(100_000_000, Locale.ENGLISH))
   }
 
   @Test
@@ -180,5 +183,11 @@ class SeriesDownloadTest {
     assertEquals("en", profile.policy?.constraints?.audio?.preferred?.code)
     assertEquals(listOf("audioTier", "size"), profile.policy?.criteria?.map { it.kind })
     assertEquals(500_000_000L, profile.policy?.constraints?.bytes?.min)
+  }
+
+  @Test
+  fun `a chosen language reads in lower case inside a Czech summary`() {
+    assertEquals("angličtina", inlineContentLanguageLabel("en", "cs"))
+    assertEquals("English", inlineContentLanguageLabel("en", "en"))
   }
 }

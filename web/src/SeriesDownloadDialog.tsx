@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Bell, CalendarClock, FolderOpen, ListFilter, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { useDialogFocus } from "./dialog-focus";
-import { languageName, t, useI18n } from "./i18n";
+import { inlineLanguageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
 import type { SaveTarget } from "./save-target";
 import { profileAudioLanguage, profileAudioMode, profileSummary, sourceProfileName } from "./source-profile-copy";
@@ -72,7 +72,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
   const graceLanguage = selectedProfile === undefined ? undefined : profileAudioLanguage(selectedProfile);
   const graceLabel = graceLanguage === undefined
     ? t("rules.waitForAudio")
-    : t("rules.waitForAudioLanguage", { language: languageName(graceLanguage) });
+    : t("rules.waitForAudioLanguage", { language: inlineLanguageName(graceLanguage) });
   const defaultProfileId = follow ? followSourceProfileId : downloadSourceProfileId;
   const remember = follow ? onRememberFollowSourceProfile : onRememberDownloadSourceProfile;
   const showRemember = Boolean(remember) && Boolean(profileId) && profileId !== (defaultProfileId ?? "");

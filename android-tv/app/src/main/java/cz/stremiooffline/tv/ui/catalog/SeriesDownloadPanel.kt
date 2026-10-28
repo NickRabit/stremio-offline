@@ -42,7 +42,7 @@ import cz.stremiooffline.tv.data.formatRuleGigabytes
 import cz.stremiooffline.tv.data.ruleSummaryParts
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
-import cz.stremiooffline.tv.ui.settings.contentLanguageLabel
+import cz.stremiooffline.tv.ui.settings.inlineContentLanguageLabel
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.android.awaitFrame
@@ -490,7 +490,7 @@ private fun ruleSummary(policy: SourceProfilePolicyDto?, uiLanguage: String?): S
         } else {
           stringResource(
             R.string.rules_summary_prefer_language,
-            contentLanguageLabel(part.language, uiLanguage),
+            inlineContentLanguageLabel(part.language, uiLanguage),
           )
         }
         AudioMode.ONLY -> if (part.language == null) {
@@ -498,23 +498,23 @@ private fun ruleSummary(policy: SourceProfilePolicyDto?, uiLanguage: String?): S
         } else {
           stringResource(
             R.string.rules_summary_only_language,
-            contentLanguageLabel(part.language, uiLanguage),
+            inlineContentLanguageLabel(part.language, uiLanguage),
           )
         }
       }
       is RuleSummaryPart.Size -> when {
         part.minBytes != null && part.maxBytes != null -> stringResource(
           R.string.rules_summary_range_episode,
-          formatRuleGigabytes(part.minBytes),
-          formatRuleGigabytes(part.maxBytes),
+          formatRuleGigabytes(part.minBytes, locale),
+          formatRuleGigabytes(part.maxBytes, locale),
         )
         part.maxBytes != null -> stringResource(
           R.string.rules_summary_up_to_episode,
-          formatRuleGigabytes(part.maxBytes),
+          formatRuleGigabytes(part.maxBytes, locale),
         )
         else -> stringResource(
           R.string.rules_summary_from_episode,
-          formatRuleGigabytes(part.minBytes ?: 0L),
+          formatRuleGigabytes(part.minBytes ?: 0L, locale),
         )
       }
     }

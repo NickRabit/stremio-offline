@@ -620,6 +620,7 @@ export const pl: Catalog = {
   "rules.audioLanguage": "Język dźwięku",
   "rules.audioLanguageMine": "Mój język (z ustawień)",
   "rules.sizeRange": "Rozmiar pliku, w przybliżeniu (GB)",
+  "rules.sizeMinAboveMax": "Rozmiar „od” nie może być większy niż „do”.",
   "rules.sizeEpisodeFrom": "Odcinek od",
   "rules.sizeEpisodeTo": "Odcinek do",
   "rules.sizeMovieFrom": "Film od",

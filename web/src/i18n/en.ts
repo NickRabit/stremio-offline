@@ -655,6 +655,7 @@ export const en = {
   "rules.audioLanguage": "Audio language",
   "rules.audioLanguageMine": "My language (from settings)",
   "rules.sizeRange": "File size, approximately (GB)",
+  "rules.sizeMinAboveMax": "The “from” size must not be larger than the “to” size.",
   "rules.sizeEpisodeFrom": "Episode from",
   "rules.sizeEpisodeTo": "Episode to",
   "rules.sizeMovieFrom": "Film from",
