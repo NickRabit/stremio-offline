@@ -5,6 +5,7 @@ import { ForbiddenError } from "../roles.js";
 import {
   declaresStream,
   RULE_PRESETS,
+  SOURCE_PROFILE_IDS,
 } from "../source-profiles.js";
 import { parseDownloadRules, type DownloadRules } from "../download-rules.js";
 import type { State, StoredSourceProfile } from "../store.js";
@@ -249,6 +250,9 @@ export function registerAdminSourceProfilesRoutes(
       for (const data of Object.values(state.userData ?? {})) {
         if (data.prefs.downloadSourceProfile === profile.id) delete data.prefs.downloadSourceProfile;
         if (data.prefs.followSourceProfile === profile.id) delete data.prefs.followSourceProfile;
+        // A source order or playback default that named the deleted rules falls back to Balanced.
+        if (data.prefs.streamSort === `rule:${profile.id}`) data.prefs.streamSort = `rule:${SOURCE_PROFILE_IDS.balanced}`;
+        if (data.prefs.defaultRulesProfileId === profile.id) delete data.prefs.defaultRulesProfileId;
       }
     });
     res.status(204).end();

@@ -109,7 +109,7 @@ const SETTINGS_TAB_LABEL: Record<SettingsTab, Key> = {
 };
 const isSettingsTab = (value: string | null): value is SettingsTab => SETTINGS_TABS.includes(value as SettingsTab);
 
-export function SettingsPage({ build, restricted = false, settings, search, onSearch, languages, libraries = [], session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError, sourceProfiles }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; search: SearchState | null; onSearch: (state: SearchState) => void; languages: Array<{ code: string; name: string }>; libraries?: LibraryView[]; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void; sourceProfiles: SourceProfile[] | null }) {
+export function SettingsPage({ build, restricted = false, settings, search, onSearch, languages, libraries = [], session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError, sourceProfiles, onSourceProfilesChanged }: { onSourceProfilesChanged?: () => void; build: BuildInfo | null; restricted?: boolean; settings: AppSettings; search: SearchState | null; onSearch: (state: SearchState) => void; languages: Array<{ code: string; name: string }>; libraries?: LibraryView[]; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void; sourceProfiles: SourceProfile[] | null }) {
   const { t, locale, setLocale } = useI18n();
   // An ordinary user decides only what is personal, and the panels the instance owns are
   // not rendered for one at all -- a disabled control still says what the instance runs.
@@ -239,7 +239,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           </select>
         </SettingControl>
       </section>
-      {admin && !restricted && <SourceProfilesSettings languages={languages} titleKey="settings.sourceRulesTitle" hintKey="settings.sourceRulesHint"/>}
+      {admin && !restricted && <SourceProfilesSettings languages={languages} titleKey="settings.sourceRulesTitle" hintKey="settings.sourceRulesHint" {...(onSourceProfilesChanged ? { onChanged: onSourceProfilesChanged } : {})}/>}
       </>}
       {tab === "services" && <>
       {admin && <TmdbSettings configured={settings.tmdbConfigured} onSave={onSave} onError={onError} restricted={restricted || !admin}/>}

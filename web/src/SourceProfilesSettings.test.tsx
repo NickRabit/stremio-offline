@@ -108,6 +108,7 @@ const mount = async (
   profiles: AdminSourceProfile[] = [preset, custom],
   onWrite?: (url: string, method: string, body: unknown) => Response | undefined,
   remoteLibraries: AdminRemoteLibrary[] | "fail" = remotes,
+  onChanged?: () => void,
 ) => {
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -122,7 +123,7 @@ const mount = async (
     }
     return json({});
   });
-  await act(async () => { root.render(<SourceProfilesSettings languages={[{ code: "cs", name: "Čeština" }, { code: "en", name: "English" }]}/>); });
+  await act(async () => { root.render(<SourceProfilesSettings languages={[{ code: "cs", name: "Čeština" }, { code: "en", name: "English" }]} {...(onChanged ? { onChanged } : {})}/>); });
   await flush();
 };
 
@@ -413,4 +414,19 @@ it("keeps stale-revision reload handling and patches rules", async () => {
   await clickText("Save", dialog());
   expect(patches.map((patch) => (patch as { revision: number }).revision)).toEqual([4, 5]);
   expect(patches[0]).toMatchObject({ name: "Living room", rules: custom.parameters });
+});
+
+it("tells the caller after a rule was duplicated or deleted, so sort options reload", async () => {
+  const onChanged = vi.fn();
+  await mount([preset, custom], () => json(custom), remotes, onChanged);
+  await clickText("Duplicate", host.querySelector(`[data-profile-id="${CUSTOM}"]`)!);
+  await setInput("Name", "Copy");
+  await act(async () => { dialog().querySelector<HTMLButtonElement>('button[type="submit"]')!.click(); });
+  await flush();
+  expect(onChanged).toHaveBeenCalledTimes(1);
+
+  await clickText("Delete", host.querySelector(`[data-profile-id="${CUSTOM}"]`)!);
+  await act(async () => { dialog().querySelector<HTMLButtonElement>('button[type="submit"]')!.click(); });
+  await flush();
+  expect(onChanged).toHaveBeenCalledTimes(2);
 });

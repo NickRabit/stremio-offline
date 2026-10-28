@@ -109,7 +109,9 @@ function DialogShell({ label, title, busy, onClose, onSubmit, children, footer }
   </div>;
 }
 
-export function SourceProfilesSettings({ languages, titleKey = "rules.title", hintKey = "rules.hint" }: {
+export function SourceProfilesSettings({ languages, titleKey = "rules.title", hintKey = "rules.hint", onChanged }: {
+  /** Told after a rule was added, duplicated, edited or deleted, so other lists can reload. */
+  onChanged?: () => void;
   languages: Array<{ code: string; name: string }>;
   titleKey?: Key;
   hintKey?: Key;
@@ -143,6 +145,7 @@ export function SourceProfilesSettings({ languages, titleKey = "rules.title", hi
     setProfiles(loaded.profiles); setAddons(loaded.addons); setRemoteLibraries(loaded.remoteLibraries); setLoadError("");
     return loaded;
   };
+  const changed = async () => { await refresh(); onChanged?.(); };
   useEffect(() => {
     let stale = false;
     readCatalogue().then((loaded) => {
@@ -176,7 +179,7 @@ export function SourceProfilesSettings({ languages, titleKey = "rules.title", hi
         ...(session.builtIn ? {} : { name: session.draft.name.trim() }),
         rules: session.draft.rules,
       });
-      setSession(null); await refresh();
+      setSession(null); await changed();
     } catch (error) {
       setDialogError(describeError(error));
       setCanReload(error instanceof ApiError && error.status === 409 && session.kind === "edit");
@@ -197,14 +200,14 @@ export function SourceProfilesSettings({ languages, titleKey = "rules.title", hi
   const saveDuplicate = async () => {
     if (!duplicate || !nameOk(duplicate.name)) return;
     setBusy(true); setDialogError("");
-    try { await api.duplicateAdminSourceProfile(duplicate.id, duplicate.name.trim()); setDuplicate(null); await refresh(); }
+    try { await api.duplicateAdminSourceProfile(duplicate.id, duplicate.name.trim()); setDuplicate(null); await changed(); }
     catch (error) { setDialogError(describeError(error)); }
     finally { setBusy(false); }
   };
   const confirmDelete = async () => {
     if (!remove) return;
     setBusy(true); setDialogError(""); setCanReload(false);
-    try { await api.deleteAdminSourceProfile(remove.id, remove.revision); setRemove(null); await refresh(); }
+    try { await api.deleteAdminSourceProfile(remove.id, remove.revision); setRemove(null); await changed(); }
     catch (error) { setDialogError(describeError(error)); setCanReload(error instanceof ApiError && error.status === 409); }
     finally { setBusy(false); }
   };
