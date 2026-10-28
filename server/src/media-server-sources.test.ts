@@ -584,6 +584,8 @@ test("matched mints only the verified versions behind an exact id", async () => 
     harness.server.versionsOf["item-1"] = [{ id: "v1", name: "1080p" }];
     const listed = await harness.sources.matched(harness.adminAuthority, harness.owner, harness.libraryId, "movie", "tt1");
     assert.deepEqual(listed.map((item) => item.name), ["1080p"]);
+    const addonSpecific = await harness.sources.matched(harness.adminAuthority, harness.owner, harness.libraryId, "movie", "mpa:webshare-index:tt1");
+    assert.deepEqual(addonSpecific.map((item) => item.name), ["1080p"]);
     assert.deepEqual(await harness.sources.matched(harness.adminAuthority, harness.owner, harness.libraryId, "movie", "tt9"), []);
   });
 });

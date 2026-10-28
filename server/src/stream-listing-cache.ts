@@ -1,4 +1,4 @@
-import { streamCandidates, streamListings, type StreamListing } from "./addons.js";
+import { streamCandidates, streamListings, type StreamCandidate, type StreamListing } from "./addons.js";
 import { addonIdentity } from "./addon-identity.js";
 import type { AddonRecord, StreamItem } from "./types.js";
 
@@ -48,30 +48,31 @@ export class StreamListingCache {
   }
 
   async list(addons: AddonRecord[], type: string, id: string): Promise<StreamItem[]> {
-    const candidates = streamCandidates(addons, type, id);
+    const candidates = await streamCandidates(addons, type, id);
     const hits = new Map<string, StreamItem[]>();
-    const misses: AddonRecord[] = [];
+    const misses: StreamCandidate[] = [];
 
-    for (const addon of candidates) {
-      const key = this.key(type, id, addon);
+    for (const candidate of candidates) {
+      const key = this.key(type, candidate.id, candidate.addon);
       const entry = this.entries.get(key);
       if (entry && this.now() - entry.at < this.ttlMs) {
         this.entries.delete(key);
         this.entries.set(key, entry);
-        hits.set(addon.key, entry.items);
+        hits.set(candidate.addon.key, entry.items);
       } else {
         if (entry) this.entries.delete(key);
-        misses.push(addon);
+        misses.push(candidate);
       }
     }
 
-    const results = await Promise.allSettled(misses.map((addon) => this.fetchOnce(addon, type, id)));
+    const results = await Promise.allSettled(misses.map((candidate) => this.fetchOnce(candidate, type, id)));
     results.forEach((result, index) => {
-      if (result.status !== "fulfilled" || result.value.status !== "success" || result.value.addonKey !== misses[index].key) return;
-      hits.set(misses[index].key, result.value.items);
+      const candidate = misses[index]!;
+      if (result.status !== "fulfilled" || result.value.status !== "success" || result.value.addonKey !== candidate.addon.key) return;
+      hits.set(candidate.addon.key, result.value.items);
     });
 
-    return candidates.flatMap((addon) => hits.get(addon.key) ?? []);
+    return candidates.flatMap((candidate) => hits.get(candidate.addon.key) ?? []);
   }
 
   invalidate(type: string, id: string): void {
@@ -94,22 +95,22 @@ export class StreamListingCache {
     return JSON.stringify([type, id, addon.key, addonIdentity(addon)]);
   }
 
-  private fetchOnce(addon: AddonRecord, type: string, id: string): Promise<StreamListing> {
-    const key = this.key(type, id, addon);
-    const addonKey = addon.key;
-    const requested = { ...addon, manifest: structuredClone(addon.manifest) };
+  private fetchOnce(candidate: StreamCandidate, type: string, videoId: string): Promise<StreamListing> {
+    const key = this.key(type, candidate.id, candidate.addon);
+    const addonKey = candidate.addon.key;
+    const requested = { ...candidate.addon, manifest: structuredClone(candidate.addon.manifest) };
     const existing = this.inFlight.get(key);
     if (existing) return existing.promise;
 
     const promise = Promise.resolve()
-      .then(() => this.fetch(requested, type, id))
+      .then(() => this.fetch(requested, type, candidate.id))
       .catch((): StreamListing => ({ addonKey, status: "failure" }));
-    const entry: InFlightEntry = { type, videoId: id, epoch: this.epoch, promise };
+    const entry: InFlightEntry = { type, videoId, epoch: this.epoch, promise };
     this.inFlight.set(key, entry);
     void promise.then((listing) => {
       try {
         if (entry.epoch === this.epoch && listing.status === "success" && listing.addonKey === addonKey) {
-          this.remember(key, type, id, listing.items);
+          this.remember(key, type, videoId, listing.items);
         }
       } finally {
         if (this.inFlight.get(key) === entry) this.inFlight.delete(key);

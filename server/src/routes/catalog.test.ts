@@ -1471,6 +1471,43 @@ test("GET /api/streams/:type/:id returns no source from an addon the caller may 
   });
 });
 
+test("stream source routes resolve an addon id to IMDb without replacing the direct addon", async (t) => {
+  resetImdbTargets();
+  const meta = addon("title-meta", [], { role: "both", resources: ["meta"] });
+  const own = addon("own-source", [], { role: "source", resources: ["stream"] });
+  own.manifest.resources = [{ name: "stream", types: ["movie"], idPrefixes: ["mpa:"] }];
+  const imdbOnly = addon("imdb-source", [], { role: "source", resources: ["stream"] });
+  imdbOnly.manifest.resources = [{ name: "stream", types: ["movie"], idPrefixes: ["tt"] }];
+  const harness = await mount([meta, own, imdbOnly]);
+  t.after(harness.close);
+  const id = "mpa:sosac:35da1549e221b6b74237";
+  const paths: string[] = [];
+
+  await withStubbedAddons((url) => {
+    const parsed = new URL(url);
+    const path = decodeURIComponent(parsed.pathname);
+    paths.push(`${parsed.hostname}${path}`);
+    if (parsed.hostname === "title-meta.example") {
+      return json({ meta: { id, type: "movie", name: "Harry Potter", imdb_id: "tt0241527" } });
+    }
+    return json({ streams: [{ url: `https://cdn.example/${parsed.hostname}.mp4`, name: parsed.hostname }] });
+  }, async () => {
+    const sources = await (await api(harness.base, `/api/stream-sources/movie/${encodeURIComponent(id)}`)).json() as Array<{ key: string }>;
+    assert.deepEqual(sources.map((source) => source.key), ["own-source", "imdb-source"]);
+
+    const imdb = await (await api(harness.base, `/api/streams/movie/${encodeURIComponent(id)}?addon=imdb-source`)).json() as Array<{ name: string }>;
+    assert.deepEqual(imdb.map((stream) => stream.name), ["imdb-source.example"]);
+    const direct = await (await api(harness.base, `/api/streams/movie/${encodeURIComponent(id)}?addon=own-source`)).json() as Array<{ name: string }>;
+    assert.deepEqual(direct.map((stream) => stream.name), ["own-source.example"]);
+  });
+
+  assert.deepEqual(paths, [
+    "title-meta.example/meta/movie/mpa:sosac:35da1549e221b6b74237.json",
+    "imdb-source.example/stream/movie/tt0241527.json",
+    "own-source.example/stream/movie/mpa:sosac:35da1549e221b6b74237.json",
+  ]);
+});
+
 const storedRulePresets = (): StoredSourceProfile[] => RULE_PRESETS.map((preset) => ({
   id: preset.id,
   revision: 1,
@@ -1559,6 +1596,37 @@ test("GET /api/local-streams mints one library entry per copy", async (t) => {
   assert.equal((entry.behaviorHints as { videoSize?: number; filename?: string }).filename, "Heat 1995 1080p.mkv");
   assert.equal(typeof entry.sourceId, "string");
   assert.ok(entry.sourceId);
+});
+
+test("GET /api/local-streams retries an addon-specific id under its resolved IMDb id", async (t) => {
+  resetImdbTargets();
+  const id = "mpa:sosac:35da1549e221b6b74237";
+  const asked: Array<{ type: string; id: string }> = [];
+  const harness = await mount([
+    addon("local-title-meta", [], { role: "both", resources: ["meta"] }),
+  ], null, {
+    localCopies: async (type, catalogId) => {
+      asked.push({ type, id: catalogId });
+      return catalogId === "tt0113277" ? [localCopy()] : [];
+    },
+  });
+  t.after(harness.close);
+
+  await withStubbedAddons((url) => {
+    if (new URL(url).hostname === "local-title-meta.example") {
+      return json({ meta: { id, type: "movie", name: "Heat", imdb_id: "tt0113277" } });
+    }
+    throw new Error(`Unexpected addon URL ${url}`);
+  }, async () => {
+    const response = await api(harness.base, `/api/local-streams/movie/${encodeURIComponent(id)}`);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as unknown[]).length, 1);
+  });
+
+  assert.deepEqual(asked, [
+    { type: "movie", id },
+    { type: "movie", id: "tt0113277" },
+  ]);
 });
 
 test("GET /api/local-streams attaches a verdict for every admitting rules profile", async (t) => {

@@ -1,8 +1,10 @@
+import { allowedAddons, subtitleTarget } from "./addons.js";
 import { mayDownloadToDevice, mayDownloadToLibrary } from "./downloads.js";
 import { libraryVisible, type DefaultLibrarySettings, type LibraryRecord } from "./libraries.js";
 import { remoteContentAccessible, remoteLibraryVisibleTo } from "./media-server-access.js";
 import { canonicalRemoteDownloadReference, defaultRemoteCopyTarget, takesRemoteTarget, type RemoteDownloadReference } from "./media-server-download.js";
 import type { MediaServerAuthority, MediaServerItemVersions, MediaServerManager } from "./media-server-manager.js";
+import { remoteMatchTarget } from "./media-server-match.js";
 import type { ProviderVersion } from "./media-server-provider.js";
 import { isRemoteMediaStream, openRemoteContent, remoteSecretStamp, sealRemoteContent } from "./media-server-reference.js";
 import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
@@ -208,7 +210,14 @@ export class MediaServerSources {
    *  resolved catalogue or series title, used only to bound a provider that cannot search by
    *  external id; it never widens what is matched. */
   async matched(authority: MediaServerAuthority, owner: ResourceOwner, libraryId: string, type: string, catalogId: string, signal?: AbortSignal, nameHint?: string): Promise<PublicStream[]> {
-    const results = await this.manager.matchedVersions(authority, libraryId, type, catalogId, signal, nameHint);
+    let targetId = catalogId;
+    if (!remoteMatchTarget(type, catalogId)) {
+      const user = this.currentUser(owner.userId);
+      if (user) {
+        targetId = await subtitleTarget(allowedAddons(this.store.addons(), user), type, catalogId, false, signal) ?? catalogId;
+      }
+    }
+    const results = await this.manager.matchedVersions(authority, libraryId, type, targetId, signal, nameHint);
     const secretStamp = this.ownerStamp(owner, authority);
     const sealed = results.flatMap((result) => this.seal(result, owner, secretStamp));
     const listed = this.listed(sealed, owner);

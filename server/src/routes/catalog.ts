@@ -1,6 +1,6 @@
 import type express from "express";
 import { readFile } from "node:fs/promises";
-import { allowedAddons, catalog, orderedForUser, orderFor, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
+import { allowedAddons, catalog, orderedForUser, orderFor, searchAll, searchableCatalogs, streamCandidates, streams, subtitleTarget, subtitles, type MetaProvider } from "../addons.js";
 import { DetailGalleryCache } from "../detail-gallery.js";
 import { AppError } from "../errors.js";
 import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
@@ -311,11 +311,11 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       disconnect.dispose();
     }
   }));
-  app.get("/api/stream-sources/:type/:id", (req, res) => {
+  app.get("/api/stream-sources/:type/:id", asyncRoute(async (req, res) => {
     // The picker lists these in the caller's own order, the same one `GET /api/addons` answers.
-    res.json(streamCandidates(inOrder(req), String(req.params.type), String(req.params.id))
-      .map((addon) => ({ key: addon.key, name: addon.manifest.name })));
-  });
+    const candidates = await streamCandidates(inOrder(req), String(req.params.type), String(req.params.id), true);
+    res.json(candidates.map(({ addon }) => ({ key: addon.key, name: addon.manifest.name })));
+  }));
   app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
     const disconnect = routeDisconnectSignal(req, res);
     try {
@@ -357,7 +357,13 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/local-streams/:type/:id", asyncRoute(async (req, res) => {
     const viewer = viewerOf(currentUser(req));
     const owner = ownerOf(req);
-    const copies = await localCopies(String(req.params.type), String(req.params.id), viewer);
+    const type = String(req.params.type);
+    const id = String(req.params.id);
+    let copies = await localCopies(type, id, viewer);
+    if (!copies.length) {
+      const fallbackId = await subtitleTarget(inOrder(req), type, id, true);
+      if (fallbackId && fallbackId !== id) copies = await localCopies(type, fallbackId, viewer);
+    }
     // A grant withdrawn while the walk was being read must not get a resource, the same way
     // the addon listing re-checks. Nothing is awaited between the check and the listing.
     for (const libraryId of new Set(copies.map((copy) => copy.libraryId))) requireAccess(req, { libraryId });
