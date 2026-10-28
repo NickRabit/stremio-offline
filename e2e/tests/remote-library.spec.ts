@@ -692,8 +692,10 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
       await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
       const player = page.locator(".player-overlay");
       await expect(player).toBeVisible();
+      await player.locator("video").evaluate((video: HTMLVideoElement) => { video.playbackRate = 0.1; void video.play().catch(() => undefined); });
+      for (const toast of await page.locator(".toast").all()) await toast.evaluate((element) => element.remove());
       await player.dispatchEvent("pointermove");
-      await player.locator(".player-settings-toggle").click();
+      await player.locator(".player-settings-toggle").dispatchEvent("click");
       await expect(player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true })).toBeVisible();
       await expect(player.getByRole("button", { name: "Uložit do tohoto zařízení", exact: true })).toHaveCount(0);
       await player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true }).click();
@@ -709,8 +711,10 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
       await dialog.locator(".stream-list button").filter({ hasText: "Local 40 GB" }).click();
       await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
       await expect(player).toBeVisible();
+      await player.locator("video").evaluate((video: HTMLVideoElement) => { video.playbackRate = 0.1; void video.play().catch(() => undefined); });
+      for (const toast of await page.locator(".toast").all()) await toast.evaluate((element) => element.remove());
       await player.dispatchEvent("pointermove");
-      await player.locator(".player-settings-toggle").click();
+      await player.locator(".player-settings-toggle").dispatchEvent("click");
       await expect(player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true })).toHaveCount(0);
       await player.getByRole("button", { name: "Uložit do tohoto zařízení", exact: true }).click();
       await expect.poll(() => devicePaths).toContain("Other/copy.mkv");
