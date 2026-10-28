@@ -334,7 +334,7 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
           <label><span>{t("rules.sizeMovieFrom")}</span><input type="number" min="0.1" max="200" step="0.1" aria-label={t("rules.sizeMovieFrom")} value={draft.rules.sizeGb.movie.min ?? ""} onChange={(event) => updateRules({ ...draft.rules, sizeGb: { ...draft.rules.sizeGb, movie: { ...draft.rules.sizeGb.movie, min: event.target.value ? Number(event.target.value) : null } } })}/></label>
           <label><span>{t("rules.sizeMovieTo")}</span><input type="number" min="0.1" max="200" step="0.1" aria-label={t("rules.sizeMovieTo")} value={draft.rules.sizeGb.movie.max ?? ""} onChange={(event) => updateRules({ ...draft.rules, sizeGb: { ...draft.rules.sizeGb, movie: { ...draft.rules.sizeGb.movie, max: event.target.value ? Number(event.target.value) : null } } })}/></label>
         </div>
-        {!validRange(draft.rules.sizeGb.episode) || !validRange(draft.rules.sizeGb.movie) ? <p className="login-error" role="alert">{t("err.sourceProfileInvalid")}</p> : null}
+        {!validRange(draft.rules.sizeGb.episode) || !validRange(draft.rules.sizeGb.movie) ? <p className="login-error" role="alert">{t("rules.sizeMinAboveMax")}</p> : null}
         <label className="rules-check"><input type="checkbox" aria-label={t("rules.skipCinema")} checked={draft.rules.skipCinema} onChange={(event) => updateRules({ ...draft.rules, skipCinema: event.target.checked })}/><span>{t("rules.skipCinema")}</span></label>
       </fieldset>
       <fieldset className="rules-fieldset"><legend>{t("rules.language")}</legend>

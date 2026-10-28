@@ -164,7 +164,7 @@ test("an administrator creates, lists and deletes a download rule", async ({ pag
 
   const row = page.locator(".source-profile-row", { hasText: RULES_NAME });
   await expect(row).toBeVisible();
-  await expect(row).toContainText("480p · přednost: Angličtina · ~1,2–4 GB na díl");
+  await expect(row).toContainText("480p · přednost: angličtina · ~1,2–4 GB na díl");
   await row.getByRole("button", { name: "Smazat", exact: true }).click();
   const confirmation = page.getByRole("dialog", { name: "Smazat pravidla stahování" });
   await expect(confirmation).toContainText(RULES_NAME);

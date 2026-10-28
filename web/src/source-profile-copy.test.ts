@@ -73,6 +73,13 @@ describe("rulesSummary", () => {
     expect(withSize(1.2, null)).toBe(`720p–1080p · any language · from ~1.2 GB per ${label}`);
     expect(withSize(null, null)).toBe("720p–1080p · any language");
   });
+  it("writes a chosen language in lower case where the locale does", () => {
+    setLocale("cs");
+    expect(rulesSummary(rules({ audio: { mode: "prefer", language: "en", fallback: null } })))
+      .toBe("720p–1080p · přednost: angličtina");
+    expect(rulesSummary(rules({ audio: { mode: "only", language: "de", fallback: null } })))
+      .toBe("720p–1080p · jen němčina");
+  });
 });
 
 describe("profile summaries", () => {

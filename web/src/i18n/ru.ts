@@ -620,6 +620,7 @@ export const ru: Catalog = {
   "rules.audioLanguage": "Язык аудио",
   "rules.audioLanguageMine": "Мой язык (из настроек)",
   "rules.sizeRange": "Размер файла, примерно (ГБ)",
+  "rules.sizeMinAboveMax": "Размер «от» не может быть больше, чем «до».",
   "rules.sizeEpisodeFrom": "Эпизод от",
   "rules.sizeEpisodeTo": "Эпизод до",
   "rules.sizeMovieFrom": "Фильм от",

@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/source-selection",
   "private": true,
-  "version": "0.5.198",
+  "version": "0.5.199",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

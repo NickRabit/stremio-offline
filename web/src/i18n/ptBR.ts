@@ -620,6 +620,7 @@ export const ptBR: Catalog = {
   "rules.audioLanguage": "Idioma do áudio",
   "rules.audioLanguageMine": "Meu idioma (das configurações)",
   "rules.sizeRange": "Tamanho do arquivo, aproximado (GB)",
+  "rules.sizeMinAboveMax": "O tamanho “a partir de” não pode ser maior que “até”.",
   "rules.sizeEpisodeFrom": "Episódio a partir de",
   "rules.sizeEpisodeTo": "Episódio até",
   "rules.sizeMovieFrom": "Filme a partir de",

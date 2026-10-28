@@ -222,7 +222,7 @@ it("disables saving and shows an inline error when a size range is reversed", as
   await setInput("Episode from", "10");
   await setInput("Episode to", "4");
   expect(dialog().querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
-  expect(dialog().querySelector(".login-error")?.textContent).toBe("The download rule settings are invalid.");
+  expect(dialog().querySelector(".login-error")?.textContent).toBe("The “from” size must not be larger than the “to” size.");
 });
 
 it("clears and disables fallback for my-language-only audio", async () => {
