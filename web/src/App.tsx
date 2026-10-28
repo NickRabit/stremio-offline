@@ -769,7 +769,7 @@ export function App() {
   };
   const [skip, setSkip] = useState(0); const [cursor, setCursor] = useState(""); const [hasMore, setHasMore] = useState(false); const [loadingMore, setLoadingMore] = useState(false); const [sourceCount, setSourceCount] = useState(0);
   const [pendingSources, setPendingSources] = useState(0);
-  const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
+  const pickedRef = useRef(false); /** The viewer chose the playing source by hand, so the next episode stays with its provider. */ const viewerChoseSourceRef = useRef(false); const sourcesRequestRef = useRef(0);
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null); const sourceListRef = useRef<HTMLDivElement>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
@@ -2387,7 +2387,7 @@ export function App() {
     cancelRemoteWork();
     setSelectedVideo(video ?? null); setSourcesLoaded(false); setSourcesComplete(false); setBusy(true);
     setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0);
-    pickedRef.current = false;
+    pickedRef.current = false; viewerChoseSourceRef.current = false;
     // Remote libraries are asked separately: an addon or subtitle failure cannot hide them.
     void loadRemoteGroups(type, id, nameHint);
     // Local copies are asked for beside the addons and outside the try: an addon or subtitle
@@ -2569,7 +2569,10 @@ export function App() {
       .catch(() => undefined)
       .finally(() => { if (!stale()) setLocalLoading(false); });
     try {
-      const ruleId = sortRuleId(defaultStreamSort);
+      // A source the viewer picked by hand keeps its provider for the next episode; one the rule
+      // picked lets the rule choose again, among this episode's library copies too.
+      const keepProvider = viewerChoseSourceRef.current;
+      const ruleId = keepProvider ? undefined : sortRuleId(defaultStreamSort);
       const prefetched = nextEpisodePrefetchRef.current;
       const addonRequest = prefetched?.id === id
         ? prefetched.promise.catch(() => fetchEpisodeSources(type, id))
@@ -2583,7 +2586,7 @@ export function App() {
       if (stale()) return false;
       const currentLanguage = playbackPreferences.audioLanguage ?? (currentStream ? streamLanguages(currentStream, metaLanguage)[0] : undefined);
       const preferredLanguage = currentLanguage ?? settings.audioLanguage;
-      let nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort, localRows) ?? null;
+      let nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort, localRows, keepProvider) ?? null;
       // A listing comes back without the addon that is playing when its request failed or the
       // provider was busy. Asking that one on its own keeps the viewer with the provider they
       // chose instead of moving a binge to another one, in another language.
@@ -2592,7 +2595,7 @@ export function App() {
         if (stale()) return false;
         if (again.length) {
           nextStreams = [...nextStreams, ...again];
-          nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort, localRows) ?? nextStream;
+          nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort, localRows, keepProvider) ?? nextStream;
         }
       }
       if (currentStream && nextStream && !isLocalStream(nextStream) && nextStream.addonKey !== currentStream.addonKey) {
@@ -3246,7 +3249,7 @@ export function App() {
     const ref = playbackCatalogueRef();
     if (!ref) throw new Error(t("player.noOtherSource"));
     playbackReturn.current = capturePlaybackReturn({ kind: "catalog", key: `${ref.type}:${ref.id}` });
-    pickedRef.current = true;
+    pickedRef.current = true; viewerChoseSourceRef.current = true;
     setStartAtSeconds(positionSeconds);
     // The shared detail's player keeps its own title, episode and progress key: only the row
     // changes, and the browse panel's selection is never moved by it. A local row still replaces
@@ -3571,7 +3574,7 @@ export function App() {
                 all: { label: t("sources.anyLanguage"), count: languageSources.length },
                 options: streamLangs.map(([code, count]) => ({ value: code, label: label(code), count })),
               } } : {})} sort={{ value: streamSort, onChange: setStreamSort }} profiles={sourceProfiles}/>
-              <SourceRows rows={sourceRows} selected={selectedStream} onSelect={setSelectedStream} onPicked={() => { pickedRef.current = true; }}
+              <SourceRows rows={sourceRows} selected={selectedStream} onSelect={setSelectedStream} onPicked={() => { pickedRef.current = true; viewerChoseSourceRef.current = true; }}
                 titleLanguage={metaLanguage} ruleId={sortRuleId(streamSort) ?? defaultRuleId}
                 listRef={sourceListRef}
                 onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}

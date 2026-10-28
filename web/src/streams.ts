@@ -155,11 +155,12 @@ export function catalogSourceRows(
   return arrangeStreams([...local, ...remote, ...addonStreams], { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
 }
 
-/** A rule sort with verdicts chooses like Play; other sorts keep the current provider and
- *  choose its best language and nearest size variant. */
-export function pickNextEpisodeStream(streams: Stream[], current: Stream | null, preferredLanguage: string, priority: Map<string, number>, titleLanguage: string | undefined, sort: StreamOrder, localRows: Stream[] = []): Stream | undefined {
+/** A rule sort with verdicts chooses like Play, unless the viewer picked the current source by
+ *  hand; otherwise the next episode keeps the current provider and chooses its best language and
+ *  nearest size variant. */
+export function pickNextEpisodeStream(streams: Stream[], current: Stream | null, preferredLanguage: string, priority: Map<string, number>, titleLanguage: string | undefined, sort: StreamOrder, localRows: Stream[] = [], keepProvider = false): Stream | undefined {
   const ranked = arrangeStreams(streams.filter((stream) => stream.playable), { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
-  const ruleId = sortRuleId(sort);
+  const ruleId = keepProvider ? undefined : sortRuleId(sort);
   if (ruleId) {
     const local = localRows.filter((stream) => stream.playable);
     if ([...local, ...ranked].some((stream) => stream.rules?.[ruleId])) {

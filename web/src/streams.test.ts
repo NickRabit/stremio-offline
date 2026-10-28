@@ -407,6 +407,15 @@ describe("pickNextEpisodeStream", () => {
     expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(addon);
   });
 
+  it("keeps the provider the viewer picked by hand even under a rule sort", () => {
+    const current = stream({ addonKey: "same", addonName: "Same" });
+    const local = stream({ name: "local meets", kind: "library", localPath: "lib/next.mkv", rules: { balanced: verdict([0]) } });
+    const same = stream({ name: "same addon", addonKey: "same", addonName: "Same", rules: { balanced: verdict([2], "breaks") } });
+    const other = stream({ name: "other meets", addonKey: "other", addonName: "Other", rules: { balanced: verdict([1]) } });
+    expect(pickNextEpisodeStream([other, same], current, "cs", new Map(), undefined, "rule:balanced", [local], true)).toBe(same);
+    expect(pickNextEpisodeStream([other, same], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(local);
+  });
+
   it("ignores local copies when no rule sort is active", () => {
     const current = stream({ addonKey: "same", addonName: "Same" });
     const local = stream({ name: "local", kind: "library", localPath: "lib/next.mkv", rules: { balanced: verdict([0]) } });
