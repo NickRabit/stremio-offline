@@ -1,8 +1,9 @@
 import { mayDownloadToDevice, mayDownloadToLibrary } from "./downloads.js";
 import { libraryVisible, type DefaultLibrarySettings, type LibraryRecord } from "./libraries.js";
-import { remoteContentAccessible } from "./media-server-access.js";
+import { remoteContentAccessible, remoteLibraryVisibleTo } from "./media-server-access.js";
 import { canonicalRemoteDownloadReference, defaultRemoteCopyTarget, takesRemoteTarget, type RemoteDownloadReference } from "./media-server-download.js";
 import type { MediaServerAuthority, MediaServerItemVersions, MediaServerManager } from "./media-server-manager.js";
+import type { ProviderVersion } from "./media-server-provider.js";
 import { isRemoteMediaStream, openRemoteContent, remoteSecretStamp, sealRemoteContent } from "./media-server-reference.js";
 import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
 import { ResourceError, type MediaResources, type ResourceOwner } from "./media-resources.js";
@@ -180,6 +181,97 @@ export class MediaServerSources {
     const results = await this.manager.matchedVersions(authority, libraryId, type, catalogId, signal, nameHint);
     const secretStamp = this.ownerStamp(owner, authority);
     return this.listed(results.flatMap((result) => this.seal(result, owner, secretStamp)), owner);
+  }
+
+  async downloadCandidates(input: {
+    ownerUserId: string;
+    libraryId: string;
+    type: "movie" | "series";
+    catalogId: string;
+    nameHint?: string;
+    signal?: AbortSignal;
+  }): Promise<Array<{
+    reference: RemoteDownloadReference;
+    version: ProviderVersion;
+    libraryName: string;
+    stream: StreamItem;
+  }>> {
+    const initial = this.currentUser(input.ownerUserId);
+    const library = this.store.remoteLibraries().find((candidate) => candidate.id === input.libraryId);
+    if (!initial || initial.disabled || initial.mustChangePassword || !mayDownloadToLibrary(initial)
+      || !library || !remoteLibraryVisibleTo(this.store.mediaConnections(), library, {
+        id: initial.id,
+        role: initial.role,
+      })) {
+      return [];
+    }
+
+    const actor = { id: initial.id, secret: initial.secret };
+    const authority: MediaServerAuthority = {
+      actor,
+      assertCurrent: () => {
+        const current = this.currentUser(actor.id);
+        if (!current || current.disabled || current.mustChangePassword
+          || current.secret !== actor.secret || !mayDownloadToLibrary(current)) {
+          throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+        }
+      },
+    };
+    try {
+      authority.assertCurrent();
+    } catch {
+      return [];
+    }
+
+    let results: MediaServerItemVersions[];
+    try {
+      results = await this.manager.matchedVersions(
+        authority,
+        input.libraryId,
+        input.type,
+        input.catalogId,
+        input.signal,
+        input.nameHint,
+      );
+    } catch (error) {
+      if (error instanceof ResourceError && error.status === 404) return [];
+      throw error;
+    }
+    try {
+      authority.assertCurrent();
+    } catch {
+      return [];
+    }
+
+    return results.flatMap((result) => {
+      if (result.downloadAllowed !== true) return [];
+      return result.versions.map((version) => {
+        const name = version.name ?? result.item.name;
+        return {
+          reference: canonicalRemoteDownloadReference({
+            schemaVersion: 1,
+            ownerUserId: input.ownerUserId,
+            connectionId: result.connectionId,
+            libraryId: result.libraryId,
+            generation: result.generation,
+            provider: result.identity.provider,
+            serverId: result.identity.serverId,
+            accountId: result.identity.accountId,
+            itemId: result.identity.itemId,
+            mediaSourceId: version.id,
+          }),
+          version,
+          libraryName: result.libraryName,
+          stream: {
+            name,
+            behaviorHints: {
+              filename: copyFilename(name, version.container),
+              ...(version.size === undefined ? {} : { videoSize: version.size }),
+            },
+          },
+        };
+      });
+    });
   }
 
   /** Refuses any remote source that is not the exact one the owner session was granted, as

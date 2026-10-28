@@ -38,8 +38,8 @@ export interface DownloadResolution {
   audioLanguage?: string;
   audioTrack?: number;
   fallbackUsed?: boolean;
-  /** What established `audioLanguage`: the file's own tags, the addon listing, or nothing. */
-  audioEvidence?: "probe" | "listing" | "none";
+  /** What established `audioLanguage`: inspected tags, a listing, provider metadata, or nothing. */
+  audioEvidence?: "probe" | "listing" | "metadata" | "none";
   subtitleLanguage?: string;
   subtitleTrack?: number;
   subtitleSource?: "embedded" | "addon";

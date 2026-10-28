@@ -404,7 +404,11 @@ const materializeForComparison = (
   };
 };
 
-export function rulesFromPolicy(policy: SourcePolicyV1, kind: "episode" | "movie"): DownloadRules {
+export function rulesFromPolicy(
+  policy: SourcePolicyV1,
+  kind: "episode" | "movie",
+  options: { allowRemoteProviders?: boolean } = {},
+): DownloadRules {
   const kinds: Array<SourcePolicyV1["constraints"]["sourceKinds"][number]> = [
     "localFile",
     "mediaServerOriginal",
@@ -424,10 +428,16 @@ export function rulesFromPolicy(policy: SourcePolicyV1, kind: "episode" | "movie
   if (policy.scope.mode === "allAvailable") {
     scope = "all";
   } else {
-    if (policy.scope.providerKeys.some((key) => !key.startsWith("addon:"))) return fail();
-    scope = {
-      selected: policy.scope.providerKeys.map((key) => key.slice("addon:".length)),
-    };
+    const remote = policy.scope.providerKeys.some((key) => key.startsWith("remote:"));
+    if (remote && !options.allowRemoteProviders) return fail();
+    if (policy.scope.providerKeys.some((key) => !key.startsWith("addon:") && !(remote && key.startsWith("remote:")))) {
+      return fail();
+    }
+    scope = remote
+      ? "all"
+      : {
+          selected: policy.scope.providerKeys.map((key) => key.slice("addon:".length)),
+        };
   }
 
   const providerOrder = policy.criteria.find((criterion) => criterion.kind === "providerOrder");
@@ -464,7 +474,9 @@ export function rulesFromPolicy(policy: SourcePolicyV1, kind: "episode" | "movie
   const audioFallback = policy.constraints.audio.fallback;
   if (audioFallback !== undefined && !("code" in audioFallback)) return fail();
   const subtitlePreferred = policy.constraints.subtitles.preferred;
-  const subtitleLanguage = policy.scope.mode === "allAvailable"
+  const materializedFromAll = policy.scope.mode === "allAvailable"
+    || (policy.scope.mode === "selected" && policy.scope.providerKeys.some((key) => key.startsWith("remote:")));
+  const subtitleLanguage = materializedFromAll
     && policy.constraints.subtitles.mode !== "off"
     && subtitlePreferred !== undefined
     && "code" in subtitlePreferred
@@ -491,7 +503,7 @@ export function rulesFromPolicy(policy: SourcePolicyV1, kind: "episode" | "movie
     audio: {
       mode: rulesAudioMode(policy),
       // A materialised policy always names a code; only an unmaterialised one can tell a chosen language from "mine".
-      language: policy.scope.mode === "allAvailable" && "code" in policy.constraints.audio.preferred
+      language: materializedFromAll && "code" in policy.constraints.audio.preferred
         ? policy.constraints.audio.preferred.code
         : "mine",
       fallback: audioFallback && "code" in audioFallback ? audioFallback.code : null,

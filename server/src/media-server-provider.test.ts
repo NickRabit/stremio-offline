@@ -301,6 +301,71 @@ test("versions keeps only usable file sources and never selects a remote URL", a
   await assert.rejects(badId.provider.versions("tok", "user-1", "item-1"), { code: "invalid-response" });
 });
 
+test("versions reads bounded video, audio and embedded-subtitle facts from MediaStreams", async () => {
+  const { provider } = fixture(() => ({
+    MediaSources: [{
+      Id: "v1",
+      Protocol: "File",
+      Name: "1080p",
+      MediaStreams: [
+        null,
+        "not-a-stream",
+        { Type: "Video", Width: 1920, Height: 800 },
+        { Type: "Video", Width: 3840, Height: 2160 },
+        { Type: "Audio", Language: "cze" },
+        { Type: "Audio", Language: 42 },
+        { Type: "Audio", Language: "not-a-language" },
+        { Type: "Subtitle", IsExternal: false, Language: "eng" },
+        { Type: "Subtitle", Language: "not-a-language" },
+        { Type: "Subtitle", IsExternal: true, Language: "ces" },
+        { Type: "Subtitle", IsExternal: "false", Language: "deu" },
+      ],
+    }],
+  }));
+
+  assert.deepEqual(await provider.versions("tok", "user-1", "item-1"), [{
+    id: "v1",
+    name: "1080p",
+    videoWidth: 1920,
+    videoHeight: 800,
+    audioLanguages: ["cs", undefined, undefined],
+    embeddedSubtitleLanguages: ["en", undefined, "de"],
+  }]);
+});
+
+test("versions skips malformed stream entries and rejects oversized language arrays", async () => {
+  const malformed = fixture(() => ({
+    MediaSources: [{
+      Id: "v1",
+      Protocol: "File",
+      MediaStreams: [
+        { Type: "Video", Width: -1, Height: 1.5 },
+        { Type: "Audio", Language: "" },
+        { Type: "Subtitle", IsExternal: false },
+      ],
+    }],
+  }));
+  assert.deepEqual(await malformed.provider.versions("tok", "user-1", "item-1"), [{
+    id: "v1",
+    audioLanguages: [undefined],
+    embeddedSubtitleLanguages: [undefined],
+  }]);
+
+  for (const stream of [
+    { Type: "Audio" },
+    { Type: "Subtitle", IsExternal: false },
+  ]) {
+    const oversized = fixture(() => ({
+      MediaSources: [{
+        Id: "v1",
+        Protocol: "File",
+        MediaStreams: Array.from({ length: 65 }, () => stream),
+      }],
+    }));
+    await assert.rejects(oversized.provider.versions("tok", "user-1", "item-1"), { code: "invalid-response" });
+  }
+});
+
 test("playbackInfo parses direct-play sources and drops every address and unknown field", async () => {
   const { calls, provider } = fixture(() => ({
     PlaySessionId: "a".repeat(32),

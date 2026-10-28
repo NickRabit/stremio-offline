@@ -54,6 +54,7 @@ class FakeServer {
   /** Runs inside the original request, before its response is handed back, so a test can change
    *  the records while the manager is awaiting the transport. */
   onOriginal?: () => Promise<void>;
+  onVersions?: () => Promise<void>;
   assetResult: { bytes: Uint8Array; contentType: string } | undefined;
   assetRequests: Array<Record<string, unknown>> = [];
 
@@ -81,7 +82,11 @@ const stubProvider = (server: FakeServer): MediaServerProvider => ({
     return clone(item);
   },
   ancestors: async (_token, _account, itemId) => { await server.run(); return [...(server.ancestorsOf[itemId] ?? [])]; },
-  versions: async (_token, _account, itemId) => { await server.run(); return clone(server.versionsOf[itemId] ?? []); },
+  versions: async (_token, _account, itemId) => {
+    await server.run();
+    await server.onVersions?.();
+    return clone(server.versionsOf[itemId] ?? []);
+  },
   playbackInfo: async (_token, _account, itemId) => {
     await server.run();
     return {
@@ -558,6 +563,117 @@ const downloadReferenceOf = (harness: Harness): RemoteDownloadReference => ({
   schemaVersion: 1, ownerUserId: ADA, connectionId: harness.connectionId, libraryId: harness.libraryId,
   generation: harness.store.mediaConnections()[0]!.generation, provider: "jellyfin", serverId: "server-1",
   accountId: "account-1", itemId: "item-1", mediaSourceId: "v1",
+});
+
+test("downloadCandidates returns canonical owner references and sanitized streams without URLs", async () => {
+  await withHarness(async (harness) => {
+    harness.server.items["remote-1"] = [{ id: "item-1", name: "Movie One", type: "movie", providerIds: { imdb: "tt1" } }];
+    harness.server.detailOf["item-1"] = { id: "item-1", name: "Movie One", type: "movie", providerIds: { imdb: "tt1" } };
+    harness.server.versionsOf["item-1"] = [
+      { id: "v1", name: "Movie.1080p", container: "mkv", size: 200_000 },
+      { id: "v2", name: "Movie.720p", container: "mp4", size: 100_000 },
+    ];
+
+    const candidates = await harness.sources.downloadCandidates({
+      ownerUserId: ADA,
+      libraryId: harness.libraryId,
+      type: "movie",
+      catalogId: "tt1",
+    });
+
+    assert.deepEqual(candidates.map((candidate) => candidate.reference), [
+      downloadReferenceOf(harness),
+      { ...downloadReferenceOf(harness), mediaSourceId: "v2" },
+    ]);
+    assert.deepEqual(candidates.map((candidate) => candidate.stream), [
+      {
+        name: "Movie.1080p",
+        behaviorHints: { filename: "Movie.1080p.mkv", videoSize: 200_000 },
+      },
+      {
+        name: "Movie.720p",
+        behaviorHints: { filename: "Movie.720p.mp4", videoSize: 100_000 },
+      },
+    ]);
+    assert.ok(candidates.every((candidate) => !("url" in candidate.stream)));
+    assert.doesNotMatch(JSON.stringify(candidates), /https?:|token|secret|expiresAt|sid|media-server:/i);
+    assert.equal(harness.server.originalCalls, 0, "discovery never opens original bytes");
+  }, { contentDownloading: true });
+});
+
+test("downloadCandidates answers nothing without a current owner or copy right", async () => {
+  await withHarness(async (harness) => {
+    harness.server.items["remote-1"] = [{ id: "item-1", name: "Movie One", type: "movie", providerIds: { imdb: "tt1" } }];
+    harness.server.detailOf["item-1"] = { id: "item-1", name: "Movie One", type: "movie", providerIds: { imdb: "tt1" } };
+    harness.server.versionsOf["item-1"] = [{ id: "v1", name: "1080p" }];
+    const input = {
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      type: "movie" as const,
+      catalogId: "tt1",
+    };
+
+    await harness.store.update((state) => {
+      state.users = state.users?.map((user) => user.id === BOB ? { ...user, disabled: true } : user);
+    });
+    assert.deepEqual(await harness.sources.downloadCandidates(input), []);
+
+    await harness.store.update((state) => {
+      state.users = state.users?.map((user) => user.id === BOB
+        ? {
+            ...user,
+            disabled: false,
+            permissions: { ...user.permissions, downloadToLibrary: false },
+          }
+        : user);
+    });
+    assert.deepEqual(await harness.sources.downloadCandidates(input), []);
+  }, { contentDownloading: true });
+});
+
+test("downloadCandidates refuses a changed owner secret or invisible library", async () => {
+  await withHarness(async (harness) => {
+    harness.server.items["remote-1"] = [{ id: "item-1", name: "Movie One", type: "movie", providerIds: { imdb: "tt1" } }];
+    harness.server.detailOf["item-1"] = { id: "item-1", name: "Movie One", type: "movie", providerIds: { imdb: "tt1" } };
+    harness.server.versionsOf["item-1"] = [{ id: "v1", name: "1080p" }];
+    harness.server.onVersions = async () => {
+      harness.server.onVersions = undefined;
+      await harness.store.update((state) => {
+        state.users = state.users?.map((user) => user.id === BOB ? { ...user, secret: "changed" } : user);
+      });
+    };
+    assert.deepEqual(await harness.sources.downloadCandidates({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      type: "movie",
+      catalogId: "tt1",
+    }), []);
+
+    await harness.store.update((state) => {
+      state.remoteLibraries = state.remoteLibraries?.map((library) =>
+        library.id === harness.libraryId ? { ...library, allowedUsers: [] } : library);
+    });
+    assert.deepEqual(await harness.sources.downloadCandidates({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      type: "movie",
+      catalogId: "tt1",
+    }), []);
+  }, { contentDownloading: true });
+});
+
+test("downloadCandidates drops a result the provider does not allow copying", async () => {
+  await withHarness(async (harness) => {
+    harness.server.items["remote-1"] = [{ id: "item-1", name: "Movie One", type: "movie", providerIds: { imdb: "tt1" } }];
+    harness.server.detailOf["item-1"] = { id: "item-1", name: "Movie One", type: "movie", providerIds: { imdb: "tt1" } };
+    harness.server.versionsOf["item-1"] = [{ id: "v1", name: "1080p" }];
+    assert.deepEqual(await harness.sources.downloadCandidates({
+      ownerUserId: ADA,
+      libraryId: harness.libraryId,
+      type: "movie",
+      catalogId: "tt1",
+    }), []);
+  }, { contentDownloading: false });
 });
 
 test("downloadReference captures a durable, session-free handle for the exact version", async () => {

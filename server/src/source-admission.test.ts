@@ -126,6 +126,16 @@ const storedBuiltIns = (): StoredSourceProfile[] =>
     updatedAt: "2026-01-01T00:00:00.000Z",
   }));
 
+const storedRules = (): StoredSourceProfile => ({
+  id: SOURCE_PROFILE_IDS.balanced,
+  revision: 1,
+  template: "rules",
+  nameKey: "rules.preset.balanced",
+  parameters: defaultTemplateParameters("rules"),
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+});
+
 const context = (
   user = account(),
   options: Partial<Omit<SourceAdmissionContext, "viewer" | "preferences" | "operation" | "mediaKind">> & {
@@ -533,6 +543,60 @@ test("Travel freezes its quality floor, ascending size and local-copy policy", (
   ]);
   assert.equal(snapshot.policy.existingLocalCopy, "meetsRequirements");
   assert.equal(snapshot.policy.nextEpisode, "profile");
+});
+
+test("rules downloads admit visible remote libraries before addons", () => {
+  const firstRemote = remoteLibrary(REMOTE_ONE, [MEMBER]);
+  const secondRemote = { ...remoteLibrary(REMOTE_TWO, [MEMBER]), order: 1 };
+  const snapshot = materializeSourceAdmission(
+    reference(SOURCE_PROFILE_IDS.balanced),
+    context(account(), {
+      profiles: [storedRules()],
+      addons: [addon("first", { allowedUsers: [MEMBER] }), addon("second", { allowedUsers: [MEMBER] })],
+      remoteLibraries: [secondRemote, firstRemote],
+      operation: "downloadToLibrary",
+    }),
+  );
+
+  assert.deepEqual(snapshot.providerKeys, [
+    `remote:${REMOTE_ONE}`,
+    `remote:${REMOTE_TWO}`,
+    "addon:first",
+    "addon:second",
+  ]);
+  assert.deepEqual(
+    snapshot.policy.criteria.find((criterion) => criterion.kind === "providerOrder"),
+    { kind: "providerOrder", keys: snapshot.providerKeys },
+  );
+});
+
+test("other download templates keep their addon-only provider snapshots", () => {
+  for (const profileId of [SOURCE_PROFILE_IDS.travel, SOURCE_PROFILE_IDS.providerPriority]) {
+    const snapshot = materializeSourceAdmission(
+      reference(profileId),
+      context(account(), {
+        addons: [addon("source", { allowedUsers: [MEMBER] })],
+        remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+        operation: "downloadToLibrary",
+      }),
+    );
+    assert.deepEqual(snapshot.providerKeys, ["addon:source"], profileId);
+  }
+});
+
+test("rules downloads without the copy right keep remote providers out", () => {
+  assert.throws(
+    () => materializeSourceAdmission(
+      reference(SOURCE_PROFILE_IDS.balanced),
+      context(account(MEMBER, "user", { downloadToLibrary: false, downloadToDevice: true }), {
+        profiles: [storedRules()],
+        addons: [addon("source", { allowedUsers: [MEMBER] })],
+        remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+        operation: "downloadToLibrary",
+      }),
+    ),
+    rejectionCode("operationForbidden"),
+  );
 });
 
 test("Travel snapshot parsing rematerializes only its mutable provider and language fields", () => {

@@ -166,6 +166,7 @@ const resolverFor = (state: State, fake: FakeDependencies = {}) => {
     listStreams: fake.listStreams ?? (async () => []),
     listSubtitles: fake.listSubtitles ?? (async () => []),
     inspect: fake.inspect ?? (async () => media()),
+    remoteDownloadCandidates: async () => [],
   };
   return createTravelProfileResolver(deps);
 };

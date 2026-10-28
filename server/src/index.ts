@@ -388,6 +388,7 @@ const queueResolverDeps: SourceResolverDeps = {
   listStreams: (addons, type, id) => streamCache.list(addons, type, id),
   listSubtitles: (addons, type, id, signal) => subtitles(addons, type, id, false, signal),
   inspect: (stream, signal) => playback.inspect(stream, signal),
+  remoteDownloadCandidates: (input) => mediaServerSources.downloadCandidates(input),
 };
 queue.setResolver(createSourceResolver(queueResolverDeps));
 queue.setTravelResolver(createTravelProfileResolver(queueResolverDeps));

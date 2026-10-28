@@ -90,7 +90,7 @@ export interface DownloadResolution {
   audioTrack?: number;
   fallbackUsed?: boolean;
   /** What established `audioLanguage`: the file's own tags, the addon listing, or nothing. */
-  audioEvidence?: "probe" | "listing" | "none";
+  audioEvidence?: "probe" | "listing" | "metadata" | "none";
   subtitleLanguage?: string;
   subtitleTrack?: number;
   subtitleSource?: "embedded" | "addon";
@@ -272,7 +272,7 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
     const addon = scope.addons.find((item) => item.key === addonKey);
     if (!addon?.enabled || !addonAllowed(addon, viewer)) return false;
   }
-  if (isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream) {
+  if (isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream && !job.remoteDownload) {
     const streamAddon = job.stream.addonKey
       ? scope.addons.find((item) => item.key === job.stream!.addonKey)
       : undefined;
@@ -1037,6 +1037,7 @@ export class DownloadQueue {
     job.stream = undefined;
     job.subtitle = undefined;
     job.resolution = undefined;
+    delete job.remoteDownload;
     delete job.sourceStreamAddonIdentity;
     delete job.sourceSubtitleAddonIdentity;
     job.target = "";
@@ -1047,11 +1048,15 @@ export class DownloadQueue {
   private async discardProfileSelection(job: DownloadJob, markTried: boolean) {
     const abandoned = job.target ? this.jobPath(job) : undefined;
     const subtitleFiles = this.subtitleFiles(job);
-    const failedUrl = markTried ? job.stream?.url : undefined;
+    const failedUrl = markTried && !job.remoteDownload ? job.stream?.url : undefined;
     const failedTorrent = markTried && job.stream?.infoHash ? torrentKey(job.stream) : undefined;
+    const failedRemote = markTried && job.remoteDownload
+      ? `remote:${remoteDownloadKey(job.remoteDownload)}`
+      : undefined;
     this.clearLazyChoice(job);
     if (failedUrl && job.source && !job.source.tried.includes(failedUrl)) job.source.tried.push(failedUrl);
     if (failedTorrent && job.source && !job.source.tried.includes(failedTorrent)) job.source.tried.push(failedTorrent);
+    if (failedRemote && job.source && !job.source.tried.includes(failedRemote)) job.source.tried.push(failedRemote);
     delete job.travelCursor;
     delete job.travelTemporaryFailures;
     delete job.travelBudgetAttempts;
@@ -1189,8 +1194,8 @@ export class DownloadQueue {
     const sealed = isRemoteDownloadSource(stream);
     const marker = stream.url === REMOTE_DOWNLOAD_MARKER;
     if (!sealed && !marker) {
-      if (remoteDownload !== undefined) throw remoteDownloadRefused();
-      return { stream };
+      if (remoteDownload === undefined) return { stream };
+      if (stream.url !== undefined && stream.url !== "") throw remoteDownloadRefused();
     }
     if (!remoteDownload || !isRemoteDownloadReference(remoteDownload) || !this.remoteDownload) throw remoteDownloadRefused();
     if (remoteDownload.ownerUserId !== ownerUserId) throw remoteDownloadRefused();
@@ -2095,30 +2100,46 @@ export class DownloadQueue {
       throw new SourceError("The job has neither a source nor a rule for finding one.");
     }
     const snapshot = job.sourceAdmission;
-    const hasUrl = outcome.stream.url !== undefined && outcome.stream.url !== "";
-    if (isTravelSnapshot(snapshot) && outcome.stream.infoHash !== undefined) {
-      throw new SourceError("No matching source was found.", "err.noMatchingSource");
-    }
-    if (hasUrl) {
-      if (!isHttpDownloadUrl(outcome.stream.url)) {
+    const remote = "remoteDownload" in outcome;
+    let selectedStream: StreamItem;
+    let remoteDownload: RemoteDownloadReference | undefined;
+    let subtitle: SubtitleItem | undefined;
+    let streamAddonIdentity: string | undefined;
+    let subtitleAddonIdentity: string | undefined;
+    if (remote) {
+      const admitted = this.remoteAdmission(outcome.stream, outcome.remoteDownload, this.ownerOf(job));
+      selectedStream = admitted.stream;
+      remoteDownload = admitted.reference;
+    } else {
+      selectedStream = outcome.stream;
+      subtitle = outcome.subtitle;
+      streamAddonIdentity = outcome.streamAddonIdentity;
+      subtitleAddonIdentity = outcome.subtitleAddonIdentity;
+      const hasUrl = selectedStream.url !== undefined && selectedStream.url !== "";
+      if (isTravelSnapshot(snapshot) && selectedStream.infoHash !== undefined) {
         throw new SourceError("No matching source was found.", "err.noMatchingSource");
       }
-    } else if (typeof outcome.stream.infoHash !== "string"
-      || outcome.stream.infoHash.trim() === "") {
-      throw new SourceError("No matching source was found.", "err.noMatchingSource");
-    }
-    if (!hasUrl && this.kindOf(job) === "series"
-      && (typeof outcome.stream.fileIdx !== "number"
-        || !Number.isSafeInteger(outcome.stream.fileIdx)
-        || outcome.stream.fileIdx < 0)) {
-      throw new SourceError("No matching source was found.", "err.noMatchingSource");
-    }
-    if (outcome.subtitle !== undefined && !isHttpDownloadUrl(outcome.subtitle.url)) {
-      throw new SourceError("No matching source was found.", "err.noMatchingSource");
-    }
-    if (isRemoteDownloadSource(outcome.stream)
-      || (outcome.subtitle && isRemoteMediaStream({ url: outcome.subtitle.url }))) {
-      throw new SourceError("This library is read-only.", "library.readOnly");
+      if (hasUrl) {
+        if (!isHttpDownloadUrl(selectedStream.url)) {
+          throw new SourceError("No matching source was found.", "err.noMatchingSource");
+        }
+      } else if (typeof selectedStream.infoHash !== "string"
+        || selectedStream.infoHash.trim() === "") {
+        throw new SourceError("No matching source was found.", "err.noMatchingSource");
+      }
+      if (!hasUrl && this.kindOf(job) === "series"
+        && (typeof selectedStream.fileIdx !== "number"
+          || !Number.isSafeInteger(selectedStream.fileIdx)
+          || selectedStream.fileIdx < 0)) {
+        throw new SourceError("No matching source was found.", "err.noMatchingSource");
+      }
+      if (subtitle !== undefined && !isHttpDownloadUrl(subtitle.url)) {
+        throw new SourceError("No matching source was found.", "err.noMatchingSource");
+      }
+      if (isRemoteDownloadSource(selectedStream)
+        || (subtitle && isRemoteMediaStream({ url: subtitle.url }))) {
+        throw new SourceError("This library is read-only.", "library.readOnly");
+      }
     }
 
     const settings = job.source.selection?.targetSettings;
@@ -2126,11 +2147,12 @@ export class DownloadQueue {
     const kind = this.kindOf(job);
     const staged: DownloadJob = {
       ...job,
-      stream: outcome.stream,
-      subtitle: outcome.subtitle,
+      stream: selectedStream,
+      ...(subtitle === undefined ? {} : { subtitle }),
+      ...(remoteDownload === undefined ? {} : { remoteDownload }),
       resolution: outcome.resolution,
-      sourceStreamAddonIdentity: outcome.streamAddonIdentity,
-      sourceSubtitleAddonIdentity: outcome.subtitleAddonIdentity,
+      ...(streamAddonIdentity === undefined ? {} : { sourceStreamAddonIdentity: streamAddonIdentity }),
+      ...(subtitleAddonIdentity === undefined ? {} : { sourceSubtitleAddonIdentity: subtitleAddonIdentity }),
       targetSettings: settings,
     };
     const library = await this.resolveLibrary(kind, settings);
@@ -2156,6 +2178,7 @@ export class DownloadQueue {
     const previous = {
       stream: job.stream,
       subtitle: job.subtitle,
+      remoteDownload: job.remoteDownload,
       resolution: job.resolution,
       streamIdentity: job.sourceStreamAddonIdentity,
       subtitleIdentity: job.sourceSubtitleAddonIdentity,
@@ -2173,9 +2196,13 @@ export class DownloadQueue {
       await this.persist({
         apply: () => {
           job.stream = staged.stream;
-          job.subtitle = staged.subtitle;
+          if (staged.subtitle === undefined) delete job.subtitle;
+          else job.subtitle = staged.subtitle;
+          if (staged.remoteDownload === undefined) delete job.remoteDownload;
+          else job.remoteDownload = staged.remoteDownload;
           job.resolution = staged.resolution;
-          job.sourceStreamAddonIdentity = staged.sourceStreamAddonIdentity;
+          if (staged.sourceStreamAddonIdentity === undefined) delete job.sourceStreamAddonIdentity;
+          else job.sourceStreamAddonIdentity = staged.sourceStreamAddonIdentity;
           if (staged.sourceSubtitleAddonIdentity === undefined) delete job.sourceSubtitleAddonIdentity;
           else job.sourceSubtitleAddonIdentity = staged.sourceSubtitleAddonIdentity;
           job.targetSettings = staged.targetSettings;
@@ -2191,6 +2218,8 @@ export class DownloadQueue {
         revert: () => {
           job.stream = previous.stream;
           job.subtitle = previous.subtitle;
+          if (previous.remoteDownload === undefined) delete job.remoteDownload;
+          else job.remoteDownload = previous.remoteDownload;
           job.resolution = previous.resolution;
           if (previous.streamIdentity === undefined) delete job.sourceStreamAddonIdentity;
           else job.sourceStreamAddonIdentity = previous.streamIdentity;
@@ -2227,7 +2256,8 @@ export class DownloadQueue {
       return false;
     }
     log("INFO", "Download source selected", {
-      id: job.id, title: job.title, addon: outcome.stream.addonName, target: job.target,
+      id: job.id, title: job.title, addon: selectedStream.addonName, target: job.target,
+      ...(remoteDownload === undefined ? {} : { provider: remoteDownload.provider }),
       library: library.id, attempt: job.source.tried.length + 1, selectionMs: this.now() - startedAt,
       checkedCandidates: outcome.resolution.checkedCandidates, audioLanguage: outcome.resolution.audioLanguage,
       fallbackAudio: outcome.resolution.fallbackUsed, subtitleStatus: outcome.resolution.subtitleStatus,
