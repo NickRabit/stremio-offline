@@ -17,6 +17,7 @@ const rules = (overrides: Partial<DownloadRules> = {}): DownloadRules => ({
   resolution: { min: 720, max: 1080 },
   audio: { mode: "prefer", language: "mine", fallback: null },
   subtitles: "ifAvailable",
+  subtitleLanguage: "mine",
   sizeGb: {
     episode: { min: null, max: 4 },
     movie: { min: null, max: 15 },
@@ -200,6 +201,45 @@ test("rule validation is strict and rejects contradictory choices", () => {
   assert.throws(() => parseDownloadRules(rules({ preference: [] })), DownloadRulesValidationError);
   assert.throws(() => parseDownloadRules(rules({ preference: ["language", "language"] })), DownloadRulesValidationError);
   assert.throws(() => parseDownloadRules(rules({ addons: { scope: { selected: [] }, order: "viewer" } })), DownloadRulesValidationError);
+});
+
+test("subtitle language defaults, normalizes and validates in both input shapes", () => {
+  const { subtitleLanguage: _subtitleLanguage, ...v2WithoutSubtitleLanguage } = rules();
+  assert.equal(parseDownloadRules(v2WithoutSubtitleLanguage).subtitleLanguage, "mine");
+
+  const legacy = {
+    addons: { scope: "all", order: "viewer" },
+    torrents: true,
+    resolution: { min: 720, max: 1080 },
+    audio: { mode: "prefer", fallback: null },
+    subtitles: "ifAvailable",
+    maxSizeGb: { episode: 4, movie: 15 },
+    skipCinema: true,
+    preference: ["language", "smaller"],
+  };
+  assert.equal(parseDownloadRules(legacy).subtitleLanguage, "mine");
+  assert.equal(parseDownloadRules(rules({ subtitleLanguage: "CS" })).subtitleLanguage, "cs");
+  assert.throws(() => parseDownloadRules(rules({ subtitleLanguage: "xx" })), DownloadRulesValidationError);
+  assert.throws(
+    () => parseDownloadRules(rules({ subtitles: "off", subtitleLanguage: "cs" })),
+    DownloadRulesValidationError,
+  );
+});
+
+test("subtitle language maps to a coded or viewer preference without adding a criterion", () => {
+  assert.deepEqual(rulesPolicy(rules({ subtitleLanguage: "cs" }), "episode").constraints.subtitles.preferred, { code: "cs" });
+  assert.deepEqual(rulesPolicy(rules(), "episode").constraints.subtitles.preferred, { preference: "subtitle" });
+  assert.equal(
+    rulesPolicy(rules({ subtitleLanguage: "cs" }), "episode").criteria
+      .some((criterion) => criterion.kind === "subtitleTier"),
+    false,
+  );
+
+  const chosen = rules({
+    subtitleLanguage: "cs",
+    sizeGb: { episode: { min: null, max: 4 }, movie: { min: null, max: null } },
+  });
+  assert.deepEqual(rulesFromPolicy(rulesPolicy(chosen, "episode"), "episode"), chosen);
 });
 
 test("v2 rules round-trip all audio modes with mine or an explicit language", () => {

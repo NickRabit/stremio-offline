@@ -60,6 +60,10 @@ const sizeSummary = (
   return "";
 };
 
+const subtitleSummary = (language: string | undefined) => language === undefined
+  ? ""
+  : t("rules.summary.subtitlesLanguage", { language: inlineLanguageName(language) });
+
 const summary = (
   min: number | null | undefined,
   max: number | null | undefined,
@@ -68,10 +72,12 @@ const summary = (
   sizeMin: number | null | undefined,
   sizeMax: number | null | undefined,
   kind: "episode" | "movie",
+  subtitleLanguage: string | undefined,
 ) => [
   resolutionSummary(min, max),
   audioSummary(audio, language),
   sizeSummary(sizeMin, sizeMax, kind),
+  subtitleSummary(subtitleLanguage),
 ].filter(Boolean).join(" · ");
 
 export const rulesSummary = (rules: DownloadRules, kind: "episode" | "movie" = "episode") =>
@@ -83,6 +89,9 @@ export const rulesSummary = (rules: DownloadRules, kind: "episode" | "movie" = "
     rules.sizeGb[kind].min,
     rules.sizeGb[kind].max,
     kind,
+    rules.subtitles === "off" || rules.subtitleLanguage === "mine"
+      ? undefined
+      : rules.subtitleLanguage,
   );
 
 export const profileAudioMode = (profile: SourceProfile): DownloadRules["audio"]["mode"] => {
@@ -93,6 +102,12 @@ export const profileAudioMode = (profile: SourceProfile): DownloadRules["audio"]
 export const profileAudioLanguage = (profile: SourceProfile): string | undefined => {
   const preferred = profile.policy.constraints.audio.preferred;
   return "code" in preferred ? preferred.code : undefined;
+};
+
+export const profileSubtitleLanguage = (profile: SourceProfile): string | undefined => {
+  const preferred = profile.policy.constraints.subtitles.preferred;
+  return profile.policy.constraints.subtitles.mode !== "off"
+    && preferred !== undefined && "code" in preferred ? preferred.code : undefined;
 };
 
 export const profileSummary = (profile: SourceProfile, kind: "episode" | "movie") => {
@@ -106,5 +121,6 @@ export const profileSummary = (profile: SourceProfile, kind: "episode" | "movie"
   return summary(height?.min, height?.max,
     profileAudioMode(profile), profileAudioLanguage(profile),
     bytes?.min == null ? null : bytes.min / 1_000_000_000,
-    bytes?.max == null ? null : bytes.max / 1_000_000_000, kind);
+    bytes?.max == null ? null : bytes.max / 1_000_000_000, kind,
+    profileSubtitleLanguage(profile));
 };

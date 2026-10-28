@@ -31,6 +31,7 @@ export interface DownloadRules {
     fallback: string | null;
   };
   subtitles: "off" | "ifAvailable" | "required";
+  subtitleLanguage: "mine" | string;
   sizeGb: { episode: RuleSizeRange; movie: RuleSizeRange };
   skipCinema: boolean;
   preference: RulePreference[];
@@ -135,7 +136,7 @@ const parser = (value: unknown): DownloadRules => {
   const input = objectValue(
     value,
     ["addons", "torrents", "resolution", "audio", "subtitles", "skipCinema", "preference"],
-    ["sizeGb", "maxSizeGb"],
+    ["sizeGb", "maxSizeGb", "subtitleLanguage"],
   );
   const hasSizeRange = Object.hasOwn(input, "sizeGb");
   const hasLegacyMaximum = Object.hasOwn(input, "maxSizeGb");
@@ -214,12 +215,21 @@ const parser = (value: unknown): DownloadRules => {
     };
   }
 
+  const subtitles = enumValue(input.subtitles, ["off", "ifAvailable", "required"] as const);
+  const subtitleLanguage = !Object.hasOwn(input, "subtitleLanguage")
+    ? "mine"
+    : input.subtitleLanguage === "mine"
+      ? "mine"
+      : languageCode(input.subtitleLanguage) ?? fail();
+  if (subtitles === "off" && subtitleLanguage !== "mine") return fail();
+
   const parsed: DownloadRules = {
     addons: { scope, order },
     torrents: input.torrents,
     resolution: { min, max },
     audio: { mode, language, fallback },
-    subtitles: enumValue(input.subtitles, ["off", "ifAvailable", "required"] as const),
+    subtitles,
+    subtitleLanguage,
     sizeGb: sizes,
     skipCinema: input.skipCinema,
     preference: preferences,
@@ -306,7 +316,9 @@ export function rulesPolicy(
         ? { mode: "off" }
         : {
             mode: rules.subtitles === "required" ? "required" : "optional",
-            preferred: { preference: "subtitle" },
+            preferred: rules.subtitleLanguage === "mine"
+              ? { preference: "subtitle" }
+              : { code: rules.subtitleLanguage },
           },
       ...(height === undefined ? {} : { heightPixels: height }),
       ...(bytes === undefined ? {} : { bytes }),
@@ -451,6 +463,13 @@ export function rulesFromPolicy(policy: SourcePolicyV1, kind: "episode" | "movie
 
   const audioFallback = policy.constraints.audio.fallback;
   if (audioFallback !== undefined && !("code" in audioFallback)) return fail();
+  const subtitlePreferred = policy.constraints.subtitles.preferred;
+  const subtitleLanguage = policy.scope.mode === "allAvailable"
+    && policy.constraints.subtitles.mode !== "off"
+    && subtitlePreferred !== undefined
+    && "code" in subtitlePreferred
+    ? subtitlePreferred.code
+    : "mine";
   const height = policy.constraints.heightPixels;
   const bytes = policy.constraints.bytes;
   const sizeRange = (reported: boolean): RuleSizeRange => ({
@@ -480,6 +499,7 @@ export function rulesFromPolicy(policy: SourcePolicyV1, kind: "episode" | "movie
     subtitles: policy.constraints.subtitles.mode === "off"
       ? "off"
       : policy.constraints.subtitles.mode === "required" ? "required" : "ifAvailable",
+    subtitleLanguage,
     sizeGb: {
       episode: sizeRange(kind === "episode"),
       movie: sizeRange(kind === "movie"),

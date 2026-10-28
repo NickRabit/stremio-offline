@@ -3,17 +3,19 @@ import { setLocale } from "./i18n";
 import {
   profileAudioLanguage,
   profileAudioMode,
+  profileSubtitleLanguage,
   profileSummary,
   rulesSummary,
 } from "./source-profile-copy";
 import type { DownloadRules, SourceProfile } from "./types";
 
 type AudioPreference = { preference: "audio" } | { code: string };
+type SubtitlePreference = { preference: "subtitle" } | { code: string };
 
 const rules = (over: Partial<DownloadRules> = {}): DownloadRules => ({
   addons: { scope: "all", order: "viewer" }, torrents: true,
   resolution: { min: 720, max: 1080 }, audio: { mode: "prefer", language: "mine", fallback: null },
-  subtitles: "ifAvailable", sizeGb: {
+  subtitles: "ifAvailable", subtitleLanguage: "mine", sizeGb: {
     episode: { min: null, max: null }, movie: { min: null, max: null },
   }, skipCinema: true,
   preference: ["language", "addonOrder"], ...over,
@@ -23,12 +25,16 @@ const profile = ({
   mode = "preferred",
   preferred = { preference: "audio" },
   audioTier = true,
+  subtitleMode = "off",
+  subtitlePreferred,
   sizeLimits,
   bytes,
 }: {
   mode?: "preferred" | "strict";
   preferred?: AudioPreference;
   audioTier?: boolean;
+  subtitleMode?: "off" | "optional" | "required";
+  subtitlePreferred?: SubtitlePreference;
   sizeLimits?: SourceProfile["sizeLimits"];
   bytes?: { min?: number; max?: number };
 } = {}): SourceProfile => ({
@@ -38,7 +44,10 @@ const profile = ({
     schemaVersion: 1, scope: { mode: "allAvailable" },
     constraints: {
       sourceKinds: ["localFile", "mediaServerOriginal", "http"], audio: { mode, preferred },
-      subtitles: { mode: "off" }, heightPixels: { min: 720, max: 1080 },
+      subtitles: subtitleMode === "off"
+        ? { mode: "off" }
+        : { mode: subtitleMode, preferred: subtitlePreferred ?? { preference: "subtitle" } },
+      heightPixels: { min: 720, max: 1080 },
       ...(bytes === undefined ? {} : { bytes }),
     },
     criteria: [
@@ -80,6 +89,13 @@ describe("rulesSummary", () => {
     expect(rulesSummary(rules({ audio: { mode: "only", language: "de", fallback: null } })))
       .toBe("720p–1080p · jen němčina");
   });
+
+  it("appends only a chosen subtitle language", () => {
+    expect(rulesSummary(rules({ subtitles: "required", subtitleLanguage: "cs" })))
+      .toBe("720p–1080p · prefer my language · subtitles: Czech");
+    expect(rulesSummary(rules())).toBe("720p–1080p · prefer my language");
+    expect(rulesSummary(rules({ subtitles: "off" }))).toBe("720p–1080p · prefer my language");
+  });
 });
 
 describe("profile summaries", () => {
@@ -115,11 +131,28 @@ describe("profile summaries", () => {
     }), "movie")).toBe("720p–1080p · any language · ~1.2–3.4 GB per film");
   });
 
-  it("exports the public audio mode and explicit language", () => {
+  it("appends only a chosen profile subtitle language", () => {
+    expect(profileSummary(profile({
+      subtitleMode: "required",
+      subtitlePreferred: { code: "cs" },
+    }), "episode")).toBe("720p–1080p · prefer my language · subtitles: Czech");
+    expect(profileSummary(profile(), "episode")).toBe("720p–1080p · prefer my language");
+    expect(profileSummary(profile({
+      subtitleMode: "optional",
+      subtitlePreferred: { preference: "subtitle" },
+    }), "episode")).toBe("720p–1080p · prefer my language");
+  });
+
+  it("exports the public audio mode and explicit languages", () => {
     expect(profileAudioMode(profile({ audioTier: false }))).toBe("any");
     expect(profileAudioMode(profile())).toBe("prefer");
     expect(profileAudioMode(profile({ mode: "strict" }))).toBe("only");
     expect(profileAudioLanguage(profile())).toBeUndefined();
     expect(profileAudioLanguage(profile({ preferred: { code: "en" } }))).toBe("en");
+    expect(profileSubtitleLanguage(profile())).toBeUndefined();
+    expect(profileSubtitleLanguage(profile({
+      subtitleMode: "optional",
+      subtitlePreferred: { code: "cs" },
+    }))).toBe("cs");
   });
 });

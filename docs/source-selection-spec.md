@@ -479,6 +479,8 @@ copies), Language (audio, subtitles) and an ordered preference list.
   admission) or a chosen language code. `any` is encoded as a preferred audio constraint with no
   `audioTier` criterion, so language neither filters nor ranks; `rulesAudioMode(policy)` reads the
   mode back. A fallback language and the Follow wait for audio exist only for `prefer`.
+- **Subtitles** use the viewer's own language (`"mine"`, resolved at admission) or a chosen
+  language code. A chosen subtitle language filters subtitles without adding a ranking criterion.
 - **Size** is a range per episode and per film, judged on the listed size only: a known size
   outside the range excludes the offer, an unknown size passes.
 - **Resolution** compares classes, not raw pixel height. A probed video is classed by

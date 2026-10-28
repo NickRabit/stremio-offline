@@ -34,7 +34,7 @@ const addonRows = (addons: readonly Addon[]) => addons.filter(providesStreams)
 const blankRules = (): DownloadRules => ({
   addons: { scope: "all", order: "viewer" }, torrents: true,
   resolution: { min: 720, max: 1080 }, audio: { mode: "prefer", language: "mine", fallback: null },
-  subtitles: "ifAvailable", sizeGb: {
+  subtitles: "ifAvailable", subtitleLanguage: "mine", sizeGb: {
     episode: { min: null, max: 4 }, movie: { min: null, max: 15 },
   }, skipCinema: true,
   preference: ["language", "resolutionHigher", "addonOrder", "smaller"],
@@ -259,6 +259,14 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
       : draft.rules.audio.fallback;
     updateRules({ ...draft.rules, audio: { ...draft.rules.audio, language, fallback } });
   };
+  const setSubtitles = (subtitles: DownloadRules["subtitles"]) => {
+    if (!draft) return;
+    updateRules({
+      ...draft.rules,
+      subtitles,
+      subtitleLanguage: subtitles === "off" ? "mine" : draft.rules.subtitleLanguage,
+    });
+  };
   // A rule for a chosen language names it; "my language" stays generic.
   const preferenceLabel = (preference: RulePreference) =>
     preference === "language" && draft && draft.rules.audio.language !== "mine"
@@ -342,7 +350,8 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
           <label><span>{t("rules.audio")}</span><select aria-label={t("rules.audio")} value={draft.rules.audio.mode} onChange={(event) => setAudioMode(event.target.value as DownloadRules["audio"]["mode"])}><option value="any">{t("rules.audioAny")}</option><option value="prefer">{t("rules.audioModePrefer")}</option><option value="only">{t("rules.audioModeOnly")}</option></select></label>
           <label><span>{t("rules.audioLanguage")}</span><select aria-label={t("rules.audioLanguage")} disabled={draft.rules.audio.mode === "any"} value={draft.rules.audio.language} onChange={(event) => setAudioLanguage(event.target.value)}><option value="mine">{t("rules.audioLanguageMine")}</option>{languages.map(({ code }) => <option key={code} value={code}>{languageName(code)}</option>)}</select></label>
           <label><span>{t("rules.fallbackLanguage")}</span><select aria-label={t("rules.fallbackLanguage")} disabled={draft.rules.audio.mode !== "prefer"} value={draft.rules.audio.fallback ?? ""} onChange={(event) => updateRules({ ...draft.rules, audio: { ...draft.rules.audio, fallback: event.target.value || null } })}><option value="">{t("rules.fallbackNone")}</option>{languages.filter(({ code }) => draft.rules.audio.language === "mine" || code !== draft.rules.audio.language).map(({ code }) => <option key={code} value={code}>{languageName(code)}</option>)}</select></label>
-          <label><span>{t("rules.subtitles")}</span><select aria-label={t("rules.subtitles")} value={draft.rules.subtitles} onChange={(event) => updateRules({ ...draft.rules, subtitles: event.target.value as DownloadRules["subtitles"] })}><option value="off">{t("rules.subtitlesOff")}</option><option value="ifAvailable">{t("rules.subtitlesIfAvailable")}</option><option value="required">{t("rules.subtitlesRequired")}</option></select></label>
+          <label><span>{t("rules.subtitles")}</span><select aria-label={t("rules.subtitles")} value={draft.rules.subtitles} onChange={(event) => setSubtitles(event.target.value as DownloadRules["subtitles"])}><option value="off">{t("rules.subtitlesOff")}</option><option value="ifAvailable">{t("rules.subtitlesIfAvailable")}</option><option value="required">{t("rules.subtitlesRequired")}</option></select></label>
+          <label><span>{t("rules.subtitleLanguage")}</span><select aria-label={t("rules.subtitleLanguage")} disabled={draft.rules.subtitles === "off"} value={draft.rules.subtitleLanguage} onChange={(event) => updateRules({ ...draft.rules, subtitleLanguage: event.target.value })}><option value="mine">{t("rules.audioLanguageMine")}</option>{languages.map(({ code }) => <option key={code} value={code}>{languageName(code)}</option>)}</select></label>
         </div>
       </fieldset>
       <fieldset className="rules-fieldset"><legend>{t("rules.preferSection")}</legend>

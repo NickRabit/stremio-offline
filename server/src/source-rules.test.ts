@@ -31,6 +31,7 @@ const baseRules = (overrides: Partial<DownloadRules> = {}): DownloadRules => par
   resolution: { min: null, max: null },
   audio: { mode: "prefer", language: "mine", fallback: null },
   subtitles: "off",
+  subtitleLanguage: "mine",
   sizeGb: {
     episode: { min: null, max: null },
     movie: { min: null, max: null },
