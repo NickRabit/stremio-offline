@@ -892,4 +892,11 @@ class StreamsTest {
     assertNull(Streams.noteProfileId(StreamSort.Addon, "addon", ids))
     assertNull(Streams.noteProfileId(StreamSort.FirstRule, "recommended", emptyList()))
   }
+
+  @Test
+  fun `a media-server version's own track languages win over its name`() {
+    val stream = StreamDto(sourceId = "r", name = "Show S01E01", audioLanguages = listOf("cs", "en", "cs"))
+    assertEquals(listOf("cs", "en"), Streams.streamLanguages(stream))
+    assertEquals(emptyList<String>(), Streams.streamLanguages(StreamDto(sourceId = "a", name = "Show S01E01")))
+  }
 }

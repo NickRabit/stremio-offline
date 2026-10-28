@@ -34,6 +34,8 @@ object Streams {
 
   /** `titleLanguage` stands in only for a source whose addon admitted it found no language. */
   fun streamLanguages(stream: StreamDto, titleLanguage: String? = null): List<String> {
+    // A media-server version names its own tracks; that wins over a guess from its name.
+    if (stream.audioLanguages.isNotEmpty()) return stream.audioLanguages.distinct()
     val found = (Languages.guessLanguages(streamText(stream)) +
       Languages.bingeGroupLanguages(stream.behaviorHints?.bingeGroup)).distinct()
     if (found.isNotEmpty() || titleLanguage == null || !Languages.leavesLanguageBlank(stream.behaviorHints?.bingeGroup)) return found

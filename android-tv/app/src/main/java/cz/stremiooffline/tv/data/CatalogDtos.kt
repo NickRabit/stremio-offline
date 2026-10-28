@@ -138,6 +138,10 @@ data class StreamDto(
   /** Source-owned external subtitles this version carries (an addon's own list, or the SRT a
    *  media server minted for one remote version), each with an opaque id. */
   val subtitles: List<AddonSubtitleDto> = emptyList(),
+  /** A media-server version's own track languages; [audioLanguagesGuessed] when read from its name. */
+  val audioLanguages: List<String> = emptyList(),
+  val subtitleLanguages: List<String> = emptyList(),
+  val audioLanguagesGuessed: Boolean = false,
   /** The same source's handle in every session; the server mints it and the app never computes it. */
   val stableKey: String? = null,
   /** One verdict per rules profile, keyed by profile id. */
