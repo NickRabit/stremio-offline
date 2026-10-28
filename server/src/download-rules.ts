@@ -474,8 +474,9 @@ export function rulesFromPolicy(
   const audioFallback = policy.constraints.audio.fallback;
   if (audioFallback !== undefined && !("code" in audioFallback)) return fail();
   const subtitlePreferred = policy.constraints.subtitles.preferred;
-  const materializedFromAll = policy.scope.mode === "allAvailable"
-    || (policy.scope.mode === "selected" && policy.scope.providerKeys.some((key) => key.startsWith("remote:")));
+  // A materialised policy always names a code, so only an unmaterialised one can tell a chosen
+  // language from "mine"; the comparison below copies the materialised preference back.
+  const materializedFromAll = policy.scope.mode === "allAvailable";
   const subtitleLanguage = materializedFromAll
     && policy.constraints.subtitles.mode !== "off"
     && subtitlePreferred !== undefined

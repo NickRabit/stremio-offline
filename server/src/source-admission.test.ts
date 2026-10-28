@@ -23,6 +23,7 @@ import {
   SOURCE_PROFILE_IDS,
   viewerOfProfileAccount,
 } from "./source-profiles.js";
+import { admitsRemoteProviders, legacySelectionFromAdmission } from "./routes/source-profile-selection.js";
 import { parseSourcePolicyV1, type SourcePolicyV1 } from "./source-policy.js";
 import type { StoredSourceProfile } from "./store.js";
 import type { AddonRecord } from "./types.js";
@@ -909,4 +910,43 @@ test("the snapshot type keeps fully materialized policy and provider membership"
   assert.deepEqual(snapshot.providerKeys, ["addon:priority"]);
   assert.equal(snapshot.policy.scope.mode, "selected");
   assert.doesNotMatch(JSON.stringify(snapshot), /"from":"viewer"|"preference":"(audio|subtitle)"/);
+});
+
+test("a rule download reaching only a remote library admits for every audio mode", () => {
+  const base = RULE_PRESETS[0]!.rules;
+  const audios = [
+    { mode: "any", language: "mine", fallback: null },
+    { mode: "prefer", language: "mine", fallback: null },
+    { mode: "prefer", language: "de", fallback: null },
+    { mode: "only", language: "mine", fallback: null },
+  ] as const;
+  for (const audio of audios) {
+    const rules = parseDownloadRules({
+      ...base,
+      audio,
+      preference: audio.mode === "any"
+        ? base.preference.filter((preference) => preference !== "language")
+        : base.preference,
+    });
+    const profile: StoredSourceProfile = {
+      id: "remote-only-rule",
+      revision: 1,
+      template: "rules",
+      name: "Remote only",
+      parameters: rules,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const snapshot = materializeSourceAdmission(reference(profile.id), context(account(), {
+      profiles: [profile],
+      remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+      operation: "downloadToLibrary",
+      audioLanguage: "cs",
+    }));
+    assert.deepEqual(snapshot.providerKeys, [`remote:${REMOTE_ONE}`], audio.mode);
+    assert.deepEqual(parseSourceAdmissionSnapshotV1(structuredClone(snapshot)), snapshot);
+    // The legacy selection carries no addon and the route lets it through for the remote library.
+    assert.deepEqual(legacySelectionFromAdmission(snapshot).addonKeys, []);
+    assert.equal(admitsRemoteProviders(snapshot), true);
+  }
 });

@@ -12,7 +12,7 @@ import type { DownloadTargetSettings, MetaItem } from "../types.js";
 import { feedTokenMatches, type FollowDefaults, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import { createSelectionParser } from "./downloads.js";
-import { legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference, sourceProfileSnapshotForAdmission } from "./source-profile-selection.js";
+import { admitsRemoteProviders, legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference, sourceProfileSnapshotForAdmission } from "./source-profile-selection.js";
 
 export interface FollowDeps extends RouteContext {
   follows: FollowService;
@@ -343,6 +343,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           : undefined;
         const selection = await parseSelection(req, {
           selection: admission ? legacySelectionFromAdmission(admission) : item.selection,
+          remoteProviders: admitsRemoteProviders(admission),
           target: item.target,
           metaType: follow.type,
           parentId: follow.metaId,

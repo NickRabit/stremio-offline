@@ -17,7 +17,7 @@ import type { ResourceOwner } from "../media-resources.js";
 import type { UserPrefs } from "../store.js";
 import type { DownloadTargetSettings, MetaItem, StreamItem } from "../types.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
-import { legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference } from "./source-profile-selection.js";
+import { admitsRemoteProviders, legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference } from "./source-profile-selection.js";
 
 export interface DownloadsDeps extends RouteContext {
   queue: DownloadQueue;
@@ -122,7 +122,7 @@ const acceptedSelectionMode = <T extends string>(value: unknown, allowed: readon
 /** Parses the lazy download body of a series into a `DownloadSelection`: the addon keys the
  *  caller may use, the strategy, the audio and subtitle rules, the title language and a
  *  concrete target. Shared so the bulk route and a follow's automatic rule cannot drift. */
-export function createSelectionParser(deps: SelectionDeps): (req: express.Request, input: { selection: unknown; target: unknown; metaType: string; parentId?: string; kind?: "movie" | "series" }) => Promise<DownloadSelection> {
+export function createSelectionParser(deps: SelectionDeps): (req: express.Request, input: { selection: unknown; target: unknown; metaType: string; parentId?: string; kind?: "movie" | "series"; remoteProviders?: boolean }) => Promise<DownloadSelection> {
   const { store, currentUser, cachedMeta, prefsOf, defaultDownloadLibrary } = deps;
   const assertMayQueue = mayQueueGuard(deps);
   const explicitTarget = explicitTargetFor(deps);
@@ -141,7 +141,8 @@ export function createSelectionParser(deps: SelectionDeps): (req: express.Reques
     const addonKeys = Array.isArray(rawSelection.addonKeys)
       ? [...new Set(rawSelection.addonKeys.map(String))].filter((key) => usable.some((addon) => addon.key === key && addon.enabled && addon.role !== "catalog"))
       : [];
-    if (!addonKeys.length) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
+    // A rule that reaches a remote library can be satisfied without any addon.
+    if (!addonKeys.length && !input.remoteProviders) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
     const sourceStrategy = acceptedSelectionMode(rawSelection.sourceStrategy, ["largest", "priority"] as const, "priority");
     const audioLanguage = normalizeLanguage(String(rawSelection.audioLanguage ?? ""));
     if (!audioLanguage) throw new AppError("Pick an audio language.", "err.missingAudioLanguage");
@@ -276,6 +277,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       : materializeSourceProfileAdmission(deps, owner, profileReference.reference, "episode");
     const validatedSelection = await parseSelection(req, {
       selection: sourceAdmission === undefined ? req.body.selection : legacySelectionFromAdmission(sourceAdmission),
+      remoteProviders: admitsRemoteProviders(sourceAdmission),
       target: req.body.target,
       metaType,
       parentId,
