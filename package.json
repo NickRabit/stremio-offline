@@ -1,7 +1,7 @@
 {
   "name": "stremio-offline",
   "private": true,
-  "version": "0.6.8",
+  "version": "0.6.9",
   "description": "Self-hosted web client for Stremio addons",
   "license": "MIT",
   "repository": {
