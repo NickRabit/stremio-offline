@@ -438,6 +438,21 @@ describe("librarySourceRows", () => {
       .toEqual(["native", "copy", "other", "add"]);
   });
 
+  it("keeps native and local rows first while interleaving remote and addon rows by rule rank", () => {
+    const ranked = librarySourceEntries([remote("native", 1)], "Local files", [
+      { key: "local", kind: "local", name: "", status: "loaded", streams: [stream("copy", { kind: "library", localPath: "p" })], error: "" },
+      { key: "remote:l2", kind: "remote", name: "Second", provider: "emby", status: "loaded", streams: [stream("remote-mid", { provider: "jellyfin", rule: { profileId: "balanced", status: "meets", reasons: [], rank: [1] } })], error: "" },
+      { key: "addon:a", kind: "addon", name: "Alpha", status: "loaded", streams: [
+        stream("addon-last", { addonName: "Alpha", rule: { profileId: "balanced", status: "breaks", reasons: ["language"], rank: [2] } }),
+        stream("addon-best", { addonName: "Alpha", rule: { profileId: "balanced", status: "meets", reasons: [], rank: [0] } }),
+      ], error: "" },
+    ], (group) => group.name || "Local files");
+    expect(librarySourceRows(ranked, "", "", "recommended", "en").map((row) => row.sourceId))
+      .toEqual(["native", "copy", "addon-best", "remote-mid", "addon-last"]);
+    expect(librarySourceRows(entries, "", "", "recommended", "en").map((row) => row.sourceId))
+      .toEqual(["native", "copy", "other", "add"]);
+  });
+
   it("isolates one class, and the class still out contributes nothing yet", () => {
     expect(librarySourceRows(entries, "addon:b", "", "recommended", "en")).toEqual([]);
     expect(librarySourceRows(entries, "remote:l2", "", "recommended", "en").map((row) => row.sourceId)).toEqual(["other"]);

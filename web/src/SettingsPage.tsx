@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, CirclePlay, Download, FileJson, HardDrive, Heart, KeyRound, Languages, Library, PackagePlus, Server, ShieldCheck, Trash2, Upload, Users } from "lucide-react";
 import { api } from "./api";
 import { DiagnosticsSection } from "./DiagnosticsPanel";
@@ -9,7 +9,8 @@ import { SearchSettings } from "./SearchSettings";
 import { HomeLayoutSettings } from "./HomeLayoutSettings";
 import { Heading, SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES, languageName, localeTag, t, useI18n, type Key, type Locale } from "./i18n";
-import type { BuildInfo, LibraryView, SearchState, Session, Settings as AppSettings, SettingsPatch } from "./types";
+import { sourceProfileName } from "./source-profile-copy";
+import type { BuildInfo, LibraryView, SearchState, Session, Settings as AppSettings, SettingsPatch, SourceProfile } from "./types";
 import { SourceProfilesSettings } from "./SourceProfilesSettings";
 import { UserManager } from "./UserManager";
 
@@ -137,6 +138,18 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
   const tileSizes = [{ value: "compact", key: "settings.tile.compact" }, { value: "small", key: "settings.tile.small" }, { value: "medium", key: "settings.tile.medium" }, { value: "large", key: "settings.tile.large" }] as const;
   const importInput = useRef<HTMLInputElement>(null);
   const [backupBusy, setBackupBusy] = useState(false);
+  const [sourceProfiles, setSourceProfiles] = useState<SourceProfile[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    void api.sourceProfiles().then((profiles) => {
+      if (active) setSourceProfiles(Array.isArray(profiles) ? profiles : []);
+    }).catch(() => {
+      if (active) setSourceProfiles([]);
+    });
+    return () => { active = false; };
+  }, []);
+  const ruleProfiles = sourceProfiles?.filter((profile) => profile.template === "rules") ?? [];
+  const balancedProfile = ruleProfiles.find((profile) => profile.nameKey === "rules.preset.balanced");
   // Which root a download lands under is a property of the library, and a mount differs per
   // install; showing a fixed path was the last thing here that assumed one.
   const libraryRoot = (libraries.find((library) => library.defaultMovie) ?? libraries[0])?.root ?? t("settings.noLibraryRoot");
@@ -222,7 +235,11 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
       </section>}
       </>}
       {tab === "playback" && <>
-      <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}><select aria-label={t("settings.streamSort")} disabled={restricted} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option></select></SettingControl><SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
+      <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}><select aria-label={t("settings.streamSort")} disabled={restricted} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option></select></SettingControl>{ruleProfiles.length > 0 && <SettingControl title={t("settings.defaultRules")} text={t("settings.defaultRulesHint")}>
+          <select aria-label={t("settings.defaultRules")} disabled={restricted} value={settings.defaultRulesProfileId ?? balancedProfile?.id ?? ""} onChange={(event) => void onSave({ defaultRulesProfileId: event.target.value })}>
+            {ruleProfiles.map((profile) => <option key={profile.id} value={profile.id}>{sourceProfileName(profile.nameKey, profile.name)}</option>)}
+          </select>
+        </SettingControl>}<SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
           <select aria-label={t("settings.trackProgressLabel")} disabled={restricted} value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>
             <option value="1">{t("settings.store")}</option><option value="0">{t("settings.doNotStore")}</option>
           </select></SettingControl>{!restricted && <SettingControl title={t("settings.history")} text={t("settings.historyHint")}>

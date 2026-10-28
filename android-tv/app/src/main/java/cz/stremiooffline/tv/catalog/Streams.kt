@@ -54,7 +54,26 @@ object Streams {
 
   data class StreamFilters(val addon: String = "", val language: String = "", val sort: StreamSort = StreamSort.Recommended)
 
-  /** Recommended = the preferred language first, then the addon's priority, then largest first. */
+  /** Lexicographic over `rule.rank`, ascending better. A stream without `rule` sorts after every
+   *  stream with one; a tie keeps the incoming order of a stable sort. */
+  fun compareRuleRank(a: StreamDto, b: StreamDto): Int {
+    val left = a.rule
+    val right = b.rule
+    if (left == null && right == null) return 0
+    if (left == null) return 1
+    if (right == null) return -1
+    val leftRank = left.rank
+    val rightRank = right.rank
+    val limit = minOf(leftRank.size, rightRank.size)
+    for (i in 0 until limit) {
+      val cmp = java.lang.Double.compare(leftRank[i], rightRank[i])
+      if (cmp != 0) return cmp
+    }
+    return leftRank.size.compareTo(rightRank.size)
+  }
+
+  /** Recommended = the server's rule rank when any stream carries one, otherwise the preferred
+   *  language first, then the addon's priority, then largest first. */
   fun arrangeStreams(
     streams: List<StreamDto>,
     filters: StreamFilters,
@@ -65,6 +84,12 @@ object Streams {
     val list = streams.filter { stream ->
       (filters.addon.isEmpty() || stream.addonName == filters.addon) &&
         (filters.language.isEmpty() || streamLanguages(stream, titleLanguage).contains(filters.language))
+    }
+    if (filters.sort == StreamSort.Recommended && list.any { it.rule != null }) {
+      val decorated = list.mapIndexed { index, stream -> stream to index }
+      return decorated.sortedWith { a, b ->
+        compareRuleRank(a.first, b.first).takeIf { it != 0 } ?: (a.second - b.second)
+      }.map { it.first }
     }
     val size = list.associateWith { streamSize(it) }
     val rank = { stream: StreamDto -> priority[stream.addonName ?: ""] ?: Int.MAX_VALUE }
@@ -225,8 +250,16 @@ object Streams {
     remoteFilterLibrary(filters.addon) != null ->
       remote.firstOrNull { it.libraryId == remoteFilterLibrary(filters.addon) }?.streams.orEmpty()
     filters.addon.isNotEmpty() -> addon
-    filters.sort == StreamSort.Recommended || filters.sort == StreamSort.Addon ->
+    filters.sort == StreamSort.Addon ->
       origins.rows + local + remote.flatMap { it.streams } + addon
+    filters.sort == StreamSort.Recommended -> {
+      val rest = remote.flatMap { it.streams } + addon
+      origins.rows + local + if (rest.any { it.rule != null }) {
+        rest.sortedWith { a, b -> compareRuleRank(a, b) }
+      } else {
+        rest
+      }
+    }
     else -> arrangeStreams(
       origins.rows + remote.flatMap { it.streams } + addon + local,
       StreamFilters(sort = filters.sort),

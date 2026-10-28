@@ -15,7 +15,18 @@ export type StreamSort = "recommended" | "size-desc" | "size-asc" | "addon";
 
 export interface StreamFilters { addon: string; language: string; sort: StreamSort }
 
-/** Recommended = the preferred language first, largest first within the group. */
+export function compareRuleRank(a: Stream, b: Stream): number {
+  if (!a.rule) return b.rule ? 1 : 0;
+  if (!b.rule) return -1;
+  const shared = Math.min(a.rule.rank.length, b.rule.rank.length);
+  for (let index = 0; index < shared; index += 1) {
+    const difference = a.rule.rank[index]! - b.rule.rank[index]!;
+    if (difference) return difference;
+  }
+  return a.rule.rank.length - b.rule.rank.length;
+}
+
+/** Without server verdicts, recommended puts the preferred language first and the largest first within the group. */
 export function arrangeStreams(streams: Stream[], filters: StreamFilters, preferredLanguage: string, priority: Map<string, number> = new Map(), titleLanguage?: string): Stream[] {
   const list = streams.filter((stream) =>
     (!filters.addon || stream.addonName === filters.addon) &&
@@ -24,9 +35,11 @@ export function arrangeStreams(streams: Stream[], filters: StreamFilters, prefer
   const size = new Map(list.map((stream) => [stream, streamSize(stream)]));
   const decorated = list.map((stream, index) => ({ stream, index }));
   const rank = (stream: Stream) => priority.get(stream.addonName ?? "") ?? Number.MAX_SAFE_INTEGER;
+  const hasRule = list.some((stream) => stream.rule);
   decorated.sort((a, b) => {
     if (filters.sort === "addon") return (rank(a.stream) - rank(b.stream)) || (a.index - b.index);
     if (filters.sort === "recommended") {
+      if (hasRule) return compareRuleRank(a.stream, b.stream) || (a.index - b.index);
       const preferred = (stream: Stream) => streamLanguages(stream, titleLanguage).includes(preferredLanguage) ? 0 : 1;
       const byLanguage = preferred(a.stream) - preferred(b.stream);
       if (byLanguage) return byLanguage;
@@ -93,7 +106,10 @@ export function catalogSourceRows(
   const remoteId = remoteFilterId(filter);
   if (remoteId !== undefined) return remote.filter((stream) => stream.libraryId === remoteId);
   if (filter) return addonStreams;
-  if (sort === "recommended") return [...local, ...remote, ...addonStreams];
+  if (sort === "recommended") {
+    const external = [...remote, ...addonStreams];
+    return [...local, ...(external.some((stream) => stream.rule) ? external.sort(compareRuleRank) : external)];
+  }
   if (sort === "addon") return [...local, ...remote, ...arrangeStreams(addonStreams, { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage)];
   return arrangeStreams([...addonStreams, ...local, ...remote], { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
 }

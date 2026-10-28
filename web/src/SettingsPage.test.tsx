@@ -184,3 +184,33 @@ describe("SettingsPage library row", () => {
     expect(onSave).not.toHaveBeenCalledWith({ showResumeRow: false });
   });
 });
+
+describe("SettingsPage default rules", () => {
+  it("lists rules profiles, defaults to balanced and saves the chosen profile", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/source-profiles")) {
+        return Promise.resolve(json({ profiles: [
+          { id: "balanced", nameKey: "rules.preset.balanced", template: "rules" },
+          { id: "best", nameKey: "rules.preset.best", template: "rules" },
+          { id: "recommended", template: "recommended" },
+        ] }));
+      }
+      return Promise.resolve(json({ saveHistory: true, liveSearch: true, defaultOrder: "source", recent: [] }));
+    }));
+
+    const { onSave } = await render();
+    await selectTab("Playback");
+    const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.defaultRules"]}"]`)!;
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      en["rules.preset.balanced"],
+      en["rules.preset.best"],
+    ]);
+    expect(select.value).toBe("balanced");
+    await act(async () => {
+      select.value = "best";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onSave).toHaveBeenCalledWith({ defaultRulesProfileId: "best" });
+  });
+});

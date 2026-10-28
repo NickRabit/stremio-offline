@@ -542,6 +542,9 @@ internal fun SourceRow(
               overflow = TextOverflow.Ellipsis,
             )
             if (meta.isNotEmpty()) Text(meta.joinToString(" · "), color = Tokens.Muted, fontSize = 10.sp, maxLines = 1)
+            sourceRuleBreaksNote(stream)?.let { note ->
+              Text(note, color = Tokens.Muted, fontSize = 10.sp, maxLines = 1)
+            }
           }
           // One mark only: the playing row is the playing one, otherwise the picked row, otherwise
           // the default.
@@ -570,6 +573,33 @@ internal fun SourceRow(
       FocusButton(text = saveText, onClick = onSave, modifier = saveModifier)
     }
   }
+}
+
+/** The muted rule-break line of a source row, or null when the row meets the rules or has none. */
+@Composable
+internal fun sourceRuleBreaksNote(stream: StreamDto): String? {
+  val rule = stream.rule ?: return null
+  if (rule.status != "breaks") return null
+  val language = stringResource(R.string.sources_rule_reason_language)
+  val resolutionLow = stringResource(R.string.sources_rule_reason_resolution_low)
+  val resolutionHigh = stringResource(R.string.sources_rule_reason_resolution_high)
+  val cinema = stringResource(R.string.sources_rule_reason_cinema)
+  val subtitles = stringResource(R.string.sources_rule_reason_subtitles)
+  val sample = stringResource(R.string.sources_rule_reason_sample)
+  val reasons = rule.reasons.mapNotNull { code ->
+    when (code) {
+      "language" -> language
+      "resolutionLow" -> resolutionLow
+      "resolutionHigh" -> resolutionHigh
+      "cinema" -> cinema
+      "subtitles" -> subtitles
+      "sample" -> sample
+      else -> null
+    }
+  }
+  // A break the app has no label for says nothing rather than an empty reason list.
+  if (reasons.isEmpty()) return null
+  return stringResource(R.string.sources_rule_breaks, reasons.joinToString(", "))
 }
 
 /** One row's headline: the stream's name, or the first line it wrote about itself. */

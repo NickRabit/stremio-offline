@@ -5,8 +5,10 @@ package cz.stremiooffline.tv.ui.catalog
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -16,6 +18,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SourceRuleVerdictDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.ui.FakeTvApi
@@ -220,5 +223,62 @@ class CatalogSourcesTest {
 
     api.progressListGate!!.complete(Unit)
     compose.waitForIdle()
+  }
+
+  @Test
+  fun `a source that breaks the rules shows the reason labels under the row`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(
+      StreamDto(
+        sourceId = "srcA",
+        kind = "remote",
+        playable = true,
+        title = "English 8 GB",
+        addonName = "Alpha",
+        rule = SourceRuleVerdictDto(
+          profileId = "p1",
+          status = "breaks",
+          reasons = listOf("language", "unknown", "cinema"),
+          rank = listOf(1.0),
+        ),
+      ),
+    )
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    compose.onNodeWithTag(sourceRowTag(0))
+      .assertTextContains("Does not meet the rules: other language, cinema copy (CAM/TS)")
+  }
+
+  @Test
+  fun `a source that meets the rules has no rule note`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(
+      StreamDto(
+        sourceId = "srcA",
+        kind = "remote",
+        playable = true,
+        title = "Czech 8 GB",
+        addonName = "Alpha",
+        rule = SourceRuleVerdictDto(profileId = "p1", status = "meets", rank = listOf(0.0)),
+      ),
+    )
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Czech 8 GB")
+    compose.onNodeWithTag(sourceRowTag(0))
+      .assert(hasText("Does not meet the rules", substring = true).not())
   }
 }

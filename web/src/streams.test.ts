@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { addonNotices, arrangeStreams, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
-import type { Stream } from "./types";
+import { addonNotices, arrangeStreams, canQueue, catalogSourceRows, compareRuleRank, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import type { SourceRuleVerdict, Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
+const verdict = (rank: number[], status: SourceRuleVerdict["status"] = "meets"): SourceRuleVerdict =>
+  ({ profileId: "balanced", status, reasons: [], rank });
 const names = (list: Stream[]) => list.map((item) => item.name);
 const filters = (overrides: Partial<StreamFilters> = {}): StreamFilters =>
   ({ addon: "", language: "", sort: "recommended", ...overrides });
@@ -127,6 +129,28 @@ describe("arrangeStreams", () => {
       .toEqual(["cz-big", "cz-small", "en-big", "unknown"]);
   });
 
+  it("ranks recommended sources by the server verdict instead of language and size", () => {
+    const czechSmall = stream({ name: "czech-small", title: "Czech 1 GB", rule: verdict([0, 1]) });
+    const englishBig = stream({ name: "english-big", title: "English 20 GB", rule: verdict([0, 2]) });
+    expect(names(arrangeStreams([englishBig, czechSmall], filters(), "en")))
+      .toEqual(["czech-small", "english-big"]);
+  });
+
+  it("puts a breaking verdict after one that meets the rules", () => {
+    const breaks = stream({ name: "breaks", rule: verdict([2], "breaks") });
+    const meets = stream({ name: "meets", rule: verdict([1], "meets") });
+    expect(names(arrangeStreams([breaks, meets], filters(), "cs")))
+      .toEqual(["meets", "breaks"]);
+  });
+
+  it("compares ranks lexicographically and keeps an unruled source after ruled ones", () => {
+    const prefix = stream({ rule: verdict([1]) });
+    const longer = stream({ rule: verdict([1, 0]) });
+    const unruled = stream({});
+    expect(compareRuleRank(prefix, longer)).toBeLessThan(0);
+    expect(compareRuleRank(longer, unruled)).toBeLessThan(0);
+  });
+
   it("respects addon priority inside the preferred language", () => {
     const priority = new Map([["beta", 0], ["alpha", 1]]);
     expect(names(arrangeStreams([czechSmall, czechBig], filters(), "cs", priority)))
@@ -164,6 +188,16 @@ describe("arrangeStreams", () => {
     arrangeStreams(input, filters({ sort: "size-desc" }), "cs");
     expect(input).toEqual(all);
   });
+
+  it("keeps size and addon sorting independent of rule ranks", () => {
+    const small = stream({ name: "small", title: "1 GB", addonName: "alpha", rule: verdict([0]) });
+    const large = stream({ name: "large", title: "20 GB", addonName: "beta", rule: verdict([1]) });
+    const priority = new Map([["alpha", 0], ["beta", 1]]);
+    // The ranked order proves the feature is active while the explicit sorts still use size and priority.
+    expect(names(arrangeStreams([large, small], filters(), "en"))).toEqual(["small", "large"]);
+    expect(names(arrangeStreams([small, large], filters({ sort: "size-desc" }), "en"))).toEqual(["large", "small"]);
+    expect(names(arrangeStreams([large, small], filters({ sort: "addon" }), "en", priority))).toEqual(["small", "large"]);
+  });
 });
 
 describe("torrent listing", () => {
@@ -179,6 +213,12 @@ describe("torrent listing", () => {
   it("prefers a playable HTTP source over a torrent", () => {
     expect(pickDefaultStream([torrent, http])?.name).toBe("http");
     expect(pickDefaultStream([torrent])?.name).toBe("torrent");
+  });
+
+  it("picks the first playable source from the rule-ranked order", () => {
+    const lower = stream({ name: "lower", rule: verdict([2]) });
+    const best = stream({ name: "best", rule: verdict([0]) });
+    expect(pickDefaultStream(arrangeStreams([lower, best], filters(), "en"))?.name).toBe("best");
   });
 
   it("labels torrents as RD, not as a generic external source", () => {
@@ -394,6 +434,17 @@ describe("remote media-server sources", () => {
   });
 
   it("orders local, then remote, then addon sources in the recommended All list", () => {
+    expect(catalogSourceRows([local], [addon], "", "recommended", "en", new Map(), undefined, [remote]))
+      .toEqual([local, remote, addon]);
+  });
+
+  it("interleaves remote and addon sources by rule rank while local copies stay first", () => {
+    const firstAddon = stream({ sourceId: "a2", name: "Addon best", addonName: "Luna", rule: verdict([0]) });
+    const rankedRemote = { ...remote, rule: verdict([1]) };
+    const lastAddon = stream({ sourceId: "a3", name: "Addon last", addonName: "Luna", rule: verdict([2]) });
+    expect(catalogSourceRows([local], [lastAddon, firstAddon], "", "recommended", "en", new Map(), undefined, [rankedRemote]).map((item) => item.name))
+      .toEqual(["Local", "Addon best", "Remote 1080p", "Addon last"]);
+    // Without any verdicts the old class order remains the fallback for an older server.
     expect(catalogSourceRows([local], [addon], "", "recommended", "en", new Map(), undefined, [remote]))
       .toEqual([local, remote, addon]);
   });
