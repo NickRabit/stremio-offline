@@ -50,6 +50,10 @@ export interface LibraryTitleDetailProps {
   /** The row the caller opened this detail on. It is selected as soon as the listing holds it,
    *  a row that arrives later never replaces it, and a row the viewer picks still wins. */
   initialSource?: Stream;
+  /** A copy owned by the opened item, preferred after a saved-position source and before the
+   *  source order's default. A matched folder uses this to keep another copy of the title from
+   *  becoming its first source. */
+  preferredSource?: Stream;
   /** The source the title's stored position was last played from: the detail opens on that row
    *  wherever the title still offers it, unless the viewer picked one themselves. */
   resumeStableKey?: string;
@@ -116,7 +120,7 @@ const clock = (value: number) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, resumeStableKey, keepOrder, addonPriority, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -167,7 +171,9 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   // makes the next open land on the source it moved to. A row that is not here yet is simply not
   // a candidate, so a group still to load can never be selected for it.
   const stored = resumeStableKey ? pickable.find((row) => row.stableKey === resumeStableKey) : undefined;
-  const selected = picked ?? seeded ?? stored ?? defaultPick;
+  const preferred = preferredSource && preferredSource.playable
+    ? pickable.find((row) => sourceRowKey(row) === sourceRowKey(preferredSource)) : undefined;
+  const selected = picked ?? seeded ?? stored ?? preferred ?? defaultPick;
   const ruleRefusal = Boolean(ruleAware && !selected && pickable.some((stream) => stream.playable));
   const multiple = own.length > 1 || sourceGroups != null || ruleRefusal;
   const canSave = selected !== null && (saveSupported?.(selected) ?? true);

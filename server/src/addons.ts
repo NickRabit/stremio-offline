@@ -363,9 +363,33 @@ export async function metadata(
   return best;
 }
 
-/** The addons that can return streams for this title. The client then asks them one by one. */
-export function streamCandidates(addons: AddonRecord[], type: string, id: string) {
-  return addons.filter((a) => a.enabled && a.role !== "catalog" && supports(a, "stream", type, id));
+export interface StreamCandidate {
+  addon: AddonRecord;
+  id: string;
+}
+
+/** The addons that can return streams for this title, and the id each one takes. The client then
+ *  asks them one by one. */
+export async function streamCandidates(
+  addons: AddonRecord[],
+  type: string,
+  id: string,
+  interactive = false,
+  signal?: AbortSignal,
+): Promise<StreamCandidate[]> {
+  const offered = addons.filter((addon) => addon.enabled && addon.role !== "catalog" && supports(addon, "stream", type));
+  const direct = new Set(offered.filter((addon) => supports(addon, "stream", type, id)).map((addon) => addon.key));
+  if (offered.every((addon) => direct.has(addon.key))) {
+    return offered.map((addon) => ({ addon, id }));
+  }
+
+  const imdb = await subtitleTarget(addons, type, id, interactive, signal);
+  if (!imdb || signal?.aborted) return offered.filter((addon) => direct.has(addon.key)).map((addon) => ({ addon, id }));
+
+  return offered.flatMap((addon) => {
+    const target = direct.has(addon.key) ? id : supports(addon, "stream", type, imdb) ? imdb : undefined;
+    return target === undefined ? [] : [{ addon, id: target }];
+  });
 }
 
 export type StreamListing =
@@ -394,19 +418,28 @@ export async function streamListings(
   interactive = false,
   signal?: AbortSignal,
 ): Promise<StreamListing[]> {
-  const candidates = streamCandidates(addons, type, id);
+  return streamListingCandidates(await streamCandidates(addons, type, id, interactive, signal), type, interactive, signal);
+}
+
+async function streamListingCandidates(
+  candidates: StreamCandidate[],
+  type: string,
+  interactive: boolean,
+  signal?: AbortSignal,
+): Promise<StreamListing[]> {
   const results = await Promise.allSettled(candidates.map(async (addon) => {
-    const response = await jsonFetch<unknown>(resourceUrl(addon, "stream", type, id), STREAM_TIMEOUT_MS, interactive, signal);
-    return mapStreams(response, addon);
+    const response = await jsonFetch<unknown>(resourceUrl(addon.addon, "stream", type, addon.id), STREAM_TIMEOUT_MS, interactive, signal);
+    return mapStreams(response, addon.addon);
   }));
   if (!signal?.aborted) {
     results.forEach((result, index) => {
-      if (result.status === "rejected") log("WARN", "Addon request failed", { operation: "streams", addon: candidates[index].manifest.name, type, id, reason: reasonOf(result.reason) });
+      const candidate = candidates[index]!;
+      if (result.status === "rejected") log("WARN", "Addon request failed", { operation: "streams", addon: candidate.addon.manifest.name, type, id: candidate.id, reason: reasonOf(result.reason) });
     });
   }
   return results.map((result, index) => result.status === "fulfilled"
-    ? { addonKey: candidates[index].key, status: "success", items: result.value }
-    : { addonKey: candidates[index].key, status: "failure" });
+    ? { addonKey: candidates[index]!.addon.key, status: "success", items: result.value }
+    : { addonKey: candidates[index]!.addon.key, status: "failure" });
 }
 
 export async function streams(
@@ -417,7 +450,9 @@ export async function streams(
   interactive = false,
   signal?: AbortSignal,
 ): Promise<StreamItem[]> {
-  const listings = await streamListings(addons.filter((addon) => !addonKey || addon.key === addonKey), type, id, interactive, signal);
+  const candidates = (await streamCandidates(addons, type, id, interactive, signal))
+    .filter((candidate) => !addonKey || candidate.addon.key === addonKey);
+  const listings = await streamListingCandidates(candidates, type, interactive, signal);
   if (signal?.aborted) return [];
   return listings.flatMap((listing) => listing.status === "success" ? listing.items : []);
 }
@@ -453,9 +488,8 @@ async function imdbTitle(addons: AddonRecord[], type: string, id: string, intera
   return imdb;
 }
 
-/** Subtitle addons such as OpenSubtitles accept IMDb ids only, so a title whose id they do not
- *  take is asked under its IMDb id instead, an episode keeping its season and episode. */
-async function subtitleTarget(addons: AddonRecord[], type: string, id: string, interactive: boolean, signal?: AbortSignal): Promise<string | null> {
+/** The IMDb id used by addon, copy and library lookups, with an episode's numbering kept. */
+export async function subtitleTarget(addons: AddonRecord[], type: string, id: string, interactive: boolean, signal?: AbortSignal): Promise<string | null> {
   const episode = type === "series" ? /^(.+):(\d+):(\d+)$/.exec(id) : null;
   const title = episode ? episode[1]! : id;
   const imdb = await imdbTitle(addons, type, title, interactive, signal);

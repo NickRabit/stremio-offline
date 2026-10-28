@@ -10,7 +10,7 @@ process.env.ADDON_MAX_CONCURRENT = "1";
 process.env.ALLOW_PRIVATE_ADDONS = "1";
 process.env.STREAM_ADDON_TIMEOUT_MS = "100";
 
-const { loadAddon, streamListings, streams, subtitles } = await import("./addons.js");
+const { loadAddon, resetImdbTargets, streamCandidates, streamListings, streams, subtitles } = await import("./addons.js");
 const { AppError } = await import("./errors.js");
 const { flushLog, initLogger } = await import("./logger.js");
 const { defaultDownloadSettings } = await import("./naming.js");
@@ -44,6 +44,16 @@ const addon = (host: string, resource: "stream" | "subtitles"): AddonRecord => (
 });
 
 const hostDiagnostics = (host: string) => outbound.diagnostics().find((entry) => entry.host === host);
+
+const metaAddon = (host: string, types = ["movie", "series"]): AddonRecord => ({
+  ...addon(host, "stream"),
+  manifest: { ...addon(host, "stream").manifest, resources: [{ name: "meta", types }] },
+});
+
+const prefixedStreamAddon = (host: string, idPrefixes: string[], types = ["movie", "series"]): AddonRecord => ({
+  ...addon(host, "stream"),
+  manifest: { ...addon(host, "stream").manifest, resources: [{ name: "stream", types, idPrefixes }] },
+});
 
 test("stream listings distinguish a successful empty response from provider failure", async () => {
   setFetchTransport(async (url) => {
@@ -85,6 +95,85 @@ test("stream listings reject a non-array field and non-object entries while acce
     { addonKey: "null-stream.example", status: "failure" },
     { addonKey: "malformed-stream.example", status: "failure" },
   ]);
+});
+
+test("stream candidates use metadata to add IMDb-only addons without changing a direct id", async () => {
+  resetImdbTargets();
+  const meta = metaAddon("metadata-target.example");
+  const direct = prefixedStreamAddon("own-id.example", ["mpa:"]);
+  const imdbOnly = prefixedStreamAddon("imdb-stream.example", ["tt"]);
+  const requests: string[] = [];
+  setFetchTransport(async (url) => {
+    const parsed = new URL(url);
+    const path = decodeURIComponent(parsed.pathname);
+    requests.push(`${parsed.hostname}${path}`);
+    if (parsed.hostname === new URL(meta.manifestUrl).hostname) {
+      return json({ meta: { id: path.includes("sosac") ? "mpa:sosac:35da1549e221b6b74237" : "mpa:unknown:no-imdb", type: "movie", name: "Harry Potter",
+        ...(path.includes("sosac") ? { imdb_id: "tt0241527" } : {}) } });
+    }
+    return json({ streams: [{ url: `https://cdn.example/${parsed.hostname}.mp4`, name: parsed.hostname }] });
+  });
+
+  const id = "mpa:sosac:35da1549e221b6b74237";
+  const candidates = await streamCandidates([meta, direct, imdbOnly], "movie", id);
+  assert.deepEqual(candidates.map((candidate) => [candidate.addon.key, candidate.id]), [
+    [direct.key, id],
+    [imdbOnly.key, "tt0241527"],
+  ]);
+
+  assert.deepEqual((await streams([meta, direct, imdbOnly], "movie", id, direct.key)).map((stream) => stream.name), [
+    "own-id.example",
+  ]);
+  assert.deepEqual((await streams([meta, direct, imdbOnly], "movie", id, imdbOnly.key)).map((stream) => stream.name), [
+    "imdb-stream.example",
+  ]);
+  assert.equal(requests.filter((path) => path.startsWith("metadata-target.example")).length, 1, "the resolver cache is kept");
+  assert.deepEqual(requests.filter((path) => !path.startsWith("metadata-target.example")), [
+    "own-id.example/stream/movie/mpa:sosac:35da1549e221b6b74237.json",
+    "imdb-stream.example/stream/movie/tt0241527.json",
+  ]);
+
+  assert.deepEqual(await streamCandidates([meta, direct, imdbOnly], "movie", "mpa:unknown:no-imdb"), [
+    { addon: direct, id: "mpa:unknown:no-imdb" },
+  ]);
+});
+
+test("an episode keeps its numbering on the resolved IMDb stream id", async () => {
+  resetImdbTargets();
+  const meta = metaAddon("episode-meta.example");
+  const direct = prefixedStreamAddon("episode-own.example", ["mpa:"]);
+  const imdbOnly = prefixedStreamAddon("episode-imdb.example", ["tt"]);
+  const requested: string[] = [];
+  setFetchTransport(async (url) => {
+    const parsed = new URL(url);
+    const path = decodeURIComponent(parsed.pathname);
+    requested.push(path);
+    if (parsed.hostname === "episode-meta.example") {
+      return json({ meta: { id: "mpa:x:abc", type: "series", name: "Show", imdb_id: "tt1234567" } });
+    }
+    return json({ streams: [] });
+  });
+
+  await streams([meta, direct, imdbOnly], "series", "mpa:x:abc:1:2", imdbOnly.key);
+  assert.deepEqual(requested, [
+    "/meta/series/mpa:x:abc.json",
+    "/stream/series/tt1234567:1:2.json",
+  ]);
+});
+
+test("an IMDb id carried inside an addon id needs no metadata request", async () => {
+  resetImdbTargets();
+  const imdbOnly = prefixedStreamAddon("carried-imdb.example", ["tt"]);
+  let requests = 0;
+  setFetchTransport(async () => {
+    requests += 1;
+    return json({ streams: [] });
+  });
+
+  assert.deepEqual(await streamCandidates([imdbOnly], "movie", "mpa:webshare-index:tt2709692"), [
+    { addon: imdbOnly, id: "tt2709692" },
+  ]);
+  assert.equal(requests, 0);
 });
 
 test("non-search JSON holds its host slot through the body read while other hosts proceed", async () => {

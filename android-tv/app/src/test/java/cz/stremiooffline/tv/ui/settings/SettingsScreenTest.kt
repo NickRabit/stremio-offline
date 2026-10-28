@@ -27,6 +27,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.TvPreferences
 import cz.stremiooffline.tv.ui.FakeTvApi
@@ -104,8 +105,9 @@ class SettingsScreenTest {
     press(Key.DirectionDown); focusRow(TagSettingsRowUiLanguage)
     press(Key.DirectionDown); focusRow(TagSettingsRowAudio)
     press(Key.DirectionDown); focusRow(TagSettingsRowSubtitle)
+    press(Key.DirectionDown); focusRow(TagSettingsRowStreamSort)
     press(Key.DirectionDown); focusRow(TagSettingsRowStartView)
-    press(Key.DirectionUp); focusRow(TagSettingsRowSubtitle)
+    press(Key.DirectionUp); focusRow(TagSettingsRowStreamSort)
   }
 
   @Test
@@ -115,7 +117,7 @@ class SettingsScreenTest {
     compose.onNodeWithTag(TagSettingsRowDevice).assertExists().assert(notFocusable)
     compose.onNodeWithTag(TagSettingsRowVersion).assertExists().assert(notFocusable)
 
-    repeat(5) { press(Key.DirectionDown) }
+    repeat(6) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
     // The Home row, then the switch, then Send diagnostics: the device facts between and under
     // them are not focusable.
@@ -135,7 +137,7 @@ class SettingsScreenTest {
     val root = compose.onRoot().fetchSemanticsNode()
     val rows = listOf(
       TagSettingsRowServer, TagSettingsRowAccount, TagSettingsRowUiLanguage, TagSettingsRowAudio,
-      TagSettingsRowSubtitle, TagSettingsRowStartView, TagSettingsRowHomeLayout,
+      TagSettingsRowSubtitle, TagSettingsRowStreamSort, TagSettingsRowStartView, TagSettingsRowHomeLayout,
       TagSettingsRowPreferConversion, TagSettingsRowDiagnostics,
     )
     rows.forEachIndexed { index, tag ->
@@ -159,7 +161,7 @@ class SettingsScreenTest {
   @Test
   fun `the prefer conversion row sits between the start page and the device`() {
     mount(fake())
-    repeat(5) { press(Key.DirectionDown) }
+    repeat(6) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
     press(Key.DirectionDown)
     focusRow(TagSettingsRowHomeLayout)
@@ -179,7 +181,7 @@ class SettingsScreenTest {
   fun `OK on the prefer conversion row flips it and stores it on the device`() {
     preferences().preferConversion = false
     mount(fake())
-    repeat(7) { press(Key.DirectionDown) }
+    repeat(8) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowPreferConversion)
     compose.onNodeWithTag(TagSettingsRowPreferConversion).assertTextContains("Off", substring = true)
 
@@ -193,7 +195,7 @@ class SettingsScreenTest {
   fun `toggling the prefer conversion row writes nothing to the server`() {
     val api = fake()
     mount(api)
-    repeat(7) { press(Key.DirectionDown) }
+    repeat(8) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowPreferConversion)
 
     press(Key.DirectionCenter)
@@ -283,7 +285,7 @@ class SettingsScreenTest {
     val api = fake()
     api.searchStateValue = SearchStateDto(recent = listOf(RecentSearchDto("Heat", "now")))
     mount(api)
-    repeat(7) { press(Key.DirectionDown) }
+    repeat(8) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowClearHistory)
 
     press(Key.DirectionCenter)
@@ -322,7 +324,7 @@ class SettingsScreenTest {
   fun `the start page panel writes the start view`() {
     val api = fake()
     mount(api)
-    repeat(5) { press(Key.DirectionDown) }
+    repeat(6) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
     press(Key.DirectionCenter)
 
@@ -338,7 +340,7 @@ class SettingsScreenTest {
   fun `the start page panel opens on the fallback when the setting is unknown`() {
     val api = FakeTvApi().apply { settingsValue = SettingsResponse(startView = "following") }
     mount(api)
-    repeat(5) { press(Key.DirectionDown) }
+    repeat(6) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
     press(Key.DirectionCenter)
 
@@ -377,7 +379,7 @@ class SettingsScreenTest {
     cz.stremiooffline.tv.diagnostics.AppLog.clear()
     cz.stremiooffline.tv.diagnostics.AppLog.record("WARN", "API GET /api/home", mapOf("status" to "403"))
     mount(api)
-    repeat(8) { press(Key.DirectionDown) }
+    repeat(9) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -396,7 +398,7 @@ class SettingsScreenTest {
     api.bundleFailure = ApiFailure.Forbidden
     api.bundleFailureMessage = "Client logs are turned off on this server."
     mount(api)
-    repeat(8) { press(Key.DirectionDown) }
+    repeat(9) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -411,7 +413,7 @@ class SettingsScreenTest {
     val api = fake()
     api.bundleFailure = ApiFailure.Unreachable
     mount(api)
-    repeat(8) { press(Key.DirectionDown) }
+    repeat(9) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -420,5 +422,128 @@ class SettingsScreenTest {
     val unreachable = ApplicationProvider.getApplicationContext<Context>()
       .getString(cz.stremiooffline.tv.R.string.tv_err_unreachable)
     compose.onNodeWithTag(TagSettingsRowDiagnostics).assertTextContains(unreachable, substring = true)
+  }
+
+  private fun sortProfiles() = listOf(
+    SourceProfileDto(id = "balanced", nameKey = "rules.preset.balanced"),
+    SourceProfileDto(id = "nightly", name = "Nightly"),
+  )
+
+  /** The source-order row sits under the subtitle language; OK opens its picker. */
+  private fun openStreamSort(api: FakeTvApi) {
+    compose.waitUntil(5_000) { api.sourceProfilesCalls >= 1 }
+    compose.waitForIdle()
+    repeat(5) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowStreamSort)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSettingsPanel).assertExists()
+  }
+
+  @Test
+  fun `the source order row shows the current rule's name`() {
+    val api = fake()
+    api.settingsValue = api.settingsValue.copy(streamSort = "rule:best")
+    api.sourceProfilesValue = listOf(
+      SourceProfileDto(id = "balanced", nameKey = "rules.preset.balanced"),
+      SourceProfileDto(id = "best", nameKey = "rules.preset.best"),
+    )
+    mount(api)
+    compose.waitUntil(5_000) { api.sourceProfilesCalls >= 1 }
+    compose.waitForIdle()
+
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    compose.onNodeWithTag(TagSettingsRowStreamSort).assertTextContains("Best quality", substring = true)
+    compose.onNodeWithTag(TagSettingsRowStreamSort).assertTextContains(context.getString(R.string.settings_stream_sort), substring = true)
+    compose.onNodeWithTag(TagSettingsRowStreamSort).assertTextContains(context.getString(R.string.settings_default_rules_hint), substring = true)
+  }
+
+  @Test
+  fun `the source order picker lists the rules before the fixed orders`() {
+    val api = fake()
+    api.settingsValue = api.settingsValue.copy(streamSort = "rule:balanced")
+    api.sourceProfilesValue = sortProfiles()
+    mount(api)
+    openStreamSort(api)
+
+    val balanced = settingsOptionTag("sort", "rule:balanced")
+    val nightly = settingsOptionTag("sort", "rule:nightly")
+    val largest = settingsOptionTag("sort", "size-desc")
+    val smallest = settingsOptionTag("sort", "size-asc")
+    val addon = settingsOptionTag("sort", "addon")
+    compose.onNodeWithTag(balanced).assertTextContains("Balanced", substring = true)
+    compose.onNodeWithTag(nightly).assertTextContains("Nightly", substring = true)
+    compose.onNodeWithTag(largest).assertTextContains("Largest first", substring = true)
+    compose.onNodeWithTag(smallest).assertTextContains("Smallest first", substring = true)
+    compose.onNodeWithTag(addon).assertTextContains("By addon priority", substring = true)
+
+    fun top(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.top
+    assertTrue(top(balanced) < top(nightly))
+    assertTrue(top(nightly) < top(largest))
+    assertTrue(top(largest) < top(smallest))
+    assertTrue(top(smallest) < top(addon))
+
+    compose.onNodeWithTag(balanced).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(nightly).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(largest).assertIsFocused()
+
+    scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagSettingsPanel).assertDoesNotExist()
+    assertTrue(api.settingsPatches.isEmpty())
+    focusRow(TagSettingsRowStreamSort)
+  }
+
+  @Test
+  fun `choosing a rule or largest first sends streamSort`() {
+    val api = fake()
+    api.settingsValue = api.settingsValue.copy(streamSort = "rule:balanced")
+    api.sourceProfilesValue = sortProfiles()
+    mount(api)
+    openStreamSort(api)
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(settingsOptionTag("sort", "rule:nightly")).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf("streamSort" to "rule:nightly"), api.settingsPatches)
+    focusRow(TagSettingsRowStreamSort)
+    compose.onNodeWithTag(TagSettingsRowStreamSort).assertTextContains("Nightly", substring = true)
+
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(settingsOptionTag("sort", "rule:nightly")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(settingsOptionTag("sort", "size-desc")).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(
+      listOf("streamSort" to "rule:nightly", "streamSort" to "size-desc"),
+      api.settingsPatches,
+    )
+    focusRow(TagSettingsRowStreamSort)
+    compose.onNodeWithTag(TagSettingsRowStreamSort).assertTextContains("Largest first", substring = true)
+  }
+
+  @Test
+  fun `a legacy recommended source order shows the first rule`() {
+    val api = fake()
+    api.settingsValue = api.settingsValue.copy(streamSort = "recommended")
+    api.sourceProfilesValue = listOf(
+      SourceProfileDto(id = "nightly", name = "Nightly"),
+      SourceProfileDto(id = "balanced", nameKey = "rules.preset.balanced"),
+    )
+    mount(api)
+    compose.waitUntil(5_000) { api.sourceProfilesCalls >= 1 }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagSettingsRowStreamSort).assertTextContains("Nightly", substring = true)
+    repeat(5) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowStreamSort)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(settingsOptionTag("sort", "rule:nightly")).assertIsFocused()
+    compose.onNodeWithTag(settingsOptionTag("sort", "rule:nightly")).assertTextContains("Nightly", substring = true)
+    compose.onNodeWithTag(settingsOptionTag("sort", "rule:balanced")).assertTextContains("Balanced", substring = true)
   }
 }

@@ -354,6 +354,79 @@ test("GET /api/remote-libraries/:id/streams attaches languages and every admitti
   });
 });
 
+test("GET /api/remote-libraries/:id/items/:itemId/sources attaches every rules verdict", async () => {
+  await withHarness(async (harness) => {
+    harness.server.items["lib-1"] = [{ ...movie("m1", "Alien"), providerIds: { imdb: "tt1" } }];
+    harness.server.detailOf.m1 = { ...movie("m1", "Alien"), providerIds: { imdb: "tt1" } };
+    harness.server.versionsOf.m1 = [
+      { id: "360p", name: "Alien 360p", videoWidth: 640, videoHeight: 360, audioLanguages: ["cs"] },
+      { id: "1080p", name: "Alien 1080p", videoWidth: 1920, videoHeight: 1080, audioLanguages: ["cs"] },
+    ];
+    const profileIds = harness.store.sourceProfiles()
+      .filter((profile) => profile.template === "rules")
+      .map((profile) => profile.id)
+      .sort();
+
+    const response = await api(
+      harness.base,
+      `/api/remote-libraries/${harness.libraryId}/items/m1/sources`,
+      { user: BOB },
+    );
+    const body = await response.json() as {
+      streams: Array<{
+        remoteItem: { mediaSourceId: string };
+        rules?: Record<string, { profileId: string; status: string; reasons: string[]; rank: number[] }>;
+      }>;
+    };
+    assert.equal(response.status, 200);
+    for (const stream of body.streams) {
+      assert.deepEqual(Object.keys(stream.rules ?? {}).sort(), profileIds);
+    }
+    const low = body.streams.find((stream) => stream.remoteItem.mediaSourceId === "360p")!.rules![SOURCE_PROFILE_IDS.balanced]!;
+    assert.equal(low.status, "breaks");
+    assert.deepEqual(low.reasons, ["resolutionLow"]);
+  });
+});
+
+test("an item-sources rank has the matched route's layout for every rules profile", async () => {
+  await withHarness(async (harness) => {
+    harness.server.items["lib-1"] = [{ ...movie("m1", "Alien"), providerIds: { imdb: "tt1" } }];
+    harness.server.detailOf.m1 = { ...movie("m1", "Alien"), providerIds: { imdb: "tt1" } };
+    harness.server.versionsOf.m1 = [
+      { id: "360p", name: "Alien 360p", videoWidth: 640, videoHeight: 360, audioLanguages: ["cs"] },
+      { id: "1080p", name: "Alien 1080p", videoWidth: 1920, videoHeight: 1080, audioLanguages: ["cs"] },
+    ];
+
+    const itemResponse = await api(
+      harness.base,
+      `/api/remote-libraries/${harness.libraryId}/items/m1/sources`,
+      { user: BOB },
+    );
+    const matchedResponse = await api(
+      harness.base,
+      `/api/remote-libraries/${harness.libraryId}/streams/movie/tt1`,
+      { user: BOB },
+    );
+    const itemBody = await itemResponse.json() as {
+      streams: Array<{ remoteItem: { mediaSourceId: string }; rules?: Record<string, { rank: number[] }> }>;
+    };
+    const matchedBody = await matchedResponse.json() as {
+      streams: Array<{ remoteItem: { mediaSourceId: string }; rules?: Record<string, { rank: number[] }> }>;
+    };
+    const matchedByVersion = new Map(matchedBody.streams.map((stream) => [stream.remoteItem.mediaSourceId, stream]));
+    for (const stream of itemBody.streams) {
+      const matched = matchedByVersion.get(stream.remoteItem.mediaSourceId)!;
+      for (const profileId of Object.keys(matched.rules ?? {})) {
+        assert.equal(
+          stream.rules?.[profileId]?.rank.length,
+          matched.rules?.[profileId]?.rank.length,
+          `${stream.remoteItem.mediaSourceId} has ${profileId}'s rank layout`,
+        );
+      }
+    }
+  });
+});
+
 test("a granted member browses and previews natively, and only GET reaches those paths", async () => {
   await withHarness(async (harness) => {
     harness.server.libraries[0]!.primaryImageTag = "root-tag";

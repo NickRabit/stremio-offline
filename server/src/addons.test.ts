@@ -215,7 +215,7 @@ test("a disabled addon is refused for an administrator too, where enabled is enf
   const calls: string[] = [];
   await withStubbedAddons((url) => { calls.push(String(url)); return json({ meta: {} }); }, async () => {
     assert.deepEqual(searchableCatalogs(granted), [], "a disabled addon has no catalogue");
-    assert.deepEqual(streamCandidates(granted, "movie", "tt1"), [], "and no source");
+    assert.deepEqual(await streamCandidates(granted, "movie", "tt1"), [], "and no source");
     assert.equal(await metadata(granted, "movie", "tt1", "en"), null, "and no metadata");
   });
   assert.equal(calls.length, 0, "a disabled addon is never asked");

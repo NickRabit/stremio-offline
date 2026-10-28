@@ -188,6 +188,8 @@ common.cancel
 settings.uiLanguage
 settings.audioLanguage
 settings.subtitleLanguage
+settings.streamSort
+settings.defaultRulesHint
 settings.startView
 tv.settingsTitle
 tv.account

@@ -61,9 +61,11 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.Versions
+import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.SearchStateDto
+import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.TvPreferences
 import cz.stremiooffline.tv.diagnostics.AppLog
@@ -71,6 +73,7 @@ import cz.stremiooffline.tv.playback.decodedLabels
 import cz.stremiooffline.tv.playback.passthroughLabels
 import cz.stremiooffline.tv.ui.catalog.PanelOption
 import cz.stremiooffline.tv.ui.catalog.SidePanel
+import cz.stremiooffline.tv.ui.catalog.ruleName
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.signin.messageRes
@@ -90,6 +93,7 @@ const val TagSettingsRowAccount = "settings_row_account"
 const val TagSettingsRowUiLanguage = "settings_row_ui_language"
 const val TagSettingsRowAudio = "settings_row_audio"
 const val TagSettingsRowSubtitle = "settings_row_subtitle"
+const val TagSettingsRowStreamSort = "settings_row_stream_sort"
 const val TagSettingsRowStartView = "settings_row_start_view"
 const val TagSettingsRowHomeLayout = "settings_row_home_layout"
 const val TagSettingsRowPreferConversion = "settings_row_prefer_conversion"
@@ -110,7 +114,7 @@ fun settingsOptionTag(kind: String, code: String): String = "settings_${kind}_op
  *  else -- the same value drives the row's label, the panel's tint and the panel's focus. */
 private val START_VIEWS = listOf("home", "catalog", "library")
 
-private enum class SettingsPanel { SignOut, UiLanguage, AudioLanguage, SubtitleLanguage, StartView, HomeLayout, ClearHistory }
+private enum class SettingsPanel { SignOut, UiLanguage, AudioLanguage, SubtitleLanguage, StreamSort, StartView, HomeLayout, ClearHistory }
 
 /** The Device/Version line: the model, the Android release and what the device plays, all from
  *  the capability DTO the player already builds. */
@@ -150,6 +154,7 @@ fun SettingsRoute(
   SettingsScreen(
     state = viewModel.state,
     languages = viewModel.languages,
+    sourceProfiles = viewModel.sourceProfiles,
     address = api.serverAddress,
     username = username,
     appVersion = appVersion,
@@ -159,6 +164,7 @@ fun SettingsRoute(
     onUiLanguage = viewModel::setUiLanguage,
     onAudioLanguage = viewModel::setAudioLanguage,
     onSubtitleLanguage = viewModel::setSubtitleLanguage,
+    onStreamSort = viewModel::setStreamSort,
     onStartView = viewModel::setStartView,
     homeLayout = viewModel.homeLayout,
     onToggleHomeRow = viewModel::toggleHomeRow,
@@ -191,6 +197,7 @@ private fun appVersionOf(context: Context): String =
 fun SettingsScreen(
   state: SettingsState,
   languages: List<LanguageDto>,
+  sourceProfiles: List<SourceProfileDto>,
   address: String,
   username: String,
   appVersion: String,
@@ -200,6 +207,7 @@ fun SettingsScreen(
   onUiLanguage: (String) -> Unit,
   onAudioLanguage: (String) -> Unit,
   onSubtitleLanguage: (String) -> Unit,
+  onStreamSort: (String) -> Unit,
   onStartView: (String) -> Unit,
   homeLayout: HomeLayoutState,
   onToggleHomeRow: (String) -> Unit,
@@ -227,6 +235,7 @@ fun SettingsScreen(
   val uiFocus = remember { FocusRequester() }
   val audioFocus = remember { FocusRequester() }
   val subtitleFocus = remember { FocusRequester() }
+  val streamSortFocus = remember { FocusRequester() }
   val startFocus = remember { FocusRequester() }
   val homeFocus = remember { FocusRequester() }
   val clearHistoryFocus = remember { FocusRequester() }
@@ -338,6 +347,13 @@ fun SettingsScreen(
         value = subtitleName,
         onClick = { openPanel(SettingsPanel.SubtitleLanguage, subtitleFocus) },
         modifier = Modifier.testTag(TagSettingsRowSubtitle).focusRequester(subtitleFocus),
+      )
+      SettingsRow(
+        label = stringResource(R.string.settings_stream_sort),
+        value = streamSortValue(state.streamSort, sourceProfiles),
+        note = stringResource(R.string.settings_default_rules_hint),
+        onClick = { openPanel(SettingsPanel.StreamSort, streamSortFocus) },
+        modifier = Modifier.testTag(TagSettingsRowStreamSort).focusRequester(streamSortFocus),
       )
       SettingsRow(
         label = stringResource(R.string.settings_start_view),
@@ -469,6 +485,13 @@ fun SettingsScreen(
       onClose = { closePanel() },
       onPick = { closePanel(); onSubtitleLanguage(it) },
     )
+    SettingsPanel.StreamSort -> StreamSortPanel(
+      profiles = sourceProfiles,
+      current = state.streamSort,
+      panelFocus = panelFocus,
+      onClose = { closePanel() },
+      onPick = { closePanel(); onStreamSort(it) },
+    )
     SettingsPanel.StartView -> SidePanel(
       title = stringResource(R.string.settings_start_view),
       onClose = { closePanel() },
@@ -552,6 +575,66 @@ private fun ContentLanguagePanel(
   }
 }
 
+private data class StreamSortOption(val wire: String, val label: String)
+
+/** Rules profiles by name, then the three fixed orders. A legacy `recommended` resolves to the first rule. */
+@Composable
+private fun streamSortOptions(profiles: List<SourceProfileDto>): List<StreamSortOption> = buildList {
+  for (profile in profiles) {
+    if (profile.id.isBlank()) continue
+    add(StreamSortOption(Streams.StreamSort.Rule(profile.id).wire, ruleName(profile).ifBlank { profile.id }))
+  }
+  add(StreamSortOption(Streams.StreamSort.SizeDesc.wire, stringResource(R.string.sources_sort_largest)))
+  add(StreamSortOption(Streams.StreamSort.SizeAsc.wire, stringResource(R.string.sources_sort_smallest)))
+  add(StreamSortOption(Streams.StreamSort.Addon.wire, stringResource(R.string.sources_sort_addon)))
+}
+
+@Composable
+private fun streamSortValue(sort: String?, profiles: List<SourceProfileDto>): String {
+  val ids = profiles.map { it.id }.filter { it.isNotBlank() }
+  return when (val resolved = Streams.resolveRuleSort(Streams.StreamSort.of(sort), ids)) {
+    is Streams.StreamSort.Rule -> {
+      val profile = profiles.firstOrNull { it.id == resolved.profileId }
+      if (profile == null) resolved.profileId else ruleName(profile).ifBlank { profile.id }
+    }
+    Streams.StreamSort.SizeDesc -> stringResource(R.string.sources_sort_largest)
+    Streams.StreamSort.SizeAsc -> stringResource(R.string.sources_sort_smallest)
+    Streams.StreamSort.Addon -> stringResource(R.string.sources_sort_addon)
+    Streams.StreamSort.FirstRule -> stringResource(R.string.sources_sort_recommended)
+  }
+}
+
+@Composable
+private fun StreamSortPanel(
+  profiles: List<SourceProfileDto>,
+  current: String?,
+  panelFocus: FocusRequester,
+  onClose: () -> Unit,
+  onPick: (String) -> Unit,
+) {
+  val options = streamSortOptions(profiles)
+  val ids = profiles.map { it.id }.filter { it.isNotBlank() }
+  val resolved = Streams.resolveRuleSort(Streams.StreamSort.of(current), ids).wire
+  val selected = options.indexOfFirst { it.wire == resolved }.let { if (it >= 0) it else 0 }
+  SidePanel(
+    title = stringResource(R.string.settings_stream_sort),
+    onClose = onClose,
+    modifier = Modifier.testTag(TagSettingsPanel),
+    initialFocus = panelFocus,
+  ) {
+    options.forEachIndexed { index, option ->
+      PanelOption(
+        text = option.label,
+        selected = option.wire == resolved,
+        onClick = { onPick(option.wire) },
+        modifier = Modifier
+          .testTag(settingsOptionTag("sort", option.wire))
+          .then(if (index == selected) Modifier.focusRequester(panelFocus) else Modifier),
+      )
+    }
+  }
+}
+
 /** Localizes a content language from its code, the way the web's `languageName` does. */
 fun contentLanguageLabel(code: String, uiLanguage: String?): String {
   val display = Locale.forLanguageTag(uiLanguage ?: "en")
@@ -572,11 +655,12 @@ private fun SettingsRow(
   value: String,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  note: String? = null,
 ) {
   val shape = RoundedCornerShape(8.dp)
   Surface(
     onClick = onClick,
-    modifier = modifier.fillMaxWidth().height(44.dp),
+    modifier = modifier.fillMaxWidth().then(if (note == null) Modifier.height(44.dp) else Modifier),
     shape = ClickableSurfaceDefaults.shape(shape = shape),
     colors = ClickableSurfaceDefaults.colors(
       containerColor = Color.Transparent,
@@ -592,14 +676,26 @@ private fun SettingsRow(
       focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),
     ),
   ) {
-    Row(
-      modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Text(label, modifier = Modifier.weight(1f), color = Tokens.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(value, modifier = Modifier.weight(1f, fill = false), color = Tokens.Muted, fontSize = 13.sp, textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Spacer(Modifier.width(10.dp))
-      Chevron()
+    if (note == null) {
+      Row(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(label, modifier = Modifier.weight(1f), color = Tokens.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(value, modifier = Modifier.weight(1f, fill = false), color = Tokens.Muted, fontSize = 13.sp, textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.width(10.dp))
+        Chevron()
+      }
+    } else {
+      Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Text(label, modifier = Modifier.weight(1f), color = Tokens.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+          Text(value, modifier = Modifier.weight(1f, fill = false), color = Tokens.Muted, fontSize = 13.sp, textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis)
+          Spacer(Modifier.width(10.dp))
+          Chevron()
+        }
+        Text(note, color = Tokens.Muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      }
     }
   }
 }

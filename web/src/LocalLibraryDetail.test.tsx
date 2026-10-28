@@ -166,6 +166,17 @@ describe("LocalLibraryDetail discovery", () => {
     expect(rows()[0]!.textContent).toContain("Heat.1080p.mkv");
   });
 
+  it("starts a matched folder with its own copy instead of another copy of the title", async () => {
+    identityHandler = () => json(identity({ file: false, kind: "movie", bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    copies = () => json([
+      copy("Other/Heat.1080p.mkv", "Heat.1080p.mkv", 6_000_000_000),
+      copy("Heat/Heat.mkv", "Heat.mkv", 2_000_000_000),
+    ]);
+    const { onPlay } = await render(folder());
+    await click(host.querySelector(".library-detail-play button.primary"));
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Heat/Heat.mkv" }), undefined, expect.anything());
+  });
+
   it("shows no versions for a folder whose binding is not one movie", async () => {
     identityHandler = () => json(identity({ file: false, kind: "series", bound: { type: "series", id: "tt9", name: "Show" } }));
     await render(folder({ name: "Assorted" }));

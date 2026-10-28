@@ -453,6 +453,15 @@ describe("librarySourceRows", () => {
       .toEqual(["native", "copy", "other", "add"]);
   });
 
+  it("keeps native rows first but orders them by the active rule", () => {
+    const ranked = librarySourceEntries([
+      stream("native-worse", { provider: "jellyfin", rules: { balanced: { profileId: "balanced", status: "breaks", reasons: ["resolutionLow"], rank: [0, 2, 360] } } }),
+      stream("native-best", { provider: "jellyfin", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0, 0, 1080] } } }),
+    ], "Local files", [], (group) => group.name || "Local files");
+    expect(librarySourceRows(ranked, "", "", "rule:balanced", "en").map((row) => row.sourceId))
+      .toEqual(["native-best", "native-worse"]);
+  });
+
   it("keeps native rows first but lets an explicit rule move a local copy last", () => {
     const ranked = librarySourceEntries([remote("native", 1_000_000_000)], "Local files", [
       { key: "local", kind: "local", name: "", status: "loaded", streams: [stream("copy", { kind: "library", localPath: "p", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0, 0, 2] } } })], error: "" },

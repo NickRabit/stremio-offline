@@ -103,7 +103,10 @@ const fixedSnapshot = (profileId: string): SourceAdmissionSnapshotV1 => {
 const travelSnapshot = (): SourceAdmissionSnapshotV1 => fixedSnapshot(SOURCE_PROFILE_IDS.travel);
 const providerPrioritySnapshot = (): SourceAdmissionSnapshotV1 =>
   fixedSnapshot(SOURCE_PROFILE_IDS.providerPriority);
-const rulesSnapshot = (): SourceAdmissionSnapshotV1 => {
+const rulesSnapshot = (
+  rules?: ReturnType<typeof parseDownloadRules>,
+  kind: "episode" | "movie" = "movie",
+): SourceAdmissionSnapshotV1 => {
   const preset = RULE_PRESETS.find((candidate) => candidate.id === SOURCE_PROFILE_IDS.balanced);
   assert.ok(preset);
   const providerKeys = [PROVIDER_TWO, PROVIDER_ONE];
@@ -113,7 +116,7 @@ const rulesSnapshot = (): SourceAdmissionSnapshotV1 => {
     operation: "downloadToLibrary",
     providerKeys,
     policy: materializeSourceAdmissionPolicy(
-      rulesPolicy(preset.rules, "movie"),
+      rulesPolicy(rules ?? preset.rules, kind),
       providerKeys,
       { audioLanguage: "English", subtitleLanguage: "cs" },
     ),
@@ -258,6 +261,44 @@ const countingServer = (status = 200) => new Promise<{ server: Server; url: stri
   server.listen(0, "127.0.0.1", () => {
     const address = server.address() as { port: number };
     resolve({ server, url: `http://127.0.0.1:${address.port}/film.mp4`, requests: () => requests });
+  });
+});
+
+const declaredSizeServer = (total: number, ranges = false) => new Promise<{
+  server: Server;
+  url: string;
+  entered: Promise<void>;
+  requests: () => number;
+  transfers: () => number;
+}>((resolve) => {
+  const entered = deferred();
+  let requests = 0;
+  let transfers = 0;
+  const server = createServer((request, response) => {
+    requests += 1;
+    if (ranges && request.headers.range === "bytes=0-0") {
+      response.writeHead(206, {
+        "content-type": "video/mp4",
+        "content-length": "1",
+        "content-range": `bytes 0-0/${total}`,
+      });
+      response.end("x");
+      return;
+    }
+    transfers += 1;
+    entered.release();
+    response.writeHead(200, { "content-type": "video/mp4", "content-length": String(total) });
+    response.write("x");
+  });
+  server.listen(0, "127.0.0.1", () => {
+    const address = server.address() as { port: number };
+    resolve({
+      server,
+      url: `http://127.0.0.1:${address.port}/film.mp4`,
+      entered: entered.promise,
+      requests: () => requests,
+      transfers: () => transfers,
+    });
   });
 });
 
@@ -427,14 +468,14 @@ const selectedProviderPriority = (
   searchStatus: "complete",
 });
 
-const selectedRules = (url: string): RulesProfileResolution => ({
+const selectedRules = (url: string, videoSize: number | null = 1): RulesProfileResolution => ({
   status: "selected",
   stream: {
     url,
     addonKey: "queue-private-token",
     addonName: "Rules fixture",
     name: "Film.mp4",
-    behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+    behaviorHints: { filename: "Film.mp4", ...(videoSize === null ? {} : { videoSize }) },
   },
   resolution: { checkedCandidates: 1, audioLanguage: "en", audioEvidence: "probe" },
   settings: defaultDownloadSettings(),
@@ -443,6 +484,18 @@ const selectedRules = (url: string): RulesProfileResolution => ({
   retryable: false,
   observations: emptyObservations,
 });
+
+const rulesWithMaximum = (kind: "episode" | "movie", maximumGb: number) => {
+  const preset = RULE_PRESETS.find((candidate) => candidate.id === SOURCE_PROFILE_IDS.balanced);
+  assert.ok(preset);
+  return parseDownloadRules({
+    ...preset.rules,
+    sizeGb: {
+      ...preset.rules.sizeGb,
+      [kind]: { min: null, max: maximumGb },
+    },
+  });
+};
 
 test("a stored Travel variant runs through the Travel resolver", async () => {
   const { directory, data, downloads } = await setup();
@@ -3530,6 +3583,203 @@ test("a rules snapshot runs only through the rules resolver and stages a verifie
   } finally {
     await queue.stop();
     source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a rules HTTP source outside the real size range falls back to the next candidate", async () => {
+  const { directory, data, downloads } = await setup();
+  const oversized = await declaredSizeServer(60_000_000_000);
+  const good = await countingServer();
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, { retryDelay: () => 0 });
+  queue.setRulesResolver(async (input) => {
+    resolutions += 1;
+    if (resolutions === 1) return selectedRules(oversized.url, null);
+    assert.deepEqual(input.source.tried, [oversized.url]);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, 1);
+    assert.equal(await fileAbsent(path.join(downloads, "Film", "Film.mp4.part")), true);
+    return selectedRules(good.url);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-rules-real-size", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      rulesSnapshot(rulesWithMaximum("movie", 20)),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(resolutions, 2);
+    assert.equal(oversized.transfers(), 1);
+    assert.equal(good.requests(), 1);
+    assert.equal(await fileAbsent(path.join(downloads, "Film", "Film.mp4.part")), true);
+  } finally {
+    await queue.stop();
+    oversized.server.closeAllConnections();
+    oversized.server.close();
+    good.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a rules ranged source outside the real size stops at the range probe", async () => {
+  const { directory, data, downloads } = await setup();
+  const oversized = await declaredSizeServer(60_000_000_000, true);
+  const good = await countingServer();
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, { retryDelay: () => 0, segments: () => 2 });
+  queue.setRulesResolver(async (input) => {
+    resolutions += 1;
+    if (resolutions === 1) return selectedRules(oversized.url, null);
+    assert.deepEqual(input.source.tried, [oversized.url]);
+    return selectedRules(good.url);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-rules-real-size-ranged", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      rulesSnapshot(rulesWithMaximum("movie", 20)),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(resolutions, 2);
+    assert.equal(oversized.requests(), 1);
+    assert.equal(oversized.transfers(), 0);
+    assert.equal(await fileAbsent(path.join(downloads, "Film", "Film.mp4.part")), true);
+  } finally {
+    await queue.stop();
+    oversized.server.close();
+    good.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a 10 GB rules source under a 20 GB limit is not stopped by the real-size check", async () => {
+  const { directory, data, downloads } = await setup();
+  const source = await declaredSizeServer(10_000_000_000);
+  let resolutions = 0;
+  const queue = openQueue(data, downloads);
+  queue.setRulesResolver(async () => {
+    resolutions += 1;
+    return selectedRules(source.url, null);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-rules-real-size-inside", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      rulesSnapshot(rulesWithMaximum("movie", 20)),
+    );
+    assert.ok(added);
+    await source.entered;
+    await waitFor(queue, () => (queue.get(added.id)?.received ?? 0) > 0);
+    assert.equal(resolutions, 1);
+    assert.deepEqual(internalJobs(queue)[0]?.source?.tried, []);
+    assert.equal(queue.get(added.id)?.status, "downloading");
+  } finally {
+    await queue.stop();
+    source.server.closeAllConnections();
+    source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a non-rules source larger than the rule bytes is not stopped by the real-size check", async () => {
+  const { directory, data, downloads } = await setup();
+  const source = await declaredSizeServer(60_000_000_000);
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, {
+    freeSpace: async () => ({ freeBytes: 200_000_000_000, totalBytes: 400_000_000_000 }),
+  });
+  queue.setProviderPriorityResolver(async () => {
+    resolutions += 1;
+    return selectedProviderPriority(source.url);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-real-size", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await source.entered;
+    await waitFor(queue, () => (queue.get(added.id)?.received ?? 0) > 0);
+    assert.equal(resolutions, 1);
+    assert.deepEqual(internalJobs(queue)[0]?.source?.tried, []);
+    assert.equal(queue.get(added.id)?.status, "downloading");
+  } finally {
+    await queue.stop();
+    source.server.closeAllConnections();
+    source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an exact source larger than a rule bytes range is not stopped by the real-size check", async () => {
+  const { directory, data, downloads } = await setup();
+  const source = await declaredSizeServer(60_000_000_000);
+  const queue = openQueue(data, downloads, {
+    freeSpace: async () => ({ freeBytes: 200_000_000_000, totalBytes: 400_000_000_000 }),
+  });
+  await queue.load();
+  try {
+    const added = await queue.add("Film", { url: source.url, behaviorHints: { filename: "Film.mp4" } });
+    await source.entered;
+    await waitFor(queue, () => (queue.get(added.id)?.received ?? 0) > 0);
+    assert.equal(queue.get(added.id)?.status, "downloading");
+  } finally {
+    await queue.stop();
+    source.server.closeAllConnections();
+    source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the episode range stops an episode source whose real size is too large", async () => {
+  const { directory, data, downloads } = await setup();
+  const oversized = await declaredSizeServer(5_000_000_000);
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, { retryDelay: () => 0 });
+  queue.setRulesResolver(async () => {
+    resolutions += 1;
+    if (resolutions === 1) return selectedRules(oversized.url, null);
+    return { status: "noMatch", retryable: false, observations: emptyObservations };
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Show",
+      { type: "series", videoId: "tt-rules-real-size-episode:1:1", selection: selection("queue-private-token") },
+      { kind: "episode", title: "Show", season: 1, episode: 1 },
+      QUEUE_OWNER,
+      undefined,
+      rulesSnapshot(rulesWithMaximum("episode", 4), "episode"),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    assert.equal(resolutions, 2);
+    assert.deepEqual(internalJobs(queue)[0]?.source?.tried, [oversized.url]);
+    assert.equal(queue.get(added.id)?.errorKey, "err.noMatchingSource");
+    assert.equal(await fileAbsent(path.join(downloads, "Show", "Show.S01E01.mp4.part")), true);
+  } finally {
+    await queue.stop();
+    oversized.server.closeAllConnections();
+    oversized.server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

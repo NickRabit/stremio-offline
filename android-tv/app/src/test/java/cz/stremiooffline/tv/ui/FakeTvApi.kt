@@ -547,6 +547,7 @@ open class FakeTvApi : TvApi {
       "uiLanguage" -> settingsValue.copy(uiLanguage = value)
       "audioLanguage" -> settingsValue.copy(audioLanguage = value)
       "subtitleLanguage" -> settingsValue.copy(subtitleLanguage = value)
+      "streamSort" -> settingsValue.copy(streamSort = value)
       "startView" -> settingsValue.copy(startView = value)
       else -> settingsValue
     }
