@@ -139,7 +139,8 @@ services:
       - "8090:8080"
     environment:
       TZ: Europe/Prague
-      # Owner of the download folder; see below.
+      # Owner of the download folder: ls -n /downloads in the container terminal.
+      # 1030 is one Synology account, yours may differ; 100 is the Synology users group.
       PUID: "1030"
       PGID: "100"
       # Intel QuickSync. RENDER_GID is the group that owns renderD128; see below.
@@ -173,9 +174,8 @@ ls -n /dev/dri
 ```
 
 The first command shows the owner of the download folder: put its two numbers
-into `PUID` and `PGID` (the example's `1030` is one Synology account;
-yours may differ, and the `users` group is `100`). The second shows the group of
-`renderD128`: put it into `RENDER_GID`. Then use **Action → Build** on the
+into `PUID` and `PGID`. The second shows the group of `renderD128`: put it
+into `RENDER_GID`. Then use **Action → Build** on the
 project, which recreates the container with the new values. The log line
 `VAAPI is available` confirms QuickSync is in use; a warning in its place names
 what to fix.

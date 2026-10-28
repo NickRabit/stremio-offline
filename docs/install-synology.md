@@ -79,7 +79,8 @@ services:
       - "8090:8080"
     environment:
       TZ: Europe/Prague
-      # Owner of the download folder; see below.
+      # Owner of the download folder: ls -n /downloads in the container terminal.
+      # 1030 is one Synology account, yours may differ; 100 is the Synology users group.
       PUID: "1030"
       PGID: "100"
       # Intel QuickSync. RENDER_GID is the group that owns renderD128; see below.
