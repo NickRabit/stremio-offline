@@ -106,6 +106,14 @@ data class SourceRuleVerdictDto(
   val rank: List<Double> = emptyList(),
 )
 
+/** The video evidence the source rules evaluated. Unknown JSON keys stay ignored. */
+@Serializable
+data class VideoFactsDto(
+  val heightPixels: Int? = null,
+  val codec: String? = null,
+  val range: String? = null,
+)
+
 /** One `GET /api/streams/:type/:id` entry, the `Stream` shape the web reads. */
 @Serializable
 data class StreamDto(
@@ -142,6 +150,7 @@ data class StreamDto(
   val audioLanguages: List<String> = emptyList(),
   val subtitleLanguages: List<String> = emptyList(),
   val audioLanguagesGuessed: Boolean = false,
+  val videoFacts: VideoFactsDto? = null,
   /** The same source's handle in every session; the server mints it and the app never computes it. */
   val stableKey: String? = null,
   /** One verdict per rules profile, keyed by profile id. */

@@ -6,7 +6,7 @@ import {
   materializeSourceAdmission,
   type SourceAdmissionSnapshotV1,
 } from "./source-admission.js";
-import type { SourceRuleReason, SourceRuleVerdict } from "./api-types.js";
+import type { SourceRuleReason, SourceRuleVerdict, VideoFacts } from "./api-types.js";
 import {
   compareFinalTie,
   evaluateSourceCandidate,
@@ -146,6 +146,25 @@ const playbackEvidence = (candidate: SourceEvidenceCandidateV1): SourceEvidenceC
     },
   };
 };
+
+export function sourceVideoFacts(candidate: SourceEvidenceCandidateV1): VideoFacts | undefined {
+  const facts = playbackEvidence(candidate).facts;
+  const heightPixels = knownNumber(facts.heightPixels, candidate.hints?.heightPixels);
+  const codec = facts.videoCodec.evidence !== "unknown"
+    && facts.videoCodec.value !== null
+    && facts.videoCodec.value !== "other"
+    ? facts.videoCodec.value
+    : undefined;
+  const range = facts.videoRange.evidence !== "unknown" && facts.videoRange.value !== "sdr"
+    ? facts.videoRange.value
+    : undefined;
+  if (heightPixels === undefined && codec === undefined && range === undefined) return undefined;
+  return {
+    ...(heightPixels === undefined ? {} : { heightPixels }),
+    ...(codec === undefined ? {} : { codec }),
+    ...(range === undefined ? {} : { range }),
+  };
+}
 
 const reasonFor = (
   reason: SourceEvidenceReason,

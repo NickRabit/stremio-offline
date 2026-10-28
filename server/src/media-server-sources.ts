@@ -11,7 +11,7 @@ import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-
 import { ResourceError, type MediaResources, type ResourceOwner } from "./media-resources.js";
 import { containerExtension, nameExtension } from "./naming.js";
 import { remoteAudioLanguages, remoteSourceEvidence, remoteSubtitleLanguages } from "./source-remote-evidence.js";
-import { ruleSnapshots, ruleVerdictsForProfiles } from "./source-rule-verdict.js";
+import { ruleSnapshots, ruleVerdictsForProfiles, sourceVideoFacts } from "./source-rule-verdict.js";
 import type { Store } from "./store.js";
 import type { DownloadTargetSettings, PublicStream, StreamItem } from "./types.js";
 import type { UserRecord } from "./users.js";
@@ -205,17 +205,31 @@ export class MediaServerSources {
   ): PublicStream[] {
     const sealed = results.flatMap((result) => this.seal(result, owner, secretStamp));
     const listed = this.listed(sealed, owner);
+    const videoFacts = new Map(sealed.flatMap((entry) => {
+      const facts = sourceVideoFacts(entry.candidate);
+      return facts === undefined ? [] : [[entry.candidate.sourceId, facts] as const];
+    }));
     const snapshots = ruleSnapshots({
       user: this.currentUser(owner.userId),
       store: this.store,
       preferences: this.store.prefs(owner.userId),
       mediaKind,
     });
-    if (!snapshots.length) return listed;
+    if (!snapshots.length) {
+      return listed.map((stream, index) => {
+        const facts = videoFacts.get(sealed[index]!.candidate.sourceId);
+        return facts === undefined ? stream : { ...stream, videoFacts: facts };
+      });
+    }
     const verdicts = ruleVerdictsForProfiles(snapshots, sealed.map((entry) => entry.candidate));
     return listed.map((stream, index) => {
       const verdict = verdicts.get(sealed[index]!.candidate.sourceId);
-      return verdict === undefined ? stream : { ...stream, rules: verdict };
+      const facts = videoFacts.get(sealed[index]!.candidate.sourceId);
+      return {
+        ...stream,
+        ...(verdict === undefined ? {} : { rules: verdict }),
+        ...(facts === undefined ? {} : { videoFacts: facts }),
+      };
     });
   }
 

@@ -1,5 +1,5 @@
 import type { RemoteCapabilities } from "./media-server-types.js";
-import type { SourceRuleVerdicts } from "./api-types.js";
+import type { SourceRuleVerdicts, VideoFacts } from "./api-types.js";
 
 export type AddonRole = "catalog" | "source" | "both";
 export type DownloadLayout = "flat" | "structured";
@@ -150,6 +150,7 @@ export interface PublicStream {
   audioLanguages?: string[];
   subtitleLanguages?: string[];
   audioLanguagesGuessed?: true;
+  videoFacts?: VideoFacts;
   rules?: SourceRuleVerdicts;
   behaviorHints: { filename?: string; videoSize?: number; bingeGroup?: string };
   subtitles: PublicSubtitle[];

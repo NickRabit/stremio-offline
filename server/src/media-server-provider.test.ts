@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { RemoteDownloadReference } from "./media-server-download.js";
 import { createMediaServerTransport, type MediaServerTransport } from "./media-server-security.js";
 import { MediaServerError, type MediaServerKind } from "./media-server-types.js";
 import { createMediaServerProvider, type MediaServerProvider } from "./media-server-provider.js";
+import { remoteSourceEvidence } from "./source-remote-evidence.js";
+import { sourceVideoFacts } from "./source-rule-verdict.js";
 
 interface Call {
   operation: string;
@@ -333,6 +336,47 @@ test("versions reads bounded video, audio and embedded-subtitle facts from Media
     audioLanguages: ["cs", undefined, undefined],
     embeddedSubtitleLanguages: ["en", undefined, "de"],
   }]);
+});
+
+test("MediaStreams video facts reach the source evidence projection", async () => {
+  const { provider } = fixture(() => ({
+    MediaSources: [{
+      Id: "v1",
+      Protocol: "File",
+      MediaStreams: [{
+        Type: "Video",
+        Width: 3840,
+        Height: 2160,
+        Codec: "hevc",
+        VideoRangeType: "DOVI",
+      }],
+    }],
+  }));
+  const [version] = await provider.versions("tok", "user-1", "item-1");
+  const reference: RemoteDownloadReference = {
+    schemaVersion: 1,
+    ownerUserId: "usr_00000001",
+    connectionId: `mconn_${"1".repeat(32)}`,
+    libraryId: `rlib_${"2".repeat(32)}`,
+    generation: 1,
+    provider: "jellyfin",
+    serverId: "server-1",
+    accountId: "account-1",
+    itemId: "item-1",
+    mediaSourceId: "v1",
+  };
+  const candidate = remoteSourceEvidence({
+    providerKey: `remote:${reference.libraryId}`,
+    reference,
+    version: version!,
+    providerResponseIndex: 0,
+  });
+
+  assert.deepEqual(sourceVideoFacts(candidate), {
+    heightPixels: 2160,
+    codec: "hevc",
+    range: "dolbyVision",
+  });
 });
 
 test("versions map Jellyfin and Emby video range fields with Dolby Vision priority", async () => {

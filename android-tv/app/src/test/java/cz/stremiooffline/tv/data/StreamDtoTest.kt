@@ -30,4 +30,14 @@ class StreamDtoTest {
     val stream = ApiJson.decodeFromString(StreamDto.serializer(), """{"sourceId":"s1","kind":"remote","playable":true}""")
     assertTrue(stream.rules.isEmpty())
   }
+
+  @Test
+  fun `video facts decode their known fields and ignore unknown keys`() {
+    val stream = ApiJson.decodeFromString(
+      StreamDto.serializer(),
+      """{"sourceId":"s1","kind":"remote","playable":true,"videoFacts":""" +
+        """{"heightPixels":2160,"codec":"hevc","range":"dolbyVision","future":"ignored"}}""",
+    )
+    assertEquals(VideoFactsDto(2160, "hevc", "dolbyVision"), stream.videoFacts)
+  }
 }

@@ -25,7 +25,7 @@ import { subtitleVtt } from "../subtitle-text.js";
 import { shiftVtt } from "../vtt.js";
 import { listedLocalCopyEvidence } from "../local-copy-admission.js";
 import { listedAddonSourceEvidence } from "../source-addon-evidence.js";
-import { ruleSnapshots, ruleVerdictsForProfiles } from "../source-rule-verdict.js";
+import { ruleSnapshots, ruleVerdictsForProfiles, sourceVideoFacts } from "../source-rule-verdict.js";
 import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "./context.js";
 
 /** The language the player shows a subtitle under, which is what a file that is not Unicode
@@ -342,10 +342,21 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
         });
       });
       const verdicts = ruleVerdictsForProfiles(snapshots, candidates.filter((candidate) => candidate !== undefined));
+      const videoFacts = new Map(candidates.flatMap((candidate) => {
+        if (candidate === undefined) return [];
+        const facts = sourceVideoFacts(candidate);
+        return facts === undefined ? [] : [[candidate.sourceId, facts] as const];
+      }));
       const listed = mediaResources.listing(items, owner);
       res.setHeader("cache-control", "private, no-store").json(listed.map((stream, index) => {
-        const verdict = candidates[index] === undefined ? undefined : verdicts.get(candidates[index].sourceId);
-        return verdict === undefined ? stream : { ...stream, rules: verdict };
+        const candidate = candidates[index];
+        const verdict = candidate === undefined ? undefined : verdicts.get(candidate.sourceId);
+        const facts = candidate === undefined ? undefined : videoFacts.get(candidate.sourceId);
+        return {
+          ...stream,
+          ...(verdict === undefined ? {} : { rules: verdict }),
+          ...(facts === undefined ? {} : { videoFacts: facts }),
+        };
       }));
     } catch (error) {
       if (disconnect.signal.aborted) return;
@@ -376,12 +387,18 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     const snapshots = rulesFor(req, String(req.params.type));
     const candidates = copies.map((copy, index) => listedLocalCopyEvidence(copy, index, posixBase(copy.key)));
     const verdicts = ruleVerdictsForProfiles(snapshots, candidates);
+    const videoFacts = new Map(candidates.flatMap((candidate) => {
+      const facts = sourceVideoFacts(candidate);
+      return facts === undefined ? [] : [[candidate.sourceId, facts] as const];
+    }));
     res.setHeader("cache-control", "private, no-store").json(listed.map((stream, index) => {
       const verdict = verdicts.get(candidates[index]!.sourceId);
+      const facts = videoFacts.get(candidates[index]!.sourceId);
       return {
         ...stream, behaviorHints: { ...stream.behaviorHints, filename: posixBase(copies[index]!.key) },
         localPath: copies[index]!.path, libraryName: copies[index]!.libraryName,
         ...(verdict === undefined ? {} : { rules: verdict }),
+        ...(facts === undefined ? {} : { videoFacts: facts }),
       };
     }));
   }));

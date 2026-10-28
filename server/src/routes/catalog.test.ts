@@ -1539,6 +1539,52 @@ test("GET /api/streams attaches a verdict for every admitting rules profile", as
   );
 });
 
+test("GET /api/streams exposes one videoFacts object for every rules profile", async (t) => {
+  const records = [addon("rule-source", [], { role: "source", resources: ["stream"] })];
+  const harness = await mount(records, null, { profiles: storedRulePresets() });
+  t.after(harness.close);
+
+  await withStubbedAddons(
+    () => json({ streams: [{ url: "https://cdn.example/movie-2160p-hevc-dv.mp4", name: "2160p HEVC DV" }] }),
+    async () => {
+      const listed = await (await api(harness.base, "/api/streams/movie/tt1")).json() as Array<{
+        videoFacts?: { heightPixels?: number; codec?: string; range?: string };
+        rules?: Record<string, { profileId: string }>;
+      }>;
+      assert.deepEqual(listed[0]!.videoFacts, {
+        heightPixels: 2160,
+        codec: "hevc",
+        range: "dolbyVision",
+      });
+      assert.deepEqual(Object.keys(listed[0]!.rules ?? {}).sort(), RULE_PRESETS.map((preset) => preset.id).sort());
+    },
+  );
+});
+
+test("GET /api/streams omits videoFacts for an untagged source beside a tagged one", async (t) => {
+  const records = [addon("rule-source", [], { role: "source", resources: ["stream"] })];
+  const harness = await mount(records, null, { profiles: storedRulePresets() });
+  t.after(harness.close);
+
+  await withStubbedAddons(
+    () => json({ streams: [
+      { url: "https://cdn.example/movie-2160p-hevc-dv.mp4", name: "2160p HEVC DV" },
+      { url: "https://cdn.example/movie.mp4", name: "Czech" },
+    ] }),
+    async () => {
+      const listed = await (await api(harness.base, "/api/streams/movie/tt1")).json() as Array<{
+        videoFacts?: { heightPixels?: number; codec?: string; range?: string };
+      }>;
+      assert.deepEqual(listed[0]!.videoFacts, {
+        heightPixels: 2160,
+        codec: "hevc",
+        range: "dolbyVision",
+      });
+      assert.equal("videoFacts" in listed[1]!, false);
+    },
+  );
+});
+
 test("a server with no admitting rules profile omits rules", async (t) => {
   const records = [addon("rule-source", [], { role: "source", resources: ["stream"] })];
   const harness = await mount(records, null, {
@@ -1633,13 +1679,18 @@ test("GET /api/local-streams attaches a verdict for every admitting rules profil
   const harness = await mount([], null, {
     libraries: [library("lib_00000001")],
     profiles: storedRulePresets(),
-    localCopies: async () => [localCopy()],
+    localCopies: async () => [localCopy({
+      key: "lib_00000001/Heat (1995)/Heat 1995 HEVC DV.mkv",
+      path: "Heat (1995)/Heat 1995 HEVC DV.mkv",
+    })],
   });
   t.after(harness.close);
 
   const listed = await (await api(harness.base, "/api/local-streams/movie/tt0113277")).json() as Array<{
+    videoFacts?: { codec?: string; range?: string };
     rules?: Record<string, { profileId: string; status: string; rank: number[] }>;
   }>;
+  assert.deepEqual(listed[0]!.videoFacts, { codec: "hevc", range: "dolbyVision" });
   const rules = listed[0]!.rules!;
   assert.deepEqual(Object.keys(rules).sort(), RULE_PRESETS.map((preset) => preset.id).sort());
   assert.equal(rules[SOURCE_PROFILE_IDS.balanced]!.status, "unverified");
