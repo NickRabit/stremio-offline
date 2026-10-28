@@ -18,6 +18,15 @@ The single set of rules for any coding agent working in this repository.
   server sends to the interface carries English text plus a catalogue key
   (`AppError`); one that only reaches the log stays plain English.
 
+## Dependencies
+
+- Add a dependency at the latest stable version compatible with the supported
+  Node and browser targets. Do not copy an older version from another workspace.
+- For a major upgrade, check the release notes and account for breaking changes
+  in the same change.
+- Update `package-lock.json` with the manifest and run `npm ci` before handing
+  the change off.
+
 ## Git workflow
 
 - Write everything in English: commit messages, branch names, pull request
