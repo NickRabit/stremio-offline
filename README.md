@@ -32,7 +32,7 @@ the Home Screen.
 > from addons and libraries the user connects. Use only sources and accounts
 > you have the right to access; what you add and download is your responsibility.
 
-![The catalog with a title's details, its source and the buttons to play or save it](docs/images/catalog.jpg)
+![The catalog with a title's details, its source and the buttons to play or save it](docs/images/v0.5/catalog.jpg)
 
 ## What it does
 
@@ -95,17 +95,21 @@ torrent engine. See [Addons and downloads](docs/downloads.md#real-debrid-and-oth
 
 | Home | Library |
 | --- | --- |
-| ![Home with continue watching, a row from the library and an addon catalog](docs/images/home.jpg) | ![Downloaded films in the library, with posters and descriptions](docs/images/library.jpg) |
+| ![Home with continue watching, a row from the library and an addon catalog](docs/images/v0.5/home.jpg) | ![Downloaded films in the library, with posters and descriptions](docs/images/v0.5/library.jpg) |
 
 | Following with automatic downloads | Download queue |
 | --- | --- |
-| ![Following a series: start a few episodes ahead and pick download rules](docs/images/follow.jpg) | ![One film downloading, another waiting in the queue](docs/images/downloads.jpg) |
+| ![Following a series: start a few episodes ahead and pick download rules](docs/images/v0.5/follow.jpg) | ![One film downloading, another waiting in the queue](docs/images/v0.5/downloads.jpg) |
 
-![The player with subtitles](docs/images/player.jpg)
+![The player with subtitles](docs/images/v0.5/player.jpg)
+
+| Android TV: Home | Android TV: title detail |
+| --- | --- |
+| ![The Android TV app's Home with the Tonight row](docs/images/v0.5/tv-home.jpg) | ![A film's detail on Android TV with Play and Sources](docs/images/v0.5/tv-detail.jpg) |
 
 <p>
-  <img src="docs/images/mobile-home.jpg" alt="Home on a phone" width="260">
-  <img src="docs/images/mobile-library.jpg" alt="The library on a phone" width="260">
+  <img src="docs/images/v0.5/mobile-home.jpg" alt="Home on a phone" width="260">
+  <img src="docs/images/v0.5/mobile-library.jpg" alt="The library on a phone" width="260">
 </p>
 
 The films and the series shown are Blender Foundation open movies (CC BY),

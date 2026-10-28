@@ -12,7 +12,7 @@ This is an independent project, not affiliated with Stremio or Smart Code Ltd.
 No media content is included. Connect only sources and accounts you have the
 right to use.
 
-![Stremio Offline catalog](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/catalog.jpg)
+![Stremio Offline catalog](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/catalog.jpg)
 
 ## Features
 
