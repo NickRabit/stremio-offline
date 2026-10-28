@@ -18,6 +18,10 @@ on:
         type: boolean
         default: false
   workflow_call:
+    secrets:
+      DOCKER_TOKEN:
+        description: "Docker Hub access token with write access to nickrabit/stremio-offline"
+        required: true
     inputs:
       tags:
         description: "Extra tags besides :latest and :<sha>, space-separated"
@@ -230,3 +234,49 @@ jobs:
           name: stremio-offline-amd64
           path: dist/stremio-offline-amd64.tar.gz
           retention-days: 14
+
+  docker-hub:
+    needs: [manifest, verify]
+    if: ${{ !cancelled() && needs.manifest.result == 'success' && needs.verify.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    env:
+      SOURCE_IMAGE: ${{ needs.manifest.outputs.image }}
+      DOCKER_IMAGE: docker.io/nickrabit/stremio-offline
+      COMMIT: ${{ github.sha }}
+      TAGS: ${{ inputs.tags }}
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        with:
+          username: nickrabit
+          password: ${{ secrets.DOCKER_TOKEN }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Copy the verified multi-platform image to Docker Hub
+        run: |
+          set -euo pipefail
+          tags=(-t "$DOCKER_IMAGE:latest" -t "$DOCKER_IMAGE:$COMMIT")
+          for tag in $TAGS; do tags+=(-t "$DOCKER_IMAGE:$tag"); done
+          docker buildx imagetools create "${tags[@]}" "$SOURCE_IMAGE:$COMMIT"
+      - name: Verify both Docker Hub architectures
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$DOCKER_IMAGE:$COMMIT" --raw | jq -e '
+            any(.manifests[]; .platform.os == "linux" and .platform.architecture == "amd64") and
+            any(.manifests[]; .platform.os == "linux" and .platform.architecture == "arm64")
+          '
+      - uses: actions/checkout@v7
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77 # v4
+        with:
+          username: nickrabit
+          password: ${{ secrets.DOCKER_TOKEN }}
+          repository: nickrabit/stremio-offline
+          short-description: "Self-hosted Stremio addon client with streaming, offline downloads and personal media libraries."
+          readme-filepath: docs/docker-hub.md
