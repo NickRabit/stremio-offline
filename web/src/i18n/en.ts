@@ -578,6 +578,9 @@ export const en = {
   "episodes.bulkSkipped": { one: "1 skipped, already queued.", other: "{count} skipped, already queued." },
 
   "bulk.title": "Download series",
+  "bulk.titleMovie": "Download film",
+  "bulk.titleEpisode": "Download episode",
+  "rules.selectedSource": "Selected source",
   "bulk.episodeCount": { one: "1 episode", other: "{count} episodes" },
   "bulk.queueHint": "Each episode is checked only when it reaches the front of the queue.",
   "bulk.add": "Add to queue",

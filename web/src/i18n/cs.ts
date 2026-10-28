@@ -573,6 +573,9 @@ export const cs: Catalog = {
   "episodes.bulkSkipped": { one: "1 přeskočena, už je ve frontě.", few: "{count} přeskočeny, už jsou ve frontě.", many: "{count} přeskočeny, už jsou ve frontě.", other: "{count} přeskočeno, už jsou ve frontě." },
 
   "bulk.title": "Stažení seriálu",
+  "bulk.titleMovie": "Stažení filmu",
+  "bulk.titleEpisode": "Stažení dílu",
+  "rules.selectedSource": "Vybraný zdroj",
   "bulk.episodeCount": { one: "1 epizoda", few: "{count} epizody", many: "{count} epizody", other: "{count} epizod" },
   "bulk.queueHint": "Každá epizoda se kontroluje až ve chvíli, kdy přijde na řadu.",
   "bulk.add": "Přidat do fronty",

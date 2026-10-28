@@ -235,6 +235,8 @@
   <string name="tv_download_from_episode">Od tejto časti ďalej</string>
   <string name="tv_download_all_episodes">Všetky časti</string>
   <string name="bulk_title">Stiahnite si sériu</string>
+  <string name="bulk_title_movie">Stiahnutie filmu</string>
+  <string name="bulk_title_episode">Stiahnutie epizódy</string>
   <string name="bulk_add">Pridať do poradia</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">1 epizóda</item>
@@ -243,6 +245,7 @@
     <item quantity="other">%1$s epizód</item>
   </plurals>
   <string name="rules_title">Pravidlá sťahovania</string>
+  <string name="rules_selected_source">Vybraný zdroj</string>
   <string name="rules_unavailable">Pravidlá sťahovania nie sú k dispozícii. Požiadajte správcu.</string>
   <string name="rules_preset_balanced">Vyvážené</string>
   <string name="rules_preset_best">Najlepšia kvalita</string>

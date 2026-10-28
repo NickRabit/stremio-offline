@@ -235,6 +235,8 @@
   <string name="tv_download_from_episode">Od tego odcinka</string>
   <string name="tv_download_all_episodes">Wszystkie odcinki</string>
   <string name="bulk_title">Pobierz serię</string>
+  <string name="bulk_title_movie">Pobieranie filmu</string>
+  <string name="bulk_title_episode">Pobieranie odcinka</string>
   <string name="bulk_add">Dodaj do kolejki</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">1 odcinek</item>
@@ -243,6 +245,7 @@
     <item quantity="other">Liczba odcinków: %1$s</item>
   </plurals>
   <string name="rules_title">Reguły pobierania</string>
+  <string name="rules_selected_source">Wybrane źródło</string>
   <string name="rules_unavailable">Reguły pobierania są niedostępne. Poproś administratora.</string>
   <string name="rules_preset_balanced">Zrównoważone</string>
   <string name="rules_preset_best">Najlepsza jakość</string>

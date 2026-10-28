@@ -224,9 +224,12 @@ tv.downloadThisSeason
 tv.downloadFromEpisode
 tv.downloadAllEpisodes
 bulk.title
+bulk.titleMovie
+bulk.titleEpisode
 bulk.add
 bulk.episodeCount
 rules.title
+rules.selectedSource
 rules.unavailable
 rules.preset.balanced
 rules.preset.best

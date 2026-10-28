@@ -231,12 +231,15 @@
   <string name="tv_download_from_episode">From this episode on</string>
   <string name="tv_download_all_episodes">All episodes</string>
   <string name="bulk_title">Download series</string>
+  <string name="bulk_title_movie">Download film</string>
+  <string name="bulk_title_episode">Download episode</string>
   <string name="bulk_add">Add to queue</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">1 episode</item>
     <item quantity="other">%1$s episodes</item>
   </plurals>
   <string name="rules_title">Download rules</string>
+  <string name="rules_selected_source">Selected source</string>
   <string name="rules_unavailable">Download rules are unavailable. Ask an administrator.</string>
   <string name="rules_preset_balanced">Balanced</string>
   <string name="rules_preset_best">Best quality</string>

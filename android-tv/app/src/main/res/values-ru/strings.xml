@@ -235,6 +235,8 @@
   <string name="tv_download_from_episode">С этой серии</string>
   <string name="tv_download_all_episodes">Все серии</string>
   <string name="bulk_title">Скачать серию</string>
+  <string name="bulk_title_movie">Загрузка фильма</string>
+  <string name="bulk_title_episode">Загрузка эпизода</string>
   <string name="bulk_add">Добавить в очередь</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">%1$s серия</item>
@@ -243,6 +245,7 @@
     <item quantity="other">%1$s серий</item>
   </plurals>
   <string name="rules_title">Правила скачивания</string>
+  <string name="rules_selected_source">Выбранный источник</string>
   <string name="rules_unavailable">Правила скачивания недоступны. Обратитесь к администратору.</string>
   <string name="rules_preset_balanced">Сбалансированные</string>
   <string name="rules_preset_best">Лучшее качество</string>

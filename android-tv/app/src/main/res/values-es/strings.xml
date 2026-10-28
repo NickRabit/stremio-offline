@@ -231,12 +231,15 @@
   <string name="tv_download_from_episode">Desde este episodio</string>
   <string name="tv_download_all_episodes">Todos los episodios</string>
   <string name="bulk_title">Descargar serie</string>
+  <string name="bulk_title_movie">Descargar película</string>
+  <string name="bulk_title_episode">Descargar episodio</string>
   <string name="bulk_add">Añadir a la cola</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">1 episodio</item>
     <item quantity="other">%1$s episodios</item>
   </plurals>
   <string name="rules_title">Reglas de descarga</string>
+  <string name="rules_selected_source">Fuente seleccionada</string>
   <string name="rules_unavailable">Las reglas de descarga no están disponibles. Pídaselas a un administrador.</string>
   <string name="rules_preset_balanced">Equilibrado</string>
   <string name="rules_preset_best">Mejor calidad</string>
