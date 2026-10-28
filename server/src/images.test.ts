@@ -19,7 +19,7 @@ const DETAIL = 1920;
 const DAY = 24 * 60 * 60 * 1000;
 
 const imageResponse = (body: Buffer = PNG, type = "image/png", status = 200) =>
-  new Response(status === 200 ? body : null, { status, headers: { "content-type": type } });
+  new Response(status === 200 ? new Uint8Array(body) : null, { status, headers: { "content-type": type } });
 
 const jpeg = async () => imageResponse(Buffer.alloc(64, 7), "image/jpeg");
 const cached = async (dir: string) => (await readdir(dir)).filter((name) => /^[\w-]{32}\.jpg$/.test(name));
