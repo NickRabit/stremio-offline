@@ -97,6 +97,16 @@ describe("LibraryTitleDetail sources", () => {
     expect(chosenRow()!.textContent).toContain("Small");
   });
 
+  it("reports whether the selected version came from an explicit pick", async () => {
+    const onSourceChange = vi.fn();
+    render({ sources: [remote("s1", "720p", 800_000_000), remote("s2", "1080p", 3_000_000_000)], onSourceChange });
+    await flush();
+    expect(onSourceChange).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "s2" }), false);
+    click(host.querySelector<HTMLButtonElement>(".split-button-toggle"));
+    click(pickerRows()[0]!);
+    expect(onSourceChange).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "s2" }), true);
+  });
+
   it("keeps an explicit choice across a refresh of the same title and resets for a new one", () => {
     const sources = [remote("s1", "1080p", 3_000_000_000), remote("s2", "720p", 1)];
     render({ sources });

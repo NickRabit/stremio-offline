@@ -31,7 +31,7 @@ import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
 import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, streamLanguages, visibleCatalogStreams, type StreamSort } from "./streams";
-import { providerLabel, SourceFilters, SourceRows } from "./source-rows";
+import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
 import { panelProgressAddonKey } from "./player-progress";
 import { alternativeSaveRequest } from "./alternative-save";
@@ -60,7 +60,7 @@ import type { HomeCard } from "../../server/src/home";
 import { parseHomeCatalogRowId } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { MediaGallery } from "./MediaGallery";
-import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage, type GalleryKind } from "./gallery-images";
+import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage } from "./gallery-images";
 import { loadTitleGallery, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
@@ -243,7 +243,7 @@ export function App() {
   const [libraryReset, setLibraryReset] = useState(0);
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
-  const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
+  const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: Record<string, unknown>; exactSource?: { stream: Stream; label: string; preferred: boolean }; detail?: CatalogueDetailTarget } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
@@ -2627,12 +2627,40 @@ export function App() {
       await loadDownloads(); return true;
     } catch (e) { fail(e); return false; }
   };
-  /** The primary "Save to library" action. A native source whose server projected no destination
-   *  opens the choice dialog instead of submitting a copy the server would refuse, so the viewer
-   *  picks a library themselves; every other source queues straight away, as before. */
+  const openSingleDownload = () => {
+    if (!selected || !selectedStream || (selected.type !== "movie" && selected.type !== "series")) return false;
+    if (selected.type === "series" && (!selectedVideo || selectedVideo.id == null || String(selectedVideo.id).trim() === "")) return false;
+    const episodeId = selectedVideo
+      ? String(selectedVideo.id)
+      : undefined;
+    const detail: CatalogueDetailTarget = {
+      type: selected.type,
+      id: selected.id,
+      name: selected.name,
+      ...(selected.poster ? { poster: selected.poster } : {}),
+      ...(selectedVideo?.season != null ? { season: selectedVideo.season } : {}),
+      ...(selectedVideo?.episode != null ? { episode: selectedVideo.episode } : {}),
+      ...(episodeId ? { videoId: episodeId } : {}),
+      ...(selectedVideo?.title || selectedVideo?.name ? { episodeTitle: selectedVideo.title || selectedVideo.name } : {}),
+    };
+    setBulkDownload({
+      label: videoTitle,
+      title: baseDownloadTitle,
+      type: selected.type,
+      episodes: [selected.type === "movie"
+        ? { id: selected.id }
+        : { id: episodeId!, season: selectedVideo!.season, episode: selectedVideo!.episode, title: selectedVideo!.title || selectedVideo!.name }],
+      media: selectedMedia(),
+      exactSource: { stream: selectedStream, label: streamLabel(selectedStream), preferred: pickedRef.current },
+      detail,
+    });
+    return true;
+  };
+
+  /** The primary "Save to library" action opens the rules dialog for this one title; the
+   *  selected source remains an explicit choice at the top of its rule list. */
   const primarySave = () => {
-    if (selectedStream && isRemoteStream(selectedStream) && sourceTargetRule(selectedStream) === undefined) { setSaveTargetOpen(true); return; }
-    void enqueue();
+    openSingleDownload();
   };
 
   /** The device action of the panel\u2019s player: the server fetches the row, its own proxy included,
@@ -2787,6 +2815,7 @@ export function App() {
    *  its rows can play. The panel's own selection is another title and never answers for it. */
   const [detailRead, setDetailRead] = useState<{ meta: Meta | null; target: CatalogueDetailTarget; pending: boolean; playable: boolean } | null>(null);
   const [detailSource, setDetailSource] = useState<Stream | null>(null);
+  const [detailSourcePicked, setDetailSourcePicked] = useState(false);
   const [catalogueFollow, setCatalogueFollow] = useState<FollowView | null>(null);
   const [detailFollowOpen, setDetailFollowOpen] = useState(false);
   const detailType = catalogueDetail?.type;
@@ -2842,7 +2871,7 @@ export function App() {
     if (!catalogueDetail) detailReturn.current = { view, windowY: window.scrollY, pane: view === "catalog" ? "catalog" : null, paneY: gridRef.current?.scrollTop ?? 0 };
     // Nothing the previous title read survives the next one: the episode it was on, the source it
     // selected, the follow it carried and the saved position drawn beside it all belong to it.
-    setDetailRead(null); setDetailSource(null); setCatalogueFollow(null); setDetailFollowOpen(false);
+    setDetailRead(null); setDetailSource(null); setDetailSourcePicked(false); setCatalogueFollow(null); setDetailFollowOpen(false);
     setCatalogueDetail({
       ...target,
       type: target.type,
@@ -3008,6 +3037,21 @@ export function App() {
       ? { kind: "movie", title: detail.name, ...(year ? { year } : {}), id: detail.id, metaType: detail.type }
       : { kind: "episode", title: detail.name, id: detail.id, metaType: detail.type,
         ...(detail.season != null ? { season: detail.season } : {}), ...(detail.episode != null ? { episode: detail.episode } : {}) };
+  };
+  const openCatalogueDownload = (detail: CatalogueDetailTarget, stream: Stream, preferred: boolean) => {
+    if (detail.type === "series" && (!detail.videoId || detail.season == null || detail.episode == null)) return;
+    const media = { ...catalogueMedia(detail), ...(detail.poster ? { poster: detail.poster } : {}) };
+    setBulkDownload({
+      label: detail.episodeTitle ? `${detail.name} · ${detail.episodeTitle}` : detail.name,
+      title: detail.name,
+      type: detail.type,
+      episodes: [detail.type === "movie"
+        ? { id: detail.id }
+        : { id: detail.videoId!, season: detail.season, episode: detail.episode, ...(detail.episodeTitle ? { title: detail.episodeTitle } : {}) }],
+      media,
+      exactSource: { stream, label: streamLabel(stream), preferred },
+      detail,
+    });
   };
   const queueCatalogueStream = async (detail: CatalogueDetailTarget, stream: Stream, target?: SaveTarget) => {
     if (!canQueue(stream, settings.realDebridConfigured)) return false;
@@ -3312,7 +3356,7 @@ export function App() {
             addonPriority={addonPriority} showTorrents={settings.realDebridConfigured}
             onRead={setDetailRead}
             {...(detailChips ? { chips: detailChips } : {})}
-            onSourceChange={setDetailSource}
+            onSourceChange={(stream, explicitlyPicked) => { setDetailSource(stream); setDetailSourcePicked(explicitlyPicked); }}
             {...(detailProgress ? { progress: detailProgress } : {})}
             {...(detailResumeStableKey ? { resumeStableKey: detailResumeStableKey } : {})}
             onClearProgress={() => clearDetailProgress()}
@@ -3320,7 +3364,7 @@ export function App() {
             // and the way to say that episode is seen -- which is that position going away.
             {...(detailProgress ? { watched: true, watchedLabel: t("mediaServer.markWatched"), onToggleWatched: () => void clearDetailProgress() } : {})}
             onPlay={playCatalogueDetail}
-            onSaveToLibrary={(stream, effective) => void queueCatalogueStream(effective, stream)}
+            onSaveToLibrary={(stream, effective) => openCatalogueDownload(effective, stream, detailSourcePicked)}
             onSaveElsewhere={(stream, effective) => setCatalogueSave({
               ...(effective.season != null ? { season: effective.season } : {}),
               ...alternativeSaveRequest(effective.name, stream, catalogueMedia(effective), effective.type === "series" ? "series" : "movie"),
@@ -3889,7 +3933,9 @@ export function App() {
     {identifyFrom && <IdentifyDialog path={identifyFrom}
       onClose={() => setIdentifyFrom(null)}
       onApplied={() => { setAppliedSuggestion(identifyFrom); setIdentifyFrom(null); void loadBrowse(browsePath); }}/>}
-    {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} title={bulkDownload.title} episodes={bulkDownload.episodes} libraries={libraries} canRetain={session!.role === "admin"} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
+    {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} title={bulkDownload.title} episodes={bulkDownload.episodes} libraries={libraries} canRetain={session!.role === "admin"} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} {...(bulkDownload.exactSource ? { exactSource: bulkDownload.exactSource } : {})} onExactSave={async (target) => {
+      if (bulkDownload.exactSource && bulkDownload.detail) await queueCatalogueStream(bulkDownload.detail, bulkDownload.exactSource.stream, target);
+    }} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
     {followDialogOpen && detailFollow && <FollowDialog follow={detailFollow} videos={selected?.videos} libraries={libraries} canRetain={session!.role === "admin"} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={(updated) => applyFollowChange(detailFollow.id, updated)} onClose={() => setFollowDialogOpen(false)} onNotify={notify}/>}
     {followStart && <SeriesDownloadDialog type={followStart.type || "series"} label={followStart.name} title={followStart.name} episodes={followStart.type === "movie" ? [{ id: followStart.id }] : toEpisodes(followStart.videos)} libraries={libraries}
       canRetain={session!.role === "admin"}

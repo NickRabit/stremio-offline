@@ -22,6 +22,7 @@ export interface CatalogueDetailTarget {
   season?: number;
   episode?: number;
   videoId?: string;
+  episodeTitle?: string;
   /** The row the catalogue played from, so the detail opens on the same version. */
   initialSource?: Stream;
   /** The catalogue's own metadata, which this detail never reads again. */
@@ -63,7 +64,7 @@ export interface CatalogueTitleDetailProps {
   /** The stable key of the source the title was last played from, preselected when listed. */
   resumeStableKey?: string;
   /** Told whenever the selected version changes, so the caller can read that version's own state. */
-  onSourceChange?: (stream: Stream | null) => void;
+  onSourceChange?: (stream: Stream | null, explicitlyPicked: boolean) => void;
   /** Clears the saved position of the title this detail holds; true once the write succeeded. */
   onClearProgress?: (stream: Stream) => Promise<boolean>;
   /** Whether the episode on screen has anything left to resume, and the way to say it is seen:
@@ -164,6 +165,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       ...(episode.season != null ? { season: episode.season } : {}),
       ...(episode.episode != null ? { episode: episode.episode } : {}),
       ...(episode.id != null ? { videoId: String(episode.id) } : {}),
+      ...(episode.title || episode.name ? { episodeTitle: episode.title || episode.name } : {}),
     } : {}),
   };
   // The rows the catalogue read answer for the selection they were read for; another episode is

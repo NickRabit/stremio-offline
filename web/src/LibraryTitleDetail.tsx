@@ -84,7 +84,7 @@ export interface LibraryTitleDetailProps {
    *  position can never be drawn. */
   progress?: { position: number; duration: number; sourceKey: string };
   /** Told whenever the played version changes, so a caller can read that version's own state. */
-  onSourceChange?: (stream: Stream | null) => void;
+  onSourceChange?: (stream: Stream | null, explicitlyPicked: boolean) => void;
   /** Clears the selected source's saved position; true once the owner's write succeeded. */
   onClearProgress?: (stream: Stream) => Promise<boolean>;
   /** Start-over asks for the same stream with `fromBeginning`, which leaves its progress alone. */
@@ -191,12 +191,14 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   // reading the new version's state must not be asked again just because the tree redrew.
   const onChangeRef = useRef(onSourceChange);
   onChangeRef.current = onSourceChange;
-  const announced = useRef<{ identity: string; key: string | null } | null>(null);
+  const explicitlyPicked = Boolean(picked);
+  const announced = useRef<{ identity: string; key: string | null; explicitlyPicked: boolean } | null>(null);
   useEffect(() => {
-    if (announced.current?.identity === identityKey && announced.current.key === selectedKey) return;
-    announced.current = { identity: identityKey, key: selectedKey };
-    onChangeRef.current?.(selected ? selected : null);
-  }, [identityKey, selectedKey]);
+    if (announced.current?.identity === identityKey && announced.current.key === selectedKey
+      && announced.current.explicitlyPicked === explicitlyPicked) return;
+    announced.current = { identity: identityKey, key: selectedKey, explicitlyPicked };
+    onChangeRef.current?.(selected ? selected : null, explicitlyPicked);
+  }, [identityKey, selectedKey, explicitlyPicked]);
   // A cleared version stays hidden until the selection moves on; the owner's own refresh then
   // says what the store really holds.
   useEffect(() => { setCleared(null); setClearing(null); }, [identityKey, selectedKey]);
