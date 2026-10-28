@@ -99,6 +99,10 @@ object Streams {
     return StreamSort.Rule(id)
   }
 
+  /** The profile a rule sort orders and plays by. A size sort, an addon sort and an unresolved
+   *  [StreamSort.FirstRule] have none. */
+  fun ruleIdOf(sort: StreamSort): String? = (sort as? StreamSort.Rule)?.profileId
+
   /**
    * Which profile's verdict the row note reads. A rule sort uses that profile. A size or addon
    * sort uses the account default when that default is itself a rule, and otherwise no profile.
@@ -189,12 +193,55 @@ object Streams {
     return if (showTorrents) arranged else arranged.filter { it.kind != "torrent" }
   }
 
-  /** The row the list opens on: the one the viewer last played, when the caller knows its handle,
-   *  and otherwise the first playable row. */
-  fun pickDefaultStream(streams: List<StreamDto>, preferredStableKey: String? = null): StreamDto? =
-    preferredStableKey?.takeIf { it.isNotBlank() }?.let { key -> streams.firstOrNull { it.stableKey == key } }
-      ?: streams.firstOrNull { it.playable }
-      ?: streams.firstOrNull()
+  /** The row Play starts when the viewer has not picked one.
+   *
+   *  The last-played handle wins, including when that row breaks [ruleId]. Otherwise, once a
+   *  playable row carries a verdict for [ruleId], the first playable row that meets the rule, then
+   *  the first playable unverified row. Every playable row breaking the rule is no automatic
+   *  choice. Without a verdict the first playable row wins, then the first row at all.
+   */
+  fun pickDefaultStream(
+    streams: List<StreamDto>,
+    preferredStableKey: String? = null,
+    ruleId: String? = null,
+  ): StreamDto? {
+    preferredStableKey?.takeIf { it.isNotBlank() }?.let { key ->
+      streams.firstOrNull { it.stableKey == key }
+    }?.let { return it }
+    val playable = streams.filter { it.playable }
+    if (ruleId.isNullOrEmpty() || playable.none { it.rules[ruleId] != null }) {
+      return playable.firstOrNull() ?: streams.firstOrNull()
+    }
+    return playable.firstOrNull { it.rules[ruleId]?.status == "meets" }
+      ?: playable.firstOrNull { it.rules[ruleId]?.status == "unverified" }
+  }
+
+  /** The row Play acts on. An explicit pick wins. A remembered automatic row that breaks [ruleId]
+   *  yields to [preferred], which is null when the rule leaves no row to start. */
+  fun selectedPlayRow(
+    explicit: StreamDto?,
+    remembered: StreamDto?,
+    preferred: StreamDto?,
+    ruleId: String?,
+  ): StreamDto? {
+    if (explicit != null) return explicit
+    if (
+      !ruleId.isNullOrEmpty() &&
+      remembered != null &&
+      remembered != preferred &&
+      remembered.rules[ruleId]?.status == "breaks"
+    ) {
+      return preferred
+    }
+    return remembered ?: preferred
+  }
+
+  /** Play opens the sources panel: [ruleId] has a verdict on a playable row and [active] is not a
+   *  row it may start. */
+  fun needsSourceChoice(rows: List<StreamDto>, ruleId: String?, active: StreamDto?): Boolean {
+    if (active != null || ruleId.isNullOrEmpty()) return false
+    return rows.any { it.playable && it.rules[ruleId] != null }
+  }
 
   /** A copy that already exists in one of the viewer's libraries. */
   fun isLocalStream(stream: StreamDto): Boolean = stream.kind == "library"
@@ -281,10 +328,13 @@ object Streams {
 
   /**
    * The list a source panel shows, as the web builds it. [addon] is already filtered and sorted.
-   * The Local choice of the addon filter shows the library copies alone, a named addon shows its
-   * streams alone, and with no addon filter the copies lead the rule and addon-priority
-   * orders but rank with the addon rows under the size sorts. [origins] are drawn in the same list,
-   * ahead of everything under a rule sort.
+   * The Local choice of the addon filter shows the library copies alone, and a named addon shows
+   * its streams alone. With no addon filter, a rule that carries verdicts sorts the library
+   * copies, the remote versions and the addon rows together by that rank. The server already
+   * puts a local copy first only when the rule uses the viewer's order, so this list does not
+   * prepend one. Without a verdict the copies still lead, then the remote versions, then the
+   * addon rows. Size and addon sorts are unchanged. [origins], the item's own versions, stay
+   * ahead of that merge under a rule sort.
    *
    * [local] is the copies the caller did not already hand over as [origins], so a file the detail
    * holds and the viewer's library both know is one row of the list, not two.
@@ -313,12 +363,12 @@ object Streams {
     filters.sort == StreamSort.Addon ->
       origins.rows + local + remote.flatMap { it.streams } + addon
     filters.sort.isRuleSort -> {
-      val rest = remote.flatMap { it.streams } + addon
-      val profileId = (filters.sort as? StreamSort.Rule)?.profileId
-      origins.rows + local + if (profileId != null && rest.any { it.rules[profileId] != null }) {
-        rest.sortedWith { a, b -> compareRuleRank(a, b, profileId) }
+      val profileId = ruleIdOf(filters.sort)
+      val merged = local + remote.flatMap { it.streams } + addon
+      origins.rows + if (profileId != null && merged.any { it.rules[profileId] != null }) {
+        merged.sortedWith { a, b -> compareRuleRank(a, b, profileId) }
       } else {
-        rest
+        merged
       }
     }
     else -> arrangeStreams(

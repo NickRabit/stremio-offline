@@ -622,7 +622,7 @@ class StreamsTest {
   }
 
   @Test
-  fun `catalogSourceList recommended interleaves remote and addon by rank and keeps local first`() {
+  fun `catalogSourceList under a rule sorts local remote and addon together and keeps origins first`() {
     val origin = remote("own", "rlibA", "iA", "Own", verdict("breaks", listOf(9.0)))
     val localRow = stream(
       sourceId = "lib1",
@@ -645,9 +645,60 @@ class StreamsTest {
       origins = Streams.Origins(rows = listOf(origin), libraryId = "rlibA", label = "jellyfin · Film"),
     )
     assertEquals(
-      listOf("own", "lib1", "a-best", "r-good", "a-mid", "r-bad"),
+      listOf("own", "a-best", "r-good", "a-mid", "r-bad", "lib1"),
       rows.map { it.sourceId },
     )
+  }
+
+  @Test
+  fun `a breaking local copy sorts below a meeting addon under an explicit rule and above it under the viewer order`() {
+    val origin = remote("own", "rlibA", "iA", "Own", verdict("meets", listOf(0.0, 0.0, 9.0)))
+    val breakingLocal = stream(
+      sourceId = "lib1",
+      kind = "library",
+      playable = true,
+      name = "Local",
+      localPath = "/f",
+      rule = verdict("breaks", listOf(0.0, 2.0, 0.0), listOf("size")),
+    )
+    val meetingAddon = stream(sourceId = "addon", name = "Addon", addonName = "Luna", rule = verdict("meets", listOf(0.0, 0.0, 0.0)))
+    val meetingRemote = remote("remote", "rlibB", "iB", "Remote", verdict("meets", listOf(0.0, 0.0, 1.0)))
+    val explicit = Streams.catalogSourceList(
+      local = listOf(breakingLocal),
+      addon = listOf(meetingAddon),
+      filters = filters(sort = StreamSort.of("rule:p1")),
+      remote = listOf(Streams.RemoteGroup("rlibB", "emby", "Serial", listOf(meetingRemote))),
+      origins = Streams.Origins(rows = listOf(origin), libraryId = "rlibA", label = "jellyfin · Film"),
+    )
+    assertEquals(listOf("own", "addon", "remote", "lib1"), explicit.map { it.sourceId })
+
+    val viewerLocal = breakingLocal.copy(rules = mapOf("p1" to verdict("breaks", listOf(0.0, 2.0, 0.0), listOf("size"))))
+    val viewerAddon = meetingAddon.copy(rules = mapOf("p1" to verdict("meets", listOf(1.0, 0.0, 0.0))))
+    val viewerRemote = meetingRemote.copy(rules = mapOf("p1" to verdict("meets", listOf(1.0, 0.0, 1.0))))
+    val viewer = Streams.catalogSourceList(
+      local = listOf(viewerLocal),
+      addon = listOf(viewerAddon),
+      filters = filters(sort = StreamSort.of("rule:p1")),
+      remote = listOf(Streams.RemoteGroup("rlibB", "emby", "Serial", listOf(viewerRemote))),
+      origins = Streams.Origins(rows = listOf(origin), libraryId = "rlibA", label = "jellyfin · Film"),
+    )
+    assertEquals(listOf("own", "lib1", "addon", "remote"), viewer.map { it.sourceId })
+  }
+
+  @Test
+  fun `a rule sort without verdicts keeps local then remote then addon after the origins`() {
+    val origin = remote("own", "rlibA", "iA", "Own")
+    val localRow = stream(sourceId = "lib1", kind = "library", playable = true, name = "Local", localPath = "/f")
+    val remoteA = remote("r1", "rlibB", "iB", "R1")
+    val addonA = stream(sourceId = "a1", name = "A1", addonName = "Luna")
+    val rows = Streams.catalogSourceList(
+      local = listOf(localRow),
+      addon = listOf(addonA),
+      filters = filters(sort = StreamSort.of("rule:p1")),
+      remote = listOf(Streams.RemoteGroup("rlibB", "emby", "Serial", listOf(remoteA))),
+      origins = Streams.Origins(rows = listOf(origin), libraryId = "rlibA", label = "jellyfin · Film"),
+    )
+    assertEquals(listOf("own", "lib1", "r1", "a1"), rows.map { it.sourceId })
   }
 
   @Test
@@ -694,6 +745,50 @@ class StreamsTest {
     val stored = stream(name = "stored", playable = true, title = "1080p 20 GB", stableKey = "a:${"2".repeat(24)}", rule = verdict("meets", listOf(1.0)))
     val arranged = Streams.arrangeStreams(listOf(stored, best), filters(sort = StreamSort.of("rule:p1")), "en")
     assertEquals("stored", Streams.pickDefaultStream(arranged, preferredStableKey = stored.stableKey)?.name)
+  }
+
+  @Test
+  fun `pickDefaultStream takes meets then unverified and refuses a row that only breaks the rule`() {
+    val breaks = stream(name = "breaks", playable = true, rule = verdict("breaks", listOf(0.0, 2.0), listOf("size")))
+    val unverified = stream(name = "unverified", playable = true, rule = verdict("unverified", listOf(0.0, 1.0)))
+    val meets = stream(name = "meets", playable = true, rule = verdict("meets", listOf(0.0, 0.0)))
+    val unplayableMeets = stream(name = "hidden", playable = false, rule = verdict("meets", listOf(0.0, 0.0)))
+    assertEquals("meets", Streams.pickDefaultStream(listOf(breaks, unverified, meets), ruleId = "p1")?.name)
+    assertEquals("unverified", Streams.pickDefaultStream(listOf(unplayableMeets, breaks, unverified), ruleId = "p1")?.name)
+    assertNull(Streams.pickDefaultStream(listOf(breaks), ruleId = "p1"))
+  }
+
+  @Test
+  fun `pickDefaultStream keeps the last played row even when it breaks the rule`() {
+    val meets = stream(name = "meets", playable = true, stableKey = "a:${"1".repeat(24)}", rule = verdict("meets", listOf(0.0, 0.0)))
+    val stored = stream(
+      name = "stored",
+      playable = true,
+      stableKey = "a:${"2".repeat(24)}",
+      rule = verdict("breaks", listOf(0.0, 2.0), listOf("torrent")),
+    )
+    assertEquals("stored", Streams.pickDefaultStream(listOf(meets, stored), preferredStableKey = stored.stableKey, ruleId = "p1")?.name)
+  }
+
+  @Test
+  fun `pickDefaultStream keeps the old fallback when the rule has no verdict`() {
+    val unplayable = stream(name = "unplayable", playable = false)
+    val playable = stream(name = "playable", playable = true)
+    assertEquals("playable", Streams.pickDefaultStream(listOf(unplayable, playable), ruleId = "p1")?.name)
+    assertEquals("unplayable", Streams.pickDefaultStream(listOf(unplayable), ruleId = "p1")?.name)
+  }
+
+  @Test
+  fun `an explicit pick wins over the rule and an automatic breaking row does not`() {
+    val picked = stream(name = "picked", rule = verdict("breaks", listOf(0.0, 2.0), listOf("provider")))
+    val meets = stream(name = "meets", rule = verdict("meets", listOf(0.0, 0.0)))
+    val remembered = stream(name = "remembered", rule = verdict("breaks", listOf(0.0, 2.0), listOf("size")))
+    assertEquals("picked", Streams.selectedPlayRow(picked, picked, meets, "p1")?.name)
+    assertEquals("meets", Streams.selectedPlayRow(null, remembered, meets, "p1")?.name)
+    assertNull(Streams.selectedPlayRow(null, remembered, null, "p1"))
+    assertEquals(true, Streams.needsSourceChoice(listOf(remembered), "p1", null))
+    assertEquals(false, Streams.needsSourceChoice(listOf(remembered), "p1", picked))
+    assertEquals(false, Streams.needsSourceChoice(listOf(stream(name = "bare")), "p1", null))
   }
 
   private fun remote(

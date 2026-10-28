@@ -583,18 +583,21 @@ internal fun SourceRow(
   }
 }
 
-/** The muted rule-break line of a source row, or null when [profileId] has no breaking verdict. */
-@Composable
-internal fun sourceRuleBreaksNote(stream: StreamDto, profileId: String?): String? {
-  val rule = profileId?.let { stream.rules[it] } ?: return null
-  if (rule.status != "breaks") return null
-  val language = stringResource(R.string.sources_rule_reason_language)
-  val resolutionLow = stringResource(R.string.sources_rule_reason_resolution_low)
-  val resolutionHigh = stringResource(R.string.sources_rule_reason_resolution_high)
-  val cinema = stringResource(R.string.sources_rule_reason_cinema)
-  val subtitles = stringResource(R.string.sources_rule_reason_subtitles)
-  val sample = stringResource(R.string.sources_rule_reason_sample)
-  val reasons = rule.reasons.mapNotNull { code ->
+/** The labels a break note can name, in the order the verdict listed them. An unknown code is
+ *  dropped. Nothing known is null, so the row draws no note. */
+internal fun ruleBreakNote(
+  reasons: List<String>,
+  language: String,
+  resolutionLow: String,
+  resolutionHigh: String,
+  cinema: String,
+  subtitles: String,
+  sample: String,
+  size: String,
+  provider: String,
+  torrent: String,
+): String? {
+  val known = reasons.mapNotNull { code ->
     when (code) {
       "language" -> language
       "resolutionLow" -> resolutionLow
@@ -602,12 +605,34 @@ internal fun sourceRuleBreaksNote(stream: StreamDto, profileId: String?): String
       "cinema" -> cinema
       "subtitles" -> subtitles
       "sample" -> sample
+      "size" -> size
+      "provider" -> provider
+      "torrent" -> torrent
       else -> null
     }
   }
-  // A break the app has no label for says nothing rather than an empty reason list.
-  if (reasons.isEmpty()) return null
-  return stringResource(R.string.sources_rule_breaks, reasons.joinToString(", "))
+  if (known.isEmpty()) return null
+  return known.joinToString(", ")
+}
+
+/** The muted rule-break line of a source row, or null when [profileId] has no breaking verdict. */
+@Composable
+internal fun sourceRuleBreaksNote(stream: StreamDto, profileId: String?): String? {
+  val rule = profileId?.let { stream.rules[it] } ?: return null
+  if (rule.status != "breaks") return null
+  val reasons = ruleBreakNote(
+    rule.reasons,
+    language = stringResource(R.string.sources_rule_reason_language),
+    resolutionLow = stringResource(R.string.sources_rule_reason_resolution_low),
+    resolutionHigh = stringResource(R.string.sources_rule_reason_resolution_high),
+    cinema = stringResource(R.string.sources_rule_reason_cinema),
+    subtitles = stringResource(R.string.sources_rule_reason_subtitles),
+    sample = stringResource(R.string.sources_rule_reason_sample),
+    size = stringResource(R.string.sources_rule_reason_size),
+    provider = stringResource(R.string.sources_rule_reason_provider),
+    torrent = stringResource(R.string.sources_rule_reason_torrent),
+  ) ?: return null
+  return stringResource(R.string.sources_rule_breaks, reasons)
 }
 
 /** One row's headline: the stream's name, or the first line it wrote about itself. */

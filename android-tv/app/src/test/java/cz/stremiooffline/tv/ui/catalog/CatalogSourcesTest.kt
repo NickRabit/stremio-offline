@@ -8,6 +8,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -15,7 +16,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
-import androidx.compose.ui.test.requestFocus
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.SourceRuleVerdictDto
@@ -223,6 +223,56 @@ class CatalogSourcesTest {
 
     api.progressListGate!!.complete(Unit)
     compose.waitForIdle()
+  }
+
+  @Test
+  fun `Play opens the sources panel when every playable row breaks the rule`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings().copy(streamSort = "rule:p1")
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(
+      StreamDto(
+        sourceId = "srcA",
+        kind = "remote",
+        playable = true,
+        title = "English 8 GB",
+        addonName = "Alpha",
+        rules = mapOf(
+          "p1" to SourceRuleVerdictDto(
+            profileId = "p1",
+            status = "breaks",
+            reasons = listOf("size"),
+            rank = listOf(0.0, 2.0),
+          ),
+        ),
+      ),
+      StreamDto(
+        sourceId = "srcB",
+        kind = "remote",
+        playable = true,
+        title = "English 4 GB",
+        addonName = "Alpha",
+        rules = mapOf(
+          "p1" to SourceRuleVerdictDto(
+            profileId = "p1",
+            status = "breaks",
+            reasons = listOf("torrent"),
+            rank = listOf(0.0, 2.0, 1.0),
+          ),
+        ),
+      ),
+    )
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Play")
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogPrimary).requestFocus()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagSourcesPanel).assertExists()
+    assertTrue(played.isEmpty())
   }
 
   @Test

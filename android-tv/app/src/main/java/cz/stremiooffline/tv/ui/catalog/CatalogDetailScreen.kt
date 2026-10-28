@@ -433,13 +433,20 @@ fun CatalogDetailScreen(
   // The list that is drawn and picked from: the library copies arranged with the addon streams the
   // way the web does (Streams.catalogSourceList); counts and notices keep using the addon streams.
   val rows = lists.rows
-  // The row of the source last played leads, so Resume continues in it.
+  // The row of the source last played leads, so Resume continues in it. A rule with verdicts
+  // then takes a row that meets it; the call lives in Streams so this screen only passes the sort.
   val preferredStream = Streams.pickDefaultStream(
     rows,
     (if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey),
+    Streams.ruleIdOf(filters.sort),
   )
   val chosenStream = pick.selectedStream?.takeIf { pick.pickedStream && rows.contains(it) }
-  val activeStream = chosenStream ?: pick.selectedStream?.takeIf { rows.contains(it) } ?: preferredStream
+  val activeStream = Streams.selectedPlayRow(
+    chosenStream,
+    pick.selectedStream?.takeIf { rows.contains(it) },
+    preferredStream,
+    Streams.ruleIdOf(filters.sort),
+  )
   val remoteAsking = remote.pending > 0
   val remoteStreams = remote.groups.flatMap { it.streams }
   val remoteFailedLabels = remote.groups.filter { it.failed }.map { it.label }
@@ -738,6 +745,10 @@ fun CatalogDetailScreen(
     val stream = preferredStream
     if (stream?.playable == true) {
       play(stream)
+    } else if (Streams.needsSourceChoice(rows, Streams.ruleIdOf(filters.sort), stream)) {
+      notice(null)
+      pick.closeToPlay = true
+      pick.sourcesOpen = true
     } else if (pick.localStreams.isEmpty()) {
       notice(if (offered.isEmpty()) texts.noSources else texts.torrent, CatalogNotice.Failure)
     }
@@ -759,6 +770,12 @@ fun CatalogDetailScreen(
       }
       stream?.playable == true -> play(stream)
       findingSources -> armPendingPlay()
+      // Nothing meets the rule. The panel is the choice; a breaking row is not started.
+      Streams.needsSourceChoice(rows, Streams.ruleIdOf(filters.sort), stream) -> {
+        notice(null)
+        pick.closeToPlay = true
+        pick.sourcesOpen = true
+      }
       // A chosen stream that cannot be played is what the torrent message is for; queuing it is
       // the To library button's job.
       stream != null -> if (pick.localStreams.isEmpty()) notice(texts.torrent, CatalogNotice.Failure)
@@ -811,6 +828,10 @@ fun CatalogDetailScreen(
       }
       pick.pickedStream -> notice(if (stream != null) texts.torrent else emptyText, if (stream != null) CatalogNotice.Failure else emptyKind)
       anyAsking -> Unit
+      Streams.needsSourceChoice(rows, Streams.ruleIdOf(filters.sort), stream) -> {
+        pick.closeToPlay = true
+        pick.sourcesOpen = true
+      }
       else -> if (pick.localStreams.isEmpty()) notice(emptyText, emptyKind)
     }
   }
