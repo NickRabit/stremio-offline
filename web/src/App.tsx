@@ -30,7 +30,7 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, catalogPlaybackChoice, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder } from "./streams";
+import { addonNotices, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder } from "./streams";
 import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
 import { panelProgressAddonKey } from "./player-progress";
@@ -354,6 +354,11 @@ export function App() {
   const [followDialogOpen, setFollowDialogOpen] = useState(false);
   /** The series whose Follow chip was pressed: how to follow it is asked before anything is saved. */
   const [followStart, setFollowStart] = useState<(Meta & { addonKey?: string }) | null>(null);
+  // A dialog that saves into a library reads the list again as it opens: the one read at sign-in
+  // fails quietly on a slow or resumed connection, and a stale empty list offered no library at
+  // all until the page was reloaded.
+  const savesToLibrary = Boolean(bulkDownload) || Boolean(followStart) || followDialogOpen || Boolean(movePath);
+  useEffect(() => { if (savesToLibrary) void refreshLibraries(); }, [savesToLibrary]);
   const [libraryFavorites, setLibraryFavorites] = useState<string[]>([]);
   const [localPoster, setLocalPoster] = useState<string | undefined>(undefined);
   // The path the listing should scroll to and highlight after a jump from the download queue.
@@ -2216,7 +2221,9 @@ export function App() {
     [offered, settings.realDebridConfigured]);
   const hiddenTorrents = listedStreams.length < offered.length;
   // The local filter is not an addon name, so the addon filtering and sorting never see it.
-  const addonFilter = streamAddon === LOCAL_SOURCE ? "" : streamAddon;
+  // Only an addon's own name filters the addon rows: the library and remote filters are not
+  // addon names, and treating them as one listed them a second time as an empty "addon".
+  const addonFilter = streamAddon === LOCAL_SOURCE || remoteFilterId(streamAddon) !== undefined ? "" : streamAddon;
   const localSelected = streamAddon === LOCAL_SOURCE;
   const visibleStreams = useMemo(
     () => visibleCatalogStreams(listedStreams, { addon: addonFilter, language: streamLanguage, sort: streamSort }, settings.audioLanguage, addonPriority, true, metaLanguage),
@@ -2242,14 +2249,7 @@ export function App() {
     () => localSelected ? localStreams : remoteSelected !== undefined ? remoteFilterStreams : streamAddon ? byAddon : [...byAddon, ...localStreams, ...remoteFlat],
     [localSelected, localStreams, remoteSelected, remoteFilterStreams, streamAddon, byAddon, remoteFlat]);
 
-  const streamAddons = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const stream of byLanguage) { const name = stream.addonName ?? "?"; counts.set(name, (counts.get(name) ?? 0) + 1); }
-    // The chosen addon has to stay in the menu even when nothing is left for it, or the field empties.
-    if (addonFilter && !counts.has(addonFilter)) counts.set(addonFilter, 0);
-    const rank = (name: string) => addonPriority.get(name) ?? Number.MAX_SAFE_INTEGER;
-    return [...counts.entries()].sort((a, b) => (rank(a[0]) - rank(b[0])) || (b[1] - a[1]));
-  }, [byLanguage, addonFilter, addonPriority]);
+  const streamAddons = useMemo(() => catalogAddonCounts(byLanguage, streamAddon, addonPriority), [byLanguage, streamAddon, addonPriority]);
   const streamLangs = useMemo(() => {
     const counts = new Map<string, number>();
     for (const stream of languageSources) for (const code of streamLanguages(stream, metaLanguage)) counts.set(code, (counts.get(code) ?? 0) + 1);
@@ -3565,9 +3565,10 @@ export function App() {
                 all: { label: t("sources.allAddons"), count: byLanguage.length + localByLanguage.length + remoteFlat.length },
                 options: [
                   ...((localStreams.length > 0 || localSelected) ? [{ value: LOCAL_SOURCE, label: t("sources.localFilter"), count: localStreams.length }] : []),
-                  ...streamAddons.map(([name, count]) => ({ value: name, label: name, count })),
+                  // Local copies, remote libraries, then addons: the order the rows themselves take.
                   ...remoteByLanguage.map((group) => ({ value: remoteSourceFilter(group.libraryId), label: `${remoteProviderLabel(group.provider)} · ${group.name}`, count: group.streams.length })),
                   ...(remoteSelected !== undefined && !remoteByLanguage.some((group) => group.libraryId === remoteSelected) ? [{ value: streamAddon, label: remoteLibraryLabel(remoteSelected), count: 0 }] : []),
+                  ...streamAddons.map(([name, count]) => ({ value: name, label: name, count })),
                 ],
               }} {...(streamLangs.length > 0 ? { language: {
                 value: streamLanguage, onChange: setStreamLanguage,
