@@ -827,3 +827,50 @@ test("an index write that failed is made again by the next flush, and writes nev
   const after = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, unknown>;
   assert.ok(after[second] && after[third], "the last write to land is the newest index");
 });
+
+test("a link that is only handed out again is not written to the index every few seconds", async (t) => {
+  let clock = 1_000_000;
+  const { proxy, dir } = await harness(jpeg, MiB, 0, undefined, () => clock);
+  const stored = async () => {
+    try { return JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { at: number }>; }
+    catch { return {}; }
+  };
+  // Only setTimeout is mocked, so the file system is waited for on the real clock.
+  const diskShows = async (check: (index: Record<string, { at: number }>) => boolean, withinMs = 2000) => {
+    const deadline = Date.now() + withinMs;
+    while (Date.now() < deadline) {
+      if (check(await stored())) return true;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return false;
+  };
+  try {
+    const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+    await proxy.flush();
+    const firstUse = clock;
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    // An open page asks for the download list every five seconds, and every answer hands the
+    // same posters out again; a large index rewritten each time keeps a NAS busy for nothing.
+    for (let poll = 0; poll < 24; poll += 1) {
+      clock += 5000;
+      proxy.proxied(REMOTE);
+      t.mock.timers.tick(5000);
+      assert.equal(await diskShows((index) => index[id]?.at !== firstUse, 50), false, `poll ${poll + 1} rewrote the index`);
+    }
+
+    const fresh = proxy.proxied(PLAIN)!.split("/").pop()!;
+    t.mock.timers.tick(2000);
+    assert.ok(await diskShows((index) => Boolean(index[fresh])), "a new link is still written within seconds");
+    assert.equal((await stored())[id]!.at, clock, "and carries the last use of the old one with it");
+
+    clock += 1000;
+    proxy.proxied(REMOTE);
+    t.mock.timers.tick(10 * 60_000);
+    assert.ok(await diskShows((index) => index[id]?.at === clock), "a use nothing else carries is written later on its own");
+  } finally {
+    t.mock.timers.reset();
+    await proxy.flush();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

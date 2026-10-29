@@ -25,6 +25,11 @@ const FETCH_TIMEOUT_MS = 20_000;
 const TILE_WIDTH = 640;
 const DETAIL_WIDTH = 1920;
 const FFMPEG_TIMEOUT_MS = 15_000;
+const SAVE_MS = 2000;
+/** A link handed out again only moves its retirement, which is months away. An open page
+ *  re-reads the same posters every few seconds, and rewriting an index of many megabytes each
+ *  time kept a NAS busy while nobody was doing anything. */
+const TOUCH_SAVE_MS = 10 * 60_000;
 
 const EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp",
@@ -157,6 +162,7 @@ export class ImageProxy {
   /** Ids whose bytes were downloaded by the fetch that is about to serve them. */
   private justFetched = new Set<string>();
   private saveTimer?: NodeJS.Timeout;
+  private saveDue = 0;
   private dirty = false;
   private maintenance?: Promise<void>;
   private chain: Promise<unknown> = Promise.resolve();
@@ -244,15 +250,20 @@ export class ImageProxy {
     return removed;
   }
 
-  private save() {
+  /** A pending write is only ever brought forward, so a later `TOUCH_SAVE_MS` never holds
+   *  back a change that is already due sooner. */
+  private save(delayMs = SAVE_MS) {
     this.dirty = true;
-    if (this.saveTimer) return;
+    const due = Date.now() + delayMs;
+    if (this.saveTimer && this.saveDue <= due) return;
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveDue = due;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = undefined;
       if (!this.dirty) return;
       this.dirty = false;
       void this.writeIndex();
-    }, 2000);
+    }, delayMs);
     this.saveTimer.unref?.();
   }
 
@@ -289,9 +300,13 @@ export class ImageProxy {
     const target = artworkWidth(width);
     const id = idFor(value, target);
     const known = this.index.get(id);
-    if (known) known.at = this.now();
-    else this.index.set(id, { url: value, at: this.now(), ...(target === DETAIL_WIDTH ? { width: target } : {}) });
-    this.save();
+    if (known) {
+      known.at = this.now();
+      this.save(TOUCH_SAVE_MS);
+    } else {
+      this.index.set(id, { url: value, at: this.now(), ...(target === DETAIL_WIDTH ? { width: target } : {}) });
+      this.save();
+    }
     return `${PREFIX}${id}`;
   }
 
