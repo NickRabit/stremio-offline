@@ -354,6 +354,11 @@ export function App() {
   const [followDialogOpen, setFollowDialogOpen] = useState(false);
   /** The series whose Follow chip was pressed: how to follow it is asked before anything is saved. */
   const [followStart, setFollowStart] = useState<(Meta & { addonKey?: string }) | null>(null);
+  // A dialog that saves into a library reads the list again as it opens: the one read at sign-in
+  // fails quietly on a slow or resumed connection, and a stale empty list offered no library at
+  // all until the page was reloaded.
+  const savesToLibrary = Boolean(bulkDownload) || Boolean(followStart) || followDialogOpen || Boolean(movePath);
+  useEffect(() => { if (savesToLibrary) void refreshLibraries(); }, [savesToLibrary]);
   const [libraryFavorites, setLibraryFavorites] = useState<string[]>([]);
   const [localPoster, setLocalPoster] = useState<string | undefined>(undefined);
   // The path the listing should scroll to and highlight after a jump from the download queue.
