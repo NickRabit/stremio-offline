@@ -119,6 +119,8 @@ interface Inflight {
 }
 
 export interface CachedImage { file: string; type: string; etag: string }
+/** The index write schedule alone, apart from the file system's own retry waits. */
+export interface SaveTimers { set(run: () => void, ms: number): unknown; clear(handle: unknown): void }
 
 const megabytes = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
@@ -161,7 +163,7 @@ export class ImageProxy {
   private memoryBytes = 0;
   /** Ids whose bytes were downloaded by the fetch that is about to serve them. */
   private justFetched = new Set<string>();
-  private saveTimer?: NodeJS.Timeout;
+  private saveTimer?: unknown;
   private saveDue = 0;
   private dirty = false;
   private maintenance?: Promise<void>;
@@ -177,6 +179,7 @@ export class ImageProxy {
     private now: () => number = Date.now,
     private memoryCap = memoryMegabytes(process.env.IMAGE_MEMORY_MB, 32),
     private renameFile: typeof renameWithRetry = renameWithRetry,
+    private saveTimers: SaveTimers = { set: (run, ms) => setTimeout(run, ms).unref(), clear: (handle) => clearTimeout(handle as NodeJS.Timeout) },
   ) {}
 
   private get indexFile() { return path.join(this.dir, "index.json"); }
@@ -256,15 +259,14 @@ export class ImageProxy {
     this.dirty = true;
     const due = Date.now() + delayMs;
     if (this.saveTimer && this.saveDue <= due) return;
-    if (this.saveTimer) clearTimeout(this.saveTimer);
+    if (this.saveTimer) this.saveTimers.clear(this.saveTimer);
     this.saveDue = due;
-    this.saveTimer = setTimeout(() => {
+    this.saveTimer = this.saveTimers.set(() => {
       this.saveTimer = undefined;
       if (!this.dirty) return;
       this.dirty = false;
       void this.writeIndex();
     }, delayMs);
-    this.saveTimer.unref?.();
   }
 
   /** One write at a time: two would share the temporary file, and a rename could move the
@@ -275,7 +277,7 @@ export class ImageProxy {
       const temp = `${this.indexFile}.tmp`;
       try {
         await writeFile(temp, JSON.stringify(Object.fromEntries(this.index)), { mode: 0o600 });
-        await renameWithRetry(temp, this.indexFile);
+        await this.renameFile(temp, this.indexFile);
       } catch (error) {
         this.dirty = true;
         log("WARN", "The image cache index could not be saved", { reason: String(error).slice(0, 120) });
@@ -286,7 +288,7 @@ export class ImageProxy {
   }
 
   async flush() {
-    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = undefined; }
+    if (this.saveTimer) { this.saveTimers.clear(this.saveTimer); this.saveTimer = undefined; }
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
     await this.indexWrites;
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
