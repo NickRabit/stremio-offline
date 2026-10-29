@@ -40,6 +40,7 @@ const harness = async (execute?: LibraryOpsOptions["execute"]) => {
  *  terminal job is asked for after the pump has moved on, so `settled` is the only
  *  thing that covers it -- see its comment in library-ops.ts. */
 const cleanup = async (dataDir: string, queues: LibraryOps[] = []) => {
+  for (const queue of queues) queue.stop();
   for (const queue of queues) await queue.settled();
   await rm(dataDir, { recursive: true, force: true });
 };
@@ -86,9 +87,10 @@ test("load resumes a persisted in-flight job at its current item", async () => {
     });
     queues.push(resumed);
     await resumed.load();
-    // A cold Windows runner takes longer than two seconds to write this file the first time.
-    await waitFor(async () => resumed.snapshot().jobs[0]?.status === "completed"
-      && (await storedJobs(file))[0]?.status === "completed", 10_000);
+    // Reading the file while the queue renames over it makes Windows refuse the rename, so
+    // the file is read once, after the queue has finished writing it.
+    await waitFor(() => resumed.snapshot().jobs[0]?.status === "completed", 10_000);
+    await resumed.settled();
     assert.deepEqual(h.seen, ["one", "two"]);
     assert.equal(resumed.snapshot().jobs[0]?.done, 2);
     assert.equal((await storedJobs(file))[0]?.status, "completed");
