@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addonNotices, arrangeStreams, canQueue, catalogPlaybackChoice, catalogSourceRows, compareRuleRank, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import { addonNotices, arrangeStreams, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, compareRuleRank, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
 import type { SourceRuleVerdict, Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -590,5 +590,20 @@ describe("remote media-server sources", () => {
     expect(repickStream(base)).toEqual({ move: true, to: remote });
     expect(repickStream({ ...base, playing: true })).toEqual({ move: false });
     expect(repickStream({ ...base, picked: true })).toEqual({ move: false });
+  });
+});
+
+describe("catalogAddonCounts", () => {
+  const priority = new Map([["Torrentio", 0], ["Sosáč", 1]]);
+  const rows = [stream({ addonName: "Sosáč" }), stream({ addonName: "Torrentio" }), stream({ addonName: "Sosáč" })];
+
+  it("counts addons in priority order and keeps a chosen addon with nothing left", () => {
+    expect(catalogAddonCounts(rows, "", priority)).toEqual([["Torrentio", 1], ["Sosáč", 2]]);
+    expect(catalogAddonCounts(rows, "Gone", priority)).toEqual([["Torrentio", 1], ["Sosáč", 2], ["Gone", 0]]);
+  });
+
+  it("never lists a chosen remote library or the local filter as an empty addon", () => {
+    expect(catalogAddonCounts(rows, remoteSourceFilter("rlib_jellyfin"), priority)).toEqual([["Torrentio", 1], ["Sosáč", 2]]);
+    expect(catalogAddonCounts(rows, LOCAL_SOURCE, priority)).toEqual([["Torrentio", 1], ["Sosáč", 2]]);
   });
 });

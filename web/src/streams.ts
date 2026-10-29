@@ -128,6 +128,17 @@ export const remoteFilterId = (filter: string): string | undefined =>
 
 export const isRemoteStream = (stream: Stream): boolean => Boolean(stream.provider || stream.remoteItem);
 
+/** The addon entries of the catalogue's source menu, in addon priority, each with its row count.
+ *  A chosen addon stays even with nothing left for it, or the field would empty; the library and
+ *  remote filters are not addon names and never become an entry of their own. */
+export function catalogAddonCounts(streams: Stream[], filter: string, priority: Map<string, number>): Array<[string, number]> {
+  const counts = new Map<string, number>();
+  for (const stream of streams) { const name = stream.addonName ?? "?"; counts.set(name, (counts.get(name) ?? 0) + 1); }
+  if (filter && filter !== LOCAL_SOURCE && remoteFilterId(filter) === undefined && !counts.has(filter)) counts.set(filter, 0);
+  const rank = (name: string) => priority.get(name) ?? Number.MAX_SAFE_INTEGER;
+  return [...counts.entries()].sort((a, b) => (rank(a[0]) - rank(b[0])) || (b[1] - a[1]));
+}
+
 /** Local files lead the unfiltered rule and addon-priority lists. Other sorts rank them with
  *  addon rows, while a named addon and the dedicated local filter stay exclusive. */
 export function catalogSourceRows(
