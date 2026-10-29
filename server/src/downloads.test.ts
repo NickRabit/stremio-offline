@@ -1280,6 +1280,75 @@ test("the same infoHash is not queued twice", async () => {
   }
 });
 
+test("a new Real-Debrid torrent id is durable before a stopped queue can lose its timer", async () => {
+  const { directory, queue } = await tempQueue({
+    debridPollMs: 60_000,
+    debrid: {
+      configured: () => true,
+      advance: async () => ({ ready: false, torrentId: "rd1", progress: 10, status: "downloading" }),
+    },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await waitFor(queue, () => queue.list()[0]?.debridProgress === 10);
+    await queue.stop();
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<{ debrid?: { torrentId?: string } }>;
+    assert.equal(stored[0]?.debrid?.torrentId, "rd1", "the next poll must reuse the torrent instead of adding its magnet again");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed first Real-Debrid write retries without failing the waiting job", async () => {
+  let fail = false;
+  let calls = 0;
+  const torrentIds: Array<string | undefined> = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const { directory, queue } = await tempQueue({
+    debridPollMs: 20,
+    debridRetryMs: 20,
+    debrid: {
+      configured: () => true,
+      advance: async ({ torrentId }) => {
+        calls += 1;
+        torrentIds.push(torrentId);
+        if (calls === 1) await held;
+        return { ready: false, torrentId: "rd1", progress: 10, status: "downloading" };
+      },
+    },
+    writeState: async (file, data) => {
+      if (fail) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    fail = true;
+    release();
+    await waitFor(queue, () => calls === 1 && queue.get(queue.list()[0]!.id)?.debridProgress === 10);
+    assert.equal(queue.get(queue.list()[0]!.id)?.status, "waiting");
+    assert.equal(torrentIds[0], undefined);
+
+    fail = false;
+    let stored: Array<{ debrid?: { torrentId?: string } }> = [];
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8"));
+      if (stored[0]?.debrid?.torrentId === "rd1") break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(stored[0]?.debrid?.torrentId, "rd1");
+    assert.equal(torrentIds[1], "rd1", "the retry reuses the in-memory id instead of adding the magnet again");
+    assert.equal(queue.get(queue.list()[0]!.id)?.status, "waiting");
+  } finally {
+    release();
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a queued source owned by another account does not refuse the caller", async () => {
   const { directory, queue } = await tempQueue();
   try {
@@ -1963,6 +2032,50 @@ test("a paused segmented download keeps its plan and finishes after a resume", a
     await assertContent(queuedFile(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
     await queue.stop(); server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a segmented plan is persisted before the part file is allocated", async () => {
+  let planSaved = false;
+  const { directory, queue, downloads } = await tempQueue({
+    segments: () => 2,
+    writeState: async (file, data) => {
+      const stored = JSON.parse(data) as Array<{ segments?: unknown[] }>;
+      if (stored.some((job) => job.segments?.length === 2)) planSaved = true;
+      await writeFile(file, data);
+    },
+  });
+  const { server, port, requests } = await rangeServer();
+  let restarted: DownloadQueue | undefined;
+  try {
+    const job = await queue.add("Segmented restart", { url: `http://127.0.0.1:${port}/film.mkv` });
+    const deadline = Date.now() + 5_000;
+    while (!planSaved && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(planSaved, true, "the segment plan must be on disk before the full-size part file appears");
+    await queue.stop();
+    assert.equal((await stat(queuedFile(downloads, `${job.target}.part`))).size, SEGMENTED_TOTAL);
+
+    const beforeRestart = requests().length;
+    const library = downloadLibrary(downloads);
+    restarted = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+      retryDelay: () => 30,
+      libraries: () => [library],
+      defaultLibrary: () => library,
+      segments: () => 2,
+    });
+    await restarted.load();
+    await waitFor(restarted, () => restarted!.list()[0]?.status === "completed" || restarted!.list()[0]?.status === "failed", 60_000);
+    assert.equal(restarted.list()[0]?.status, "completed", restarted.list()[0]?.error ?? "");
+    const resumedRequests = requests().slice(beforeRestart);
+    assert.ok(resumedRequests.length > 0);
+    assert.ok(resumedRequests.every((range) => /^bytes=\d+-\d+$/.test(range) && range !== "bytes=0-0"),
+      `the restored plan must not probe or fall back to a linear tail: ${resumedRequests.join(", ")}`);
+    await assertContent(queuedFile(downloads, job.target), SEGMENTED_TOTAL);
+  } finally {
+    await queue.stop();
+    await restarted?.stop();
+    server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

@@ -568,6 +568,10 @@ export const LIBRARY_WAIT_MS = 30 * 60_000;
  *  download is never re-checked harder than a remote film being watched. */
 const REMOTE_REVALIDATE_MS = 30_000;
 const REMOTE_REVALIDATE_TIMEOUT_MS = 5_000;
+/** Progress is recoverable from the `.part` file and segment positions, so it does not need the
+ *  same durability cadence as admission or a terminal transition. This bounds a burst of
+ *  progress events to one full-history checkpoint per interval. */
+const PROGRESS_SAVE_MS = 10_000;
 export const SOURCE_FALLBACK_ATTEMPT_LIMIT = 8;
 const TRAVEL_TEMPORARY_FAILURE_LIMIT = 3;
 const TRAVEL_BUDGET_ATTEMPT_LIMIT = 1_000;
@@ -682,6 +686,8 @@ export class DownloadQueue {
   private beforeClearCompleted?: (jobs: ReadonlyArray<Readonly<DownloadJob>>) => Promise<void>;
   private debridTimers = new Map<string, NodeJS.Timeout>();
   private debridBusy = new Set<string>();
+  /** A torrent id recovered from Real-Debrid is kept in memory until its state write lands. */
+  private debridPersistencePending = new Set<string>();
   /** Called after a successful finish, so the library can produce a thumbnail straight away. */
   onCompleted?: (job: Readonly<DownloadJob>) => void | Promise<void>;
   /** Transferred bytes as they flow. The statistics stamp them with the time the traffic
@@ -754,6 +760,7 @@ export class DownloadQueue {
     this.debridTimers.clear();
     for (const controller of this.active.values()) controller.abort();
     await Promise.all([...this.running]);
+    if (this.debridPersistencePending.size) await this.save();
     await this.saveChain;
   }
 
@@ -1761,6 +1768,7 @@ export class DownloadQueue {
       }
       const exactFile = isExecutableDownloadSnapshot(job.sourceAdmission) && typeof job.stream?.fileIdx === "number";
       const firstStatusRead = job.debrid?.status === undefined;
+      const firstTorrent = job.debrid?.torrentId === undefined;
       const remember = this.rememberDebridReady;
       const result = await this.debrid.advance({
         infoHash,
@@ -1782,7 +1790,8 @@ export class DownloadQueue {
         }),
       });
       if (!await this.debridMayContinue(job)) return;
-      job.debrid = { torrentId: result.torrentId, progress: result.ready ? 100 : result.progress, status: result.ready ? "downloaded" : result.status };
+      const debrid = { torrentId: result.torrentId, progress: result.ready ? 100 : result.progress, status: result.ready ? "downloaded" : result.status };
+      job.debrid = debrid;
       job.updatedAt = new Date().toISOString();
       if (result.ready) {
         const filename = result.filename ?? job.stream?.behaviorHints?.filename;
@@ -1806,7 +1815,25 @@ export class DownloadQueue {
         this.pump();
         return;
       }
-      await this.saveSoon();
+      // A new torrent id is the handle every later poll needs. Losing it makes the next run add
+      // the same magnet again, so it is durable before this poll returns; progress numbers stay
+      // on the slower checkpoint.
+      const retryPersistence = firstTorrent || this.debridPersistencePending.has(job.id);
+      if (retryPersistence) {
+        try {
+          await this.persist({
+            apply: () => { job.debrid = debrid; },
+            // A failed disk write must not discard the live handle: later polls must reuse it
+            // instead of adding the same magnet again, and this flag retries the write.
+            revert: () => { job.debrid = debrid; },
+          });
+          this.debridPersistencePending.delete(job.id);
+        } catch {
+          this.debridPersistencePending.add(job.id);
+          this.scheduleDebrid(job.id, Math.max(this.debridPollMs, this.debridRetryMs));
+          return;
+        }
+      } else this.saveSoon();
       this.scheduleDebrid(job.id, this.debridPollMs);
     } catch (error) {
       if (!await this.debridMayContinue(job)) return;
@@ -1839,6 +1866,7 @@ export class DownloadQueue {
       revert: () => { if (at >= 0 && !this.jobs.includes(job)) this.jobs.splice(Math.min(at, this.jobs.length), 0, job); },
     });
     if (at < 0) return;
+    this.debridPersistencePending.delete(id);
     this.active.get(id)?.abort();
     if (job.status !== "completed" && job.target) {
       const partial = this.jobPath(job);
@@ -2025,7 +2053,13 @@ export class DownloadQueue {
       this.admitting.delete(job.id);
     }
   }
-  private saveSoon() { if (this.saveTimer) return; this.saveTimer = setTimeout(() => { this.saveTimer = undefined; void this.save(); }, 1500); }
+  private saveSoon() {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined;
+      void this.save();
+    }, PROGRESS_SAVE_MS);
+  }
   /** The bucket a job's transfer is limited within. A remote copy is bucketed by its actual
    *  provider and server -- across connections and accounts -- never by the sealed address it
    *  was queued with. Every other job keeps the source hostname, and one whose source is not
@@ -3399,6 +3433,9 @@ export class DownloadQueue {
 
       // A remote original is fetched over one authenticated sequential stream: no range probe
       // and no segment plan, whatever the account's segment preference says.
+      const previousSegments = job.segments;
+      const previousTotal = job.total;
+      const previousReceived = job.received;
       const plan = job.remoteDownload ? undefined : await this.segmentPlan(job, stream, offset, controller);
       if (job.total) this.requireRuleSize(job, job.total);
       if (job.sourceAdmission && !await this.permissionStillHeld(job, controller.signal)) return;
@@ -3406,6 +3443,15 @@ export class DownloadQueue {
         job.segments = plan;
         start(segmentedBytes(plan));
         if (job.total) await this.admitStorage(job.total - base, located.root);
+        const plannedSegments = job.segments;
+        const plannedTotal = job.total;
+        const plannedReceived = job.received;
+        // The part file is truncated to its full logical size below. Persist the plan first: a
+        // restart that sees that size without the plan would have to discard the partial file.
+        await this.persist({
+          apply: () => { job.segments = plannedSegments; job.total = plannedTotal; job.received = plannedReceived; },
+          revert: () => { job.segments = previousSegments; job.total = previousTotal; job.received = previousReceived; },
+        });
         const resumed = offset === job.total;
         const handle = await open(partial, resumed ? "r+" : "w+");
         try {
