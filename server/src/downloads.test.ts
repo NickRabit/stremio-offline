@@ -1303,6 +1303,7 @@ test("a new Real-Debrid torrent id is durable before a stopped queue can lose it
 test("a failed first Real-Debrid write retries without failing the waiting job", async () => {
   let fail = false;
   let calls = 0;
+  const torrentIds: Array<string | undefined> = [];
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   const { directory, queue } = await tempQueue({
@@ -1310,8 +1311,9 @@ test("a failed first Real-Debrid write retries without failing the waiting job",
     debridRetryMs: 20,
     debrid: {
       configured: () => true,
-      advance: async () => {
+      advance: async ({ torrentId }) => {
         calls += 1;
+        torrentIds.push(torrentId);
         if (calls === 1) await held;
         return { ready: false, torrentId: "rd1", progress: 10, status: "downloading" };
       },
@@ -1325,8 +1327,9 @@ test("a failed first Real-Debrid write retries without failing the waiting job",
     await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
     fail = true;
     release();
-    await waitFor(queue, () => calls === 1 && queue.get(queue.list()[0]!.id)?.status === "waiting");
-    assert.equal(queue.get(queue.list()[0]!.id)?.debridProgress, undefined, "a failed write is not left as if it were durable");
+    await waitFor(queue, () => calls === 1 && queue.get(queue.list()[0]!.id)?.debridProgress === 10);
+    assert.equal(queue.get(queue.list()[0]!.id)?.status, "waiting");
+    assert.equal(torrentIds[0], undefined);
 
     fail = false;
     let stored: Array<{ debrid?: { torrentId?: string } }> = [];
@@ -1337,6 +1340,7 @@ test("a failed first Real-Debrid write retries without failing the waiting job",
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     assert.equal(stored[0]?.debrid?.torrentId, "rd1");
+    assert.equal(torrentIds[1], "rd1", "the retry reuses the in-memory id instead of adding the magnet again");
     assert.equal(queue.get(queue.list()[0]!.id)?.status, "waiting");
   } finally {
     release();

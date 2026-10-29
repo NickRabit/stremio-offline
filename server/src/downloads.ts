@@ -686,6 +686,8 @@ export class DownloadQueue {
   private beforeClearCompleted?: (jobs: ReadonlyArray<Readonly<DownloadJob>>) => Promise<void>;
   private debridTimers = new Map<string, NodeJS.Timeout>();
   private debridBusy = new Set<string>();
+  /** A torrent id recovered from Real-Debrid is kept in memory until its state write lands. */
+  private debridPersistencePending = new Set<string>();
   /** Called after a successful finish, so the library can produce a thumbnail straight away. */
   onCompleted?: (job: Readonly<DownloadJob>) => void | Promise<void>;
   /** Transferred bytes as they flow. The statistics stamp them with the time the traffic
@@ -758,6 +760,7 @@ export class DownloadQueue {
     this.debridTimers.clear();
     for (const controller of this.active.values()) controller.abort();
     await Promise.all([...this.running]);
+    if (this.debridPersistencePending.size) await this.save();
     await this.saveChain;
   }
 
@@ -1766,7 +1769,6 @@ export class DownloadQueue {
       const exactFile = isExecutableDownloadSnapshot(job.sourceAdmission) && typeof job.stream?.fileIdx === "number";
       const firstStatusRead = job.debrid?.status === undefined;
       const firstTorrent = job.debrid?.torrentId === undefined;
-      const previousDebrid = job.debrid;
       const remember = this.rememberDebridReady;
       const result = await this.debrid.advance({
         infoHash,
@@ -1816,13 +1818,18 @@ export class DownloadQueue {
       // A new torrent id is the handle every later poll needs. Losing it makes the next run add
       // the same magnet again, so it is durable before this poll returns; progress numbers stay
       // on the slower checkpoint.
-      if (firstTorrent) {
+      const retryPersistence = firstTorrent || this.debridPersistencePending.has(job.id);
+      if (retryPersistence) {
         try {
           await this.persist({
             apply: () => { job.debrid = debrid; },
-            revert: () => { job.debrid = previousDebrid; },
+            // A failed disk write must not discard the live handle: later polls must reuse it
+            // instead of adding the same magnet again, and this flag retries the write.
+            revert: () => { job.debrid = debrid; },
           });
+          this.debridPersistencePending.delete(job.id);
         } catch {
+          this.debridPersistencePending.add(job.id);
           this.scheduleDebrid(job.id, Math.max(this.debridPollMs, this.debridRetryMs));
           return;
         }
@@ -1859,6 +1866,7 @@ export class DownloadQueue {
       revert: () => { if (at >= 0 && !this.jobs.includes(job)) this.jobs.splice(Math.min(at, this.jobs.length), 0, job); },
     });
     if (at < 0) return;
+    this.debridPersistencePending.delete(id);
     this.active.get(id)?.abort();
     if (job.status !== "completed" && job.target) {
       const partial = this.jobPath(job);
