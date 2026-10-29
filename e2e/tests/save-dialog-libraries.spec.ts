@@ -25,5 +25,4 @@ test("the save dialog offers the libraries even when the first library list fail
   const elsewhere = dialog.getByRole("radio", { name: /^Jinam/ });
   await expect(elsewhere).toBeEnabled();
   await expect(dialog).not.toContainText("Pro tento druh titulu nemáte knihovnu");
-  await dialog.getByRole("button", { name: "Zrušit" }).click();
 });
