@@ -25,6 +25,11 @@ const FETCH_TIMEOUT_MS = 20_000;
 const TILE_WIDTH = 640;
 const DETAIL_WIDTH = 1920;
 const FFMPEG_TIMEOUT_MS = 15_000;
+const SAVE_MS = 2000;
+/** A link handed out again only moves its retirement, which is months away. An open page
+ *  re-reads the same posters every few seconds, and rewriting an index of many megabytes each
+ *  time kept a NAS busy while nobody was doing anything. */
+const TOUCH_SAVE_MS = 10 * 60_000;
 
 const EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp",
@@ -114,6 +119,8 @@ interface Inflight {
 }
 
 export interface CachedImage { file: string; type: string; etag: string }
+/** The index write schedule alone, apart from the file system's own retry waits. */
+export interface SaveTimers { set(run: () => void, ms: number): unknown; clear(handle: unknown): void }
 
 const megabytes = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
@@ -156,7 +163,8 @@ export class ImageProxy {
   private memoryBytes = 0;
   /** Ids whose bytes were downloaded by the fetch that is about to serve them. */
   private justFetched = new Set<string>();
-  private saveTimer?: NodeJS.Timeout;
+  private saveTimer?: unknown;
+  private saveDue = 0;
   private dirty = false;
   private maintenance?: Promise<void>;
   private chain: Promise<unknown> = Promise.resolve();
@@ -171,6 +179,7 @@ export class ImageProxy {
     private now: () => number = Date.now,
     private memoryCap = memoryMegabytes(process.env.IMAGE_MEMORY_MB, 32),
     private renameFile: typeof renameWithRetry = renameWithRetry,
+    private saveTimers: SaveTimers = { set: (run, ms) => setTimeout(run, ms).unref(), clear: (handle) => clearTimeout(handle as NodeJS.Timeout) },
   ) {}
 
   private get indexFile() { return path.join(this.dir, "index.json"); }
@@ -244,16 +253,20 @@ export class ImageProxy {
     return removed;
   }
 
-  private save() {
+  /** A pending write is only ever brought forward, so a later `TOUCH_SAVE_MS` never holds
+   *  back a change that is already due sooner. */
+  private save(delayMs = SAVE_MS) {
     this.dirty = true;
-    if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
+    const due = Date.now() + delayMs;
+    if (this.saveTimer && this.saveDue <= due) return;
+    if (this.saveTimer) this.saveTimers.clear(this.saveTimer);
+    this.saveDue = due;
+    this.saveTimer = this.saveTimers.set(() => {
       this.saveTimer = undefined;
       if (!this.dirty) return;
       this.dirty = false;
       void this.writeIndex();
-    }, 2000);
-    this.saveTimer.unref?.();
+    }, delayMs);
   }
 
   /** One write at a time: two would share the temporary file, and a rename could move the
@@ -264,7 +277,7 @@ export class ImageProxy {
       const temp = `${this.indexFile}.tmp`;
       try {
         await writeFile(temp, JSON.stringify(Object.fromEntries(this.index)), { mode: 0o600 });
-        await renameWithRetry(temp, this.indexFile);
+        await this.renameFile(temp, this.indexFile);
       } catch (error) {
         this.dirty = true;
         log("WARN", "The image cache index could not be saved", { reason: String(error).slice(0, 120) });
@@ -275,7 +288,7 @@ export class ImageProxy {
   }
 
   async flush() {
-    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = undefined; }
+    if (this.saveTimer) { this.saveTimers.clear(this.saveTimer); this.saveTimer = undefined; }
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
     await this.indexWrites;
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
@@ -289,9 +302,13 @@ export class ImageProxy {
     const target = artworkWidth(width);
     const id = idFor(value, target);
     const known = this.index.get(id);
-    if (known) known.at = this.now();
-    else this.index.set(id, { url: value, at: this.now(), ...(target === DETAIL_WIDTH ? { width: target } : {}) });
-    this.save();
+    if (known) {
+      known.at = this.now();
+      this.save(TOUCH_SAVE_MS);
+    } else {
+      this.index.set(id, { url: value, at: this.now(), ...(target === DETAIL_WIDTH ? { width: target } : {}) });
+      this.save();
+    }
     return `${PREFIX}${id}`;
   }
 

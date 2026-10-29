@@ -3,7 +3,8 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile }
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ImageProxy, imageId, narrowArtwork } from "./images.js";
+import { ImageProxy, imageId, narrowArtwork, type SaveTimers } from "./images.js";
+import { renameWithRetry } from "./fs-retry.js";
 import { configureSecureMode } from "./secure.js";
 import { initLogger } from "./logger.js";
 
@@ -826,4 +827,93 @@ test("an index write that failed is made again by the next flush, and writes nev
   await Promise.all([pending, proxy.flush()]);
   const after = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, unknown>;
   assert.ok(after[second] && after[third], "the last write to land is the newest index");
+});
+
+test("a link that is only handed out again is not written to the index every few seconds", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-images-touch-"));
+  let clock = 1_000_000;
+  // Only the index schedule is driven by hand; the file system keeps its real timers, so a
+  // retry wait inside a write (a locked file on Windows) still runs out on its own.
+  let elapsed = 0;
+  const scheduled = new Set<{ due: number; run: () => void }>();
+  const advance = (ms: number) => {
+    elapsed += ms;
+    for (const timer of [...scheduled]) if (timer.due <= elapsed) { scheduled.delete(timer); timer.run(); }
+  };
+  const timers: SaveTimers = {
+    set: (run, ms) => { const timer = { due: elapsed + ms, run }; scheduled.add(timer); return timer; },
+    clear: (handle) => { scheduled.delete(handle as { due: number; run: () => void }); },
+  };
+  const proxy = new ImageProxy(dir, MiB, 0, jpeg, undefined, () => clock, 0, renameWithRetry, timers);
+  const stored = async () => {
+    try { return JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { at: number }>; }
+    catch { return {}; }
+  };
+  const diskShows = async (check: (index: Record<string, { at: number }>) => boolean, withinMs = 2000) => {
+    const deadline = Date.now() + withinMs;
+    while (Date.now() < deadline) {
+      if (check(await stored())) return true;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    return false;
+  };
+  try {
+    await proxy.load();
+    const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+    await proxy.flush();
+    const firstUse = clock;
+
+    // An open page asks for the download list every five seconds, and every answer hands the
+    // same posters out again; a large index rewritten each time keeps a NAS busy for nothing.
+    for (let poll = 0; poll < 24; poll += 1) {
+      clock += 5000;
+      proxy.proxied(REMOTE);
+      advance(5000);
+      assert.equal(await diskShows((index) => index[id]?.at !== firstUse, 50), false, `poll ${poll + 1} rewrote the index`);
+    }
+
+    const fresh = proxy.proxied(PLAIN)!.split("/").pop()!;
+    advance(2000);
+    assert.ok(await diskShows((index) => Boolean(index[fresh])), "a new link is still written within seconds");
+    assert.equal((await stored())[id]!.at, clock, "and carries the last use of the old one with it");
+
+    clock += 1000;
+    proxy.proxied(REMOTE);
+    advance(10 * 60_000);
+    assert.ok(await diskShows((index) => index[id]?.at === clock), "a use nothing else carries is written later on its own");
+  } finally {
+    await proxy.flush();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a locked index file still gets written while the index schedule is driven by hand", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-images-locked-"));
+  const scheduled: Array<() => void> = [];
+  const timers: SaveTimers = { set: (run) => { scheduled.push(run); return run; }, clear: () => undefined };
+  let busy = 2;
+  // What Windows does while a scanner holds the file: the rename fails with EPERM and the
+  // retry waits on a real timer before trying again.
+  const lockedOnce: typeof renameWithRetry = (from, to) => renameWithRetry(from, to, {
+    platform: "win32",
+    renameImpl: async (source, target) => {
+      if (path.basename(String(target)) === "index.json" && busy > 0) {
+        busy -= 1;
+        throw Object.assign(new Error("locked"), { code: "EPERM" });
+      }
+      await rename(source, target);
+    },
+  });
+  const proxy = new ImageProxy(dir, MiB, 0, jpeg, undefined, Date.now, 0, lockedOnce, timers);
+  try {
+    await proxy.load();
+    const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+    scheduled.shift()!();
+    await proxy.flush();
+    const stored = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, unknown>;
+    assert.ok(stored[id], "the write waited out the lock and landed");
+    assert.equal(busy, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
