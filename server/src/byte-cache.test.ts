@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { FileSnapCache, fileEtag, preheatFileSnaps } from "./byte-cache.js";
+import { etagMatches, FileSnapCache, fileEtag, preheatFileSnaps } from "./byte-cache.js";
 import { initLogger } from "./logger.js";
 
 process.env.LOG_STDOUT = "0";
@@ -21,6 +21,16 @@ const snapOf = async (file: string) => {
 
 test("the etag spells the size and mtime in hex", () => {
   assert.equal(fileEtag(256, 4096), 'W/"100-1000"');
+});
+
+test("If-None-Match accepts weak tags and the exact tag in a list", () => {
+  const etag = fileEtag(256, 4096);
+  assert.equal(etagMatches(etag, etag), true);
+  assert.equal(etagMatches('"100-1000"', etag), true);
+  assert.equal(etagMatches(`"other", ${etag}`, etag), true);
+  assert.equal(etagMatches("*", etag), true);
+  assert.equal(etagMatches('"other"', etag), false);
+  assert.equal(etagMatches(undefined, etag), false);
 });
 
 test("the cache keeps the newest snaps that fit and drops the oldest for a new one", () => {

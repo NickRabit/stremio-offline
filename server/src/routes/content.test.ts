@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,7 +9,7 @@ import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { starredPath } from "../favorite-identity.js";
 import { libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, visibleLibraries, type LibraryRecord } from "../libraries.js";
-import type { LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
+import type { GalleryEntry, LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isPathWithin, type LibraryEntry } from "../library.js";
 import type { Store, StoredProgress, UserPrefs } from "../store.js";
@@ -62,6 +62,9 @@ interface LibraryState {
   artwork?: (key: string) => string | undefined;
   /** Whether a picture for this key is being written right now. */
   writing?: (key: string) => boolean;
+  gallery?: GalleryEntry[];
+  galleryArtwork?: (key: string, index: number) => string | undefined;
+  artStamp?: (file: string) => Promise<string>;
 }
 
 const library = (id: string, root: string, order = 0, visibleTo?: string[]): LibraryRecord => ({
@@ -95,7 +98,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     return libraries.length === 1 ? libraryPath(libraries[0]!.id, value) : value;
   };
   const deps: ContentDeps = {
-    artStamp: async () => "stamp",
+    artStamp: async (file) => state.artStamp?.(file) ?? "stamp",
     artworkBusy: (key) => state.writing?.(key) === true,
     store: { libraries: () => libraries, users: () => [admin, ordinary] } as unknown as Store,
     needsSetup: () => false,
@@ -111,8 +114,8 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     dataOf: () => ({ ...emptyUserData(), favorites: state.favorites ?? [], watchlist: state.watchlist ?? {} }),
     deleteLibraryItem: async (relative) => { calls.deleted.push(relative); },
     fileExists: async (file) => exists(file),
-    galleryOf: () => [],
-    galleryArtwork: () => undefined,
+    galleryOf: () => state.gallery ?? [],
+    galleryArtwork: (key, index) => state.galleryArtwork?.(key, index),
     healthOf: (record) => ({ unreachable: false, readOnly: false, realRoot: record.root, caseInsensitive: false }),
     invalidateLibrary: () => undefined,
     libraryEntries: async (read?: { stale?: boolean }) => { calls.entriesAsked += 1; calls.entriesStale.push(read?.stale === true); return entries; },
@@ -789,6 +792,46 @@ test("GET /api/library/thumb answers 404 for a key whose artwork is missing", as
   assert.equal(harness.calls.entriesAsked, 1);
   assert.deepEqual(harness.calls.entriesStale, [true], "a mosaic tile never waits for a new walk of every library");
   assert.deepEqual(harness.calls.artworkAsked, ["lib_00000001/Films"], "the key is looked up among the library entries");
+});
+
+test("stored gallery addresses carry a replacement-sensitive version and use safe browser caching", async (t) => {
+  const root = await makeRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const art = path.join(root, "gallery.jpg");
+  await writeFile(art, "first");
+  const replacedAt = new Date("2026-01-02T03:04:05.000Z");
+  await utimes(art, replacedAt, replacedAt);
+  const fileStamp = async (file: string) => Math.round((await stat(file)).mtimeMs).toString(36);
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    gallery: [{ kind: "still", shape: "wide" }],
+    galleryArtwork: (_key, index) => index === 0 ? art : undefined,
+    artStamp: fileStamp,
+  });
+  t.after(() => harness.close());
+
+  const gallery = await (await api(harness.base, "/api/library/gallery?path=Films%2FHeat.mkv")).json() as { images: Array<{ url: string }> };
+  const first = new URL(gallery.images[0]!.url, harness.base);
+  assert.equal(first.searchParams.get("gallery"), "0");
+  assert.match(first.searchParams.get("v")!, /^[0-9a-z]+-/);
+
+  const served = await fetch(first);
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get("cache-control"), "private, max-age=31536000, immutable");
+  const etag = served.headers.get("etag")!;
+  assert.ok(etag);
+  const revalidated = await fetch(first, { headers: { "if-none-match": `"other", ${etag}` } });
+  assert.equal(revalidated.status, 304);
+  assert.equal(revalidated.headers.get("cache-control"), "private, max-age=31536000, immutable");
+
+  await writeFile(art, "a replacement with another size");
+  await utimes(art, replacedAt, replacedAt);
+  const changed = await (await api(harness.base, "/api/library/gallery?path=Films%2FHeat.mkv")).json() as { images: Array<{ url: string }> };
+  assert.notEqual(new URL(changed.images[0]!.url, harness.base).searchParams.get("v"), first.searchParams.get("v"),
+    "a same-mtime replacement is still a new version");
+  const stale = await fetch(first);
+  assert.equal(stale.headers.get("cache-control"), "private, no-store", "an old version is never advertised as immutable");
+  const unversioned = await fetch(`${harness.base}/api/library/thumb?path=Films%2FHeat.mkv&gallery=0`);
+  assert.equal(unversioned.headers.get("cache-control"), "private, no-store");
 });
 
 test("library thumbnails revalidate cached bytes and still enforce library visibility", async (t) => {

@@ -49,6 +49,7 @@ import { resolveListenTarget, startServer, utilityParentPort } from "./server-st
 import { loopbackHostCheck } from "./host-check.js";
 import { InFlight } from "./in-flight.js";
 import { WalkCache } from "./walk-cache.js";
+import { FreshValueCache } from "./value-cache.js";
 import { killRunningMedia } from "./media-tools.js";
 import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, listVideos, listVideosChecked, pageFiles, summarize, buildLibrary, type FoundFile, type LibraryEntry } from "./library.js";
 import { createArtworkSweep, type SweepDeps, type SweepLibrary } from "./artwork-sweep.js";
@@ -875,7 +876,9 @@ const mediaView = (media: MediaInfo) => ({ ...media, poster: images.proxied(medi
 /** A job's target is stored qualified, like every other key; the client gets the wire form,
  *  which stays relative while one library is configured. */
 const jobView = async <T extends { media?: MediaInfo; target?: string }>(job: T): Promise<T> => {
-  const current = await currentTargetArtwork(job.target);
+  const status = "status" in job && typeof job.status === "string" ? job.status : "";
+  const completedAt = "completedAt" in job && typeof job.completedAt === "string" ? job.completedAt : "";
+  const current = await currentTargetArtwork(job.target, `${status}\u0000${completedAt}`);
   return {
     ...job,
     ...(job.target ? { target: wirePath(job.target) } : {}),
@@ -888,11 +891,13 @@ const jobView = async <T extends { media?: MediaInfo; target?: string }>(job: T)
 /** The library's own picture for one job target, when that file sits in a library and has one.
  *  It is the same address the library tile draws, stamp and all, so the browser asks for the new
  *  picture after a re-assignment instead of keeping the one it cached. */
-const currentTargetArtwork = async (target: string | undefined): Promise<string | undefined> => {
+const currentTargetArtwork = async (target: string | undefined, revision = ""): Promise<string | undefined> => {
   if (!target || !parseLibraryPath(target)) return undefined;
-  const file = isVideo(posixBase(target)) ? await locateFileArtwork(target) : await locateFolderArtwork(target);
-  if (!file) return undefined;
-  return thumbUrl(isVideo(posixBase(target)) ? "path" : "dir", wirePath(target), file);
+  return targetArtworkCache.get(`${target}\u0000${revision}`, async () => {
+    const file = isVideo(posixBase(target)) ? await locateFileArtwork(target) : await locateFolderArtwork(target);
+    if (!file) return undefined;
+    return thumbUrl(isVideo(posixBase(target)) ? "path" : "dir", wirePath(target), file);
+  });
 };
 
 /** An addon logo sits on the provider's server as well, so it takes the same detour. */
@@ -1205,6 +1210,13 @@ const libraryCache = new WalkCache<LibraryEntry[]>(async () => {
   entries.sort((a, b) => b.modified.localeCompare(a.modified));
   return entries;
 }, 30_000);
+/** Download polling asks for the same target every few seconds. Hold the resulting address or
+ *  absence independently, while the short freshness window still notices external changes on
+ *  mounts whose watchers are unreliable. */
+const targetArtworkCache = new FreshValueCache<string | undefined>(30_000, {
+  lookupTimeoutMs: 2_000,
+  timeoutResult: () => undefined,
+});
 /** Every library mutation -- a move, a rename, a delete, a finished download, a watcher
  *  event, a reroot -- bumps this, so a thumbnail sweep that raced one knows its `valid` set
  *  may predate the change and stops. */
@@ -1214,6 +1226,7 @@ const invalidateLibrary = () => {
   videoCache.invalidate();
   unitCache.invalidate();
   libraryCache.invalidate();
+  targetArtworkCache.clear();
   localSearchIndex?.markDirty();
 };
 
@@ -1445,13 +1458,17 @@ const dataArtworkFile = (key: string) => artworks.file(key);
 const removeArtwork = async (file: string) => {
   await rm(file, { force: true });
   await artworks.removed(file);
+  targetArtworkCache.clear();
 };
 
 /** A generated thumbnail is counted against the cache ceiling; the same picture written
  *  next to the media is the folder's own and is neither counted nor evicted. */
 const saveGenerated = async (target: string, write: () => Promise<boolean>) => {
   const saved = await write();
-  if (saved) await artworks.written(target);
+  if (saved) {
+    await artworks.written(target);
+    targetArtworkCache.clear();
+  }
   return saved;
 };
 

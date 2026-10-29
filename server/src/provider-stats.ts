@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
+import type { StatsSaveTimers } from "./image-stats.js";
 
 /** One request the app put on the wire towards an Emby or Jellyfin server. The transport names
  *  the operation, so a count is a call that left this process: what it answered from its own
@@ -24,6 +25,7 @@ export type ProviderCallSummary = Record<ProviderCallKind, number>;
 
 const HOUR = 60 * 60 * 1000;
 const KEEP_MS = 400 * 24 * HOUR;
+const SAVE_MS = 45_000;
 
 const emptySummary = (): ProviderCallSummary =>
   Object.fromEntries(PROVIDER_CALL_KINDS.map((kind) => [kind, 0])) as ProviderCallSummary;
@@ -37,11 +39,18 @@ const isKind = (value: string): value is ProviderCallKind => (PROVIDER_CALL_KIND
  *  once a second while calls keep arriving. */
 export class ProviderStats {
   private buckets: Bucket[] = [];
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private timer: unknown;
   private dirty = false;
   private chain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly file: string, private readonly now = () => Date.now()) {}
+  constructor(
+    private readonly file: string,
+    private readonly now = () => Date.now(),
+    private readonly timers: StatsSaveTimers = {
+      set: (run, ms) => setTimeout(run, ms).unref(),
+      clear: (handle) => clearTimeout(handle as NodeJS.Timeout),
+    },
+  ) {}
 
   async load(): Promise<void> {
     try {
@@ -61,11 +70,7 @@ export class ProviderStats {
       this.buckets.push(bucket);
     }
     bucket[kind] += 1;
-    this.dirty = true;
-    if (!this.timer) {
-      this.timer = setTimeout(() => { this.timer = undefined; this.flushQuietly(); }, 1000);
-      this.timer.unref?.();
-    }
+    this.markDirty();
   }
 
   /** Counts whose hour starts inside the window, the same window the activity summary uses. */
@@ -86,6 +91,10 @@ export class ProviderStats {
   }
 
   flush(): Promise<void> {
+    if (this.timer) {
+      this.timers.clear(this.timer);
+      this.timer = undefined;
+    }
     // Nothing new: wait for the write already under way, and make it again if that one failed --
     // shutdown is the last chance to save what it carried.
     if (!this.dirty) return this.chain.then(() => this.dirty ? this.flush() : undefined);
@@ -98,10 +107,27 @@ export class ProviderStats {
       const temp = `${this.file}.tmp`;
       await writeFile(temp, payload, { mode: 0o600 });
       await renameWithRetry(temp, this.file);
-    }).catch((error: unknown) => { this.dirty = true; throw error; });
+    }).catch((error: unknown) => {
+      this.dirty = true;
+      this.schedule();
+      throw error;
+    });
     // Chaining onto the rejection itself would skip every later write until a restart.
     this.chain = write.catch(() => undefined);
     return write;
+  }
+
+  private markDirty() {
+    this.dirty = true;
+    this.schedule();
+  }
+
+  private schedule() {
+    if (this.timer) return;
+    this.timer = this.timers.set(() => {
+      this.timer = undefined;
+      this.flushQuietly();
+    }, SAVE_MS);
   }
 
   private readBucket(item: unknown): Bucket[] {

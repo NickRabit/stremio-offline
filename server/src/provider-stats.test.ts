@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ProviderStats, noteProviderCall, useProviderStats } from "./provider-stats.js";
+import type { StatsSaveTimers } from "./image-stats.js";
 
 const withDir = async (run: (dir: string) => Promise<void>) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-provider-stats-"));
@@ -112,5 +113,66 @@ test("a flush that waits on a write already in flight writes again when that one
     const reloaded = new ProviderStats(file, () => now);
     await reloaded.load();
     assert.equal(reloaded.summary(6, now).detail, 1, "the shutdown flush writes what the failed write carried");
+  });
+});
+
+test("a continuous stream of provider events schedules one bounded periodic write", async () => {
+  await withDir(async (dir) => {
+    const file = path.join(dir, "provider-stats.json");
+    const scheduled: Array<{ run: () => void; ms: number }> = [];
+    const timers: StatsSaveTimers = {
+      set: (run, ms) => { const timer = { run, ms }; scheduled.push(timer); return timer; },
+      clear: (handle) => { const at = scheduled.indexOf(handle as { run: () => void; ms: number }); if (at >= 0) scheduled.splice(at, 1); },
+    };
+    const now = Date.UTC(2026, 0, 2, 3, 10);
+    const stats = new ProviderStats(file, () => now, timers);
+    await stats.load();
+    stats.record("detail");
+    stats.record("artwork");
+    stats.record("items");
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0]!.ms, 45_000);
+
+    scheduled.shift()!.run();
+    let persisted = false;
+    for (let attempt = 0; attempt < 100 && !persisted; attempt += 1) {
+      persisted = await readFile(file, "utf8").then(() => true, () => false);
+      if (!persisted) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(persisted, true, "the periodic write lands");
+    const reloaded = new ProviderStats(file, () => now);
+    await reloaded.load();
+    assert.equal(reloaded.summary(1).detail, 1);
+    assert.equal(reloaded.summary(1).artwork, 1);
+    assert.equal(reloaded.summary(1).items, 1);
+    assert.equal(scheduled.length, 0, "idle time arms no further write");
+  });
+});
+
+test("a failed provider write arms another periodic retry", async () => {
+  await withDir(async (dir) => {
+    const file = path.join(dir, "provider-stats.json");
+    const scheduled: Array<{ run: () => void; ms: number }> = [];
+    const timers: StatsSaveTimers = {
+      set: (run, ms) => { const timer = { run, ms }; scheduled.push(timer); return timer; },
+      clear: (handle) => { const at = scheduled.indexOf(handle as { run: () => void; ms: number }); if (at >= 0) scheduled.splice(at, 1); },
+    };
+    const now = Date.UTC(2026, 0, 2, 3, 10);
+    const stats = new ProviderStats(file, () => now, timers);
+    await mkdir(`${file}.tmp`);
+    stats.record("detail");
+    await assert.rejects(stats.flush());
+    assert.deepEqual(scheduled.map((timer) => timer.ms), [45_000], "the failed write owes another retry");
+    await rm(`${file}.tmp`, { recursive: true });
+    scheduled.shift()!.run();
+    let persisted = false;
+    for (let attempt = 0; attempt < 100 && !persisted; attempt += 1) {
+      persisted = await readFile(file, "utf8").then(() => true, () => false);
+      if (!persisted) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(persisted, true);
+    const reloaded = new ProviderStats(file, () => now);
+    await reloaded.load();
+    assert.equal(reloaded.summary(1).detail, 1);
   });
 });

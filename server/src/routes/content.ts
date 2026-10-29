@@ -5,7 +5,7 @@ import path from "node:path";
 import { mkdir, readFile, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { askedSurface, imageSurface, logPoster, noteImage, type ImageFrom } from "../image-stats.js";
-import { FileSnapCache, fileEtag } from "../byte-cache.js";
+import { etagMatches, FileSnapCache, fileEtag } from "../byte-cache.js";
 import type { ArtShape } from "../artwork.js";
 import { folderMosaicUnits, mosaicIdentities, mosaicSkipped, pendingSuggestionKeys, unitFor, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
 import { AppError } from "../errors.js";
@@ -368,9 +368,14 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (!keyVisible(key, viewer)) throw new AppError("The item was not found.", "err.itemNotFound", 404);
     const wire = wirePath(key);
     res.json({
-      images: galleryOf(key).map((entry, index) => ({
-        ...entry,
-        url: `/api/library/thumb?path=${encodeURIComponent(wire)}&gallery=${index}`,
+      images: await Promise.all(galleryOf(key).map(async (entry, index) => {
+        const file = galleryArtwork(key, index);
+        const info = file ? await stat(file).catch(() => undefined) : undefined;
+        const version = file && info?.isFile() ? `${info.size.toString(36)}-${await artStamp(file)}` : "0";
+        return {
+          ...entry,
+          url: `/api/library/thumb?path=${encodeURIComponent(wire)}&gallery=${index}&v=${encodeURIComponent(version)}`,
+        };
       })),
     });
   }));
@@ -462,9 +467,15 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       const key = filePath ?? dirPath;
       if (!key || !Number.isInteger(slot) || slot < 0 || slot >= galleryOf(key).length) return res.status(404).end();
       const file = galleryArtwork(key, slot);
-      if (!file || !await fileExists(file)) return res.status(404).end();
+      const info = file ? await stat(file).catch(() => undefined) : undefined;
+      if (!file || !info?.isFile()) return res.status(404).end();
+      const stamp = `${info.size.toString(36)}-${await artStamp(file)}`;
+      const versioned = typeof req.query.v === "string" && req.query.v === stamp;
+      const etag = fileEtag(info.size, info.mtime.getTime());
+      res.setHeader("cache-control", versioned ? "private, max-age=31536000, immutable" : "private, no-store");
+      res.setHeader("etag", etag);
       void artworks.served(file);
-      res.setHeader("cache-control", "private, no-store");
+      if (etagMatches(req.headers["if-none-match"], etag)) return res.status(304).end();
       return res.sendFile(file, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
     }
     let art: string | undefined;
@@ -498,7 +509,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const etag = fileEtag(info.size, info.mtime.getTime());
     res.setHeader("cache-control", cacheControl);
     res.setHeader("etag", etag);
-    if (req.headers["if-none-match"] === etag) {
+    if (etagMatches(req.headers["if-none-match"], etag)) {
       // The snapshot is only a copy: the file may have been replaced under the same address,
       // in which case the fresh bytes are read now so the next unconditional GET is up to date.
       if (snap && (snap.size !== info.size || snap.mtimeMs !== info.mtime.getTime())) {

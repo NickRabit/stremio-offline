@@ -23,6 +23,14 @@ interface Entry {
 export type ArtworkCarry = { carried: true } | { carried: false; reason: "absent" | "failed"; detail?: string };
 
 const hash = (key: string) => createHash("sha1").update(key).digest("hex");
+const STRUCTURAL_SAVE_MS = 2000;
+const TOUCH_SAVE_MS = 10 * 60_000;
+const RETRY_SAVE_MS = 60_000;
+
+export interface ArtworkSaveTimers {
+  set(run: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+}
 
 const megabytes = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
@@ -38,7 +46,8 @@ function evictionFloor(cap: number): number {
 
 export class ArtworkCache {
   private entries = new Map<string, Entry>();
-  private timer?: NodeJS.Timeout;
+  private timer?: unknown;
+  private saveDue = 0;
   private dirty = false;
   private maintenance?: Promise<void>;
   private chain: Promise<unknown> = Promise.resolve();
@@ -47,6 +56,10 @@ export class ArtworkCache {
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "artwork"),
     private cap = megabytes(process.env.ARTWORK_CACHE_MB, 256),
+    private readonly saveTimers: ArtworkSaveTimers = {
+      set: (run, ms) => setTimeout(run, ms).unref(),
+      clear: (handle) => clearTimeout(handle as NodeJS.Timeout),
+    },
   ) {}
 
   private get indexFile() { return path.join(this.dir, "index.json"); }
@@ -70,16 +83,20 @@ export class ArtworkCache {
     return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : undefined;
   }
 
-  private save() {
+  /** Last-use alone waits much longer than a structural change. A due structural write is only
+   *  brought forward, never postponed by a later serve. */
+  private save(delayMs = STRUCTURAL_SAVE_MS) {
     this.dirty = true;
-    if (this.timer) return;
-    this.timer = setTimeout(() => {
+    const due = Date.now() + delayMs;
+    if (this.timer && this.saveDue <= due) return;
+    if (this.timer) this.saveTimers.clear(this.timer);
+    this.saveDue = due;
+    this.timer = this.saveTimers.set(() => {
       this.timer = undefined;
       if (!this.dirty) return;
       this.dirty = false;
       void this.writeIndex();
-    }, 2000);
-    this.timer.unref?.();
+    }, delayMs);
   }
 
   /** One write at a time: two would share the temporary file, and a rename could move the
@@ -92,6 +109,7 @@ export class ArtworkCache {
         await renameWithRetry(temp, this.indexFile);
       } catch (error) {
         this.dirty = true;
+        this.save(RETRY_SAVE_MS);
         log("WARN", "The artwork cache index could not be saved", { reason: String(error).slice(0, 120) });
       }
     });
@@ -126,7 +144,7 @@ export class ArtworkCache {
   }
 
   async flush() {
-    if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
+    if (this.timer) { this.saveTimers.clear(this.timer); this.timer = undefined; }
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
     await this.indexWrites;
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
@@ -241,7 +259,7 @@ export class ArtworkCache {
     if (known) this.entries.set(name, { bytes: known.bytes, at: Date.now() });
     else if (info?.isFile()) this.entries.set(name, { bytes: info.size, at: Date.now() });
     else return;
-    this.save();
+    this.save(TOUCH_SAVE_MS);
   }
 
   /** A thumbnail served from the memory in front of this cache: the index entry is refreshed

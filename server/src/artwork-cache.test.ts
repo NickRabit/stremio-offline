@@ -4,7 +4,7 @@ import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, ut
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ArtworkCache } from "./artwork-cache.js";
+import { ArtworkCache, type ArtworkSaveTimers } from "./artwork-cache.js";
 
 const hash = (key: string) => `${createHash("sha1").update(key).digest("hex")}.jpg`;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -368,6 +368,45 @@ test("a thumbnail that cannot be removed stays indexed and is retried", async ()
   });
 });
 
+test("a gallery-only last-use change waits ten minutes while structural writes stay prompt", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "artwork-cache-touch-"));
+  const dir = path.join(dataDir, "artwork");
+  const scheduled: Array<{ run: () => void; ms: number }> = [];
+  const timers: ArtworkSaveTimers = {
+    set: (run, ms) => { const timer = { run, ms }; scheduled.push(timer); return timer; },
+    clear: (handle) => { const at = scheduled.indexOf(handle as { run: () => void; ms: number }); if (at >= 0) scheduled.splice(at, 1); },
+  };
+  const cache = new ArtworkCache(dir, 1024 * 1024, timers);
+  try {
+    const file = await put(cache, "lib_aaaaaaaa/One.mkv", 64);
+    assert.deepEqual(scheduled.map((timer) => timer.ms), [2000], "a new thumbnail stays on the prompt schedule");
+    await cache.served(file);
+    assert.deepEqual(scheduled.map((timer) => timer.ms), [2000], "a serve never postpones the structural write");
+    await cache.flush();
+
+    const before = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { at: number }>;
+    const name = path.join("lib_aaaaaaaa", hash("One.mkv"));
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    await cache.served(file);
+    await cache.served(file);
+    assert.deepEqual(scheduled.map((timer) => timer.ms), [600_000], "repeated gallery reads share one lazy write");
+    const during = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { at: number }>;
+    assert.equal(during[name]!.at, before[name]!.at, "ordinary reads do not rewrite the index");
+
+    scheduled.shift()!.run();
+    let persisted = false;
+    for (let attempt = 0; attempt < 100 && !persisted; attempt += 1) {
+      const stored = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { at: number }>;
+      persisted = stored[name]!.at > before[name]!.at;
+      if (!persisted) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(persisted, true, "the lone last-use change is eventually written");
+  } finally {
+    await cache.flush();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("an index write that failed is made again by the next flush", async () => {
   await withCache(1024 * 1024, async (cache, dir) => {
     // A directory where the temporary file goes makes the write fail, the way a full disk would.
@@ -379,4 +418,32 @@ test("an index write that failed is made again by the next flush", async () => {
     assert.deepEqual(Object.keys(JSON.parse(await readFile(path.join(dir, "index.json"), "utf8"))),
       [path.join("lib_aaaaaaaa", hash("One.mkv"))]);
   });
+});
+
+test("a failed index write arms a bounded retry", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "artwork-cache-retry-"));
+  const dir = path.join(dataDir, "artwork");
+  const scheduled: Array<{ run: () => void; ms: number }> = [];
+  const timers: ArtworkSaveTimers = {
+    set: (run, ms) => { const timer = { run, ms }; scheduled.push(timer); return timer; },
+    clear: (handle) => { const at = scheduled.indexOf(handle as { run: () => void; ms: number }); if (at >= 0) scheduled.splice(at, 1); },
+  };
+  const cache = new ArtworkCache(dir, 1024 * 1024, timers);
+  try {
+    await mkdir(path.join(dir, "index.json.tmp"), { recursive: true });
+    await put(cache, "lib_aaaaaaaa/One.mkv", 64);
+    await cache.flush();
+    assert.deepEqual(scheduled.map((timer) => timer.ms), [60_000], "the failed index write is owed a retry");
+    await rm(path.join(dir, "index.json.tmp"), { recursive: true });
+    scheduled.shift()!.run();
+    let persisted = false;
+    for (let attempt = 0; attempt < 100 && !persisted; attempt += 1) {
+      persisted = await readFile(path.join(dir, "index.json"), "utf8").then(() => true, () => false);
+      if (!persisted) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(persisted, true);
+  } finally {
+    await cache.flush();
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });

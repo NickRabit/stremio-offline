@@ -20,6 +20,12 @@ const LAYERS = ["catalog", "library", "remote", "home"] as const;
 const FROMS = ["memory", "disk", "upstream"] as const;
 const HOUR = 60 * 60 * 1000;
 const KEEP_MS = 400 * 24 * HOUR;
+const SAVE_MS = 45_000;
+
+export interface StatsSaveTimers {
+  set(run: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+}
 
 const emptyCounts = (): ImageCounts => ({ memory: 0, disk: 0, upstream: 0 });
 const emptySummary = (): ImageLayerSummary => ({
@@ -57,7 +63,7 @@ export function logPoster(detail: {
   bytes: number;
   cache?: string | null;
 }): void {
-  log("INFO", "Poster served", {
+  log("DEBUG", "Poster served", {
     kind: detail.kind,
     surface: detail.surface,
     asked: detail.asked,
@@ -71,11 +77,18 @@ export function logPoster(detail: {
 /** Hourly picture counts. One request is exactly one of memory, disk or upstream. */
 export class ImageStats {
   private buckets: Bucket[] = [];
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private timer: unknown;
   private dirty = false;
   private chain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly file: string, private readonly now = () => Date.now()) {}
+  constructor(
+    private readonly file: string,
+    private readonly now = () => Date.now(),
+    private readonly timers: StatsSaveTimers = {
+      set: (run, ms) => setTimeout(run, ms).unref(),
+      clear: (handle) => clearTimeout(handle as NodeJS.Timeout),
+    },
+  ) {}
 
   async load(): Promise<void> {
     try {
@@ -95,11 +108,7 @@ export class ImageStats {
       this.buckets.push(bucket);
     }
     bucket[layer][from] += 1;
-    this.dirty = true;
-    if (!this.timer) {
-      this.timer = setTimeout(() => { this.timer = undefined; this.flushQuietly(); }, 1000);
-      this.timer.unref?.();
-    }
+    this.markDirty();
   }
 
   /** Counts whose hour starts inside the window. The selected statistics period uses the same hours. */
@@ -120,6 +129,10 @@ export class ImageStats {
   }
 
   flush(): Promise<void> {
+    if (this.timer) {
+      this.timers.clear(this.timer);
+      this.timer = undefined;
+    }
     // Nothing new: wait for the write already under way, and make it again if that one failed --
     // shutdown is the last chance to save what it carried.
     if (!this.dirty) return this.chain.then(() => this.dirty ? this.flush() : undefined);
@@ -132,10 +145,27 @@ export class ImageStats {
       const temp = `${this.file}.tmp`;
       await writeFile(temp, payload, { mode: 0o600 });
       await renameWithRetry(temp, this.file);
-    }).catch((error: unknown) => { this.dirty = true; throw error; });
+    }).catch((error: unknown) => {
+      this.dirty = true;
+      this.schedule();
+      throw error;
+    });
     // Chaining onto the rejection itself would skip every later write until a restart.
     this.chain = write.catch(() => undefined);
     return write;
+  }
+
+  private markDirty() {
+    this.dirty = true;
+    this.schedule();
+  }
+
+  private schedule() {
+    if (this.timer) return;
+    this.timer = this.timers.set(() => {
+      this.timer = undefined;
+      this.flushQuietly();
+    }, SAVE_MS);
   }
 
   private readBucket(item: unknown): Bucket[] {

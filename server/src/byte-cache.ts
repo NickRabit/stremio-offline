@@ -6,6 +6,15 @@ export function fileEtag(size: number, mtimeMs: number): string {
   return `W/"${size.toString(16)}-${mtimeMs.toString(16)}"`;
 }
 
+/** HTTP's weak comparison for an If-None-Match list, including `*`. */
+export function etagMatches(header: string | string[] | undefined, etag: string): boolean {
+  const value = Array.isArray(header) ? header.join(",") : header;
+  if (!value) return false;
+  const weak = (tag: string) => tag.trim().replace(/^W\//, "");
+  const wanted = weak(etag);
+  return value.split(",").some((tag) => tag.trim() === "*" || weak(tag) === wanted);
+}
+
 export interface FileSnap {
   bytes: Buffer;
   etag: string;
