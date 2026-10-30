@@ -336,7 +336,7 @@
   <string name="tv_global_search_hint">Cerca nei cataloghi e nelle librerie. Premi OK per cercare.</string>
   <string name="tv_global_search_library_hint">Cerca in questa libreria. Premi OK per cercare.</string>
   <string name="tv_search_library_chip">%1$s  ✕</string>
-  <string name="tv_search_library_clear">Cerca in tutta la libreria</string>
+  <string name="tv_search_library_clear">Cerca in tutte le librerie</string>
   <string name="tv_global_search_source_all">Tutti</string>
   <string name="tv_global_search_source_catalog">Catalogo</string>
   <string name="tv_global_search_source_libraries">Librerie</string>

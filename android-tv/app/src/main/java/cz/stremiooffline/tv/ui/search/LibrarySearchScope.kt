@@ -2,7 +2,7 @@ package cz.stremiooffline.tv.ui.search
 
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 
-/** One library level the Search page is fixed to, independent of the rail's search scope. */
+/** The library level a library's Search action starts the Search page on; the viewer can clear it. */
 data class LibrarySearchScope(
   val library: GlobalSearchLibraryDto?,
   val sources: List<String>,

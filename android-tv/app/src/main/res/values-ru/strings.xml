@@ -346,7 +346,7 @@
   <string name="tv_global_search_hint">Ищите в каталогах и библиотеках. Нажмите OK, чтобы начать поиск.</string>
   <string name="tv_global_search_library_hint">Ищите в этой библиотеке. Нажмите OK, чтобы начать поиск.</string>
   <string name="tv_search_library_chip">%1$s  ✕</string>
-  <string name="tv_search_library_clear">Искать по всей библиотеке</string>
+  <string name="tv_search_library_clear">Искать во всех библиотеках</string>
   <string name="tv_global_search_source_all">Все</string>
   <string name="tv_global_search_source_catalog">Каталог</string>
   <string name="tv_global_search_source_libraries">Библиотеки</string>

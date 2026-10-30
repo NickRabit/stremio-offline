@@ -2089,7 +2089,7 @@ export const cs: Catalog = {
   "tv.globalSearch.hint": "Prohledejte katalogy a knihovny. Stisknutím OK spustíte hledání.",
   "tv.globalSearch.libraryHint": "Prohledejte tuto knihovnu. Stisknutím OK spustíte hledání.",
   "tv.searchLibraryChip": "{title}  ✕",
-  "tv.searchLibraryClear": "Hledat v celé knihovně",
+  "tv.searchLibraryClear": "Hledat ve všech knihovnách",
   "tv.globalSearch.sourceAll": "Vše",
   "tv.globalSearch.sourceCatalog": "Katalog",
   "tv.globalSearch.sourceLibraries": "Knihovny",

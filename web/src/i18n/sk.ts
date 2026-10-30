@@ -2036,7 +2036,7 @@ export const sk: Catalog = {
   "tv.globalSearch.hint": "Prehľadajte katalógy a knižnice. Stlačením OK spustíte vyhľadávanie.",
   "tv.globalSearch.libraryHint": "Prehľadajte túto knižnicu. Stlačením OK spustíte vyhľadávanie.",
   "tv.searchLibraryChip": "{title}  ✕",
-  "tv.searchLibraryClear": "Hľadať v celej knižnici",
+  "tv.searchLibraryClear": "Hľadať vo všetkých knižniciach",
   "tv.globalSearch.sourceAll": "Všetko",
   "tv.globalSearch.sourceCatalog": "Katalóg",
   "tv.globalSearch.sourceLibraries": "Knižnice",

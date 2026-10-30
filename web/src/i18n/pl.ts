@@ -2039,7 +2039,7 @@ export const pl: Catalog = {
   "tv.globalSearch.hint": "Przeszukaj katalogi i biblioteki. Naciśnij OK, aby wyszukać.",
   "tv.globalSearch.libraryHint": "Przeszukaj tę bibliotekę. Naciśnij OK, aby wyszukać.",
   "tv.searchLibraryChip": "{title}  ✕",
-  "tv.searchLibraryClear": "Szukaj w całej bibliotece",
+  "tv.searchLibraryClear": "Szukaj we wszystkich bibliotekach",
   "tv.globalSearch.sourceAll": "Wszystko",
   "tv.globalSearch.sourceCatalog": "Katalog",
   "tv.globalSearch.sourceLibraries": "Biblioteki",

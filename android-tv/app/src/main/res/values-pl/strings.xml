@@ -346,7 +346,7 @@
   <string name="tv_global_search_hint">Przeszukaj katalogi i biblioteki. Naciśnij OK, aby wyszukać.</string>
   <string name="tv_global_search_library_hint">Przeszukaj tę bibliotekę. Naciśnij OK, aby wyszukać.</string>
   <string name="tv_search_library_chip">%1$s  ✕</string>
-  <string name="tv_search_library_clear">Szukaj w całej bibliotece</string>
+  <string name="tv_search_library_clear">Szukaj we wszystkich bibliotekach</string>
   <string name="tv_global_search_source_all">Wszystko</string>
   <string name="tv_global_search_source_catalog">Katalog</string>
   <string name="tv_global_search_source_libraries">Biblioteki</string>

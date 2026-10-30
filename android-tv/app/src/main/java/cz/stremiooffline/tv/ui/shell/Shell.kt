@@ -361,7 +361,6 @@ fun Shell(
               onScopeChange = { searchScope = it },
               onOpenDetail = { catalogDetail = it },
               imageUrl = { path -> path?.let(api::url) },
-              catalogSessions = searchEverywhereEnabled,
               onBackToCatalog = if (searchOrigin == SearchOrigin.Catalog) {
                 {
                   searchOrigin = SearchOrigin.Rail

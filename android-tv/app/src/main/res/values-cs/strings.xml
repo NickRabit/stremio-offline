@@ -346,7 +346,7 @@
   <string name="tv_global_search_hint">Prohledejte katalogy a knihovny. Stisknutím OK spustíte hledání.</string>
   <string name="tv_global_search_library_hint">Prohledejte tuto knihovnu. Stisknutím OK spustíte hledání.</string>
   <string name="tv_search_library_chip">%1$s  ✕</string>
-  <string name="tv_search_library_clear">Hledat v celé knihovně</string>
+  <string name="tv_search_library_clear">Hledat ve všech knihovnách</string>
   <string name="tv_global_search_source_all">Vše</string>
   <string name="tv_global_search_source_catalog">Katalog</string>
   <string name="tv_global_search_source_libraries">Knihovny</string>

@@ -2024,7 +2024,7 @@ export const fr: Catalog = {
   "tv.globalSearch.hint": "Recherchez dans les catalogues et les bibliothèques. Appuyez sur OK pour lancer la recherche.",
   "tv.globalSearch.libraryHint": "Recherchez dans cette bibliothèque. Appuyez sur OK pour lancer la recherche.",
   "tv.searchLibraryChip": "{title}  ✕",
-  "tv.searchLibraryClear": "Rechercher dans toute la bibliothèque",
+  "tv.searchLibraryClear": "Rechercher dans toutes les bibliothèques",
   "tv.globalSearch.sourceAll": "Tous",
   "tv.globalSearch.sourceCatalog": "Catalogue",
   "tv.globalSearch.sourceLibraries": "Bibliothèques",

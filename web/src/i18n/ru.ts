@@ -2039,7 +2039,7 @@ export const ru: Catalog = {
   "tv.globalSearch.hint": "Ищите в каталогах и библиотеках. Нажмите OK, чтобы начать поиск.",
   "tv.globalSearch.libraryHint": "Ищите в этой библиотеке. Нажмите OK, чтобы начать поиск.",
   "tv.searchLibraryChip": "{title}  ✕",
-  "tv.searchLibraryClear": "Искать по всей библиотеке",
+  "tv.searchLibraryClear": "Искать во всех библиотеках",
   "tv.globalSearch.sourceAll": "Все",
   "tv.globalSearch.sourceCatalog": "Каталог",
   "tv.globalSearch.sourceLibraries": "Библиотеки",

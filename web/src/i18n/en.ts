@@ -2084,7 +2084,7 @@ export const en = {
   "tv.globalSearch.hint": "Search catalogs and libraries. Press OK to search.",
   "tv.globalSearch.libraryHint": "Search this library. Press OK to search.",
   "tv.searchLibraryChip": "{title}  ✕",
-  "tv.searchLibraryClear": "Search the whole library",
+  "tv.searchLibraryClear": "Search all libraries",
   "tv.globalSearch.sourceAll": "All",
   "tv.globalSearch.sourceCatalog": "Catalog",
   "tv.globalSearch.sourceLibraries": "Libraries",

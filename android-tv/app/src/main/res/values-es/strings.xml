@@ -336,7 +336,7 @@
   <string name="tv_global_search_hint">Busca en catálogos y bibliotecas. Pulsa OK para buscar.</string>
   <string name="tv_global_search_library_hint">Busca en esta biblioteca. Pulsa OK para buscar.</string>
   <string name="tv_search_library_chip">%1$s  ✕</string>
-  <string name="tv_search_library_clear">Buscar en toda la biblioteca</string>
+  <string name="tv_search_library_clear">Buscar en todas las bibliotecas</string>
   <string name="tv_global_search_source_all">Todo</string>
   <string name="tv_global_search_source_catalog">Catálogo</string>
   <string name="tv_global_search_source_libraries">Bibliotecas</string>
