@@ -32,6 +32,7 @@ metadata store, or scheduler for each platform.
 | 5 | Selective SQLite storage | Move large, often rewritten collections out of whole-file JSON rewrites, phase by phase, per [#644](https://github.com/NickRabit/stremio-offline/issues/644). |
 | 6 | Library file fingerprint | Re-associate metadata, favourites and resume positions when a file is moved outside the app, by size and a partial hash; best built on the SQLite storage. See [Library](#library). |
 | 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
+| Alongside | Major dependency updates | Node 26 for the server image and CI, then Vite 8 with its React plugin, then TypeScript 7; Electron waits for a reason. See [Major dependency updates](#major-dependency-updates). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
 | Implemented | Personal Home layout | Each account arranges its own Home: which rows show, their order, and extra catalogue feeds from the addons it may use. The instance's Show on Home switches stay the default. |
@@ -256,6 +257,34 @@ statistics, activity) are rewritten as whole JSON files. Move them to SQLite
 selectively, keeping JSON where it fits and keeping the recovery, backup and
 authorization guarantees. The plan, phases and measurements live in
 [#644](https://github.com/NickRabit/stremio-offline/issues/644).
+
+### Major dependency updates
+
+Majors are done by hand, one PR each, in this order; Dependabot keeps minor
+and patch updates. Checked against `main` on 2026-10-30.
+
+1. **Node 22 → 26** (Active LTS since 2026-10-28; Node 22 is in maintenance
+   until April 2027, so this is not urgent). Change the build stage in the
+   `Dockerfile` and `node-version` in every workflow. The runtime stage is
+   `ubuntu:24.04` with only the `node` binary copied in, so check whether
+   Node 26 needs a library that image lacks (for example `libatomic1`), and
+   rerun Trivy on the runtime image. **The desktop apps run the same server
+   inside Electron's own Node** (`utilityProcess`, Node 24 in Electron 44), so
+   the server must keep working on Node 24: do not raise `engines` to
+   `>=26`, do not use Node 26-only APIs, and keep a CI run on Node 24.
+2. **Vite 6 → 8** with `@vitejs/plugin-react` 6, which requires Vite 8. Vite
+   8 builds with Rolldown, so compare the production bundle and the desktop
+   renderer, not only that the build passes. It does not need Node 26.
+   Vitest is already on 4; Vitest 5 accepts Vite 6–8 and can follow in its
+   own PR. Dependabot ignores Vitest majors but not Vite's.
+3. **TypeScript 5.9 → 7** (7.0 is released, a native compiler). The server
+   and tests run through `tsx`, which does not use `tsc`, so the risk is in
+   type checking and editor tooling; move all workspaces together.
+4. **Electron**: stays put until a security fix, a needed feature or
+   electron-builder asks for it. Its Node version decides the floor for the
+   server (see 1).
+
+Ubuntu base image majors stay manual as well (24.04 on purpose since #634).
 
 ### Android TV
 
