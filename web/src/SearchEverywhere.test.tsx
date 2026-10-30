@@ -59,6 +59,9 @@ const controller = (over: Partial<SearchEverywhereController> = {}): SearchEvery
   setSources: vi.fn(),
   scope: null,
   setScope: vi.fn(),
+  library: null,
+  applyPreset: vi.fn(),
+  clearLibrary: vi.fn(),
   kind: "all",
   setKind: vi.fn(),
   snapshot: snapshot(),
@@ -113,6 +116,9 @@ const render = async (search: SearchEverywhereController, handlers: {
   });
 };
 
+const sourceButtons = (): HTMLButtonElement[] =>
+  [...host.querySelectorAll<HTMLButtonElement>(".search-filters .library-shelf-segments")[0]!.querySelectorAll("button")];
+
 const clickCard = async () => {
   const card = host.querySelector<HTMLButtonElement>("[data-search-card]")!;
   await act(async () => {
@@ -123,6 +129,39 @@ const clickCard = async () => {
 };
 
 describe("SearchEverywhere", () => {
+  it("draws the library chip after the sources and the library return only when given", async () => {
+    const clearLibrary = vi.fn();
+    const search = controller({
+      sources: ["local", "remote"],
+      library: {
+        scope: { libraryId: "lib", path: "filmy" },
+        source: "local",
+        title: "TV test – filmy",
+      },
+      clearLibrary,
+    });
+    await render(search);
+    const chip = [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")]
+      .find((button) => button.getAttribute("aria-label") === "Search all libraries");
+    expect(chip?.textContent).toContain("TV test – filmy");
+    const filters = host.querySelector(".search-filters")!;
+    expect(filters.innerHTML.indexOf("library-shelf-segments")).toBeLessThan(filters.innerHTML.indexOf("Search all libraries"));
+    expect(host.querySelector(".search-return")).toBeNull();
+    await act(async () => { chip!.click(); });
+    expect(clearLibrary).toHaveBeenCalledOnce();
+
+    const onBackToLibrary = vi.fn();
+    await act(async () => {
+      root.render(<SearchEverywhere search={search} shape="poster" onToggleShape={vi.fn()}
+        searchable={[]} recent={[]} onRecord={vi.fn()} onForget={vi.fn()} onRefreshRecent={vi.fn()}
+        onOpenMember={vi.fn()} onOpenCanonical={vi.fn()} onBackToLibrary={onBackToLibrary}/>);
+    });
+    const back = host.querySelector<HTMLButtonElement>(".search-return");
+    expect(back?.textContent).toContain("Back to the library");
+    await act(async () => { back!.click(); });
+    expect(onBackToLibrary).toHaveBeenCalledOnce();
+  });
+
   const openList = async () => {
     const input = host.querySelector<HTMLInputElement>("[data-search-input]")!;
     await act(async () => input.focus());
@@ -270,10 +309,33 @@ describe("SearchEverywhere", () => {
 
     await render(controller({ sources: ["local"], setScope, setSources }), { searchable });
     expect(host.querySelector("select[aria-label='Where to search']")).toBeNull();
-    const local = [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")]
-      .find((button) => button.textContent === "Local")!;
-    await act(async () => { local.click(); });
-    expect(setSources).toHaveBeenCalledWith(["local"]);
+    const libraries = sourceButtons().find((button) => button.textContent === "Libraries")!;
+    await act(async () => { libraries.click(); });
+    expect(setSources).toHaveBeenCalledWith(["local", "remote"]);
+  });
+
+  it("offers All, Catalog and Libraries", async () => {
+    const setSources = vi.fn();
+    await render(controller({ sources: ["remote", "local"], setSources }));
+
+    const buttons = sourceButtons();
+    expect(buttons.map((button) => button.textContent)).toEqual(["All", "Catalog", "Libraries"]);
+    expect(buttons.map((button) => button.getAttribute("aria-pressed"))).toEqual(["false", "false", "true"]);
+    await act(async () => { buttons[2]!.click(); });
+    expect(setSources).toHaveBeenCalledWith(["local", "remote"]);
+  });
+
+  it("drops the source strip once every source answered, and before any search", async () => {
+    const answered = (state: "ready" | "exhausted") => ({ id: state, sourceClass: "catalog" as const, label: state, state, loaded: 1, hasMore: false, continuation: "supported" as const, retryable: false });
+    await render(controller({ snapshot: snapshot({ sources: [answered("ready"), answered("exhausted")] }) }));
+    expect(host.querySelector(".search-source-strip")).toBeNull();
+    expect(host.textContent).not.toContain("All sources answered");
+
+    await render(controller({ committed: "", snapshot: null }));
+    expect(host.querySelector(".search-source-strip")).toBeNull();
+
+    await render(controller({ snapshot: snapshot({ sources: [answered("ready"), { ...answered("ready"), id: "bad", state: "failed", retryable: true }] }) }));
+    expect(host.querySelector(".search-source-strip")).not.toBeNull();
   });
 
   it("renders source states and offers Retry only for retryable sources", async () => {

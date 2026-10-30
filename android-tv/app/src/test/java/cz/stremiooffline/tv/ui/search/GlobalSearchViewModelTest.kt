@@ -25,6 +25,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -339,53 +340,190 @@ class GlobalSearchViewModelTest {
     assertEquals(listOf("b"), viewModel.state.recent.map { it.query })
   }
 
+  private fun showsLibrary() = GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows")
+
+  private fun localLibraryPreset(library: GlobalSearchLibraryDto = showsLibrary()) = SearchPreset(
+    sources = LibrarySources,
+    library = LibraryFilter(library, SourceClass.Local, "Films  ›  Shows"),
+  )
+
   @Test
-  fun `a library scope never touches history`() = runTest(dispatcher) {
+  fun `a library preset sends its library and records history`() = runTest(dispatcher) {
     val api = FakeTvApi()
     api.searchStateValue = SearchStateDto(recent = listOf(RecentSearchDto("a", "now")))
-    val library = GlobalSearchViewModel(
-      api,
-      "library",
-      library = GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows"),
-    ).also { running = it }
-    val fixedSources = GlobalSearchViewModel(
-      api,
-      "sources",
-      sources = setOf(SourceClass.Local),
-    ).also { running = it }
-
-    for (viewModel in listOf(library, fixedSources)) {
-      viewModel.refreshRecent()
-      viewModel.submit("matrix")
-      viewModel.forget("a")
-      runCurrent()
-    }
-
-    assertEquals(0, api.searchStateCalls)
-    assertTrue(api.recordedSearches.isEmpty())
-    assertTrue(api.forgottenSearches.isEmpty())
-  }
-
-  @Test
-  fun `a fixed library scope sends its library and sources and ignores filters`() = runTest(dispatcher) {
-    val api = FakeTvApi()
-    val viewModel = GlobalSearchViewModel(
-      api,
-      "slot",
-      library = GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows"),
-      sources = setOf(SourceClass.Local),
-    ).also { running = it }
+    val viewModel = viewModel(api)
     viewModel.setActive(true)
 
-    viewModel.setKind(KindFilter.Series)
-    viewModel.setSources(setOf(SourceClass.Remote))
-    viewModel.submit("hluboky")
+    viewModel.applyPreset(localLibraryPreset())
+    viewModel.submit("matrix")
     runCurrent()
 
     val body = api.globalStartCalls.single()
     assertEquals(listOf("local"), body.sources)
-    assertEquals(GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows"), body.library)
-    assertEquals("all", body.kind)
+    assertEquals(showsLibrary(), body.library)
+    assertEquals(listOf("matrix"), api.recordedSearches)
+
+    val readsBefore = api.searchStateCalls
+    viewModel.refreshRecent()
+    runCurrent()
+    assertTrue(api.searchStateCalls > readsBefore)
+    assertEquals(listOf("matrix", "a"), viewModel.state.recent.map { it.query })
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `the kind filter applies with a library restriction`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+
+    viewModel.applyPreset(localLibraryPreset())
+    viewModel.setKind(KindFilter.Series)
+    viewModel.submit("matrix")
+    runCurrent()
+
+    val body = api.globalStartCalls.single()
+    assertEquals("series", body.kind)
+    assertEquals(showsLibrary(), body.library)
+    assertEquals(listOf("local"), body.sources)
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `another source drops the library and it does not come back`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+
+    viewModel.applyPreset(localLibraryPreset())
+    assertNotNull(viewModel.state.library)
+    viewModel.setSources(LibrarySources)
+    assertNotNull(viewModel.state.library)
+    viewModel.setSources(setOf(SourceClass.Catalog))
+    assertNull(viewModel.state.library)
+    viewModel.setSources(LibrarySources)
+    viewModel.submit("matrix")
+    runCurrent()
+
+    assertNull(viewModel.state.library)
+    val body = api.globalStartCalls.single()
+    assertNull(body.library)
+    assertEquals(listOf("local", "remote"), body.sources)
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `clearLibrary searches the committed query again without the library`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+
+    viewModel.applyPreset(localLibraryPreset())
+    viewModel.submit("matrix")
+    runCurrent()
+    viewModel.clearLibrary()
+    runCurrent()
+
+    assertEquals(2, api.globalStartCalls.size)
+    assertEquals(listOf("local"), api.globalStartCalls[0].sources)
+    assertEquals(showsLibrary(), api.globalStartCalls[0].library)
+    assertEquals("matrix", api.globalStartCalls[1].query)
+    assertNull(api.globalStartCalls[1].library)
+    assertEquals(listOf("local", "remote"), api.globalStartCalls[1].sources)
+    assertNull(viewModel.state.library)
+    assertEquals(LibrarySources, viewModel.state.sources)
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `choosing a catalogue scope drops the library`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+    val scope = SearchScope(addonKey = "a", catalogType = "movie", catalogId = "top")
+
+    viewModel.applyPreset(
+      SearchPreset(
+        sources = setOf(SourceClass.Catalog),
+        library = LibraryFilter(showsLibrary(), SourceClass.Local, "Films"),
+      ),
+    )
+    assertNotNull(viewModel.state.library)
+    viewModel.submit("matrix")
+    runCurrent()
+    viewModel.setScope(scope)
+    runCurrent()
+
+    assertNull(viewModel.state.library)
+    assertEquals(scope, viewModel.state.scope)
+    assertNull(api.globalStartCalls.last().library)
+    assertEquals(scope, api.globalStartCalls.last().scope)
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `a catalogue preset sends its scope`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+    val scope = SearchScope(addonKey = "a", catalogType = "movie", catalogId = "top")
+
+    viewModel.applyPreset(SearchPreset(setOf(SourceClass.Catalog), scope))
+    runCurrent()
+    viewModel.submit("matrix")
+    runCurrent()
+
+    val body = api.globalStartCalls.single()
+    assertEquals(listOf("catalog"), body.sources)
+    assertEquals(scope, body.scope)
+    assertNull(body.library)
+    assertTrue(api.searchableCalls > 0)
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `the libraries filter searches local and remote together`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+
+    viewModel.setSources(LibrarySources)
+    viewModel.submit("matrix")
+    runCurrent()
+
+    val body = api.globalStartCalls.single()
+    assertEquals(listOf("local", "remote"), body.sources)
+    assertNull(body.library)
+    assertNull(body.scope)
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `a scope with no library selects every library and no chip`() {
+    val preset = LibrarySearchScope(null, listOf("local", "remote"), "Your library").toPreset()
+
+    assertEquals(LibrarySources, preset.sources)
+    assertNull(preset.library)
+  }
+
+  @Test
+  fun `a remote library preset sends only its class and parent`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+    val library = GlobalSearchLibraryDto("rlib_ab12cd34", parentId = "folder-9")
+    val preset = LibrarySearchScope(library, listOf("remote"), "Server").toPreset()
+
+    assertEquals(LibrarySources, preset.sources)
+    assertEquals(SourceClass.Remote, preset.library?.source)
+    viewModel.applyPreset(preset)
+    viewModel.submit("matrix")
+    runCurrent()
+
+    val body = api.globalStartCalls.single()
+    assertEquals(listOf("remote"), body.sources)
+    assertEquals(library, body.library)
+    assertNull(body.scope)
     viewModel.setActive(false)
   }
 }

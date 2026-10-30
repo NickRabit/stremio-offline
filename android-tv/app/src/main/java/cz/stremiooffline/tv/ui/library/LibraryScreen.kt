@@ -169,7 +169,9 @@ fun LibraryRoute(
   val scopeTitle = state.pages.mapNotNull { page -> page.title.takeIf { it.isNotBlank() } }
     .joinToString("  ›  ")
     .ifEmpty { fallbackTitle }
-  val searchAvailable = searchEverywhereEnabled || state.current?.searchable == true
+  // The list of libraries is not a place to search from; a library and every folder inside it are.
+  val libraryList = state.current?.items?.any { it is BrowseItem.Library } == true
+  val searchAvailable = !libraryList && (searchEverywhereEnabled || state.current?.searchable == true)
   fun openLibrarySearch() {
     onOpenSearch(LibrarySearchScope(localScope, listOf("local"), scopeTitle))
   }

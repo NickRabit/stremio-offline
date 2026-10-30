@@ -781,27 +781,6 @@ class LibraryScreenTest {
   }
 
   @Test
-  fun `the files root opens the page without a library`() {
-    val api = FakeTvApi()
-    api.pages[null] = BrowseResult(
-      "",
-      listOf(localLibrary("lib_1", "Films"), localLibrary("lib_2", "Shows")),
-      2,
-      false,
-    )
-    val opened = mutableListOf<LibrarySearchScope>()
-    mount(api, searchEverywhereEnabled = true, onOpenSearch = { scope -> opened += scope })
-    switchTo("Files")
-
-    focusOn(TagLibrarySearchAction)
-    press(Key.DirectionCenter)
-
-    assertEquals(null, opened.single().library)
-    assertEquals(listOf("local"), opened.single().sources)
-    assertEquals("Your library", opened.single().title)
-  }
-
-  @Test
   fun `UP from the first tile reaches Search`() {
     mount(nested(), searchEverywhereEnabled = true)
     switchTo("Files")
@@ -809,6 +788,23 @@ class LibraryScreenTest {
     compose.onNodeWithTag("Shows").assertIsFocused()
     press(Key.DirectionUp)
     compose.onNodeWithTag(TagLibrarySearchAction).assertIsFocused()
+  }
+
+  @Test
+  fun `the lists of libraries offer no Search, with the flag on or off`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(localLibrary("Films")), 1, false)
+    mount(api, searchEverywhereEnabled = true)
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    // The All grid and the Files list name whole libraries; Search starts inside one of them.
+    compose.onNodeWithTag(TagLibraryAllGrid).assertExists()
+    compose.onNodeWithTag(TagLibrarySearchAction).assertDoesNotExist()
+    switchTo("Files")
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagLibrarySearchAction).assertDoesNotExist()
   }
 
   @Test

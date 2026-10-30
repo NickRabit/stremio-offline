@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
+import { ChevronLeft, Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
 import { describeError } from "./api";
 import { ShapeToggle } from "./app-chrome";
 import { TileArt } from "./TileArt";
@@ -34,12 +34,16 @@ const STATE_KEY: Record<SearchSourceState, Key> = {
   unavailable: "searchAll.state.unavailable",
 };
 
-const SOURCE_OPTIONS: Array<{ value: SearchSourceClass | "all"; label: Key }> = [
-  { value: "all", label: "searchAll.sourceAll" },
-  { value: "catalog", label: "searchAll.sourceCatalog" },
-  { value: "local", label: "searchAll.sourceLocal" },
-  { value: "remote", label: "searchAll.sourceRemote" },
+const SOURCE_OPTIONS: Array<{ id: "all" | "catalog" | "libraries"; sources: SearchSourceClass[]; label: Key }> = [
+  { id: "all", sources: [], label: "searchAll.sourceAll" },
+  { id: "catalog", sources: ["catalog"], label: "searchAll.sourceCatalog" },
+  { id: "libraries", sources: ["local", "remote"], label: "searchAll.sourceLibraries" },
 ];
+
+const sameSources = (current: readonly SearchSourceClass[], option: readonly SearchSourceClass[]): boolean =>
+  option.length === 0
+    ? current.length === 0
+    : current.length === option.length && option.every((source) => current.includes(source));
 
 const kindLabel = (kind: SearchClusterView["kind"]): string => {
   if (kind === "movie") return t("catalog.oneMovie");
@@ -357,7 +361,7 @@ export function SearchResults({ search, shape, onOpenMember, onOpenCanonical, on
   </div>;
 }
 
-export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical }: {
+export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical, onBackToLibrary }: {
   search: SearchEverywhereController;
   shape: TileShape;
   onToggleShape: () => void;
@@ -370,6 +374,8 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   onRefreshRecent: () => void;
   onOpenMember: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
   onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
+  /** Returns to the Library place Search was opened from. */
+  onBackToLibrary?: () => void;
 }) {
   const root = useRef<HTMLElement>(null);
   const composing = useRef(false);
@@ -377,6 +383,9 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
     ? search.snapshot?.sources.filter((source) => source.state === "queued" || source.state === "loading" || source.state === "indexing").length
       ?? (search.sources.length || 3)
     : 0;
+  // The strip earns its row only while sources still answer or one of them did not.
+  const stripShown = !!search.committed && (waiting > 0
+    || (search.snapshot?.sources ?? []).some((source) => source.retryable || (source.state !== "ready" && source.state !== "exhausted")));
 
   useEffect(() => {
     const onScroll = () => {
@@ -441,6 +450,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   };
 
   return <section className="search-everywhere" ref={root}>
+    {onBackToLibrary && <button type="button" className="search-return" onClick={onBackToLibrary}><ChevronLeft/> {t("searchAll.backToLibrary")}</button>}
     <Heading eyebrow={t("searchAll.eyebrow")} title={t("searchAll.title")}/>
     <form className="search-everywhere-form" role="search" onSubmit={submit}>
       <div className="search-input">
@@ -480,11 +490,12 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
     <div className="filterbar section-filter search-filters">
       <div className="library-shelf-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
         {SOURCE_OPTIONS.map((option) => {
-          const active = option.value === "all" ? search.sources.length === 0 : search.sources.length === 1 && search.sources[0] === option.value;
-          return <button key={option.value} type="button" className={active ? "active" : ""} aria-pressed={active}
-            onClick={() => search.setSources(option.value === "all" ? [] : [option.value])}>{t(option.label)}</button>;
+          const active = sameSources(search.sources, option.sources);
+          return <button key={option.id} type="button" className={active ? "active" : ""} aria-pressed={active}
+            onClick={() => search.setSources(option.sources)}>{t(option.label)}</button>;
         })}
       </div>
+      {search.library && <button type="button" className="search-library-chip" aria-label={t("searchAll.libraryClear")} onClick={() => search.clearLibrary()}>{t("searchAll.libraryChip", { title: search.library.title })}</button>}
       {catalogOnly && <label><span>{t("catalog.searchScope")}</span>
         <select aria-label={t("catalog.searchScope")} value={scopeValue} onChange={(event) => chooseScope(event.target.value)}>
           <SearchScopeOptions searchable={searchable}/>
@@ -500,7 +511,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
       </div>
       <ShapeToggle shape={shape} onToggle={onToggleShape}/>
     </div>
-    <div className="search-source-strip">
+    {stripShown && <div className="search-source-strip">
       <div className="search-source-summary" aria-live="polite" role="status">
         {waiting > 0 ? t("searchAll.statusLoading", { count: waiting }) : t("searchAll.statusDone")}
       </div>
@@ -516,7 +527,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
           </div>)}
         </div>
       </details>
-    </div>
+    </div>}
     <SearchResults search={search} shape={shape} onOpenMember={onOpenMember} onOpenCanonical={onOpenCanonical} onRecord={onRecord}/>
   </section>;
 }

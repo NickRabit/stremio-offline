@@ -141,7 +141,7 @@ jobs:
   desktop:
     needs: release
     # Apple Silicon, so the arm64 build runs natively.
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: write
     env:

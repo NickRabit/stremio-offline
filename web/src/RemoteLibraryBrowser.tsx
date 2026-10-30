@@ -27,10 +27,9 @@ import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage 
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes, hideBroken } from "./settings-ui";
 import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
-import { SearchResults } from "./SearchEverywhere";
-import { useSearchEverywhere } from "./useSearchEverywhere";
+import type { LibrarySearchChip } from "./useSearchEverywhere";
 import type { SaveTarget } from "./save-target";
-import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, SearchMember, SourceProfile, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
+import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, SourceProfile, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
 
 interface Props {
   onRootPresenceChange?: (visible: boolean) => void;
@@ -79,8 +78,10 @@ interface Props {
   addons?: Addon[];
   /** Whether a debrid token is configured, so a torrent row may be queued. */
   realDebridConfigured?: boolean;
-  /** Search inside this library uses the Search everywhere engine. */
+  /** When search everywhere is on, the filter field is a button that opens Search. */
   searchEverywhere: boolean;
+  /** Opens Search limited to the folder on screen. */
+  onOpenSearch?: (chip: LibrarySearchChip | null) => void;
   sourceProfiles?: SourceProfile[] | null;
   defaultSort?: string;
 }
@@ -236,7 +237,7 @@ const groupEpisodes = (items: RemoteItem[]) => {
   return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
 };
 
-export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onNotify, accountScope = "", addons = [], realDebridConfigured = false, searchEverywhere, sourceProfiles = null, defaultSort }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onNotify, accountScope = "", addons = [], realDebridConfigured = false, searchEverywhere, onOpenSearch, sourceProfiles = null, defaultSort }: Props) {
   useI18n();
   // The listing effect must not restart when the shape changes. It still warms only the
   // picture that shape draws, so the other role is fetched when a tile actually asks for it.
@@ -498,31 +499,21 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const parentId = stack.length ? stack[stack.length - 1]!.id : undefined;
   /** The identity of the listing on screen: the library and the folder path that leads to it. */
   const navKey = selected ? `${selected.id}:${stack.map((folder) => folder.id).join("/")}` : "";
-  const librarySearch = useSearchEverywhere({
-    active: searchEverywhere && Boolean(selected) && query !== "",
-    covered: Boolean(detail),
-    ...(selected ? { library: { libraryId: selected.id, ...(parentId === undefined ? {} : { parentId }) } } : {}),
-    sources: ["remote"],
-  });
-  const librarySearchRef = useRef(librarySearch);
-  librarySearchRef.current = librarySearch;
-
-  useEffect(() => {
-    if (!searchEverywhere) return;
-    const search = librarySearchRef.current;
-    if (query === "") {
-      search.clear();
-      return;
-    }
-    search.setDraft(query);
-    search.submit();
-  }, [query, searchEverywhere, selected?.id, parentId]);
+  /** The folder on screen. A series keeps the folder it was opened from; the list has no chip. */
+  const remoteSearchChip = (): LibrarySearchChip | null => {
+    if (!selected) return null;
+    const folder = stack.at(-1);
+    return {
+      scope: folder ? { libraryId: selected.id, parentId: folder.id } : { libraryId: selected.id },
+      source: "remote",
+      title: [selected.name, ...stack.map((item) => item.name)].join(" – "),
+    };
+  };
 
   // One bounded page per request; a fresh search, sort, folder or library starts the listing over.
   useEffect(() => {
     const library = selected;
     if (!library) return;
-    if (searchEverywhere && query !== "") return;
     const epoch = ++listEpoch.current;
     cancelItemsMore();
     const restore = pendingRestore.current;
@@ -547,7 +538,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         setListing({ items: [], total: 0, loading: false, error: describeError(error) });
       });
     return () => { controller.abort(); if (listEpoch.current === epoch) listEpoch.current += 1; cancelItemsMore(); };
-  }, [selected, parentId, mode, query, sort, desc, nonce, searchEverywhere]);
+  }, [selected, parentId, mode, query, sort, desc, nonce]);
 
   // Series episodes are one more lazy page of the provider's own listing, not a stored snapshot.
   useEffect(() => {
@@ -856,42 +847,6 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (item.type === "series") { setSeries(item); setDetail(item); setSources(null); setState(null); return; }
     setSeries(null);
     setDetail(item);
-  };
-  const openSearchMember = async (member: SearchMember) => {
-    const library = selectedRef.current;
-    if (!library || member.locator.kind !== "remote" || member.locator.libraryId !== library.id) return;
-    closeMenu();
-    cancelItemsMore();
-    cancelHandoff();
-    savedScroll.current = scrollRef.current?.scrollTop ?? 0;
-    setSources(null); setSourceError(""); setState(null); setStateError("");
-    try {
-      const { item } = await api.remoteItem(library.id, member.locator.itemId);
-      if (selectedRef.current?.id !== library.id) return;
-      if (item.type === "folder" || item.type === "season") {
-        needsDetailMeta.current = false;
-        setDetail(null);
-        setSeries(null);
-        setStack([item]);
-        setSearchInput("");
-        setQuery("");
-        return;
-      }
-      needsDetailMeta.current = false;
-      setDetail(item);
-      if (item.type === "series") {
-        setSeries(item);
-        return;
-      }
-      if (item.type !== "episode" || !item.seriesId) {
-        setSeries(null);
-        return;
-      }
-      const { item: parent } = await api.remoteItem(library.id, item.seriesId);
-      if (selectedRef.current?.id === library.id && parent.type === "series") setSeries(parent);
-    } catch (error) {
-      onError(error);
-    }
   };
   const openEpisode = (episode: RemoteItem) => {
     closeMenu();
@@ -1620,7 +1575,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           </nav>
           <div className="browse-tools">
             <div className={`fold browse-fold${compact ? " closed" : ""}`}><div className="browse-fold-inner">
-              {!detail && <div className="search-input"><Search/><input value={searchInput} aria-label={t("mediaServer.searchPlaceholder")} placeholder={t("mediaServer.searchPlaceholder")} onChange={(event) => setSearchInput(event.target.value)}/></div>}
+              {searchEverywhere && (!detail || detail.type === "series") && <button type="button" className="library-search-button" onClick={() => onOpenSearch?.(remoteSearchChip())}><Search/> {t("searchAll.open")}</button>}
+              {!searchEverywhere && !detail && <div className="search-input"><Search/><input value={searchInput} aria-label={t("mediaServer.searchPlaceholder")} placeholder={t("mediaServer.searchPlaceholder")} onChange={(event) => setSearchInput(event.target.value)}/></div>}
               {!detail && <select aria-label={t("common.sorting")} value={sort} onChange={(event) => changeSort(event.target.value as RemoteItemSort)}>
                 <option value="name">{t("library.sortName")}</option>
                 <option value="added">{t("library.sortAdded")}</option>
@@ -1640,9 +1596,6 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       </div>
       <div className="browse-scroll" ref={scrollRef} onScroll={onBrowseScroll}>
         {!detail && <>
-          {searchEverywhere && query !== ""
-            ? <SearchResults search={librarySearch} shape={libraryTileShape} onOpenMember={(member) => openSearchMember(member)}/>
-            : <>
           {listing.error && <div className="remote-error" role="alert">
             <span>{listing.error}</span>
             <button type="button" onClick={retryListing}>{t("mediaServer.retry")}</button>
@@ -1654,7 +1607,6 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             : !listing.error ? <p className="identify-hint">{query ? t("mediaServer.emptySearch") : t("mediaServer.emptyItems")}</p> : null}
           {listing.cursor && <div className="load-more" ref={loadMoreItemsRef}><button type="button" disabled={listing.loading} onClick={() => void loadMoreItems()}>{t("common.loadMore")}</button></div>}
           {listing.loading && listing.items.length > 0 && <div className="loading" role="status">{t("common.loadingMore")}</div>}
-          </>}
         </>}
         {detail && detail.type === "series" && <div className="remote-detail library-title-detail remote-series-detail"
           style={seriesBackdrop ? { backgroundImage: `${LIBRARY_HERO_GRADIENT},url(${seriesBackdrop})` } : { backgroundImage: LIBRARY_HERO_EMPTY_GRADIENT }}>

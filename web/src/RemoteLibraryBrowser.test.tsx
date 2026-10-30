@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
+import type { LibrarySearchChip } from "./useSearchEverywhere";
 import { clearRemoteMosaicCache } from "./remote-mosaic";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
@@ -205,6 +206,55 @@ const openRootLibrary = async (which = 0) => {
 };
 
 describe("RemoteLibraryBrowser listing", () => {
+  it("replaces the search field with Search and reports the chip for each level", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const opened: Array<LibrarySearchChip | null> = [];
+    browse = (url) => {
+      if (url.searchParams.get("type") === "episode") return json(page([]));
+      if (url.searchParams.get("parentId") === "f1") return json(page([show]));
+      return json(page([folder("f1", "Shows")]));
+    };
+    await render({
+      searchEverywhere: true,
+      onOpenSearch: (chip) => { opened.push(chip); },
+    });
+
+    expect(host.querySelector(".remote-libraries .search-input")).toBeNull();
+    // The list of media-server libraries is not a place to search from, like the local list.
+    const rootSearch = [...host.querySelectorAll<HTMLButtonElement>(".remote-libraries button")]
+      .find((button) => button.textContent?.trim() === "Search");
+    expect(rootSearch).toBeUndefined();
+
+    await click(host.querySelector(".remote-libraries .library-open")!);
+    expect(host.querySelector(".browse-panel .search-input")).toBeNull();
+    const librarySearch = [...host.querySelectorAll<HTMLButtonElement>(".browse-panel button")]
+      .find((button) => button.textContent?.trim() === "Search");
+    await click(librarySearch!);
+    expect(opened.at(-1)).toEqual({ scope: { libraryId: "rlib_a" }, source: "remote", title: "Music videos" });
+
+    await click(tileButtons()[0]!);
+    const folderSearch = [...host.querySelectorAll<HTMLButtonElement>(".browse-panel button")]
+      .find((button) => button.textContent?.trim() === "Search");
+    await click(folderSearch!);
+    expect(opened.at(-1)).toEqual({
+      scope: { libraryId: "rlib_a", parentId: "f1" },
+      source: "remote",
+      title: "Music videos – Shows",
+    });
+
+    await click(tileButtons()[0]!);
+    expect(host.querySelector(".remote-series-detail, .remote-detail")).not.toBeNull();
+    const seriesSearch = [...host.querySelectorAll<HTMLButtonElement>(".browse-panel button")]
+      .find((button) => button.textContent?.trim() === "Search");
+    expect(seriesSearch).toBeTruthy();
+    await click(seriesSearch!);
+    expect(opened.at(-1)).toEqual({
+      scope: { libraryId: "rlib_a", parentId: "f1" },
+      source: "remote",
+      title: "Music videos – Shows",
+    });
+  });
+
   it("opens a targeted remote folder as that library's current listing", async () => {
     const target = folder("search-folder", "Search results");
     item = () => json({ item: target, capabilities });

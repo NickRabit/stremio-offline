@@ -160,15 +160,39 @@ fun RemoteLibraryRoute(
   var committed by remember { mutableStateOf("") }
   var editorOpen by remember { mutableStateOf(false) }
   val directory = level as? RemoteLevel.Directory
-  val searchAvailable = directory != null
+  // The library picker is not a place to search from; every level inside a library is.
+  val searchAvailable = directory != null || (searchEverywhereEnabled && level != null)
   val scopeTitle = state.levels.joinToString("  ›  ") { it.title }
   fun openRemoteSearch() {
-    val current = directory ?: return
+    val current = level ?: return
+    if (current is RemoteLevel.Directory) {
+      onOpenSearch(
+        LibrarySearchScope(
+          library = GlobalSearchLibraryDto(current.libraryId, parentId = current.parentId),
+          sources = listOf("remote"),
+          title = scopeTitle,
+        ),
+      )
+      return
+    }
+    val before = state.levels.takeWhile { it !== current }
+    val folder = before.lastOrNull { it is RemoteLevel.Directory } as? RemoteLevel.Directory
+    if (folder == null) {
+      onOpenSearch(
+        LibrarySearchScope(
+          library = GlobalSearchLibraryDto(current.libraryId),
+          sources = listOf("remote"),
+          title = current.libraryName,
+        ),
+      )
+      return
+    }
+    val throughFolder = before.take(before.indexOfLast { it is RemoteLevel.Directory } + 1)
     onOpenSearch(
       LibrarySearchScope(
-        library = GlobalSearchLibraryDto(current.libraryId, parentId = current.parentId),
+        library = GlobalSearchLibraryDto(folder.libraryId, parentId = folder.parentId),
         sources = listOf("remote"),
-        title = scopeTitle,
+        title = throughFolder.joinToString("  ›  ") { it.title },
       ),
     )
   }

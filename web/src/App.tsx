@@ -50,8 +50,8 @@ import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget } f
 import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
 import { clearHomeCache } from "./home-cache";
-import { SearchEverywhere, SearchResults } from "./SearchEverywhere";
-import { useSearchEverywhere } from "./useSearchEverywhere";
+import { SearchEverywhere } from "./SearchEverywhere";
+import { useSearchEverywhere, type LibrarySearchChip } from "./useSearchEverywhere";
 import { CatalogSearchStartNotFound, catalogSearchHasMore, catalogSearchSession, newCatalogSearchSlot, runCatalogSearch, type CatalogSearchCursor } from "./catalog-search-session";
 import type { HomeCardActions } from "./HomeCard";
 import { useHome } from "./useHome";
@@ -288,6 +288,12 @@ export function App() {
     libraryFirst?: boolean;
   }) | null>(null);
   const [searchReturn, setSearchReturn] = useState(false);
+  /** Search was opened from the Library, so the page offers a way back to that same place. */
+  const [searchFromLibrary, setSearchFromLibrary] = useState(false);
+  /** A remote folder id `initialTarget` can reopen. A library root has none, so the list returns. */
+  const remoteSearchRestore = useRef<{ libraryId: string; itemId: string } | null>(null);
+  /** The Search filters still hold the preset a Library's Hledat set. */
+  const libraryPreset = useRef(false);
   /** The destination dialog the shared detail's save arrow opens, with the row it was clicked for. */
   const [catalogueSave, setCatalogueSave] = useState<{ title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; season?: number; rule?: AddonDownloadSettings; ruleUnavailable?: boolean } | null>(null);
   /** Where a freshly switched source starts; the player hands the position over. */
@@ -1198,6 +1204,8 @@ export function App() {
   const openView = (target: View) => {
     navigated.current = true;
     setSearchReturn(false);
+    setSearchFromLibrary(false);
+    remoteSearchRestore.current = null;
     // A shared detail is drawn over the section that opened it, and the menu is a way out of it:
     // the entry naming that very section only puts the section back, filters and position intact.
     if (catalogueDetail) {
@@ -1304,35 +1312,23 @@ export function App() {
     active: view === "search",
     covered: (view === "library" && searchReturn) || (view === "search" && catalogueDetail !== null),
   });
-  const librarySearchActive = Boolean(buildInfo?.searchEverywhere && view === "library" && !remoteOpen && browseQuery.trim());
-  const librarySearchScope = (() => {
-    if (!librarySearchActive || !currentLibraryId) return undefined;
+  /** The folder the local Library is inside, or nothing at the library list and in Favorites. */
+  const localLibraryChip = (): LibrarySearchChip | null => {
+    if (!currentLibraryId || browsePath.startsWith(":")) return null;
+    if (browsePath === "" && libraries.length > 1) return null;
+    const library = libraries.find((item) => item.id === currentLibraryId);
+    if (!library) return null;
     const prefix = `${currentLibraryId}/`;
-    const path = browsePath === currentLibraryId ? "" : browsePath.startsWith(prefix) ? browsePath.slice(prefix.length) : browsePath;
-    return { libraryId: currentLibraryId, path };
-  })();
-  const librarySearch = useSearchEverywhere({
-    active: librarySearchActive,
-    covered: Boolean(localDetail || catalogueDetail),
-    ...(librarySearchScope ? { library: librarySearchScope } : {}),
-    sources: ["local"],
-  });
-  const librarySearchRef = useRef(librarySearch);
-  librarySearchRef.current = librarySearch;
-  const librarySearchScopeKey = JSON.stringify(librarySearchScope ?? null);
-  useEffect(() => {
-    if (!buildInfo?.searchEverywhere) return;
-    if (!librarySearchActive) {
-      librarySearchRef.current.clear();
-      return;
-    }
-    const handle = window.setTimeout(() => {
-      const search = librarySearchRef.current;
-      search.setDraft(browseQuery.trim());
-      search.submit();
-    }, 300);
-    return () => window.clearTimeout(handle);
-  }, [browseQuery, librarySearchActive, librarySearchScopeKey, buildInfo?.searchEverywhere]);
+    const path = browsePath === "" || browsePath === currentLibraryId
+      ? ""
+      : browsePath.startsWith(prefix) ? browsePath.slice(prefix.length) : browsePath;
+    const segments = path.split("/").filter(Boolean);
+    return {
+      scope: { libraryId: currentLibraryId, path },
+      source: "local",
+      title: [library.name, ...segments].join(" – "),
+    };
+  };
   /** The query is selected as well, so whatever is typed next starts a new search. */
   const focusSearchInput = () => {
     window.requestAnimationFrame(() => {
@@ -1347,6 +1343,13 @@ export function App() {
    *  the way back to a position in the results is Back from the title that was opened. */
   const openSearch = () => {
     scrollByView.current.search = 0;
+    setSearchFromLibrary(false);
+    remoteSearchRestore.current = null;
+    // A Library's preset was for that one visit: the top bar starts on every source again.
+    if (libraryPreset.current) {
+      libraryPreset.current = false;
+      searchEverywhere.applyPreset({ sources: [] });
+    }
     if (view === "search" && !catalogueDetail) {
       window.scrollTo({ top: 0, behavior: "smooth" });
       focusSearchInput();
@@ -1355,6 +1358,29 @@ export function App() {
     if (view === "search") detailReturn.current = null;
     openView("search");
     focusSearchInput();
+  };
+  /** Hledat in the Library: Libraries is selected, and a folder keeps its chip. The flag is set
+   *  after openView, which clears it the way it clears the card's return. */
+  const openSearchFromLibrary = (chip: LibrarySearchChip | null) => {
+    const remote = chip?.source === "remote" && "parentId" in chip.scope && chip.scope.parentId
+      ? { libraryId: chip.scope.libraryId, itemId: chip.scope.parentId }
+      : null;
+    searchEverywhere.applyPreset({ sources: ["local", "remote"], library: chip });
+    libraryPreset.current = true;
+    scrollByView.current.search = 0;
+    openView("search");
+    remoteSearchRestore.current = remote;
+    setSearchFromLibrary(true);
+    focusSearchInput();
+  };
+  const returnToLibraryFromSearch = () => {
+    const restore = remoteSearchRestore.current;
+    remoteSearchRestore.current = null;
+    setSearchFromLibrary(false);
+    setView("library");
+    if (!restore) return;
+    remoteTargetNonce.current += 1;
+    setRemoteTarget({ libraryId: restore.libraryId, itemId: restore.itemId, nonce: remoteTargetNonce.current });
   };
   /** The logo leads to the account's own start page: Home or the Library when chosen (a restricted
    *  build has no Home), otherwise a clean catalogue as it always has. */
@@ -1616,9 +1642,9 @@ export function App() {
   // The first listing waits for that apply: an account that sorts by size must not see the
   // name order first and then watch it jump.
   useEffect(() => {
-    if (!ready || view !== "library" || !browseApplied || librarySearchActive) return;
+    if (!ready || view !== "library" || !browseApplied) return;
     void loadBrowse(browsePath);
-  }, [ready, view, browseApplied, browsePath, browseQuery, browseSort, browseDesc, onlyUnconfirmed, scanEpoch, librarySearchActive]);
+  }, [ready, view, browseApplied, browsePath, browseQuery, browseSort, browseDesc, onlyUnconfirmed, scanEpoch]);
   useEffect(() => { setSelectionMode(false); setSelectedPaths(new Set()); }, [browsePath]);
   // Polling only means something while a scan is on; otherwise one look on entry is enough.
   const scanning = libraryScan?.status === "running" || libraryScan?.status === "paused";
@@ -1683,7 +1709,7 @@ export function App() {
   }, [suggestionsOpen]);
   // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
-    if (view !== "library" || !browse || librarySearchActive) return;
+    if (view !== "library" || !browse) return;
     const element = browseScrollRef.current;
     if (!element) return;
     const nactenych = browse.items.length;
@@ -1695,7 +1721,7 @@ export function App() {
     element.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
     return () => element.removeEventListener("scroll", onScroll);
-  }, [view, browse, browseBusy, browsePath, librarySearchActive]);
+  }, [view, browse, browseBusy, browsePath]);
 
   // The wanted entry need not be on the first page, so pages load until it turns up.
   // Scroll and the hide timer run once per jump; a later artwork refresh must not repeat them.
@@ -2966,52 +2992,6 @@ export function App() {
     setSearchReturn(false);
     openCatalogueDetail(canonical, undefined, libraryFirst ? { libraryFirst } : undefined);
   };
-  const openLibrarySearchMember = async (
-    member: import("./types").SearchMember,
-    anchorKey: string,
-    libraryFirst = false,
-  ) => {
-    librarySearchRef.current.setFocusAnchor(anchorKey);
-    librarySearchRef.current.setScrollTop(window.scrollY);
-    if (member.locator.kind === "catalog") {
-      openCatalogueDetail({
-        type: member.locator.type,
-        id: member.locator.id,
-        name: member.title,
-        ...(member.poster ? { poster: member.poster } : {}),
-      }, undefined, libraryFirst ? { libraryFirst } : undefined);
-      return;
-    }
-    if (member.locator.kind === "remote") {
-      openRemoteCard({ libraryId: member.locator.libraryId, itemId: member.locator.itemId });
-      return;
-    }
-    const path = member.locator.key;
-    if (member.locator.itemKind === "folder") {
-      openLocalDetail({ kind: "folder", path, name: member.title, fileCount: 0, size: 0 });
-    } else {
-      openLocalDetail({
-        kind: "file",
-        path,
-        label: member.title,
-        season: member.season ?? null,
-        episode: member.episode ?? null,
-        size: 0,
-        modified: "",
-        ...(member.year === undefined ? {} : { year: String(member.year) }),
-        ...(member.poster === undefined ? {} : { poster: member.poster }),
-      });
-    }
-  };
-  const openLibrarySearchCanonical = async (
-    canonical: NonNullable<import("./types").SearchMemberPage["canonical"]>,
-    anchorKey: string,
-    libraryFirst = false,
-  ) => {
-    librarySearchRef.current.setFocusAnchor(anchorKey);
-    librarySearchRef.current.setScrollTop(window.scrollY);
-    openCatalogueDetail(canonical, undefined, libraryFirst ? { libraryFirst } : undefined);
-  };
   const focusSearchAnchor = () => {
     const anchor = searchEverywhere.focusAnchor;
     if (!anchor) return;
@@ -3600,7 +3580,8 @@ export function App() {
       </section>}
       {view === "search" && buildInfo?.searchEverywhere && <SearchEverywhere search={searchEverywhere} shape={settings.searchTileShape} onToggleShape={() => void toggleShape("searchTileShape")}
         searchable={searchable} recent={searchState?.saveHistory ? searchState.recent.map((entry) => entry.query) : []}
-        onRecord={recordSearch} onForget={forgetSearch} onRefreshRecent={() => void loadSearchState()} onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}/>}
+        onRecord={recordSearch} onForget={forgetSearch} onRefreshRecent={() => void loadSearchState()} onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}
+        {...(searchFromLibrary ? { onBackToLibrary: returnToLibraryFromSearch } : {})}/>}
       {view === "library" && <section ref={libraryPageRef} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
         <Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
@@ -3617,7 +3598,7 @@ export function App() {
           onCatalogueDownload={(stream, detail) => openCatalogueDownload(detail, stream, false)}
           onNotify={notify}
           accountScope={session!.username} addons={addons} realDebridConfigured={settings.realDebridConfigured}
-          searchEverywhere={buildInfo?.searchEverywhere === true}/>
+          searchEverywhere={buildInfo?.searchEverywhere === true} onOpenSearch={openSearchFromLibrary}/>
         {!remoteOpen && <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
@@ -3640,7 +3621,8 @@ export function App() {
           </nav>
           <div className="browse-tools">
             <div className={`fold browse-fold${libraryCompact ? " closed" : ""}`}><div className="browse-fold-inner">
-            {(!libraryList || buildInfo?.searchEverywhere) && !localDetail && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
+            {buildInfo?.searchEverywhere && !libraryList && !localDetail && <button type="button" className="library-search-button" onClick={() => openSearchFromLibrary(localLibraryChip())}><Search/> {t("searchAll.open")}</button>}
+            {!buildInfo?.searchEverywhere && !libraryList && !localDetail && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
             {!libraryList && !localDetail && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
               setBrowseSort(next);
@@ -3765,8 +3747,6 @@ export function App() {
               clicked.kind === "file" && clicked.season != null, { kind: "library", key: clicked.path }, fromBeginning,
               catalogue ?? undefined);
           }}/> : <>
-        {librarySearchActive ? <SearchResults search={librarySearch} shape={settings.libraryTileShape}
-          onOpenMember={openLibrarySearchMember} onOpenCanonical={openLibrarySearchCanonical}/> : <>
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
           <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
@@ -3851,7 +3831,6 @@ export function App() {
               </div>;
             })()}
           </>}
-        </>}
         </>}
         </div>
         </div>}

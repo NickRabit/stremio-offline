@@ -39,7 +39,6 @@
   <string name="tv_placeholder_action">Back to Home</string>
   <string name="tv_library_title">Your library</string>
   <string name="tv_library_type_panel">Type</string>
-  <string name="tv_library_search_scope">In library: %1$s</string>
   <string name="tv_library_empty">Nothing here yet. Files you download appear in this library.</string>
   <string name="tv_library_files">%1$s files</string>
   <string name="tv_detail_eyebrow_library">In your library</string>
@@ -336,10 +335,12 @@
   <string name="tv_global_search_title">Search everywhere</string>
   <string name="tv_global_search_hint">Search catalogs and libraries. Press OK to search.</string>
   <string name="tv_global_search_library_hint">Search this library. Press OK to search.</string>
+  <string name="tv_search_library_chip">%1$s  ✕</string>
+  <string name="tv_search_library_clear">Search all libraries</string>
   <string name="tv_global_search_source_all">All</string>
   <string name="tv_global_search_source_catalog">Catalog</string>
-  <string name="tv_global_search_source_local">Local</string>
-  <string name="tv_global_search_source_remote">Remote</string>
+  <string name="tv_global_search_source_libraries">Libraries</string>
+  <string name="tv_global_search_reset">Clear the search</string>
   <string name="tv_global_search_kind_all">All</string>
   <string name="tv_global_search_kind_movies">Movies</string>
   <string name="tv_global_search_kind_series">Series</string>

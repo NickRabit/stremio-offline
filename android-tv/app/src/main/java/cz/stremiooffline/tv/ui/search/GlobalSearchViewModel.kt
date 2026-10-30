@@ -14,7 +14,6 @@ import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.GlobalSearchAliasDto
 import cz.stremiooffline.tv.data.GlobalSearchApi
 import cz.stremiooffline.tv.data.GlobalSearchClusterDto
-import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchStartDto
@@ -37,6 +36,9 @@ enum class SourceClass(val wire: String) {
   Remote("remote"),
 }
 
+/** The Libraries filter: every local and remote library at once. */
+val LibrarySources: Set<SourceClass> = setOf(SourceClass.Local, SourceClass.Remote)
+
 enum class KindFilter(val wire: String) {
   All("all"),
   Movies("movie"),
@@ -47,6 +49,7 @@ data class GlobalSearchState(
   val committed: String = "",
   val sources: Set<SourceClass> = emptySet(),
   val scope: SearchScope = SearchScope(),
+  val library: LibraryFilter? = null,
   val searchable: List<SearchableCatalogDto> = emptyList(),
   val kind: KindFilter = KindFilter.All,
   val snapshot: GlobalSearchSnapshotDto? = null,
@@ -128,19 +131,10 @@ internal fun retainedFocusAnchor(
 class GlobalSearchViewModel(
   private val api: GlobalSearchApi,
   private val slotId: String = UUID.randomUUID().toString().replace("-", ""),
-  private val library: GlobalSearchLibraryDto? = null,
-  sources: Set<SourceClass>? = null,
 ) : ViewModel() {
 
-  private val fixedSources = sources
-  private val keepsHistory = library == null && sources == null
-
-  var state by mutableStateOf(GlobalSearchState(sources = fixedSources.orEmpty()))
+  var state by mutableStateOf(GlobalSearchState())
     private set
-
-  init {
-    if (state.sources == setOf(SourceClass.Catalog)) loadSearchable()
-  }
 
   private var generation = 0
   private var sessionId: String? = null
@@ -157,16 +151,23 @@ class GlobalSearchViewModel(
     val trimmed = query.trim()
     if (trimmed.isEmpty()) return
     restartDepth = 0
-    startSearch(trimmed, freshLayout = true, record = keepsHistory)
+    startSearch(trimmed, freshLayout = true, record = true)
+  }
+
+  fun applyPreset(preset: SearchPreset) {
+    state = state.copy(
+      sources = preset.sources,
+      scope = preset.scope,
+      library = preset.library,
+    )
+    if (!preset.scope.addonKey.isNullOrEmpty()) loadSearchable()
   }
 
   fun refreshRecent() {
-    if (!keepsHistory) return
     viewModelScope.launch { loadRecent() }
   }
 
   fun forget(query: String) {
-    if (!keepsHistory) return
     val trimmed = query.trim()
     if (trimmed.isEmpty()) return
     state = state.copy(recent = state.recent.filterNot { it.query == trimmed })
@@ -184,12 +185,12 @@ class GlobalSearchViewModel(
   }
 
   fun setSources(sources: Set<SourceClass>) {
-    if (fixedSources != null) return
     if (sources == state.sources) return
     val includesCatalog = sources.isEmpty() || SourceClass.Catalog in sources
     state = state.copy(
       sources = sources,
       scope = state.scope.takeIf { includesCatalog } ?: SearchScope(),
+      library = state.library?.takeIf { sources == LibrarySources },
     )
     if (includesCatalog) loadSearchable()
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
@@ -211,16 +212,20 @@ class GlobalSearchViewModel(
   }
 
   fun setScope(scope: SearchScope) {
-    if (fixedSources != null) return
     if (state.sources.isNotEmpty() && SourceClass.Catalog !in state.sources) return
-    if (state.scope == scope) return
-    state = state.copy(scope = scope)
+    if (state.scope == scope && state.library == null) return
+    state = state.copy(scope = scope, library = null)
     loadSearchable()
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
   }
 
+  fun clearLibrary() {
+    if (state.library == null) return
+    state = state.copy(library = null)
+    if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
+  }
+
   fun setKind(kind: KindFilter) {
-    if (fixedSources != null) return
     if (kind == state.kind) return
     state = state.copy(kind = kind)
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
@@ -296,6 +301,17 @@ class GlobalSearchViewModel(
     if (id != null) viewModelScope.launch { api.deleteGlobalSearch(id) }
   }
 
+  /** Back to how the page opens from the rail: no query, every source, every kind, no scope or
+   *  library. The recent searches and the loaded catalogue list stay, so nothing reloads. */
+  fun reset() {
+    val kept = state
+    val wasActive = active
+    leave()
+    state = GlobalSearchState(recent = kept.recent, saveHistory = kept.saveHistory, searchable = kept.searchable)
+    searchableLoaded = kept.searchable.isNotEmpty()
+    active = wasActive
+  }
+
   override fun onCleared() {
     val id = sessionId
     generation += 1
@@ -315,7 +331,8 @@ class GlobalSearchViewModel(
     startJob?.cancel()
     pollJob?.cancel()
     actionJob?.cancel()
-    val requestSources = fixedSources ?: state.sources.ifEmpty { SourceClass.entries.toSet() }
+    val requestSources = state.library?.let { setOf(it.source) } ?: state.sources.ifEmpty { SourceClass.entries.toSet() }
+    val requestLibrary = state.library?.library
     state = state.copy(
       committed = query,
       previousQuery = state.snapshot != null,
@@ -332,10 +349,9 @@ class GlobalSearchViewModel(
             slotId = slotId,
             generation = currentGeneration,
             scope = state.scope.takeIf {
-              fixedSources == null &&
               (requestSources.isEmpty() || SourceClass.Catalog in requestSources) && !it.addonKey.isNullOrEmpty()
             },
-            library = library,
+            library = requestLibrary,
           ),
         )
         if (currentGeneration != generation) return@launch
@@ -450,12 +466,8 @@ class GlobalSearchViewModel(
   }
 
   companion object {
-    fun factory(
-      api: GlobalSearchApi,
-      library: GlobalSearchLibraryDto? = null,
-      sources: Set<SourceClass>? = null,
-    ) = viewModelFactory {
-      initializer { GlobalSearchViewModel(api, library = library, sources = sources) }
+    fun factory(api: GlobalSearchApi) = viewModelFactory {
+      initializer { GlobalSearchViewModel(api) }
     }
   }
 }

@@ -39,7 +39,6 @@
   <string name="tv_placeholder_action">Zpět domů</string>
   <string name="tv_library_title">Vaše knihovna</string>
   <string name="tv_library_type_panel">Typ</string>
-  <string name="tv_library_search_scope">V knihovně: %1$s</string>
   <string name="tv_library_empty">Zatím tu nic není. Stažené soubory se objeví v této knihovně.</string>
   <string name="tv_library_files">Souborů: %1$s</string>
   <string name="tv_detail_eyebrow_library">Ve vaší knihovně</string>
@@ -346,10 +345,12 @@
   <string name="tv_global_search_title">Hledat všude</string>
   <string name="tv_global_search_hint">Prohledejte katalogy a knihovny. Stisknutím OK spustíte hledání.</string>
   <string name="tv_global_search_library_hint">Prohledejte tuto knihovnu. Stisknutím OK spustíte hledání.</string>
+  <string name="tv_search_library_chip">%1$s  ✕</string>
+  <string name="tv_search_library_clear">Hledat ve všech knihovnách</string>
   <string name="tv_global_search_source_all">Vše</string>
   <string name="tv_global_search_source_catalog">Katalog</string>
-  <string name="tv_global_search_source_local">Místní</string>
-  <string name="tv_global_search_source_remote">Vzdálené</string>
+  <string name="tv_global_search_source_libraries">Knihovny</string>
+  <string name="tv_global_search_reset">Vymazat hledání</string>
   <string name="tv_global_search_kind_all">Vše</string>
   <string name="tv_global_search_kind_movies">Filmy</string>
   <string name="tv_global_search_kind_series">Seriály</string>
