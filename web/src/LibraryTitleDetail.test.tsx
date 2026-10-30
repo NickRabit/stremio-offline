@@ -7,7 +7,7 @@ import type { LibrarySourceGroup } from "./library-sources";
 import type { GalleryImage } from "./gallery-images";
 import { sourceIdentity } from "./library-detail-sources";
 import { setLocale } from "./i18n";
-import type { MediaServerProvider, Stream } from "./types";
+import type { MediaServerProvider, SourceProfile, Stream } from "./types";
 
 const poster = (url: string): GalleryImage => ({ url, label: "Poster", shape: "poster", kind: "poster" });
 const still = (url: string): GalleryImage => ({ url, label: "Still 1", shape: "wide", kind: "still" });
@@ -872,6 +872,74 @@ describe("LibraryTitleDetail stored source", () => {
     click(pickerRows().find((node) => node.textContent?.includes("Remux 4K"))!);
     click(playButton());
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
+  });
+
+  const qualityProfiles: SourceProfile[] = [
+    { id: "balanced", nameKey: "rules.preset.balanced", template: "rules", revision: 1, operations: ["play"], policy: {} as SourceProfile["policy"] },
+    { id: "best", nameKey: "rules.preset.best", template: "rules", revision: 1, operations: ["play"], policy: {} as SourceProfile["policy"] },
+  ];
+  const smallAndBig = () => {
+    const small = {
+      ...remote("small", "SMALL", 2_600_000_000),
+      stableKey: "small-key",
+      rules: {
+        balanced: { profileId: "balanced", status: "meets" as const, reasons: [], rank: [0] },
+        best: { profileId: "best", status: "meets" as const, reasons: [], rank: [1] },
+      },
+    };
+    const big = {
+      ...remote("big", "BIG", 9_800_000_000),
+      stableKey: "big-key",
+      rules: {
+        balanced: { profileId: "balanced", status: "meets" as const, reasons: [], rank: [1] },
+        best: { profileId: "best", status: "meets" as const, reasons: [], rank: [0] },
+      },
+    };
+    return { small, big };
+  };
+  const chooserSort = () => [...document.querySelectorAll<HTMLSelectElement>(".library-source-card .stream-filters select")].at(-1)!;
+  const closeChooser = () => {
+    const close = document.querySelector<HTMLButtonElement>(".library-source-card .dialog-foot button");
+    if (close) click(close);
+  };
+
+  it("re-picks the rule's winner when the viewer changes sort in the chooser", () => {
+    const { small, big } = smallAndBig();
+    const { onPlay } = render({
+      sources: [small, big],
+      resumeStableKey: small.stableKey,
+      sourceProfiles: qualityProfiles,
+      defaultSort: "rule:balanced",
+    });
+    expect(host.querySelector(".library-detail-source")!.textContent).toContain("SMALL");
+    click(host.querySelector(".split-button-toggle"));
+    expect(chosenRow()!.textContent).toContain("SMALL");
+    act(() => {
+      const sort = chooserSort();
+      sort.value = "rule:best";
+      sort.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    // The dialog stays open on the new pick, so the viewer sees what the order chose.
+    expect(document.querySelector(".library-source-card")).not.toBeNull();
+    expect(chosenRow()!.textContent).toContain("BIG");
+    closeChooser();
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
+  });
+
+  it("keeps the stored source when the chooser opens and closes without a sort change", () => {
+    const { small, big } = smallAndBig();
+    const { onPlay } = render({
+      sources: [small, big],
+      resumeStableKey: small.stableKey,
+      sourceProfiles: qualityProfiles,
+      defaultSort: "rule:balanced",
+    });
+    click(host.querySelector(".split-button-toggle"));
+    expect(chosenRow()!.textContent).toContain("SMALL");
+    closeChooser();
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "small" }));
   });
 });
 

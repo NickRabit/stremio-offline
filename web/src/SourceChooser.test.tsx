@@ -198,4 +198,63 @@ describe("SourceChooser", () => {
     render({ groups: [addonGroup([], { status: "loading" })] });
     expect(host.querySelector('[role="status"]')!.textContent).toBe("Asking the other sources…");
   });
+
+  it("picks the rule's winner, without onSelect, when the sort changes to a rule", () => {
+    const balancedFirst = addon("a1", "Balanced first", 1_000);
+    balancedFirst.rules = {
+      balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0] },
+      best: { profileId: "best", status: "meets", reasons: [], rank: [1] },
+    };
+    const bestFirst = addon("a2", "Best first", 2_000);
+    bestFirst.rules = {
+      balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [1] },
+      best: { profileId: "best", status: "meets", reasons: [], rank: [0] },
+    };
+    const props = render({
+      lead: [], groups: [addonGroup([balancedFirst, bestFirst])], sourceProfiles: profiles,
+      defaultSort: "rule:balanced", selected: balancedFirst, onSortPick: vi.fn(),
+    });
+    choose(selects()[1]!, "rule:best");
+    expect(props.onSortPick).toHaveBeenCalledTimes(1);
+    expect(props.onSortPick).toHaveBeenCalledWith(bestFirst);
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+
+  it("picks the largest playable row when the sort changes to size-desc", () => {
+    const small = file("local-1", "Small", 100);
+    const large = file("local-2", "Large", 8_000_000_000);
+    const props = render({ lead: [small, large], selected: small, onSortPick: vi.fn() });
+    choose(selects()[1]!, "size-desc");
+    expect(props.onSortPick).toHaveBeenCalledWith(large);
+  });
+
+  it("picks nothing on a sort change in the player, which takes no sort pick", () => {
+    const balancedFirst = addon("a1", "Balanced first", 1_000);
+    balancedFirst.rules = {
+      balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0] },
+      best: { profileId: "best", status: "meets", reasons: [], rank: [1] },
+    };
+    const bestFirst = addon("a2", "Best first", 2_000);
+    bestFirst.rules = {
+      balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [1] },
+      best: { profileId: "best", status: "meets", reasons: [], rank: [0] },
+    };
+    const props = render({
+      lead: [], groups: [addonGroup([balancedFirst, bestFirst])], sourceProfiles: profiles,
+      defaultSort: "rule:balanced", selected: balancedFirst,
+    });
+    choose(selects()[1]!, "rule:best");
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+
+  it("picks nothing when the source filter changes", () => {
+    const mine = file("local-1", "One");
+    const extra = addon("a1", "4K");
+    const props = render({
+      lead: [mine], groups: [addonGroup([extra])], selected: mine, onSortPick: vi.fn(),
+    });
+    choose(selects()[0]!, "addon:torrentio");
+    expect(props.onSortPick).not.toHaveBeenCalled();
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
 });

@@ -3,7 +3,7 @@ import { t, useI18n } from "./i18n";
 import { librarySourceChoices, librarySourceEntries, librarySourceRows, type LibrarySourceGroup, type LibrarySourcePanel } from "./library-sources";
 import { sourceRowKey } from "./library-detail-sources";
 import { providerLabel, SourceFilters, SourceRows } from "./source-rows";
-import { addonNotices, isLocalStream, noticeText, resolveStreamSort, sortRuleId, type StreamOrder, type StreamSort } from "./streams";
+import { addonNotices, isLocalStream, noticeText, pickDefaultStream, resolveStreamSort, sortRuleId, type StreamOrder, type StreamSort } from "./streams";
 import type { SourceProfile, Stream } from "./types";
 
 export interface SourceChooserProps {
@@ -24,6 +24,10 @@ export interface SourceChooserProps {
   priority?: Map<string, number>;
   sourceProfiles?: SourceProfile[] | null;
   defaultSort?: string;
+  /** Told the row a newly chosen sorting would play, when the viewer changes it. The detail's
+   *  dialog keeps that row as its pick and stays open; the player's panel passes nothing, as a
+   *  pick there switches what is playing. */
+  onSortPick?: (stream: Stream) => void;
 }
 
 /** The row of `rows` the place holds: the very object, or the row that names the same source --
@@ -45,7 +49,7 @@ const sameSource = (stream: Stream) => stream.remoteItem || stream.localPath ? s
 /** The one chooser body every place draws: the classes a title offers, the source, language and
  *  order menus over them, and the notices that go with them. The detail's dialog and the
  *  player's panel both render it, so one title reads the same wherever it is offered. */
-export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, onSelect, preferredLanguage, badgeOf, listClassName, priority, sourceProfiles = null, defaultSort = "recommended" }: SourceChooserProps) {
+export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, onSelect, preferredLanguage, badgeOf, listClassName, priority, sourceProfiles = null, defaultSort = "recommended", onSortPick }: SourceChooserProps) {
   useI18n();
   const [filter, setFilter] = useState("");
   const [language, setLanguage] = useState("");
@@ -102,7 +106,14 @@ export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, 
       value: filter, onChange: setFilter, all: { label: t("sources.allSources"), count: choices.total }, options: choices.options,
     }} profiles={sourceProfiles} {...(choices.languages.length ? { language: {
       value: language, onChange: setLanguage, all: { label: t("sources.anyLanguage"), count: choices.languageTotal }, options: choices.languages,
-    } } : {})} sort={{ value: resolvedSort, onChange: (value: StreamSort) => setSort(value) }}/>
+    } } : {})} sort={{ value: resolvedSort, onChange: (value: StreamSort) => {
+      setSort(value);
+      if (!onSortPick) return;
+      const next = resolveStreamSort(value, sourceProfiles);
+      const listed = librarySourceRows(entries, filter, language, next, preferredLanguage, undefined, priority);
+      const winner = pickDefaultStream(listed, sortRuleId(next));
+      if (winner) onSortPick(winner);
+    } }}/>
     {notices.map((notice) => <p className="notice" key={notice.sourceId}><b>{notice.addonName}</b> {noticeText(notice)}</p>)}
     <SourceRows className={listClassName ?? "stream-list"} rows={rows} selected={chosen} onSelect={onSelect}
       ruleId={sortRuleId(resolvedSort) ?? defaultRuleId}
