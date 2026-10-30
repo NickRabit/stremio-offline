@@ -6,6 +6,7 @@ import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.TitleRefDto
 import cz.stremiooffline.tv.data.episodeCodeText
 import cz.stremiooffline.tv.data.yearText
@@ -48,22 +49,36 @@ fun cardLabel(card: HomeCard): Int? = when (card) {
   else -> null
 }
 
-/** The remote card as the native detail needs it: opaque identity only, never a path or a
- *  catalogue id. */
-fun remoteDetailOf(card: HomeCard.Remote): RemoteDetailData = RemoteDetailData(
-  libraryId = card.libraryId,
-  libraryName = card.libraryName,
-  provider = card.provider,
-  item = RemoteItemDto(
-    id = card.itemId,
-    name = card.title,
-    type = card.itemType,
-    season = card.season,
-    episode = card.episode,
-    poster = card.poster,
-    wide = card.wide,
-  ),
-)
+/** The remote card as the native detail needs it. Exact ids already on the card travel as hints;
+ *  the detail reads any missing parent metadata from the provider. */
+fun remoteDetailOf(card: HomeCard.Remote): RemoteDetailData {
+  val identity = card.identity
+  val providerIds = identity?.takeIf { it.type == card.itemType }?.let(::remoteIds)
+    ?: RemoteProviderIdsDto()
+  val parentIds = identity?.takeIf { card.itemType == "episode" && it.type == "series" }?.let(::remoteIds)
+  return RemoteDetailData(
+    libraryId = card.libraryId,
+    libraryName = card.libraryName,
+    provider = card.provider,
+    item = RemoteItemDto(
+      id = card.itemId,
+      name = card.title,
+      type = card.itemType,
+      season = card.season,
+      episode = card.episode,
+      poster = card.poster,
+      wide = card.wide,
+      providerIds = providerIds,
+    ),
+    seriesIds = parentIds,
+  )
+}
+
+private fun remoteIds(identity: TitleRefDto): RemoteProviderIdsDto = when {
+  identity.id.startsWith("tt") -> RemoteProviderIdsDto(imdb = identity.id)
+  identity.id.startsWith("tmdb:") -> RemoteProviderIdsDto(tmdb = identity.id.removePrefix("tmdb:"))
+  else -> RemoteProviderIdsDto()
+}
 
 /** The web's `captionOf`, minus the age and release-date text the TV deliberately leaves out.
  *  No caption names the library or the media server a row came from. */

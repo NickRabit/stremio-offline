@@ -186,11 +186,12 @@ class GlobalSearchViewModel(
   fun setSources(sources: Set<SourceClass>) {
     if (fixedSources != null) return
     if (sources == state.sources) return
+    val includesCatalog = sources.isEmpty() || SourceClass.Catalog in sources
     state = state.copy(
       sources = sources,
-      scope = state.scope.takeIf { sources == setOf(SourceClass.Catalog) } ?: SearchScope(),
+      scope = state.scope.takeIf { includesCatalog } ?: SearchScope(),
     )
-    if (sources == setOf(SourceClass.Catalog)) loadSearchable()
+    if (includesCatalog) loadSearchable()
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
   }
 
@@ -211,9 +212,9 @@ class GlobalSearchViewModel(
 
   fun setScope(scope: SearchScope) {
     if (fixedSources != null) return
-    val scopedSources = setOf(SourceClass.Catalog)
-    if (state.scope == scope && state.sources == scopedSources) return
-    state = state.copy(sources = scopedSources, scope = scope)
+    if (state.sources.isNotEmpty() && SourceClass.Catalog !in state.sources) return
+    if (state.scope == scope) return
+    state = state.copy(scope = scope)
     loadSearchable()
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
   }
@@ -332,7 +333,7 @@ class GlobalSearchViewModel(
             generation = currentGeneration,
             scope = state.scope.takeIf {
               fixedSources == null &&
-              requestSources == setOf(SourceClass.Catalog) && !it.addonKey.isNullOrEmpty()
+              (requestSources.isEmpty() || SourceClass.Catalog in requestSources) && !it.addonKey.isNullOrEmpty()
             },
             library = library,
           ),

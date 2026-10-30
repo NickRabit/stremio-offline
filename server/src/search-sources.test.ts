@@ -775,6 +775,31 @@ test("discovery orders local, remote then catalog and numbers the sources", asyn
   assert.deepEqual(sources.map((source) => source.id), ["s0", "s1", "s2"]);
 });
 
+test("a catalog scope under All retains local and remote search sources", async () => {
+  const sources = await discoverSources(
+    deps({
+      libraries: () => [localLibrary("lib_00000001", "Films")],
+      addons: () => [addon("alpha"), addon("beta")],
+      remote: {
+        visibleLibraries: async () => [remoteLibrary("rlib_00000001", "conn_00000001")],
+        searchLibrary: async () => ({ items: [] }),
+        matchingItems: async () => [],
+        canSearchLibrary: () => true,
+        libraryGeneration: () => 1,
+      },
+    }),
+    authority(),
+    request({
+      sources: ["catalog", "remote", "local"],
+      scope: { addonKey: "alpha" },
+    }),
+    "ss_test",
+  );
+
+  assert.deepEqual(sources.map((source) => source.sourceClass), ["local", "remote", "catalog"]);
+  assert.equal(sources.filter((source) => source.sourceClass === "catalog").length, 1);
+});
+
 test("discovery only contacts the source classes the request names", async () => {
   let remoteCalls = 0;
   const sources = await discoverSources(

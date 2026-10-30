@@ -11,6 +11,7 @@ import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
 import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.SearchStateDto
+import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.ui.FakeTvApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -257,6 +258,54 @@ class GlobalSearchViewModelTest {
 
     assertEquals(listOf("matrix"), api.recordedSearches)
     assertEquals(2, api.globalStartCalls.size)
+  }
+
+  @Test
+  fun `All keeps its source classes when a catalog scope is applied`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+
+    viewModel.setScope(SearchScope(addonKey = "alpha"))
+    viewModel.submit("matrix")
+    runCurrent()
+
+    assertTrue(viewModel.state.sources.isEmpty())
+    val request = api.globalStartCalls.single()
+    assertEquals(listOf("catalog", "local", "remote"), request.sources)
+    assertEquals(SearchScope(addonKey = "alpha"), request.scope)
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `changing sources keeps a catalog scope only while Catalog remains included`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    val scope = SearchScope(addonKey = "alpha")
+
+    viewModel.setScope(scope)
+    viewModel.setSources(setOf(SourceClass.Catalog, SourceClass.Local, SourceClass.Remote))
+    assertEquals(scope, viewModel.state.scope)
+    assertEquals(setOf(SourceClass.Catalog, SourceClass.Local, SourceClass.Remote), viewModel.state.sources)
+
+    viewModel.setSources(setOf(SourceClass.Local))
+    assertEquals(SearchScope(), viewModel.state.scope)
+  }
+
+  @Test
+  fun `Catalog to All preserves the catalog scope and all source classes`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    val scope = SearchScope(addonKey = "alpha")
+
+    viewModel.setSources(setOf(SourceClass.Catalog))
+    viewModel.setScope(scope)
+    viewModel.setSources(emptySet())
+    viewModel.submit("matrix")
+    runCurrent()
+
+    assertTrue(viewModel.state.sources.isEmpty())
+    assertEquals(scope, viewModel.state.scope)
+    assertEquals(listOf("catalog", "local", "remote"), api.globalStartCalls.single().sources)
   }
 
   @Test

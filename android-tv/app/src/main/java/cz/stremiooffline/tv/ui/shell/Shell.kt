@@ -34,11 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -263,6 +259,7 @@ fun Shell(
     railHidden = detail != null || catalogDetail != null || remoteDetail != null,
   ) { focusRequester ->
     val section = current
+    val accountFocus = remember { FocusRequester() }
     // The holder keeps each section's list state and selection across the swap.
     sectionStates.SaveableStateProvider(section) {
       when (section) {
@@ -392,7 +389,7 @@ fun Shell(
         Section.Account -> SettingsRoute(
           api = api,
           username = username,
-          focusRequester = focusRequester,
+          focusRequester = accountFocus,
           onSignOut = onSignOut,
           onLocale = onLocale,
           onHint = ::showHint,
@@ -585,7 +582,16 @@ fun ShellScaffold(
       Modifier
         .fillMaxSize()
         .padding(start = CollapsedRail)
-        .focusProperties { left = railFocusRequesters.getValue(current) },
+        .focusProperties {
+          onExit = {
+            if (requestedFocusDirection == FocusDirection.Left) {
+              runCatching { railFocusRequesters.getValue(current).requestFocus() }
+              cancelFocusChange()
+            }
+          }
+        }
+        .focusRequester(contentFocusRequester)
+        .focusGroup(),
     ) {
       CompositionLocalProvider(LocalRailFocus provides railFocusRequesters.getValue(current)) {
         content(contentFocusRequester)
@@ -652,7 +658,7 @@ private fun Rail(
           .fillMaxWidth()
           .testTag(railTag(section))
           .focusRequester(requesters.getValue(section))
-          .rightToContent(contentRequester),
+          .focusProperties { right = contentRequester() },
         leading = { Icon(mark, contentDescription = null, modifier = Modifier.size(16.dp)) },
         onFocusChanged = { onFocusChanged(section, it) },
         onClick = { onSelect(section) },
@@ -668,7 +674,7 @@ private fun Rail(
         .fillMaxWidth()
         .testTag(railTag(Section.Account))
         .focusRequester(requesters.getValue(Section.Account))
-        .rightToContent(contentRequester),
+        .focusProperties { right = contentRequester() },
       leading = { Avatar(username) },
       onFocusChanged = { onFocusChanged(Section.Account, it) },
       onClick = { onSelect(Section.Account) },
@@ -681,11 +687,6 @@ fun railTag(section: Section): String = TAG_RAIL_PREFIX + section.route
 /** RIGHT from the rail goes to the content's remembered element when that element is on screen;
  *  a section that has not attached it yet (still loading, or a screen without one) falls back to
  *  the ordinary geometric move instead of crashing on an unattached requester. */
-private fun Modifier.rightToContent(contentRequester: () -> FocusRequester): Modifier = onPreviewKeyEvent { event ->
-  if (event.type != KeyEventType.KeyDown || event.key != Key.DirectionRight) return@onPreviewKeyEvent false
-  runCatching { contentRequester().requestFocus() }.isSuccess
-}
-
 @Composable
 private fun RailItem(
   label: String,

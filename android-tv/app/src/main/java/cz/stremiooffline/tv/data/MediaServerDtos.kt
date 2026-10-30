@@ -63,6 +63,8 @@ data class RemoteItemDto(
   val type: String = "",
   val parentId: String? = null,
   val seriesId: String? = null,
+  /** The show's display name, when the provider supplied it with an episode row. */
+  val seriesName: String? = null,
   val season: Int? = null,
   val episode: Int? = null,
   val providerIds: RemoteProviderIdsDto = RemoteProviderIdsDto(),

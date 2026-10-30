@@ -287,6 +287,7 @@ open class FakeTvApi : TvApi {
   var remoteStateFailure: ApiError? = null
   var remoteItemValues: MutableMap<String, RemoteItemDetailDto> = mutableMapOf()
   var remoteItemFailure: ApiError? = null
+  var remoteItemGates: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
   val remoteItemRequests: MutableList<Pair<String, String>> = mutableListOf()
   /** One answer per `libraryId|type|id`; a key in [remoteMatchFailures] refuses instead. */
   val remoteMatchValues: MutableMap<String, List<StreamDto>> = mutableMapOf()
@@ -667,6 +668,7 @@ open class FakeTvApi : TvApi {
 
   override suspend fun remoteItem(libraryId: String, itemId: String): RemoteItemDetailDto {
     remoteItemRequests += libraryId to itemId
+    remoteItemGates["$libraryId:$itemId"]?.let { withContext(currentCoroutineContext()) { it.await() } }
     remoteItemFailure?.let { throw it }
     return remoteItemValues["$libraryId:$itemId"] ?: throw ApiError(ApiFailure.NotFound)
   }

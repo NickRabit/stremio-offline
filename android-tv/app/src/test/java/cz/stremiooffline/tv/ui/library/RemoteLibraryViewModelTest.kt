@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -50,6 +51,7 @@ class RemoteLibraryViewModelTest {
     /** Every browse call in order, with its full query, so a test can name the request. */
     val calls = mutableListOf<BrowseCall>()
     var failure: ApiError? = null
+    val episodeGates = mutableMapOf<String, CompletableDeferred<Unit>>()
     val previewPages = mutableMapOf<String, List<String>>()
     val previewMosaics = mutableMapOf<String, String>()
     val previewRequests = mutableListOf<Pair<String, String?>>()
@@ -122,6 +124,7 @@ class RemoteLibraryViewModelTest {
       calls += BrowseCall(libraryId, limit, cursor, search, type, parentId, mode)
       if (parentId != null && (type == "episode" || mode == "titles")) {
         episodeRequests += parentId to cursor
+        episodeGates[parentId]?.let { withContext(currentCoroutineContext()) { it.await() } }
         failure?.let { throw it }
         return episodePages["$parentId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
       }
@@ -256,6 +259,26 @@ class RemoteLibraryViewModelTest {
     assertEquals(listOf("e1"), state(vm).items.map { it.id })
     assertTrue(api.cursors.isEmpty())
     assertEquals(listOf("s1" to null), api.episodeRequests)
+  }
+
+  @Test
+  fun `quick A then B keeps the late A episode answer out of B`() = runTest(dispatcher) {
+    val api = FakeRemoteApi()
+    api.episodePages["s1|"] = page(listOf(RemoteItemDto(id = "a1", name = "A episode", type = "episode", season = 1, episode = 1)))
+    api.episodePages["s2|"] = page(listOf(RemoteItemDto(id = "b1", name = "B episode", type = "episode", season = 2, episode = 1)))
+    api.episodeGates["s1"] = CompletableDeferred()
+    val vm = RemoteLibraryViewModel(api)
+
+    vm.openSeries("rlibA", "Filmy", "jellyfin", RemoteItemDto(id = "s1", name = "Show A", type = "series"))
+    runCurrent()
+    vm.openSeries("rlibA", "Filmy", "jellyfin", RemoteItemDto(id = "s2", name = "Show B", type = "series"))
+    runCurrent()
+
+    api.episodeGates["s1"]?.complete(Unit)
+    advanceUntilIdle()
+
+    assertEquals("Show B", vm.state.current?.title)
+    assertEquals(listOf("b1"), state(vm).items.map { it.id })
   }
 
   @Test

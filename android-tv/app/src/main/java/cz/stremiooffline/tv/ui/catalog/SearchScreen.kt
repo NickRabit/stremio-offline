@@ -7,6 +7,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.widthIn
@@ -40,6 +41,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -292,15 +294,16 @@ internal fun RecentSearches(
     )
     LazyColumn(
       modifier = Modifier.weight(1f).fillMaxWidth().testTag(TagSearchRecentList),
+      contentPadding = PaddingValues(horizontal = 4.dp, vertical = 12.dp),
       verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       itemsIndexed(items, key = { _, entry -> entry.query }) { index, entry ->
+        val ownFocus = remember(entry.query) { FocusRequester() }
+        val rowFocus = if (index == 0 && firstRowFocus != null) firstRowFocus else ownFocus
+        rowFocuses[entry.query] = rowFocus
         RecentSearchRow(
           query = entry.query,
-          rowFocus = remember(entry.query, index) {
-            if (index == 0 && firstRowFocus != null) firstRowFocus
-            else rowFocuses.getOrPut(entry.query) { FocusRequester() }
-          },
+          rowFocus = rowFocus,
           removeFocus = remember(entry.query) { removeFocuses.getOrPut(entry.query) { FocusRequester() } },
           upFocus = if (index == 0) firstRowUp else null,
           onClick = { onPick(entry.query) },
@@ -326,11 +329,13 @@ private fun RecentSearchRow(
   onRemove: () -> Unit,
 ) {
   var focused by remember { mutableStateOf(false) }
+  var removeFocused by remember { mutableStateOf(false) }
   val shape = RoundedCornerShape(8.dp)
   val removeText = stringResource(R.string.common_remove)
   Row(
-    modifier = Modifier.fillMaxWidth().height(38.dp).padding(start = 12.dp, end = 6.dp),
+    modifier = Modifier.fillMaxWidth().height(40.dp),
     verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(6.dp),
   ) {
     // The label is its own focus target so the button beside it never sees the row's OK.
     Row(
@@ -353,25 +358,45 @@ private fun RecentSearchRow(
             else -> false
           }
         }
-        .then(if (focused) Modifier.background(Tokens.Panel2, shape).border(1.5.dp, Tokens.Accent2, shape) else Modifier)
+        .recentFocusTreatment(focused, shape)
+        .padding(horizontal = 12.dp)
         .testTag(recentSearchTag(query)),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(query, color = Tokens.Text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
-    FocusButton(
-      text = "✕",
-      onClick = onRemove,
-      kind = FocusButtonKind.Icon,
-      contentDescription = removeText,
-      // LEFT returns to the row instead of leaving the screen for the rail.
+    Box(
       modifier = Modifier
+        .size(40.dp)
         .focusRequester(removeFocus)
         .leftToNeighbour(rowFocus)
+        .onFocusChanged { removeFocused = it.isFocused }
+        .focusable()
+        .semantics { contentDescription = removeText }
+        .onPreviewKeyEvent { event ->
+          if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+          when (event.key) {
+            Key.Enter, Key.DirectionCenter, Key.Spacebar -> { onRemove(); true }
+            else -> false
+          }
+        }
+        .recentFocusTreatment(removeFocused, shape)
         .testTag(recentRemoveTag(query)),
-    )
+      contentAlignment = Alignment.Center,
+    ) {
+      Text("✕", color = Tokens.Text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    }
   }
 }
+
+private fun Modifier.recentFocusTreatment(focused: Boolean, shape: RoundedCornerShape): Modifier =
+  then(
+    if (focused) {
+      Modifier.background(Tokens.Panel2, shape).border(1.5.dp, Tokens.Accent2, shape)
+    } else {
+      Modifier.border(1.5.dp, Tokens.Line, shape)
+    },
+  )
 
 /** One catalogue chip label: every addon, one addon's name, or its catalogue with its type. */
 @Composable

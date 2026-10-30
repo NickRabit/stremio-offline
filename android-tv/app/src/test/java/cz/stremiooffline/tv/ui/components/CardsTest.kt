@@ -17,6 +17,7 @@ import coil.request.ErrorResult
 import coil.request.ImageRequest
 import coil.request.ImageResult
 import coil.request.SuccessResult
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -53,6 +54,26 @@ class CardsTest {
     ImageLoader.Builder(context)
       .components { add(RecordingInterceptor(requested, loads, context)) }
       .build()
+
+  @Test
+  fun `a library root tries the server mosaic before its collage`() {
+    val requested = mutableListOf<String>()
+    compose.setContent {
+      CompositionLocalProvider(LocalImageLoader provides loader(requested)) {
+        LibraryRootCard(
+          name = "Films",
+          caption = null,
+          composedMosaic = "http://server/mosaic.jpg",
+          posters = listOf("http://server/a.jpg", "http://server/b.jpg"),
+          onClick = {},
+          fallback = {},
+        )
+      }
+    }
+    compose.waitUntil(5_000) { requested.isNotEmpty() }
+    compose.waitForIdle()
+    assertEquals(listOf("http://server/mosaic.jpg"), requested)
+  }
 
   @Test
   fun `a wide card falls back to its poster when the still does not load`() {

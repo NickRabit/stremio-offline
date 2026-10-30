@@ -171,6 +171,20 @@ fun RemoteDetailScreen(
   BackHandler(enabled = backEnabled) { onBack() }
   val identity = data.libraryId to data.item.id
   val live = rememberUpdatedState(identity)
+  var metadata by remember(identity) { mutableStateOf(initialRemoteMetadata(data)) }
+  var metadataResolved by remember(identity) { mutableStateOf(false) }
+  var titleRowReady by remember(identity) { mutableStateOf(false) }
+  LaunchedEffect(identity, data.item, data.seriesName, data.seriesIds) {
+    metadataResolved = false
+    titleRowReady = false
+    metadata = resolveRemoteMetadata(api, data)
+    metadataResolved = true
+  }
+  val detail = data.copy(
+    item = metadata.item,
+    seriesName = metadata.seriesName ?: metadata.item.seriesName,
+    seriesIds = metadata.seriesIds,
+  )
 
   var sources by remember(identity) { mutableStateOf<List<StreamDto>>(emptyList()) }
   var sourcesLoading by remember(identity) { mutableStateOf(true) }
@@ -200,7 +214,9 @@ fun RemoteDetailScreen(
   // The unified Sources panel: a catalogue port plus a derivable identity is what puts the Versions
   // button on an item at all. The coordinator is keyed by the item -- another item never sees these
   // rows -- and its scope is dropped with it, which abandons every call it had out.
-  val sourcesIdentity = remember(data.item, data.seriesIds) { nativeAddonIdentity(data.item, data.seriesIds) }
+  val sourcesIdentity = remember(detail.item, detail.seriesIds, metadataResolved) {
+    if (metadataResolved) nativeAddonIdentity(detail.item, detail.seriesIds) else null
+  }
   val sourceGroups = remember(identity, sourcesIdentity, catalogueApi) {
     val port = catalogueApi
     val wanted = sourcesIdentity
@@ -212,7 +228,7 @@ fun RemoteDetailScreen(
         identity = wanted,
         // A provider's name filter takes the resolved catalogue title: a series name for an
         // episode, never the episode's own, and nothing guessed when the parent is unknown.
-        nameHint = if (data.isEpisode) data.seriesName?.takeIf { it.isNotBlank() } else data.item.name.takeIf { it.isNotBlank() },
+        nameHint = if (detail.isEpisode) detail.seriesName?.takeIf { it.isNotBlank() } else detail.item.name.takeIf { it.isNotBlank() },
       )
     } else {
       null
@@ -251,7 +267,7 @@ fun RemoteDetailScreen(
     sourcesLoading = true
     sourcesError = false
     try {
-      val found = api.remoteSources(data.libraryId, data.item.id).filter { Streams.isRemoteStream(it) }
+      val found = api.remoteSources(detail.libraryId, detail.item.id).filter { Streams.isRemoteStream(it) }
       if (live.value != mine) return
       sources = found
     } catch (cancelled: CancellationException) {
@@ -283,7 +299,7 @@ fun RemoteDetailScreen(
     val loadedTitle = loadTitleRow()
     if (live.value == mine) titleRow = loadedTitle
     try {
-      val loaded = api.remoteItemState(data.libraryId, data.item.id)
+      val loaded = api.remoteItemState(detail.libraryId, detail.item.id)
       if (live.value != mine) return
       state = loaded
     } catch (cancelled: CancellationException) {
@@ -304,6 +320,12 @@ fun RemoteDetailScreen(
     pickedRow = null
     loadSources(mine)
     loadState(mine)
+  }
+  LaunchedEffect(metadataResolved, sourcesIdentity) {
+    if (metadataResolved) {
+      titleRow = loadTitleRow()
+      titleRowReady = true
+    }
   }
 
   val stateLoaded = state != null && !stateError
@@ -350,15 +372,16 @@ fun RemoteDetailScreen(
     onPlay(
       PlayTarget(
         key = sourcesIdentity?.let { ProgressKey.of(it.first, it.second) } ?: context.progressKey,
-        title = titleOf(data),
+        title = titleOf(detail),
         resume = resume,
         sourceId = source.sourceId.takeIf { it.isNotBlank() },
         stableKey = source.stableKey,
-        poster = data.item.poster,
+        poster = detail.item.poster,
         // The title's own catalogue identity travels with a native play too: a row of another kind
         // picked later in the player keeps the generic key and subtitles this identity makes.
         subtitleType = sourcesIdentity?.first,
         subtitleTarget = sourcesIdentity?.second,
+        subtitleName = if (detail.isEpisode) detail.seriesName else detail.item.name,
         remoteItem = context,
         remoteSources = Streams.remoteVersionsOf(context, loadedRows),
         initialSources = loadedRows,
@@ -370,29 +393,50 @@ fun RemoteDetailScreen(
    *  act on the pick, on the item's leading version while there is none. */
   fun playPicked(resume: Boolean): Boolean {
     val pick = pickedRow?.takeIf { row -> loadedRows.any { it === row } } ?: return false
-    val wanted = nativeRowTarget(pick, titleOf(data), sourcesIdentity, loadedRows, data.item.poster) ?: return false
+    val wanted = nativeRowTarget(
+      pick,
+      titleOf(detail),
+      sourcesIdentity,
+      loadedRows,
+      detail.item.poster,
+      identityName = if (detail.isEpisode) detail.seriesName else detail.item.name,
+    ) ?: return false
     onPlay(if (resume) wanted else wanted.copy(resume = false))
     return true
   }
 
+  val playbackMetadataReady = metadataResolved && titleRowReady
+  var pendingStartOver by remember(identity) { mutableStateOf<Boolean?>(null) }
+
   fun playPressed() {
+    if (!playbackMetadataReady) { pendingStartOver = false; return }
     // A picked row travels as nativeRowTarget makes it; the player re-checks what a resume means
     // for that exact version.
     if (playPicked(resume = true)) return
     play(primary, resume = resuming)
   }
 
-  var autoPlayed by remember { mutableStateOf(false) }
-  LaunchedEffect(stateLoaded, primary) {
-    if (data.autoPlay && stateLoaded && primary != null && !autoPlayed) {
+  var autoPlayed by remember(identity) { mutableStateOf(false) }
+  LaunchedEffect(stateLoaded, primary, playbackMetadataReady) {
+    if (detail.autoPlay && stateLoaded && primary != null && playbackMetadataReady && pendingStartOver == null && !autoPlayed) {
       playPressed()
       autoPlayed = true
     }
   }
 
   fun startOverPressed() {
+    if (!playbackMetadataReady) { pendingStartOver = true; return }
     if (playPicked(resume = false)) return
     play(primary, resume = false)
+  }
+
+  LaunchedEffect(playbackMetadataReady, pendingStartOver, primary) {
+    if (playbackMetadataReady && primary != null) {
+      val startOver = pendingStartOver ?: return@LaunchedEffect
+      pendingStartOver = null
+      autoPlayed = true
+      if (startOver) startOverPressed() else playPressed()
+    }
   }
 
   /** One row of the sources panel: a media-server version plays its own exact item, a library copy
@@ -433,8 +477,8 @@ fun RemoteDetailScreen(
     val load = loadDestinations ?: return
     if (save.resolving || save.busy) return
     val generation = saveGeneration
-    val subject = nativeCopySubject(data.item, data.seriesName, data.seriesIds)
-    val kind = if (data.isEpisode) "series" else "movie"
+    val subject = nativeCopySubject(detail.item, detail.seriesName, detail.seriesIds)
+    val kind = if (detail.isEpisode) "series" else "movie"
     save.resolving = true
     save.notice = null
     save.queued = false
@@ -507,7 +551,7 @@ fun RemoteDetailScreen(
     mutationError = false
     scope.launch {
       try {
-        val next = api.patchRemoteItemState(data.libraryId, data.item.id, RemoteItemStatePatch(favorite = wanted))
+        val next = api.patchRemoteItemState(detail.libraryId, detail.item.id, RemoteItemStatePatch(favorite = wanted))
         if (live.value == mine) state = next
       } catch (cancelled: CancellationException) {
         throw cancelled
@@ -534,7 +578,7 @@ fun RemoteDetailScreen(
     mutationError = false
     scope.launch {
       try {
-        val next = api.patchRemoteItemState(data.libraryId, data.item.id, RemoteItemStatePatch(watched = wanted))
+        val next = api.patchRemoteItemState(detail.libraryId, detail.item.id, RemoteItemStatePatch(watched = wanted))
         if (live.value == mine) state = next
         // A finished title keeps no position, as on the web: the title's row goes with it.
         if (wanted) clearTitleRow()
@@ -557,7 +601,7 @@ fun RemoteDetailScreen(
     scope.launch {
       try {
         clearTitleRow()
-        val next = api.patchRemoteItemState(data.libraryId, data.item.id, RemoteItemStatePatch(position = 0.0, duration = 0.0))
+        val next = api.patchRemoteItemState(detail.libraryId, detail.item.id, RemoteItemStatePatch(position = 0.0, duration = 0.0))
         if (live.value == mine) state = next
       } catch (cancelled: CancellationException) {
         throw cancelled
@@ -589,10 +633,10 @@ fun RemoteDetailScreen(
       try {
         val resolved = resolveNativeCopy(
           api = api,
-          libraryId = data.libraryId,
-          item = data.item,
-          seriesName = data.seriesName,
-          seriesIds = data.seriesIds,
+          libraryId = detail.libraryId,
+          item = detail.item,
+          seriesName = detail.seriesName,
+          seriesIds = detail.seriesIds,
           sources = sources.takeIf { it.isNotEmpty() },
           loadDestinations = load,
         )
@@ -699,7 +743,7 @@ fun RemoteDetailScreen(
 
   Box(Modifier.fillMaxSize().background(Tokens.Bg)) {
     // The item's own artwork when the server exposed it, else the plain gradient behind it.
-    val art = imageUrl(data.item.wide ?: data.item.poster)
+    val art = imageUrl(detail.item.wide ?: detail.item.poster)
     if (art != null) {
       AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
     }
@@ -708,9 +752,9 @@ fun RemoteDetailScreen(
       Modifier.fillMaxSize().padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
       verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-      Text(eyebrow(data), color = Tokens.Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.8.sp)
+      Text(eyebrow(detail), color = Tokens.Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.8.sp)
       Text(
-        titleOf(data),
+        titleOf(detail),
         color = Tokens.Text,
         fontSize = 40.sp,
         fontWeight = FontWeight.ExtraBold,
@@ -720,7 +764,7 @@ fun RemoteDetailScreen(
         modifier = Modifier.width(820.dp),
       )
       Text(
-        listOfNotNull(data.provider.ifBlank { null }, data.libraryName.ifBlank { null }, stringResource(R.string.media_server_read_only))
+        listOfNotNull(detail.provider.ifBlank { null }, detail.libraryName.ifBlank { null }, stringResource(R.string.media_server_read_only))
           .joinToString(" · "),
         color = Tokens.Muted,
         fontSize = 11.5.sp,
@@ -884,9 +928,9 @@ fun RemoteDetailScreen(
         // groups answered sits under them, and none of them ever takes the default.
         originals = sources,
         originLibrary = Streams.RemoteGroup(
-          libraryId = data.libraryId,
-          provider = data.provider,
-          libraryName = data.libraryName,
+          libraryId = detail.libraryId,
+          provider = detail.provider,
+          libraryName = detail.libraryName,
           streams = sources,
         ),
         default = primary,
@@ -934,7 +978,7 @@ fun RemoteDetailScreen(
 
     val request = copyRequest
     if (request != null) {
-      val kind = if (data.isEpisode) "series" else "movie"
+      val kind = if (detail.isEpisode) "series" else "movie"
       NativeQueuePanel(
         versions = request.versions,
         libraries = request.destinations.filter { it.canWrite && (it.type == kind || it.type == "mixed") },

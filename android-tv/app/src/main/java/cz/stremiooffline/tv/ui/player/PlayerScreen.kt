@@ -1051,6 +1051,7 @@ internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget 
       addonKey = current.addonKey,
       subtitleType = current.subtitleType,
       subtitleTarget = current.subtitleTarget,
+      subtitleName = current.subtitleName,
       catalogue = current.catalogue,
       remoteItem = incomingRemote,
       // Only the same item's versions: another library or item never lends its list.
@@ -1071,6 +1072,7 @@ internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget 
       addonKey = current.addonKey,
       subtitleType = current.subtitleType,
       subtitleTarget = current.subtitleTarget,
+      subtitleName = current.subtitleName,
       catalogue = current.catalogue,
       initialSources = current.initialSources,
     )
@@ -1089,6 +1091,7 @@ internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget 
     addonKey = current.addonKey,
     subtitleType = current.subtitleType,
     subtitleTarget = current.subtitleTarget,
+    subtitleName = current.subtitleName,
     catalogue = current.catalogue,
     initialSources = current.initialSources,
   )
