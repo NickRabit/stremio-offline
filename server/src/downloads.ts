@@ -381,6 +381,8 @@ export interface QueueHooks {
   renamePublication?: (from: string, to: string) => Promise<void>;
   /** Writes the queue's own state file; tests use it to fail one particular write. */
   writeState?: (file: string, data: string) => Promise<void>;
+  /** How long a failed best-effort save waits before it is tried again. */
+  saveRetryMs?: number;
   stallInitialMs?: number;
   stallTransferMs?: number;
   spaceCheckMs?: number;
@@ -572,6 +574,9 @@ const REMOTE_REVALIDATE_TIMEOUT_MS = 5_000;
  *  same durability cadence as admission or a terminal transition. This bounds a burst of
  *  progress events to one full-history checkpoint per interval. */
 const PROGRESS_SAVE_MS = 10_000;
+/** A failed save is usually a Windows lock (antivirus, indexer, backup) that ends in a moment;
+ *  without another try the state on disk would stay behind until some later change. */
+const SAVE_RETRY_MS = 2_000;
 export const SOURCE_FALLBACK_ATTEMPT_LIMIT = 8;
 const TRAVEL_TEMPORARY_FAILURE_LIMIT = 3;
 const TRAVEL_BUDGET_ATTEMPT_LIMIT = 1_000;
@@ -633,6 +638,9 @@ export class DownloadQueue {
   private pumpScheduled = false;
   private saveTimer?: NodeJS.Timeout;
   private retryTimer?: NodeJS.Timeout;
+  private saveRetryTimer?: NodeJS.Timeout;
+  private saveFailing = false;
+  private readonly saveRetryMs: number;
   private spaceWatch?: NodeJS.Timeout;
   private saveChain: Promise<void> = Promise.resolve();
   /** Set when the state file could not be read: the queue refuses new work rather than
@@ -713,6 +721,7 @@ export class DownloadQueue {
     this.createWriteStream = hooks.createWriteStream ?? fsCreateWriteStream;
     this.renamePublication = hooks.renamePublication ?? rename;
     this.writeState = hooks.writeState ?? ((file, data) => writeFile(file, data, { mode: 0o600 }));
+    this.saveRetryMs = hooks.saveRetryMs ?? SAVE_RETRY_MS;
     this.stallInitialMs = hooks.stallInitialMs ?? 15_000;
     this.stallTransferMs = hooks.stallTransferMs ?? 30_000;
     this.spaceCheckMs = hooks.spaceCheckMs ?? 30_000;
@@ -753,14 +762,15 @@ export class DownloadQueue {
     this.stopped = true;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     if (this.retryTimer) clearTimeout(this.retryTimer);
+    if (this.saveRetryTimer) clearTimeout(this.saveRetryTimer);
     if (this.spaceWatch) clearInterval(this.spaceWatch);
     if (this.libraryWatch) clearInterval(this.libraryWatch);
-    this.saveTimer = undefined; this.retryTimer = undefined; this.spaceWatch = undefined; this.libraryWatch = undefined;
+    this.saveTimer = undefined; this.retryTimer = undefined; this.saveRetryTimer = undefined; this.spaceWatch = undefined; this.libraryWatch = undefined;
     for (const timer of this.debridTimers.values()) clearTimeout(timer);
     this.debridTimers.clear();
     for (const controller of this.active.values()) controller.abort();
     await Promise.all([...this.running]);
-    if (this.debridPersistencePending.size) await this.save();
+    if (this.debridPersistencePending.size || this.saveFailing) await this.save();
     await this.saveChain;
   }
 
@@ -2015,9 +2025,24 @@ export class DownloadQueue {
   }
 
   /** A best-effort save: it logs and never rejects, so the many callers that do not wait for
-   *  it keep working and a failed write never brings the server down. */
+   *  it keep working and a failed write never brings the server down. A failure is tried again
+   *  on its own, logged once per run of failures, so the last change is not left only in memory. */
   private save(): Promise<void> {
-    return this.write().catch((error) => { log("ERROR", "The queue state could not be saved", { reason: error instanceof Error ? error.message : String(error) }); });
+    return this.write().then(
+      () => {
+        if (this.saveFailing) log("INFO", "The queue state was saved again");
+        this.saveFailing = false;
+      },
+      (error) => {
+        if (!this.saveFailing) log("ERROR", "The queue state could not be saved", { reason: error instanceof Error ? error.message : String(error), retryInMs: this.saveRetryMs });
+        this.saveFailing = true;
+        if (this.stopped || this.saveRetryTimer) return;
+        this.saveRetryTimer = setTimeout(() => {
+          this.saveRetryTimer = undefined;
+          void this.save();
+        }, this.saveRetryMs);
+      },
+    );
   }
 
   /** A save an admission waits on: the change lands with its own write or not at all, and

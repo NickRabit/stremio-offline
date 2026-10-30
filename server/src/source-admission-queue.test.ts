@@ -191,14 +191,18 @@ const openQueue = (data: string, downloads: string, hooks: QueueHooks = {}) => {
 const readJobs = async (state: string): Promise<Array<Record<string, unknown>>> =>
   JSON.parse(await readFile(state, "utf8")) as Array<Record<string, unknown>>;
 
-const waitFor = async (queue: DownloadQueue, predicate: () => boolean | Promise<boolean>, ms = 5_000) => {
+const waitFor = async (queue: DownloadQueue, predicate: () => boolean | Promise<boolean>, ms = 5_000, everyMs = 20) => {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (await predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, everyMs));
   }
   throw new Error(`timeout: ${JSON.stringify(queue.snapshot())}`);
 };
+
+// Reading downloads.json holds it open, which on Windows refuses the queue's rename over it;
+// the read-back is not eager and leaves room for the queue's own save retry.
+const waitForDisk = (queue: DownloadQueue, predicate: () => Promise<boolean>) => waitFor(queue, predicate, 10_000, 100);
 
 const deferred = () => {
   let release!: () => void;
@@ -1170,7 +1174,7 @@ test("a Travel budget makes progress past four exhausted attempts without using 
     assert.equal(internalJobs(queue)[0]?.travelTemporaryFailures, 1);
     assert.equal(internalJobs(queue)[0]?.notBefore, 10_250);
     let stored!: Record<string, unknown>;
-    await waitFor(queue, async () => {
+    await waitForDisk(queue, async () => {
       stored = (await readJobs(state)).find((entry) => entry.id === added.id)!;
       return (stored?.travelCursor as TravelContinuationCursorV1 | undefined)?.nextIndex === 1;
     });
@@ -1187,7 +1191,7 @@ test("a Travel budget makes progress past four exhausted attempts without using 
       assert.equal(job.travelBudgetAttempts, nextIndex - 1);
       assert.equal(job.retryCount, undefined, "source inspection does not spend a transfer retry");
       assert.equal(job.notBefore, clock + 250);
-      await waitFor(queue, async () => {
+      await waitForDisk(queue, async () => {
         stored = (await readJobs(state)).find((entry) => entry.id === added.id)!;
         return (stored.travelCursor as TravelContinuationCursorV1 | undefined)?.nextIndex === nextIndex;
       });
@@ -2130,7 +2134,7 @@ test("selected Travel transfer fallbacks stay bounded across rotating URLs until
     assert.equal(failed.errorKey, "err.noMatchingSource");
     assertPublicViewIsClean(failed as unknown as Record<string, unknown>);
     assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, SOURCE_FALLBACK_ATTEMPT_LIMIT);
-    await waitFor(queue, async () => {
+    await waitForDisk(queue, async () => {
       const stored = (await readJobs(state)).find((entry) => entry.id === added.id);
       return stored?.status === "failed"
         && stored.sourceFallbackAttempts === SOURCE_FALLBACK_ATTEMPT_LIMIT;
@@ -2141,7 +2145,7 @@ test("selected Travel transfer fallbacks stay bounded across rotating URLs until
     assert.equal(resolutions, SOURCE_FALLBACK_ATTEMPT_LIMIT * 2);
     assert.equal(requests, SOURCE_FALLBACK_ATTEMPT_LIMIT * 2);
     assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, SOURCE_FALLBACK_ATTEMPT_LIMIT);
-    await waitFor(queue, async () => {
+    await waitForDisk(queue, async () => {
       const stored = (await readJobs(state)).find((entry) => entry.id === added.id);
       return stored?.status === "failed"
         && stored.sourceFallbackAttempts === SOURCE_FALLBACK_ATTEMPT_LIMIT;
@@ -2922,7 +2926,7 @@ test("Provider priority rotating signed URLs consume one finite fallback budget"
     assert.equal(resolutions, SOURCE_FALLBACK_ATTEMPT_LIMIT);
     assert.equal(requests, SOURCE_FALLBACK_ATTEMPT_LIMIT);
     assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, SOURCE_FALLBACK_ATTEMPT_LIMIT);
-    await waitFor(queue, async () => {
+    await waitForDisk(queue, async () => {
       const stored = (await readJobs(state)).find((job) => job.id === added.id);
       return stored?.sourceFallbackAttempts === SOURCE_FALLBACK_ATTEMPT_LIMIT;
     });
