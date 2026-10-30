@@ -55,20 +55,15 @@ const advance = async (milliseconds: number) => {
 let root: Root;
 let host: HTMLDivElement;
 let current: SearchEverywhereController;
-let options: {
-  active: boolean;
-  covered: boolean;
-  library?: { libraryId: string; path?: string } | { libraryId: string; parentId?: string };
-  sources?: SearchSourceClass[];
-};
+let options: { active: boolean; covered: boolean };
 
 function Harness() {
   current = useSearchEverywhere(options);
   return null;
 }
 
-const render = async (active = true, covered = false, extra: Pick<typeof options, "library" | "sources"> = {}) => {
-  options = { active, covered, ...extra };
+const render = async (active = true, covered = false) => {
+  options = { active, covered };
   await act(async () => { root.render(createElement(Harness)); });
   await flush();
 };
@@ -124,19 +119,71 @@ afterEach(() => {
 });
 
 describe("useSearchEverywhere", () => {
-  it("sends a library and its fixed sources on every start", async () => {
+  it("a library chip searches only its source and stays gone once cleared", async () => {
     vi.spyOn(api, "searchEverywhereStart").mockResolvedValue({
-      id: "session-one",
-      snapshot: snapshot({ revision: 1 }),
+      id: "session-chip",
+      snapshot: snapshot({ revision: 1, state: "complete" }),
     });
-    await render(true, false, { library: { libraryId: "lib_ab12cd34", path: "Shows" }, sources: ["local"] });
+    await render();
+    await act(async () => {
+      current.applyPreset({
+        sources: ["local", "remote"],
+        library: {
+          scope: { libraryId: "lib_ab12cd34", path: "Shows" },
+          source: "local",
+          title: "Films – Shows",
+        },
+      });
+    });
+    expect(current.committed).toBe("");
+    expect(current.sources).toEqual(["local", "remote"]);
+    expect(current.library).toEqual({
+      scope: { libraryId: "lib_ab12cd34", path: "Shows" },
+      source: "local",
+      title: "Films – Shows",
+    });
+
     await submit("alpha");
-    await render(true, false, { library: { libraryId: "lib_ab12cd34", path: "Shows" }, sources: ["local"] });
+    const scoped = startBodies().at(-1)!;
+    expect(scoped.sources).toEqual(["local"]);
+    expect(scoped.library).toEqual({ libraryId: "lib_ab12cd34", path: "Shows" });
+    expect(scoped.scope).toBeUndefined();
+
+    await act(async () => { current.clearLibrary(); });
+    await flush();
+    expect(current.library).toBeNull();
+    const cleared = startBodies().at(-1)!;
+    expect(cleared.sources).toEqual(["local", "remote"]);
+    expect(cleared.library).toBeUndefined();
+
+    await act(async () => { current.setSources(["catalog"]); });
+    await flush();
+    await act(async () => { current.setSources(["remote", "local"]); });
+    await flush();
+    expect(current.library).toBeNull();
+    const restored = startBodies().at(-1)!;
+    expect(restored.library).toBeUndefined();
+    expect(restored.sources).toEqual(["remote", "local"]);
+
+    await act(async () => {
+      current.applyPreset({
+        sources: ["local", "remote"],
+        library: {
+          scope: { libraryId: "rlib_a", parentId: "f1" },
+          source: "remote",
+          title: "Server – Shows",
+        },
+      });
+    });
     await submit("beta");
-    expect(startBodies().map((body) => ({ library: body.library, sources: body.sources }))).toEqual([
-      { library: { libraryId: "lib_ab12cd34", path: "Shows" }, sources: ["local"] },
-      { library: { libraryId: "lib_ab12cd34", path: "Shows" }, sources: ["local"] },
-    ]);
+    await act(async () => { current.setScope({ addonKey: "cinemeta" }); });
+    await flush();
+    expect(current.library).toBeNull();
+    expect(current.sources).toEqual(["catalog"]);
+    const scopedAway = startBodies().at(-1)!;
+    expect(scopedAway.library).toBeUndefined();
+    expect(scopedAway.scope).toEqual({ addonKey: "cinemeta" });
+    expect(scopedAway.sources).toEqual(["catalog"]);
   });
 
   it("drops a late start response from an older query", async () => {

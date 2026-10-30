@@ -2017,6 +2017,9 @@ export const ptBR: Catalog = {
   "searchAll.openTitlePage": "Abrir página do título",
   "searchAll.conflict": "IDs conflitantes",
   "searchAll.backToSearch": "Voltar à pesquisa",
+  "searchAll.libraryChip": "{title}  ✕",
+  "searchAll.libraryClear": "Pesquisar em todas as bibliotecas",
+  "searchAll.backToLibrary": "Voltar à biblioteca",
   "searchAll.homeAction": "Abrir pesquisa",
   "searchAll.restartFailed": "A pesquisa expirou. Pesquise novamente.",
 

@@ -66,16 +66,23 @@ export type LibrarySearchScope =
   | { libraryId: string; path?: string }
   | { libraryId: string; parentId?: string };
 
+/** A folder the Search page was opened from. The request sends only `source`, because the
+ *  server accepts `library` with a single source and no catalogue scope. */
+export type LibrarySearchChip = {
+  scope: LibrarySearchScope;
+  source: "local" | "remote";
+  title: string;
+};
+
 export function useSearchEverywhere(options: {
   active: boolean;
   covered: boolean;
-  library?: LibrarySearchScope;
-  sources?: SearchSourceClass[];
 }) {
   const [draft, setDraftState] = useState("");
   const [committed, setCommittedState] = useState("");
-  const [sources, setSourcesState] = useState<SearchSourceClass[]>(options.sources ?? []);
+  const [sources, setSourcesState] = useState<SearchSourceClass[]>([]);
   const [scope, setScopeState] = useState<SearchStartBody["scope"] | null>(null);
+  const [library, setLibraryState] = useState<LibrarySearchChip | null>(null);
   const [kind, setKindState] = useState<SearchKindFilter>("all");
   const [snapshot, setSnapshotState] = useState<SearchSnapshot | null>(null);
   const [previousQuery, setPreviousQuery] = useState(false);
@@ -100,9 +107,8 @@ export function useSearchEverywhere(options: {
   const unidentifiedOrderRef = useRef<string[]>([]);
   const committedRef = useRef("");
   const draftRef = useRef("");
-  const sourcesRef = useRef<SearchSourceClass[]>(options.sources ?? []);
-  const fixedSourcesRef = useRef(options.sources);
-  const libraryRef = useRef(options.library);
+  const sourcesRef = useRef<SearchSourceClass[]>([]);
+  const libraryChipRef = useRef<LibrarySearchChip | null>(null);
   const scopeRef = useRef<SearchStartBody["scope"] | null>(null);
   const kindRef = useRef<SearchKindFilter>("all");
   const interactedRef = useRef(false);
@@ -124,8 +130,6 @@ export function useSearchEverywhere(options: {
 
   activeRef.current = options.active;
   coveredRef.current = options.covered;
-  fixedSourcesRef.current = options.sources;
-  libraryRef.current = options.library;
 
   const canPoll = () =>
     activeRef.current
@@ -297,7 +301,10 @@ export function useSearchEverywhere(options: {
       holdingRef.current = false;
     }
     const generation = ++generationRef.current;
-    const requestSources = fixedSourcesRef.current ?? (sourcesRef.current.length ? sourcesRef.current : ALL_SOURCES);
+    const chip = libraryChipRef.current;
+    const requestSources = chip
+      ? [chip.source]
+      : (sourcesRef.current.length ? sourcesRef.current : ALL_SOURCES);
     abortRequests();
     committedRef.current = query;
     setCommittedState(query);
@@ -313,8 +320,7 @@ export function useSearchEverywhere(options: {
       sources: [...requestSources],
       slotId: slotRef.current!,
       generation,
-      ...(scopeRef.current ? { scope: { ...scopeRef.current } } : {}),
-      ...(libraryRef.current ? { library: { ...libraryRef.current } } : {}),
+      ...(chip ? { library: { ...chip.scope } } : scopeRef.current ? { scope: { ...scopeRef.current } } : {}),
     }, controller.signal).then((answer) => {
       if (generation !== generationRef.current || controller.signal.aborted) return;
       sessionIdRef.current = answer.id;
@@ -353,14 +359,24 @@ export function useSearchEverywhere(options: {
     resetSession();
   };
 
+  const librariesOnly = (value: SearchSourceClass[]) =>
+    value.length === 2 && value.includes("local") && value.includes("remote");
+
   const setSources = (value: SearchSourceClass[]) => {
-    if (fixedSourcesRef.current) return;
     const next = [...new Set(value)];
     if (!(next.length === 1 && next[0] === "catalog")) {
       scopeRef.current = null;
       setScopeState(null);
     }
-    if (JSON.stringify(next) === JSON.stringify(sourcesRef.current)) return;
+    const hadChip = libraryChipRef.current !== null;
+    if (hadChip && !librariesOnly(next)) {
+      libraryChipRef.current = null;
+      setLibraryState(null);
+    }
+    if (JSON.stringify(next) === JSON.stringify(sourcesRef.current)) {
+      if (hadChip && !librariesOnly(next) && committedRef.current) startSearch(committedRef.current, true);
+      return;
+    }
     sourcesRef.current = next;
     setSourcesState(next);
     if (committedRef.current) startSearch(committedRef.current, true);
@@ -368,13 +384,45 @@ export function useSearchEverywhere(options: {
 
   const setScope = (value: SearchStartBody["scope"] | null) => {
     const next = value?.addonKey ? value : null;
-    if (JSON.stringify(next) === JSON.stringify(scopeRef.current)) return;
+    const hadChip = libraryChipRef.current !== null;
+    if (hadChip) {
+      libraryChipRef.current = null;
+      setLibraryState(null);
+    }
+    if (JSON.stringify(next) === JSON.stringify(scopeRef.current)) {
+      if (hadChip && committedRef.current) startSearch(committedRef.current, true);
+      return;
+    }
     scopeRef.current = next;
     setScopeState(next);
     if (next && !(sourcesRef.current.length === 1 && sourcesRef.current[0] === "catalog")) {
       sourcesRef.current = ["catalog"];
       setSourcesState(["catalog"]);
     }
+    if (committedRef.current) startSearch(committedRef.current, true);
+  };
+
+  const applyPreset = (preset: {
+    sources: SearchSourceClass[];
+    scope?: SearchStartBody["scope"] | null;
+    library?: LibrarySearchChip | null;
+  }) => {
+    resetSession();
+    const nextSources = [...preset.sources];
+    sourcesRef.current = nextSources;
+    setSourcesState(nextSources);
+    const nextScope = preset.scope?.addonKey ? preset.scope : null;
+    scopeRef.current = nextScope;
+    setScopeState(nextScope);
+    const nextLibrary = preset.library ?? null;
+    libraryChipRef.current = nextLibrary;
+    setLibraryState(nextLibrary);
+  };
+
+  const clearLibrary = () => {
+    if (!libraryChipRef.current) return;
+    libraryChipRef.current = null;
+    setLibraryState(null);
     if (committedRef.current) startSearch(committedRef.current, true);
   };
 
@@ -488,6 +536,9 @@ export function useSearchEverywhere(options: {
     setSources,
     scope,
     setScope,
+    library,
+    applyPreset,
+    clearLibrary,
     kind,
     setKind,
     snapshot,

@@ -59,6 +59,9 @@ const controller = (over: Partial<SearchEverywhereController> = {}): SearchEvery
   setSources: vi.fn(),
   scope: null,
   setScope: vi.fn(),
+  library: null,
+  applyPreset: vi.fn(),
+  clearLibrary: vi.fn(),
   kind: "all",
   setKind: vi.fn(),
   snapshot: snapshot(),
@@ -126,6 +129,39 @@ const clickCard = async () => {
 };
 
 describe("SearchEverywhere", () => {
+  it("draws the library chip after the sources and the library return only when given", async () => {
+    const clearLibrary = vi.fn();
+    const search = controller({
+      sources: ["local", "remote"],
+      library: {
+        scope: { libraryId: "lib", path: "filmy" },
+        source: "local",
+        title: "TV test – filmy",
+      },
+      clearLibrary,
+    });
+    await render(search);
+    const chip = [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")]
+      .find((button) => button.getAttribute("aria-label") === "Search all libraries");
+    expect(chip?.textContent).toContain("TV test – filmy");
+    const filters = host.querySelector(".search-filters")!;
+    expect(filters.innerHTML.indexOf("library-shelf-segments")).toBeLessThan(filters.innerHTML.indexOf("Search all libraries"));
+    expect(host.querySelector(".search-return")).toBeNull();
+    await act(async () => { chip!.click(); });
+    expect(clearLibrary).toHaveBeenCalledOnce();
+
+    const onBackToLibrary = vi.fn();
+    await act(async () => {
+      root.render(<SearchEverywhere search={search} shape="poster" onToggleShape={vi.fn()}
+        searchable={[]} recent={[]} onRecord={vi.fn()} onForget={vi.fn()} onRefreshRecent={vi.fn()}
+        onOpenMember={vi.fn()} onOpenCanonical={vi.fn()} onBackToLibrary={onBackToLibrary}/>);
+    });
+    const back = host.querySelector<HTMLButtonElement>(".search-return");
+    expect(back?.textContent).toContain("Back to the library");
+    await act(async () => { back!.click(); });
+    expect(onBackToLibrary).toHaveBeenCalledOnce();
+  });
+
   const openList = async () => {
     const input = host.querySelector<HTMLInputElement>("[data-search-input]")!;
     await act(async () => input.focus());

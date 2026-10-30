@@ -2017,6 +2017,9 @@ export const it: Catalog = {
   "searchAll.openTitlePage": "Apri pagina del titolo",
   "searchAll.conflict": "ID in conflitto",
   "searchAll.backToSearch": "Torna alla ricerca",
+  "searchAll.libraryChip": "{title}  ✕",
+  "searchAll.libraryClear": "Cerca in tutte le librerie",
+  "searchAll.backToLibrary": "Torna alla libreria",
   "searchAll.homeAction": "Apri ricerca",
   "searchAll.restartFailed": "La ricerca è scaduta. Cerca di nuovo.",
 

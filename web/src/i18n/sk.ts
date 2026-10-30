@@ -2029,6 +2029,9 @@ export const sk: Catalog = {
   "searchAll.openTitlePage": "Otvoriť stránku titulu",
   "searchAll.conflict": "Protirečivé ID",
   "searchAll.backToSearch": "Späť na vyhľadávanie",
+  "searchAll.libraryChip": "{title}  ✕",
+  "searchAll.libraryClear": "Hľadať vo všetkých knižniciach",
+  "searchAll.backToLibrary": "Späť do knižnice",
   "searchAll.homeAction": "Otvoriť vyhľadávanie",
   "searchAll.restartFailed": "Vyhľadávanie vypršalo. Vyhľadajte znova.",
 

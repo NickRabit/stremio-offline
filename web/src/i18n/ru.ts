@@ -2032,6 +2032,9 @@ export const ru: Catalog = {
   "searchAll.openTitlePage": "Открыть страницу названия",
   "searchAll.conflict": "Противоречивые ID",
   "searchAll.backToSearch": "Назад к поиску",
+  "searchAll.libraryChip": "{title}  ✕",
+  "searchAll.libraryClear": "Искать во всех библиотеках",
+  "searchAll.backToLibrary": "Назад в библиотеку",
   "searchAll.homeAction": "Открыть поиск",
   "searchAll.restartFailed": "Срок поиска истёк. Выполните поиск снова.",
 

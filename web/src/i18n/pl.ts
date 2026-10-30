@@ -2032,6 +2032,9 @@ export const pl: Catalog = {
   "searchAll.openTitlePage": "Otwórz stronę tytułu",
   "searchAll.conflict": "Sprzeczne identyfikatory",
   "searchAll.backToSearch": "Wróć do wyszukiwania",
+  "searchAll.libraryChip": "{title}  ✕",
+  "searchAll.libraryClear": "Szukaj we wszystkich bibliotekach",
+  "searchAll.backToLibrary": "Wróć do biblioteki",
   "searchAll.homeAction": "Otwórz wyszukiwanie",
   "searchAll.restartFailed": "Wyszukiwanie wygasło. Wyszukaj ponownie.",
 

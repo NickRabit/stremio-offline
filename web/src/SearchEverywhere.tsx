@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
+import { ChevronLeft, Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
 import { describeError } from "./api";
 import { ShapeToggle } from "./app-chrome";
 import { TileArt } from "./TileArt";
@@ -361,7 +361,7 @@ export function SearchResults({ search, shape, onOpenMember, onOpenCanonical, on
   </div>;
 }
 
-export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical }: {
+export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical, onBackToLibrary }: {
   search: SearchEverywhereController;
   shape: TileShape;
   onToggleShape: () => void;
@@ -374,6 +374,8 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   onRefreshRecent: () => void;
   onOpenMember: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
   onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
+  /** Returns to the Library place Search was opened from. */
+  onBackToLibrary?: () => void;
 }) {
   const root = useRef<HTMLElement>(null);
   const composing = useRef(false);
@@ -445,6 +447,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   };
 
   return <section className="search-everywhere" ref={root}>
+    {onBackToLibrary && <button type="button" className="search-return" onClick={onBackToLibrary}><ChevronLeft/> {t("searchAll.backToLibrary")}</button>}
     <Heading eyebrow={t("searchAll.eyebrow")} title={t("searchAll.title")}/>
     <form className="search-everywhere-form" role="search" onSubmit={submit}>
       <div className="search-input">
@@ -489,6 +492,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
             onClick={() => search.setSources(option.sources)}>{t(option.label)}</button>;
         })}
       </div>
+      {search.library && <button type="button" className="search-library-chip" aria-label={t("searchAll.libraryClear")} onClick={() => search.clearLibrary()}>{t("searchAll.libraryChip", { title: search.library.title })}</button>}
       {catalogOnly && <label><span>{t("catalog.searchScope")}</span>
         <select aria-label={t("catalog.searchScope")} value={scopeValue} onChange={(event) => chooseScope(event.target.value)}>
           <SearchScopeOptions searchable={searchable}/>
