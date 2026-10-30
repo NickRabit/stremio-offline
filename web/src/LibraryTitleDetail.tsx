@@ -351,14 +351,14 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     {pickerOpen && <SourcePicker own={own} groups={groups} panel={sourceGroups} selected={selected} badgeOf={badgeOf} {...(addonPriority ? { priority: addonPriority } : {})}
       nativeLabel={nativeSourceLabel ?? t("sources.localFilter")} preferredLanguage={preferredLanguage ?? ""}
       sourceProfiles={sourceProfiles} defaultSort={defaultSort}
-      onSelect={choose} onClose={() => setPickerOpen(false)}/>}
+      onSelect={choose} onSortPick={(stream) => setChosen({ identity: identityKey, key: sourceRowKey(stream) })} onClose={() => setPickerOpen(false)}/>}
   </div>;
 }
 
 /** The destination picker beside Play: the same dialog shell as Save to…, one row per playable
  *  source with the catalogue's own filters and rows. Clicking a row chooses it and closes; Escape
  *  returns to the arrow. */
-function SourcePicker({ own, groups, panel, selected, badgeOf, nativeLabel, preferredLanguage, priority, sourceProfiles, defaultSort, onSelect, onClose }: {
+function SourcePicker({ own, groups, panel, selected, badgeOf, nativeLabel, preferredLanguage, priority, sourceProfiles, defaultSort, onSelect, onSortPick, onClose }: {
   priority?: Map<string, number>;
   own: Stream[];
   groups: LibrarySourceGroup[];
@@ -370,6 +370,8 @@ function SourcePicker({ own, groups, panel, selected, badgeOf, nativeLabel, pref
   sourceProfiles: SourceProfile[] | null;
   defaultSort: string;
   onSelect: (stream: Stream) => void;
+  /** A change of sorting picks the row that order would play, and the dialog stays open. */
+  onSortPick: (stream: Stream) => void;
   onClose: () => void;
 }) {
   useI18n();
@@ -397,7 +399,7 @@ function SourcePicker({ own, groups, panel, selected, badgeOf, nativeLabel, pref
         <p className="identify-hint">{t("mediaServer.versionsHint")}</p>
         <SourceChooser lead={own} leadLabel={nativeLabel} groups={groups} {...(panel ? { panel } : {})}
           selected={selected} onSelect={onSelect} preferredLanguage={preferredLanguage} badgeOf={badgeOf} {...(priority ? { priority } : {})}
-          sourceProfiles={sourceProfiles} defaultSort={defaultSort}
+          sourceProfiles={sourceProfiles} defaultSort={defaultSort} onSortPick={onSortPick}
           listClassName="stream-list remote-streams library-source-list"/>
       </div>
       <footer className="dialog-foot">
