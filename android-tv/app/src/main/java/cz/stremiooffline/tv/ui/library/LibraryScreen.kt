@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -168,7 +169,9 @@ fun LibraryRoute(
   val scopeTitle = state.pages.mapNotNull { page -> page.title.takeIf { it.isNotBlank() } }
     .joinToString("  ›  ")
     .ifEmpty { fallbackTitle }
-  val searchAvailable = searchEverywhereEnabled || state.current?.searchable == true
+  // The list of libraries is not a place to search from; a library and every folder inside it are.
+  val libraryList = state.current?.items?.any { it is BrowseItem.Library } == true
+  val searchAvailable = !libraryList && (searchEverywhereEnabled || state.current?.searchable == true)
   fun openLibrarySearch() {
     onOpenSearch(LibrarySearchScope(localScope, listOf("local"), scopeTitle))
   }
@@ -177,8 +180,6 @@ fun LibraryRoute(
   var backToken by remember { mutableIntStateOf(0) }
   var restoreKey by remember { mutableStateOf("") }
   var consumedSearchReturn by rememberSaveable { mutableIntStateOf(0) }
-  // Set while a Search return owns the All grid, so a later load cannot focus the grid over Hledat.
-  var suppressPlainAllFocus by remember { mutableStateOf(false) }
   // The card that opened each nested page, in page-stack order, so Back can focus it again.
   val openedBy = remember { mutableListOf<String>() }
 
@@ -214,26 +215,11 @@ fun LibraryRoute(
   }
 
   // A plain entry into All takes the first tile, or the grid itself when it holds none, so the
-  // remote starts inside the half and the rail is one LEFT away. A tile opened from All is left
-  // to the effect above; a return from Search is left to the effect below.
+  // remote starts inside the half and the rail is one LEFT away. A return is left to the effect above.
   LaunchedEffect(segment, state.loading) {
-    if (segment != LibrarySegment.All) {
-      suppressPlainAllFocus = false
-      return@LaunchedEffect
-    }
-    if (state.loading || enteredFromAll != null || suppressPlainAllFocus) return@LaunchedEffect
-    if (searchReturnToken > consumedSearchReturn) return@LaunchedEffect
+    if (segment != LibrarySegment.All || state.loading || enteredFromAll != null) return@LaunchedEffect
     awaitFrame()
-    if (suppressPlainAllFocus || searchReturnToken > consumedSearchReturn) return@LaunchedEffect
     runCatching { allGridFocus.requestFocus() }
-  }
-  LaunchedEffect(segment, searchReturnToken, backEnabled, searchEverywhereEnabled) {
-    if (segment != LibrarySegment.All || !backEnabled || !searchEverywhereEnabled) return@LaunchedEffect
-    if (searchReturnToken <= consumedSearchReturn) return@LaunchedEffect
-    suppressPlainAllFocus = true
-    consumedSearchReturn = searchReturnToken
-    awaitFrame()
-    runCatching { searchAction.requestFocus() }
   }
 
   // A new page focuses its own first card; a return restores the card that opened the page. An open
@@ -308,10 +294,8 @@ fun LibraryRoute(
         }
       }
       LibraryToolbar(
-        onSearch = {
-          onOpenSearch(LibrarySearchScope(null, listOf("local", "remote"), fallbackTitle))
-        },
-        available = searchEverywhereEnabled,
+        onSearch = {},
+        available = false,
         openFocus = searchAction,
       )
       Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -330,7 +314,7 @@ fun LibraryRoute(
               horizontalArrangement = Arrangement.spacedBy(18.dp),
               verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-              itemsIndexed(local, key = { _, item -> allLocalKey(item.path) }) { index, item ->
+              itemsIndexed(local, key = { _, item -> allLocalKey(item.path) }) { _, item ->
                 val key = allLocalKey(item.path)
                 val requester = remember(key) { FocusRequester() }
                 allRequesters[key] = requester
@@ -345,18 +329,10 @@ fun LibraryRoute(
                   },
                   modifier = Modifier
                     .focusRequester(requester)
-                    .then(
-                      if (index < columns && searchEverywhereEnabled) {
-                        Modifier.focusProperties { up = searchAction }
-                      } else {
-                        Modifier
-                      },
-                    )
                     .onFocusChanged { if (it.isFocused) viewModel.selectedPath = item.path },
                 )
               }
-              itemsIndexed(remote, key = { _, library -> allRemoteKey(library.id) }) { remoteIndex, library ->
-                val index = local.size + remoteIndex
+              items(remote, key = { library -> allRemoteKey(library.id) }) { library ->
                 val key = allRemoteKey(library.id)
                 val requester = remember(key) { FocusRequester() }
                 allRequesters[key] = requester
@@ -376,15 +352,7 @@ fun LibraryRoute(
                     segment = LibrarySegment.Servers
                     remoteViewModel.openLibrary(library)
                   },
-                  modifier = Modifier
-                    .focusRequester(requester)
-                    .then(
-                      if (index < columns && searchEverywhereEnabled) {
-                        Modifier.focusProperties { up = searchAction }
-                      } else {
-                        Modifier
-                      },
-                    ),
+                  modifier = Modifier.focusRequester(requester),
                 )
               }
             }

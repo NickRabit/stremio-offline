@@ -131,7 +131,7 @@ class RemoteLibraryChromeTest {
   }
 
   @Test
-  fun `the picker root and an episodes level offer Search when the flag is on`() {
+  fun `the picker root offers no Search but an episodes level does`() {
     val api = api()
     api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(
       items = listOf(RemoteItemDto(id = "e1", name = "Pilot", type = "episode")),
@@ -142,15 +142,9 @@ class RemoteLibraryChromeTest {
     compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
     compose.waitForIdle()
 
-    compose.onNodeWithTag(TagLibrarySearchAction).assertExists()
-    compose.onNodeWithTag(TagLibraryTypeFilter).assertDoesNotExist()
-    focusOn(TagLibrarySearchAction)
-    press(Key.DirectionCenter)
-    assertNull(opened.single().library)
-    assertEquals(listOf("local", "remote"), opened.single().sources)
-    assertEquals("Your library", opened.single().title)
+    // The picker lists whole libraries; Search starts inside one of them.
+    compose.onNodeWithTag(TagLibrarySearchAction).assertDoesNotExist()
 
-    // Search took the remote; the library card is what opens the directory under the episodes level.
     focusOn(remoteLibraryTag("rlibA"))
     openLibrary(api)
     compose.onNodeWithTag(remoteItemTag("f1")).performKeyInput { pressKey(Key.DirectionCenter) }

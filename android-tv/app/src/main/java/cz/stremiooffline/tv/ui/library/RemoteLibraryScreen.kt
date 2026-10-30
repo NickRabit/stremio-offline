@@ -160,15 +160,11 @@ fun RemoteLibraryRoute(
   var committed by remember { mutableStateOf("") }
   var editorOpen by remember { mutableStateOf(false) }
   val directory = level as? RemoteLevel.Directory
-  val searchAvailable = searchEverywhereEnabled || directory != null
-  val sectionTitle = stringResource(R.string.tv_library_title)
+  // The library picker is not a place to search from; every level inside a library is.
+  val searchAvailable = directory != null || (searchEverywhereEnabled && level != null)
   val scopeTitle = state.levels.joinToString("  ›  ") { it.title }
   fun openRemoteSearch() {
-    val current = level
-    if (current == null) {
-      onOpenSearch(LibrarySearchScope(null, listOf("local", "remote"), sectionTitle))
-      return
-    }
+    val current = level ?: return
     if (current is RemoteLevel.Directory) {
       onOpenSearch(
         LibrarySearchScope(
@@ -388,15 +384,7 @@ fun RemoteLibraryRoute(
       }
       Box(Modifier.weight(1f).fillMaxWidth()) {
         if (level == null) {
-          LibraryPicker(
-            state,
-            viewModel,
-            imageUrl,
-            requesters,
-            gridFocus,
-            errorFocus,
-            firstRowUp = searchAction.takeIf { searchAvailable },
-          )
+          LibraryPicker(state, viewModel, imageUrl, requesters, gridFocus, errorFocus)
         } else {
           ItemBrowser(
             level = level,
@@ -741,7 +729,6 @@ private fun LibraryPicker(
   requesters: MutableMap<String, FocusRequester>,
   gridFocus: FocusRequester,
   errorFocus: FocusRequester,
-  firstRowUp: FocusRequester? = null,
 ) {
   // The picker is the root of the servers half: the section's own heading already names the page, so
   // the library cards start straight away rather than under a second large heading.
@@ -759,7 +746,7 @@ private fun LibraryPicker(
             horizontalArrangement = Arrangement.spacedBy(18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
           ) {
-            itemsIndexed(state.libraries, key = { _, library -> library.id }) { index, library ->
+            itemsIndexed(state.libraries, key = { _, library -> library.id }) { _, library ->
               val key = "library:${library.id}"
               val requester = remember(key) { FocusRequester() }
               DisposableEffect(key, requester) {
@@ -780,13 +767,6 @@ private fun LibraryPicker(
                 onClick = { viewModel.openLibrary(library) },
                 modifier = Modifier
                   .focusRequester(requester)
-                  .then(
-                    if (index < columns && firstRowUp != null) {
-                      Modifier.focusProperties { up = firstRowUp }
-                    } else {
-                      Modifier
-                    },
-                  )
                   .onFocusChanged { if (it.isFocused) viewModel.select(REMOTE_PICKER_KEY, key) },
               )
             }
