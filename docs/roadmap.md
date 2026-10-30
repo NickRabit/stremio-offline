@@ -27,9 +27,11 @@ metadata store, or scheduler for each platform.
 | --- | --- | --- |
 | 1 | Richer title detail | Cast and crew, related titles, age rating and the next episode's date from one server route, in small steps on the existing detail screens (no detail rewrite). See [Richer title detail](#richer-title-detail). |
 | 2 | Player chapters and badges | Chapter marks on the timeline, the current chapter's name and a chapter list; badges for what is playing (resolution, HDR, audio). Web and Android TV. See [Player and mobile chrome](#player-and-mobile-chrome). |
-| 3 | Queue controls | Night-only window first, then an aggregate speed limit and a completion notice; current download limits cover concurrency, not these controls. |
-| 4 | Selective SQLite storage | Move large, often rewritten collections out of whole-file JSON rewrites, phase by phase, per [#644](https://github.com/NickRabit/stremio-offline/issues/644). |
-| 5 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
+| 3 | Intro skip and next-episode threshold | Skip intro, recap and outro from IntroDB segments, with optional auto-skip; a configurable point before the end where the next episode is offered. Web and Android TV. See [Player and mobile chrome](#player-and-mobile-chrome). |
+| 4 | Queue controls | Night-only window first, then an aggregate speed limit and a completion notice; current download limits cover concurrency, not these controls. |
+| 5 | Selective SQLite storage | Move large, often rewritten collections out of whole-file JSON rewrites, phase by phase, per [#644](https://github.com/NickRabit/stremio-offline/issues/644). |
+| 6 | Library file fingerprint | Re-associate metadata, favourites and resume positions when a file is moved outside the app, by size and a partial hash; best built on the SQLite storage. See [Library](#library). |
+| 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
 | Implemented | Personal Home layout | Each account arranges its own Home: which rows show, their order, and extra catalogue feeds from the addons it may use. The instance's Show on Home switches stay the default. |
@@ -204,6 +206,18 @@ client calls TMDB on its own.
 - **Badges for what is playing**: resolution, HDR/Dolby Vision and the audio
   format of the running stream, shown with the player controls. Nuvio added
   both in October 2026.
+- **Skip intro, recap and outro**: read the segments of the playing episode or
+  film from [IntroDB](https://introdb.app/docs) by IMDb id, show a skip button
+  while playback is inside one, and offer an opt-in auto-skip for intro and
+  recap. Only the server asks IntroDB and keeps the answer for a while; no
+  client calls it, and secure mode may turn the lookup off, since it tells a
+  third party what is playing. No IMDb id, no data or a failing service means
+  no button and no error. Read-only: nothing is submitted back.
+- **Next-episode threshold**: the next episode is offered only once playback
+  ends (`onEnded` in `web/src/Player.tsx`). Add a Playback setting for when it
+  appears instead: a percentage (97–100 %) or minutes before the end, and the
+  start of an outro segment when that comes earlier. This is a new trigger, not
+  an existing hard-coded value made configurable.
 - Improve Safari landscape chrome behavior on a physical iPhone/iPad; WebKit
   automation cannot emulate browser chrome, so this needs a device. The same goes
   for the native iOS fullscreen with the Fill screen toggle.
@@ -216,6 +230,17 @@ client calls TMDB on its own.
   a wizard that offers it at the moment someone needs it.
 - Bulk rename by pattern. Deliberately out of the first multi-library release;
   the operations queue is shaped to take it without a migration.
+- A per-file fingerprint so a move outside the app keeps its metadata,
+  favourites and resume position. Today identity follows the relative path, so
+  a file moved on the NAS by hand shows up as a new item. Store size and a
+  SHA-256 of the first and last MiB; when a new path matches exactly one file
+  that disappeared, take over its record, and leave anything ambiguous as a
+  suggestion. Modification time is not compared, since a copy to another disk
+  changes it, and files still being written are skipped. A series is one
+  top-level folder, so a renamed series folder needs the show's match carried
+  over as well, not only its files. The library's existing fingerprint only
+  detects that something changed. Build it on the SQLite storage rather than
+  growing the JSON files.
 
 ### Queue controls
 
