@@ -91,6 +91,29 @@ test("playback claims survive selection expiry but not auth expiry or parent rem
   assert.throws(() => registry.get(second.resourceId, owner.sid, "media"), { status: 410 });
 });
 
+test("internal claims are readable only by the server and release idempotently", () => {
+  const registry = new MediaResources(() => 0);
+  const claim = registry.claimInternal(source, 60_000);
+  const id = claim.path.split("/").pop()!;
+  assert.equal(registry.get(id, undefined, "media", true).stream.url, source.url);
+  assert.throws(() => registry.get(id, "any-session", "media"), { status: 404 });
+  claim.release();
+  claim.release();
+  assert.throws(() => registry.get(id, undefined, "media", true), { status: 404 });
+});
+
+test("internal claims refuse remote media-server streams and expire at their lifetime", () => {
+  let now = 1_000;
+  const registry = new MediaResources(() => now);
+  assert.throws(() => registry.claimInternal({ url: sealedFor() }, 60_000), { status: 404, code: "RESOURCE_NOT_FOUND" });
+  const claim = registry.claimInternal(source, 5_000);
+  const id = claim.path.split("/").pop()!;
+  now += 4_999;
+  assert.equal(registry.get(id, undefined, "media", true).id, id);
+  now += 1;
+  assert.throws(() => registry.get(id, undefined, "media", true), { status: 410, code: "RESOURCE_EXPIRED" });
+});
+
 test("playlist children are sealed onto the parent instead of stored", () => {
   const registry = new MediaResources(() => 0, 2);
   const parent = registry.mediaStream(source, owner);

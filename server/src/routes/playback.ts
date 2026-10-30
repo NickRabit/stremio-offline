@@ -77,6 +77,82 @@ const READ_AHEAD_GRACE_MS = 50;
  *  that ignores ranges. They keep the ordinary transfer. */
 const unblockable = new Set<string>();
 const PLAYLIST_TYPE = /mpegurl|dash\+xml/i;
+const DOCUMENT_MEDIA_TYPES = new Set([
+  "text/html",
+  "application/xhtml+xml",
+  "image/svg+xml",
+  "text/xml",
+  "application/xml",
+  "text/javascript",
+  "application/javascript",
+]);
+
+/** Document types must not inherit this origin's privileges when opened as media. */
+export function servedMediaType(upstream: string): string {
+  const essence = upstream.split(";", 1)[0].trim().toLowerCase();
+  if (DOCUMENT_MEDIA_TYPES.has(essence)) return "application/octet-stream";
+  if (essence.endsWith("+xml") && essence !== "application/dash+xml") return "application/octet-stream";
+  return upstream;
+}
+
+const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+const PLAYLIST_PREFIX = Buffer.from("#EXTM3U");
+
+const playlistPrefixState = (data: Buffer): "playlist" | "other" | "partial" => {
+  const bomLength = data.subarray(0, Math.min(data.length, UTF8_BOM.length)).equals(UTF8_BOM.subarray(0, Math.min(data.length, UTF8_BOM.length)))
+    && data[0] === UTF8_BOM[0] ? Math.min(data.length, UTF8_BOM.length) : 0;
+  if (data.length < UTF8_BOM.length && data.length > 0 && data[0] === UTF8_BOM[0]) return "partial";
+  const payload = bomLength === UTF8_BOM.length ? data.subarray(UTF8_BOM.length) : data;
+  const compared = Math.min(payload.length, PLAYLIST_PREFIX.length);
+  if (!payload.subarray(0, compared).equals(PLAYLIST_PREFIX.subarray(0, compared))) return "other";
+  return payload.length >= PLAYLIST_PREFIX.length ? "playlist" : "partial";
+};
+
+const prependBody = (prefix: Buffer, reader: ReadableStreamDefaultReader<Uint8Array>): ReadableStream<Uint8Array> => {
+  let sent = false;
+  return new ReadableStream({
+    async pull(controller) {
+      if (!sent) {
+        sent = true;
+        if (prefix.length) controller.enqueue(prefix);
+        return;
+      }
+      const { done, value } = await reader.read();
+      if (done) controller.close();
+      else if (value.length) controller.enqueue(value);
+    },
+    cancel(reason) { return reader.cancel(reason); },
+  });
+};
+
+/** Reads only enough of the first body chunks to decide whether they spell the HLS signature. */
+const sniffPlaylist = async (body: ReadableStream<Uint8Array>, signal: AbortSignal) => {
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const { done, value } = await reader.read();
+      if (value?.length) chunks.push(Buffer.from(value));
+      const prefix = Buffer.concat(chunks);
+      const state = playlistPrefixState(prefix);
+      if (state === "partial" && !done) continue;
+      return { playlist: state === "playlist", stream: prependBody(prefix, reader) };
+    }
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    throw error;
+  }
+};
+
+const rangeStartsAtZero = (range: string) => !range || /^\s*bytes=0-\d*\s*$/.test(range);
+
+const readAheadPrefix = async (readAhead: RemoteReadAhead, first: ReadAheadBlock): Promise<Buffer> => {
+  const chunks: Buffer[] = [];
+  const end = Math.min(first.end, first.start + UTF8_BOM.length + PLAYLIST_PREFIX.length);
+  for await (const piece of readAhead.read(first, first.start, end)) chunks.push(piece);
+  return Buffer.concat(chunks);
+};
 
 /** Writes the 206 head for `position`..`last` and then the bytes the read-ahead holds for them,
  *  reading at most READ_AHEAD_BLOCKS blocks. Returns where it stopped; whatever is left is the
@@ -87,7 +163,7 @@ async function writeBlocks(
   position: number, last: number, open: OpenRange, signal: AbortSignal, progress = { position },
 ): Promise<number> {
   res.status(206);
-  if (first.contentType) res.setHeader("content-type", first.contentType);
+  if (first.contentType) res.setHeader("content-type", servedMediaType(first.contentType));
   res.setHeader("accept-ranges", "bytes");
   res.setHeader("content-range", `bytes ${position}-${last}/${first.size}`);
   res.setHeader("content-length", String(last - position + 1));
@@ -470,7 +546,10 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       }
       if (![200, 206].includes(upstream.status)) { discard(upstream.body); throw new AppError("The media server is unavailable.", "err.mediaServerUnavailable", 502); }
       res.status(upstream.status);
-      for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
+      for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
+        const value = upstream.headers.get(name);
+        if (value) res.setHeader(name, name === "content-type" ? servedMediaType(value) : value);
+      }
       if (req.method === "HEAD" || !upstream.body) { discard(upstream.body); return void res.end(); }
       // The stream pipeline on this response is what crosses Node's default of ten `close`
       // listeners. One slot, not a raised global default.
@@ -489,6 +568,18 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       stream = { ...stream, url: child.toString(), behaviorHints: { ...stream.behaviorHints, proxyHeaders: { request: Object.fromEntries(headers) } } };
     }
     const raw = stream.url!;
+    const sendRewrittenPlaylist = (text: string, baseUrl: string, status: number) => {
+      const proxied = (value: string) => {
+        const child = new URL(value, baseUrl);
+        if (!["http:", "https:"].includes(child.protocol) || child.username || child.password) throw new Error("Unsupported playlist resource.");
+        const path = mediaChildPath(resource.parent ?? resource.id, child.toString());
+        const url = `${path}${internal ? `?token=${INTERNAL_TOKEN}` : ""}`;
+        return grant ? airplayAccess.url(grant.playbackId, url) : url;
+      };
+      const playlist = rewritePlaylist(text, proxied, (value) => safeSourceText(value, stream) ?? "");
+      if (res.destroyed || res.writableEnded) return;
+      res.status(status).type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store").send(playlist);
+    };
     const findOwner = () => [...playbackOwners].find(([, value]) => value.resourceId === (resource.parent ?? resource.id))?.[0];
     const ownedSession = findOwner();
     // A conversion's read is opened before the route that started it has registered the session,
@@ -548,6 +639,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         first = await remoteReadAhead.take(key, start, open);
         // Judged on where the host really answered from: a redirect may lead to a manifest.
         if ((first.contentType && PLAYLIST_TYPE.test(first.contentType)) || /\.(m3u8|mpd)$/i.test(new URL(first.url || raw).pathname)) throw new UnexpectedAnswer();
+        if (start === 0 && rangeStartsAtZero(askedRange)
+          && playlistPrefixState(await readAheadPrefix(remoteReadAhead, first)) === "playlist") throw new UnexpectedAnswer();
       } catch (error) {
         if (error instanceof RangeNotSatisfiable) {
           if (error.contentRange && /^bytes \*\/\d+$/.test(error.contentRange)) res.setHeader("content-range", error.contentRange);
@@ -598,7 +691,9 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       // source hears nothing. Only a reader that keeps going is handed on to it, from where this
       // leaves off.
       res.status(held.status);
-      for (const [name, value] of Object.entries(held.headers)) res.setHeader(name, value);
+      for (const [name, value] of Object.entries(held.headers)) {
+        res.setHeader(name, name.toLowerCase() === "content-type" ? servedMediaType(value) : value);
+      }
       if (!res.write(held.bytes)) await once(res, "drain");
       alreadySent = held.bytes.length;
       log("DEBUG", "Served a read the source had already answered", { req: req.id, range: askedRange || "whole file", bytes: alreadySent, whole: held.complete });
@@ -679,28 +774,33 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       return void res.status(502).json({ error: "Media source request failed." });
     }
     const contentType = upstream.headers.get("content-type") ?? "";
-    if (contentType.includes("dash+xml") || new URL(upstream.url).pathname.toLowerCase().endsWith(".mpd")) {
+    if (/dash\+xml/i.test(contentType) || new URL(upstream.url).pathname.toLowerCase().endsWith(".mpd")) {
       await upstream.body?.cancel();
       throw new Error("DASH playlists are not supported by the media proxy.");
     }
-    if (req.method !== "HEAD" && (contentType.includes("mpegurl") || new URL(upstream.url).pathname.toLowerCase().endsWith(".m3u8"))) {
-      const proxied = (value: string) => {
-        const child = new URL(value, upstream.url);
-        if (!["http:", "https:"].includes(child.protocol) || child.username || child.password) throw new Error("Unsupported playlist resource.");
-        const path = mediaChildPath(resource.parent ?? resource.id, child.toString());
-        const url = `${path}${internal ? `?token=${INTERNAL_TOKEN}` : ""}`;
-        return grant ? airplayAccess.url(grant.playbackId, url) : url;
-      };
-      const playlist = rewritePlaylist(await readMediaText(upstream), proxied, (text) => safeSourceText(text, stream) ?? "");
-      if (res.destroyed || res.writableEnded) return;
-      res.status(upstream.status).type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store").send(playlist);
+    const playlistResponse = (body: BodyInit, status: number) => new Response(body, { status, headers: upstream.headers });
+    const explicitPlaylist = /mpegurl/i.test(contentType) || new URL(upstream.url).pathname.toLowerCase().endsWith(".m3u8");
+    if (req.method !== "HEAD" && explicitPlaylist) {
+      sendRewrittenPlaylist(await readMediaText(upstream, 2 * 1024 * 1024, controller.signal), upstream.url, upstream.status);
       return;
+    }
+    let body: AsyncIterable<Uint8Array> | null = null;
+    if (req.method === "GET" && !alreadySent && !explicitPlaylist && rangeStartsAtZero(askedRange) && upstream.body) {
+      const sniffed = await sniffPlaylist(upstream.body, controller.signal);
+      if (sniffed.playlist) {
+        const response = playlistResponse(sniffed.stream, upstream.status);
+        sendRewrittenPlaylist(await readMediaText(response, 2 * 1024 * 1024, controller.signal), upstream.url, upstream.status);
+        return;
+      }
+      body = Readable.fromWeb(sniffed.stream as never);
     }
     if (!alreadySent) {
       res.status(upstream.status);
-      for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
+      for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
+        const value = upstream.headers.get(name);
+        if (value) res.setHeader(name, name === "content-type" ? servedMediaType(value) : value);
+      }
     }
-    if (!upstream.body) return res.end();
     // These hosts hand over a few seconds and then cut the stream. FFmpeg answers that by
     // reconnecting on its own -- another connection into a host that is counting them, and one
     // it usually refuses. The transfer is picked up here instead, from the byte it stopped at,
@@ -715,22 +815,23 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       const promised = /^bytes \d+-(\d+)\//.exec(String(res.getHeader("content-range") ?? ""));
       const answered = /^bytes (\d+)-(\d+)\//.exec(upstream.headers.get("content-range") ?? "");
       if (upstream.status !== 206 || !promised || !answered || Number(answered[1]) !== from || Number(answered[2]) < Number(promised[1])) {
-        try { void upstream.body.cancel().catch(() => undefined); } catch { /* already disturbed */ }
+        try { void upstream.body?.cancel().catch(() => undefined); } catch { /* already disturbed */ }
         log("WARN", "The source handed on the wrong part of the file", { req: req.id, url: raw, status: upstream.status, range: headers.range, answered: upstream.headers.get("content-range") });
         return void res.destroy();
       }
       expected = Number(promised[1]) - from + 1;
     }
+    body ??= upstream.body ? Readable.fromWeb(upstream.body as never) : null;
+    if (!body) return res.end();
     let delivered = 0;
     // Worth keeping only while it is still short: a longer read is the picture going by.
     let keep: Buffer[] | undefined = req.method === "GET" ? [] : undefined;
     let kept = 0;
-    let body: ReadableStream | null = upstream.body;
     for (let resumed = 0; ; ) {
       let broke: unknown;
       let waitingSince = performance.now();
       try {
-        for await (const chunk of Readable.fromWeb(body as never)) {
+        for await (const chunk of body) {
           const arrived = performance.now();
           // Never more than was asked for: a source picking the transfer up runs to the end of the
           // file, and a body longer than the length already promised breaks the response itself.
@@ -785,7 +886,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         log("WARN", "The source would not pick the transfer up", { req: req.id, url: raw, at: from + delivered, status: next?.status });
         throw broke ?? new Error("The source ended the transfer early.");
       }
-      body = next.body;
+      body = Readable.fromWeb(next.body as never);
     }
     res.end();
   }));

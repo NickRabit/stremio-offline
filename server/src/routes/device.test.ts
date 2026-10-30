@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,7 +10,7 @@ import { DeviceTransfers } from "../device-transfers.js";
 import { messageKeyOf } from "../errors.js";
 import { remoteSecretStamp, sealRemoteContent } from "../media-server-reference.js";
 import { MediaServerError } from "../media-server-types.js";
-import { ResourceError, type ResourceOwner } from "../media-resources.js";
+import { mediaResources, ResourceError, type ResourceOwner } from "../media-resources.js";
 import type { Store } from "../store.js";
 import type { StreamItem } from "../types.js";
 import type { UserPermissions, UserRecord } from "../users.js";
@@ -396,4 +396,55 @@ test("a media server that forbids downloading mints no ticket for its own origin
   const response = await api(harness.base, "/api/device-download", { method: "POST", user: "bob", body: { title: "Some Movie" } });
   assert.equal(response.status, 403, await response.text());
   assert.equal(harness.tickets.size, 0, "no ticket is minted for a row the media server forbids");
+});
+
+test("a device HLS transfer gives FFmpeg only an internal proxied URL and releases its claim", async (t) => {
+  const addonUrl = "http://127.0.0.1:1/private/master.m3u8?token=addon-secret";
+  const harness = await mount({
+    source: {
+      url: addonUrl,
+      behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer addon-secret" } } },
+    },
+  });
+  t.after(harness.close);
+  const directory = await mkdtemp(path.join(tmpdir(), "device-ffmpeg-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const ffmpeg = path.join(directory, "ffmpeg");
+  const logFile = path.join(directory, "ffmpeg-args.jsonl");
+  await writeFile(ffmpeg, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.FAKE_FFMPEG_LOG, JSON.stringify(args) + "\\n");
+if (args.includes("-h")) process.stdout.write("extension_picky");
+else process.stdout.write("assembled");
+`, { mode: 0o755 });
+  const previousFfmpeg = process.env.FFMPEG_PATH;
+  const previousLog = process.env.FAKE_FFMPEG_LOG;
+  const previousPrivate = process.env.ALLOW_PRIVATE_ADDONS;
+  process.env.FFMPEG_PATH = ffmpeg;
+  process.env.FAKE_FFMPEG_LOG = logFile;
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => {
+    if (previousFfmpeg === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = previousFfmpeg;
+    if (previousLog === undefined) delete process.env.FAKE_FFMPEG_LOG; else process.env.FAKE_FFMPEG_LOG = previousLog;
+    if (previousPrivate === undefined) delete process.env.ALLOW_PRIVATE_ADDONS; else process.env.ALLOW_PRIVATE_ADDONS = previousPrivate;
+  });
+
+  const minted = await api(harness.base, "/api/device-download", { method: "POST", user: "bob", body: { title: "Movie" } });
+  const { url } = await minted.json() as { url: string };
+  const response = await api(harness.base, url, { user: "bob" });
+  assert.equal(await response.text(), "assembled");
+
+  const invocations = (await readFile(logFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+  const args = invocations.find((item) => item.includes("-i"));
+  assert.ok(args);
+  const input = args[args.indexOf("-i") + 1]!;
+  assert.match(input, /^http:\/\/127\.0\.0\.1:\d+\/api\/media\/[A-Za-z0-9_-]{43}\?token=[a-f0-9]+$/);
+  assert.equal(input.includes("addon-secret"), false);
+  assert.equal(args.includes("-headers"), false);
+  assert.equal(args[args.indexOf("-protocol_whitelist") + 1], "http,tcp,crypto");
+
+  await settle();
+  const resourceId = new URL(input).pathname.split("/").pop()!;
+  assert.throws(() => mediaResources.get(resourceId, undefined, "media", true), { status: 404 });
 });

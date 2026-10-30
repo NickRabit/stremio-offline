@@ -16,6 +16,8 @@ import { safeFetch } from "./security.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { ffmpegPath, mediaStopping, trackMedia } from "./media-tools.js";
+import { internalUrl, redactMediaText } from "./internal-url.js";
+import { mediaResources } from "./media-resources.js";
 import { retryAfterMs } from "./outbound.js";
 import {
   classifyFailure, expectedSize, HttpSourceError, IncompleteDownloadError, parseContentRange,
@@ -212,6 +214,11 @@ export const isExecutableDownloadSnapshot = (
   snapshot: SourceAdmissionSnapshotV1 | undefined,
 ): snapshot is SourceAdmissionSnapshotV1 =>
   snapshot?.operation === "downloadToLibrary" && isExecutableDownloadProfile(snapshot.profile);
+
+/** FFmpeg input options for an HLS source that is already behind the media proxy. */
+export function proxiedPlaylistInput(source: string, playlistFlags: string[]): string[] {
+  return ["-protocol_whitelist", "http,tcp,crypto", ...playlistFlags, "-i", source];
+}
 
 export const isSelectedProfileJob = (
   job: Pick<DownloadJob, "sourceAdmission" | "stream">,
@@ -3048,16 +3055,10 @@ export class DownloadQueue {
     await unlink(partial).catch(() => undefined);
     job.received = 0; job.total = undefined; job.segments = undefined;
 
-    const headers = Object.entries(stream.behaviorHints?.proxyHeaders?.request ?? {})
-      .map(([name, value]) => `${name}: ${value}\r\n`)
-      .join("");
-
+    const claim = mediaResources.claimInternal(stream, 24 * 60 * 60_000);
     const args = [
       "-hide_banner", "-loglevel", "error", "-nostdin",
-      "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-      ...await playlistArgs("ffmpeg"),
-      ...(headers ? ["-headers", headers] : []),
-      "-i", stream.url!,
+      ...proxiedPlaylistInput(internalUrl(claim.path), await playlistArgs("ffmpeg")),
       ...(job.resolution?.audioTrack != null
         ? ["-map", "0:v:0?", "-map", `0:a:${job.resolution.audioTrack}?`,
           ...(job.resolution.subtitleTrack != null ? ["-map", `0:s:${job.resolution.subtitleTrack}?`] : []),
@@ -3073,7 +3074,13 @@ export class DownloadQueue {
     ];
 
     log("INFO", "Assembling a playlist", { id: job.id, target: job.target });
-    const child = trackMedia(spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] }));
+    let child;
+    try {
+      child = trackMedia(spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] }));
+    } catch (error) {
+      claim.release();
+      throw error;
+    }
 
     let stderr = "";
     child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4000); });
@@ -3104,10 +3111,14 @@ export class DownloadQueue {
       // Killed by the shutdown: nothing is recorded, so the job is still downloading on disk and
       // the next start queues it again, as it did before the shutdown took FFmpeg with it.
       if (code !== 0 && mediaStopping()) await new Promise<never>(() => {});
-      if (code !== 0) throw new SourceError(`The playlist could not be assembled. ${stderr.trim().split("\n").pop() ?? ""}`.trim());
+      if (code !== 0) {
+        const detail = redactMediaText(stderr.trim().split("\n").pop() ?? "");
+        throw new SourceError(`The playlist could not be assembled. ${detail}`.trim());
+      }
     } finally {
       clearInterval(progress);
       controller.signal.removeEventListener("abort", abort);
+      claim.release();
     }
 
     const written = await stat(partial).then((info) => info.size, () => 0);
