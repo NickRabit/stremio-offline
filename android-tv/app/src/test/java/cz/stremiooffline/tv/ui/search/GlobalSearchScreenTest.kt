@@ -20,6 +20,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
+import androidx.lifecycle.ViewModelProvider
 import cz.stremiooffline.tv.data.GlobalSearchAliasDto
 import cz.stremiooffline.tv.data.GlobalSearchCanonicalDto
 import cz.stremiooffline.tv.data.GlobalSearchClusterDto
@@ -280,7 +281,9 @@ class GlobalSearchScreenTest {
     press(Key.DirectionUp)
 
     compose.onNodeWithTag(recentSearchTag("Heat")).assertIsNotFocused()
-    compose.onNodeWithTag(TagGlobalSearchField).assertIsNotFocused()
+    compose.onNodeWithTag(globalSearchFilterTag("source_all")).assertIsFocused()
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagGlobalSearchField).assertIsFocused()
   }
 
   @Test
@@ -390,6 +393,135 @@ class GlobalSearchScreenTest {
   }
 
   @Test
+  fun `source chips and both dropdowns are reachable on one toolbar`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(searchable("a", "Alpha"))
+    mount(api)
+
+    focus(TagGlobalSearchField)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchFilterTag("source_all")).assertIsFocused()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(globalSearchFilterTag("source_catalog")).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.searchableCalls == 1 }
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(globalSearchFilterTag("source_local")).assertIsFocused()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(globalSearchFilterTag("source_remote")).assertIsFocused()
+    press(Key.DirectionLeft)
+    compose.onNodeWithTag(globalSearchFilterTag("source_local")).assertIsFocused()
+
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(globalSearchFilterTag("source_remote")).assertIsFocused()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(globalSearchFilterTag("kind_all")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchFilterTag("kind_movie")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchFilterTag("kind_series")).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused().assertTextContains("Series", substring = true)
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertIsFocused().assertIsDisplayed()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertIsFocused()
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagGlobalSearchField).assertIsFocused()
+  }
+
+  @Test
+  fun `selecting Catalog loads searchable names without opening the scope panel`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(searchable("a", "Alpha"))
+    mount(api)
+
+    chooseCatalogSource()
+    compose.waitUntil(5_000) { api.searchableCalls == 1 }
+
+    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertTextContains("all addons", substring = true)
+  }
+
+  @Test
+  fun `the type dropdown changes the submitted kind and returns focus`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1")))
+    mount(api)
+    search()
+    focus(TagGlobalSearchKindChip)
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchFilterTag("kind_movie")).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals("movie", api.globalStartCalls.last().kind)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused().assertTextContains("Movies", substring = true)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(globalSearchFilterTag("kind_movie")).assertIsFocused()
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "cs-rCZ-w960dp-h540dp-xhdpi")
+  fun `Czech toolbar keeps a long addon label inside the safe viewport`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(searchable("a", "A very long addon name ".repeat(12)))
+    val restored = ViewModelProvider(compose.activity, GlobalSearchViewModel.factory(api))[GlobalSearchViewModel::class.java]
+    restored.setScope(SearchScope(addonKey = "a"))
+    mount(api)
+    compose.waitUntil(5_000) { api.searchableCalls > 0 }
+    compose.waitForIdle()
+
+    val source = compose.onNodeWithTag(globalSearchFilterTag("source_all")).fetchSemanticsNode().boundsInRoot
+    val kind = compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val scope = compose.onNodeWithTag(TagGlobalSearchScopeChip).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+    assertTrue(kotlin.math.abs(source.center.y - kind.center.y) < 2f)
+    assertTrue(kotlin.math.abs(kind.center.y - scope.center.y) < 2f)
+    assertTrue(kind.right <= scope.left)
+    assertTrue(scope.right < root.right)
+  }
+
+  @Test
+  fun `a restored Catalog scope loads its persisted label after recomposition`() {
+    val api = FakeTvApi()
+    val gate = CompletableDeferred<Unit>()
+    api.searchableGate = gate
+    api.searchableValue = listOf(searchable("a", "Alpha"))
+    val restored = ViewModelProvider(
+      compose.activity,
+      GlobalSearchViewModel.factory(api),
+    )[GlobalSearchViewModel::class.java]
+    restored.setScope(SearchScope(addonKey = "a"))
+
+    mount(api)
+    gate.complete(Unit)
+    compose.waitUntil(5_000) {
+      compose.onAllNodes(androidx.compose.ui.test.hasText("Alpha", substring = true))
+        .fetchSemanticsNodes().isNotEmpty()
+    }
+
+    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertTextContains("Alpha", substring = true)
+  }
+
+  @Test
+  fun `the first result returns through status to the toolbar`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1", title = "One")))
+    mount(api)
+    search()
+
+    focus(globalSearchCardTag("m1"))
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagGlobalSearchSourceStrip).assertIsFocused()
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagGlobalSearchField).assertIsFocused()
+  }
+
+  @Test
   fun `picking an addon re-submits the query with its scope`() {
     val api = FakeTvApi()
     api.searchableValue = listOf(searchable("a", "Alpha"))
@@ -488,16 +620,21 @@ class GlobalSearchScreenTest {
   }
 
   @Test
-  fun `the D-pad moves between the filter row and the scope chip`() {
+  fun `the D-pad moves between the type and scope dropdowns`() {
     val api = FakeTvApi()
     mount(api)
     chooseCatalogSource()
 
-    focus(globalSearchFilterTag("kind_series"))
+    focus(TagGlobalSearchKindChip)
     press(Key.DirectionRight)
     compose.onNodeWithTag(TagGlobalSearchScopeChip).assertIsFocused()
     press(Key.DirectionLeft)
-    compose.onNodeWithTag(globalSearchFilterTag("kind_series")).assertIsFocused()
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
+    compose.onNodeWithTag(globalSearchFilterTag("kind_all")).assertDoesNotExist()
   }
 
   @Test
@@ -690,7 +827,7 @@ class GlobalSearchScreenTest {
     }
     mount(api)
     search()
-    focus(globalSearchFilterTag("kind_movie"))
+    focus(TagGlobalSearchKindChip)
 
     next = GlobalSearchPollDto(
       changed = true,
@@ -699,7 +836,7 @@ class GlobalSearchScreenTest {
     gate.complete(Unit)
     compose.waitForIdle()
 
-    compose.onNodeWithTag(globalSearchFilterTag("kind_movie")).assertIsFocused()
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
   }
 
   @Test

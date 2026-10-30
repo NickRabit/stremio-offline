@@ -648,8 +648,15 @@ class ApiClient(
 
   /** Up to four authorized poster URLs for one library root or folder. An empty answer leaves the
    *  folder's own icon in place. */
-  override suspend fun remotePreview(libraryId: String, parentId: String?): RemotePreviewDto {
-    val query = if (parentId.isNullOrEmpty()) "" else "?parentId=" + encode(parentId)
+  override suspend fun remotePreview(
+    libraryId: String,
+    parentId: String?,
+    childrenArtwork: Boolean,
+  ): RemotePreviewDto {
+    val query = buildList {
+      if (!parentId.isNullOrEmpty()) add("parentId=" + encode(parentId))
+      if (childrenArtwork) add("artwork=children")
+    }.joinToString("&", prefix = if (parentId.isNullOrEmpty() && !childrenArtwork) "" else "?")
     val path = "/api/remote-libraries/" + encode(libraryId) + "/preview" + query
     return request(Request.Builder().url(address.resolve(path)).get().build())
       .decode<RemotePreviewDto>() ?: RemotePreviewDto()

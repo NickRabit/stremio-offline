@@ -21,6 +21,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 /** The independent remote group deadlines of the library-bound loader. */
 private const val REMOTE_DISCOVERY_TIMEOUT_MS = 3_000L
 private const val REMOTE_MATCH_TIMEOUT_MS = 8_000L
+private const val ADDON_GROUP_TIMEOUT_MS = 8_000L
 /** Two requests of one category at a time, the same budget the catalogue's own panel keeps: enough
  *  to overlap the slow ones, few enough that opening the panel does not flood the server. */
 private const val MAX_GROUP_REQUESTS = 2
@@ -41,34 +42,49 @@ class LibraryPlaySources(private val api: TvApi) {
   private val addonPermits = Semaphore(MAX_GROUP_REQUESTS)
   private val remotePermits = Semaphore(MAX_GROUP_REQUESTS)
 
-  /** Loads the offered rows of [target] and reports them until the last addon answered. A
-   *  cancelled caller stops the loading; nothing is reported for a catalogue play, a snapshot of
-   *  several rows, a target without a path, an unbound file or a failed lookup. */
+  /** Loads the offered rows of [target] and reports them until the last addon answered. The initial
+   *  snapshot is published first and every identified group grows behind it. A catalogue play is
+   *  owned by its detail and is never rediscovered here; an unidentified target keeps only the
+   *  rows it carried. */
   suspend fun load(target: PlayTarget, report: (OfferedSources) -> Unit) {
-    // The rows the play carried: a native detail's addon snapshot, or the versions of a remote play.
     val snapshot = (target.initialSources ?: target.remoteSources).orEmpty()
-    // More than one row is a list of its own and is offered as it stands; the catalogue detail
-    // reports its own list too, so nothing here asks the addons about it.
-    if (snapshot.size > 1) return
     if (target.catalogue) return
-    // One row and no identity names nothing to ask the addons about; a remote play reports its own
-    // versions instead.
-    if (target.remoteItem != null && snapshot.isNotEmpty()) return
+    fun reportSnapshot(loading: Boolean) {
+      val rows = Streams.deduped(snapshot)
+      if (rows.isNotEmpty()) report(OfferedSources(rows, loading))
+    }
     val identityType = target.subtitleType?.takeIf { it.isNotBlank() }
     val identityId = target.subtitleTarget?.takeIf { it.isNotBlank() }
-    val title = if (identityType != null && identityId != null) {
+    val carriedIdentity = identityType != null && identityId != null
+    if (target.remoteItem != null && !carriedIdentity) {
+      reportSnapshot(loading = false)
+      return
+    }
+    reportSnapshot(loading = true)
+    val title = if (carriedIdentity) {
       LibraryTitleDto(type = identityType, id = identityId, name = target.title)
     } else {
-      val path = target.path ?: return
-      read { api.libraryTitle(path) } ?: return
+      val path = target.path ?: run {
+        reportSnapshot(loading = false)
+        return
+      }
+      read { api.libraryTitle(path) } ?: run {
+        reportSnapshot(loading = false)
+        return
+      }
     }
-    if (title.id.isBlank()) return
+    if (title.id.isBlank()) {
+      reportSnapshot(loading = false)
+      return
+    }
     val type = title.type
     // An episode is asked for the id the addon stream endpoint takes, which is the video's own.
     val id = title.videoId?.takeIf { it.isNotBlank() } ?: title.id
-    val settings = read { api.settings() } ?: SettingsResponse()
-    val addons = read { api.addons() }.orEmpty()
-    val profileIds = read { api.sourceProfiles() }.orEmpty().map { it.id }.filter { it.isNotBlank() }
+    val settings = deadline(ADDON_GROUP_TIMEOUT_MS) { api.settings() } ?: SettingsResponse()
+    val addons = deadline(ADDON_GROUP_TIMEOUT_MS) { api.addons() }.orEmpty()
+    val profileIds = deadline(ADDON_GROUP_TIMEOUT_MS) { api.sourceProfiles() }.orEmpty()
+      .map { it.id }
+      .filter { it.isNotBlank() }
     val sort = Streams.resolveRuleSort(Streams.StreamSort.of(settings.streamSort), profileIds)
     val filters = Streams.StreamFilters(sort = sort)
     val noteProfile = Streams.noteProfileId(sort, settings.streamSort, profileIds)
@@ -117,7 +133,7 @@ class LibraryPlaySources(private val api: TvApi) {
       // The local lookup is its own child, started before the addons are asked, so a failed
       // addon discovery neither cancels it nor skips it.
       launch {
-        val found = read { api.localStreams(type, id) }.orEmpty()
+        val found = deadline(ADDON_GROUP_TIMEOUT_MS) { api.localStreams(type, id) }.orEmpty()
         lock.withLock {
           local += found
           localAsking = false
@@ -140,7 +156,7 @@ class LibraryPlaySources(private val api: TvApi) {
         }
         // A library the account switched off takes no part in matching: it is not asked, and it is
         // not named as a failure either.
-        val libraries = discovered.filter { it.enabled }
+        val libraries = discovered.filter { it.enabled && it.id != target.remoteItem?.libraryId }
         if (libraries.isEmpty()) {
           lock.withLock { remoteAsking = false; publish() }
           return@launch
@@ -178,7 +194,8 @@ class LibraryPlaySources(private val api: TvApi) {
       }
       // A provider that came back without a key names nothing to ask on its own, and an unfiltered
       // call would fan out into every addon at once: it is left out of the providers.
-      val sources = read { api.streamSources(type, id) }.orEmpty().filter { it.key.isNotBlank() }
+      val sources = deadline(ADDON_GROUP_TIMEOUT_MS) { api.streamSources(type, id) }.orEmpty()
+        .filter { it.key.isNotBlank() }
       var pending = sources.size
       lock.withLock {
         if (pending == 0) addonsAsking = false
@@ -188,7 +205,7 @@ class LibraryPlaySources(private val api: TvApi) {
         sources.forEach { source ->
           launch {
             val part = addonPermits.withPermit {
-              read { api.streams(type, id, source.key) }.orEmpty()
+              deadline(ADDON_GROUP_TIMEOUT_MS) { api.streams(type, id, source.key) }.orEmpty()
             }
             // Addon answers can resume on different threads, so their updates take a lock: a lost
             // decrement would leave the panel asking forever.
@@ -212,4 +229,7 @@ class LibraryPlaySources(private val api: TvApi) {
   } catch (error: ApiError) {
     null
   }
+
+  private suspend fun <T> deadline(ms: Long, call: suspend () -> T): T? =
+    read { withTimeoutOrNull(ms) { call() } }
 }

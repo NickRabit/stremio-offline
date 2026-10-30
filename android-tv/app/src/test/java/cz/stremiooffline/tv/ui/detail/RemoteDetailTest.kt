@@ -226,6 +226,16 @@ class RemoteDetailTest {
     compose.waitForIdle()
   }
 
+  @Test
+  fun `the effective default version is named before a manual pick`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"))
+    mount(api)
+    compose.waitUntil(5_000) { api.remoteSourcesRequests.contains("rlibA" to "iA") }
+
+    compose.onNodeWithTag(TagRemoteDetailPickCaption).assertTextContains("Version a1", substring = true)
+  }
+
   /** RIGHT from Play walks the toolbar; the target holds focus once it is reached. */
   private fun focusByLabel(label: String) {
     repeat(6) {

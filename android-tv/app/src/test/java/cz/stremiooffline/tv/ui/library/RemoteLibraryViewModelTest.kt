@@ -51,7 +51,9 @@ class RemoteLibraryViewModelTest {
     val calls = mutableListOf<BrowseCall>()
     var failure: ApiError? = null
     val previewPages = mutableMapOf<String, List<String>>()
+    val previewMosaics = mutableMapOf<String, String>()
     val previewRequests = mutableListOf<Pair<String, String?>>()
+    val previewChildren = mutableListOf<Boolean>()
     var previewFailure: ApiError? = null
     var previewGate: CompletableDeferred<Unit>? = null
     var previewsInFlight = 0
@@ -64,14 +66,20 @@ class RemoteLibraryViewModelTest {
       return emptyList()
     }
 
-    override suspend fun remotePreview(libraryId: String, parentId: String?): RemotePreviewDto {
+    override suspend fun remotePreview(
+      libraryId: String,
+      parentId: String?,
+      childrenArtwork: Boolean,
+    ): RemotePreviewDto {
       previewRequests += libraryId to parentId
+      previewChildren += childrenArtwork
       previewsInFlight++
       mostPreviewsAtOnce = maxOf(mostPreviewsAtOnce, previewsInFlight)
       try {
         previewGate?.let { withContext(currentCoroutineContext()) { it.await() } }
         previewFailure?.let { throw it }
-        return RemotePreviewDto(previewPages["$libraryId|${parentId ?: ""}"].orEmpty())
+        val key = "$libraryId|${parentId ?: ""}"
+        return RemotePreviewDto(previewPages[key].orEmpty(), previewMosaics[key])
       } finally {
         previewsInFlight--
       }
@@ -411,18 +419,18 @@ class RemoteLibraryViewModelTest {
   }
 
   @Test
-  fun `a root or folder that carries its own poster never asks for a preview`() = runTest(dispatcher) {
+  fun `a root prefers a child preview while a folder with its own poster skips it`() = runTest(dispatcher) {
     val api = FakeRemoteApi()
     val vm = RemoteLibraryViewModel(api)
     vm.openLibrary(RemoteLibraryDto(id = "rlibA", name = "Mixed", provider = "emby", type = "mixed"))
     advanceUntilIdle()
 
-    vm.loadPreview("rlibA|", "rlibA", null, mosaic = true, poster = "/own-root.jpg")
+    vm.loadPreview("rlibA|", "rlibA", null, mosaic = true, poster = "/own-root.jpg", childrenArtwork = true)
     vm.loadPreview("rlibA|f1", "rlibA", "f1", mosaic = true, poster = "/folder.jpg")
     advanceUntilIdle()
 
-    // Own poster wins over any child collage, so neither the root nor the folder asked.
-    assertTrue(api.previewRequests.isEmpty())
+    assertEquals(listOf("rlibA" to null), api.previewRequests)
+    assertEquals(listOf(true), api.previewChildren)
   }
 
   @Test
@@ -483,6 +491,41 @@ class RemoteLibraryViewModelTest {
     advanceUntilIdle()
     // A settled failure is not retried on every recomposition.
     assertEquals(1, api.previewRequests.size)
+  }
+
+  @Test
+  fun `a library list refresh clears a failed preview so artwork can be retried`() = runTest(dispatcher) {
+    val api = FakeRemoteApi()
+    api.previewFailure = ApiError(ApiFailure.Generic)
+    val vm = RemoteLibraryViewModel(api)
+    vm.loadPreview("rlibA|", "rlibA", null, mosaic = true, childrenArtwork = true)
+    advanceUntilIdle()
+    assertEquals(RemotePreviewState.Failed, vm.preview("rlibA|"))
+
+    vm.loadLibraries()
+    advanceUntilIdle()
+    api.previewFailure = null
+    vm.loadPreview("rlibA|", "rlibA", null, mosaic = true, childrenArtwork = true)
+    advanceUntilIdle()
+
+    assertEquals(2, api.previewRequests.size)
+    assertEquals(RemotePreviewState.Ready(emptyList()), vm.preview("rlibA|"))
+  }
+
+  @Test
+  fun `a ready preview retains its composed mosaic and cell fallbacks`() = runTest(dispatcher) {
+    val api = FakeRemoteApi()
+    api.previewPages["rlibA|"] = listOf("/a.jpg", "/b.jpg")
+    api.previewMosaics["rlibA|"] = "/api/remote-libraries/rlibA/mosaic?v=1"
+    val vm = RemoteLibraryViewModel(api)
+
+    vm.loadPreview("rlibA|", "rlibA", null, mosaic = true, childrenArtwork = true)
+    advanceUntilIdle()
+
+    assertEquals(
+      RemotePreviewState.Ready(listOf("/a.jpg", "/b.jpg"), "/api/remote-libraries/rlibA/mosaic?v=1"),
+      vm.preview("rlibA|"),
+    )
   }
 }
 

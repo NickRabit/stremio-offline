@@ -8,10 +8,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -19,6 +21,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
@@ -27,11 +30,17 @@ import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.ProgressDto
+import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagSourcesLoading
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
+import cz.stremiooffline.tv.ui.catalog.TagSourceFilterOptions
+import cz.stremiooffline.tv.ui.catalog.TagSourcesCount
+import cz.stremiooffline.tv.ui.catalog.TagSourcesFilters
+import cz.stremiooffline.tv.ui.catalog.sourceFilterOptionTag
+import cz.stremiooffline.tv.ui.catalog.sourceFilterTag
 import cz.stremiooffline.tv.ui.catalog.sourceRowTag
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CompletableDeferred
@@ -55,6 +64,7 @@ class PlayerSourcesPanelTest {
 
   private val alpha = StreamDto(sourceId = "srcA", kind = "remote", playable = true, name = "small", title = "Czech 1 GB", addonName = "Alpha")
   private val beta = StreamDto(sourceId = "srcB", kind = "remote", playable = true, name = "big", title = "Czech 8 GB", addonName = "Beta")
+  private val gamma = StreamDto(sourceId = "srcC", kind = "remote", playable = true, name = "medium", title = "Czech 4 GB", addonName = "Gamma")
   private val local = StreamDto(
     // The server mints a source id for a local row too, but the row must not need one: the panel
     // marks it by the path it plays, so a blank id names no source and marks no second row.
@@ -403,6 +413,82 @@ class PlayerSourcesPanelTest {
     press(Key.DirectionCenter)
     compose.onNodeWithTag(sourceRowTag(0)).assertExists()
     compose.onNodeWithTag(sourceRowTag(1)).assertExists()
+  }
+
+  @Test
+  fun `sort and addon filters change the player's rows without losing the playing marker`() {
+    val api = FakeTvApi()
+    mount(api, listOf(alpha, beta, gamma), sourceId = "srcA")
+    compose.waitUntil(5_000) { api.startedSources.isNotEmpty() }
+    focusSources()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagSourcesFilters).assertExists()
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Playing"))
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Alpha"))
+
+    compose.onNodeWithTag(sourceFilterTag("sort")).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(sourceFilterTag("sort")).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.onNodeWithTag(TagSourceFilterOptions).assertExists()
+    compose.onNodeWithTag(sourceFilterOptionTag(1)).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(sourceFilterOptionTag(1)).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Playing"))
+    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Gamma"))
+    compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Beta"))
+
+    compose.onNodeWithTag(sourceFilterTag("addon")).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(sourceFilterTag("addon")).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.onNodeWithTag(sourceFilterOptionTag(2)).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(sourceFilterOptionTag(2)).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Alpha")).assert(hasText("Playing"))
+    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Beta"))
+    compose.onNodeWithTag(sourceRowTag(2)).assertDoesNotExist()
+    compose.onNodeWithTag(TagSourcesCount).assertTextContains("2 of 3", substring = true)
+  }
+
+  @Test
+  fun `player filter options describe the complete mixed source list`() {
+    val origin = StreamDto(
+      sourceId = "ms1",
+      kind = "remote",
+      playable = true,
+      name = "Original",
+      provider = "Jellyfin",
+      libraryName = "Films",
+      remoteItem = RemoteItemContext("rlibA", "iA", "ms1", "remote:rlibA:iA"),
+    )
+    val otherRemote = origin.copy(
+      sourceId = "ms9",
+      name = "Other library",
+      provider = "Emby",
+      libraryName = "Shows",
+      remoteItem = RemoteItemContext("rlibB", "iB", "ms9", "remote:rlibB:iB"),
+    )
+    val offered = listOf(origin, otherRemote, local, alpha)
+    val target = PlayTarget(
+      key = "remote:rlibA:iA",
+      title = "Heat",
+      resume = false,
+      sourceId = "ms1",
+      remoteItem = origin.remoteItem,
+    )
+
+    val lists = playerSourceLists(
+      offered = offered,
+      target = target,
+      addons = emptyList(),
+      filters = cz.stremiooffline.tv.catalog.Streams.StreamFilters(),
+      preferredLanguage = "en",
+      showTorrents = true,
+    )
+
+    assertEquals(listOf("Alpha"), lists.options.addons.map { it.value })
+    assertEquals(1, lists.options.localCount)
+    assertEquals(listOf("rlibA", "rlibB"), lists.options.remoteGroups.map { it.value.removePrefix(cz.stremiooffline.tv.catalog.Streams.REMOTE_FILTER_PREFIX) })
+    assertEquals(4, lists.rows.size)
   }
 
   // A button that leaves the row while it holds the remote would leave the D-pad with nothing to

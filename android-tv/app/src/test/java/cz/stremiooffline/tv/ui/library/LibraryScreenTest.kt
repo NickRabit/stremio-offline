@@ -586,6 +586,38 @@ class LibraryScreenTest {
   }
 
   @Test
+  fun `a nonempty pending library root stays usable while artwork refreshes`() {
+    val api = object : FakeTvApi() {
+      override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
+        if (path == null) {
+          return BrowseResult(
+            "",
+            listOf(BrowseItem.Library(path = "Films", name = "Films", mosaicImage = null)),
+            1,
+            pending = true,
+          )
+        }
+        return BrowseResult(path, listOf(file("Films/It/It.mkv")), 1, false)
+      }
+    }
+    var opened: DetailData? = null
+    mount(api, pendingDelayMs = 10_000L, onDetail = { opened = it })
+    compose.waitForIdle()
+    switchTo("Files")
+
+    focusOn("Films")
+    compose.onNodeWithTag("Films").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) {
+      compose.onAllNodesWithTag("Films/It/It.mkv").fetchSemanticsNodes().isNotEmpty()
+    }
+    focusOn("Films/It/It.mkv")
+    compose.onNodeWithTag("Films/It/It.mkv").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { opened != null }
+
+    assertEquals("Films/It/It.mkv", opened?.files?.single()?.path)
+  }
+
+  @Test
   fun `the section opens on the All grid with the local and the remote library`() {
     val api = FakeTvApi()
     api.pages[null] = BrowseResult("", listOf(localLibrary("Films")), 1, false)

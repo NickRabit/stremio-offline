@@ -71,6 +71,7 @@
   <string name="tv_play_when_ready">Avvio quando le fonti saranno pronte…</string>
   <string name="catalog_title">Cosa vuoi guardare?</string>
   <string name="catalog_genre">Genere</string>
+  <string name="catalog_type">Digitare</string>
   <string name="catalog_all_genres">Tutto</string>
   <string name="catalog_all_addons">tutti i componenti aggiuntivi</string>
   <string name="catalog_all_catalogs">Tutti i cataloghi</string>
@@ -342,6 +343,7 @@
   <string name="tv_global_search_kind_all">Tutti</string>
   <string name="tv_global_search_kind_movies">Film</string>
   <string name="tv_global_search_kind_series">Serie</string>
+  <string name="tv_global_search_all_addons">Tutti i componenti aggiuntivi</string>
   <plurals name="tv_global_search_status_loading">
     <item quantity="one">Ricerca in %1$s fonte…</item>
     <item quantity="other">Ricerca in %1$s fonti…</item>

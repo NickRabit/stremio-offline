@@ -71,6 +71,7 @@
   <string name="tv_play_when_ready">Spustím, až budou zdroje načtené…</string>
   <string name="catalog_title">Co chcete sledovat?</string>
   <string name="catalog_genre">Žánr</string>
+  <string name="catalog_type">Typ</string>
   <string name="catalog_all_genres">Všechny</string>
   <string name="catalog_all_addons">všech doplňcích</string>
   <string name="catalog_all_catalogs">Všechny katalogy</string>
@@ -352,6 +353,7 @@
   <string name="tv_global_search_kind_all">Vše</string>
   <string name="tv_global_search_kind_movies">Filmy</string>
   <string name="tv_global_search_kind_series">Seriály</string>
+  <string name="tv_global_search_all_addons">Všechny doplňky</string>
   <plurals name="tv_global_search_status_loading">
     <item quantity="one">Hledá se v %1$s zdroji…</item>
     <item quantity="few">Hledá se ve %1$s zdrojích…</item>

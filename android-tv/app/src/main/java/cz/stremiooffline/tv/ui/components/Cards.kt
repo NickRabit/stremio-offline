@@ -76,6 +76,8 @@ fun PosterCard(
   cardTag: String? = null,
   fallbackImageUrl: String? = null,
   mosaic: List<String> = emptyList(),
+  /** Try an image before the collage and use the collage only when every image fails. */
+  imageBeforeMosaic: Boolean = false,
 ) {
   var focused by remember { mutableStateOf(false) }
   val candidates = remember(imageUrl, fallbackImageUrl) { listOfNotNull(imageUrl, fallbackImageUrl).distinct() }
@@ -107,7 +109,9 @@ fun PosterCard(
           .clip(shape)
           .background(Brush.verticalGradient(listOf(Tokens.Panel2, Tokens.Bg))),
       ) {
-        if (art != null && mosaic.size < 2) {
+        val collage = mosaic.size >= 2
+        val imageShown = art != null && (!collage || imageBeforeMosaic)
+        if (imageShown) {
           AsyncImage(
             model = art,
             contentDescription = null,
@@ -116,12 +120,13 @@ fun PosterCard(
             modifier = Modifier.fillMaxSize(),
           )
         }
-        // As on the web, two or more covers inside win over the folder's own picture.
-        val collage = mosaic.size >= 2
-        if (collage) PosterMosaic(mosaic, label = stringResource(R.string.library_mosaic_alt, mosaic.size.toString()))
+        // As on the web, two or more covers inside normally win over the folder's own picture.
+        if (collage && (!imageBeforeMosaic || art == null)) {
+          PosterMosaic(mosaic, label = stringResource(R.string.library_mosaic_alt, mosaic.size.toString()))
+        }
         // The name over the artwork is the gradient fallback; with a real poster it would only
         // fight the picture.
-        if (art == null && !collage) {
+        if (!imageShown && !collage) {
           Text(
             name,
             color = Tokens.Text,

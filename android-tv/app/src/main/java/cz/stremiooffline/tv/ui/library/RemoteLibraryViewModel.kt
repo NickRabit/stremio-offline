@@ -52,7 +52,7 @@ data class RemoteItemsState(
  *  leaves the plain folder icon. */
 sealed interface RemotePreviewState {
   data object Loading : RemotePreviewState
-  data class Ready(val posters: List<String>) : RemotePreviewState
+  data class Ready(val posters: List<String>, val mosaic: String? = null) : RemotePreviewState
   data object Failed : RemotePreviewState
 }
 
@@ -158,11 +158,19 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
 
   /**
    * Asks for one root or folder mosaic. The composed tile calls this; the cache and the running
-   * jobs dedupe. A library with the mosaic off never fetches at all, and a tile that already
-   * carries its own poster never does either -- the own picture wins over any child collage.
+   * jobs dedupe. A library with the mosaic off never fetches. A root asks for child artwork when
+   * [childrenArtwork] is set even when the provider has its own poster; a folder with its own
+   * poster keeps that artwork and skips the request.
    */
-  fun loadPreview(key: String, libraryId: String, parentId: String?, mosaic: Boolean, poster: String? = null) {
-    if (!mosaic || !poster.isNullOrEmpty()) return
+  fun loadPreview(
+    key: String,
+    libraryId: String,
+    parentId: String?,
+    mosaic: Boolean,
+    poster: String? = null,
+    childrenArtwork: Boolean = false,
+  ) {
+    if (!mosaic || (!childrenArtwork && !poster.isNullOrEmpty())) return
     val known = previews[key]
     if (known is RemotePreviewState.Ready || known is RemotePreviewState.Failed) return
     if (previewJobs.containsKey(key)) return
@@ -170,9 +178,9 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
     val generation = previewEpoch
     previewJobs[key] = viewModelScope.launch {
       try {
-        val posters = previewSlots.withPermit { api.remotePreview(libraryId, parentId).posters }
+        val preview = previewSlots.withPermit { api.remotePreview(libraryId, parentId, childrenArtwork) }
         if (generation != previewEpoch) return@launch
-        previews = previews + (key to RemotePreviewState.Ready(posters))
+        previews = previews + (key to RemotePreviewState.Ready(preview.posters, preview.mosaic))
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (_: Throwable) {
@@ -441,12 +449,13 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
       RemoteTypeFilter.Series -> items.filter { it.type in setOf("folder", "series", "season", "episode") }
     }
 
-  /** Cancels every running mosaic load; finished answers stay cached for a return. */
+  /** Cancels every running mosaic load; successful answers stay cached, while a failure may be
+   *  retried after navigation or a listing refresh. */
   private fun cancelPreviews() {
     previewEpoch++
     previewJobs.values.forEach { it.cancel() }
     previewJobs.clear()
-    previews = previews.filterValues { it !is RemotePreviewState.Loading }
+    previews = previews.filterValues { it is RemotePreviewState.Ready }
   }
 
   private fun cancelLoads() {

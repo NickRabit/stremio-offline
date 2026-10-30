@@ -266,6 +266,7 @@ internal fun RecentSearches(
   modifier: Modifier = Modifier,
   /** Where Up from the first row goes; null leaves it to the geometry. */
   firstRowUp: FocusRequester? = fieldFocus,
+  firstRowFocus: FocusRequester? = null,
 ) {
   val rowFocuses = remember { mutableMapOf<String, FocusRequester>() }
   val removeFocuses = remember { mutableMapOf<String, FocusRequester>() }
@@ -296,7 +297,10 @@ internal fun RecentSearches(
       itemsIndexed(items, key = { _, entry -> entry.query }) { index, entry ->
         RecentSearchRow(
           query = entry.query,
-          rowFocus = remember(entry.query) { rowFocuses.getOrPut(entry.query) { FocusRequester() } },
+          rowFocus = remember(entry.query, index) {
+            if (index == 0 && firstRowFocus != null) firstRowFocus
+            else rowFocuses.getOrPut(entry.query) { FocusRequester() }
+          },
           removeFocus = remember(entry.query) { removeFocuses.getOrPut(entry.query) { FocusRequester() } },
           upFocus = if (index == 0) firstRowUp else null,
           onClick = { onPick(entry.query) },

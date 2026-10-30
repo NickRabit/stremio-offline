@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,9 +24,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -44,8 +55,10 @@ import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.MicIcon
+import cz.stremiooffline.tv.ui.catalog.PanelOption
 import cz.stremiooffline.tv.ui.catalog.RecentSearches
 import cz.stremiooffline.tv.ui.catalog.SearchScopePanel
+import cz.stremiooffline.tv.ui.catalog.SidePanel
 import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
 import cz.stremiooffline.tv.ui.catalog.rememberVoiceSearch
 import cz.stremiooffline.tv.ui.catalog.scopeLabel
@@ -55,7 +68,6 @@ import cz.stremiooffline.tv.ui.catalog.voiceSearchAvailable
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.TvTextField
-import cz.stremiooffline.tv.ui.components.leftToNeighbour
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.android.awaitFrame
@@ -63,6 +75,7 @@ import kotlinx.coroutines.android.awaitFrame
 const val TagGlobalSearchField = "global_search_field"
 const val TagGlobalSearchInput = "global_search_input"
 const val TagGlobalSearchVoice = "global_search_voice"
+const val TagGlobalSearchKindChip = "global_search_kind_chip"
 const val TagGlobalSearchScopeChip = "global_search_scope_chip"
 const val TagGlobalSearchSourceStrip = "global_search_source_strip"
 const val TagGlobalSearchSourceRows = "global_search_source_rows"
@@ -111,7 +124,12 @@ fun GlobalSearchScreen(
   val fieldFocus = remember { FocusRequester() }
   val gridFocus = remember { FocusRequester() }
   val scopeFocus = remember { FocusRequester() }
+  val kindFocus = remember { FocusRequester() }
+  val sourceFocuses = remember { List(4) { FocusRequester() } }
+  val recentEntryFocus = remember { FocusRequester() }
+  val sourceStripFocus = remember { FocusRequester() }
   val scopePanelEntry = remember { FocusRequester() }
+  val kindPanelEntry = remember { FocusRequester() }
   var draft by remember { mutableStateOf("") }
   var stripExpanded by remember { mutableStateOf(false) }
   var clearFocusSignal by remember { mutableIntStateOf(0) }
@@ -119,6 +137,9 @@ fun GlobalSearchScreen(
   var overlayWasOpen by remember { mutableStateOf(overlayOpen) }
   var scopePanel by remember { mutableStateOf(false) }
   var scopePanelOpener by remember { mutableStateOf<FocusRequester?>(null) }
+  var kindPanel by remember { mutableStateOf(false) }
+  var kindPanelOpener by remember { mutableStateOf<FocusRequester?>(null) }
+  var toolbarFocusIndex by remember { mutableIntStateOf(4) }
 
   fun submit() {
     val query = draft.trim()
@@ -135,6 +156,17 @@ fun GlobalSearchScreen(
   fun clearCardFocus() {
     clearFocusSignal++
   }
+
+  val showRecent = libraryScope == null && !state.submitted && draft.isBlank() && state.recent.isNotEmpty()
+  val scopeShown = libraryScope == null && state.sources == setOf(SourceClass.Catalog)
+  val toolbarSize = if (scopeShown) 6 else 5
+  val activeToolbarIndex = toolbarFocusIndex.coerceIn(0, toolbarSize - 1)
+  val lastToolbarFocus = when (activeToolbarIndex) {
+    in 0..3 -> sourceFocuses[activeToolbarIndex]
+    4 -> kindFocus
+    else -> scopeFocus
+  }
+  val contentFocus = if (state.submitted) sourceStripFocus else recentEntryFocus
 
   val voice = rememberVoiceSearch(voiceAvailable, onVoiceResult = ::onVoice, launcher = voiceLauncher)
 
@@ -160,8 +192,18 @@ fun GlobalSearchScreen(
   LaunchedEffect(viewModel) {
     viewModel.refreshRecent()
   }
+  LaunchedEffect(viewModel, state.sources) {
+    if (state.sources == setOf(SourceClass.Catalog)) viewModel.loadSearchable()
+  }
   if (onBack != null) BackHandler { onBack() }
   BackHandler(enabled = stripExpanded) { stripExpanded = false }
+  LaunchedEffect(kindPanel) {
+    if (!kindPanel) {
+      val opener = kindPanelOpener
+      kindPanelOpener = null
+      runCatching { opener?.requestFocus() }
+    }
+  }
   LaunchedEffect(scopePanel) {
     if (!scopePanel) {
       val opener = scopePanelOpener
@@ -179,13 +221,6 @@ fun GlobalSearchScreen(
       .voiceKey(voice),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    Text(
-      stringResource(R.string.tv_global_search_title).uppercase(),
-      color = Tokens.Accent,
-      fontSize = 10.sp,
-      fontWeight = FontWeight.Bold,
-      letterSpacing = 1.8.sp,
-    )
     if (libraryScope != null) {
       Text(
         stringResource(R.string.tv_library_search_scope, libraryScope.title),
@@ -195,7 +230,7 @@ fun GlobalSearchScreen(
         overflow = TextOverflow.Ellipsis,
       )
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
       TvTextField(
         label = stringResource(R.string.tv_global_search_title),
         value = draft,
@@ -206,7 +241,10 @@ fun GlobalSearchScreen(
         inputTestTag = TagGlobalSearchInput,
         onSubmit = ::submit,
         modifier = Modifier
-          .width(520.dp)
+          .weight(1f)
+          .focusDirections(
+            down = if (libraryScope == null) sourceFocuses.first() else contentFocus.takeIf { state.submitted || showRecent },
+          )
           .onFocusChanged { if (it.isFocused) clearCardFocus() },
       )
       if (voice.available) {
@@ -219,6 +257,7 @@ fun GlobalSearchScreen(
           modifier = Modifier
             .size(38.dp)
             .testTag(TagGlobalSearchVoice)
+            .focusDirections(down = if (libraryScope == null) sourceFocuses.first() else contentFocus)
             .onFocusChanged { if (it.isFocused) clearCardFocus() },
         )
       }
@@ -233,12 +272,24 @@ fun GlobalSearchScreen(
         kind = state.kind,
         scope = state.scope,
         searchable = state.searchable,
+        fieldFocus = fieldFocus,
+        sourceFocuses = sourceFocuses,
+        kindFocus = kindFocus,
         scopeFocus = scopeFocus,
+        downFocus = contentFocus.takeIf { state.submitted || showRecent },
+        onFocusChanged = { toolbarFocusIndex = it },
         onSources = {
           viewModel.setSources(it)
-          if (it != setOf(SourceClass.Catalog)) scopePanel = false
+          if (it == setOf(SourceClass.Catalog)) {
+            viewModel.loadSearchable()
+          } else {
+            scopePanel = false
+          }
         },
-        onKind = viewModel::setKind,
+        onKindPanel = {
+          kindPanelOpener = kindFocus
+          kindPanel = true
+        },
         onScope = {
           viewModel.loadSearchable()
           scopePanelOpener = scopeFocus
@@ -257,10 +308,12 @@ fun GlobalSearchScreen(
         onToggle = { stripExpanded = !stripExpanded },
         onRetry = viewModel::retry,
         onFocused = ::clearCardFocus,
+        upFocus = lastToolbarFocus,
+        downFocus = gridFocus,
+        focus = sourceStripFocus,
       )
     }
 
-    val showRecent = libraryScope == null && !state.submitted && draft.isBlank() && state.recent.isNotEmpty()
     if (showRecent) {
       Box(Modifier.weight(1f).fillMaxWidth()) {
         RecentSearches(
@@ -271,7 +324,8 @@ fun GlobalSearchScreen(
             viewModel.submit(picked)
           },
           onForget = viewModel::forget,
-          firstRowUp = null,
+          firstRowUp = lastToolbarFocus,
+          firstRowFocus = recentEntryFocus,
         )
       }
     } else {
@@ -286,6 +340,7 @@ fun GlobalSearchScreen(
         gridFocus = gridFocus,
         restoreToken = resultRestore,
         clearFocusSignal = clearFocusSignal,
+        firstRowUp = if (state.submitted) sourceStripFocus else null,
       )
     }
   }
@@ -304,6 +359,17 @@ fun GlobalSearchScreen(
       initialFocus = scopePanelEntry,
     )
   }
+  if (kindPanel) {
+    GlobalSearchKindPanel(
+      kind = state.kind,
+      onPick = {
+        viewModel.setKind(it)
+        kindPanel = false
+      },
+      onClose = { kindPanel = false },
+      initialFocus = kindPanelEntry,
+    )
+  }
 }
 @Composable
 private fun GlobalSearchFilters(
@@ -311,109 +377,102 @@ private fun GlobalSearchFilters(
   kind: KindFilter,
   scope: SearchScope,
   searchable: List<SearchableCatalogDto>,
+  fieldFocus: FocusRequester,
+  sourceFocuses: List<FocusRequester>,
+  kindFocus: FocusRequester,
   scopeFocus: FocusRequester,
+  downFocus: FocusRequester?,
+  onFocusChanged: (Int) -> Unit,
   onSources: (Set<SourceClass>) -> Unit,
-  onKind: (KindFilter) -> Unit,
+  onKindPanel: () -> Unit,
   onScope: () -> Unit,
   onFocused: () -> Unit,
 ) {
-  val kindSeriesFocus = remember { FocusRequester() }
   val catalog = sources == setOf(SourceClass.Catalog)
-  Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
-    GlobalSearchFilter(
-      text = stringResource(R.string.tv_global_search_source_all),
-      selected = sources.isEmpty(),
-      tag = "source_all",
-      onFocused = onFocused,
-      onClick = { onSources(emptySet()) },
+  Row(
+    modifier = Modifier.fillMaxWidth().focusGroup(),
+    horizontalArrangement = Arrangement.spacedBy(6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    val values = listOf(
+      Triple(stringResource(R.string.tv_global_search_source_all), sources.isEmpty(), "source_all"),
+      Triple(stringResource(R.string.tv_global_search_source_catalog), catalog, "source_catalog"),
+      Triple(stringResource(R.string.tv_global_search_source_local), sources == setOf(SourceClass.Local), "source_local"),
+      Triple(stringResource(R.string.tv_global_search_source_remote), sources == setOf(SourceClass.Remote), "source_remote"),
     )
-    GlobalSearchFilter(
-      text = stringResource(R.string.tv_global_search_source_catalog),
-      selected = sources == setOf(SourceClass.Catalog),
-      tag = "source_catalog",
-      onFocused = onFocused,
-      onClick = { onSources(setOf(SourceClass.Catalog)) },
-    )
-    GlobalSearchFilter(
-      text = stringResource(R.string.tv_global_search_source_local),
-      selected = sources == setOf(SourceClass.Local),
-      tag = "source_local",
-      onFocused = onFocused,
-      onClick = { onSources(setOf(SourceClass.Local)) },
-    )
-    GlobalSearchFilter(
-      text = stringResource(R.string.tv_global_search_source_remote),
-      selected = sources == setOf(SourceClass.Remote),
-      tag = "source_remote",
-      onFocused = onFocused,
-      onClick = { onSources(setOf(SourceClass.Remote)) },
-    )
-    Box(Modifier.width(8.dp))
-    GlobalSearchFilter(
-      text = stringResource(R.string.tv_global_search_kind_all),
-      selected = kind == KindFilter.All,
-      tag = "kind_all",
-      onFocused = onFocused,
-      onClick = { onKind(KindFilter.All) },
-    )
-    GlobalSearchFilter(
-      text = stringResource(R.string.tv_global_search_kind_movies),
-      selected = kind == KindFilter.Movies,
-      tag = "kind_movie",
-      onFocused = onFocused,
-      onClick = { onKind(KindFilter.Movies) },
-    )
-    GlobalSearchFilter(
-      text = stringResource(R.string.tv_global_search_kind_series),
-      selected = kind == KindFilter.Series,
-      tag = "kind_series",
-      onFocused = onFocused,
-      onClick = { onKind(KindFilter.Series) },
+    values.forEachIndexed { index, (text, selected, tag) ->
+      GlobalSearchFilter(
+        text = text,
+        selected = selected,
+        tag = tag,
+        onFocused = { onFocusChanged(index); onFocused() },
+        onClick = {
+          onSources(
+            when (tag) {
+              "source_catalog" -> setOf(SourceClass.Catalog)
+              "source_local" -> setOf(SourceClass.Local)
+              "source_remote" -> setOf(SourceClass.Remote)
+              else -> emptySet()
+            },
+          )
+        },
+        modifier = Modifier
+          .focusRequester(sourceFocuses[index])
+          .focusDirections(
+            left = sourceFocuses.getOrNull(index - 1),
+            right = sourceFocuses.getOrNull(index + 1) ?: kindFocus,
+            up = fieldFocus,
+            down = downFocus,
+          ),
+      )
+    }
+    Spacer(Modifier.width(8.dp))
+    GlobalSearchDropdown(
+      text = stringResource(R.string.catalog_type) + " · " + kindLabel(kind),
+      contentDescription = stringResource(R.string.catalog_type),
+      onClick = onKindPanel,
+      onFocused = { onFocusChanged(4); onFocused() },
       modifier = Modifier
-        .focusRequester(kindSeriesFocus)
-        .then(if (catalog) Modifier.focusProperties { right = scopeFocus } else Modifier),
+        .focusRequester(kindFocus)
+        .focusDirections(
+          left = sourceFocuses.last(),
+          right = if (catalog) scopeFocus else kindFocus,
+          up = fieldFocus,
+          down = downFocus,
+        )
+        .testTag(TagGlobalSearchKindChip),
     )
     if (catalog) {
-      GlobalSearchScopeChip(
-        scope = scope,
-        searchable = searchable,
+      GlobalSearchDropdown(
+        text = if (scope.addonKey.isNullOrEmpty()) stringResource(R.string.tv_global_search_all_addons) else scopeLabel(scope, searchable),
+        contentDescription = stringResource(R.string.catalog_search_scope),
         onClick = onScope,
-        onFocused = onFocused,
+        onFocused = { onFocusChanged(5); onFocused() },
         modifier = Modifier
+          .weight(1f)
           .focusRequester(scopeFocus)
-          .leftToNeighbour(kindSeriesFocus),
+          .focusDirections(left = kindFocus, right = scopeFocus, up = fieldFocus, down = downFocus)
+          .testTag(TagGlobalSearchScopeChip),
       )
     }
   }
 }
 
 @Composable
-private fun GlobalSearchScopeChip(
-  scope: SearchScope,
-  searchable: List<SearchableCatalogDto>,
+private fun GlobalSearchDropdown(
+  text: String,
+  contentDescription: String,
   onClick: () -> Unit,
   onFocused: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-    Text(
-      stringResource(R.string.catalog_search_scope).uppercase(),
-      color = Tokens.Muted,
-      fontSize = 8.5.sp,
-      fontWeight = FontWeight.ExtraBold,
-      letterSpacing = 0.8.sp,
-    )
-    FocusButton(
-      text = scopeLabel(scope, searchable),
-      onClick = onClick,
-      contentDescription = stringResource(R.string.catalog_search_scope),
-      labelMaxWidth = 300.dp,
-      modifier = modifier
-        .height(38.dp)
-        .testTag(TagGlobalSearchScopeChip)
-        .onFocusChanged { if (it.isFocused) onFocused() },
-    )
-  }
+  FocusButton(
+    text = text,
+    onClick = onClick,
+    contentDescription = contentDescription,
+    trailing = { DropdownChevron() },
+    modifier = modifier.onFocusChanged { if (it.isFocused) onFocused() },
+  )
 }
 
 @Composable
@@ -436,6 +495,70 @@ private fun GlobalSearchFilter(
 }
 
 @Composable
+private fun GlobalSearchKindPanel(
+  kind: KindFilter,
+  onPick: (KindFilter) -> Unit,
+  onClose: () -> Unit,
+  initialFocus: FocusRequester,
+) {
+  val selected = KindFilter.entries.indexOf(kind).coerceAtLeast(0)
+  SidePanel(
+    title = stringResource(R.string.catalog_type),
+    onClose = onClose,
+    initialFocus = initialFocus,
+  ) {
+    KindFilter.entries.forEachIndexed { index, option ->
+      val tag = when (option) {
+        KindFilter.All -> "kind_all"
+        KindFilter.Movies -> "kind_movie"
+        KindFilter.Series -> "kind_series"
+      }
+      PanelOption(
+        text = kindLabel(option),
+        selected = option == kind,
+        onClick = { onPick(option) },
+        modifier = Modifier
+          .testTag(globalSearchFilterTag(tag))
+          .then(if (index == selected) Modifier.focusRequester(initialFocus) else Modifier),
+      )
+    }
+  }
+}
+
+@Composable
+private fun kindLabel(kind: KindFilter): String = stringResource(
+  when (kind) {
+    KindFilter.All -> R.string.tv_global_search_kind_all
+    KindFilter.Movies -> R.string.tv_global_search_kind_movies
+    KindFilter.Series -> R.string.tv_global_search_kind_series
+  },
+)
+
+@Composable
+private fun DropdownChevron() {
+  Icon(DropdownChevronIcon, contentDescription = null, tint = Tokens.Muted, modifier = Modifier.size(14.dp))
+}
+
+private val DropdownChevronIcon: ImageVector = ImageVector.Builder(
+  name = "DropdownChevron",
+  defaultWidth = 24.dp,
+  defaultHeight = 24.dp,
+  viewportWidth = 24f,
+  viewportHeight = 24f,
+).apply {
+  path(
+    stroke = SolidColor(Color.White),
+    strokeLineWidth = 2f,
+    strokeLineCap = StrokeCap.Round,
+    strokeLineJoin = StrokeJoin.Round,
+  ) {
+    moveTo(6f, 9f)
+    lineTo(12f, 15f)
+    lineTo(18f, 9f)
+  }
+}.build()
+
+@Composable
 private fun GlobalSourceStrip(
   sources: List<GlobalSearchSourceDto>,
   requested: Int,
@@ -444,6 +567,9 @@ private fun GlobalSourceStrip(
   onToggle: () -> Unit,
   onRetry: (String) -> Unit,
   onFocused: () -> Unit,
+  upFocus: FocusRequester,
+  downFocus: FocusRequester,
+  focus: FocusRequester,
 ) {
   val pending = sources.count { it.state == "queued" || it.state == "loading" || it.state == "indexing" }
   val loading = snapshotState == null || snapshotState == "partial"
@@ -457,6 +583,8 @@ private fun GlobalSourceStrip(
       text = text,
       onClick = onToggle,
       modifier = Modifier
+        .focusRequester(focus)
+        .focusDirections(up = upFocus, down = if (expanded) null else downFocus)
         .testTag(TagGlobalSearchSourceStrip)
         .onFocusChanged { if (it.isFocused) onFocused() },
     )
@@ -498,6 +626,23 @@ private fun GlobalSourceStrip(
       }
     }
   }
+}
+
+private fun Modifier.focusDirections(
+  left: FocusRequester? = null,
+  right: FocusRequester? = null,
+  up: FocusRequester? = null,
+  down: FocusRequester? = null,
+): Modifier = onPreviewKeyEvent { event ->
+  if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+  val target = when (event.key) {
+    Key.DirectionLeft -> left
+    Key.DirectionRight -> right
+    Key.DirectionUp -> up
+    Key.DirectionDown -> down
+    else -> null
+  }
+  target?.let { runCatching { it.requestFocus() }.isSuccess } ?: false
 }
 
 @Composable

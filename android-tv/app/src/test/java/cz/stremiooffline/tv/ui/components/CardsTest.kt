@@ -165,4 +165,73 @@ class CardsTest {
     compose.waitUntil(5_000) { requested.size == 2 }
     assertTrue("the folder's own cover is not drawn under the collage", "http://server/own.jpg" !in requested)
   }
+
+  @Test
+  fun `a failed composed mosaic falls back to the server supplied cells`() {
+    val requested = mutableListOf<String>()
+    compose.setContent {
+      CompositionLocalProvider(
+        LocalImageLoader provides loader(requested) { !it.contains("/mosaic") },
+      ) {
+        PosterCard(
+          name = "Show",
+          imageUrl = "http://server/api/library/mosaic?v=1",
+          progress = null,
+          onClick = {},
+          mosaic = listOf("http://server/a.jpg", "http://server/b.jpg"),
+          imageBeforeMosaic = true,
+        )
+      }
+    }
+    compose.waitForIdle()
+    compose.waitUntil(5_000) { requested.contains("http://server/b.jpg") }
+
+    compose.onNodeWithTag(TagPosterMosaic, useUnmergedTree = true).assertExists()
+  }
+
+  @Test
+  fun `a loading composed mosaic does not draw the fallback collage`() {
+    val requested = mutableListOf<String>()
+    compose.setContent {
+      CompositionLocalProvider(LocalImageLoader provides loader(requested)) {
+        PosterCard(
+          name = "Show",
+          imageUrl = "http://server/api/library/mosaic?v=1",
+          progress = null,
+          onClick = {},
+          mosaic = listOf("http://server/a.jpg", "http://server/b.jpg"),
+          imageBeforeMosaic = true,
+        )
+      }
+    }
+    compose.waitForIdle()
+    compose.waitUntil(5_000) { requested.contains("http://server/api/library/mosaic?v=1") }
+
+    compose.onNodeWithTag(TagPosterMosaic, useUnmergedTree = true).assertDoesNotExist()
+    assertTrue("the fallback cells stay unused while the composed image loads", requested.none { it.contains("/a.jpg") })
+  }
+
+  @Test
+  fun `a remote composed image falls back through provider art to the child cells`() {
+    val requested = mutableListOf<String>()
+    compose.setContent {
+      CompositionLocalProvider(
+        LocalImageLoader provides loader(requested) { it.contains("/a.jpg") || it.contains("/b.jpg") },
+      ) {
+        PosterCard(
+          name = "Server",
+          imageUrl = "http://server/api/remote-libraries/r/mosaic?v=1",
+          fallbackImageUrl = "http://server/provider-root.jpg",
+          progress = null,
+          onClick = {},
+          mosaic = listOf("http://server/a.jpg", "http://server/b.jpg"),
+          imageBeforeMosaic = true,
+        )
+      }
+    }
+    compose.waitForIdle()
+    compose.waitUntil(5_000) { requested.containsAll(listOf("http://server/provider-root.jpg", "http://server/b.jpg")) }
+
+    compose.onNodeWithTag(TagPosterMosaic, useUnmergedTree = true).assertExists()
+  }
 }

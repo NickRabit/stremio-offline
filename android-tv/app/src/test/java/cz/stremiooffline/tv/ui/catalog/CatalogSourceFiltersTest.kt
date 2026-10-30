@@ -201,6 +201,31 @@ class CatalogSourceFiltersTest {
     compose.onNodeWithTag(TagSourcesCount).assertTextContains("1 of 2")
   }
 
+  @Test
+  fun `filtering detail sources keeps the complete snapshot available to the player`() {
+    val api = FakeTvApi()
+    twoAddons(api)
+    var offered = emptyList<StreamDto>()
+    compose.setContent {
+      CatalogDetailScreen(
+        api = api,
+        args = movieArgs(),
+        imageUrl = { null },
+        onPlay = {},
+        onBack = {},
+        onSources = { offered = it.streams },
+      )
+    }
+    compose.waitForIdle()
+    openSources()
+    openAddonMenuAt(1)
+
+    compose.onNodeWithTag(TagSourcesCount).assertTextContains("1 of 2")
+    compose.runOnIdle {
+      assertEquals(setOf("srcA", "srcB"), offered.map { it.sourceId }.toSet())
+    }
+  }
+
   private fun withLibraryCopy(api: FakeTvApi) {
     api.localStreamsResult = listOf(
       StreamDto(

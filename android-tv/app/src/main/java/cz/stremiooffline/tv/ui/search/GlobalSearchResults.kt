@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -76,6 +77,7 @@ internal fun GlobalSearchResults(
   restoreToken: Int = 0,
   clearFocusSignal: Int = 0,
   canonicalTitles: Boolean = true,
+  firstRowUp: FocusRequester? = null,
 ) {
   val state = search.state
   val context = LocalContext.current
@@ -279,6 +281,7 @@ internal fun GlobalSearchResults(
           onClearFocus = ::clearCardFocus,
           onOpen = ::openCluster,
           imageUrl = imageUrl,
+          firstRowUp = firstRowUp,
           gridFocus = gridFocus,
           gridState = gridState,
           cardFocus = cardFocus,
@@ -335,6 +338,7 @@ private fun GlobalResultGrid(
   onClearFocus: () -> Unit,
   onOpen: (GlobalSearchClusterDto, String) -> Unit,
   imageUrl: (String?) -> String?,
+  firstRowUp: FocusRequester?,
   gridFocus: FocusRequester,
   gridState: LazyGridState,
   cardFocus: MutableMap<String, FocusRequester>,
@@ -375,6 +379,7 @@ private fun GlobalResultGrid(
           },
           onOpen = onOpen,
           cardFocus = cardFocus,
+          firstRowUp = firstRowUp.takeIf { index == 0 },
         )
       }
       if (unidentified.isNotEmpty()) {
@@ -405,6 +410,7 @@ private fun GlobalResultGrid(
             onFocus = { anchor -> onFocusCard(anchor, index + cards.size) },
             onOpen = onOpen,
             cardFocus = cardFocus,
+            firstRowUp = null,
           )
         }
       }
@@ -428,6 +434,7 @@ private fun GlobalSearchResultCard(
   onFocus: (String) -> Unit,
   onOpen: (GlobalSearchClusterDto, String) -> Unit,
   cardFocus: MutableMap<String, FocusRequester>,
+  firstRowUp: FocusRequester?,
 ) {
   val anchor = globalSearchAnchor(cluster, focusAnchor)
   val requester = remember(anchor) { FocusRequester() }
@@ -444,7 +451,9 @@ private fun GlobalSearchResultCard(
       }
     },
     onClick = { onOpen(cluster, anchor) },
-    modifier = Modifier.focusRequester(requester),
+    modifier = Modifier
+      .focusRequester(requester)
+      .then(if (firstRowUp != null) Modifier.focusProperties { up = firstRowUp } else Modifier),
   )
 }
 

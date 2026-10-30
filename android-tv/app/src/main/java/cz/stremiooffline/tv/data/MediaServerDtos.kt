@@ -173,10 +173,12 @@ data class RemotePersonalPageDto(
 )
 
 /** The `GET /api/remote-libraries/:libraryId/preview` answer: up to four same-origin authorized
- *  poster URLs for one library root or folder, never an upstream URL. Empty means no artwork. */
+ *  poster URLs for one library root or folder, never an upstream URL, and the composed fan made
+ *  from them when there are at least two. Empty cells mean no artwork. */
 @Serializable
 data class RemotePreviewDto(
   val posters: List<String> = emptyList(),
+  val mosaic: String? = null,
 )
 
 data class RemotePersonalPage(val items: List<HomeCard>, val total: Int, val partial: Boolean)

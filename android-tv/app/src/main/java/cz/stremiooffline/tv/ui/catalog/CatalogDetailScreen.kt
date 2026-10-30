@@ -433,6 +433,19 @@ fun CatalogDetailScreen(
   // The list that is drawn and picked from: the library copies arranged with the addon streams the
   // way the web does (Streams.catalogSourceList); counts and notices keep using the addon streams.
   val rows = lists.rows
+  val playbackFilters = filters.copy(addon = "", language = "")
+  val playbackRows = remember(pick.streams, addons, settings, meta.language, playbackFilters, pick.localStreams, remote.groups) {
+    Streams.sourceLists(
+      streams = pick.streams,
+      addons = addons,
+      filters = playbackFilters,
+      preferredLanguage = settings.audioLanguage ?: "en",
+      showTorrents = settings.realDebridConfigured,
+      metaLanguage = meta.language,
+      local = pick.localStreams,
+      remote = remote.groups.map { it.group() },
+    ).rows
+  }
   // The row of the source last played leads, so Resume continues in it. A rule with verdicts
   // then takes a row that meets it; the call lives in Streams so this screen only passes the sort.
   val preferredStream = Streams.pickDefaultStream(
@@ -485,12 +498,11 @@ fun CatalogDetailScreen(
     if (next.move) pick.selectedStream = next.to
   }
 
-  // The player's own Sources panel gets the same list, the local copies included, and it keeps
-  // growing while the addons answer.
-  LaunchedEffect(rows, anyAsking, remoteFailed, remote.discoveryFailed, filters, settings.streamSort) {
+  // The player applies its own filters to the complete list while the addons keep answering.
+  LaunchedEffect(playbackRows, anyAsking, remoteFailed, remote.discoveryFailed, filters, settings.streamSort) {
     onSources(
       OfferedSources(
-        rows,
+        playbackRows,
         anyAsking,
         if (remoteFailed) RemoteSourcesFailure(remoteFailedLabels, remote.discoveryFailed) else null,
         sourceFilters.noteProfileId(settings.streamSort),
@@ -1127,19 +1139,17 @@ fun CatalogDetailScreen(
           } else null,
         ),
       )
-      if (pick.chosenInPanel) {
-        activeStream?.let { stream ->
-          val caption = chosenSourceCaption(stream).joinToString(" · ")
-          if (caption.isNotEmpty()) {
-            Text(
-              stringResource(R.string.tv_chosen_source) + " · " + caption,
-              color = Tokens.Muted,
-              fontSize = 11.sp,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.testTag(TagCatalogChosenSource),
-            )
-          }
+      activeStream?.let { stream ->
+        val caption = chosenSourceCaption(stream).joinToString(" · ")
+        if (caption.isNotEmpty()) {
+          Text(
+            stringResource(R.string.tv_chosen_source) + " · " + caption,
+            color = Tokens.Muted,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag(TagCatalogChosenSource),
+          )
         }
       }
       val shown = message

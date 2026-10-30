@@ -12,7 +12,9 @@ import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.LibraryApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /** One level of the library grid: its path, the breadcrumb title, the query it is narrowed by and
@@ -52,6 +54,8 @@ class LibraryViewModel(
   var selectedPath by mutableStateOf("")
 
   private var job: Job? = null
+  private var pollJob: Job? = null
+  private var requestEpoch = 0
   private var deepLinked = false
   private var searchEngine = false
 
@@ -64,36 +68,49 @@ class LibraryViewModel(
 
   fun start() {
     deepLinked = false
-    job?.cancel()
+    cancelRequests()
     state = LibraryState(pages = listOf(LibraryPage(path = "", title = "")), loading = true)
-    job = viewModelScope.launch { load(null, "") }
+    val mine = requestEpoch
+    job = viewModelScope.launch { load(null, "", mine) }
   }
 
   fun open(path: String, title: String) {
-    job?.cancel()
+    cancelRequests()
     // A library card was opened: whatever the next answer holds, this level is a real directory.
     state = state.copy(pages = state.pages + LibraryPage(path, title, searchable = true), loading = true, error = false)
-    job = viewModelScope.launch { load(path, "") }
+    val mine = requestEpoch
+    job = viewModelScope.launch { load(path, "", mine) }
   }
 
   /** Opens a folder a Home card asked for, on top of the library root so Back leaves the folder. */
   fun openHere(path: String, title: String) {
-    job?.cancel()
+    cancelRequests()
     deepLinked = true
     val root = state.pages.firstOrNull() ?: LibraryPage(path = "", title = "")
     state = state.copy(pages = listOf(root, LibraryPage(path, title, searchable = true)), loading = true, error = false)
+    val mine = requestEpoch
     job = viewModelScope.launch {
-      val rootPage = pageOrNull(null, 0, root.search)
-      if (rootPage != null) updateAt(0) { it.copy(path = rootPage.path, items = rootPage.items, total = rootPage.total) }
-      val page = pageOrNull(path, 0, "")
-      if (page != null) updateAt(1) { it.copy(path = page.path, items = page.items, total = page.total) }
-      state = state.copy(loading = false, error = page == null)
+      val rootRead = readOrNull(null, 0, root.search)
+      requireCurrent(mine)
+      if (rootRead != null) {
+        applyPage(0, rootRead.page, mergeTail = false)
+      }
+      val pageRead = readOrNull(path, 0, "")
+      requireCurrent(mine)
+      if (pageRead != null) {
+        applyPage(1, pageRead.page, mergeTail = false)
+      }
+      state = state.copy(loading = false, error = pageRead == null)
+      pollJob = viewModelScope.launch {
+        pageRead?.let { pollPending(1, path, "", it, mine) }
+        rootRead?.let { pollPending(0, null, root.search, it, mine) }
+      }
     }
   }
 
   /** Pushes a level whose rows were already fetched, so a folder is not browsed twice. */
   fun push(path: String, title: String, items: List<BrowseItem>, total: Int) {
-    job?.cancel()
+    cancelRequests()
     state = state.copy(
       pages = state.pages + LibraryPage(path, title, items, total, searchable = true),
       loading = false,
@@ -103,28 +120,25 @@ class LibraryViewModel(
 
   fun retry() {
     val page = state.current ?: return
-    job?.cancel()
+    cancelRequests()
     state = state.copy(loading = true, error = false)
-    job = viewModelScope.launch { load(page.path.ifEmpty { null }, page.search) }
+    val mine = requestEpoch
+    job = viewModelScope.launch { load(page.path.ifEmpty { null }, page.search, mine) }
   }
 
   /** Re-reads the level on screen in the background: the old rows stay until the answer lands. */
   fun refresh() {
     val page = state.current ?: return
     if (state.loading || state.loadingMore) return
-    val depth = state.pages.size
-    job?.cancel()
+    val index = state.pages.lastIndex
+    cancelRequests()
+    val mine = requestEpoch
     job = viewModelScope.launch {
-      val next = pageOrNull(page.path.ifEmpty { null }, 0, page.search) ?: return@launch
-      update(depth) { current ->
-        // A level the viewer had paged keeps the rows they had already scrolled to: the first page
-        // is re-read (a star or a stored position may have moved) and every row beyond it stays,
-        // deduped by path and clamped to what the level now holds.
-        val head = next.items
-        val headPaths = head.mapTo(HashSet()) { it.path }
-        val tail = current.items.filterNot { item -> item.path in headPaths }
-        val merged = (head + tail).take(maxOf(head.size, next.total))
-        current.copy(path = next.path, items = merged, total = next.total)
+      val read = readOrNull(page.path.ifEmpty { null }, 0, page.search) ?: return@launch
+      requireCurrent(mine)
+      applyPage(index, read.page, mergeTail = true)
+      pollJob = viewModelScope.launch {
+        pollPending(index, page.path.ifEmpty { null }, page.search, read, mine)
       }
     }
   }
@@ -138,7 +152,7 @@ class LibraryViewModel(
     val page = state.current ?: return
     val wanted = query.trim()
     if (page.search == wanted) return
-    job?.cancel()
+    cancelRequests()
     // The level is narrowed from the moment the viewer commits the query, not from the moment the
     // answer lands: a failed first read leaves the level searching for exactly this query, so its
     // Retry, its refresh and its paging all carry it, and the search can still be cleared.
@@ -149,14 +163,15 @@ class LibraryViewModel(
       state = state.copy(loading = false)
       return
     }
-    job = viewModelScope.launch { load(page.path.ifEmpty { null }, wanted) }
+    val mine = requestEpoch
+    job = viewModelScope.launch { load(page.path.ifEmpty { null }, wanted, mine) }
   }
 
   /** True while there is a level to go back to. */
   fun back(): Boolean {
     if (state.pages.size <= 1) return false
     // A level that is still loading or paging must not land in its parent once it is gone.
-    job?.cancel()
+    cancelRequests()
     state = state.copy(pages = state.pages.dropLast(1), loading = false, loadingMore = false, error = false)
     return true
   }
@@ -166,55 +181,107 @@ class LibraryViewModel(
     if (state.loading || state.loadingMore || page.items.size >= page.total) return
     state = state.copy(loadingMore = true)
     val depth = state.pages.size
+    val mine = requestEpoch
     job = viewModelScope.launch {
       try {
-        val next = loadPage(page.path.ifEmpty { null }, page.items.size, page.search)
+        val next = readPage(page.path.ifEmpty { null }, page.items.size, page.search)
+        requireCurrent(mine)
         update(depth) { it.copy(items = it.items + next.items, total = next.total.coerceAtLeast(it.total)) }
       } catch (_: ApiError) {
       } finally {
-        state = state.copy(loadingMore = false)
+        if (mine == requestEpoch) state = state.copy(loadingMore = false)
       }
     }
   }
 
-  /** The server answers before its first walk of a library has finished; an empty pending page
-   *  is asked again instead of being shown as empty. */
-  private suspend fun loadPage(path: String?, skip: Int, query: String): BrowsePage {
-    var page = api.browse(path, limit = PAGE, skip = skip, query = query)
-    var attempts = 0
-    while (page.pending && page.items.isEmpty() && attempts++ < PENDING_RETRIES) {
-      delay(pendingDelayMs)
-      page = api.browse(path, limit = PAGE, skip = skip, query = query)
-    }
-    return BrowsePage(page.path, page.items, page.total)
-  }
+  private data class PageRead(val page: BrowsePage, val attempts: Int)
 
-  private suspend fun pageOrNull(path: String?, skip: Int, query: String): BrowsePage? = try {
-    loadPage(path, skip, query)
+  private suspend fun readPage(path: String?, skip: Int, query: String): BrowsePage =
+    api.browse(path, limit = PAGE, skip = skip, query = query).let {
+      BrowsePage(it.path, it.items, it.total, it.pending)
+    }
+
+  private suspend fun readOrNull(path: String?, skip: Int, query: String): PageRead? = try {
+    readInitial(path, skip, query)
   } catch (cancelled: CancellationException) {
     throw cancelled
   } catch (_: ApiError) {
     null
   }
 
-  private suspend fun load(path: String?, query: String) {
-    val depth = state.pages.size
+  /** A nonempty pending page is published at once; only an empty one keeps the first load busy. */
+  private suspend fun readInitial(path: String?, skip: Int, query: String): PageRead {
+    var read = PageRead(readPage(path, skip, query), 0)
+    while (read.page.pending && read.page.items.isEmpty() && read.attempts < PENDING_RETRIES) {
+      delay(pendingDelay(read.attempts))
+      read = PageRead(readPage(path, skip, query), read.attempts + 1)
+    }
+    return read
+  }
+
+  private suspend fun pollPending(
+    index: Int,
+    path: String?,
+    query: String,
+    initial: PageRead,
+    mine: Int,
+  ) {
+    var page = initial.page
+    var attempts = initial.attempts
+    while (page.pending && attempts < PENDING_RETRIES) {
+      delay(pendingDelay(attempts))
+      attempts += 1
+      val read = try {
+        readPage(path, 0, query)
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        return
+      }
+      requireCurrent(mine)
+      page = read
+      applyPage(index, page, mergeTail = true)
+    }
+  }
+
+  private fun pendingDelay(attempt: Int): Long {
+    val factor = 1L shl attempt.coerceIn(0, 4)
+    return minOf(PENDING_MAX_DELAY_MS, pendingDelayMs * factor)
+  }
+
+  private fun applyPage(index: Int, page: BrowsePage, mergeTail: Boolean) {
+    updateAt(index) { current ->
+      val items = if (mergeTail) {
+        val headPaths = page.items.mapTo(HashSet()) { it.path }
+        val tail = current.items.filterNot { item -> item.path in headPaths }
+        (page.items + tail).take(maxOf(page.items.size, page.total))
+      } else {
+        page.items
+      }
+      current.copy(path = page.path, items = items, total = page.total)
+    }
+  }
+
+  private suspend fun load(path: String?, query: String, mine: Int) {
+    val index = state.pages.lastIndex
     try {
-      val page = loadPage(path, 0, query)
-      update(depth) {
+      val read = readInitial(path, 0, query)
+      requireCurrent(mine)
+      applyPage(index, read.page, mergeTail = false)
+      updateAt(index) {
         it.copy(
-          path = page.path,
-          items = page.items,
-          total = page.total,
           search = query,
           // The libraries themselves are all a multi-library root lists, and the server narrows
           // nothing there; every other level is a directory and stays searchable, empty or broken.
-          searchable = page.items.none { item -> item is BrowseItem.Library },
+          searchable = read.page.items.none { item -> item is BrowseItem.Library },
         )
       }
       state = state.copy(loading = false, error = false)
+      pollJob = viewModelScope.launch {
+        pollPending(index, path, query, read, mine)
+      }
     } catch (_: ApiError) {
-      state = state.copy(loading = false, error = true)
+      if (mine == requestEpoch) state = state.copy(loading = false, error = true)
     }
   }
 
@@ -234,14 +301,28 @@ class LibraryViewModel(
     state = state.copy(pages = pages)
   }
 
+  private fun cancelRequests() {
+    requestEpoch++
+    job?.cancel()
+    job = null
+    pollJob?.cancel()
+    pollJob = null
+  }
+
+  private suspend fun requireCurrent(mine: Int) {
+    currentCoroutineContext().ensureActive()
+    if (mine != requestEpoch) throw CancellationException("Library request was replaced")
+  }
+
   companion object {
     const val PAGE = 60
-    private const val PENDING_RETRIES = 5
+    private const val PENDING_RETRIES = 8
     private const val PENDING_DELAY_MS = 1_500L
+    private const val PENDING_MAX_DELAY_MS = 8_000L
 
     fun factory(api: LibraryApi, pendingDelayMs: Long = PENDING_DELAY_MS) =
       viewModelFactory { initializer { LibraryViewModel(api, pendingDelayMs) } }
   }
 }
 
-private data class BrowsePage(val path: String, val items: List<BrowseItem>, val total: Int)
+private data class BrowsePage(val path: String, val items: List<BrowseItem>, val total: Int, val pending: Boolean)

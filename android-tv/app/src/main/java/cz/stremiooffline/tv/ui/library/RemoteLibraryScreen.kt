@@ -761,22 +761,32 @@ internal fun RemoteArtTile(
   wide: String? = null,
 ) {
   val key = RemoteLibraryViewModel.previewKey(libraryId, parentId)
+  val childrenArtwork = parentId == null && mosaic
   // Only a composed tile asks, so an off-screen folder never fetches; the cache dedupes repeats.
-  // A tile that already carries its own poster asks for nothing: the own picture wins.
-  LaunchedEffect(key, mosaic, poster, viewModel.preview(key) == null) {
-    viewModel.loadPreview(key, libraryId, parentId, mosaic, poster)
+  // A root prefers its children's collage; a folder keeps its own picture when it has one.
+  LaunchedEffect(key, mosaic, poster, childrenArtwork, viewModel.preview(key) == null) {
+    viewModel.loadPreview(key, libraryId, parentId, mosaic, poster, childrenArtwork)
   }
-  val posters = if (mosaic && poster.isNullOrEmpty()) (viewModel.preview(key) as? RemotePreviewState.Ready)?.posters.orEmpty() else emptyList()
+  val preview = if (mosaic && (childrenArtwork || poster.isNullOrEmpty())) {
+    viewModel.preview(key) as? RemotePreviewState.Ready
+  } else {
+    null
+  }
+  val posters = preview?.posters.orEmpty()
   val art = posters.mapNotNull(imageUrl)
+  val composed = imageUrl(preview?.mosaic)
+  val ownPoster = imageUrl(poster)
+  val primary = if (childrenArtwork) composed ?: ownPoster else ownPoster ?: composed
   Box {
     PosterCard(
       name = title,
-      imageUrl = imageUrl(poster) ?: art.firstOrNull(),
-      fallbackImageUrl = imageUrl(wide),
+      imageUrl = primary ?: art.firstOrNull(),
+      fallbackImageUrl = if (childrenArtwork && composed != null) ownPoster ?: imageUrl(wide) else imageUrl(wide),
       progress = null,
       caption = caption,
       cardTag = cardTag,
       mosaic = art,
+      imageBeforeMosaic = composed != null || (childrenArtwork && ownPoster != null),
       onClick = onClick,
       modifier = modifier,
     )

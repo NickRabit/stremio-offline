@@ -363,14 +363,15 @@ class CatalogDetailTest {
     api.progressEntries = listOf(
       ProgressEntryDto(key = "series:tt1:1:1", position = 600.0, duration = 600.0, title = "Show · One", series = ProgressEntryDto.Series("tt1", "Show", 1, 1)),
     )
-    api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "FullHD"))
-    api.streamsValues["series:tt1:1:3"] = listOf(stream("s3", name = "FullHD"))
+    api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "Episode 2"))
+    api.streamsValues["series:tt1:1:3"] = listOf(stream("s3", name = "Episode 3"))
     mount(api, CatalogDetailArgs(MetaDto(id = "tt1", type = "series", name = "Show"), "Cinemeta", "series"))
     compose.waitForIdle()
 
     compose.onNodeWithTag(seasonChipTag(1)).assertExists()
     compose.onNodeWithTag(episodeCardTag(v2)).assertExists()
     compose.onNodeWithTag(episodeCardTag(v3)).assertExists()
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Episode 2", substring = true)
 
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(v2)).assertIsFocused()
@@ -379,6 +380,7 @@ class CatalogDetailTest {
     compose.onNodeWithTag(episodeCardTag(v3)).assertIsFocused()
     press(Key.DirectionCenter)
     assertTrue(api.streamsRequests.contains("series:tt1:1:3"))
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Episode 3", substring = true)
   }
 
   // --- ATV-12: choosing a source, series sources, DOWN in the panel ---------------------------
@@ -976,7 +978,7 @@ class CatalogDetailTest {
   }
 
   @Test
-  fun `Play without picking a source shows no chosen caption`() {
+  fun `Play names its effective default source before a manual pick`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
     api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
@@ -987,7 +989,7 @@ class CatalogDetailTest {
     press(Key.DirectionCenter)
 
     assertEquals(listOf("s1"), played.map { it.sourceId })
-    compose.onNodeWithTag(TagCatalogChosenSource).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("FullHD", substring = true)
   }
 
   @Test

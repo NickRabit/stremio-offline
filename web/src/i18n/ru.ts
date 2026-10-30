@@ -2047,6 +2047,7 @@ export const ru: Catalog = {
   "tv.globalSearch.kindAll": "Все",
   "tv.globalSearch.kindMovies": "Фильмы",
   "tv.globalSearch.kindSeries": "Сериалы",
+  "tv.globalSearch.allAddons": "Все дополнения",
   "tv.globalSearch.statusLoading": { one: "Идёт поиск в {count} источнике…", few: "Идёт поиск в {count} источниках…", many: "Идёт поиск в {count} источниках…", other: "Идёт поиск в {count} источниках…" },
   "tv.globalSearch.statusDone": "Все источники ответили",
   "tv.globalSearch.retry": "Повторить",

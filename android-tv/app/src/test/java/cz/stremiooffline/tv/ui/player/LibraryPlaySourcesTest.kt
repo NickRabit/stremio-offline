@@ -220,6 +220,31 @@ class LibraryPlaySourcesTest {
   }
 
   @Test
+  fun `an unbound local play settles its carried snapshot instead of spinning`() = runTest {
+    val api = FakeTvApi()
+    val snapshot = alpha()
+    val reports = mutableListOf<OfferedSources>()
+
+    LibraryPlaySources(api).load(
+      PlayTarget(
+        key = "file:Filmy/Loose.mkv",
+        title = "Loose",
+        resume = true,
+        path = "Filmy/Loose.mkv",
+        sourceId = snapshot.sourceId,
+        initialSources = listOf(snapshot),
+      ),
+    ) { reports += it }
+
+    assertEquals(listOf(snapshot), reports.last().streams)
+    assertFalse(reports.last().loading)
+    assertEquals(listOf(true, false), reports.map { it.loading })
+    assertTrue(api.streamSourcesRequests.isEmpty())
+    assertTrue(api.localStreamsRequests.isEmpty())
+    assertEquals(0, api.addonsCalls)
+  }
+
+  @Test
   fun `a failed lookup reports nothing`() = runTest {
     val api = FakeTvApi()
     api.libraryTitleValues["Filmy/Heat/Heat.mkv"] = LibraryTitleDto("movie", "tt1", name = "Heat")
@@ -321,27 +346,120 @@ class LibraryPlaySourcesTest {
   }
 
   @Test
-  fun `a snapshot of several rows is already a list and discovers nothing`() = runTest {
+  fun `a multi-version snapshot still discovers the identified title around its original rows`() = runTest {
     val api = FakeTvApi()
-    api.libraryTitleValues["Filmy/Heat/Heat.mkv"] = LibraryTitleDto("movie", "tt1", name = "Heat")
+    api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en")
+    api.streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("alpha", "Alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(alpha())
+    api.localStreamsValues["movie:tt1"] = listOf(library("Filmy/Heat/Heat.mkv"))
+    api.remoteLibrariesValue = listOf(
+      RemoteLibraryDto(id = "rlibA", name = "Filmy", provider = "jellyfin"),
+      RemoteLibraryDto(id = "rlibB", name = "Serialy", provider = "jellyfin"),
+    )
+    val other = StreamDto(
+      sourceId = "ms9",
+      kind = "remote",
+      playable = true,
+      name = "Version ms9",
+      remoteItem = cz.stremiooffline.tv.data.RemoteItemContext("rlibB", "iB", "ms9", "remote:rlibB:iB"),
+    )
+    api.remoteMatchValues["rlibB|movie|tt1"] = listOf(other)
+    val original = StreamDto(
+      sourceId = "ms1",
+      kind = "remote",
+      playable = true,
+      name = "Version ms1",
+      remoteItem = cz.stremiooffline.tv.data.RemoteItemContext("rlibA", "iA", "ms1", "remote:rlibA:iA"),
+    )
+    val otherVersion = original.copy(sourceId = "ms2", remoteItem = original.remoteItem?.copy(mediaSourceId = "ms2"))
     val reports = mutableListOf<OfferedSources>()
 
     LibraryPlaySources(api).load(
       PlayTarget(
-        key = "movie:tt1",
+        key = "remote:rlibA:iA",
         title = "Heat",
         resume = true,
-        sourceId = "srcA",
+        sourceId = "ms1",
         subtitleType = "movie",
         subtitleTarget = "tt1",
-        initialSources = listOf(alpha(), alpha("srcB")),
+        remoteItem = original.remoteItem,
+        initialSources = listOf(original, otherVersion),
       ),
     ) { reports += it }
 
-    assertTrue(reports.isEmpty())
+    assertEquals(listOf("ms1", "ms2"), reports.first().streams.map { it.sourceId })
+    assertEquals(listOf("ms1", "ms2", "Filmy/Heat/Heat.mkv", "ms9", "srcA"), reports.last().streams.map { it.localPath ?: it.sourceId })
+    assertEquals("ms1", reports.last().streams.first().remoteItem?.mediaSourceId)
     assertTrue(api.libraryTitleRequests.isEmpty())
-    assertTrue(api.localStreamsRequests.isEmpty())
+    assertEquals(listOf("movie:tt1"), api.localStreamsRequests)
+    assertEquals(listOf("movie:tt1"), api.streamSourcesRequests)
+    assertEquals(listOf("rlibB|movie|tt1"), api.remoteMatchRequests)
+  }
+
+  @Test
+  fun `an unidentified remote play keeps its versions and asks no addon or library`() = runTest {
+    val api = FakeTvApi()
+    val original = StreamDto(
+      sourceId = "ms1",
+      kind = "remote",
+      playable = true,
+      name = "Version ms1",
+      remoteItem = cz.stremiooffline.tv.data.RemoteItemContext("rlibA", "iA", "ms1", "remote:rlibA:iA"),
+    )
+    val reports = mutableListOf<OfferedSources>()
+
+    LibraryPlaySources(api).load(
+      PlayTarget(
+        key = "remote:rlibA:iA",
+        title = "Heat",
+        resume = true,
+        sourceId = "ms1",
+        remoteItem = original.remoteItem,
+        remoteSources = listOf(original),
+      ),
+    ) { reports += it }
+
+    assertEquals(listOf("ms1"), reports.single().streams.map { it.sourceId })
+    assertEquals("ms1", reports.single().streams.single().remoteItem?.mediaSourceId)
+    assertFalse(reports.single().loading)
     assertTrue(api.streamSourcesRequests.isEmpty())
-    assertTrue(api.remoteMatchRequests.isEmpty())
+    assertTrue(api.localStreamsRequests.isEmpty())
+    assertEquals(0, api.remoteLibrariesCalls)
+  }
+
+  @Test
+  fun `an identified remote episode discovers under the parent series and episode suffix`() = runTest {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en")
+    api.streamSourcesValues["series:tt5:1:2"] = listOf(StreamSourceDto("alpha", "Alpha"))
+    api.addonStreams["series:tt5:1:2|alpha"] = listOf(alpha())
+    api.localStreamsValues["series:tt5:1:2"] = listOf(library("Shows/Show/S01/Show.S01E02.mkv"))
+    val original = StreamDto(
+      sourceId = "ms1",
+      kind = "remote",
+      playable = true,
+      name = "Episode version",
+      remoteItem = cz.stremiooffline.tv.data.RemoteItemContext("rlibA", "eA", "ms1", "remote:rlibA:eA"),
+    )
+    val reports = mutableListOf<OfferedSources>()
+
+    LibraryPlaySources(api).load(
+      PlayTarget(
+        key = "series:tt5:1:2",
+        title = "Show · S1 · E2",
+        resume = true,
+        sourceId = "ms1",
+        subtitleType = "series",
+        subtitleTarget = "tt5:1:2",
+        remoteItem = original.remoteItem,
+        initialSources = listOf(original),
+      ),
+    ) { reports += it }
+
+    assertEquals(listOf("series:tt5:1:2"), api.streamSourcesRequests)
+    assertEquals(listOf("series:tt5:1:2"), api.localStreamsRequests)
+    assertEquals(listOf("ms1"), reports.first().streams.map { it.sourceId })
+    assertEquals("ms1", reports.last().streams.first().remoteItem?.mediaSourceId)
+    assertTrue(reports.last().streams.any { it.localPath == "Shows/Show/S01/Show.S01E02.mkv" })
   }
 }

@@ -62,6 +62,8 @@ fun FocusButton(
   enabled: Boolean = true,
   /** Caps the label so a long one ellipsizes instead of widening the row. */
   labelMaxWidth: Dp? = null,
+  /** An icon or other trailing affordance, after the label. */
+  trailing: (@Composable () -> Unit)? = null,
 ) {
   val interaction = remember { MutableInteractionSource() }
   val focused by interaction.collectIsFocusedAsState()
@@ -101,7 +103,20 @@ fun FocusButton(
       if (text.isNotEmpty()) Spacer(Modifier.width(8.dp))
     }
     // An icon-only button passes no text and is named by its content description.
-    if (text.isNotEmpty()) Text(text, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    if (text.isNotEmpty()) {
+      Text(
+        text,
+        fontSize = 12.5.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = if (trailing != null) Modifier.weight(1f, fill = false) else Modifier,
+      )
+    }
+    if (trailing != null) {
+      Spacer(Modifier.width(6.dp))
+      trailing()
+    }
   }
 }
 

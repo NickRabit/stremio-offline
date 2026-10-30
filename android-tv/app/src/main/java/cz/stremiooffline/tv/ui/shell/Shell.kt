@@ -60,6 +60,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.DownloadTargetDto
@@ -462,8 +463,7 @@ fun Shell(
       data = openRemoteDetail,
       imageUrl = { path -> path?.let(api::url) },
       onPlay = {
-        // A remote play offers the target's own versions; the catalogue and library loaders are
-        // never asked about a remote item.
+        // The item's versions stay available while the player discovers supplementary groups.
         player = it
       },
       onBack = {
@@ -528,24 +528,18 @@ private fun OverlayFocusTrap(fenced: Boolean, content: @Composable () -> Unit) {
   ) { content() }
 }
 
-/** The list of sources a play is offered. A snapshot of several rows is a list of its own and is
- *  offered as it stands: a native detail's addon rows, or a remote play's own versions. A catalogue
- *  play keeps [catalogue], the list the catalogue detail reports. Every other play takes [library],
- *  the list the loader gathered: for a bound library file, and for a play the detail started with a
- *  single row and a title identity, so the Sources button appears once a second row arrives. The
- *  two local lists stay apart so neither can lend the other its title, and a play whose loader
- *  reported nothing simply has nothing there -- no Sources button, as before. Kept here so the
- *  expression can be tested without a whole shell. */
-internal fun playerSourcesFor(target: PlayTarget, catalogue: OfferedSources, library: OfferedSources): OfferedSources =
-  when {
-    // A native detail's addon play carries the rows it had already loaded, when it loaded more than
-    // one: the player offers exactly those, so no discovery is asked about it.
-    target.initialSources.orEmpty().size > 1 -> OfferedSources(target.initialSources.orEmpty())
-    // A native media-server play offers the item's own versions, again only as a list of its own.
-    target.remoteItem != null && target.remoteSources.size > 1 -> OfferedSources(target.remoteSources)
-    target.catalogue -> catalogue
-    else -> library
-  }
+/** The list of sources a play is offered. A catalogue play keeps the list its detail owns. Every
+ *  other play starts with the rows it carried and merges the groups the library loader discovers,
+ *  so late answers grow the same list and an identified native play keeps its original version. */
+internal fun playerSourcesFor(target: PlayTarget, catalogue: OfferedSources, library: OfferedSources): OfferedSources {
+  if (target.catalogue) return catalogue
+  val carried = OfferedSources(Streams.deduped(target.initialSources ?: target.remoteSources))
+  val rows = Streams.deduped(carried.streams + library.streams)
+  return if (rows.isEmpty()) library else library.copy(
+    streams = rows,
+    ruleNoteProfileId = library.ruleNoteProfileId ?: carried.ruleNoteProfileId,
+  )
+}
 
 
 /**

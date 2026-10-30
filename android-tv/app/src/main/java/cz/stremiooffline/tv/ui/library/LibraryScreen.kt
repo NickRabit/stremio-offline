@@ -485,7 +485,8 @@ private fun LocalLibraryCard(
     progress = progressFraction(item),
     caption = caption(item),
     cardTag = cardTag,
-    mosaic = if (item.mosaicImage != null) emptyList() else item.mosaic.map(api::url),
+    mosaic = item.mosaic.map(api::url),
+    imageBeforeMosaic = item.mosaicImage != null && item.mosaic.size >= 2,
     onClick = onClick,
     modifier = modifier,
   )
