@@ -339,8 +339,7 @@
   <string name="tv_search_library_clear">Die ganze Bibliothek durchsuchen</string>
   <string name="tv_global_search_source_all">Alle</string>
   <string name="tv_global_search_source_catalog">Katalog</string>
-  <string name="tv_global_search_source_local">Lokal</string>
-  <string name="tv_global_search_source_remote">Remote</string>
+  <string name="tv_global_search_source_libraries">Bibliotheken</string>
   <string name="tv_global_search_kind_all">Alle</string>
   <string name="tv_global_search_kind_movies">Filme</string>
   <string name="tv_global_search_kind_series">Serien</string>

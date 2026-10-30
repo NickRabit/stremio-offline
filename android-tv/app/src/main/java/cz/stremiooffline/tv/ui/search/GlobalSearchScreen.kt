@@ -110,7 +110,7 @@ fun GlobalSearchScreen(
   val scopeFocus = remember { FocusRequester() }
   val libraryFocus = remember { FocusRequester() }
   val kindFocus = remember { FocusRequester() }
-  val sourceFocuses = remember { List(4) { FocusRequester() } }
+  val sourceFocuses = remember { List(3) { FocusRequester() } }
   val recentEntryFocus = remember { FocusRequester() }
   val sourceStripFocus = remember { FocusRequester() }
   val scopePanelEntry = remember { FocusRequester() }
@@ -124,9 +124,8 @@ fun GlobalSearchScreen(
   var scopePanelOpener by remember { mutableStateOf<FocusRequester?>(null) }
   var kindPanel by remember { mutableStateOf(false) }
   var kindPanelOpener by remember { mutableStateOf<FocusRequester?>(null) }
-  var toolbarFocusIndex by remember { mutableIntStateOf(4) }
+  var toolbarFocusIndex by remember { mutableIntStateOf(3) }
   var libraryClearToken by remember { mutableIntStateOf(0) }
-  var libraryClearSource by remember { mutableStateOf<SourceClass?>(null) }
 
   fun submit() {
     val query = draft.trim()
@@ -148,11 +147,11 @@ fun GlobalSearchScreen(
   val sourceSet = if (state.sources.isEmpty()) SourceClass.entries.toSet() else state.sources
   val scopeShown = state.library == null && SourceClass.Catalog in sourceSet
   val libraryShown = state.library != null
-  val toolbarSize = if (scopeShown || libraryShown) 6 else 5
+  val toolbarSize = if (scopeShown || libraryShown) 5 else 4
   val activeToolbarIndex = toolbarFocusIndex.coerceIn(0, toolbarSize - 1)
   val lastToolbarFocus = when (activeToolbarIndex) {
-    in 0..3 -> sourceFocuses[activeToolbarIndex]
-    4 -> kindFocus
+    in 0..2 -> sourceFocuses[activeToolbarIndex]
+    3 -> kindFocus
     else -> if (libraryShown) libraryFocus else scopeFocus
   }
   val contentFocus = if (state.submitted) sourceStripFocus else recentEntryFocus
@@ -169,14 +168,9 @@ fun GlobalSearchScreen(
     if (preset != null) viewModel.applyPreset(preset)
   }
   LaunchedEffect(libraryClearToken) {
-    val source = libraryClearSource ?: return@LaunchedEffect
+    if (libraryClearToken == 0) return@LaunchedEffect
     awaitFrame()
-    val focus = when (source) {
-      SourceClass.Local -> sourceFocuses[2]
-      SourceClass.Remote -> sourceFocuses[3]
-      else -> return@LaunchedEffect
-    }
-    runCatching { focus.requestFocus() }
+    runCatching { sourceFocuses[2].requestFocus() }
   }
   LaunchedEffect(viewModel, overlayOpen) {
     viewModel.setActive(!overlayOpen)
@@ -292,11 +286,9 @@ fun GlobalSearchScreen(
         scopePanel = true
       },
       onClearLibrary = {
-        val source = viewModel.state.library?.source
-        if (source != null) {
+        if (viewModel.state.library != null) {
           viewModel.clearLibrary()
-          toolbarFocusIndex = if (source == SourceClass.Remote) 3 else 2
-          libraryClearSource = source
+          toolbarFocusIndex = 2
           libraryClearToken++
         }
       },
@@ -306,7 +298,7 @@ fun GlobalSearchScreen(
     if (state.submitted) {
       GlobalSourceStrip(
         sources = snapshot?.sources.orEmpty(),
-        requested = state.sources.ifEmpty { SourceClass.entries.toSet() }.size,
+        requested = if (state.library != null) 1 else state.sources.ifEmpty { SourceClass.entries.toSet() }.size,
         snapshotState = snapshot?.state,
         expanded = stripExpanded,
         onToggle = { stripExpanded = !stripExpanded },
@@ -406,8 +398,7 @@ private fun GlobalSearchFilters(
     val values = listOf(
       Triple(stringResource(R.string.tv_global_search_source_all), sources.isEmpty(), "source_all"),
       Triple(stringResource(R.string.tv_global_search_source_catalog), catalogOnly, "source_catalog"),
-      Triple(stringResource(R.string.tv_global_search_source_local), sources == setOf(SourceClass.Local), "source_local"),
-      Triple(stringResource(R.string.tv_global_search_source_remote), sources == setOf(SourceClass.Remote), "source_remote"),
+      Triple(stringResource(R.string.tv_global_search_source_libraries), sources == LibrarySources, "source_libraries"),
     )
     values.forEachIndexed { index, (text, selected, tag) ->
       GlobalSearchFilter(
@@ -419,8 +410,7 @@ private fun GlobalSearchFilters(
           onSources(
             when (tag) {
               "source_catalog" -> setOf(SourceClass.Catalog)
-              "source_local" -> setOf(SourceClass.Local)
-              "source_remote" -> setOf(SourceClass.Remote)
+              "source_libraries" -> LibrarySources
               else -> emptySet()
             },
           )
@@ -440,7 +430,7 @@ private fun GlobalSearchFilters(
       text = stringResource(R.string.catalog_type) + " · " + kindLabel(kind),
       contentDescription = stringResource(R.string.catalog_type),
       onClick = onKindPanel,
-      onFocused = { onFocusChanged(4); onFocused() },
+      onFocused = { onFocusChanged(3); onFocused() },
       modifier = Modifier
         .focusRequester(kindFocus)
         .focusDirections(
@@ -455,7 +445,7 @@ private fun GlobalSearchFilters(
       GlobalSearchLibraryChip(
         library = library,
         onClear = onClearLibrary,
-        onFocused = { onFocusChanged(5); onFocused() },
+        onFocused = { onFocusChanged(4); onFocused() },
         modifier = Modifier
           .focusRequester(libraryFocus)
           .focusDirections(left = kindFocus, right = libraryFocus, up = fieldFocus, down = downFocus),
@@ -465,7 +455,7 @@ private fun GlobalSearchFilters(
         text = if (scope.addonKey.isNullOrEmpty()) stringResource(R.string.tv_global_search_all_addons) else scopeLabel(scope, searchable),
         contentDescription = stringResource(R.string.catalog_search_scope),
         onClick = onScope,
-        onFocused = { onFocusChanged(5); onFocused() },
+        onFocused = { onFocusChanged(4); onFocused() },
         modifier = Modifier
           .weight(1f)
           .focusRequester(scopeFocus)

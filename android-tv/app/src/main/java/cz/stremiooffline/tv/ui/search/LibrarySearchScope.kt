@@ -14,7 +14,7 @@ fun LibrarySearchScope.toPreset(): SearchPreset {
   val wire = sources.singleOrNull() ?: return SearchPreset()
   val source = SourceClass.entries.firstOrNull { it.wire == wire } ?: return SearchPreset()
   return SearchPreset(
-    sources = setOf(source),
+    sources = LibrarySources,
     library = library?.let { LibraryFilter(it, source, title) },
   )
 }

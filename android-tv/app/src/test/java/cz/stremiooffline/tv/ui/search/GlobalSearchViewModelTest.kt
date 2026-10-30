@@ -343,7 +343,7 @@ class GlobalSearchViewModelTest {
   private fun showsLibrary() = GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows")
 
   private fun localLibraryPreset(library: GlobalSearchLibraryDto = showsLibrary()) = SearchPreset(
-    sources = setOf(SourceClass.Local),
+    sources = LibrarySources,
     library = LibraryFilter(library, SourceClass.Local, "Films  ›  Shows"),
   )
 
@@ -396,15 +396,19 @@ class GlobalSearchViewModelTest {
     viewModel.setActive(true)
 
     viewModel.applyPreset(localLibraryPreset())
-    viewModel.setSources(setOf(SourceClass.Remote))
-    viewModel.setSources(setOf(SourceClass.Local))
+    assertNotNull(viewModel.state.library)
+    viewModel.setSources(LibrarySources)
+    assertNotNull(viewModel.state.library)
+    viewModel.setSources(setOf(SourceClass.Catalog))
+    assertNull(viewModel.state.library)
+    viewModel.setSources(LibrarySources)
     viewModel.submit("matrix")
     runCurrent()
 
     assertNull(viewModel.state.library)
     val body = api.globalStartCalls.single()
     assertNull(body.library)
-    assertEquals(listOf("local"), body.sources)
+    assertEquals(listOf("local", "remote"), body.sources)
     viewModel.setActive(false)
   }
 
@@ -421,11 +425,13 @@ class GlobalSearchViewModelTest {
     runCurrent()
 
     assertEquals(2, api.globalStartCalls.size)
+    assertEquals(listOf("local"), api.globalStartCalls[0].sources)
     assertEquals(showsLibrary(), api.globalStartCalls[0].library)
     assertEquals("matrix", api.globalStartCalls[1].query)
     assertNull(api.globalStartCalls[1].library)
-    assertEquals(listOf("local"), api.globalStartCalls[1].sources)
+    assertEquals(listOf("local", "remote"), api.globalStartCalls[1].sources)
     assertNull(viewModel.state.library)
+    assertEquals(LibrarySources, viewModel.state.sources)
     viewModel.setActive(false)
   }
 
@@ -472,6 +478,44 @@ class GlobalSearchViewModelTest {
     assertEquals(scope, body.scope)
     assertNull(body.library)
     assertTrue(api.searchableCalls > 0)
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `the libraries filter searches local and remote together`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+
+    viewModel.setSources(LibrarySources)
+    viewModel.submit("matrix")
+    runCurrent()
+
+    val body = api.globalStartCalls.single()
+    assertEquals(listOf("local", "remote"), body.sources)
+    assertNull(body.library)
+    assertNull(body.scope)
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `a remote library preset sends only its class and parent`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+    val library = GlobalSearchLibraryDto("rlib_ab12cd34", parentId = "folder-9")
+    val preset = LibrarySearchScope(library, listOf("remote"), "Server").toPreset()
+
+    assertEquals(LibrarySources, preset.sources)
+    assertEquals(SourceClass.Remote, preset.library?.source)
+    viewModel.applyPreset(preset)
+    viewModel.submit("matrix")
+    runCurrent()
+
+    val body = api.globalStartCalls.single()
+    assertEquals(listOf("remote"), body.sources)
+    assertEquals(library, body.library)
+    assertNull(body.scope)
     viewModel.setActive(false)
   }
 }

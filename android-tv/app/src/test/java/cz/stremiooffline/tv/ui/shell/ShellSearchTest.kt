@@ -284,6 +284,9 @@ class ShellSearchTest {
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagGlobalSearchField).assertExists()
     compose.onNodeWithTag(globalSearchFilterTag("source_all")).assertExists()
+    compose.onNodeWithTag(globalSearchFilterTag("source_libraries")).assertExists()
+    compose.onNodeWithTag(globalSearchFilterTag("source_local")).assertDoesNotExist()
+    compose.onNodeWithTag(globalSearchFilterTag("source_remote")).assertDoesNotExist()
     compose.onNodeWithTag(TagGlobalSearchLibraryChip).assertExists()
 
     host!!.onBackPressedDispatcher.onBackPressed()

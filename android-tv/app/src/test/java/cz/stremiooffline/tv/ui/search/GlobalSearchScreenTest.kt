@@ -136,7 +136,7 @@ class GlobalSearchScreenTest {
   }
 
   private fun libraryPreset(title: String = "Films  ›  Shows") = SearchPreset(
-    sources = setOf(SourceClass.Local),
+    sources = LibrarySources,
     library = LibraryFilter(
       library = GlobalSearchLibraryDto("lib1", path = "Shows"),
       source = SourceClass.Local,
@@ -323,7 +323,29 @@ class GlobalSearchScreenTest {
   }
 
   @Test
-  fun `a library preset keeps the filters, selects Local and shows the library chip`() {
+  fun `Libraries is the third source filter and searches local and remote`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1", title = "One")))
+    mount(api)
+
+    compose.onNodeWithTag(globalSearchFilterTag("source_all")).assertExists()
+    compose.onNodeWithTag(globalSearchFilterTag("source_catalog")).assertExists()
+    compose.onNodeWithTag(globalSearchFilterTag("source_libraries")).assertExists()
+    compose.onNodeWithTag(globalSearchFilterTag("source_local")).assertDoesNotExist()
+    compose.onNodeWithTag(globalSearchFilterTag("source_remote")).assertDoesNotExist()
+
+    focus(globalSearchFilterTag("source_libraries"))
+    press(Key.DirectionCenter)
+    search("matrix")
+    compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }
+    val body = api.globalStartCalls.single()
+    assertEquals(listOf("local", "remote"), body.sources)
+    assertNull(body.library)
+    assertNull(body.scope)
+  }
+
+  @Test
+  fun `a library preset keeps the filters, selects Libraries and shows the library chip`() {
     val api = FakeTvApi()
     api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
     start(api, listOf(cluster("c1", "m1", title = "One")))
@@ -333,8 +355,14 @@ class GlobalSearchScreenTest {
     val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
 
     compose.onNodeWithTag(globalSearchFilterTag("source_all")).assertExists()
+    compose.onNodeWithTag(globalSearchFilterTag("source_libraries")).assertExists()
+    compose.onNodeWithTag(globalSearchFilterTag("source_local")).assertDoesNotExist()
+    compose.onNodeWithTag(globalSearchFilterTag("source_remote")).assertDoesNotExist()
     compose.onNodeWithTag(TagGlobalSearchLibraryChip)
       .assertTextContains(preset.library!!.title, substring = true)
+    focus(globalSearchFilterTag("source_libraries"))
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagGlobalSearchLibraryChip).assertExists()
     compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_global_search_library_hint)).assertExists()
     compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_global_search_hint)).assertDoesNotExist()
     compose.onNodeWithTag(recentSearchTag("Heat")).assertExists()
@@ -356,7 +384,7 @@ class GlobalSearchScreenTest {
   }
 
   @Test
-  fun `OK on the library chip clears it and focus lands on Local`() {
+  fun `OK on the library chip clears it and focus lands on Libraries`() {
     val api = FakeTvApi()
     start(api, listOf(cluster("c1", "m1", title = "One")))
     mount(api, preset = libraryPreset())
@@ -369,10 +397,10 @@ class GlobalSearchScreenTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagGlobalSearchLibraryChip).assertDoesNotExist()
-    compose.onNodeWithTag(globalSearchFilterTag("source_local")).assertIsFocused()
+    compose.onNodeWithTag(globalSearchFilterTag("source_libraries")).assertIsFocused()
     compose.waitUntil(5_000) { api.globalStartCalls.size >= 2 }
     assertNull(api.globalStartCalls.last().library)
-    assertEquals(listOf("local"), api.globalStartCalls.last().sources)
+    assertEquals(listOf("local", "remote"), api.globalStartCalls.last().sources)
   }
 
   @Test
@@ -380,7 +408,9 @@ class GlobalSearchScreenTest {
     val api = FakeTvApi()
     mount(api, preset = libraryPreset())
 
-    focus(TagGlobalSearchKindChip)
+    focus(globalSearchFilterTag("source_libraries"))
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
     press(Key.DirectionCenter)
     press(Key.DirectionDown)
     press(Key.DirectionDown)
@@ -436,7 +466,7 @@ class GlobalSearchScreenTest {
     chooseCatalogSource()
     compose.onNodeWithTag(TagGlobalSearchScopeChip).assertExists().assertTextContains("all addons", substring = true)
 
-    focus(globalSearchFilterTag("source_local"))
+    focus(globalSearchFilterTag("source_libraries"))
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagGlobalSearchScopeChip).assertDoesNotExist()
   }
@@ -472,14 +502,11 @@ class GlobalSearchScreenTest {
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.searchableCalls == 1 }
     press(Key.DirectionRight)
-    compose.onNodeWithTag(globalSearchFilterTag("source_local")).assertIsFocused()
-    press(Key.DirectionRight)
-    compose.onNodeWithTag(globalSearchFilterTag("source_remote")).assertIsFocused()
+    compose.onNodeWithTag(globalSearchFilterTag("source_libraries")).assertIsFocused()
     press(Key.DirectionLeft)
-    compose.onNodeWithTag(globalSearchFilterTag("source_local")).assertIsFocused()
-
+    compose.onNodeWithTag(globalSearchFilterTag("source_catalog")).assertIsFocused()
     press(Key.DirectionRight)
-    compose.onNodeWithTag(globalSearchFilterTag("source_remote")).assertIsFocused()
+    compose.onNodeWithTag(globalSearchFilterTag("source_libraries")).assertIsFocused()
     press(Key.DirectionRight)
     compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
     press(Key.DirectionCenter)
@@ -642,11 +669,12 @@ class GlobalSearchScreenTest {
     press(Key.DirectionCenter)
     compose.waitForIdle()
 
-    focus(globalSearchFilterTag("source_local"))
+    focus(globalSearchFilterTag("source_libraries"))
     press(Key.DirectionCenter)
     compose.waitForIdle()
 
     assertNull(api.globalStartCalls.last().scope)
+    assertEquals(listOf("local", "remote"), api.globalStartCalls.last().sources)
     compose.onNodeWithTag(TagGlobalSearchScopeChip).assertDoesNotExist()
 
     chooseCatalogSource()

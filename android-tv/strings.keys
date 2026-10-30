@@ -329,8 +329,7 @@ tv.searchLibraryChip
 tv.searchLibraryClear
 tv.globalSearch.sourceAll
 tv.globalSearch.sourceCatalog
-tv.globalSearch.sourceLocal
-tv.globalSearch.sourceRemote
+tv.globalSearch.sourceLibraries
 tv.globalSearch.kindAll
 tv.globalSearch.kindMovies
 tv.globalSearch.kindSeries

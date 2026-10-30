@@ -113,6 +113,9 @@ const render = async (search: SearchEverywhereController, handlers: {
   });
 };
 
+const sourceButtons = (): HTMLButtonElement[] =>
+  [...host.querySelectorAll<HTMLButtonElement>(".search-filters .library-shelf-segments")[0]!.querySelectorAll("button")];
+
 const clickCard = async () => {
   const card = host.querySelector<HTMLButtonElement>("[data-search-card]")!;
   await act(async () => {
@@ -270,10 +273,20 @@ describe("SearchEverywhere", () => {
 
     await render(controller({ sources: ["local"], setScope, setSources }), { searchable });
     expect(host.querySelector("select[aria-label='Where to search']")).toBeNull();
-    const local = [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")]
-      .find((button) => button.textContent === "Local")!;
-    await act(async () => { local.click(); });
-    expect(setSources).toHaveBeenCalledWith(["local"]);
+    const libraries = sourceButtons().find((button) => button.textContent === "Libraries")!;
+    await act(async () => { libraries.click(); });
+    expect(setSources).toHaveBeenCalledWith(["local", "remote"]);
+  });
+
+  it("offers All, Catalog and Libraries", async () => {
+    const setSources = vi.fn();
+    await render(controller({ sources: ["remote", "local"], setSources }));
+
+    const buttons = sourceButtons();
+    expect(buttons.map((button) => button.textContent)).toEqual(["All", "Catalog", "Libraries"]);
+    expect(buttons.map((button) => button.getAttribute("aria-pressed"))).toEqual(["false", "false", "true"]);
+    await act(async () => { buttons[2]!.click(); });
+    expect(setSources).toHaveBeenCalledWith(["local", "remote"]);
   });
 
   it("renders source states and offers Retry only for retryable sources", async () => {

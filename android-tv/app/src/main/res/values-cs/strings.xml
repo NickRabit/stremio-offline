@@ -349,8 +349,7 @@
   <string name="tv_search_library_clear">Hledat v celé knihovně</string>
   <string name="tv_global_search_source_all">Vše</string>
   <string name="tv_global_search_source_catalog">Katalog</string>
-  <string name="tv_global_search_source_local">Místní</string>
-  <string name="tv_global_search_source_remote">Vzdálené</string>
+  <string name="tv_global_search_source_libraries">Knihovny</string>
   <string name="tv_global_search_kind_all">Vše</string>
   <string name="tv_global_search_kind_movies">Filmy</string>
   <string name="tv_global_search_kind_series">Seriály</string>

@@ -403,11 +403,11 @@ describe("useSearchEverywhere", () => {
     });
 
     await act(async () => {
-      current.setSources(["local"]);
+      current.setSources(["local", "remote"]);
       await Promise.resolve();
     });
     await flush();
-    expect(startBodies().at(-1)?.sources).toEqual(["local"]);
+    expect(startBodies().at(-1)?.sources).toEqual(["local", "remote"]);
     expect(startBodies().at(-1)).not.toHaveProperty("scope");
     expect(current.scope).toBeNull();
   });

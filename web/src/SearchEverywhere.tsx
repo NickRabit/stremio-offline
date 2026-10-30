@@ -34,12 +34,16 @@ const STATE_KEY: Record<SearchSourceState, Key> = {
   unavailable: "searchAll.state.unavailable",
 };
 
-const SOURCE_OPTIONS: Array<{ value: SearchSourceClass | "all"; label: Key }> = [
-  { value: "all", label: "searchAll.sourceAll" },
-  { value: "catalog", label: "searchAll.sourceCatalog" },
-  { value: "local", label: "searchAll.sourceLocal" },
-  { value: "remote", label: "searchAll.sourceRemote" },
+const SOURCE_OPTIONS: Array<{ id: "all" | "catalog" | "libraries"; sources: SearchSourceClass[]; label: Key }> = [
+  { id: "all", sources: [], label: "searchAll.sourceAll" },
+  { id: "catalog", sources: ["catalog"], label: "searchAll.sourceCatalog" },
+  { id: "libraries", sources: ["local", "remote"], label: "searchAll.sourceLibraries" },
 ];
+
+const sameSources = (current: readonly SearchSourceClass[], option: readonly SearchSourceClass[]): boolean =>
+  option.length === 0
+    ? current.length === 0
+    : current.length === option.length && option.every((source) => current.includes(source));
 
 const kindLabel = (kind: SearchClusterView["kind"]): string => {
   if (kind === "movie") return t("catalog.oneMovie");
@@ -480,9 +484,9 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
     <div className="filterbar section-filter search-filters">
       <div className="library-shelf-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
         {SOURCE_OPTIONS.map((option) => {
-          const active = option.value === "all" ? search.sources.length === 0 : search.sources.length === 1 && search.sources[0] === option.value;
-          return <button key={option.value} type="button" className={active ? "active" : ""} aria-pressed={active}
-            onClick={() => search.setSources(option.value === "all" ? [] : [option.value])}>{t(option.label)}</button>;
+          const active = sameSources(search.sources, option.sources);
+          return <button key={option.id} type="button" className={active ? "active" : ""} aria-pressed={active}
+            onClick={() => search.setSources(option.sources)}>{t(option.label)}</button>;
         })}
       </div>
       {catalogOnly && <label><span>{t("catalog.searchScope")}</span>

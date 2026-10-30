@@ -60,38 +60,31 @@ test("source filters start a fresh generation and drop old cards", async ({ page
   await expect(page.locator("[data-search-card][title=\"Zkušební film\"]").filter({ hasText: "· Film" })).toBeVisible();
   await expect(page.locator("[data-search-card][title=\"Zkušební seriál\"]").filter({ hasText: "· Seriál" })).toBeVisible();
 
-  const remoteRequest = page.waitForRequest((request) =>
-    request.method() === "POST"
-    && request.url().endsWith("/api/search/everywhere")
-    && request.postDataJSON()?.sources?.length === 1
-    && request.postDataJSON()?.sources?.[0] === "remote");
-  await page.getByRole("button", { name: "Vzdálené", exact: true }).click();
-  const body = (await remoteRequest).postDataJSON();
-  expect(body.query).toBe("Zkušební");
-  await expect(page.locator("[data-search-card]")).toHaveCount(0);
-
-  // The library may already hold titles from earlier specs, so the local answer is not assumed to
-  // be empty: every card on screen has to come from the local search's own answers.
-  const localMembers = new Set<string>();
-  let localSession = "";
+  // The library may already hold titles from earlier specs, so the libraries answer is not assumed
+  // to be empty: every card on screen has to come from that search's own answers.
+  const libraryMembers = new Set<string>();
+  let librarySession = "";
   page.on("response", async (response) => {
     if (response.request().method() !== "POST" || !/\/api\/search\/everywhere(\/[^/]+\/poll)?$/.test(new URL(response.url()).pathname)) return;
     const answer = await response.json().catch(() => null) as { id?: string; snapshot?: { clusters: Array<{ memberKeys: string[] }>; unidentified: Array<{ memberKeys: string[] }> } } | null;
-    if (answer?.id) localSession = answer.id;
-    if (!localSession || !response.url().includes(localSession) && !answer?.id) return;
+    if (answer?.id) librarySession = answer.id;
+    if (!librarySession || !response.url().includes(librarySession) && !answer?.id) return;
     for (const cluster of [...(answer?.snapshot?.clusters ?? []), ...(answer?.snapshot?.unidentified ?? [])]) {
-      for (const key of cluster.memberKeys) localMembers.add(key);
+      for (const key of cluster.memberKeys) libraryMembers.add(key);
     }
   });
-  const localRequest = page.waitForRequest((request) =>
+  const librariesRequest = page.waitForRequest((request) =>
     request.method() === "POST"
     && request.url().endsWith("/api/search/everywhere")
-    && request.postDataJSON()?.sources?.[0] === "local");
-  await page.getByRole("button", { name: "Místní", exact: true }).click();
-  expect((await localRequest).postDataJSON().sources).toEqual(["local"]);
+    && request.postDataJSON()?.sources?.[0] === "local"
+    && request.postDataJSON()?.sources?.[1] === "remote");
+  await page.locator(".search-filters").getByRole("button", { name: "Knihovny", exact: true }).click();
+  const body = (await librariesRequest).postDataJSON();
+  expect(body.query).toBe("Zkušební");
+  expect(body.sources).toEqual(["local", "remote"]);
   await expect(page.locator(".search-source-summary")).toHaveText("Všechny zdroje odpověděly");
   const shown = await page.locator("[data-search-card]").evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.primaryMember ?? ""));
-  for (const key of shown) expect(localMembers.has(key), `card ${key} is not from the local search`).toBe(true);
+  for (const key of shown) expect(libraryMembers.has(key), `card ${key} is not from the libraries search`).toBe(true);
 
   const catalogRequest = page.waitForRequest((request) =>
     request.method() === "POST"

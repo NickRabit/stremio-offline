@@ -36,6 +36,9 @@ enum class SourceClass(val wire: String) {
   Remote("remote"),
 }
 
+/** The Libraries filter: every local and remote library at once. */
+val LibrarySources: Set<SourceClass> = setOf(SourceClass.Local, SourceClass.Remote)
+
 enum class KindFilter(val wire: String) {
   All("all"),
   Movies("movie"),
@@ -187,7 +190,7 @@ class GlobalSearchViewModel(
     state = state.copy(
       sources = sources,
       scope = state.scope.takeIf { includesCatalog } ?: SearchScope(),
-      library = state.library?.takeIf { sources == setOf(it.source) },
+      library = state.library?.takeIf { sources == LibrarySources },
     )
     if (includesCatalog) loadSearchable()
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
@@ -317,8 +320,8 @@ class GlobalSearchViewModel(
     startJob?.cancel()
     pollJob?.cancel()
     actionJob?.cancel()
-    val requestSources = state.sources.ifEmpty { SourceClass.entries.toSet() }
-    val requestLibrary = state.library?.takeIf { requestSources == setOf(it.source) }?.library
+    val requestSources = state.library?.let { setOf(it.source) } ?: state.sources.ifEmpty { SourceClass.entries.toSet() }
+    val requestLibrary = state.library?.library
     state = state.copy(
       committed = query,
       previousQuery = state.snapshot != null,
