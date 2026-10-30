@@ -401,7 +401,7 @@ private fun GlobalSearchFilters(
   Row(
     modifier = Modifier.fillMaxWidth().focusGroup(),
     horizontalArrangement = Arrangement.spacedBy(6.dp),
-    verticalAlignment = Alignment.Bottom,
+    verticalAlignment = Alignment.CenterVertically,
   ) {
     val values = listOf(
       Triple(stringResource(R.string.tv_global_search_source_all), sources.isEmpty(), "source_all"),
@@ -483,27 +483,15 @@ private fun RowScope.GlobalSearchLibraryChip(
   onFocused: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Column(
-    modifier = Modifier.weight(1f).align(Alignment.Bottom),
-    verticalArrangement = Arrangement.spacedBy(4.dp),
-  ) {
-    Text(
-      stringResource(R.string.catalog_search_scope).uppercase(),
-      color = Tokens.Muted,
-      fontSize = 8.5.sp,
-      fontWeight = FontWeight.ExtraBold,
-      letterSpacing = 0.8.sp,
-    )
-    FocusButton(
-      text = stringResource(R.string.tv_search_library_chip, library.title),
-      onClick = onClear,
-      contentDescription = stringResource(R.string.tv_search_library_clear),
-      modifier = modifier
-        .fillMaxWidth()
-        .testTag(TagGlobalSearchLibraryChip)
-        .onFocusChanged { if (it.isFocused) onFocused() },
-    )
-  }
+  FocusButton(
+    text = stringResource(R.string.tv_search_library_chip, library.title),
+    onClick = onClear,
+    contentDescription = stringResource(R.string.tv_search_library_clear),
+    modifier = modifier
+      .weight(1f)
+      .testTag(TagGlobalSearchLibraryChip)
+      .onFocusChanged { if (it.isFocused) onFocused() },
+  )
 }
 
 @Composable
