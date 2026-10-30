@@ -2044,6 +2044,7 @@ export const sk: Catalog = {
   "tv.globalSearch.kindAll": "Všetko",
   "tv.globalSearch.kindMovies": "Filmy",
   "tv.globalSearch.kindSeries": "Seriály",
+  "tv.globalSearch.allAddons": "Všetky doplnky",
   "tv.globalSearch.statusLoading": { one: "Hľadá sa v {count} zdroji…", few: "Hľadá sa v {count} zdrojoch…", many: "Hľadá sa v {count} zdroja…", other: "Hľadá sa v {count} zdrojoch…" },
   "tv.globalSearch.statusDone": "Všetky zdroje odpovedali",
   "tv.globalSearch.retry": "Skúsiť znova",

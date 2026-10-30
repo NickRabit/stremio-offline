@@ -2032,6 +2032,7 @@ export const it: Catalog = {
   "tv.globalSearch.kindAll": "Tutti",
   "tv.globalSearch.kindMovies": "Film",
   "tv.globalSearch.kindSeries": "Serie",
+  "tv.globalSearch.allAddons": "Tutti i componenti aggiuntivi",
   "tv.globalSearch.statusLoading": { one: "Ricerca in {count} fonte…", other: "Ricerca in {count} fonti…" },
   "tv.globalSearch.statusDone": "Tutte le fonti hanno risposto",
   "tv.globalSearch.retry": "Riprova",

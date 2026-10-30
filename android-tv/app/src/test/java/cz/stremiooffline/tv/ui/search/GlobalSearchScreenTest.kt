@@ -281,9 +281,9 @@ class GlobalSearchScreenTest {
     press(Key.DirectionUp)
 
     compose.onNodeWithTag(recentSearchTag("Heat")).assertIsNotFocused()
-    compose.onNodeWithTag(globalSearchFilterTag("kind_all")).assertIsFocused()
-    press(Key.DirectionUp)
     compose.onNodeWithTag(globalSearchFilterTag("source_all")).assertIsFocused()
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagGlobalSearchField).assertIsFocused()
   }
 
   @Test
@@ -393,7 +393,7 @@ class GlobalSearchScreenTest {
   }
 
   @Test
-  fun `source and kind rows are completely reachable before results`() {
+  fun `source chips and both dropdowns are reachable on one toolbar`() {
     val api = FakeTvApi()
     api.searchableValue = listOf(searchable("a", "Alpha"))
     mount(api)
@@ -412,17 +412,24 @@ class GlobalSearchScreenTest {
     press(Key.DirectionLeft)
     compose.onNodeWithTag(globalSearchFilterTag("source_local")).assertIsFocused()
 
-    focus(globalSearchFilterTag("source_catalog"))
-    press(Key.DirectionDown)
-    compose.onNodeWithTag(globalSearchFilterTag("kind_all")).assertIsFocused()
     press(Key.DirectionRight)
+    compose.onNodeWithTag(globalSearchFilterTag("source_remote")).assertIsFocused()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(globalSearchFilterTag("kind_all")).assertIsFocused()
+    press(Key.DirectionDown)
     compose.onNodeWithTag(globalSearchFilterTag("kind_movie")).assertIsFocused()
-    press(Key.DirectionRight)
-    compose.onNodeWithTag(globalSearchFilterTag("kind_series")).assertIsFocused()
     press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchFilterTag("kind_series")).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused().assertTextContains("Series", substring = true)
+    press(Key.DirectionRight)
     compose.onNodeWithTag(TagGlobalSearchScopeChip).assertIsFocused().assertIsDisplayed()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertIsFocused()
     press(Key.DirectionUp)
-    compose.onNodeWithTag(globalSearchFilterTag("kind_all")).assertIsFocused()
+    compose.onNodeWithTag(TagGlobalSearchField).assertIsFocused()
   }
 
   @Test
@@ -435,6 +442,45 @@ class GlobalSearchScreenTest {
     compose.waitUntil(5_000) { api.searchableCalls == 1 }
 
     compose.onNodeWithTag(TagGlobalSearchScopeChip).assertTextContains("all addons", substring = true)
+  }
+
+  @Test
+  fun `the type dropdown changes the submitted kind and returns focus`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1")))
+    mount(api)
+    search()
+    focus(TagGlobalSearchKindChip)
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchFilterTag("kind_movie")).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals("movie", api.globalStartCalls.last().kind)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused().assertTextContains("Movies", substring = true)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(globalSearchFilterTag("kind_movie")).assertIsFocused()
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "cs-rCZ-w960dp-h540dp-xhdpi")
+  fun `Czech toolbar keeps a long addon label inside the safe viewport`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(searchable("a", "A very long addon name ".repeat(12)))
+    val restored = ViewModelProvider(compose.activity, GlobalSearchViewModel.factory(api))[GlobalSearchViewModel::class.java]
+    restored.setScope(SearchScope(addonKey = "a"))
+    mount(api)
+    compose.waitUntil(5_000) { api.searchableCalls > 0 }
+    compose.waitForIdle()
+
+    val source = compose.onNodeWithTag(globalSearchFilterTag("source_all")).fetchSemanticsNode().boundsInRoot
+    val kind = compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val scope = compose.onNodeWithTag(TagGlobalSearchScopeChip).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+    assertTrue(kotlin.math.abs(source.center.y - kind.center.y) < 2f)
+    assertTrue(kotlin.math.abs(kind.center.y - scope.center.y) < 2f)
+    assertTrue(kind.right <= scope.left)
+    assertTrue(scope.right < root.right)
   }
 
   @Test
@@ -460,7 +506,7 @@ class GlobalSearchScreenTest {
   }
 
   @Test
-  fun `the first result returns to the filter columns`() {
+  fun `the first result returns through status to the toolbar`() {
     val api = FakeTvApi()
     start(api, listOf(cluster("c1", "m1", title = "One")))
     mount(api)
@@ -470,9 +516,9 @@ class GlobalSearchScreenTest {
     press(Key.DirectionUp)
     compose.onNodeWithTag(TagGlobalSearchSourceStrip).assertIsFocused()
     press(Key.DirectionUp)
-    compose.onNodeWithTag(globalSearchFilterTag("kind_all")).assertIsFocused()
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
     press(Key.DirectionUp)
-    compose.onNodeWithTag(globalSearchFilterTag("source_all")).assertIsFocused()
+    compose.onNodeWithTag(TagGlobalSearchField).assertIsFocused()
   }
 
   @Test
@@ -574,16 +620,21 @@ class GlobalSearchScreenTest {
   }
 
   @Test
-  fun `the D-pad moves from the kind row down to the scope chip`() {
+  fun `the D-pad moves between the type and scope dropdowns`() {
     val api = FakeTvApi()
     mount(api)
     chooseCatalogSource()
 
-    focus(globalSearchFilterTag("kind_series"))
-    press(Key.DirectionDown)
+    focus(TagGlobalSearchKindChip)
+    press(Key.DirectionRight)
     compose.onNodeWithTag(TagGlobalSearchScopeChip).assertIsFocused()
-    press(Key.DirectionUp)
-    compose.onNodeWithTag(globalSearchFilterTag("kind_all")).assertIsFocused()
+    press(Key.DirectionLeft)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
+    compose.onNodeWithTag(globalSearchFilterTag("kind_all")).assertDoesNotExist()
   }
 
   @Test
@@ -776,7 +827,7 @@ class GlobalSearchScreenTest {
     }
     mount(api)
     search()
-    focus(globalSearchFilterTag("kind_movie"))
+    focus(TagGlobalSearchKindChip)
 
     next = GlobalSearchPollDto(
       changed = true,
@@ -785,7 +836,7 @@ class GlobalSearchScreenTest {
     gate.complete(Unit)
     compose.waitForIdle()
 
-    compose.onNodeWithTag(globalSearchFilterTag("kind_movie")).assertIsFocused()
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
   }
 
   @Test

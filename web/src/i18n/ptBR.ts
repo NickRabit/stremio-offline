@@ -2032,6 +2032,7 @@ export const ptBR: Catalog = {
   "tv.globalSearch.kindAll": "Todos",
   "tv.globalSearch.kindMovies": "Filmes",
   "tv.globalSearch.kindSeries": "Séries",
+  "tv.globalSearch.allAddons": "Todos os complementos",
   "tv.globalSearch.statusLoading": { one: "Pesquisando em {count} fonte…", other: "Pesquisando em {count} fontes…" },
   "tv.globalSearch.statusDone": "Todas as fontes responderam",
   "tv.globalSearch.retry": "Tentar novamente",

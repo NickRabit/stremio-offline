@@ -2097,6 +2097,7 @@ export const cs: Catalog = {
   "tv.globalSearch.kindAll": "Vše",
   "tv.globalSearch.kindMovies": "Filmy",
   "tv.globalSearch.kindSeries": "Seriály",
+  "tv.globalSearch.allAddons": "Všechny doplňky",
   "tv.globalSearch.statusLoading": { one: "Hledá se v {count} zdroji…", few: "Hledá se ve {count} zdrojích…", many: "Hledá se v {count} zdroje…", other: "Hledá se v {count} zdrojích…" },
   "tv.globalSearch.statusDone": "Všechny zdroje odpověděly",
   "tv.globalSearch.retry": "Zkusit znovu",

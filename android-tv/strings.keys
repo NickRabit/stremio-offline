@@ -70,6 +70,7 @@ tv.findingSources
 tv.playWhenReady
 catalog.title
 catalog.genre
+catalog.type
 catalog.allGenres
 catalog.allAddons
 catalog.allCatalogs
@@ -332,6 +333,7 @@ tv.globalSearch.sourceRemote
 tv.globalSearch.kindAll
 tv.globalSearch.kindMovies
 tv.globalSearch.kindSeries
+tv.globalSearch.allAddons
 tv.globalSearch.statusLoading
 tv.globalSearch.statusDone
 tv.globalSearch.retry
