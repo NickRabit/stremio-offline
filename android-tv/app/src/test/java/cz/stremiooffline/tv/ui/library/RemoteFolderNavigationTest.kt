@@ -148,7 +148,7 @@ class RemoteFolderNavigationTest {
   }
 
   @Test
-  fun `a library root that carries its own poster asks for no preview mosaic`() {
+  fun `a library root asks for child artwork even when it carries its own poster`() {
     val api = FakeTvApi()
     api.remoteLibrariesValue = listOf(
       RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby", type = "mixed", poster = "/own-root.jpg"),
@@ -162,8 +162,8 @@ class RemoteFolderNavigationTest {
     compose.waitForIdle()
     compose.onNodeWithTag(remoteLibraryTag("rlibA")).assertIsFocused()
 
-    // The own picture wins over any child collage, so nothing was asked of the preview route.
-    assertTrue(api.remotePreviewRequests.isEmpty())
+    compose.waitUntil(5_000) { api.remotePreviewRequests.contains("rlibA" to null) }
+    assertEquals(listOf(true), api.remotePreviewChildrenRequests)
   }
 
   @Test
@@ -189,5 +189,28 @@ class RemoteFolderNavigationTest {
 
     // The season's collage would be its episodes, which says nothing about it, so it never asked.
     assertTrue(api.remotePreviewRequests.none { it.second == "sea1" })
+  }
+
+  @Test
+  fun `a folder with its own poster keeps it and asks for no child collage`() {
+    val api = FakeTvApi()
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby", type = "mixed"))
+    api.remoteBrowsePages["rlibA||"] = RemoteItemsPageDto(
+      items = listOf(folder("f1", "Shows").copy(poster = "/folder.jpg")),
+      total = 1,
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteLibraryRoute(api = api, segment = LibrarySegment.Servers, onOpenItem = { _, _, _, _ -> })
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.onNodeWithTag(remoteLibraryTag("rlibA")).assertIsFocused()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(remoteItemTag("f1")).assertIsFocused()
+    assertTrue(api.remotePreviewRequests.none { it.second == "f1" })
   }
 }

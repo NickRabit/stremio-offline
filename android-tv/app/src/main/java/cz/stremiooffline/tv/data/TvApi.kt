@@ -154,8 +154,13 @@ interface RemoteLibraryApi {
   ): RemoteItemsPageDto = throw ApiError(ApiFailure.Generic)
 
   /** Up to four same-origin authorized poster URLs for one library root or folder; empty when the
-   *  library's mosaic is off or the directory has no artwork of its own. */
-  suspend fun remotePreview(libraryId: String, parentId: String? = null): RemotePreviewDto =
+   *  library's mosaic is off or the directory has no artwork. [childrenArtwork] asks a root for its
+   *  children even when the provider also supplies a root poster. */
+  suspend fun remotePreview(
+    libraryId: String,
+    parentId: String? = null,
+    childrenArtwork: Boolean = false,
+  ): RemotePreviewDto =
     throw ApiError(ApiFailure.Generic)
 
   suspend fun remoteItem(libraryId: String, itemId: String): RemoteItemDetailDto =

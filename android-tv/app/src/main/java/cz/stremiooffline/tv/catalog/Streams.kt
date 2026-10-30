@@ -484,13 +484,18 @@ object Streams {
   ): SourceFilterOptions {
     val byLanguage = if (filters.language.isEmpty()) listed
     else listed.filter { streamLanguages(it, titleLanguage).contains(filters.language) }
-    val byAddon = if (filters.addon.isEmpty()) listed
-    else listed.filter { it.addonName == filters.addon }
+    val byAddon = when {
+      filters.addon.isEmpty() -> listed
+      filters.addon == LOCAL_FILTER -> listed.filter(::isLocalStream)
+      remoteFilterLibrary(filters.addon) != null ->
+        listed.filter { it.remoteItem?.libraryId == remoteFilterLibrary(filters.addon) }
+      else -> listed.filter { it.addonName == filters.addon }
+    }
 
     val addonCounts = LinkedHashMap<String, Int>()
     for (stream in byLanguage) {
       // A remote version is offered through its own group choice, never under an addon name.
-      if (isRemoteStream(stream)) continue
+      if (isRemoteStream(stream) || isLocalStream(stream)) continue
       val name = stream.addonName ?: "?"
       addonCounts[name] = (addonCounts[name] ?: 0) + 1
     }
@@ -554,7 +559,7 @@ object Streams {
       notices = addonNotices(streams),
       titleLanguage = titleLanguage,
       options = filterOptions(
-        listed,
+        origins.rows + local + remote.flatMap { it.streams } + listed,
         filters,
         priority,
         titleLanguage,

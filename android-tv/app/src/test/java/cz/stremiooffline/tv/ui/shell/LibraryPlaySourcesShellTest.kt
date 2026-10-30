@@ -240,10 +240,10 @@ class LibraryPlaySourcesShellTest {
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertExists()
   }
 
-  /** An addon play a native detail started with several rows carries its own list: the player
-   *  offers exactly those, never the catalogue list the shell happens to still hold. */
+  /** An addon play a native detail started with several rows keeps those rows and accepts the
+   *  supplementary groups the library loader discovers around their catalogue identity. */
   @Test
-  fun `a native detail's addon snapshot of several rows is the player's list`() {
+  fun `a native detail's multi-row snapshot grows with the loader list`() {
     val row = StreamDto(sourceId = "srcA", kind = "remote", playable = true, title = "Czech 8 GB", addonName = "Alpha")
     val other = StreamDto(sourceId = "srcB", kind = "remote", playable = true, title = "Czech 4 GB", addonName = "Alpha")
     val stale = StreamDto(sourceId = "stale", kind = "remote", playable = true, title = "Stale", addonName = "Old")
@@ -260,12 +260,12 @@ class LibraryPlaySourcesShellTest {
 
     val sources = playerSourcesFor(target, OfferedSources(listOf(stale), loading = true), OfferedSources(listOf(libraryRow)))
 
-    assertEquals(listOf(row, other), sources.streams)
+    assertEquals(listOf(row, other, libraryRow), sources.streams)
     assertFalse(sources.loading)
   }
 
   @Test
-  fun `one snapshot row hands the play to the loader, several rows are the list`() {
+  fun `every non-catalogue snapshot is merged with the loader`() {
     val row = StreamDto(sourceId = "srcA", kind = "remote", playable = true, title = "Czech 8 GB", addonName = "Alpha")
     val other = StreamDto(sourceId = "srcB", kind = "remote", playable = true, title = "Czech 4 GB", addonName = "Alpha")
     val loaded = OfferedSources(listOf(row, other), loading = true)
@@ -291,7 +291,7 @@ class LibraryPlaySourcesShellTest {
       remoteItem = RemoteItemContext(libraryId = "rlibA", itemId = "iA", mediaSourceId = "ms1", progressKey = "remote:rlibA:iA"),
       remoteSources = listOf(row),
     )
-    assertEquals(loaded, playerSourcesFor(oneRemote, OfferedSources(), loaded))
+    assertEquals(loaded.streams, playerSourcesFor(oneRemote, OfferedSources(), loaded).streams)
   }
 
   @Test

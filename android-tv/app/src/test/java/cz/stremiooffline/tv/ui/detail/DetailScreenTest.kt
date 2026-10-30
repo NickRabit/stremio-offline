@@ -80,6 +80,35 @@ class DetailScreenTest {
     }
   }
 
+  @Test
+  fun `the action row names the file Play acts on and follows the episode change`() {
+    val first = file("Shows/Show/S01/Show.S01E01.mkv", "S1 · E1")
+      .copy(size = 1_000_000_000.0, season = 1, episode = 1)
+    val second = file("Shows/Show/S01/Show.S02E02.mkv", "S1 · E2")
+      .copy(size = 2_000_000_000.0, season = 1, episode = 2)
+    compose.setContent {
+      DetailScreen(
+        detail = detail(listOf(first, second)),
+        imageUrl = { null },
+        onPlay = {},
+        onBack = {},
+        progress = { key -> progress[key] },
+        forgetProgress = {},
+        markWatched = { watched ->
+          progress[cz.stremiooffline.tv.playback.Progress.libraryKey(watched.path)] =
+            ProgressDto(position = 1.0, duration = 1.0)
+        },
+      )
+    }
+
+    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("S1 · E1", substring = true)
+    compose.onNodeWithTag(TagDetailMarkWatched).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(TagDetailMarkWatched).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("S1 · E2", substring = true)
+  }
+
   private fun press(key: Key) {
     compose.onRoot().performKeyInput { pressKey(key) }
     compose.waitForIdle()

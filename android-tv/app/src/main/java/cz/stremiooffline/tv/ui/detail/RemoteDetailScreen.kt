@@ -369,7 +369,7 @@ fun RemoteDetailScreen(
   /** The play one picked row starts, exactly as the player starts any other: Play and Start over
    *  act on the pick, on the item's leading version while there is none. */
   fun playPicked(resume: Boolean): Boolean {
-    val pick = pickedRow ?: return false
+    val pick = pickedRow?.takeIf { row -> loadedRows.any { it === row } } ?: return false
     val wanted = nativeRowTarget(pick, titleOf(data), sourcesIdentity, loadedRows, data.item.poster) ?: return false
     onPlay(if (resume) wanted else wanted.copy(resume = false))
     return true
@@ -424,6 +424,7 @@ fun RemoteDetailScreen(
    *  versions. Without one, or with such a version picked, the item's own copy panel is what opens. */
   val copyPick = pickedCopy?.takeIf { row -> sources.none { it === row } }
   val copyOffered = if (copyPick == null) canCopy else canSaveRow(copyPick)
+  val actionRow = pickedCopy ?: primary
 
   /** Reads, at the viewer's Save press, the destinations this one row may be queued into, then
    *  opens the panel with exactly that row. Nothing is queued blind and no first candidate is
@@ -806,19 +807,17 @@ fun RemoteDetailScreen(
         ) else null,
         caption = caption,
       )
-      if (pickedRow != null) {
-        pickedRow?.let { row ->
-          val pickedCaption = chosenSourceCaption(row).joinToString(" · ")
-          if (pickedCaption.isNotEmpty()) {
-            Text(
-              stringResource(R.string.tv_chosen_source) + " · " + pickedCaption,
-              color = Tokens.Muted,
-              fontSize = 11.sp,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.testTag(TagRemoteDetailPickCaption),
-            )
-          }
+      actionRow?.let { row ->
+        val pickedCaption = chosenSourceCaption(row).joinToString(" · ")
+        if (pickedCaption.isNotEmpty()) {
+          Text(
+            stringResource(R.string.tv_chosen_source) + " · " + pickedCaption,
+            color = Tokens.Muted,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag(TagRemoteDetailPickCaption),
+          )
         }
       }
 

@@ -59,6 +59,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.ProgressKey
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.AddonSubtitleDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
@@ -91,8 +92,11 @@ import cz.stremiooffline.tv.playback.sidecarAdvanced
 import cz.stremiooffline.tv.playback.sidecarPollDelay
 import cz.stremiooffline.tv.playback.sidecarRefresh
 import cz.stremiooffline.tv.ui.catalog.SourcesPanel
+import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
+import cz.stremiooffline.tv.ui.catalog.SourceFilterState
 import cz.stremiooffline.tv.ui.catalog.libraryAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.RemoteSourcesFailure
+import cz.stremiooffline.tv.ui.catalog.sourceFilterChips
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -163,6 +167,7 @@ fun PlayerScreen(
   // The window lost its target while a screensaver or another activity covered it.
   var reclaimFocus by remember { mutableIntStateOf(0) }
   var settings by remember { mutableStateOf(SettingsResponse()) }
+  var sourceAddons by remember { mutableStateOf<List<AddonDto>>(emptyList()) }
   var addonSubtitles by remember { mutableStateOf<List<AddonSubtitleDto>>(emptyList()) }
   var addonFetched by remember { mutableStateOf(false) }
   // The name the OSD and the loading overlay show; it follows the next episode too.
@@ -190,6 +195,11 @@ fun PlayerScreen(
   // The correction lives with this playback, not beyond it.
   var delaySeconds by remember(target.key) { mutableDoubleStateOf(0.0) }
   var cues by remember { mutableStateOf<List<VttCue>>(emptyList()) }
+  val sourceFilters = remember(target.key) { SourceFilterState() }
+  BindSourceProfiles(api, sourceFilters)
+  LaunchedEffect(api, target.key) {
+    sourceAddons = runCatching { api.addons() }.getOrDefault(emptyList())
+  }
 
   val currentState by rememberUpdatedState(state)
   val currentNext by rememberUpdatedState(nextEpisode)
@@ -359,8 +369,24 @@ fun PlayerScreen(
   // because an addon source chosen over a library file leaves that file's path on the session.
   val playingSource = offeredSources.firstOrNull { it.sourceId.isNotBlank() && it.sourceId == state.sourceId }
     ?: offeredSources.firstOrNull { Streams.isLocalStream(it) && it.localPath != null && it.localPath == currentTarget.path }
-  // The panel lists the row that is playing first, the rest in their own order.
-  val panelSources = sourcesWithPlayingFirst(offeredSources, playingSource)
+  val filters = sourceFilters.filters(settings.streamSort)
+  val lists = remember(offeredSources, sourceAddons, filters, settings, currentTarget.remoteItem) {
+    playerSourceLists(
+      offered = offeredSources,
+      target = currentTarget,
+      addons = sourceAddons,
+      filters = filters,
+      preferredLanguage = settings.audioLanguage ?: "en",
+      showTorrents = settings.realDebridConfigured,
+    )
+  }
+  // Filtering and sorting only choose presentation. The complete offered list stays untouched for
+  // every later filter change, subtitle lookup and switch.
+  val displayRows = if (sourceFilters.isDefault()) Streams.deduped(offeredSources) else lists.rows
+  val panelSources = sourcesWithPlayingFirst(
+    playerDisplaySources(displayRows, playingSource),
+    playingSource,
+  )
   val quality = qualityChoice(state.quality, state.escalatedByViewer)
 
   /** Starts [target], leaving the outgoing session saved and deleted behind it. A different remote
@@ -766,6 +792,7 @@ fun PlayerScreen(
       }
 
       if (sourcesOpen) {
+        val chips = sourceFilterChips(filters, lists.options, sourceFilters.profiles)
         SourcesPanel(
           streams = panelSources,
           focusIndex = 0,
@@ -775,12 +802,21 @@ fun PlayerScreen(
             restoreFocus = sourcesFocus
           },
           default = Streams.pickDefaultStream(panelSources),
+          chosen = playingSource,
           playing = playingSource,
           asking = sourcesAsking,
+          titleLanguage = lists.titleLanguage,
           emptyText = stringResource(R.string.sources_none),
           failureText = stringResource(R.string.tv_load_error),
           remoteNote = remoteFailureNote,
-          ruleNoteProfileId = ruleNoteProfileId,
+          ruleNoteProfileId = sourceFilters.noteProfileId(settings.streamSort) ?: ruleNoteProfileId,
+          filters = if (offeredSources.size > 1) chips else emptyList(),
+          onFilterSelect = sourceFilters::select,
+          countText = if (offeredSources.size > 1) {
+            stringResource(R.string.sources_of_total, panelSources.size, offeredSources.size)
+          } else {
+            null
+          },
           onRetry = if (sourcesRemoteFailure != null) onSourcesRetry else null,
           retryTag = if (sourcesRemoteFailure != null) TagRemoteSourcesRetry else null,
           initialFocus = sourcesEntry,
@@ -912,6 +948,67 @@ internal fun sourcesWithPlayingFirst(streams: List<StreamDto>, playing: StreamDt
   val index = playing?.let(streams::indexOf) ?: -1
   if (index <= 0) return streams
   return listOf(streams[index]) + streams.filterIndexed { position, _ -> position != index }
+}
+
+/** Keep the playing row visible while filters narrow the rest of the presentation. */
+internal fun playerDisplaySources(streams: List<StreamDto>, playing: StreamDto?): List<StreamDto> {
+  if (playing == null || streams.any { it === playing }) return streams
+  return listOf(playing) + streams
+}
+
+/** Build the player's display list from the complete offered snapshot, keeping each source kind
+ *  separate so the shared filters can attribute local, remote and addon rows correctly. */
+internal fun playerSourceLists(
+  offered: List<StreamDto>,
+  target: PlayTarget,
+  addons: List<AddonDto>,
+  filters: Streams.StreamFilters,
+  preferredLanguage: String,
+  showTorrents: Boolean,
+): Streams.SourceLists {
+  val unique = Streams.deduped(offered)
+  val origin = target.remoteItem
+  val origins = if (origin == null) {
+    emptyList()
+  } else {
+    unique.filter {
+      it.remoteItem?.libraryId == origin.libraryId && it.remoteItem?.itemId == origin.itemId
+    }
+  }
+  val originIds = origins.mapTo(HashSet()) { Streams.rowIdentity(it) }
+  val rest = unique.filterNot { Streams.rowIdentity(it) in originIds }
+  val local = rest.filter(Streams::isLocalStream)
+  val remoteRows = rest.filter(Streams::isRemoteStream)
+  val remoteGroups = remoteRows.groupBy { row ->
+    listOf(
+      row.remoteItem?.libraryId.orEmpty(),
+      row.provider.orEmpty(),
+      row.libraryName.orEmpty(),
+    )
+  }.map { (identity, rows) ->
+    Streams.RemoteGroup(
+      libraryId = identity[0],
+      provider = identity[1],
+      libraryName = identity[2],
+      streams = rows,
+    )
+  }
+  val addonRows = rest.filter { !Streams.isLocalStream(it) && !Streams.isRemoteStream(it) }
+  val originLabel = origins.firstOrNull()?.let { row ->
+    listOfNotNull(row.provider?.takeIf { it.isNotBlank() }, row.libraryName?.takeIf { it.isNotBlank() })
+      .joinToString(" · ")
+  }.orEmpty()
+  return Streams.sourceLists(
+    streams = addonRows,
+    addons = addons,
+    filters = filters,
+    preferredLanguage = preferredLanguage,
+    showTorrents = showTorrents,
+    metaLanguage = null,
+    local = local,
+    remote = remoteGroups,
+    origins = Streams.Origins(origins, origin?.libraryId, originLabel),
+  )
 }
 
 /**

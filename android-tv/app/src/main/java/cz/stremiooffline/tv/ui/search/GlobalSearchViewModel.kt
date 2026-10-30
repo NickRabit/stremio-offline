@@ -138,6 +138,10 @@ class GlobalSearchViewModel(
   var state by mutableStateOf(GlobalSearchState(sources = fixedSources.orEmpty()))
     private set
 
+  init {
+    if (state.sources == setOf(SourceClass.Catalog)) loadSearchable()
+  }
+
   private var generation = 0
   private var sessionId: String? = null
   private var revision = 0
@@ -186,6 +190,7 @@ class GlobalSearchViewModel(
       sources = sources,
       scope = state.scope.takeIf { sources == setOf(SourceClass.Catalog) } ?: SearchScope(),
     )
+    if (sources == setOf(SourceClass.Catalog)) loadSearchable()
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
   }
 
@@ -209,6 +214,7 @@ class GlobalSearchViewModel(
     val scopedSources = setOf(SourceClass.Catalog)
     if (state.scope == scope && state.sources == scopedSources) return
     state = state.copy(sources = scopedSources, scope = scope)
+    loadSearchable()
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
   }
 

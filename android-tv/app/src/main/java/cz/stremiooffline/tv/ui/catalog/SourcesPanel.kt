@@ -706,6 +706,7 @@ internal fun sourceFilterChips(
   val allAddonsLabel = stringResource(R.string.sources_all_addons)
   val localLabel = stringResource(R.string.sources_local_filter)
   val anyLanguageLabel = stringResource(R.string.sources_any_language)
+  val recommendedLabel = stringResource(R.string.sources_sort_recommended)
   val sortLabels = buildList {
     for (profile in profiles) {
       if (profile.id.isBlank()) continue
@@ -718,6 +719,7 @@ internal fun sourceFilterChips(
   }
   val valueLabel = sortLabels.firstOrNull { it.first == sortValue }?.second
     ?: (sortValue as? Streams.StreamSort.Rule)?.profileId
+    ?: recommendedLabel.takeIf { sortValue == Streams.StreamSort.FirstRule }
     ?: ""
   val languageOptions = options.languages
   val chips = buildList {
@@ -805,6 +807,8 @@ internal class SourceFilterState {
       "language" -> language = key
     }
   }
+
+  fun isDefault(): Boolean = addon.isEmpty() && language.isEmpty() && sort == null
 
   fun reset() {
     addon = ""

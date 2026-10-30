@@ -61,11 +61,12 @@ class RemoteBrowseApiTest {
 
   @Test
   fun `preview asks the library root without a parent`() = runTest {
-    server.enqueue(MockResponse().setBody("""{"posters":["/api/media/a.jpg","/api/media/b.jpg"]}"""))
+    server.enqueue(MockResponse().setBody("""{"posters":["/api/media/a.jpg","/api/media/b.jpg"],"mosaic":"/api/remote-libraries/rlibA/mosaic?v=stamp"}"""))
 
     val preview = api(start()).remotePreview("rlibA")
 
     assertEquals(listOf("/api/media/a.jpg", "/api/media/b.jpg"), preview.posters)
+    assertEquals("/api/remote-libraries/rlibA/mosaic?v=stamp", preview.mosaic)
     assertEquals("/api/remote-libraries/rlibA/preview", server.takeRequest().path)
   }
 
@@ -76,6 +77,15 @@ class RemoteBrowseApiTest {
     api(start()).remotePreview("lib/1", "a b/c&d")
 
     assertEquals("/api/remote-libraries/lib%2F1/preview?parentId=a%20b%2Fc%26d", server.takeRequest().path)
+  }
+
+  @Test
+  fun `a root preview can force child artwork`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"posters":[]}"""))
+
+    api(start()).remotePreview("rlibA", childrenArtwork = true)
+
+    assertEquals("/api/remote-libraries/rlibA/preview?artwork=children", server.takeRequest().path)
   }
 
   @Test

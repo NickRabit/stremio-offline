@@ -204,6 +204,7 @@ open class FakeTvApi : TvApi {
   val catalogDeletedIds: MutableList<String> = mutableListOf()
   var searchableValue: List<SearchableCatalogDto> = emptyList()
   var searchableCalls = 0
+  var searchableGate: CompletableDeferred<Unit>? = null
   var searchStateValue: SearchStateDto = SearchStateDto()
   var searchStateCalls = 0
   var searchStateFailure: ApiFailure? = null
@@ -273,7 +274,9 @@ open class FakeTvApi : TvApi {
   val remoteBrowseGates: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
   /** The posters every preview answers with; a test may gate or fail the call. */
   var remotePreviewValue: List<String> = emptyList()
+  var remotePreviewMosaicValue: String? = null
   val remotePreviewRequests: MutableList<Pair<String, String?>> = mutableListOf()
+  val remotePreviewChildrenRequests: MutableList<Boolean> = mutableListOf()
   var remotePreviewFailure: ApiError? = null
   /** Held open until the test releases it, so preview concurrency can be watched. */
   var remotePreviewGate: CompletableDeferred<Unit>? = null
@@ -388,6 +391,7 @@ open class FakeTvApi : TvApi {
 
   override suspend fun searchable(): List<SearchableCatalogDto> {
     searchableCalls += 1
+    searchableGate?.await()
     return searchableValue
   }
 
@@ -696,11 +700,16 @@ open class FakeTvApi : TvApi {
     }
   }
 
-  override suspend fun remotePreview(libraryId: String, parentId: String?): RemotePreviewDto {
+  override suspend fun remotePreview(
+    libraryId: String,
+    parentId: String?,
+    childrenArtwork: Boolean,
+  ): RemotePreviewDto {
     remotePreviewRequests += libraryId to parentId
+    remotePreviewChildrenRequests += childrenArtwork
     remotePreviewGate?.await()
     remotePreviewFailure?.let { throw it }
-    return RemotePreviewDto(remotePreviewValue)
+    return RemotePreviewDto(remotePreviewValue, remotePreviewMosaicValue)
   }
 
   override suspend fun remoteEpisodes(

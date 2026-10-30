@@ -5,14 +5,18 @@ import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.ui.FakeTvApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -50,6 +54,148 @@ class LibraryViewModelTest {
   }
 
   @Test
+  fun `a nonempty pending page is shown at once and its composed mosaic arrives in the background`() = runTest(dispatcher) {
+    var call = 0
+    val api = object : FakeTvApi() {
+      override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
+        call++
+        val poster = if (call == 1) null else "/api/library/mosaic?dir=lib_1&v=ready"
+        return BrowseResult(
+          path.orEmpty(),
+          listOf(BrowseItem.Library(path = "lib_1", name = "Films", mosaicImage = poster)),
+          1,
+          pending = call == 1,
+        )
+      }
+    }
+    val viewModel = LibraryViewModel(api, pendingDelayMs = 1L)
+    viewModel.selectedPath = "lib_1"
+
+    viewModel.start()
+    runCurrent()
+
+    assertEquals(1, call)
+    assertFalse(viewModel.state.loading)
+    assertEquals(listOf("lib_1"), viewModel.state.current!!.items.map { it.path })
+    assertEquals(null, (viewModel.state.current!!.items.single() as BrowseItem.Library).mosaicImage)
+
+    advanceTimeBy(1)
+    runCurrent()
+
+    assertEquals(2, call)
+    assertEquals(
+      "/api/library/mosaic?dir=lib_1&v=ready",
+      (viewModel.state.current!!.items.single() as BrowseItem.Library).mosaicImage,
+    )
+    assertEquals("lib_1", viewModel.selectedPath)
+  }
+
+  @Test
+  fun `navigating away cancels a pending artwork refresh before it can touch the new level`() = runTest(dispatcher) {
+    var rootCalls = 0
+    val api = object : FakeTvApi() {
+      override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
+        if (path == "lib_1") return BrowseResult(path, listOf(folder("lib_1/Films", "Films")), 1, false)
+        rootCalls++
+        return BrowseResult(
+          "",
+          listOf(BrowseItem.Library(path = "lib_1", name = "Films", mosaicImage = null)),
+          1,
+          pending = true,
+        )
+      }
+    }
+    val viewModel = LibraryViewModel(api, pendingDelayMs = 1L)
+    viewModel.start()
+    runCurrent()
+    assertEquals(1, rootCalls)
+
+    viewModel.open("lib_1", "Films")
+    advanceUntilIdle()
+
+    assertEquals(2, viewModel.state.pages.size)
+    assertEquals("lib_1", viewModel.state.current!!.path)
+    assertEquals(listOf("Films"), viewModel.state.current!!.items.map { it.title })
+    assertEquals(1, rootCalls)
+  }
+
+  @Test
+  fun `pending artwork polling is bounded and keeps the last usable rows`() = runTest(dispatcher) {
+    var calls = 0
+    val api = object : FakeTvApi() {
+      override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
+        calls++
+        return BrowseResult(
+          path.orEmpty(),
+          listOf(BrowseItem.Library(path = "lib_1", name = "Films", mosaicImage = null)),
+          1,
+          pending = true,
+        )
+      }
+    }
+    val viewModel = LibraryViewModel(api, pendingDelayMs = 1L)
+    viewModel.start()
+    advanceUntilIdle()
+
+    assertEquals(9, calls)
+    assertEquals(listOf("lib_1"), viewModel.state.current!!.items.map { it.path })
+  }
+
+  @Test
+  fun `paging while artwork is pending cannot let stale jobs touch a new root`() = runTest(dispatcher) {
+    val pollGate = CompletableDeferred<Unit>()
+    val pageGate = CompletableDeferred<Unit>()
+    var calls = 0
+    val api = object : FakeTvApi() {
+      override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
+        calls++
+        return when (calls) {
+          1 -> BrowseResult(
+            "",
+            listOf(BrowseItem.Library(path = "Films", name = "Films", mosaicImage = null)),
+            2,
+            pending = true,
+          )
+          2 -> {
+            withContext(NonCancellable) { pollGate.await() }
+            BrowseResult(
+              "",
+              listOf(BrowseItem.Library(path = "Films", name = "Films", mosaicImage = "/new.jpg")),
+              2,
+              pending = true,
+            )
+          }
+          3 -> {
+            withContext(NonCancellable) { pageGate.await() }
+            BrowseResult("", listOf(BrowseItem.Library(path = "Films/page", name = "Page")), 2, pending = true)
+          }
+          else -> BrowseResult("", listOf(BrowseItem.Library(path = "Shows", name = "Shows")), 1, pending = false)
+        }
+      }
+    }
+    val viewModel = LibraryViewModel(api, pendingDelayMs = 1L)
+    viewModel.start()
+    runCurrent()
+    advanceTimeBy(1)
+    runCurrent()
+    assertEquals(2, calls)
+
+    viewModel.loadMore()
+    runCurrent()
+    assertEquals(3, calls)
+    viewModel.start()
+    runCurrent()
+    assertEquals(listOf("Shows"), viewModel.state.current!!.items.map { it.path })
+
+    pollGate.complete(Unit)
+    pageGate.complete(Unit)
+    advanceUntilIdle()
+
+    assertEquals(listOf("Shows"), viewModel.state.current!!.items.map { it.path })
+    assertEquals(1, viewModel.state.pages.size)
+  }
+
+  @Test
   fun `back drops one level and keeps the parent items`() = runTest(dispatcher) {
     val api = FakeTvApi()
     api.pages[null] = BrowseResult("", listOf(folder("Shows", "Shows")), 1, false)
@@ -65,6 +211,25 @@ class LibraryViewModelTest {
     assertTrue(viewModel.back())
     assertEquals(1, viewModel.state.pages.size)
     assertEquals(listOf("Shows"), viewModel.state.current!!.items.map { it.title })
+  }
+
+  @Test
+  fun `a failed deep link settles its loading state and keeps the target level`() = runTest(dispatcher) {
+    val api = object : FakeTvApi() {
+      override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
+        if (path == null) return BrowseResult("", listOf(folder("Films", "Films")), 1, false)
+        throw ApiError(ApiFailure.Unreachable)
+      }
+    }
+    val viewModel = LibraryViewModel(api)
+
+    viewModel.openHere("Films/It", "It")
+    advanceUntilIdle()
+
+    assertFalse(viewModel.state.loading)
+    assertTrue(viewModel.state.error)
+    assertEquals("Films/It", viewModel.state.current!!.path)
+    assertEquals(2, viewModel.state.pages.size)
   }
 
   // Found in review: Back while a nested level was still loading wrote its items into the parent.

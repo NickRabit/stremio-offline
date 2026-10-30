@@ -162,7 +162,7 @@ class PlayerInitialSourcesTest {
     assertTrue(api.localStreamsRequests.isEmpty())
     assertTrue(api.remoteSourcesRequests.isEmpty())
     assertTrue(api.remoteMatchRequests.isEmpty())
-    assertEquals(0, api.addonsCalls)
+    assertEquals(1, api.addonsCalls)
   }
 
   @Test
@@ -194,7 +194,7 @@ class PlayerInitialSourcesTest {
     assertTrue(api.subtitlesRequests.isEmpty())
     assertTrue(api.libraryTitleRequests.isEmpty())
     assertTrue(api.streamSourcesRequests.isEmpty())
-    assertEquals(0, api.addonsCalls)
+    assertEquals(1, api.addonsCalls)
   }
 
   /**
@@ -281,6 +281,6 @@ class PlayerInitialSourcesTest {
     assertTrue(api.streamSourcesRequests.isEmpty())
     assertTrue(api.localStreamsRequests.isEmpty())
     assertTrue(api.remoteMatchRequests.isEmpty())
-    assertEquals(0, api.addonsCalls)
+    assertEquals(1, api.addonsCalls)
   }
 }

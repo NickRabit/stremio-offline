@@ -271,9 +271,7 @@ fun DetailScreen(
   var sourcesOpen by remember(detail.gridPath) { mutableStateOf(false) }
   var sourcesPath by remember(detail.gridPath) { mutableStateOf<String?>(null) }
   var pickedRow by remember(detail.gridPath) { mutableStateOf<StreamDto?>(null) }
-  /** Whether the row on the action row was picked in the panel the action row opened: only that
-   *  pick is named by the caption, and only it is what Play and Start over act on. */
-  var pickedInRow by remember(detail.gridPath) { mutableStateOf(false) }
+  var pickedAtDefaultPath by remember(detail.gridPath) { mutableStateOf<String?>(null) }
   /** A panel opened from an episode's card has to play the row at once: that card is the only
    *  button the episode has. */
   var sourcesFromCard by remember(detail.gridPath) { mutableStateOf(false) }
@@ -361,6 +359,9 @@ fun DetailScreen(
     )
   }
   val realDebrid = groupState?.realDebridConfigured == true
+  fun currentPick(): StreamDto? = pickedRow
+    ?.takeIf { pickedAtDefaultPath == playFile?.path && loadedRows.any { row -> row === it } }
+  val actionRow = currentPick() ?: playFile?.let(::fileRow)
 
   fun openSources(file: BrowseItem.File?, opener: FocusRequester?, fromCard: Boolean = false) {
     val target = file ?: sourcesFile ?: playFile ?: return
@@ -431,8 +432,8 @@ fun DetailScreen(
   /**
    * The play one row of a panel starts: a library copy plays the file on disk, a media-server
    * version plays its own exact item and an addon row plays the title under the binding's own
-   * identity. Every play carries the whole loaded list, so the player offers it and discovers
-   * nothing of its own. False when the row names nothing playable.
+   * identity. Every play carries the loaded list while the player discovers any remaining groups.
+   * False when the row names nothing playable.
    */
   fun playRow(row: StreamDto, resume: Boolean = true): Boolean {
     val wanted = nativeRowTarget(row, current.title, sourcesIdentity, loadedRows, current.poster) ?: return false
@@ -455,19 +456,19 @@ fun DetailScreen(
       return
     }
     pickedRow = row
-    pickedInRow = !sourcesFromCard
+    pickedAtDefaultPath = playFile?.path
     sourceNotice = null
     if (sourcesFromCard) playRow(row)
   }
 
   /** The file Play would play without a pick, and the row the panel picked with one. */
   fun playPressed() {
-    if (pickedRow?.let { playRow(it) } == true) return
+    if (currentPick()?.let { playRow(it) } == true) return
     playFile?.let { onPlay(PlayTarget(Progress.libraryKey(it.path), it.label, resume = resuming, path = it.path)) }
   }
 
   fun startOverPressed() {
-    if (pickedRow?.let { playRow(it, resume = false) } == true) return
+    if (currentPick()?.let { playRow(it, resume = false) } == true) return
     playFile?.let { onPlay(PlayTarget(Progress.libraryKey(it.path), it.label, resume = false, path = it.path)) }
   }
 
@@ -723,13 +724,13 @@ fun DetailScreen(
         },
         // The row the viewer picked is the one To library acts on; a file already on disk has no
         // copy to queue and never offers it.
-        toLibrary = pickedRow?.takeIf { canSaveRow(it) }?.let {
+        toLibrary = currentPick()?.takeIf { canSaveRow(it) }?.let {
           DetailAction(
             label = stringResource(R.string.save_to_library),
             icon = DownloadIcon,
             tag = TagDetailToLibrary,
             enabled = !save.resolving && !save.busy,
-            onClick = { pickedRow?.let { row -> saveRow(row) } },
+            onClick = { currentPick()?.let { row -> saveRow(row) } },
           )
         },
         favourite = DetailAction(
@@ -755,19 +756,17 @@ fun DetailScreen(
         ) else null,
         caption = caption,
       )
-      if (pickedInRow) {
-        pickedRow?.let { row ->
-          val captionParts = chosenSourceCaption(row).joinToString(" · ")
-          if (captionParts.isNotEmpty()) {
-            Text(
-              stringResource(R.string.tv_chosen_source) + " · " + captionParts,
-              color = Tokens.Muted,
-              fontSize = 11.sp,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.testTag(TagDetailPickCaption),
-            )
-          }
+      actionRow?.let { row ->
+        val captionParts = chosenSourceCaption(row).joinToString(" · ")
+        if (captionParts.isNotEmpty()) {
+          Text(
+            stringResource(R.string.tv_chosen_source) + " · " + captionParts,
+            color = Tokens.Muted,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag(TagDetailPickCaption),
+          )
         }
       }
       if (forgetError) {
@@ -807,7 +806,7 @@ fun DetailScreen(
         originals = panelRows,
         // The film's versions lead largest first; an episode is the only row of its own list.
         default = panelRows.firstOrNull(),
-        chosen = pickedRow?.takeIf { row -> loadedRows.any { it === row } },
+        chosen = currentPick(),
         filters = sourceFilters.filters(groupState?.settings?.streamSort),
         profiles = sourceFilters.profiles,
         ruleNoteProfileId = sourceFilters.noteProfileId(groupState?.settings?.streamSort),
