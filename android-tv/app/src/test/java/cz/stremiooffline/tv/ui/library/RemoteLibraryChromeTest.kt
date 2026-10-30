@@ -20,6 +20,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
+import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.R
@@ -33,6 +34,7 @@ import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.search.LibrarySearchScope
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -126,6 +128,50 @@ class RemoteLibraryChromeTest {
     compose.waitForIdle()
     compose.mainClock.advanceTimeBy(200)
     compose.waitForIdle()
+  }
+
+  @Test
+  fun `the picker root and an episodes level offer Search when the flag is on`() {
+    val api = api()
+    api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(
+      items = listOf(RemoteItemDto(id = "e1", name = "Pilot", type = "episode")),
+      total = 1,
+    )
+    val opened = mutableListOf<LibrarySearchScope>()
+    mountEmbedded(api, searchEverywhereEnabled = true, onOpenSearch = { scope -> opened += scope })
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagLibrarySearchAction).assertExists()
+    compose.onNodeWithTag(TagLibraryTypeFilter).assertDoesNotExist()
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    assertNull(opened.single().library)
+    assertEquals(listOf("local", "remote"), opened.single().sources)
+    assertEquals("Your library", opened.single().title)
+
+    // Search took the remote; the library card is what opens the directory under the episodes level.
+    focusOn(remoteLibraryTag("rlibA"))
+    openLibrary(api)
+    compose.onNodeWithTag(remoteItemTag("f1")).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.any { it.parentId == "f1" } }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+    scenario.onActivity {
+      ViewModelProvider(it, RemoteLibraryViewModel.factory(api))[RemoteLibraryViewModel::class.java]
+        .openItem(RemoteItemDto(id = "s1", name = "Show", type = "series"))
+    }
+    compose.waitUntil(5_000) { api.remoteEpisodesRequests.any { it.second == "s1" } }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagLibrarySearchAction).assertExists()
+    compose.onNodeWithTag(TagLibraryTypeFilter).assertDoesNotExist()
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    assertEquals(GlobalSearchLibraryDto("rlibA", parentId = "f1"), opened.last().library)
+    assertEquals(listOf("remote"), opened.last().sources)
+    assertEquals("Server  ›  Shows", opened.last().title)
   }
 
   @Test

@@ -25,9 +25,12 @@ import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.CatalogExtraDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.library.TagLibraryAllGrid
 import cz.stremiooffline.tv.ui.library.TagLibrarySearchAction
+import cz.stremiooffline.tv.ui.library.remoteLibraryTag
 import cz.stremiooffline.tv.ui.search.TagGlobalSearchField
 import cz.stremiooffline.tv.ui.search.TagGlobalSearchInput
 import cz.stremiooffline.tv.ui.search.TagGlobalSearchLibraryChip
@@ -294,6 +297,62 @@ class ShellSearchTest {
     compose.mainClock.advanceTimeBy(200)
     compose.waitForIdle()
 
+    compose.onNodeWithTag(TagLibrarySearchAction).assertIsFocused()
+    compose.onNodeWithTag(TagGlobalSearchField).assertDoesNotExist()
+  }
+
+  @Test
+  fun `All tab Search opens Libraries with no chip and Back returns to the Search action`() {
+    val api = api()
+    api.globalSearchEnabled = true
+    api.pages[null] = BrowseResult("", listOf(BrowseItem.Library(path = "Films", name = "Films")), 1, false)
+    mount(api, Section.Library)
+    compose.waitUntil(5_000) { api.globalSearchEnabledCalls > 0 }
+    compose.waitForIdle()
+
+    focus(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagGlobalSearchField).assertExists()
+    compose.onNodeWithTag(globalSearchFilterTag("source_libraries")).assertExists()
+    compose.onNodeWithTag(TagGlobalSearchLibraryChip).assertDoesNotExist()
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagLibraryAllGrid).assertExists()
+    compose.onNodeWithTag(TagLibrarySearchAction).assertIsFocused()
+    compose.onNodeWithTag(TagGlobalSearchField).assertDoesNotExist()
+  }
+
+  @Test
+  fun `Media servers root Search opens Libraries with no chip and Back returns to the Search action`() {
+    val api = api()
+    api.globalSearchEnabled = true
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby", type = "mixed"))
+    mount(api, Section.Library)
+    compose.waitUntil(5_000) { api.globalSearchEnabledCalls > 0 }
+    compose.waitForIdle()
+
+    compose.onNodeWithText("Media servers").performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+
+    focus(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagGlobalSearchField).assertExists()
+    compose.onNodeWithTag(globalSearchFilterTag("source_libraries")).assertExists()
+    compose.onNodeWithTag(TagGlobalSearchLibraryChip).assertDoesNotExist()
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(remoteLibraryTag("rlibA")).assertExists()
     compose.onNodeWithTag(TagLibrarySearchAction).assertIsFocused()
     compose.onNodeWithTag(TagGlobalSearchField).assertDoesNotExist()
   }

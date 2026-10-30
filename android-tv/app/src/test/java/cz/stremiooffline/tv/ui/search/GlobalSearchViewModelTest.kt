@@ -499,6 +499,14 @@ class GlobalSearchViewModelTest {
   }
 
   @Test
+  fun `a scope with no library selects every library and no chip`() {
+    val preset = LibrarySearchScope(null, listOf("local", "remote"), "Your library").toPreset()
+
+    assertEquals(LibrarySources, preset.sources)
+    assertNull(preset.library)
+  }
+
+  @Test
   fun `a remote library preset sends only its class and parent`() = runTest(dispatcher) {
     val api = FakeTvApi()
     val viewModel = viewModel(api)

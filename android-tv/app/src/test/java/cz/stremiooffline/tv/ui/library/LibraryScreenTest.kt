@@ -812,6 +812,35 @@ class LibraryScreenTest {
   }
 
   @Test
+  fun `the All tab offers Search when the flag is on and hides it when the flag is off`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(localLibrary("Films")), 1, false)
+    mount(api, searchEverywhereEnabled = false)
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagLibraryAllGrid).assertExists()
+    compose.onNodeWithTag(TagLibrarySearchAction).assertDoesNotExist()
+
+    val opened = mutableListOf<LibrarySearchScope>()
+    mount(api, searchEverywhereEnabled = true, onOpenSearch = { scope -> opened += scope })
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagLibrarySearchAction).assertExists()
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    assertEquals(null, opened.single().library)
+    assertEquals(listOf("local", "remote"), opened.single().sources)
+
+    focusOn("all_local:Films")
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagLibrarySearchAction).assertIsFocused()
+  }
+
+  @Test
   fun `a files search with the flag off keeps the browse query`() {
     val api = nested()
     api.globalSearchEnabled = false

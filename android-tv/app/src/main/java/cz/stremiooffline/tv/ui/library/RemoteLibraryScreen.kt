@@ -160,15 +160,43 @@ fun RemoteLibraryRoute(
   var committed by remember { mutableStateOf("") }
   var editorOpen by remember { mutableStateOf(false) }
   val directory = level as? RemoteLevel.Directory
-  val searchAvailable = directory != null
+  val searchAvailable = searchEverywhereEnabled || directory != null
+  val sectionTitle = stringResource(R.string.tv_library_title)
   val scopeTitle = state.levels.joinToString("  ›  ") { it.title }
   fun openRemoteSearch() {
-    val current = directory ?: return
+    val current = level
+    if (current == null) {
+      onOpenSearch(LibrarySearchScope(null, listOf("local", "remote"), sectionTitle))
+      return
+    }
+    if (current is RemoteLevel.Directory) {
+      onOpenSearch(
+        LibrarySearchScope(
+          library = GlobalSearchLibraryDto(current.libraryId, parentId = current.parentId),
+          sources = listOf("remote"),
+          title = scopeTitle,
+        ),
+      )
+      return
+    }
+    val before = state.levels.takeWhile { it !== current }
+    val folder = before.lastOrNull { it is RemoteLevel.Directory } as? RemoteLevel.Directory
+    if (folder == null) {
+      onOpenSearch(
+        LibrarySearchScope(
+          library = GlobalSearchLibraryDto(current.libraryId),
+          sources = listOf("remote"),
+          title = current.libraryName,
+        ),
+      )
+      return
+    }
+    val throughFolder = before.take(before.indexOfLast { it is RemoteLevel.Directory } + 1)
     onOpenSearch(
       LibrarySearchScope(
-        library = GlobalSearchLibraryDto(current.libraryId, parentId = current.parentId),
+        library = GlobalSearchLibraryDto(folder.libraryId, parentId = folder.parentId),
         sources = listOf("remote"),
-        title = scopeTitle,
+        title = throughFolder.joinToString("  ›  ") { it.title },
       ),
     )
   }
@@ -360,7 +388,15 @@ fun RemoteLibraryRoute(
       }
       Box(Modifier.weight(1f).fillMaxWidth()) {
         if (level == null) {
-          LibraryPicker(state, viewModel, imageUrl, requesters, gridFocus, errorFocus)
+          LibraryPicker(
+            state,
+            viewModel,
+            imageUrl,
+            requesters,
+            gridFocus,
+            errorFocus,
+            firstRowUp = searchAction.takeIf { searchAvailable },
+          )
         } else {
           ItemBrowser(
             level = level,
@@ -705,6 +741,7 @@ private fun LibraryPicker(
   requesters: MutableMap<String, FocusRequester>,
   gridFocus: FocusRequester,
   errorFocus: FocusRequester,
+  firstRowUp: FocusRequester? = null,
 ) {
   // The picker is the root of the servers half: the section's own heading already names the page, so
   // the library cards start straight away rather than under a second large heading.
@@ -722,7 +759,7 @@ private fun LibraryPicker(
             horizontalArrangement = Arrangement.spacedBy(18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
           ) {
-            itemsIndexed(state.libraries, key = { _, library -> library.id }) { _, library ->
+            itemsIndexed(state.libraries, key = { _, library -> library.id }) { index, library ->
               val key = "library:${library.id}"
               val requester = remember(key) { FocusRequester() }
               DisposableEffect(key, requester) {
@@ -743,6 +780,13 @@ private fun LibraryPicker(
                 onClick = { viewModel.openLibrary(library) },
                 modifier = Modifier
                   .focusRequester(requester)
+                  .then(
+                    if (index < columns && firstRowUp != null) {
+                      Modifier.focusProperties { up = firstRowUp }
+                    } else {
+                      Modifier
+                    },
+                  )
                   .onFocusChanged { if (it.isFocused) viewModel.select(REMOTE_PICKER_KEY, key) },
               )
             }
