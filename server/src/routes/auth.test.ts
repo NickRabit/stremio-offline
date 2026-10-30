@@ -340,6 +340,20 @@ test("signing in as the migrated user works and the cookie names the user id", a
   assert.deepEqual(harness.store.userData(owner?.id ?? "").progress, { "movie:tt1": { position: 12, duration: 100, title: "Neco", updatedAt: "2026-01-01T00:00:00.000Z" } });
 });
 
+test("the username signs in whatever its case, the way it was matched when the account was made", async (t) => {
+  const harness = await mount(await singleAccountState("migrated-secret", "migrated-signing-secret"));
+  t.after(harness.close);
+  const [owner] = harness.store.users();
+  const response = await api(harness.base, "/api/auth/login", { method: "POST", body: { username: "ONdra", password: "migrated-secret" }, ip: "10.1.0.4" });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { username: "Ondra", role: "admin", mustChangePassword: false }, "the stored spelling is answered, not the typed one");
+  const cookie = parseCookies(response.headers.get("set-cookie") ?? "")[SESSION_COOKIE];
+  assert.equal(sessionUserId(cookie), owner?.id);
+  const wrong = await api(harness.base, "/api/auth/login", { method: "POST", body: { username: "ONdra", password: "not-it" }, ip: "10.1.0.4" });
+  assert.equal(wrong.status, 401);
+  assert.equal(await keyOf(wrong), "err.badCredentials");
+});
+
 test("a sign-in records when the account was last seen, and a sign-out leaves it there", async (t) => {
   const harness = await mount();
   t.after(harness.close);

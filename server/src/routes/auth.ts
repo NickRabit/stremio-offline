@@ -1,6 +1,6 @@
 import type express from "express";
 import { randomBytes } from "node:crypto";
-import { clearedCookie, createSession, DECOY_HASH, hashPassword, LoginThrottle, pruneRevoked, REMEMBER_DAYS, secretEquals, sessionCookie, verifyPassword } from "../auth.js";
+import { clearedCookie, createSession, DECOY_HASH, hashPassword, LoginThrottle, pruneRevoked, REMEMBER_DAYS, sessionCookie, verifyPassword } from "../auth.js";
 import { AppError } from "../errors.js";
 import { isUiLanguage } from "../language.js";
 import { log } from "../logger.js";
@@ -109,7 +109,9 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     // switch without leaving a trace. Recovery runs through `ADMIN_PASSWORD_RESET`, which
     // resets a real account's password and says so in the log, and an install that only ever
     // had the variables is given a real account on the boot that finds it.
-    const signIn = passwordMatches && secretEquals(username, account?.username ?? "") ? account : undefined;
+    // The name needs no second check: `findUser` matches it the way creation and rename keep
+    // names unique, so any case of it is the same account.
+    const signIn = passwordMatches ? account : undefined;
     if (!signIn) {
       logins.fail(from);
       log("WARN", "Failed sign-in", { username, from });
