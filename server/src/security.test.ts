@@ -84,6 +84,73 @@ test("ALLOW_PRIVATE_ADDONS reaches a local server", async (t) => {
   assert.deepEqual(server.hits, ["/manifest.json"]);
 });
 
+test("an IPv4-mapped loopback in hex form never reaches the listener", async (t) => {
+  const server = await loopbackServer((_path, response) => { response.writeHead(200); response.end("ok"); });
+  t.after(server.close);
+  useLookup(t, { "::ffff:7f00:1": ["::ffff:7f00:1"] });
+
+  await assert.rejects(safeFetch(`http://[::ffff:7f00:1]:${server.port}/`), (error: { messageKey?: string; vars?: Record<string, string> }) => {
+    assert.equal(error.messageKey, "err.privateAddon");
+    assert.equal(error.vars?.address, "::ffff:7f00:1");
+    return true;
+  });
+  assert.deepEqual(server.hits, []);
+});
+
+test("mapped metadata, NAT64 and site-local literals are refused", async (t) => {
+  useLookup(t, {
+    "::ffff:a9fe:a9fe": ["::ffff:a9fe:a9fe"],
+    "64:ff9b::a9fe:a9fe": ["64:ff9b::a9fe:a9fe"],
+    "fec0::1": ["fec0::1"],
+  });
+  for (const raw of ["http://[::ffff:a9fe:a9fe]/latest/meta-data", "http://[64:ff9b::a9fe:a9fe]/", "http://[fec0::1]/"]) {
+    const host = new URL(raw).hostname.replace(/^\[|\]$/g, "");
+    await assert.rejects(validateRemoteUrl(raw), (error: { messageKey?: string; vars?: Record<string, string> }) => {
+      assert.equal(error.messageKey, "err.privateAddon");
+      assert.equal(error.vars?.address, host);
+      return true;
+    });
+  }
+});
+
+test("a name that resolves to a mapped loopback at connection time is refused", async (t) => {
+  const server = await loopbackServer((_path, response) => { response.writeHead(200); response.end("ok"); });
+  t.after(server.close);
+  useLookup(t, { "mapped.example": ["93.184.216.34", "::ffff:7f00:1"] });
+
+  await assert.rejects(safeFetch(`http://mapped.example:${server.port}/admin`), (error: { messageKey?: string; vars?: Record<string, string> }) => {
+    assert.equal(error.messageKey, "err.privateAddon");
+    assert.equal(error.vars?.address, "::ffff:7f00:1");
+    return true;
+  });
+  assert.deepEqual(server.hits, []);
+});
+
+test("ALLOW_ADDON_HOSTS for a named host still lets that host through", async (t) => {
+  const server = await loopbackServer((_path, response) => { response.writeHead(200, { "content-type": "text/plain" }); response.end("ok"); });
+  t.after(server.close);
+  withEnv(t, "ALLOW_ADDON_HOSTS", "home.example");
+  useLookup(t, { "home.example": ["127.0.0.1"] });
+
+  const response = await safeFetch(`http://home.example:${server.port}/manifest.json`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "ok");
+  assert.deepEqual(server.hits, ["/manifest.json"]);
+});
+
+test("an IPv6 zone identifier is refused even where private addresses are allowed", async (t) => {
+  t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; });
+  for (const allowed of [false, true]) {
+    if (allowed) process.env.ALLOW_PRIVATE_ADDONS = "1";
+    for (const raw of ["http://[fe80::1%25eth0]/", "http://[fe80::1%eth0]/manifest.json", "http://["]) {
+      await assert.rejects(validateRemoteUrl(raw), (error: { messageKey?: string }) => {
+        assert.equal(error.messageKey, "err.invalidUrl");
+        return true;
+      });
+    }
+  }
+});
+
 test("a redirect to a name that rebinds is refused the same way", async (t) => {
   let port = 0;
   const server = await loopbackServer((path, response) => {
