@@ -2096,6 +2096,7 @@ export const cs: Catalog = {
   "tv.globalSearch.sourceAll": "Vše",
   "tv.globalSearch.sourceCatalog": "Katalog",
   "tv.globalSearch.sourceLibraries": "Knihovny",
+  "tv.globalSearch.reset": "Vymazat hledání",
   "tv.globalSearch.kindAll": "Vše",
   "tv.globalSearch.kindMovies": "Filmy",
   "tv.globalSearch.kindSeries": "Seriály",

@@ -2043,6 +2043,7 @@ export const sk: Catalog = {
   "tv.globalSearch.sourceAll": "Všetko",
   "tv.globalSearch.sourceCatalog": "Katalóg",
   "tv.globalSearch.sourceLibraries": "Knižnice",
+  "tv.globalSearch.reset": "Vymazať hľadanie",
   "tv.globalSearch.kindAll": "Všetko",
   "tv.globalSearch.kindMovies": "Filmy",
   "tv.globalSearch.kindSeries": "Seriály",

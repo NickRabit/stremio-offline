@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +56,7 @@ import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.MicIcon
+import cz.stremiooffline.tv.ui.catalog.ResetIcon
 import cz.stremiooffline.tv.ui.catalog.PanelOption
 import cz.stremiooffline.tv.ui.catalog.RecentSearches
 import cz.stremiooffline.tv.ui.catalog.SearchScopePanel
@@ -75,6 +77,7 @@ import kotlinx.coroutines.android.awaitFrame
 const val TagGlobalSearchField = "global_search_field"
 const val TagGlobalSearchInput = "global_search_input"
 const val TagGlobalSearchVoice = "global_search_voice"
+const val TagGlobalSearchReset = "global_search_reset"
 const val TagGlobalSearchKindChip = "global_search_kind_chip"
 const val TagGlobalSearchScopeChip = "global_search_scope_chip"
 const val TagGlobalSearchLibraryChip = "global_search_library_chip"
@@ -126,6 +129,7 @@ fun GlobalSearchScreen(
   var kindPanelOpener by remember { mutableStateOf<FocusRequester?>(null) }
   var toolbarFocusIndex by remember { mutableIntStateOf(3) }
   var libraryClearToken by remember { mutableIntStateOf(0) }
+  var stripFocused by remember { mutableStateOf(false) }
 
   fun submit() {
     val query = draft.trim()
@@ -154,7 +158,15 @@ fun GlobalSearchScreen(
     3 -> kindFocus
     else -> if (libraryShown) libraryFocus else scopeFocus
   }
-  val contentFocus = if (state.submitted) sourceStripFocus else recentEntryFocus
+  val snapshot = state.snapshot
+  val stripShown = state.submitted && sourceStripShown(snapshot?.state, snapshot?.sources.orEmpty())
+  val hasCards = snapshot?.clusters?.isNotEmpty() == true || snapshot?.unidentified?.isNotEmpty() == true
+  val contentFocus = when {
+    !state.submitted -> recentEntryFocus
+    stripShown -> sourceStripFocus
+    hasCards -> gridFocus
+    else -> null
+  }
 
   val voice = rememberVoiceSearch(voiceAvailable, onVoiceResult = ::onVoice, launcher = voiceLauncher)
 
@@ -208,7 +220,17 @@ fun GlobalSearchScreen(
     }
   }
 
-  val snapshot = state.snapshot
+  val stripStillShown by rememberUpdatedState(stripShown)
+  LaunchedEffect(stripShown) {
+    if (stripShown) return@LaunchedEffect
+    stripExpanded = false
+    // A focused strip that leaves takes the focus with it; hand it to the results it stood over.
+    if (stripFocused) {
+      stripFocused = false
+      awaitFrame()
+      runCatching { if (hasCards) gridFocus.requestFocus() else lastToolbarFocus.requestFocus() }
+    }
+  }
 
   Column(
     modifier = modifier
@@ -246,6 +268,25 @@ fun GlobalSearchScreen(
             .onFocusChanged { if (it.isFocused) clearCardFocus() },
         )
       }
+      FocusButton(
+        text = "",
+        onClick = {
+          draft = ""
+          stripExpanded = false
+          scopePanel = false
+          kindPanel = false
+          toolbarFocusIndex = 3
+          viewModel.reset()
+        },
+        kind = FocusButtonKind.Icon,
+        leading = { Icon(ResetIcon, contentDescription = null, modifier = Modifier.size(18.dp)) },
+        contentDescription = stringResource(R.string.tv_global_search_reset),
+        modifier = Modifier
+          .size(38.dp)
+          .testTag(TagGlobalSearchReset)
+          .focusDirections(down = sourceFocuses.first())
+          .onFocusChanged { if (it.isFocused) clearCardFocus() },
+      )
     }
     if (!state.submitted) {
       Text(
@@ -266,7 +307,7 @@ fun GlobalSearchScreen(
       kindFocus = kindFocus,
       scopeFocus = scopeFocus,
       libraryFocus = libraryFocus,
-      downFocus = contentFocus.takeIf { state.submitted || showRecent },
+      downFocus = contentFocus?.takeIf { state.submitted || showRecent },
       onFocusChanged = { toolbarFocusIndex = it },
       onSources = {
         viewModel.setSources(it)
@@ -295,7 +336,7 @@ fun GlobalSearchScreen(
       onFocused = ::clearCardFocus,
     )
 
-    if (state.submitted) {
+    if (stripShown) {
       GlobalSourceStrip(
         sources = snapshot?.sources.orEmpty(),
         requested = if (state.library != null) 1 else state.sources.ifEmpty { SourceClass.entries.toSet() }.size,
@@ -304,6 +345,8 @@ fun GlobalSearchScreen(
         onToggle = { stripExpanded = !stripExpanded },
         onRetry = viewModel::retry,
         onFocused = ::clearCardFocus,
+        // The strip's own removal reports a loss of focus too; that one must not count.
+        onStripFocus = { if (it || stripStillShown) stripFocused = it },
         upFocus = lastToolbarFocus,
         downFocus = gridFocus,
         focus = sourceStripFocus,
@@ -336,7 +379,11 @@ fun GlobalSearchScreen(
         gridFocus = gridFocus,
         restoreToken = resultRestore,
         clearFocusSignal = clearFocusSignal,
-        firstRowUp = if (state.submitted) sourceStripFocus else null,
+        firstRowUp = when {
+          stripShown -> sourceStripFocus
+          state.submitted -> lastToolbarFocus
+          else -> null
+        },
       )
     }
   }
@@ -593,6 +640,7 @@ private fun GlobalSourceStrip(
   onToggle: () -> Unit,
   onRetry: (String) -> Unit,
   onFocused: () -> Unit,
+  onStripFocus: (Boolean) -> Unit,
   upFocus: FocusRequester,
   downFocus: FocusRequester,
   focus: FocusRequester,
@@ -604,7 +652,7 @@ private fun GlobalSourceStrip(
   } else {
     stringResource(R.string.tv_global_search_status_done)
   }
-  Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+  Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.onFocusChanged { onStripFocus(it.hasFocus) }) {
     FocusButton(
       text = text,
       onClick = onToggle,
@@ -670,6 +718,12 @@ private fun Modifier.focusDirections(
   }
   target?.let { runCatching { it.requestFocus() }.isSuccess } ?: false
 }
+
+/** The strip earns its row only while sources are still answering or one of them did not:
+ *  once every source has answered, it would just say so and push the results down. */
+internal fun sourceStripShown(snapshotState: String?, sources: List<GlobalSearchSourceDto>): Boolean =
+  snapshotState == null || snapshotState == "partial" ||
+    sources.any { it.retryable || it.state != "ready" && it.state != "exhausted" }
 
 @Composable
 private fun sourceStateText(state: String): String = stringResource(

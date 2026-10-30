@@ -301,6 +301,17 @@ class GlobalSearchViewModel(
     if (id != null) viewModelScope.launch { api.deleteGlobalSearch(id) }
   }
 
+  /** Back to how the page opens from the rail: no query, every source, every kind, no scope or
+   *  library. The recent searches and the loaded catalogue list stay, so nothing reloads. */
+  fun reset() {
+    val kept = state
+    val wasActive = active
+    leave()
+    state = GlobalSearchState(recent = kept.recent, saveHistory = kept.saveHistory, searchable = kept.searchable)
+    searchableLoaded = kept.searchable.isNotEmpty()
+    active = wasActive
+  }
+
   override fun onCleared() {
     val id = sessionId
     generation += 1

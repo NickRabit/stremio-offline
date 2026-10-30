@@ -330,6 +330,7 @@ tv.searchLibraryClear
 tv.globalSearch.sourceAll
 tv.globalSearch.sourceCatalog
 tv.globalSearch.sourceLibraries
+tv.globalSearch.reset
 tv.globalSearch.kindAll
 tv.globalSearch.kindMovies
 tv.globalSearch.kindSeries

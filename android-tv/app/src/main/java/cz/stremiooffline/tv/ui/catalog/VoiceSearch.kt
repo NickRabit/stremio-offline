@@ -44,6 +44,17 @@ val MicIcon: ImageVector = outlineIcon("Mic") {
   lineTo(15f, 20f)
 }
 
+/** The reset beside the microphone: an arrow turning back on itself. */
+val ResetIcon: ImageVector = outlineIcon("Reset") {
+  moveTo(3f, 12f)
+  arcTo(9f, 9f, 0f, isMoreThanHalf = true, isPositiveArc = false, x1 = 12f, y1 = 3f)
+  arcTo(9.75f, 9.75f, 0f, isMoreThanHalf = false, isPositiveArc = false, x1 = 5.26f, y1 = 5.74f)
+  lineTo(3f, 8f)
+  moveTo(3f, 3f)
+  lineTo(3f, 8f)
+  lineTo(8f, 8f)
+}
+
 /** Whether this device answers [RecognizerIntent]: with no recognizer, no mic button and no mic
  *  key. Android 11 up hides another package's activities until the manifest asks for them. */
 @Composable

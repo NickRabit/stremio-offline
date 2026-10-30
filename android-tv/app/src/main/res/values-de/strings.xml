@@ -340,6 +340,7 @@
   <string name="tv_global_search_source_all">Alle</string>
   <string name="tv_global_search_source_catalog">Katalog</string>
   <string name="tv_global_search_source_libraries">Bibliotheken</string>
+  <string name="tv_global_search_reset">Suche zurücksetzen</string>
   <string name="tv_global_search_kind_all">Alle</string>
   <string name="tv_global_search_kind_movies">Filme</string>
   <string name="tv_global_search_kind_series">Serien</string>

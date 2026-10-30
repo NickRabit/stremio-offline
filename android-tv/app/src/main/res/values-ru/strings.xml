@@ -350,6 +350,7 @@
   <string name="tv_global_search_source_all">Все</string>
   <string name="tv_global_search_source_catalog">Каталог</string>
   <string name="tv_global_search_source_libraries">Библиотеки</string>
+  <string name="tv_global_search_reset">Сбросить поиск</string>
   <string name="tv_global_search_kind_all">Все</string>
   <string name="tv_global_search_kind_movies">Фильмы</string>
   <string name="tv_global_search_kind_series">Сериалы</string>

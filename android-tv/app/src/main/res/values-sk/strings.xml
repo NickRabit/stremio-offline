@@ -350,6 +350,7 @@
   <string name="tv_global_search_source_all">Všetko</string>
   <string name="tv_global_search_source_catalog">Katalóg</string>
   <string name="tv_global_search_source_libraries">Knižnice</string>
+  <string name="tv_global_search_reset">Vymazať hľadanie</string>
   <string name="tv_global_search_kind_all">Všetko</string>
   <string name="tv_global_search_kind_movies">Filmy</string>
   <string name="tv_global_search_kind_series">Seriály</string>

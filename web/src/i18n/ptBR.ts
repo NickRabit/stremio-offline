@@ -2031,6 +2031,7 @@ export const ptBR: Catalog = {
   "tv.globalSearch.sourceAll": "Todos",
   "tv.globalSearch.sourceCatalog": "Catálogo",
   "tv.globalSearch.sourceLibraries": "Bibliotecas",
+  "tv.globalSearch.reset": "Limpar a pesquisa",
   "tv.globalSearch.kindAll": "Todos",
   "tv.globalSearch.kindMovies": "Filmes",
   "tv.globalSearch.kindSeries": "Séries",

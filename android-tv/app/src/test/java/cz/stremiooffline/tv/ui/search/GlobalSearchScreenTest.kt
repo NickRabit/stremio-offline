@@ -440,6 +440,55 @@ class GlobalSearchScreenTest {
   }
 
   @Test
+  fun `RIGHT from the mic reaches the reset, which brings the page back to its defaults`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat"))
+    start(api, listOf(cluster("c1", "m1", title = "One")))
+    mount(api, preset = libraryPreset(), voiceAvailable = true, voiceLauncher = {})
+    search("matrix")
+    compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }
+    focus(TagGlobalSearchKindChip)
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.globalStartCalls.size >= 2 }
+    compose.onNodeWithTag(globalSearchCardTag("m1")).assertExists()
+
+    focus(TagGlobalSearchVoice)
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagGlobalSearchReset).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagGlobalSearchLibraryChip).assertDoesNotExist()
+    compose.onNodeWithTag(globalSearchCardTag("m1")).assertDoesNotExist()
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertTextContains("All", substring = true)
+    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertExists()
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertExists()
+    assertEquals(listOf("gs"), api.globalDeletedIds)
+
+    search("heat")
+    compose.waitUntil(5_000) { api.globalStartCalls.size >= 3 }
+    val body = api.globalStartCalls.last()
+    assertEquals("heat", body.query)
+    assertEquals("all", body.kind)
+    assertEquals(setOf("catalog", "local", "remote"), body.sources.toSet())
+    assertNull(body.library)
+    assertNull(body.scope)
+  }
+
+  @Test
+  fun `the reset is there without a microphone too`() {
+    mount(FakeTvApi(), voiceAvailable = false)
+    compose.onNodeWithTag(TagGlobalSearchVoice).assertDoesNotExist()
+    compose.onNodeWithTag(TagGlobalSearchReset).assertExists()
+    focus(TagGlobalSearchField)
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagGlobalSearchReset).assertIsFocused()
+  }
+
+  @Test
   fun `the library scope keeps the page's own voice search`() {
     val api = FakeTvApi()
     start(api, listOf(cluster("c1", "m1", title = "One")))
@@ -599,9 +648,9 @@ class GlobalSearchScreenTest {
   }
 
   @Test
-  fun `the first result returns through status to the toolbar`() {
+  fun `while sources still answer, the first result returns through status to the toolbar`() {
     val api = FakeTvApi()
-    start(api, listOf(cluster("c1", "m1", title = "One")))
+    start(api, listOf(cluster("c1", "m1", title = "One")), state = "partial")
     mount(api)
     search()
 
@@ -612,6 +661,43 @@ class GlobalSearchScreenTest {
     compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
     press(Key.DirectionUp)
     compose.onNodeWithTag(TagGlobalSearchField).assertIsFocused()
+  }
+
+  @Test
+  fun `once every source answered there is no status row and the first result returns to the toolbar`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1", title = "One")))
+    mount(api)
+    search()
+
+    compose.onNodeWithTag(TagGlobalSearchSourceStrip).assertDoesNotExist()
+    focus(globalSearchCardTag("m1"))
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchCardTag("m1")).assertIsFocused()
+  }
+
+  @Test
+  fun `the status row leaves without losing focus when the last source answers`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1", title = "One")), state = "partial")
+    var done = false
+    api.globalPollHandler = { _, revision ->
+      if (done && revision < 2) GlobalSearchPollDto(changed = true, revision = 2, snapshot = snapshot(2, listOf(cluster("c1", "m1", title = "One"))))
+      else GlobalSearchPollDto(changed = false, revision = revision)
+    }
+    mount(api)
+    search()
+    focus(TagGlobalSearchSourceStrip)
+
+    done = true
+    compose.waitUntil(5_000) {
+      compose.onAllNodes(androidx.compose.ui.test.hasTestTag(TagGlobalSearchSourceStrip)).fetchSemanticsNodes().isEmpty()
+    }
+    compose.mainClock.advanceTimeBy(100)
+    compose.waitForIdle()
+    compose.onNodeWithTag(globalSearchCardTag("m1")).assertIsFocused()
   }
 
   @Test

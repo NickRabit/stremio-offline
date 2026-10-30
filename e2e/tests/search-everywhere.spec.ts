@@ -78,11 +78,15 @@ test("source filters start a fresh generation and drop old cards", async ({ page
     && request.url().endsWith("/api/search/everywhere")
     && request.postDataJSON()?.sources?.[0] === "local"
     && request.postDataJSON()?.sources?.[1] === "remote");
+  const librariesResponse = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().endsWith("/api/search/everywhere"));
   await page.locator(".search-filters").getByRole("button", { name: "Knihovny", exact: true }).click();
   const body = (await librariesRequest).postDataJSON();
   expect(body.query).toBe("Zkušební");
   expect(body.sources).toEqual(["local", "remote"]);
-  await expect(page.locator(".search-source-summary")).toHaveText("Všechny zdroje odpověděly");
+  await librariesResponse;
+  // Once every source has answered the status row leaves the page.
+  await expect(page.locator(".search-source-strip")).toHaveCount(0);
   const shown = await page.locator("[data-search-card]").evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.primaryMember ?? ""));
   for (const key of shown) expect(libraryMembers.has(key), `card ${key} is not from the libraries search`).toBe(true);
 

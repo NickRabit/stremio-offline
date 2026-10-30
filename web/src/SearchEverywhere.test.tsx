@@ -325,6 +325,19 @@ describe("SearchEverywhere", () => {
     expect(setSources).toHaveBeenCalledWith(["local", "remote"]);
   });
 
+  it("drops the source strip once every source answered, and before any search", async () => {
+    const answered = (state: "ready" | "exhausted") => ({ id: state, sourceClass: "catalog" as const, label: state, state, loaded: 1, hasMore: false, continuation: "supported" as const, retryable: false });
+    await render(controller({ snapshot: snapshot({ sources: [answered("ready"), answered("exhausted")] }) }));
+    expect(host.querySelector(".search-source-strip")).toBeNull();
+    expect(host.textContent).not.toContain("All sources answered");
+
+    await render(controller({ committed: "", snapshot: null }));
+    expect(host.querySelector(".search-source-strip")).toBeNull();
+
+    await render(controller({ snapshot: snapshot({ sources: [answered("ready"), { ...answered("ready"), id: "bad", state: "failed", retryable: true }] }) }));
+    expect(host.querySelector(".search-source-strip")).not.toBeNull();
+  });
+
   it("renders source states and offers Retry only for retryable sources", async () => {
     const search = controller({
       snapshot: snapshot({

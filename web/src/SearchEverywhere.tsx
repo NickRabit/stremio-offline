@@ -383,6 +383,9 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
     ? search.snapshot?.sources.filter((source) => source.state === "queued" || source.state === "loading" || source.state === "indexing").length
       ?? (search.sources.length || 3)
     : 0;
+  // The strip earns its row only while sources still answer or one of them did not.
+  const stripShown = !!search.committed && (waiting > 0
+    || (search.snapshot?.sources ?? []).some((source) => source.retryable || (source.state !== "ready" && source.state !== "exhausted")));
 
   useEffect(() => {
     const onScroll = () => {
@@ -508,7 +511,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
       </div>
       <ShapeToggle shape={shape} onToggle={onToggleShape}/>
     </div>
-    <div className="search-source-strip">
+    {stripShown && <div className="search-source-strip">
       <div className="search-source-summary" aria-live="polite" role="status">
         {waiting > 0 ? t("searchAll.statusLoading", { count: waiting }) : t("searchAll.statusDone")}
       </div>
@@ -524,7 +527,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
           </div>)}
         </div>
       </details>
-    </div>
+    </div>}
     <SearchResults search={search} shape={shape} onOpenMember={onOpenMember} onOpenCanonical={onOpenCanonical} onRecord={onRecord}/>
   </section>;
 }

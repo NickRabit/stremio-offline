@@ -2091,6 +2091,7 @@ export const en = {
   "tv.globalSearch.sourceAll": "All",
   "tv.globalSearch.sourceCatalog": "Catalog",
   "tv.globalSearch.sourceLibraries": "Libraries",
+  "tv.globalSearch.reset": "Clear the search",
   "tv.globalSearch.kindAll": "All",
   "tv.globalSearch.kindMovies": "Movies",
   "tv.globalSearch.kindSeries": "Series",

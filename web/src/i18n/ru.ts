@@ -2046,6 +2046,7 @@ export const ru: Catalog = {
   "tv.globalSearch.sourceAll": "Все",
   "tv.globalSearch.sourceCatalog": "Каталог",
   "tv.globalSearch.sourceLibraries": "Библиотеки",
+  "tv.globalSearch.reset": "Сбросить поиск",
   "tv.globalSearch.kindAll": "Все",
   "tv.globalSearch.kindMovies": "Фильмы",
   "tv.globalSearch.kindSeries": "Сериалы",

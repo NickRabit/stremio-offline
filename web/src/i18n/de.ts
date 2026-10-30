@@ -2031,6 +2031,7 @@ export const de: Catalog = {
   "tv.globalSearch.sourceAll": "Alle",
   "tv.globalSearch.sourceCatalog": "Katalog",
   "tv.globalSearch.sourceLibraries": "Bibliotheken",
+  "tv.globalSearch.reset": "Suche zurücksetzen",
   "tv.globalSearch.kindAll": "Alle",
   "tv.globalSearch.kindMovies": "Filme",
   "tv.globalSearch.kindSeries": "Serien",
