@@ -84,7 +84,9 @@ import cz.stremiooffline.tv.ui.player.LibraryPlaySources
 import cz.stremiooffline.tv.ui.player.PlayerScreen
 import cz.stremiooffline.tv.ui.resume.ResumeRoute
 import cz.stremiooffline.tv.ui.search.GlobalSearchScreen
-import cz.stremiooffline.tv.ui.search.LibrarySearchScope
+import cz.stremiooffline.tv.ui.search.SearchPreset
+import cz.stremiooffline.tv.ui.search.SourceClass
+import cz.stremiooffline.tv.ui.search.toPreset
 import cz.stremiooffline.tv.ui.settings.SettingsRoute
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
@@ -120,6 +122,8 @@ private val Section.labelRes: Int
   }
 
 const val TAG_RAIL_PREFIX = "rail_"
+
+private enum class SearchOrigin { Rail, Catalog, Library }
 
 /** The rail item of the section on screen, which LEFT out of the content goes to. A focus group in
  *  the content does not inherit the shell's own LEFT, so one that has to leave by it reads this. */
@@ -207,12 +211,10 @@ fun Shell(
   var favoritesSeen by remember { mutableStateOf(false) }
   var resumeRefreshToken by remember { mutableIntStateOf(0) }
   var resumeSeen by remember { mutableStateOf(false) }
-  // Where Search looks: kept across a rail switch, and preset when a catalogue's Hledat opens it.
+  // Where the flag-off catalogue search looks, kept across a rail switch.
   var searchScope by remember { mutableStateOf(SearchScope()) }
-  /** True while Search was opened from the catalogue, so Back returns there instead of the rail. */
-  var searchFromCatalog by remember { mutableStateOf(false) }
-  /** The library level the Search page is fixed to, or null for the rail's own search. */
-  var librarySearch by remember { mutableStateOf<LibrarySearchScope?>(null) }
+  var searchOrigin by remember { mutableStateOf(SearchOrigin.Rail) }
+  var searchPreset by remember { mutableStateOf<SearchPreset?>(null) }
   var librarySearchReturnToken by remember { mutableIntStateOf(0) }
   var searchEverywhereEnabled by remember { mutableStateOf(false) }
   LaunchedEffect(Unit) {
@@ -247,10 +249,10 @@ fun Shell(
     current = current,
     hint = hint,
     onSection = { section ->
-      // The rail's Search is not the catalogue's: Back there belongs to the rail again.
+      // The rail's Search is not the catalogue's or a library's: it starts with no preset.
       if (section == Section.Search) {
-        searchFromCatalog = false
-        librarySearch = null
+        searchOrigin = SearchOrigin.Rail
+        searchPreset = null
       }
       shellState.pick(section)
       true
@@ -278,7 +280,8 @@ fun Shell(
           onQueue = nativeQueue,
           searchEverywhereEnabled = searchEverywhereEnabled,
           onOpenSearch = { scope ->
-            librarySearch = scope
+            searchOrigin = SearchOrigin.Library
+            searchPreset = scope.toPreset()
             shellState.pick(Section.Search)
           },
           searchReturnToken = librarySearchReturnToken,
@@ -312,17 +315,16 @@ fun Shell(
           onOpenDetail = { catalogDetail = it },
           onOpenSearch = { scope ->
             searchScope = scope
-            searchFromCatalog = true
-            librarySearch = null
+            searchOrigin = SearchOrigin.Catalog
+            searchPreset = SearchPreset(setOf(SourceClass.Catalog), scope)
             shellState.pick(Section.Search)
           },
           imageUrl = { path -> path?.let(api::url) },
           restoreToken = returnToken,
         )
         Section.Search -> {
-          val libraryPage = librarySearch
-          when {
-            libraryPage != null -> GlobalSearchScreen(
+          if (searchOrigin == SearchOrigin.Library || searchEverywhereEnabled) {
+            GlobalSearchScreen(
               api = api,
               onOpenCatalog = { catalogDetail = it },
               onOpenRemote = { remoteDetail = it },
@@ -332,37 +334,40 @@ fun Shell(
               },
               imageUrl = { path -> path?.let(api::url) },
               overlayOpen = overlayOpen,
-              libraryScope = libraryPage,
-              onBack = {
-                librarySearch = null
-                librarySearchReturnToken++
-                shellState.pick(Section.Library)
+              preset = searchPreset,
+              onBack = when (searchOrigin) {
+                SearchOrigin.Library -> {
+                  {
+                    searchOrigin = SearchOrigin.Rail
+                    searchPreset = null
+                    librarySearchReturnToken++
+                    shellState.pick(Section.Library)
+                  }
+                }
+                SearchOrigin.Catalog -> {
+                  {
+                    searchOrigin = SearchOrigin.Rail
+                    searchPreset = null
+                    shellState.pick(Section.Catalog)
+                  }
+                }
+                SearchOrigin.Rail -> null
               },
             )
-            searchFromCatalog || !searchEverywhereEnabled -> SearchScreen(
+          } else {
+            SearchScreen(
               api = api,
               scope = searchScope,
               onScopeChange = { searchScope = it },
               onOpenDetail = { catalogDetail = it },
               imageUrl = { path -> path?.let(api::url) },
               catalogSessions = searchEverywhereEnabled,
-              onBackToCatalog = if (searchFromCatalog) {
+              onBackToCatalog = if (searchOrigin == SearchOrigin.Catalog) {
                 {
-                  searchFromCatalog = false
+                  searchOrigin = SearchOrigin.Rail
                   shellState.pick(Section.Catalog)
                 }
               } else null,
-            )
-            else -> GlobalSearchScreen(
-              api = api,
-              onOpenCatalog = { catalogDetail = it },
-              onOpenRemote = { remoteDetail = it },
-              onOpenLibrary = { path ->
-                libraryPush = path
-                shellState.pick(Section.Library)
-              },
-              imageUrl = { path -> path?.let(api::url) },
-              overlayOpen = overlayOpen,
             )
           }
         }

@@ -38,7 +38,6 @@ tv.placeholderTitle
 tv.placeholderAction
 tv.libraryTitle
 tv.libraryTypePanel
-tv.librarySearchScope
 tv.libraryEmpty
 tv.libraryFiles
 tv.detailEyebrowLibrary
@@ -326,6 +325,8 @@ sources.noAddonProviders
 tv.globalSearch.title
 tv.globalSearch.hint
 tv.globalSearch.libraryHint
+tv.searchLibraryChip
+tv.searchLibraryClear
 tv.globalSearch.sourceAll
 tv.globalSearch.sourceCatalog
 tv.globalSearch.sourceLocal

@@ -39,7 +39,6 @@
   <string name="tv_placeholder_action">Volver al inicio</string>
   <string name="tv_library_title">Tu biblioteca</string>
   <string name="tv_library_type_panel">Tipo</string>
-  <string name="tv_library_search_scope">En la biblioteca: %1$s</string>
   <string name="tv_library_empty">Aquí aún no hay nada. Los archivos que descargues aparecerán en esta biblioteca.</string>
   <string name="tv_library_files">%1$s archivos</string>
   <string name="tv_detail_eyebrow_library">En tu biblioteca</string>
@@ -336,6 +335,8 @@
   <string name="tv_global_search_title">Buscar en todas partes</string>
   <string name="tv_global_search_hint">Busca en catálogos y bibliotecas. Pulsa OK para buscar.</string>
   <string name="tv_global_search_library_hint">Busca en esta biblioteca. Pulsa OK para buscar.</string>
+  <string name="tv_search_library_chip">%1$s  ✕</string>
+  <string name="tv_search_library_clear">Buscar en toda la biblioteca</string>
   <string name="tv_global_search_source_all">Todo</string>
   <string name="tv_global_search_source_catalog">Catálogo</string>
   <string name="tv_global_search_source_local">Local</string>

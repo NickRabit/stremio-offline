@@ -8,3 +8,13 @@ data class LibrarySearchScope(
   val sources: List<String>,
   val title: String,
 )
+
+/** The Search page's starting filters for this level. An unknown source selects nothing. */
+fun LibrarySearchScope.toPreset(): SearchPreset {
+  val wire = sources.singleOrNull() ?: return SearchPreset()
+  val source = SourceClass.entries.firstOrNull { it.wire == wire } ?: return SearchPreset()
+  return SearchPreset(
+    sources = setOf(source),
+    library = library?.let { LibraryFilter(it, source, title) },
+  )
+}

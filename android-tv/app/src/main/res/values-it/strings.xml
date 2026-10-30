@@ -39,7 +39,6 @@
   <string name="tv_placeholder_action">Torna alla Home</string>
   <string name="tv_library_title">La tua libreria</string>
   <string name="tv_library_type_panel">Tipo</string>
-  <string name="tv_library_search_scope">Nella libreria: %1$s</string>
   <string name="tv_library_empty">Non c\'è ancora nulla. I file scaricati appariranno in questa libreria.</string>
   <string name="tv_library_files">%1$s file</string>
   <string name="tv_detail_eyebrow_library">Nella tua libreria</string>
@@ -336,6 +335,8 @@
   <string name="tv_global_search_title">Cerca ovunque</string>
   <string name="tv_global_search_hint">Cerca nei cataloghi e nelle librerie. Premi OK per cercare.</string>
   <string name="tv_global_search_library_hint">Cerca in questa libreria. Premi OK per cercare.</string>
+  <string name="tv_search_library_chip">%1$s  ✕</string>
+  <string name="tv_search_library_clear">Cerca in tutta la libreria</string>
   <string name="tv_global_search_source_all">Tutti</string>
   <string name="tv_global_search_source_catalog">Catalogo</string>
   <string name="tv_global_search_source_local">Locale</string>

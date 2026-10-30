@@ -115,7 +115,7 @@ class GlobalSearchScreenTest {
     api: FakeTvApi,
     voiceAvailable: Boolean = false,
     voiceLauncher: VoiceLauncher? = null,
-    libraryScope: LibrarySearchScope? = null,
+    preset: SearchPreset? = null,
     onBack: (() -> Unit)? = null,
   ) {
     compose.setContent {
@@ -126,7 +126,7 @@ class GlobalSearchScreenTest {
         onOpenLibrary = { libraryOpened = it },
         imageUrl = { null },
         overlayOpen = false,
-        libraryScope = libraryScope,
+        preset = preset,
         onBack = onBack,
         voiceAvailable = voiceAvailable,
         voiceLauncher = voiceLauncher,
@@ -134,6 +134,15 @@ class GlobalSearchScreenTest {
     }
     compose.waitForIdle()
   }
+
+  private fun libraryPreset(title: String = "Films  ›  Shows") = SearchPreset(
+    sources = setOf(SourceClass.Local),
+    library = LibraryFilter(
+      library = GlobalSearchLibraryDto("lib1", path = "Shows"),
+      source = SourceClass.Local,
+      title = title,
+    ),
+  )
 
   private fun start(api: FakeTvApi, cards: List<GlobalSearchClusterDto>, state: String = "complete") {
     api.globalStartHandler = {
@@ -314,49 +323,22 @@ class GlobalSearchScreenTest {
   }
 
   @Test
-  fun `a library-scoped search keeps no history`() {
+  fun `a library preset keeps the filters, selects Local and shows the library chip`() {
     val api = FakeTvApi()
     api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
-    val scope = LibrarySearchScope(
-      library = GlobalSearchLibraryDto("lib1", path = "Shows"),
-      sources = listOf("local"),
-      title = "Films  ›  Shows",
-    )
-    mount(api, libraryScope = scope)
-
-    compose.onNodeWithTag(TagSearchRecentList).assertDoesNotExist()
-    assertEquals(0, api.searchStateCalls)
-
-    search("matrix")
-
-    assertTrue(api.recordedSearches.isEmpty())
-  }
-
-  @Test
-  fun `a library scope starts fixed, hides the filters and returns on Back`() {
-    val api = FakeTvApi()
     start(api, listOf(cluster("c1", "m1", title = "One")))
     var backs = 0
-    val scope = LibrarySearchScope(
-      library = GlobalSearchLibraryDto("lib1", path = "Shows"),
-      sources = listOf("local"),
-      title = "Films  ›  Shows",
-    )
-    mount(api, libraryScope = scope, onBack = { backs++ })
-    compose.onNodeWithTag(globalSearchFilterTag("source_all")).assertDoesNotExist()
-    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertDoesNotExist()
-    compose.onNodeWithText(
-      androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
-        .getString(cz.stremiooffline.tv.R.string.tv_library_search_scope, scope.title),
-    ).assertExists()
-    // The hint speaks of this library, not of catalogues and libraries in general.
+    val preset = libraryPreset()
+    mount(api, preset = preset, onBack = { backs++ })
     val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+
+    compose.onNodeWithTag(globalSearchFilterTag("source_all")).assertExists()
+    compose.onNodeWithTag(TagGlobalSearchLibraryChip)
+      .assertTextContains(preset.library!!.title, substring = true)
     compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_global_search_library_hint)).assertExists()
     compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_global_search_hint)).assertDoesNotExist()
-    // The page opens ready to type: the field has the remote.
-    compose.mainClock.advanceTimeBy(100)
-    compose.waitForIdle()
-    compose.onNodeWithTag(TagGlobalSearchField).assertIsFocused()
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertExists()
+    compose.onNodeWithTag(recentSearchTag("Ronin")).assertExists()
 
     search("matrix")
     compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }
@@ -364,6 +346,7 @@ class GlobalSearchScreenTest {
     assertEquals("matrix", body.query)
     assertEquals(GlobalSearchLibraryDto("lib1", path = "Shows"), body.library)
     assertEquals(listOf("local"), body.sources)
+    assertEquals(listOf("matrix"), api.recordedSearches)
 
     compose.waitForIdle()
     focus(globalSearchCardTag("m1"))
@@ -373,16 +356,65 @@ class GlobalSearchScreenTest {
   }
 
   @Test
+  fun `OK on the library chip clears it and focus lands on Local`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1", title = "One")))
+    mount(api, preset = libraryPreset())
+    search("matrix")
+    compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }
+
+    focus(TagGlobalSearchLibraryChip)
+    press(Key.DirectionCenter)
+    compose.mainClock.advanceTimeBy(100)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagGlobalSearchLibraryChip).assertDoesNotExist()
+    compose.onNodeWithTag(globalSearchFilterTag("source_local")).assertIsFocused()
+    compose.waitUntil(5_000) { api.globalStartCalls.size >= 2 }
+    assertNull(api.globalStartCalls.last().library)
+    assertEquals(listOf("local"), api.globalStartCalls.last().sources)
+  }
+
+  @Test
+  fun `LEFT from the library chip returns to the Series filter`() {
+    val api = FakeTvApi()
+    mount(api, preset = libraryPreset())
+
+    focus(TagGlobalSearchKindChip)
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchFilterTag("kind_series")).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused().assertTextContains("Series", substring = true)
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagGlobalSearchLibraryChip).assertIsFocused()
+    press(Key.DirectionLeft)
+    compose.onNodeWithTag(TagGlobalSearchKindChip).assertIsFocused().assertTextContains("Series", substring = true)
+  }
+
+  @Test
+  fun `a catalogue preset selects Catalog and names the scope in the chip`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(searchable("a", "Cinemeta", type = "movie", id = "top", name = "Popular"))
+    mount(api, preset = SearchPreset(setOf(SourceClass.Catalog), SearchScope(addonKey = "a", catalogType = "movie", catalogId = "top")))
+    compose.waitUntil(5_000) { api.searchableCalls > 0 }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertTextContains("Cinemeta · Popular (movie)", substring = true)
+    compose.onNodeWithTag(TagGlobalSearchLibraryChip).assertDoesNotExist()
+    search("matrix")
+    compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }
+    assertEquals(listOf("catalog"), api.globalStartCalls.last().sources)
+    assertEquals(SearchScope(addonKey = "a", catalogType = "movie", catalogId = "top"), api.globalStartCalls.last().scope)
+  }
+
+  @Test
   fun `the library scope keeps the page's own voice search`() {
     val api = FakeTvApi()
     start(api, listOf(cluster("c1", "m1", title = "One")))
     val voice = Voice()
-    val scope = LibrarySearchScope(
-      library = GlobalSearchLibraryDto("lib1", path = "Shows"),
-      sources = listOf("local"),
-      title = "Films  ›  Shows",
-    )
-    mount(api, libraryScope = scope, voiceAvailable = true, voiceLauncher = { voice.calls += it })
+    mount(api, preset = libraryPreset(), voiceAvailable = true, voiceLauncher = { voice.calls += it })
 
     focus(TagGlobalSearchVoice)
     press(Key.DirectionCenter)

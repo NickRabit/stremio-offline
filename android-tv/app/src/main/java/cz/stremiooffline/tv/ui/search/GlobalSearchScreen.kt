@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,7 +43,6 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -77,6 +77,7 @@ const val TagGlobalSearchInput = "global_search_input"
 const val TagGlobalSearchVoice = "global_search_voice"
 const val TagGlobalSearchKindChip = "global_search_kind_chip"
 const val TagGlobalSearchScopeChip = "global_search_scope_chip"
+const val TagGlobalSearchLibraryChip = "global_search_library_chip"
 const val TagGlobalSearchSourceStrip = "global_search_source_strip"
 const val TagGlobalSearchSourceRows = "global_search_source_rows"
 const val TagGlobalSearchUnidentified = "global_search_unidentified"
@@ -96,34 +97,18 @@ fun GlobalSearchScreen(
   onOpenLibrary: (String) -> Unit,
   imageUrl: (String?) -> String?,
   overlayOpen: Boolean,
-  libraryScope: LibrarySearchScope? = null,
+  preset: SearchPreset? = null,
   onBack: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
   voiceAvailable: Boolean = voiceSearchAvailable(),
   voiceLauncher: VoiceLauncher? = null,
 ) {
-  val scopeKey = libraryScope?.let {
-    "${it.library?.libraryId.orEmpty()}|${it.library?.path.orEmpty()}|${it.library?.parentId.orEmpty()}|" +
-      it.sources.sorted().joinToString(",")
-  }
-  val viewModel = if (libraryScope == null) {
-    viewModel<GlobalSearchViewModel>(factory = GlobalSearchViewModel.factory(api))
-  } else {
-    viewModel<GlobalSearchViewModel>(
-      key = "library:$scopeKey",
-      factory = GlobalSearchViewModel.factory(
-        api = api,
-        library = libraryScope.library,
-        sources = libraryScope.sources.mapNotNullTo(hashSetOf()) { wire ->
-          SourceClass.entries.firstOrNull { it.wire == wire }
-        },
-      ),
-    )
-  }
+  val viewModel = viewModel<GlobalSearchViewModel>(factory = GlobalSearchViewModel.factory(api))
   val state = viewModel.state
   val fieldFocus = remember { FocusRequester() }
   val gridFocus = remember { FocusRequester() }
   val scopeFocus = remember { FocusRequester() }
+  val libraryFocus = remember { FocusRequester() }
   val kindFocus = remember { FocusRequester() }
   val sourceFocuses = remember { List(4) { FocusRequester() } }
   val recentEntryFocus = remember { FocusRequester() }
@@ -140,6 +125,8 @@ fun GlobalSearchScreen(
   var kindPanel by remember { mutableStateOf(false) }
   var kindPanelOpener by remember { mutableStateOf<FocusRequester?>(null) }
   var toolbarFocusIndex by remember { mutableIntStateOf(4) }
+  var libraryClearToken by remember { mutableIntStateOf(0) }
+  var libraryClearSource by remember { mutableStateOf<SourceClass?>(null) }
 
   fun submit() {
     val query = draft.trim()
@@ -157,15 +144,16 @@ fun GlobalSearchScreen(
     clearFocusSignal++
   }
 
-  val showRecent = libraryScope == null && !state.submitted && draft.isBlank() && state.recent.isNotEmpty()
+  val showRecent = !state.submitted && draft.isBlank() && state.recent.isNotEmpty()
   val sourceSet = if (state.sources.isEmpty()) SourceClass.entries.toSet() else state.sources
-  val scopeShown = libraryScope == null && SourceClass.Catalog in sourceSet
-  val toolbarSize = if (scopeShown) 6 else 5
+  val scopeShown = state.library == null && SourceClass.Catalog in sourceSet
+  val libraryShown = state.library != null
+  val toolbarSize = if (scopeShown || libraryShown) 6 else 5
   val activeToolbarIndex = toolbarFocusIndex.coerceIn(0, toolbarSize - 1)
   val lastToolbarFocus = when (activeToolbarIndex) {
     in 0..3 -> sourceFocuses[activeToolbarIndex]
     4 -> kindFocus
-    else -> scopeFocus
+    else -> if (libraryShown) libraryFocus else scopeFocus
   }
   val contentFocus = if (state.submitted) sourceStripFocus else recentEntryFocus
 
@@ -176,6 +164,19 @@ fun GlobalSearchScreen(
       viewModel.setActive(false)
       viewModel.leave()
     }
+  }
+  LaunchedEffect(viewModel, preset) {
+    if (preset != null) viewModel.applyPreset(preset)
+  }
+  LaunchedEffect(libraryClearToken) {
+    val source = libraryClearSource ?: return@LaunchedEffect
+    awaitFrame()
+    val focus = when (source) {
+      SourceClass.Local -> sourceFocuses[2]
+      SourceClass.Remote -> sourceFocuses[3]
+      else -> return@LaunchedEffect
+    }
+    runCatching { focus.requestFocus() }
   }
   LaunchedEffect(viewModel, overlayOpen) {
     viewModel.setActive(!overlayOpen)
@@ -222,15 +223,6 @@ fun GlobalSearchScreen(
       .voiceKey(voice),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    if (libraryScope != null) {
-      Text(
-        stringResource(R.string.tv_library_search_scope, libraryScope.title),
-        color = Tokens.Muted,
-        fontSize = 12.sp,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-    }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
       TvTextField(
         label = stringResource(R.string.tv_global_search_title),
@@ -243,9 +235,7 @@ fun GlobalSearchScreen(
         onSubmit = ::submit,
         modifier = Modifier
           .weight(1f)
-          .focusDirections(
-            down = if (libraryScope == null) sourceFocuses.first() else contentFocus.takeIf { state.submitted || showRecent },
-          )
+          .focusDirections(down = sourceFocuses.first())
           .onFocusChanged { if (it.isFocused) clearCardFocus() },
       )
       if (voice.available) {
@@ -258,47 +248,60 @@ fun GlobalSearchScreen(
           modifier = Modifier
             .size(38.dp)
             .testTag(TagGlobalSearchVoice)
-            .focusDirections(down = if (libraryScope == null) sourceFocuses.first() else contentFocus)
+            .focusDirections(down = sourceFocuses.first())
             .onFocusChanged { if (it.isFocused) clearCardFocus() },
         )
       }
     }
     if (!state.submitted) {
-      Text(stringResource(if (libraryScope != null) R.string.tv_global_search_library_hint else R.string.tv_global_search_hint), color = Tokens.Muted, fontSize = 12.sp)
-    }
-
-    if (libraryScope == null) {
-      GlobalSearchFilters(
-        sources = state.sources,
-        kind = state.kind,
-        scope = state.scope,
-        searchable = state.searchable,
-        fieldFocus = fieldFocus,
-        sourceFocuses = sourceFocuses,
-        kindFocus = kindFocus,
-        scopeFocus = scopeFocus,
-        downFocus = contentFocus.takeIf { state.submitted || showRecent },
-        onFocusChanged = { toolbarFocusIndex = it },
-        onSources = {
-          viewModel.setSources(it)
-          if (SourceClass.Catalog in it || it.isEmpty()) {
-            viewModel.loadSearchable()
-          } else {
-            scopePanel = false
-          }
-        },
-        onKindPanel = {
-          kindPanelOpener = kindFocus
-          kindPanel = true
-        },
-        onScope = {
-          viewModel.loadSearchable()
-          scopePanelOpener = scopeFocus
-          scopePanel = true
-        },
-        onFocused = ::clearCardFocus,
+      Text(
+        stringResource(if (state.library != null) R.string.tv_global_search_library_hint else R.string.tv_global_search_hint),
+        color = Tokens.Muted,
+        fontSize = 12.sp,
       )
     }
+
+    GlobalSearchFilters(
+      sources = state.sources,
+      kind = state.kind,
+      scope = state.scope,
+      library = state.library,
+      searchable = state.searchable,
+      fieldFocus = fieldFocus,
+      sourceFocuses = sourceFocuses,
+      kindFocus = kindFocus,
+      scopeFocus = scopeFocus,
+      libraryFocus = libraryFocus,
+      downFocus = contentFocus.takeIf { state.submitted || showRecent },
+      onFocusChanged = { toolbarFocusIndex = it },
+      onSources = {
+        viewModel.setSources(it)
+        if (SourceClass.Catalog in it || it.isEmpty()) {
+          viewModel.loadSearchable()
+        } else {
+          scopePanel = false
+        }
+      },
+      onKindPanel = {
+        kindPanelOpener = kindFocus
+        kindPanel = true
+      },
+      onScope = {
+        viewModel.loadSearchable()
+        scopePanelOpener = scopeFocus
+        scopePanel = true
+      },
+      onClearLibrary = {
+        val source = viewModel.state.library?.source
+        if (source != null) {
+          viewModel.clearLibrary()
+          toolbarFocusIndex = if (source == SourceClass.Remote) 3 else 2
+          libraryClearSource = source
+          libraryClearToken++
+        }
+      },
+      onFocused = ::clearCardFocus,
+    )
 
     if (state.submitted) {
       GlobalSourceStrip(
@@ -377,24 +380,28 @@ private fun GlobalSearchFilters(
   sources: Set<SourceClass>,
   kind: KindFilter,
   scope: SearchScope,
+  library: LibraryFilter?,
   searchable: List<SearchableCatalogDto>,
   fieldFocus: FocusRequester,
   sourceFocuses: List<FocusRequester>,
   kindFocus: FocusRequester,
   scopeFocus: FocusRequester,
+  libraryFocus: FocusRequester,
   downFocus: FocusRequester?,
   onFocusChanged: (Int) -> Unit,
   onSources: (Set<SourceClass>) -> Unit,
   onKindPanel: () -> Unit,
   onScope: () -> Unit,
+  onClearLibrary: () -> Unit,
   onFocused: () -> Unit,
 ) {
   val catalog = sources.isEmpty() || SourceClass.Catalog in sources
   val catalogOnly = sources == setOf(SourceClass.Catalog)
+  val trailingFocus = if (library != null) libraryFocus else if (catalog) scopeFocus else null
   Row(
     modifier = Modifier.fillMaxWidth().focusGroup(),
     horizontalArrangement = Arrangement.spacedBy(6.dp),
-    verticalAlignment = Alignment.CenterVertically,
+    verticalAlignment = Alignment.Bottom,
   ) {
     val values = listOf(
       Triple(stringResource(R.string.tv_global_search_source_all), sources.isEmpty(), "source_all"),
@@ -438,13 +445,22 @@ private fun GlobalSearchFilters(
         .focusRequester(kindFocus)
         .focusDirections(
           left = sourceFocuses.last(),
-          right = if (catalog) scopeFocus else kindFocus,
+          right = trailingFocus ?: kindFocus,
           up = fieldFocus,
           down = downFocus,
         )
         .testTag(TagGlobalSearchKindChip),
     )
-    if (catalog) {
+    if (library != null) {
+      GlobalSearchLibraryChip(
+        library = library,
+        onClear = onClearLibrary,
+        onFocused = { onFocusChanged(5); onFocused() },
+        modifier = Modifier
+          .focusRequester(libraryFocus)
+          .focusDirections(left = kindFocus, right = libraryFocus, up = fieldFocus, down = downFocus),
+      )
+    } else if (catalog) {
       GlobalSearchDropdown(
         text = if (scope.addonKey.isNullOrEmpty()) stringResource(R.string.tv_global_search_all_addons) else scopeLabel(scope, searchable),
         contentDescription = stringResource(R.string.catalog_search_scope),
@@ -457,6 +473,36 @@ private fun GlobalSearchFilters(
           .testTag(TagGlobalSearchScopeChip),
       )
     }
+  }
+}
+
+@Composable
+private fun RowScope.GlobalSearchLibraryChip(
+  library: LibraryFilter,
+  onClear: () -> Unit,
+  onFocused: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Column(
+    modifier = Modifier.weight(1f).align(Alignment.Bottom),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    Text(
+      stringResource(R.string.catalog_search_scope).uppercase(),
+      color = Tokens.Muted,
+      fontSize = 8.5.sp,
+      fontWeight = FontWeight.ExtraBold,
+      letterSpacing = 0.8.sp,
+    )
+    FocusButton(
+      text = stringResource(R.string.tv_search_library_chip, library.title),
+      onClick = onClear,
+      contentDescription = stringResource(R.string.tv_search_library_clear),
+      modifier = modifier
+        .fillMaxWidth()
+        .testTag(TagGlobalSearchLibraryChip)
+        .onFocusChanged { if (it.isFocused) onFocused() },
+    )
   }
 }
 

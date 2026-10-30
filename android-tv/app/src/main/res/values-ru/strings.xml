@@ -39,7 +39,6 @@
   <string name="tv_placeholder_action">На главную</string>
   <string name="tv_library_title">Ваша библиотека</string>
   <string name="tv_library_type_panel">Тип</string>
-  <string name="tv_library_search_scope">В библиотеке: %1$s</string>
   <string name="tv_library_empty">Здесь пока ничего нет. Скачанные файлы появятся в этой библиотеке.</string>
   <string name="tv_library_files">Файлов: %1$s</string>
   <string name="tv_detail_eyebrow_library">В вашей библиотеке</string>
@@ -346,6 +345,8 @@
   <string name="tv_global_search_title">Искать везде</string>
   <string name="tv_global_search_hint">Ищите в каталогах и библиотеках. Нажмите OK, чтобы начать поиск.</string>
   <string name="tv_global_search_library_hint">Ищите в этой библиотеке. Нажмите OK, чтобы начать поиск.</string>
+  <string name="tv_search_library_chip">%1$s  ✕</string>
+  <string name="tv_search_library_clear">Искать по всей библиотеке</string>
   <string name="tv_global_search_source_all">Все</string>
   <string name="tv_global_search_source_catalog">Каталог</string>
   <string name="tv_global_search_source_local">Локальные</string>
