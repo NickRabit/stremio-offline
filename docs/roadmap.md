@@ -9,10 +9,12 @@ needs VAAPI. See [Hardware acceleration](hardware-acceleration.md) for the setup
 
 ## Direction and delivery order
 
-Rechecked against `origin/main` at `0b3e8b2b` (0.5.36) on 2026-10-10. The
-feature inventory and near-term work below describe that revision; the dated
-engineering audit later in this file is retained as an audit record, not a
-claim that every older probe or count describes today's checkout.
+Rechecked against `origin/main` at `0b3e8b2b` (0.5.36) on 2026-10-10; the
+order below was set by the owner on 2026-10-30, after comparing the October
+releases of Nuvio and Stremio. The feature inventory and near-term work below
+describe that revision; the dated engineering audit later in this file is
+retained as an audit record, not a claim that every older probe or count
+describes today's checkout.
 
 The core product is now broad: following and automatic episode downloads,
 Home, enhanced search, and desktop apps for macOS, Windows, and Linux have
@@ -23,11 +25,14 @@ metadata store, or scheduler for each platform.
 
 | Order | Current opportunity | What remains |
 | --- | --- | --- |
-| 1 | Family home and kids mode | A child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
-| 2 | Personal Home layout — **done** | Each account now arranges its own Home: which rows show, their order, and extra catalogue feeds from the addons it may use. The instance's Show on Home switches stay the default. |
-| 3 | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
-| 4 | Queue controls | Optional quiet hours, aggregate speed limit, and a completion notice; current download limits cover concurrency, not these controls. |
-| 5 | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
+| 1 | Richer title detail | Cast and crew, related titles, age rating and the next episode's date from one server route, in small steps on the existing detail screens (no detail rewrite). See [Richer title detail](#richer-title-detail). |
+| 2 | Player chapters and badges | Chapter marks on the timeline, the current chapter's name and a chapter list; badges for what is playing (resolution, HDR, audio). Web and Android TV. See [Player and mobile chrome](#player-and-mobile-chrome). |
+| 3 | Queue controls | Night-only window first, then an aggregate speed limit and a completion notice; current download limits cover concurrency, not these controls. |
+| 4 | Selective SQLite storage | Move large, often rewritten collections out of whole-file JSON rewrites, phase by phase, per [#644](https://github.com/NickRabit/stremio-offline/issues/644). |
+| 5 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
+| Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
+| Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
+| Implemented | Personal Home layout | Each account arranges its own Home: which rows show, their order, and extra catalogue feeds from the addons it may use. The instance's Show on Home switches stay the default. |
 | Implemented | Jellyfin and Emby libraries | Native read-only libraries, per-library grants, proxy/FFmpeg and local history. [Specification](media-server-libraries-spec.md). |
 | Later | Desktop distribution and external automation | Test clean install/upgrade on real target systems; signing/notarization need credentials. The *arr bridge remains a spec/probe, not a supported integration. |
 
@@ -191,6 +196,14 @@ client calls TMDB on its own.
 
 ### Player and mobile chrome
 
+- **Chapters**: when a file has two or more chapters, mark them on the
+  timeline, show the current chapter's name and offer a chapter list to jump
+  to. The server's remux drops them today (`-map_chapters -1` in
+  `server/src/playback.ts`), so the probe has to report them to the client;
+  the web player and the Android TV player both need them.
+- **Badges for what is playing**: resolution, HDR/Dolby Vision and the audio
+  format of the running stream, shown with the player controls. Nuvio added
+  both in October 2026.
 - Improve Safari landscape chrome behavior on a physical iPhone/iPad; WebKit
   automation cannot emulate browser chrome, so this needs a device. The same goes
   for the native iOS fullscreen with the Fill screen toggle.
@@ -210,6 +223,14 @@ Optional: a night-only window, an aggregate speed limit, and a notice when the
 queue drains. Existing concurrency settings limit simultaneous jobs; they do
 not provide a time window or bandwidth cap. Push notifications outside the
 browser are a separate later idea.
+
+### Storage
+
+Large and often mutated collections (the image index, the download queue,
+statistics, activity) are rewritten as whole JSON files. Move them to SQLite
+selectively, keeping JSON where it fits and keeping the recovery, backup and
+authorization guarantees. The plan, phases and measurements live in
+[#644](https://github.com/NickRabit/stremio-offline/issues/644).
 
 ### Android TV
 
