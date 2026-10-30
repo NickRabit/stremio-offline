@@ -46,6 +46,7 @@ import cz.stremiooffline.tv.data.GlobalSearchClusterDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.SidePanel
@@ -182,6 +183,10 @@ internal fun GlobalSearchResults(
                 libraryName = member.sourceLabel,
                 provider = locator.provider.orEmpty(),
                 item = detail.item,
+                seriesName = detail.item.seriesName.takeIf { detail.item.type == "episode" },
+                seriesIds = member.parentIds?.let { ids ->
+                  RemoteProviderIdsDto(imdb = ids.imdb, tmdb = ids.tmdb, tvdb = ids.tvdb)
+                },
               ),
             )
           } catch (_: Exception) {

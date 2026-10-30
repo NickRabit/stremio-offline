@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -34,6 +36,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.BrowseItem
@@ -46,8 +49,10 @@ import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.components.LibraryRootCard
 import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
+import cz.stremiooffline.tv.ui.catalog.FolderIcon
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.episodeLabel
 import cz.stremiooffline.tv.ui.search.LibrarySearchScope
@@ -56,6 +61,7 @@ import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
 
 const val TagLibraryBreadcrumb = "library_breadcrumb"
+const val TagLibraryAllGrid = "library_all_grid"
 
 /** The composed mosaic in the poster shape, as the web's `remoteMosaicArtwork` asks for it: the URL
  *  with its `shape` query parameter set to `poster` (added, or replaced if present). */
@@ -141,6 +147,7 @@ fun LibraryRoute(
   val searchAction = remember { FocusRequester() }
   val searchField = remember { FocusRequester() }
   val allGridFocus = remember { FocusRequester() }
+  val allGridState = rememberLazyGridState()
   val allRequesters = remember { mutableMapOf<String, FocusRequester>() }
   var libraryIds by remember { mutableStateOf(emptyList<String>()) }
   LaunchedEffect(Unit) {
@@ -200,8 +207,8 @@ fun LibraryRoute(
   ) {
     if (segment != LibrarySegment.All || !backEnabled) return@LaunchedEffect
     val key = enteredFromAll ?: return@LaunchedEffect
-    val requester = allRequesters[key] ?: return@LaunchedEffect
     awaitFrame()
+    val requester = allRequesters[key] ?: return@LaunchedEffect
     if (runCatching { requester.requestFocus() }.isSuccess) enteredFromAll = null
   }
 
@@ -210,7 +217,7 @@ fun LibraryRoute(
   LaunchedEffect(segment, state.loading) {
     if (segment != LibrarySegment.All || state.loading || enteredFromAll != null) return@LaunchedEffect
     awaitFrame()
-    runCatching { (allRequesters.values.firstOrNull() ?: allGridFocus).requestFocus() }
+    runCatching { allGridFocus.requestFocus() }
   }
 
   // A new page focuses its own first card; a return restores the card that opened the page. An open
@@ -296,10 +303,11 @@ fun LibraryRoute(
           ShimmerCards()
         } else {
           BoxWithConstraints(Modifier.fillMaxSize()) {
-            val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
+            val columns = (((maxWidth.value + 18f) / 378f).toInt()).coerceAtLeast(1)
             LazyVerticalGrid(
               columns = GridCells.Fixed(columns),
-              modifier = Modifier.focusRequester(allGridFocus).focusGroup(),
+              state = allGridState,
+              modifier = Modifier.focusRequester(allGridFocus).focusGroup().testTag(TagLibraryAllGrid),
               contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
               horizontalArrangement = Arrangement.spacedBy(18.dp),
               verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -391,7 +399,8 @@ fun LibraryRoute(
             fontSize = 12.sp,
           )
           else -> BoxWithConstraints(Modifier.fillMaxSize()) {
-            val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
+            val wideRoots = items.any { it is BrowseItem.Library }
+            val columns = (((maxWidth.value + 18f) / if (wideRoots) 378f else 128f).toInt()).coerceAtLeast(1)
             LazyVerticalGrid(
               columns = GridCells.Fixed(columns),
               modifier = Modifier.focusRequester(gridFocus).focusGroup(),
@@ -479,17 +488,34 @@ private fun LocalLibraryCard(
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  PosterCard(
-    name = item.title,
-    imageUrl = (item.mosaicImage?.let(::posterMosaicUrl) ?: item.poster ?: item.wide)?.let(api::url),
-    progress = progressFraction(item),
-    caption = caption(item),
-    cardTag = cardTag,
-    mosaic = item.mosaic.map(api::url),
-    imageBeforeMosaic = item.mosaicImage != null && item.mosaic.size >= 2,
-    onClick = onClick,
-    modifier = modifier,
-  )
+  if (item is BrowseItem.Library) {
+    LibraryRootCard(
+      name = item.title,
+      caption = caption(item),
+      poster = (item.poster ?: item.wide)?.let(api::url),
+      composedMosaic = item.mosaicImage?.let(api::url)?.let(::posterMosaicUrl),
+      posters = item.mosaic.map(api::url),
+      count = item.fileCount,
+      fallback = {
+        Icon(FolderIcon, contentDescription = null, tint = Tokens.Muted, modifier = Modifier.size(46.dp))
+      },
+      cardTag = cardTag,
+      onClick = onClick,
+      modifier = modifier,
+    )
+  } else {
+    PosterCard(
+      name = item.title,
+      imageUrl = (item.mosaicImage?.let(::posterMosaicUrl) ?: item.poster ?: item.wide)?.let(api::url),
+      progress = progressFraction(item),
+      caption = caption(item),
+      cardTag = cardTag,
+      mosaic = item.mosaic.map(api::url),
+      imageBeforeMosaic = item.mosaicImage != null && item.mosaic.size >= 2,
+      onClick = onClick,
+      modifier = modifier,
+    )
+  }
 }
 
 @Composable

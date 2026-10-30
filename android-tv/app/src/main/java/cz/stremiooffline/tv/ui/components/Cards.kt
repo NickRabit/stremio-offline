@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -166,6 +167,119 @@ fun PosterCard(
     }
   }
 }
+
+/** Library roots share the web tile's artwork-left, information-right layout. */
+@Composable
+fun LibraryRootCard(
+  name: String,
+  caption: String?,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  cardTag: String? = null,
+  poster: String? = null,
+  composedMosaic: String? = null,
+  posters: List<String> = emptyList(),
+  count: Int? = null,
+  fallback: @Composable () -> Unit,
+) {
+  val artPhases = remember(composedMosaic, poster, posters) {
+    libraryRootArtPhases(composedMosaic, posters, poster)
+  }
+  var artIndex by remember(artPhases) { mutableIntStateOf(0) }
+  val artPhase = artPhases.getOrElse(artIndex) { LibraryRootArtPhase.Fallback }
+  val shape = RoundedCornerShape(11.dp)
+  Surface(
+    onClick = onClick,
+    modifier = modifier
+      .fillMaxWidth()
+      .height(164.dp)
+      .then(if (cardTag != null) Modifier.testTag(cardTag) else Modifier),
+    shape = ClickableSurfaceDefaults.shape(shape = shape),
+    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.03f),
+    glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Tokens.Accent2.copy(alpha = 0.3f), 16.dp)),
+    border = ClickableSurfaceDefaults.border(
+      border = Border(BorderStroke(1.dp, Tokens.Line), shape = shape),
+      focusedBorder = Border(BorderStroke(2.dp, Tokens.Accent2), shape = shape),
+    ),
+    colors = ClickableSurfaceDefaults.colors(containerColor = Tokens.Panel, focusedContainerColor = Tokens.Panel2),
+  ) {
+    Row(Modifier.fillMaxSize().clip(shape), verticalAlignment = Alignment.CenterVertically) {
+      Box(
+        Modifier
+          .width(132.dp)
+          .fillMaxSize()
+          .background(Brush.verticalGradient(listOf(Tokens.Panel2, Tokens.Bg))),
+      ) {
+        when (artPhase) {
+          LibraryRootArtPhase.Composed -> AsyncImage(
+            model = composedMosaic,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            onError = { artIndex++ },
+            modifier = Modifier.fillMaxSize(),
+          )
+          LibraryRootArtPhase.Collage -> PosterMosaic(
+            posters = posters,
+            label = stringResource(R.string.library_mosaic_alt, posters.size.toString()),
+            onAllFailed = { artIndex++ },
+          )
+          LibraryRootArtPhase.SinglePoster -> AsyncImage(
+            model = posters.firstOrNull(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            onError = { artIndex++ },
+            modifier = Modifier.fillMaxSize(),
+          )
+          LibraryRootArtPhase.OwnPoster -> AsyncImage(
+            model = poster,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            onError = { artIndex++ },
+            modifier = Modifier.fillMaxSize(),
+          )
+          LibraryRootArtPhase.Fallback -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { fallback() }
+        }
+        if (count != null) {
+          Box(
+            Modifier
+              .align(Alignment.TopEnd)
+              .padding(9.dp)
+              .clip(RoundedCornerShape(999.dp))
+              .background(Tokens.Bg.copy(alpha = 0.86f))
+              .padding(horizontal = 9.dp, vertical = 4.dp)
+              .semantics(mergeDescendants = true) {}
+              .then(if (cardTag != null) Modifier.testTag(libraryRootCountTag(cardTag)) else Modifier),
+          ) {
+            Text(count.toString(), color = Tokens.Text, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold)
+          }
+        }
+
+      }
+      Column(
+        Modifier.weight(1f).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Text(name, color = Tokens.Text, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        if (!caption.isNullOrBlank()) {
+          Text(caption, color = Tokens.Muted, fontSize = 11.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+      }
+    }
+  }
+}
+
+internal enum class LibraryRootArtPhase { Composed, Collage, SinglePoster, OwnPoster, Fallback }
+
+internal fun libraryRootArtPhases(composedMosaic: String?, posters: List<String>, poster: String?): List<LibraryRootArtPhase> =
+  buildList {
+    if (composedMosaic != null) add(LibraryRootArtPhase.Composed)
+    if (posters.size >= 2) add(LibraryRootArtPhase.Collage)
+    if (posters.size == 1) add(LibraryRootArtPhase.SinglePoster)
+    if (poster != null) add(LibraryRootArtPhase.OwnPoster)
+    add(LibraryRootArtPhase.Fallback)
+  }
+
+fun libraryRootCountTag(cardTag: String): String = "library_count_$cardTag"
 
 /** A 190x107 wide card for one file of a title, with its episode label and watch state. */
 @Composable
@@ -358,7 +472,12 @@ private val MosaicSlots = listOf(
 
 /** A library or folder without a cover of its own shows a collage of the covers inside it. */
 @Composable
-fun PosterMosaic(posters: List<String>, label: String, modifier: Modifier = Modifier) {
+fun PosterMosaic(
+  posters: List<String>,
+  label: String,
+  modifier: Modifier = Modifier,
+  onAllFailed: (() -> Unit)? = null,
+) {
   BoxWithConstraints(
     modifier
       .fillMaxSize()
@@ -369,6 +488,9 @@ fun PosterMosaic(posters: List<String>, label: String, modifier: Modifier = Modi
     val slotShape = RoundedCornerShape(4.dp)
     // A cover that fails to load leaves its slot empty instead of drawing a broken frame.
     val broken = remember(posters) { mutableStateListOf<Int>() }
+    LaunchedEffect(broken.size, posters) {
+      if (onAllFailed != null && broken.size >= posters.take(MosaicSlots.size).size) onAllFailed()
+    }
     posters.take(MosaicSlots.size).forEachIndexed { index, url ->
       if (index in broken) return@forEachIndexed
       val slot = MosaicSlots[index]

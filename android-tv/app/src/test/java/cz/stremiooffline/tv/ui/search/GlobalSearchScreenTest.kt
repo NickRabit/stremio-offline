@@ -223,6 +223,23 @@ class GlobalSearchScreenTest {
   }
 
   @Test
+  fun `removing the externally focused first recent row focuses the next row`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin", "Alien"))
+    mount(api)
+
+    focus(recentSearchTag("Heat"))
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(recentRemoveTag("Heat")).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertDoesNotExist()
+    compose.onNodeWithTag(recentSearchTag("Ronin")).assertIsFocused()
+    assertEquals(listOf("Heat"), api.forgottenSearches)
+  }
+
+  @Test
   fun `OK on a recent search submits it`() {
     val api = FakeTvApi()
     api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
@@ -379,17 +396,34 @@ class GlobalSearchScreenTest {
   }
 
   @Test
-  fun `the scope chip appears only with the catalog source`() {
+  fun `the scope chip appears for All and Catalog but not a non-catalog source`() {
     val api = FakeTvApi()
     mount(api)
 
-    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertDoesNotExist()
+    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertExists().assertTextContains("all addons", substring = true)
     chooseCatalogSource()
     compose.onNodeWithTag(TagGlobalSearchScopeChip).assertExists().assertTextContains("all addons", substring = true)
 
     focus(globalSearchFilterTag("source_local"))
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagGlobalSearchScopeChip).assertDoesNotExist()
+  }
+
+  @Test
+  fun `an addon scope chosen under All keeps local and remote sources`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(searchable("a", "Alpha"))
+    mount(api)
+    search()
+    openScopePanel()
+
+    focus(scopeAddonTag("a"))
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    val request = api.globalStartCalls.last()
+    assertEquals(listOf("catalog", "local", "remote"), request.sources)
+    assertEquals(SearchScope(addonKey = "a"), request.scope)
   }
 
   @Test

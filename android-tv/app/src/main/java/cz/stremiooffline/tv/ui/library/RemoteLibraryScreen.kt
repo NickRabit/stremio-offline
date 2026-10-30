@@ -77,13 +77,18 @@ import cz.stremiooffline.tv.ui.catalog.FolderIcon
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.components.LibraryRootCard
 import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.TvSpinner
+import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
+import cz.stremiooffline.tv.ui.detail.initialRemoteMetadata
+import cz.stremiooffline.tv.ui.detail.resolveRemoteMetadata
 import cz.stremiooffline.tv.ui.theme.Tokens
+import cz.stremiooffline.tv.ui.theme.appBackground
 import cz.stremiooffline.tv.ui.search.LibrarySearchScope
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.CancellationException
@@ -92,6 +97,7 @@ import kotlinx.coroutines.launch
 const val TagLibrarySegments = "library_segments"
 const val TagRemoteLoadMore = "remote_load_more"
 const val TagRemoteBreadcrumb = "remote_breadcrumb"
+const val TagRemoteSeriesRoot = "remote_series_root"
 
 fun remoteLibraryTag(id: String): String = "remote_library_$id"
 fun remoteItemTag(id: String): String = "remote_item_$id"
@@ -136,7 +142,7 @@ fun RemoteLibraryRoute(
     if (segment == LibrarySegment.Servers) viewModel.onShown()
   }
   // Leaving the half cancels every in-flight load, so no late answer lands on a hidden grid.
-  DisposableEffect(Unit) { onDispose { viewModel.onHidden() } }
+  DisposableEffect(viewModel) { onDispose { viewModel.onHidden() } }
 
   val state = viewModel.state
   val level = state.current
@@ -423,13 +429,20 @@ internal fun RemoteSeriesScreen(
     key = "remote-series:${data.libraryId}:${data.item.id}",
     factory = RemoteLibraryViewModel.factory(api),
   )
+  val parentIdentity = data.libraryId to data.item.id
+  var metadata by remember(parentIdentity) { mutableStateOf(initialRemoteMetadata(data)) }
+  var metadataResolved by remember(parentIdentity) { mutableStateOf(false) }
   LaunchedEffect(data.libraryId, data.item.id) {
     viewModel.openSeries(data.libraryId, data.libraryName, data.provider, data.item)
   }
-  DisposableEffect(Unit) { onDispose { viewModel.onHidden() } }
+  LaunchedEffect(parentIdentity, data.item, data.seriesName, data.seriesIds) {
+    metadata = resolveRemoteMetadata(api, data)
+    metadataResolved = true
+  }
+  DisposableEffect(viewModel) { onDispose { viewModel.onHidden() } }
 
-  var episode by remember { mutableStateOf<RemoteDetailData?>(null) }
-  var returnToken by remember { mutableIntStateOf(0) }
+  var episode by remember(parentIdentity) { mutableStateOf<RemoteDetailData?>(null) }
+  var returnToken by remember(parentIdentity) { mutableIntStateOf(0) }
 
   BackHandler(enabled = backEnabled) { onBack() }
 
@@ -445,12 +458,12 @@ internal fun RemoteSeriesScreen(
   val requesters = remember(levelKey) { mutableMapOf<String, FocusRequester>() }
 
   // The episode grid's copy panel, opened by Menu/Info on a playable episode card.
-  var copyCard by remember { mutableStateOf<RemoteItemDto?>(null) }
-  var copyRequest by remember { mutableStateOf<NativeCopyRequest?>(null) }
-  var copyResolving by remember { mutableStateOf(false) }
-  var copyBusy by remember { mutableStateOf(false) }
-  var copyNotice by remember { mutableStateOf<String?>(null) }
-  var copyToken by remember { mutableIntStateOf(0) }
+  var copyCard by remember(parentIdentity) { mutableStateOf<RemoteItemDto?>(null) }
+  var copyRequest by remember(parentIdentity) { mutableStateOf<NativeCopyRequest?>(null) }
+  var copyResolving by remember(parentIdentity) { mutableStateOf(false) }
+  var copyBusy by remember(parentIdentity) { mutableStateOf(false) }
+  var copyNotice by remember(parentIdentity) { mutableStateOf<String?>(null) }
+  var copyToken by remember(parentIdentity) { mutableIntStateOf(0) }
   val copyScope = rememberCoroutineScope()
   val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
   val destinationsFailedText = stringResource(R.string.media_server_error)
@@ -466,7 +479,7 @@ internal fun RemoteSeriesScreen(
       try {
         val resolved = resolveNativeCopy(
           api = api, libraryId = data.libraryId, item = item,
-          seriesName = data.item.name, seriesIds = data.item.providerIds, sources = null, loadDestinations = load,
+          seriesName = metadata.seriesName, seriesIds = metadata.seriesIds, sources = null, loadDestinations = load,
         )
         if (mine == copyToken) copyRequest = resolved
       } catch (cancelled: CancellationException) {
@@ -536,7 +549,7 @@ internal fun RemoteSeriesScreen(
 
   // A copy still being resolved belongs to the card that asked for it: leaving the level or
   // opening an episode drops it, so a late answer never opens a panel over another screen.
-  LaunchedEffect(levelKey, episode) {
+  LaunchedEffect(parentIdentity, levelKey, episode) {
     copyToken++
     copyCard = null
     copyRequest = null
@@ -545,7 +558,7 @@ internal fun RemoteSeriesScreen(
     copyBusy = false
   }
 
-  Box(Modifier.fillMaxSize()) {
+  Box(Modifier.fillMaxSize().appBackground().testTag(TagRemoteSeriesRoot)) {
     if (episode == null) Column(Modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX)) {
       if (copyNotice != null && copyRequest == null) {
         Text(copyNotice!!, color = Tokens.Red, fontSize = 11.sp, modifier = Modifier.padding(bottom = 6.dp))
@@ -553,7 +566,7 @@ internal fun RemoteSeriesScreen(
       // This screen is opened on its own from a Home or Favourites card, so it names the series once
       // and nothing above it carries that name.
       Text(
-        level?.title.orEmpty(),
+        (if (data.item.type == "series") metadata.seriesName else null) ?: level?.title.orEmpty(),
         color = Tokens.Text,
         fontSize = 25.sp,
         fontWeight = FontWeight.ExtraBold,
@@ -582,8 +595,8 @@ internal fun RemoteSeriesScreen(
                 libraryName = libraryName,
                 provider = provider,
                 item = item,
-                seriesName = data.item.name,
-                seriesIds = data.item.providerIds,
+                seriesName = metadata.seriesName ?: metadata.item.seriesName,
+                seriesIds = metadata.seriesIds.takeIf { metadataResolved },
               )
             },
           )
@@ -701,7 +714,7 @@ private fun LibraryPicker(
       state.librariesError != null -> RemoteErrorPanel(state.librariesError, { viewModel.loadLibraries() }, errorFocus)
       state.libraries.isEmpty() -> Text(stringResource(R.string.media_server_empty_shared), color = Tokens.Muted, fontSize = 12.sp)
       else -> BoxWithConstraints(Modifier.fillMaxSize()) {
-          val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
+          val columns = (((maxWidth.value + 18f) / 378f).toInt()).coerceAtLeast(1)
           LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
             modifier = Modifier.focusRequester(gridFocus).focusGroup(),
@@ -777,7 +790,21 @@ internal fun RemoteArtTile(
   val composed = imageUrl(preview?.mosaic)
   val ownPoster = imageUrl(poster)
   val primary = if (childrenArtwork) composed ?: ownPoster else ownPoster ?: composed
-  Box {
+  if (container && parentId == null) {
+    LibraryRootCard(
+      name = title,
+      caption = caption,
+      poster = ownPoster,
+      composedMosaic = composed,
+      posters = art,
+      fallback = {
+        Icon(FolderIcon, contentDescription = null, tint = Tokens.Muted, modifier = Modifier.size(46.dp))
+      },
+      cardTag = cardTag,
+      onClick = onClick,
+      modifier = modifier,
+    )
+  } else {
     PosterCard(
       name = title,
       imageUrl = primary ?: art.firstOrNull(),
@@ -790,7 +817,7 @@ internal fun RemoteArtTile(
       onClick = onClick,
       modifier = modifier,
     )
-    if (container && art.isEmpty() && poster == null && wide == null) {
+    if (container && art.isEmpty() && poster == null && wide == null && composed == null) {
       Box(Modifier.size(110.dp, 165.dp), contentAlignment = Alignment.Center) {
         Icon(FolderIcon, contentDescription = null, tint = Tokens.Muted, modifier = Modifier.size(46.dp))
       }
@@ -896,7 +923,7 @@ private fun ItemGrid(
   val hasMore = level.state.hasMore
   val loadingMore = level.state.loadingMore
   BoxWithConstraints(Modifier.fillMaxSize()) {
-    val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
+    val columns = (((maxWidth.value + 18f) / if (isEpisodes) 208f else 128f).toInt()).coerceAtLeast(1)
     LazyVerticalGrid(
       columns = GridCells.Fixed(columns),
       modifier = Modifier.focusRequester(gridFocus).focusGroup(),
@@ -970,6 +997,17 @@ private fun ItemGrid(
             poster = item.poster,
             wide = item.wide,
             caption = stringResource(R.string.media_server_read_only),
+            onClick = { onOpen(item) },
+            modifier = focus,
+          )
+        } else if (isEpisodes) {
+          WideCard(
+            label = item.name,
+            imageUrl = imageUrl(item.wide ?: item.poster),
+            progress = null,
+            completed = false,
+            caption = episodeCaption(item),
+            cardTag = remoteItemTag(item.id),
             onClick = { onOpen(item) },
             modifier = focus,
           )

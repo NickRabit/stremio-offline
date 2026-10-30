@@ -134,6 +134,8 @@ data class PlayTarget(
    *  while the file or remote version the target itself plays keeps its own key. */
   val subtitleType: String? = null,
   val subtitleTarget: String? = null,
+  /** The catalogue title behind [subtitleType]/[subtitleTarget]: a show name for an episode. */
+  val subtitleName: String? = null,
   /** True when the catalogue detail started this play. The player then keeps the sources that
    *  detail offers, the title's own library copy included; a library view or a Continue card
    *  leaves it false and gets no catalogue sources at all. */

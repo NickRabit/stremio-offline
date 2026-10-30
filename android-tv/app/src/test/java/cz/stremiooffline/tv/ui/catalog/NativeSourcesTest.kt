@@ -139,8 +139,10 @@ class NativeSourcesTest {
   fun `an episode is asked under its parent series identity and name`() = runTest {
     val api = FakeTvApi().apply {
       streamSourcesValues["series:tt5:1:2"] = listOf(StreamSourceDto("alpha", "Alpha"))
+      addonStreams["series:tt5:1:2|alpha"] = listOf(row("src-episode", "8 GB", "alpha", "Alpha"))
       localStreamsValues["series:tt5:1:2"] = emptyList()
       remoteLibrariesValue = listOf(library("rlibA", "Filmy"), library("rlibB", "Serialy"))
+      remoteMatchValues["rlibB|series|tt5:1:2"] = listOf(remote("ms-episode", "rlibB", "episode"))
     }
     val (sources, scope) = coordinator(api, identity = "series" to "tt5:1:2", nameHint = "Show")
     sources.open(scope)
@@ -152,6 +154,9 @@ class NativeSourcesTest {
     assertEquals(listOf("rlibB|series|tt5:1:2"), api.remoteMatchRequests)
     // The provider's name filter takes the series name, never the episode's own.
     assertEquals(listOf("Show"), api.remoteMatchHints)
+    assertEquals(listOf("src-episode"), sources.state.addonRows.map { it.sourceId })
+    assertEquals(listOf("rlibB"), sources.state.remoteGroups.map { it.libraryId })
+    assertFalse(sources.state.asking)
   }
 
   @Test

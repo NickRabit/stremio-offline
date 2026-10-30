@@ -29,6 +29,7 @@
       android:theme="@style/Theme.StremioOfflineTv">
     <activity
         android:name=".MainActivity"
+        android:banner="@drawable/banner"
         android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
         android:exported="true"
         android:launchMode="singleTask">

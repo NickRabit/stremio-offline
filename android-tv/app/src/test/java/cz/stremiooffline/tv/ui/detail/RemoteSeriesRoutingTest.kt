@@ -6,17 +6,21 @@ import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import cz.stremiooffline.tv.data.RemoteItemDetailDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemDto
@@ -26,6 +30,8 @@ import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.library.remoteItemTag
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesRoot
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -69,6 +75,12 @@ class RemoteSeriesRoutingTest {
   )
 
   private fun episode(id: String) = RemoteItemDto(id = id, name = "Pilot", type = "episode", season = 1, episode = 1)
+  private fun series(id: String, name: String) = RemoteDetailData(
+    libraryId = "rlibA",
+    libraryName = "Filmy",
+    provider = "jellyfin",
+    item = RemoteItemDto(id = id, name = name, type = "series"),
+  )
 
   private fun version() = StreamDto(
     sourceId = "ms1",
@@ -140,7 +152,10 @@ class RemoteSeriesRoutingTest {
 
     // The series itself never asks for versions: its episodes are the whole detail.
     assertTrue(api.remoteSourcesRequests.isEmpty())
+    compose.onNodeWithTag(TagRemoteSeriesRoot).assertExists()
     compose.onNodeWithTag(remoteItemTag("e1")).assertIsFocused()
+    val still = compose.onNodeWithTag(remoteItemTag("e1")).getBoundsInRoot()
+    assertTrue("episode still is ${still.right - still.left}x${still.bottom - still.top}", still.right - still.left > still.bottom - still.top)
 
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.remoteSourcesRequests.contains("rlibA" to "e1") }
@@ -167,4 +182,77 @@ class RemoteSeriesRoutingTest {
 
     assertEquals(1, backs)
   }
+
+  @Test
+  fun `quick A then B never shows A's late episodes under B`() {
+    val api = FakeTvApi()
+    val current = mutableStateOf(series("s1", "Show A"))
+    val aGate = CompletableDeferred<Unit>()
+    api.remoteBrowseGates["s1"] = aGate
+    api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(
+      items = listOf(episode("a1").copy(name = "A episode", season = 1, episode = 1)),
+      total = 1,
+    )
+    api.remoteEpisodesPages["s2|"] = RemoteItemsPageDto(
+      items = listOf(episode("b1").copy(name = "B episode", season = 7, episode = 1)),
+      total = 1,
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(api = api, data = current.value, onPlay = {}, onBack = {})
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.any { it.parentId == "s1" } }
+
+    compose.runOnIdle { current.value = series("s2", "Show B") }
+    compose.waitUntil(5_000) {
+      compose.onAllNodes(androidx.compose.ui.test.hasTestTag(remoteItemTag("b1"))).fetchSemanticsNodes().isNotEmpty()
+    }
+    aGate.complete(Unit)
+    compose.waitForIdle()
+
+    compose.onNodeWithText("Show B").assertExists()
+    compose.onNodeWithTag(remoteItemTag("b1")).assertExists()
+    compose.onNodeWithTag(remoteItemTag("a1")).assertDoesNotExist()
+    compose.onNodeWithText("S7 · E1").assertExists()
+  }
+  private fun assertEarlyPlayKeepsIdentity(autoPlay: Boolean) {
+    val api = FakeTvApi()
+    val gate = CompletableDeferred<Unit>()
+    api.remoteItemGates["rlibA:s1"] = gate
+    api.remoteItemValues["rlibA:s1"] = RemoteItemDetailDto(
+      RemoteItemDto(id = "s1", type = "series", name = "Exact show", providerIds = RemoteProviderIdsDto(imdb = "tt1234567")),
+    )
+    api.remoteSourcesValue = listOf(version())
+    val data = RemoteDetailData(
+      libraryId = "rlibA", libraryName = "Shows", provider = "jellyfin",
+      item = episode("e1").copy(seriesId = "s1"), autoPlay = autoPlay,
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(api = api, data = data, onPlay = { played += it }, onBack = {}, catalogueApi = api)
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteItemRequests.contains("rlibA" to "s1") && api.remoteSourcesRequests.isNotEmpty() }
+    compose.waitForIdle()
+    if (!autoPlay) {
+      compose.onNodeWithTag(TagRemoteDetailPlay).assertIsFocused()
+      press(Key.DirectionCenter)
+    }
+    compose.waitForIdle()
+    assertTrue(played.isEmpty())
+    gate.complete(Unit)
+    compose.waitUntil(5_000) { played.size == 1 }
+    assertEquals("series", played.single().subtitleType)
+    assertEquals("tt1234567:1:1", played.single().subtitleTarget)
+    assertEquals("series:tt1234567:1:1", played.single().key)
+    assertEquals("Exact show", played.single().subtitleName)
+  }
+
+  @Test
+  fun `a quick Play waits for exact metadata before building the target`() = assertEarlyPlayKeepsIdentity(false)
+
+  @Test
+  fun `autoPlay waits for exact metadata before building the target`() = assertEarlyPlayKeepsIdentity(true)
+
 }

@@ -6,7 +6,11 @@ import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.LibraryTitleDto
+import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.RemoteItemDetailDto
+import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
@@ -17,6 +21,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -419,12 +424,13 @@ class LibraryPlaySourcesTest {
       ),
     ) { reports += it }
 
-    assertEquals(listOf("ms1"), reports.single().streams.map { it.sourceId })
-    assertEquals("ms1", reports.single().streams.single().remoteItem?.mediaSourceId)
-    assertFalse(reports.single().loading)
+    assertEquals(listOf("ms1"), reports.last().streams.map { it.sourceId })
+    assertEquals("ms1", reports.last().streams.single().remoteItem?.mediaSourceId)
+    assertFalse(reports.last().loading)
     assertTrue(api.streamSourcesRequests.isEmpty())
     assertTrue(api.localStreamsRequests.isEmpty())
     assertEquals(0, api.remoteLibrariesCalls)
+    assertEquals(listOf("rlibA" to "iA"), api.remoteItemRequests)
   }
 
   @Test
@@ -434,6 +440,11 @@ class LibraryPlaySourcesTest {
     api.streamSourcesValues["series:tt5:1:2"] = listOf(StreamSourceDto("alpha", "Alpha"))
     api.addonStreams["series:tt5:1:2|alpha"] = listOf(alpha())
     api.localStreamsValues["series:tt5:1:2"] = listOf(library("Shows/Show/S01/Show.S01E02.mkv"))
+    api.remoteLibrariesValue = listOf(
+      RemoteLibraryDto(id = "rlibA", name = "Origin", provider = "jellyfin"),
+      RemoteLibraryDto(id = "rlibB", name = "Other", provider = "emby"),
+    )
+    api.remoteMatchValues["rlibB|series|tt5:1:2"] = listOf(alpha("ms2"))
     val original = StreamDto(
       sourceId = "ms1",
       kind = "remote",
@@ -451,6 +462,7 @@ class LibraryPlaySourcesTest {
         sourceId = "ms1",
         subtitleType = "series",
         subtitleTarget = "tt5:1:2",
+        subtitleName = "Show",
         remoteItem = original.remoteItem,
         initialSources = listOf(original),
       ),
@@ -458,8 +470,114 @@ class LibraryPlaySourcesTest {
 
     assertEquals(listOf("series:tt5:1:2"), api.streamSourcesRequests)
     assertEquals(listOf("series:tt5:1:2"), api.localStreamsRequests)
+    assertEquals(listOf("rlibB|series|tt5:1:2"), api.remoteMatchRequests)
+    assertEquals(listOf("Show"), api.remoteMatchHints)
     assertEquals(listOf("ms1"), reports.first().streams.map { it.sourceId })
     assertEquals("ms1", reports.last().streams.first().remoteItem?.mediaSourceId)
     assertTrue(reports.last().streams.any { it.localPath == "Shows/Show/S01/Show.S01E02.mkv" })
+  }
+
+  @Test
+  fun `a fast remote episode play resolves its exact parent before discovering every group`() = runTest {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en")
+    api.remoteItemValues["rlibA:episode"] = RemoteItemDetailDto(
+      RemoteItemDto(
+        id = "episode",
+        name = "Pilot",
+        type = "episode",
+        seriesId = "show",
+        season = 2,
+        episode = 3,
+      ),
+    )
+    api.remoteItemValues["rlibA:show"] = RemoteItemDetailDto(
+      RemoteItemDto(
+        id = "show",
+        name = "The Show",
+        type = "series",
+        providerIds = RemoteProviderIdsDto(imdb = "tt123"),
+      ),
+    )
+    api.streamSourcesValues["series:tt123:2:3"] = listOf(StreamSourceDto("alpha", "Alpha"))
+    api.addonStreams["series:tt123:2:3|alpha"] = listOf(alpha())
+    api.localStreamsValues["series:tt123:2:3"] = listOf(library("Shows/The Show/S02/Pilot.mkv"))
+    api.remoteLibrariesValue = listOf(
+      RemoteLibraryDto(id = "rlibA", name = "Origin", provider = "jellyfin"),
+      RemoteLibraryDto(id = "rlibB", name = "Other", provider = "emby"),
+    )
+    api.remoteMatchValues["rlibB|series|tt123:2:3"] = listOf(
+      StreamDto(
+        sourceId = "ms2",
+        kind = "remote",
+        playable = true,
+        remoteItem = RemoteItemContext("rlibB", "episode2", "ms2", "remote:rlibB:episode2"),
+      ),
+    )
+    val original = StreamDto(
+      sourceId = "ms1",
+      kind = "remote",
+      playable = true,
+      remoteItem = RemoteItemContext("rlibA", "episode", "ms1", "remote:rlibA:episode"),
+    )
+    val reports = mutableListOf<OfferedSources>()
+
+    LibraryPlaySources(api).load(
+      PlayTarget(
+        key = "remote:rlibA:episode",
+        title = "Pilot · S2 · E3",
+        resume = true,
+        sourceId = "ms1",
+        remoteItem = original.remoteItem,
+        initialSources = listOf(original),
+      ),
+    ) { reports += it }
+
+    assertEquals(listOf("rlibA" to "episode", "rlibA" to "show"), api.remoteItemRequests)
+    assertEquals(listOf("series:tt123:2:3"), api.localStreamsRequests)
+    assertEquals(listOf("series:tt123:2:3"), api.streamSourcesRequests)
+    assertEquals(listOf("rlibB|series|tt123:2:3"), api.remoteMatchRequests)
+    assertEquals(listOf("The Show"), api.remoteMatchHints)
+    assertEquals(
+      listOf("ms1", "Shows/The Show/S02/Pilot.mkv", "ms2", "srcA"),
+      reports.last().streams.map { it.localPath ?: it.sourceId },
+    )
+    assertFalse(reports.last().loading)
+  }
+
+  @Test
+  fun `remote metadata lookup is bounded and keeps the origin rows`() = runTest {
+    val api = FakeTvApi()
+    api.remoteItemGates["rlibA:iA"] = CompletableDeferred()
+    val original = StreamDto(
+      sourceId = "ms1",
+      kind = "remote",
+      playable = true,
+      remoteItem = RemoteItemContext("rlibA", "iA", "ms1", "remote:rlibA:iA"),
+    )
+    val reports = mutableListOf<OfferedSources>()
+
+    val job = launch {
+      LibraryPlaySources(api).load(
+        PlayTarget(
+          key = "remote:rlibA:iA",
+          title = "Heat",
+          resume = true,
+          sourceId = "ms1",
+          remoteItem = original.remoteItem,
+          initialSources = listOf(original),
+        ),
+      ) { reports += it }
+    }
+    runCurrent()
+    advanceTimeBy(REMOTE_METADATA_TIMEOUT_MS + 1)
+    runCurrent()
+    job.join()
+
+    assertEquals(listOf("ms1"), reports.last().streams.map { it.sourceId })
+    assertFalse(reports.last().loading)
+    assertTrue(api.streamSourcesRequests.isEmpty())
+    assertTrue(api.localStreamsRequests.isEmpty())
+    assertEquals(0, api.remoteLibrariesCalls)
   }
 }

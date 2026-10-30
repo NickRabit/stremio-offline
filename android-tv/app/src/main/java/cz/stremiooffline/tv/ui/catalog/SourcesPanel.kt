@@ -551,7 +551,16 @@ internal fun SourceRow(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-          Text(badge, color = badgeColour, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+          Box(Modifier.width(68.dp), contentAlignment = Alignment.CenterStart) {
+            Text(
+              badge,
+              color = badgeColour,
+              fontSize = 10.sp,
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
           Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(sourceName, color = Tokens.Muted, fontSize = 9.5.sp, maxLines = 1)
             Text(

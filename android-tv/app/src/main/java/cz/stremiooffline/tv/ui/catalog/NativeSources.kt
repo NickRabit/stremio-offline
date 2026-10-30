@@ -400,6 +400,7 @@ internal fun nativeRowTarget(
   identity: Pair<String, String>?,
   loaded: List<StreamDto>,
   poster: String?,
+  identityName: String? = null,
 ): PlayTarget? {
   val remoteItem = row.remoteItem
   if (remoteItem != null) {
@@ -412,6 +413,7 @@ internal fun nativeRowTarget(
       poster = poster,
       subtitleType = identity?.first,
       subtitleTarget = identity?.second,
+      subtitleName = identityName,
       remoteItem = remoteItem,
       remoteSources = Streams.remoteVersionsOf(remoteItem, loaded),
       initialSources = loaded,
@@ -428,6 +430,7 @@ internal fun nativeRowTarget(
       poster = poster,
       subtitleType = identity?.first,
       subtitleTarget = identity?.second,
+      subtitleName = identityName,
       initialSources = loaded,
     )
   }
@@ -441,6 +444,7 @@ internal fun nativeRowTarget(
     poster = poster,
     subtitleType = type,
     subtitleTarget = requestId,
+    subtitleName = identityName,
     catalogue = false,
     remoteItem = null,
     initialSources = loaded,

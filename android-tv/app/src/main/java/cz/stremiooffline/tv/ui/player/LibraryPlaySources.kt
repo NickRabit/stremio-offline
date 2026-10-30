@@ -3,12 +3,16 @@ package cz.stremiooffline.tv.ui.player
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.LibraryTitleDto
+import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.catalog.OfferedSources
+import cz.stremiooffline.tv.ui.catalog.nativeAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.RemoteSourcesFailure
+import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.resolveRemoteMetadata
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -22,6 +26,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 private const val REMOTE_DISCOVERY_TIMEOUT_MS = 3_000L
 private const val REMOTE_MATCH_TIMEOUT_MS = 8_000L
 private const val ADDON_GROUP_TIMEOUT_MS = 8_000L
+internal const val REMOTE_METADATA_TIMEOUT_MS = 8_000L
 /** Two requests of one category at a time, the same budget the catalogue's own panel keeps: enough
  *  to overlap the slow ones, few enough that opening the panel does not flood the server. */
 private const val MAX_GROUP_REQUESTS = 2
@@ -56,13 +61,14 @@ class LibraryPlaySources(private val api: TvApi) {
     val identityType = target.subtitleType?.takeIf { it.isNotBlank() }
     val identityId = target.subtitleTarget?.takeIf { it.isNotBlank() }
     val carriedIdentity = identityType != null && identityId != null
-    if (target.remoteItem != null && !carriedIdentity) {
-      reportSnapshot(loading = false)
-      return
-    }
     reportSnapshot(loading = true)
     val title = if (carriedIdentity) {
-      LibraryTitleDto(type = identityType, id = identityId, name = target.title)
+      LibraryTitleDto(type = identityType, id = identityId, name = target.subtitleName ?: target.title)
+    } else if (target.remoteItem != null) {
+      deadline(REMOTE_METADATA_TIMEOUT_MS) { resolveRemoteTitle(target) } ?: run {
+        reportSnapshot(loading = false)
+        return
+      }
     } else {
       val path = target.path ?: run {
         reportSnapshot(loading = false)
@@ -232,4 +238,28 @@ class LibraryPlaySources(private val api: TvApi) {
 
   private suspend fun <T> deadline(ms: Long, call: suspend () -> T): T? =
     read { withTimeoutOrNull(ms) { call() } }
+
+  private suspend fun resolveRemoteTitle(target: PlayTarget): LibraryTitleDto? {
+    val remote = target.remoteItem ?: return null
+    val metadata = resolveRemoteMetadata(
+      api,
+      RemoteDetailData(
+        libraryId = remote.libraryId,
+        libraryName = "",
+        provider = "",
+        item = RemoteItemDto(
+          id = remote.itemId,
+          name = target.title,
+          type = "",
+        ),
+      ),
+    )
+    val identity = nativeAddonIdentity(metadata.item, metadata.seriesIds) ?: return null
+    val name = if (metadata.item.type == "episode") {
+      metadata.seriesName ?: metadata.item.seriesName
+    } else {
+      metadata.item.name
+    }
+    return LibraryTitleDto(type = identity.first, id = identity.second, name = name)
+  }
 }

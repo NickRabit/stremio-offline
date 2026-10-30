@@ -11,6 +11,10 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -19,6 +23,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performSemanticsAction
@@ -35,6 +40,7 @@ import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.ui.components.TagPosterMosaic
+import cz.stremiooffline.tv.ui.components.libraryRootCountTag
 import cz.stremiooffline.tv.ui.BrowseRequest
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.DetailData
@@ -566,23 +572,26 @@ class LibraryScreenTest {
   private fun localLibrary(path: String, name: String = path) = BrowseItem.Library(path = path, name = name)
 
   @Test
-  fun `a library that carries a composed mosaic draws it instead of the collage`() {
+  fun `a library root keeps its artwork left and its title once to the right`() {
     val api = FakeTvApi()
     api.pages[null] = BrowseResult(
       "",
-      listOf(
-        BrowseItem.Library(path = "A", name = "A", mosaicImage = "/api/library/mosaic?dir=A&shape=wide"),
-        BrowseItem.Library(path = "B", name = "B", posters = listOf("/p1.jpg", "/p2.jpg")),
-      ),
-      2,
+      listOf(BrowseItem.Library(path = "Films", name = "Films", fileCount = 12, poster = "/films.jpg")),
+      1,
       false,
     )
     mount(api)
     switchTo("Files")
     compose.waitForIdle()
 
-    // The composed mosaic replaces the collage; only the library without one keeps today's drawing.
-    assertEquals(1, compose.onAllNodesWithTag(TagPosterMosaic, useUnmergedTree = true).fetchSemanticsNodes().size)
+    val card = compose.onNodeWithTag("Films").getBoundsInRoot()
+    val title = compose.onNodeWithText("Films", useUnmergedTree = true).getBoundsInRoot()
+    val count = compose.onNodeWithTag(libraryRootCountTag("Films"), useUnmergedTree = true)
+    compose.onNodeWithText("12", useUnmergedTree = true).assertExists()
+    assertTrue("title must be beside the artwork", title.left > count.getBoundsInRoot().right)
+    assertTrue("title stays inside the card", title.bottom < card.bottom)
+    assertTrue("library roots use a landscape card", (card.right - card.left) > (card.bottom - card.top) * 2)
+    assertEquals(1, compose.onAllNodesWithText("Films", useUnmergedTree = true).fetchSemanticsNodes().size)
   }
 
   @Test
@@ -658,6 +667,27 @@ class LibraryScreenTest {
 
     compose.onNodeWithTag("all_local:Films").assertIsFocused()
     compose.onNodeWithTag("Films/It").assertDoesNotExist()
+  }
+
+  @Test
+  fun `Back to a scrolled All grid restores the remote library tile`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(localLibrary("Films")), 1, false)
+    api.remoteLibrariesValue = (0..10).map { RemoteLibraryDto(id = "r$it", name = "Server $it", provider = "emby", type = "mixed") }
+    api.remoteBrowsePages["r8||"] = RemoteItemsPageDto(items = listOf(remoteFolder("f1", "Shows")), total = 1)
+    mount(api)
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagLibraryAllGrid).performScrollToNode(hasTestTag("all_remote:r8"))
+    focusOn("all_remote:r8")
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.isNotEmpty() }
+    compose.waitForIdle()
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+    compose.onNodeWithTag("all_remote:r8").assertIsFocused()
   }
 
   @Test

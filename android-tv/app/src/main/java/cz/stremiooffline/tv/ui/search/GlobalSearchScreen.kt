@@ -158,7 +158,8 @@ fun GlobalSearchScreen(
   }
 
   val showRecent = libraryScope == null && !state.submitted && draft.isBlank() && state.recent.isNotEmpty()
-  val scopeShown = libraryScope == null && state.sources == setOf(SourceClass.Catalog)
+  val sourceSet = if (state.sources.isEmpty()) SourceClass.entries.toSet() else state.sources
+  val scopeShown = libraryScope == null && SourceClass.Catalog in sourceSet
   val toolbarSize = if (scopeShown) 6 else 5
   val activeToolbarIndex = toolbarFocusIndex.coerceIn(0, toolbarSize - 1)
   val lastToolbarFocus = when (activeToolbarIndex) {
@@ -193,7 +194,7 @@ fun GlobalSearchScreen(
     viewModel.refreshRecent()
   }
   LaunchedEffect(viewModel, state.sources) {
-    if (state.sources == setOf(SourceClass.Catalog)) viewModel.loadSearchable()
+    if (SourceClass.Catalog in sourceSet) viewModel.loadSearchable()
   }
   if (onBack != null) BackHandler { onBack() }
   BackHandler(enabled = stripExpanded) { stripExpanded = false }
@@ -280,7 +281,7 @@ fun GlobalSearchScreen(
         onFocusChanged = { toolbarFocusIndex = it },
         onSources = {
           viewModel.setSources(it)
-          if (it == setOf(SourceClass.Catalog)) {
+          if (SourceClass.Catalog in it || it.isEmpty()) {
             viewModel.loadSearchable()
           } else {
             scopePanel = false
@@ -388,7 +389,8 @@ private fun GlobalSearchFilters(
   onScope: () -> Unit,
   onFocused: () -> Unit,
 ) {
-  val catalog = sources == setOf(SourceClass.Catalog)
+  val catalog = sources.isEmpty() || SourceClass.Catalog in sources
+  val catalogOnly = sources == setOf(SourceClass.Catalog)
   Row(
     modifier = Modifier.fillMaxWidth().focusGroup(),
     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -396,7 +398,7 @@ private fun GlobalSearchFilters(
   ) {
     val values = listOf(
       Triple(stringResource(R.string.tv_global_search_source_all), sources.isEmpty(), "source_all"),
-      Triple(stringResource(R.string.tv_global_search_source_catalog), catalog, "source_catalog"),
+      Triple(stringResource(R.string.tv_global_search_source_catalog), catalogOnly, "source_catalog"),
       Triple(stringResource(R.string.tv_global_search_source_local), sources == setOf(SourceClass.Local), "source_local"),
       Triple(stringResource(R.string.tv_global_search_source_remote), sources == setOf(SourceClass.Remote), "source_remote"),
     )

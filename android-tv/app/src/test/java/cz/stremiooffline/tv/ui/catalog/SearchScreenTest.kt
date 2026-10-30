@@ -2,6 +2,7 @@
 
 package cz.stremiooffline.tv.ui.catalog
 
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -179,6 +180,62 @@ class SearchScreenTest {
     compose.onNodeWithTag(recentSearchTag("Heat")).assertDoesNotExist()
     compose.onNodeWithTag(recentSearchTag("Ronin")).assertIsFocused()
     assertEquals(listOf("Heat"), api.forgottenSearches)
+  }
+
+  @Test
+  fun `prepending history moves the shared entry requester to the new first row`() {
+    val history = mutableStateOf(recent("Heat"))
+    val first = FocusRequester()
+    val field = FocusRequester()
+    compose.setContent {
+      RecentSearches(
+        items = history.value,
+        fieldFocus = field,
+        firstRowFocus = first,
+        onPick = {},
+        onForget = {},
+      )
+    }
+    compose.runOnIdle { first.requestFocus() }
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertIsFocused()
+
+    compose.runOnIdle { history.value = recent("Ronin", "Heat") }
+    compose.waitForIdle()
+    compose.runOnIdle { first.requestFocus() }
+    compose.onNodeWithTag(recentSearchTag("Ronin")).assertIsFocused()
+  }
+
+  @Test
+  fun `removing a middle row returns focus to the next middle row`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin", "Alien"))
+    mount(api)
+    compose.waitForIdle()
+
+    focusBy(recentSearchTag("Ronin"), Key.DirectionDown)
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(recentSearchTag("Ronin")).assertDoesNotExist()
+    compose.onNodeWithTag(recentSearchTag("Alien")).assertIsFocused()
+    assertEquals(listOf("Ronin"), api.forgottenSearches)
+  }
+
+  @Test
+  fun `search and remove controls have equal height, padded text and a visible gap`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat"))
+    mount(api)
+    compose.waitForIdle()
+
+    val row = compose.onNodeWithTag(recentSearchTag("Heat")).getBoundsInRoot()
+    val text = compose.onNodeWithText("Heat", useUnmergedTree = true).getBoundsInRoot()
+    val remove = compose.onNodeWithTag(recentRemoveTag("Heat")).getBoundsInRoot()
+
+    assertEquals((row.bottom - row.top).value, (remove.bottom - remove.top).value, 0.5f)
+    assertTrue("text starts at ${text.left}, row at ${row.left}", text.left >= row.left + 8.dp)
+    assertTrue("row ends at ${row.right}, remove begins at ${remove.left}", remove.left >= row.right + 4.dp)
   }
 
   @Test
