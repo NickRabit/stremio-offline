@@ -849,11 +849,13 @@ test("a link that is only handed out again is not written to the index every few
     try { return JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { at: number }>; }
     catch { return {}; }
   };
-  const diskShows = async (check: (index: Record<string, { at: number }>) => boolean, withinMs = 2000) => {
+  // Reading the file holds it open, which on Windows makes the index rename wait and retry;
+  // a write that has to land gets a generous deadline and is not read back too eagerly.
+  const diskShows = async (check: (index: Record<string, { at: number }>) => boolean, withinMs = 10_000) => {
     const deadline = Date.now() + withinMs;
     while (Date.now() < deadline) {
       if (check(await stored())) return true;
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
     return false;
   };
