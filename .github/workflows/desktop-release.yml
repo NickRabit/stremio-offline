@@ -22,9 +22,9 @@ jobs:
     # The credential-bearing job runs only from main; a dispatch from any other
     # ref is skipped rather than packing with Apple secrets.
     if: github.ref == 'refs/heads/main'
-    # macos-14 is an Apple Silicon runner, so arm64 is built natively and
+    # macos-15 is an Apple Silicon runner, so arm64 is built natively and
     # notarytool/stapler run against the artifact in place.
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: write
     steps:

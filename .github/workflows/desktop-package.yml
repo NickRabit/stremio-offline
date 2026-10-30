@@ -77,9 +77,9 @@ jobs:
           retention-days: 7
 
   package:
-    # macos-14 is an Apple Silicon runner, so the arm64 Electron build runs
+    # macos-15 is an Apple Silicon runner, so the arm64 Electron build runs
     # natively and can be handed to hdiutil for the DMG.
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       # Discovery is off, so this check is always unsigned and never needs an
       # Apple certificate or notarization credentials.
