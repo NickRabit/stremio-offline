@@ -1349,6 +1349,44 @@ test("a failed first Real-Debrid write retries without failing the waiting job",
   }
 });
 
+test("a failed queue save is tried again without waiting for another change", async () => {
+  let locked = false;
+  let refused = 0;
+  const { directory, queue } = await tempQueue({
+    saveRetryMs: 50,
+    writeState: async (file, data) => {
+      if (locked) {
+        refused += 1;
+        throw Object.assign(new Error("operation not permitted, rename"), { code: "EPERM" });
+      }
+      await writeFile(file, data);
+    },
+  });
+  try {
+    const first = await queue.add("First", { url: "http://127.0.0.1:1/first.mkv" });
+    await queue.pause(first.id);
+    const second = await queue.add("Second", { url: "http://127.0.0.1:1/second.mkv" });
+    await queue.pause(second.id);
+    locked = true;
+    await queue.move(second.id, -1);
+    assert.equal(refused, 1);
+    locked = false;
+
+    const file = path.join(directory, "data", "downloads.json");
+    let order: string[] = [];
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      order = (JSON.parse(await readFile(file, "utf8")) as Array<{ id: string }>).map((job) => job.id);
+      if (order[0] === second.id) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.deepEqual(order, [second.id, first.id], "the refused reorder reaches the disk on its own");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a queued source owned by another account does not refuse the caller", async () => {
   const { directory, queue } = await tempQueue();
   try {
@@ -2874,11 +2912,21 @@ test("reuse clears exhausted Travel continuation state instead of failing the qu
     assert.equal(job.retryCount, undefined);
     assert.equal(job.pauseReason, undefined);
     assert.equal(job.error, undefined);
-    const stored = JSON.parse(await readFile(path.join(data, "downloads.json"), "utf8")) as Array<Record<string, unknown>>;
-    for (const key of [
+    const cleared = [
       "travelCursor", "sourceFallbackAttempts", "travelTemporaryFailures", "travelBudgetAttempts",
       "retryCount", "pauseReason", "error", "errorKey", "errorVars",
-    ]) assert.equal(Object.hasOwn(stored[0]!, key), false, `${key} must be cleared`);
+    ];
+    // The completed job reaches the disk after the queue's own save, which a Windows read-back can
+    // refuse once; poll unhurriedly so the save's retry gets its turn.
+    let stored: Array<Record<string, unknown>> = [];
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      stored = JSON.parse(await readFile(path.join(data, "downloads.json"), "utf8")) as Array<Record<string, unknown>>;
+      if (stored[0]?.status === "completed") break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(stored[0]?.status, "completed");
+    for (const key of cleared) assert.equal(Object.hasOwn(stored[0]!, key), false, `${key} must be cleared`);
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });
