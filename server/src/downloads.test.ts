@@ -2912,11 +2912,21 @@ test("reuse clears exhausted Travel continuation state instead of failing the qu
     assert.equal(job.retryCount, undefined);
     assert.equal(job.pauseReason, undefined);
     assert.equal(job.error, undefined);
-    const stored = JSON.parse(await readFile(path.join(data, "downloads.json"), "utf8")) as Array<Record<string, unknown>>;
-    for (const key of [
+    const cleared = [
       "travelCursor", "sourceFallbackAttempts", "travelTemporaryFailures", "travelBudgetAttempts",
       "retryCount", "pauseReason", "error", "errorKey", "errorVars",
-    ]) assert.equal(Object.hasOwn(stored[0]!, key), false, `${key} must be cleared`);
+    ];
+    // The completed job reaches the disk after the queue's own save, which a Windows read-back can
+    // refuse once; poll unhurriedly so the save's retry gets its turn.
+    let stored: Array<Record<string, unknown>> = [];
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      stored = JSON.parse(await readFile(path.join(data, "downloads.json"), "utf8")) as Array<Record<string, unknown>>;
+      if (stored[0]?.status === "completed") break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(stored[0]?.status, "completed");
+    for (const key of cleared) assert.equal(Object.hasOwn(stored[0]!, key), false, `${key} must be cleared`);
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });
