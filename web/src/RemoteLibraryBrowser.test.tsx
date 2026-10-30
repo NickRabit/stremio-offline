@@ -220,11 +220,10 @@ describe("RemoteLibraryBrowser listing", () => {
     });
 
     expect(host.querySelector(".remote-libraries .search-input")).toBeNull();
+    // The list of media-server libraries is not a place to search from, like the local list.
     const rootSearch = [...host.querySelectorAll<HTMLButtonElement>(".remote-libraries button")]
       .find((button) => button.textContent?.trim() === "Search");
-    expect(rootSearch).toBeTruthy();
-    await click(rootSearch!);
-    expect(opened.at(-1)).toBeNull();
+    expect(rootSearch).toBeUndefined();
 
     await click(host.querySelector(".remote-libraries .library-open")!);
     expect(host.querySelector(".browse-panel .search-input")).toBeNull();

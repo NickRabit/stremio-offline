@@ -80,7 +80,7 @@ interface Props {
   realDebridConfigured?: boolean;
   /** When search everywhere is on, the filter field is a button that opens Search. */
   searchEverywhere: boolean;
-  /** The current level's folder chip, or null at the library list. */
+  /** Opens Search limited to the folder on screen. */
   onOpenSearch?: (chip: LibrarySearchChip | null) => void;
   sourceProfiles?: SourceProfile[] | null;
   defaultSort?: string;
@@ -1519,9 +1519,6 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
             <button type="button" disabled><HardDrive/> {t("mediaServer.remoteTitle")}</button>
           </nav>
-          {searchEverywhere && <div className="browse-tools">
-            <button type="button" className="library-search-button" onClick={() => onOpenSearch?.(null)}><Search/> {t("searchAll.open")}</button>
-          </div>}
         </div>
       </div>
       <div className="browse-scroll">

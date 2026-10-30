@@ -48,6 +48,7 @@ let host: HTMLDivElement;
 let browseUrls: URL[];
 let startBodies: Array<Record<string, unknown>>;
 let searchEverywhere = true;
+let extraLibraries: Array<typeof library> = [];
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -74,7 +75,7 @@ beforeEach(() => {
     if (url.pathname === "/api/status") return json({ status: "ok", version: "test", searchEverywhere });
     if (url.pathname === "/api/auth/me") return json({ username: "alice", role: "admin", language: "en" });
     if (url.pathname === "/api/addons" || url.pathname === "/api/catalogs" || url.pathname === "/api/searchable") return json([]);
-    if (url.pathname === "/api/libraries") return json([library]);
+    if (url.pathname === "/api/libraries") return json([library, ...extraLibraries]);
     if (url.pathname === "/api/views") return json(emptyViews());
     if (url.pathname === "/api/settings") return json(settings);
     if (url.pathname === "/api/languages") return json([]);
@@ -107,6 +108,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+  extraLibraries = [];
 });
 
 const flush = async () => {
@@ -179,6 +181,13 @@ describe("library search", () => {
     expect(pressed("All")).toBe("true");
     expect(pressed("Libraries")).toBe("false");
     expect(host.querySelector(".search-return")).toBeNull();
+  });
+
+  it("offers no Search on the list of libraries", async () => {
+    extraLibraries = [{ ...library, id: "lib_second01", name: "Series", order: 1 }];
+    await openLibrary();
+    expect(hledat()).toBeUndefined();
+    expect(host.querySelector('input[aria-label="Filter the library"]')).toBeNull();
   });
 
   it("keeps the filter field when search everywhere is off", async () => {

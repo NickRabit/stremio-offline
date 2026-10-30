@@ -3621,7 +3621,7 @@ export function App() {
           </nav>
           <div className="browse-tools">
             <div className={`fold browse-fold${libraryCompact ? " closed" : ""}`}><div className="browse-fold-inner">
-            {buildInfo?.searchEverywhere && !localDetail && <button type="button" className="library-search-button" onClick={() => openSearchFromLibrary(localLibraryChip())}><Search/> {t("searchAll.open")}</button>}
+            {buildInfo?.searchEverywhere && !libraryList && !localDetail && <button type="button" className="library-search-button" onClick={() => openSearchFromLibrary(localLibraryChip())}><Search/> {t("searchAll.open")}</button>}
             {!buildInfo?.searchEverywhere && !libraryList && !localDetail && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
             {!libraryList && !localDetail && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
