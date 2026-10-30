@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { isPlaylist, mayDownloadToDevice, proxiedPlaylistInput } from "../downloads.js";
+import { HLS_STALL_MS, isPlaylist, mayDownloadToDevice, proxiedPlaylistInput } from "../downloads.js";
 import type { DeviceTransfers } from "../device-transfers.js";
 import { AppError } from "../errors.js";
 import { internalUrl } from "../internal-url.js";
@@ -177,8 +177,17 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
 
       let stderr = "";
       child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-2000); });
-      child.once("close", claim.release);
-      res.on("close", () => { if (!res.writableEnded) child.kill("SIGKILL"); });
+      let lastOutputAt = Date.now();
+      const stall = setInterval(() => {
+        if (Date.now() - lastOutputAt >= HLS_STALL_MS) child.kill("SIGKILL");
+      }, 1000);
+      stall.unref();
+      child.stdout?.on("data", () => { lastOutputAt = Date.now(); });
+      child.once("close", () => { clearInterval(stall); claim.release(); });
+      res.on("close", () => {
+        clearInterval(stall);
+        if (!res.writableEnded) child.kill("SIGKILL");
+      });
 
       countBytes(res, statMeta({ source: "download", url: stream.url, title, addonKey: stream.addonKey, addonName: stream.addonName, kind: media?.kind }));
       deviceTransfers.attach(ticketId, { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "hls", addonName: stream.addonName }, res);

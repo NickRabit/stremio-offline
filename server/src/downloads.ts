@@ -68,6 +68,9 @@ import type {
   TravelProfileResolverInput,
 } from "./source-profile-resolver.js";
 
+export const HLS_STALL_MS = 5 * 60_000;
+const HLS_MAX_MS = 12 * 60 * 60_000;
+
 export type { DownloadStatus, PauseReason, QueueHalt };
 export type SubtitleMode = "off" | "optional" | "required";
 /** How hard the requested audio language is. `strict` trusts only what ffprobe reads out of the
@@ -3085,18 +3088,26 @@ export class DownloadQueue {
     let stderr = "";
     child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4000); });
 
-    let lastSize = 0; let lastAt = this.now();
-    const progress = setInterval(() => {
-      void stat(partial).then((info) => {
-        const grown = info.size - lastSize;
-        if (grown <= 0) return;
-        job.received = info.size;
-        const now = this.now();
+    const spawnedAt = this.now();
+    let lastSize = 0; let lastAt = spawnedAt; let lastGrowthAt = spawnedAt;
+    let assemblyFailure: SourceError | undefined;
+    const checkBounds = (size?: number) => {
+      const now = this.now();
+      if (size !== undefined && size > lastSize) {
+        const grown = size - lastSize;
+        job.received = size;
         job.speed = grown / Math.max(0.001, (now - lastAt) / 1000);
-        lastSize = info.size; lastAt = now; job.updatedAt = new Date().toISOString();
+        lastSize = size; lastAt = now; lastGrowthAt = now; job.updatedAt = new Date().toISOString();
         this.onProgress?.(job, grown);
         this.saveSoon();
-      }, () => undefined);
+      }
+      if (assemblyFailure) return;
+      if (now - spawnedAt >= HLS_MAX_MS) assemblyFailure = new SourceError("The playlist assembly took too long.");
+      else if (now - lastGrowthAt >= HLS_STALL_MS) assemblyFailure = new SourceError("The playlist stopped delivering data.");
+      if (assemblyFailure) child.kill("SIGKILL");
+    };
+    const progress = setInterval(() => {
+      void stat(partial).then((info) => checkBounds(info.size), () => checkBounds());
     }, 1000);
 
     const abort = () => child.kill("SIGKILL");
@@ -3107,6 +3118,7 @@ export class DownloadQueue {
         child.once("error", reject);
         child.once("close", resolve);
       });
+      if (assemblyFailure) throw assemblyFailure;
       if (controller.signal.aborted) throw new Error("The assembly was stopped.");
       // Killed by the shutdown: nothing is recorded, so the job is still downloading on disk and
       // the next start queues it again, as it did before the shutdown took FFmpeg with it.

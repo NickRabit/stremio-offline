@@ -15,7 +15,7 @@ import { HOME_LAYOUT_FEED_LIMIT, HOME_LAYOUT_ROW_LIMIT, homeCatalogRowId, homeFe
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "../language.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { currentLevel, log, parseLevel, setLevel } from "../logger.js";
-import { publicAddon } from "../security.js";
+import { publicAddon, publicAddonRestricted } from "../security.js";
 import { assertStillAdmin, ForbiddenError } from "../roles.js";
 import {
   declaresStream,
@@ -32,7 +32,7 @@ import { memberSettings, publicSettings, type InstanceSettings, type Settings, t
 import { normalizeStreamSort } from "../stream-sort.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
-import type { MetaItem } from "../types.js";
+import type { AddonRecord, MetaItem } from "../types.js";
 import { PERSONAL_SETTINGS, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
@@ -50,6 +50,7 @@ export interface SettingsDeps extends RouteContext {
   prefsOf(req?: express.Request): UserPrefs;
   queue: DownloadQueue;
   streamCache: { clear(): void };
+  publicAddonView: (addon: AddonRecord) => ReturnType<typeof publicAddon> | ReturnType<typeof publicAddonRestricted>;
 }
 
 interface SourceProfileImportSummary {
@@ -181,7 +182,7 @@ const restoreSourceProfiles = (
 };
 
 export function registerSettingsRoutes(app: express.Application, deps: SettingsDeps): void {
-  const { store, STREAM_SORTS, accountIdOf, currentUser, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, requireAccess, stopContentAccess, streamCache } = deps;
+  const { store, STREAM_SORTS, accountIdOf, currentUser, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, requireAccess, stopContentAccess, streamCache, publicAddonView } = deps;
 
   /** The acting account as the media-server surface reads it: the captured id and secret with
    *  the route's own access gate re-run on every check. */
@@ -425,7 +426,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     });
     res.json({
       settings: settingsView(req),
-      addons: store.addons().map(publicAddon),
+      addons: store.addons().map(publicAddonView),
       remapped: parsed.remaps.length,
       sourceProfiles: sourceProfileSummary,
     });

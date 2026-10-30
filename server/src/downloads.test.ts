@@ -8,6 +8,7 @@ import { Writable } from "node:stream";
 import test from "node:test";
 import {
   DownloadQueue,
+  HLS_STALL_MS,
   isPlaylist,
   proxiedPlaylistInput,
   SOURCE_FALLBACK_ATTEMPT_LIMIT,
@@ -2181,6 +2182,101 @@ if (output >= 0) writeFileSync(args[output + 1], "assembled");
     await queue.stop();
     if (previousFfmpeg === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = previousFfmpeg;
     if (previousLog === undefined) delete process.env.FAKE_FFMPEG_LOG; else process.env.FAKE_FFMPEG_LOG = previousLog;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a stalled HLS assembly is killed and fails the job", async () => {
+  let clock = Date.now();
+  const { directory, queue } = await tempQueue({ now: () => clock });
+  const ffmpeg = path.join(directory, "ffmpeg");
+  const logFile = path.join(directory, "ffmpeg-args.jsonl");
+  const pidFile = path.join(directory, "ffmpeg.pid");
+  await writeFile(ffmpeg, `#!/usr/bin/env node
+import { appendFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.FAKE_FFMPEG_LOG, JSON.stringify(args) + "\\n");
+if (args.includes("-h")) {
+  process.stdout.write("extension_picky");
+  process.exit(0);
+}
+writeFileSync(process.env.FAKE_FFMPEG_PID, String(process.pid));
+setInterval(() => {}, 1000);
+`, { mode: 0o755 });
+  const previousFfmpeg = process.env.FFMPEG_PATH;
+  const previousLog = process.env.FAKE_FFMPEG_LOG;
+  const previousPid = process.env.FAKE_FFMPEG_PID;
+  process.env.FFMPEG_PATH = ffmpeg;
+  process.env.FAKE_FFMPEG_LOG = logFile;
+  process.env.FAKE_FFMPEG_PID = pidFile;
+  try {
+    await queue.add("HLS", { url: "https://addon.test/private/master.m3u8?token=addon-secret" });
+    await waitFor(queue, () => existsSync(pidFile), 5_000);
+    const childPid = Number(await readFile(pidFile, "utf8"));
+    clock += HLS_STALL_MS;
+    await waitFor(queue, () => queue.list()[0]?.status === "failed", 5_000);
+
+    assert.match(queue.list()[0]!.error ?? "", /^The playlist stopped delivering data\.$/);
+    assert.throws(() => process.kill(childPid, 0), { code: "ESRCH" });
+
+    const invocations = (await readFile(logFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    const args = invocations.find((item) => item.includes("-i"));
+    assert.ok(args);
+    const resourceId = new URL(args[args.indexOf("-i") + 1]!).pathname.split("/").pop()!;
+    assert.throws(() => mediaResources.get(resourceId, undefined, "media", true), { status: 404 });
+  } finally {
+    await queue.stop();
+    if (previousFfmpeg === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = previousFfmpeg;
+    if (previousLog === undefined) delete process.env.FAKE_FFMPEG_LOG; else process.env.FAKE_FFMPEG_LOG = previousLog;
+    if (previousPid === undefined) delete process.env.FAKE_FFMPEG_PID; else process.env.FAKE_FFMPEG_PID = previousPid;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an HLS assembly is killed at the overall cap even while it keeps growing", async () => {
+  let clock = Date.now();
+  const { directory, queue } = await tempQueue({ now: () => clock });
+  const ffmpeg = path.join(directory, "ffmpeg");
+  const logFile = path.join(directory, "ffmpeg-args.jsonl");
+  const pidFile = path.join(directory, "ffmpeg.pid");
+  await writeFile(ffmpeg, `#!/usr/bin/env node
+import { appendFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.FAKE_FFMPEG_LOG, JSON.stringify(args) + "\\n");
+if (args.includes("-h")) {
+  process.stdout.write("extension_picky");
+  process.exit(0);
+}
+writeFileSync(args.at(-1), "assembled");
+writeFileSync(process.env.FAKE_FFMPEG_PID, String(process.pid));
+setInterval(() => {}, 1000);
+`, { mode: 0o755 });
+  const previousFfmpeg = process.env.FFMPEG_PATH;
+  const previousLog = process.env.FAKE_FFMPEG_LOG;
+  const previousPid = process.env.FAKE_FFMPEG_PID;
+  process.env.FFMPEG_PATH = ffmpeg;
+  process.env.FAKE_FFMPEG_LOG = logFile;
+  process.env.FAKE_FFMPEG_PID = pidFile;
+  try {
+    await queue.add("HLS", { url: "https://addon.test/private/master.m3u8?token=addon-secret" });
+    await waitFor(queue, () => existsSync(pidFile), 5_000);
+    const childPid = Number(await readFile(pidFile, "utf8"));
+    clock += 12 * 60 * 60_000;
+    await waitFor(queue, () => queue.list()[0]?.status === "failed", 5_000);
+
+    assert.match(queue.list()[0]!.error ?? "", /^The playlist assembly took too long\.$/);
+    assert.throws(() => process.kill(childPid, 0), { code: "ESRCH" });
+
+    const invocations = (await readFile(logFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    const args = invocations.find((item) => item.includes("-i"));
+    assert.ok(args);
+    const resourceId = new URL(args[args.indexOf("-i") + 1]!).pathname.split("/").pop()!;
+    assert.throws(() => mediaResources.get(resourceId, undefined, "media", true), { status: 404 });
+  } finally {
+    await queue.stop();
+    if (previousFfmpeg === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = previousFfmpeg;
+    if (previousLog === undefined) delete process.env.FAKE_FFMPEG_LOG; else process.env.FAKE_FFMPEG_LOG = previousLog;
+    if (previousPid === undefined) delete process.env.FAKE_FFMPEG_PID; else process.env.FAKE_FFMPEG_PID = previousPid;
     await rm(directory, { recursive: true, force: true });
   }
 });

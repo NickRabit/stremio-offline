@@ -57,6 +57,7 @@ export interface CatalogDeps extends RouteContext {
 
 const SUBTITLE_MAX_BYTES = 2 * 1024 * 1024;
 const SUBTITLE_DEADLINE_MS = 20_000;
+const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
   const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
@@ -286,6 +287,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       const asked = askedSurface(req.query.surface);
       const cache = "private, max-age=86400";
       res.setHeader("content-type", cached.type);
+      if (cached.type === "image/svg+xml") res.setHeader("content-security-policy", SVG_CONTENT_SECURITY_POLICY);
       res.setHeader("etag", cached.etag);
       res.setHeader("cache-control", cache);
       if (req.headers["if-none-match"] === cached.etag) {
