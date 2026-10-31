@@ -262,6 +262,11 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [stateError, setStateError] = useState("");
   /** The version the detail's own selector currently holds, so its state can be matched. */
   const [detailStream, setDetailStream] = useState<Stream | null>(null);
+  /** The source list the detail has already reported a selection for. A null report only counts
+   *  once that list is the one on screen, so a list still loading is not a refusal. */
+  const [decidedSources, setDecidedSources] = useState<Stream[] | null>(null);
+  const sourcesRef = useRef(sources);
+  sourcesRef.current = sources;
   const [detailNonce, setDetailNonce] = useState(0);
   const [playing, setPlaying] = useState<Playing | null>(null);
   /** The source the title's stored position names, read for the row the detail has selected. */
@@ -1150,11 +1155,20 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // What this item's own versions are called, in the detail's menu and above the rows the player
   // leads with: the provider and the library they belong to.
   const ownLabel = selected ? `${t(providerKey(selected.provider))} · ${selected.name}` : "";
+  // No row selected, and the list on screen has already said so: the title's catalogue record
+  // is the one a non-file version wrote, the same key the selected-row read uses.
+  const selectionSettled = sources !== null && decidedSources === sources;
+  const noRow = selectionSettled && !detailStream && addonIdentity !== null;
+  // A resumed version that none of this item's own rows carries is loaded without opening the
+  // chooser, and only while nothing is selected. A selected row keeps the chooser as the one
+  // intent that reads groups, which is what a detail that merely opened relies on.
+  const resumeElsewhere = Boolean(resumeStableKey && sources !== null && !sources.some((stream) => stream.stableKey === resumeStableKey));
   // Opening the chooser is the one intent that reads every group: the addons that offer this
   // title, the viewer's own copies of it, and every other library the account may browse. The
-  // library the detail already came from is never asked again.
+  // library the detail already came from is never asked again. A refused list is the exception:
+  // the version the title was last played from cannot be selected until its group has answered.
   const extra = useLibrarySources({
-    scope: titleScope, open: chooserOpen || playerSourcesOpen, catalogue: addonIdentity,
+    scope: titleScope, open: chooserOpen || playerSourcesOpen || (noRow && resumeElsewhere), catalogue: addonIdentity,
     ...(series?.name ? { nameHint: series.name } : {}),
     libraries, localCopies: true, ...(selected ? { originLibraryId: selected.id } : {}),
   });
@@ -1163,6 +1177,19 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // store only while no title names it -- or as the fallback for a position kept there before the
   // title held it. A late answer can never land on another row or another title.
   useEffect(() => {
+    if (noRow && addonIdentity) {
+      const mine = ++addonProgressEpoch.current;
+      const scope = titleScope;
+      const controller = new AbortController();
+      setAlternativeProgress(null);
+      void versionSavedRow(genericProgressKey(addonIdentity), undefined, controller.signal)
+        .then((entry) => {
+          if (mine !== addonProgressEpoch.current || titleScopeRef.current !== scope || controller.signal.aborted) return;
+          setResumeStableKey(entry?.stableKey);
+        })
+        .catch(() => undefined);
+      return () => { controller.abort(); if (addonProgressEpoch.current === mine) addonProgressEpoch.current += 1; };
+    }
     if (!alternativeSelected || !detailStreamKey || !detailOwner) { setAlternativeProgress(null); setResumeStableKey(undefined); return; }
     const mine = ++addonProgressEpoch.current;
     const scope = titleScope;
@@ -1181,7 +1208,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       })
       .catch(() => undefined);
     return () => { controller.abort(); if (addonProgressEpoch.current === mine) addonProgressEpoch.current += 1; };
-  }, [alternativeSelected, detailStreamKey, detailNonce, titleScope, selected?.id, ownerKind, ownerLibrary, ownerItemId, ownerSourceId, ownerProgressKey]);
+  }, [noRow, addonKey, alternativeSelected, detailStreamKey, detailNonce, titleScope, selected?.id, ownerKind, ownerLibrary, ownerItemId, ownerSourceId, ownerProgressKey]);
 
   // A library copy or a file plays as itself, but the subtitle addons still know the catalogue
   // title it is matched to; an addon row reads its own above.
@@ -1672,7 +1699,11 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             onRetry={retryDetail}
             {...(resumeStableKey ? { resumeStableKey } : {})}
             {...(detailProgress ? { progress: detailProgress } : {})}
-            onSourceChange={setDetailStream}
+            onSourceChange={(stream) => {
+              setDetailStream(stream);
+              const current = sourcesRef.current;
+              if (current) setDecidedSources(current);
+            }}
             // Only the item's own version drops the media-server item's own state; every other row
             // -- and every version of a title the catalogue can name -- clears what the row itself
             // stands for.

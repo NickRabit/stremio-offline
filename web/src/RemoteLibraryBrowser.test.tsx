@@ -1490,7 +1490,9 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(addonCalls.streams[0]!.pathname).toBe("/api/streams/series/tt7000%3A1%3A2");
     expect(addonCalls.streams.some((url) => url.pathname.includes("tt9999"))).toBe(false);
     await selectAddonRow();
-    expect(addonGetPaths()).toEqual(["/api/progress/series%3Att7000%3A1%3A2"]);
+    // The episode has no version of its own, so the title's record is read as the detail opens,
+    // and again for the addon row the viewer then picks. Both use the parent series' key.
+    expect(addonGetPaths()).toEqual(["/api/progress/series%3Att7000%3A1%3A2", "/api/progress/series%3Att7000%3A1%3A2"]);
   });
 
   it("queues the exact addon row into the addon's own rule and keeps a refusal in the dialog", async () => {

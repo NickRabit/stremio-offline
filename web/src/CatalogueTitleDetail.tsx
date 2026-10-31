@@ -246,9 +246,13 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       { addon: "", language: "", sort: resolvedSort }, preferredLanguage ?? "", addonPriority, metaLanguage);
     return catalogSourceRows(own, addon, "", resolvedSort);
   }, [rows, local, preferredLanguage, addonPriority, metaLanguage, showTorrents, resolvedSort]);
+  // A resumed version that is not among the rows already in hand lives in another library.
+  // Those groups load without opening the chooser. The key itself arrives from the caller,
+  // who already read the title's catalogue record, so nothing here waits on a selected row.
+  const resumeElsewhere = Boolean(resumeStableKey && ordered && !ordered.some((stream) => stream.stableKey === resumeStableKey));
   const extra = useLibrarySources({
     scope: `catalogue:${type}:${streamId}`,
-    open: chooserOpen || libraryFirst,
+    open: chooserOpen || libraryFirst || resumeElsewhere,
     catalogue: waitingEpisode ? null : { type, id: streamId },
     nameHint: name,
     libraries: null,

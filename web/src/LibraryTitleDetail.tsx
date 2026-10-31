@@ -257,16 +257,18 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   currentScope.current = selectionScope;
   // The chosen version is announced once per actual change, never on a re-render: a caller
   // reading the new version's state must not be asked again just because the tree redrew.
+  // A new source list is a change even when the selection stays empty, so a host can tell a
+  // rule that refused every row from a list that has not arrived yet.
   const onChangeRef = useRef(onSourceChange);
   onChangeRef.current = onSourceChange;
   const explicitlyPicked = Boolean(picked);
-  const announced = useRef<{ identity: string; key: string | null; explicitlyPicked: boolean } | null>(null);
+  const announced = useRef<{ identity: string; key: string | null; explicitlyPicked: boolean; sources: Stream[] | null } | null>(null);
   useEffect(() => {
     if (announced.current?.identity === identityKey && announced.current.key === selectedKey
-      && announced.current.explicitlyPicked === explicitlyPicked) return;
-    announced.current = { identity: identityKey, key: selectedKey, explicitlyPicked };
+      && announced.current.explicitlyPicked === explicitlyPicked && announced.current.sources === sources) return;
+    announced.current = { identity: identityKey, key: selectedKey, explicitlyPicked, sources };
     onChangeRef.current?.(selected ? selected : null, explicitlyPicked);
-  }, [identityKey, selectedKey, explicitlyPicked]);
+  }, [identityKey, selectedKey, explicitlyPicked, sources]);
   // A cleared version stays hidden until the selection moves on; the owner's own refresh then
   // says what the store really holds.
   useEffect(() => { setCleared(null); setClearing(null); }, [identityKey, selectedKey]);
