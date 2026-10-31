@@ -2034,7 +2034,6 @@ export const pl: Catalog = {
   "searchAll.backToSearch": "Wróć do wyszukiwania",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Szukaj we wszystkich bibliotekach",
-  "searchAll.backToLibrary": "Wróć do biblioteki",
   "searchAll.homeAction": "Otwórz wyszukiwanie",
   "searchAll.restartFailed": "Wyszukiwanie wygasło. Wyszukaj ponownie.",
 

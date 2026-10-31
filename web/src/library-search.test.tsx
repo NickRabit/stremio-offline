@@ -129,88 +129,50 @@ const openLibrary = async () => {
   await flush();
 };
 
-const hledat = () => [...host.querySelectorAll<HTMLButtonElement>(".browse-tools button")]
+const searchButton = () => [...host.querySelectorAll<HTMLButtonElement>(".browse-tools button")]
   .find((button) => button.textContent?.trim() === "Search");
+const filterField = () => host.querySelector<HTMLInputElement>('input[aria-label="Filter the library"]');
 
-describe("library search", () => {
-  it("opens Search from a folder and returns to that folder", async () => {
+describe("library filter", () => {
+  it("filters the listing in a library and starts no search everywhere", async () => {
     await openLibrary();
-    expect(host.querySelector('input[aria-label="Filter the library"]')).toBeNull();
-    expect(hledat()).toBeTruthy();
+    expect(searchButton()).toBeUndefined();
+    const input = filterField();
+    expect(input).toBeTruthy();
 
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setValue.call(input, "Filmy");
+      input!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { await new Promise((done) => setTimeout(done, 400)); });
+    await flush();
+
+    expect(browseUrls.some((url) => url.searchParams.get("query") === "Filmy")).toBe(true);
+    expect(startBodies).toEqual([]);
+    expect(host.querySelector(".search-everywhere")).toBeNull();
+  });
+
+  it("keeps the field in a folder", async () => {
+    await openLibrary();
     const folder = host.querySelector<HTMLElement>('[data-path="Filmy"] .library-open, [data-path="Filmy"] button');
-    expect(folder).toBeTruthy();
     await act(async () => { folder!.click(); });
     await flush();
-
-    await act(async () => { hledat()!.click(); });
-    await flush();
-
-    expect(host.querySelector(".search-everywhere")).toBeTruthy();
-    const libraries = [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")]
-      .find((button) => button.textContent?.trim() === "Libraries");
-    expect(libraries?.getAttribute("aria-pressed")).toBe("true");
-    const chip = [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")]
-      .find((button) => button.getAttribute("aria-label") === "Search all libraries");
-    expect(chip?.textContent).toContain("Films");
-    expect(chip?.textContent).toContain("Filmy");
-
-    const back = host.querySelector<HTMLButtonElement>(".search-return");
-    expect(back?.textContent).toContain("Back to the library");
-    await act(async () => { back!.click(); });
-    await flush();
-
-    expect(host.querySelector(".search-everywhere")).toBeNull();
-    expect([...host.querySelectorAll(".crumbs button")].some((button) => button.textContent?.includes("Filmy"))).toBe(true);
-    expect(host.querySelector('input[aria-label="Filter the library"]')).toBeNull();
+    expect(filterField()).toBeTruthy();
+    expect(searchButton()).toBeUndefined();
   });
 
-  it("lets the top bar's Search start on every source after a Library preset", async () => {
-    await openLibrary();
-    await act(async () => { hledat()!.click(); });
-    await flush();
-    const pressed = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")]
-      .find((button) => button.textContent?.trim() === label)?.getAttribute("aria-pressed");
-    expect(pressed("Libraries")).toBe("true");
-
-    const topbar = host.querySelector<HTMLButtonElement>(".topbar-search");
-    expect(topbar).toBeTruthy();
-    await act(async () => { topbar!.click(); });
-    await flush();
-
-    expect(pressed("All")).toBe("true");
-    expect(pressed("Libraries")).toBe("false");
-    expect(host.querySelector(".search-return")).toBeNull();
-  });
-
-  it("offers no Search on the list of libraries", async () => {
+  it("offers neither the field nor Search on the list of libraries", async () => {
     extraLibraries = [{ ...library, id: "lib_second01", name: "Series", order: 1 }];
     await openLibrary();
-    expect(hledat()).toBeUndefined();
-    expect(host.querySelector('input[aria-label="Filter the library"]')).toBeNull();
+    expect(searchButton()).toBeUndefined();
+    expect(filterField()).toBeNull();
   });
 
   it("keeps the filter field when search everywhere is off", async () => {
     searchEverywhere = false;
     await openLibrary();
-    expect(host.querySelector('input[aria-label="Filter the library"]')).toBeTruthy();
-    expect(hledat()).toBeUndefined();
-  });
-
-  it("opens Search from the library itself without filtering the browse listing", async () => {
-    await openLibrary();
-    expect(host.querySelector('input[aria-label="Filter the library"]')).toBeNull();
-    await act(async () => { hledat()!.click(); });
-    await flush();
-
-    expect(host.querySelector(".search-everywhere")).toBeTruthy();
-    const libraries = [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")]
-      .find((button) => button.textContent?.trim() === "Libraries");
-    expect(libraries?.getAttribute("aria-pressed")).toBe("true");
-    const chip = [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")]
-      .find((button) => button.getAttribute("aria-label") === "Search all libraries");
-    expect(chip?.textContent).toContain("Films");
-    expect(startBodies).toEqual([]);
-    expect(browseUrls.every((url) => !url.searchParams.get("query"))).toBe(true);
+    expect(filterField()).toBeTruthy();
+    expect(searchButton()).toBeUndefined();
   });
 });

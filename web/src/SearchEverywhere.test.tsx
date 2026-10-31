@@ -149,17 +149,6 @@ describe("SearchEverywhere", () => {
     expect(host.querySelector(".search-return")).toBeNull();
     await act(async () => { chip!.click(); });
     expect(clearLibrary).toHaveBeenCalledOnce();
-
-    const onBackToLibrary = vi.fn();
-    await act(async () => {
-      root.render(<SearchEverywhere search={search} shape="poster" onToggleShape={vi.fn()}
-        searchable={[]} recent={[]} onRecord={vi.fn()} onForget={vi.fn()} onRefreshRecent={vi.fn()}
-        onOpenMember={vi.fn()} onOpenCanonical={vi.fn()} onBackToLibrary={onBackToLibrary}/>);
-    });
-    const back = host.querySelector<HTMLButtonElement>(".search-return");
-    expect(back?.textContent).toContain("Back to the library");
-    await act(async () => { back!.click(); });
-    expect(onBackToLibrary).toHaveBeenCalledOnce();
   });
 
   const openList = async () => {

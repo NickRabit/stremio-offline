@@ -2019,7 +2019,6 @@ export const es: Catalog = {
   "searchAll.backToSearch": "Volver a la búsqueda",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Buscar en todas las bibliotecas",
-  "searchAll.backToLibrary": "Volver a la biblioteca",
   "searchAll.homeAction": "Abrir búsqueda",
   "searchAll.restartFailed": "La búsqueda ha caducado. Vuelve a buscar.",
 

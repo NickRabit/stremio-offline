@@ -2078,7 +2078,6 @@ export const en = {
   "searchAll.backToSearch": "Back to search",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Search all libraries",
-  "searchAll.backToLibrary": "Back to the library",
   "searchAll.homeAction": "Open search",
   "searchAll.restartFailed": "The search expired. Search again.",
 

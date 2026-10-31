@@ -2084,7 +2084,6 @@ export const cs: Catalog = {
   "searchAll.backToSearch": "Zpět na hledání",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Hledat ve všech knihovnách",
-  "searchAll.backToLibrary": "Zpět do knihovny",
   "searchAll.homeAction": "Otevřít hledání",
   "searchAll.restartFailed": "Hledání vypršelo. Hledejte znovu.",
 
