@@ -226,25 +226,29 @@ describe("Home", () => {
     expect(onRetry).toHaveBeenCalledWith("resume");
   });
 
-  it("plays a resume-file and offers Show in library and Forget progress", async () => {
+  it("opens a resume-file's detail, plays it from the menu and offers Show in library", async () => {
     const card = resumeFile();
-    const { onPlay, onReveal } = await render({ rows: allEmpty({ resume: rowState({ items: [card] }) }) });
+    const { onPlay, onOpenCatalogue, onReveal } = await render({ rows: allEmpty({ resume: rowState({ items: [card] }) }) });
     expect(cardButtons(".home-card").length).toBe(1);
     await click(primary("resume"));
+    expect(onOpenCatalogue).toHaveBeenCalledWith(card);
+    expect(onPlay).not.toHaveBeenCalled();
+    await openMenu("resume");
+    await click(menuItem("Play")!);
     expect(onPlay).toHaveBeenCalledWith(card);
     await openMenu("resume");
     await click(menuItem("Show in library")!);
     expect(onReveal).toHaveBeenCalledWith(card.path);
   });
 
-  it("resumes a catalogue card on the remembered episode, whatever source wrote it", async () => {
+  it("opens a catalogue card's detail on the remembered episode, whatever source wrote it", async () => {
     const card = catalogue();
     const { onPlay, onOpenCatalogue } = await render({ rows: allEmpty({ resume: rowState({ items: [card] }) }) });
     expect(row("resume")!.textContent).toContain("Resume");
     expect(row("resume")!.textContent).toContain("S02E04");
     await click(primary("resume"));
-    expect(onPlay).toHaveBeenCalledWith(card);
-    expect(onOpenCatalogue).not.toHaveBeenCalled();
+    expect(onOpenCatalogue).toHaveBeenCalledWith(card);
+    expect(onPlay).not.toHaveBeenCalled();
   });
 
   it("labels a film Resume and a pending next episode without a progress bar", async () => {

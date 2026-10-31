@@ -2772,7 +2772,7 @@ export function App() {
         openRemoteCard(entry.remote, true);
         return;
       }
-      homeOpen(card);
+      homeOpen(card, true);
       if (card.path) void playLocal(card.title, card.path, card.poster, card.season != null);
       return;
     }
@@ -2782,11 +2782,12 @@ export function App() {
   };
   /** The source a Continue watching row was last played from, as the progress list names it. */
   const resumeKeyOf = (key: string) => resume.find((candidate) => candidate.key === key)?.stableKey;
-  const homeOpen = (card: HomeCard) => {
+  /** `autoplay` is the card's Play: the detail presses Play once its rows arrive. Opening the
+   *  card on its own only shows the detail. */
+  const homeOpen = (card: HomeCard, autoplay = false) => {
     if (card.kind === "remote") { openRemoteCard(card); return; }
     // A catalogue card opens the shared detail: the same body the libraries use, over this page.
-    if (card.kind === "resume-file") {
-      if (!card.identity) return;
+    if (card.kind === "resume-file" && card.identity) {
       openCatalogueDetail({ type: card.identity.type, id: card.identity.id, name: card.title,
         ...(card.poster ? { poster: card.poster } : {}),
         ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
@@ -2806,7 +2807,7 @@ export function App() {
     if (card.kind === "discovery") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
     if (card.kind === "favorite-catalogue") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
-    if (card.kind === "completed" || card.kind === "recent") {
+    if (card.kind === "completed" || card.kind === "recent" || card.kind === "resume-file") {
       const slash = card.path.lastIndexOf("/");
       navigated.current = true;
       setMenuFor(null);
@@ -2829,7 +2830,7 @@ export function App() {
       return;
     }
     if (card.kind !== "resume-catalogue") return;
-    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(card.path || card.pending ? {} : { resume: { ...(resumeKeyOf(card.key) ? { stableKey: resumeKeyOf(card.key)! } : {}) } }),
+    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(!autoplay || card.path || card.pending ? {} : { resume: { ...(resumeKeyOf(card.key) ? { stableKey: resumeKeyOf(card.key)! } : {}) } }),
       ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
   };
   const homeShowAll = (target: ShowAllTarget) => {

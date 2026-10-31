@@ -94,46 +94,24 @@ describe("HomeCard wide tiles", () => {
     expect(actions.open).toHaveBeenCalledWith(card);
   });
 
-  it("plays a catalogue card whether a library file or another source wrote it", () => {
-    const withFile = resumeCatalogue({ path: "Films/Heat.mkv" });
-    const actions = render(withFile);
-    host.querySelector<HTMLButtonElement>(".browse-open")!.click();
-    expect(actions.play).toHaveBeenCalledWith(withFile);
-
-    // A row an addon source wrote plays too: its detail starts the stored source.
-    const without = resumeCatalogue();
-    const other = render(without);
-    host.querySelector<HTMLButtonElement>(".browse-open")!.click();
-    expect(other.play).toHaveBeenCalledWith(without);
-    expect(other.open).not.toHaveBeenCalled();
-  });
-
-  it("offers the detail of a bound file and of every catalogue card", () => {
-    // The card keeps its own menu state, so a rerender of the same host leaves it as it was.
+  it("opens the detail of a continue-watching card and keeps Play in its menu", () => {
     const openMenu = () => {
       const button = host.querySelector<HTMLButtonElement>(".browse-menu")!;
       if (button.getAttribute("aria-expanded") !== "true") act(() => button.click());
     };
-    const bound = resumeFile({ identity: { type: "movie", id: "tt9" } });
-    const actions = render(bound);
-    const openDetail = () => [...host.querySelectorAll<HTMLButtonElement>(".home-actions button")].find((button) => button.textContent?.includes("Open detail"));
-    openMenu();
-    expect(openDetail()).toBeTruthy();
-    act(() => openDetail()!.click());
-    expect(actions.open).toHaveBeenCalledWith(bound);
-
-    // An unbound file has no title to open.
-    render(resumeFile());
-    openMenu();
-    expect(openDetail()).toBeUndefined();
-
-    const catalogue = resumeCatalogue();
-    const rows = render(catalogue);
-    openMenu();
-    expect(openDetail()).toBeTruthy();
-    act(() => openDetail()!.click());
-    expect(rows.open).toHaveBeenCalledWith(catalogue);
+    const play = () => [...host.querySelectorAll<HTMLButtonElement>(".home-actions button")].find((button) => button.textContent?.includes("Play"));
+    for (const card of [resumeCatalogue({ path: "Films/Heat.mkv" }), resumeCatalogue(), resumeFile(), resumeFile({ identity: { type: "movie", id: "tt9" } })]) {
+      const actions = render(card);
+      host.querySelector<HTMLButtonElement>(".browse-open")!.click();
+      expect(actions.open).toHaveBeenCalledWith(card);
+      expect(actions.play).not.toHaveBeenCalled();
+      openMenu();
+      act(() => play()!.click());
+      expect(actions.play).toHaveBeenCalledWith(card);
+    }
   });
+
+
 
   it("opens the title of a favourite bound to one, and the folder or file otherwise", () => {
     const bound = favorite({ title: { type: "movie", id: "tt9" } });

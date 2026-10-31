@@ -54,8 +54,9 @@ export const HomeCard = memo(function HomeCard({ card, shape, actions }: { card:
   const menu = card.kind !== "episode" && card.kind !== "discovery" && card.kind !== "confirm" && card.kind !== "favorite-catalogue";
 
   const primary = () => {
-    // Continue watching plays whatever wrote it: a media-server version, an addon source or a file.
-    if (card.kind === "remote" || card.kind === "resume-catalogue") { actions.play(card); return; }
+    // Continue watching opens the title's detail on the version it was played from; Play is the
+    // first button there, and the card menu keeps it as a shortcut.
+    if (card.kind === "remote" || card.kind === "resume-catalogue" || card.kind === "resume-file") { actions.open(card); return; }
     if (card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") { actions.open(card); return; }
     // A favourite bound to a title is that title, whatever kind of copy it is.
     if (card.kind === "favorite" && card.title) { actions.open(card); return; }
@@ -77,8 +78,7 @@ export const HomeCard = memo(function HomeCard({ card, shape, actions }: { card:
       {menu && <button className="browse-menu" aria-label={t("home.menu", { title })} aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><MoreVertical/></button>}
     </div>
     {menu && menuOpen && <span className="browse-actions home-actions" onClick={(event) => event.stopPropagation()}>
-      {(card.kind === "completed" || card.kind === "recent") && <button onClick={() => { setMenuOpen(false); actions.play(card); }}><CirclePlay/> {t("player.play")}</button>}
-      {((card.kind === "resume-file" && card.identity) || card.kind === "resume-catalogue") && <button onClick={() => { setMenuOpen(false); actions.open(card); }}><Film/> {t("home.openDetail")}</button>}
+      {(card.kind === "completed" || card.kind === "recent" || card.kind === "resume-file" || card.kind === "resume-catalogue" || card.kind === "remote") && <button onClick={() => { setMenuOpen(false); actions.play(card); }}><CirclePlay/> {t("player.play")}</button>}
       {hasPath(card) && <button onClick={() => { setMenuOpen(false); actions.reveal(card.path); }}><HardDrive/> {t("library.showInLibrary")}</button>}
       {(card.kind === "resume-file" || card.kind === "resume-catalogue" || card.kind === "remote") && <button onClick={() => { setMenuOpen(false); actions.forget(card); }}><RotateCcw/> {t("home.forget")}</button>}
     </span>}
