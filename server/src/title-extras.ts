@@ -141,7 +141,7 @@ const throwIfCancelled = (signal?: AbortSignal) => {
 
 const keyFingerprint = (apiKey: string) => createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
 
-function tmdbPeople(data: TmdbTitleExtras): TitlePerson[] {
+function tmdbPeople(data: TmdbTitleExtras, type: "movie" | "series"): TitlePerson[] {
   const cast = [...data.cast]
     .sort((left, right) => left.order - right.order)
     .slice(0, 20)
@@ -169,6 +169,8 @@ function tmdbPeople(data: TmdbTitleExtras): TitlePerson[] {
   for (const person of data.crew) {
     const role = CREW_ROLE[person.job];
     if (!role) continue;
+    // A series' directors and writers are those of single episodes; its creators stand for it.
+    if (type === "series" && role !== "novel") continue;
     const photo = tmdbImage(person.profilePath, "w185");
     addCrew({ name: person.name, role, ...(photo ? { photo } : {}) });
   }
@@ -283,7 +285,7 @@ async function buildTmdbPart(
     : data.certifications.US != null ? "US" : undefined;
   const ageRating = ageRatingRegion ? data.certifications[ageRatingRegion] : undefined;
   const value: CachedTmdbExtras = {
-    people: tmdbPeople(data),
+    people: tmdbPeople(data, type),
     related,
     ...(data.voteAverage != null && data.voteCount != null && data.voteCount >= TMDB_RATING_MIN_VOTES ? {
       tmdb: Math.round(data.voteAverage * 10) / 10,

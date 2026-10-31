@@ -171,10 +171,8 @@ test("series extras put creators first and use aggregate roles and TV ratings", 
     { name: "First Actor", role: "cast", character: "First" },
     { name: "Second Actor", role: "cast", character: "Second" },
   ]);
-  assert.deepEqual(result.people.slice(4), [
-    { name: "Director", role: "director", photo: "https://image.tmdb.org/t/p/w185/director.jpg" },
-    { name: "Writer", role: "writer" },
-  ]);
+  // A series' directors and writers are those of single episodes: only its creators stand for it.
+  assert.deepEqual(result.people.slice(4), []);
   assert.equal(result.ageRating, "18");
   assert.equal(result.ageRatingRegion, "CZ");
   assert.equal(result.source, "tmdb");
