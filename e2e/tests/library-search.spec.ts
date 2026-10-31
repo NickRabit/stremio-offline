@@ -26,7 +26,7 @@ const openFolder = async (page: Page, name: string) => {
   await tile.getByRole("button", { name: /Otevřít složku/ }).click();
 };
 
-test("the library field filters the folder on screen and starts no search", async ({ page }) => {
+test("the library field finds videos anywhere beneath the folder and starts no search", async ({ page }) => {
   let searched = false;
   page.on("request", (request) => {
     if (request.method() === "POST" && request.url().endsWith("/api/search/everywhere")) searched = true;
@@ -40,12 +40,13 @@ test("the library field filters the folder on screen and starts no search", asyn
   const box = page.getByLabel(filter);
   const filtered = page.waitForResponse((response) => {
     const url = new URL(response.url());
-    return url.pathname === "/api/library/browse" && url.searchParams.get("query") === "hloub";
+    return url.pathname === "/api/library/browse" && url.searchParams.get("query") === "hluboky";
   });
-  await box.fill("hloub");
+  await box.fill("hluboky");
   await filtered;
-  await expect(page.locator(".browse-item").filter({ hasText: "Hloubka" })).toBeVisible();
-  await expect(page.locator(".browse-item").filter({ hasText: "Jina" })).toHaveCount(0);
+  // Both videos sit two and one folders down; the filter reaches them without opening a folder.
+  await expect(page.locator(".browse-item").filter({ hasText: "Hluboky soubor" })).toBeVisible();
+  await expect(page.locator(".browse-item").filter({ hasText: "Hluboky jinde" })).toBeVisible();
   await expect(page.locator("main.view-library")).toBeVisible();
   expect(searched).toBe(false);
 

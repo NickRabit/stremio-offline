@@ -621,17 +621,23 @@ function writeBrowseCache(key: string, entry: BrowseCacheEntry): void {
 }
 
 /** The folder's own entries as one unsorted list. `cheap` skips every aggregate a sort by
- *  name does not read, and leaves `size` and `modified` for the page that actually shows them. */
+ *  name does not read, and leaves `size` and `modified` for the page that actually shows them.
+ *  A filter looks through every folder beneath this one, as deep as `hasVideo` looks. */
 async function readMixed(root: string, relative: string, entries: Dirent[], needle: string,
-  exclude: ReadonlySet<string> | undefined, cheap: boolean, looseEpisodes: boolean): Promise<MixedItem[]> {
+  exclude: ReadonlySet<string> | undefined, cheap: boolean, looseEpisodes: boolean, depth = 0): Promise<MixedItem[]> {
   const folders: BrowseFolder[] = [];
   const files: LibraryFile[] = [];
+  const deeper: MixedItem[] = [];
 
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     const childRelative = posixJoin(relative, entry.name);
     if (exclude?.has(childRelative)) continue;
     if (entry.isDirectory()) {
+      if (needle && depth < 8) {
+        const inner = await readdir(path.join(root, toFs(childRelative)), { withFileTypes: true }).catch(() => [] as Dirent[]);
+        deeper.push(...await readMixed(root, childRelative, inner, needle, exclude, cheap, looseEpisodes, depth + 1));
+      }
       if (needle && !entry.name.toLowerCase().includes(needle)) continue;
       if (cheap) {
         if (!await hasVideo(root, childRelative, exclude)) continue;
@@ -674,10 +680,12 @@ async function readMixed(root: string, relative: string, entries: Dirent[], need
   return [
     ...folders.map((folder) => ({ path: folder.path, label: folder.name, size: folder.size, modified: folder.modified, folder })),
     ...files.map((file) => ({ path: file.path, label: file.label, size: file.size, modified: file.modified, season: file.season, episode: file.episode, file })),
+    ...deeper,
   ];
 }
 
-/** The contents of one folder: its subfolders and videos. It does not descend; that is what opening a folder is for. */
+/** The contents of one folder: its subfolders and videos. It does not descend, since that is what
+ *  opening a folder is for, except under a filter, which finds a match anywhere beneath it. */
 export async function browseDirectory(root: string, relative: string, query = "", skip = 0, limit = 60,
   sort: LibrarySort = "name", descending = false, seed = "", onlyPaths?: ReadonlySet<string>,
   exclude?: ReadonlySet<string>, looseEpisodes = false): Promise<BrowseResult> {
