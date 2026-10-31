@@ -325,6 +325,34 @@ test("favourites are filtered before paging", async () => {
   }
 });
 
+test("a filter finds folders and videos anywhere beneath the folder, and only beneath it", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-filter-deep-"));
+  try {
+    await mkdir(path.join(root, "Hledacka", "Hloubka", "Treti"), { recursive: true });
+    await mkdir(path.join(root, "Hledacka", "Jina"), { recursive: true });
+    await mkdir(path.join(root, "Hledacka", "Casting"), { recursive: true });
+    await mkdir(path.join(root, "Jinde"), { recursive: true });
+    await writeFile(path.join(root, "Hledacka", "Hloubka", "Treti", "Hluboky soubor.mp4"), "");
+    await writeFile(path.join(root, "Hledacka", "Jina", "Mělký soubor.mp4"), "");
+    await writeFile(path.join(root, "Hledacka", "Casting", "Prvni.mp4"), "");
+    await writeFile(path.join(root, "Jinde", "Hluboky venku.mp4"), "");
+
+    const plain = await browseDirectory(root, "Hledacka", "", 0, 60, "name");
+    assert.deepEqual(plain.items.map((item) => item.path).sort(), ["Hledacka/Casting", "Hledacka/Hloubka", "Hledacka/Jina"], "without a filter a folder lists only its children");
+
+    const deep = await browseDirectory(root, "Hledacka", "hluboky", 0, 60, "name");
+    assert.deepEqual(deep.items.map((item) => item.path), ["Hledacka/Hloubka/Treti/Hluboky soubor.mp4"]);
+    assert.equal(deep.total, 1);
+
+    const folder = await browseDirectory(root, "Hledacka", "cast", 0, 60, "size", true);
+    assert.deepEqual(folder.items.map((item) => [item.kind, item.path]), [["folder", "Hledacka/Casting"]]);
+    assert.equal(folder.items[0]!.kind === "folder" && folder.items[0]!.fileCount, 1);
+
+    const excluded = await browseDirectory(root, "Hledacka", "hluboky", 0, 60, "name", false, "", undefined, new Set(["Hledacka/Hloubka"]));
+    assert.equal(excluded.total, 0, "a carved-out folder stays out of the filter too");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("a favourites filter is not served the list a plain call cached", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-favorite-cache-"));
   try {
