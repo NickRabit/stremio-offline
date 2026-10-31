@@ -370,6 +370,13 @@ function futureEpisode(meta: MetaItem | null, now: number): TitleExtras["nextEpi
   return earliest?.episode;
 }
 
+function imdbIdOfMeta(meta: MetaItem | null): string | undefined {
+  for (const value of [meta?.imdb_id, meta?.imdbId, meta?.imdb]) {
+    if (typeof value === "string" && /^tt\d{5,}$/.test(value.trim())) return value.trim();
+  }
+  return undefined;
+}
+
 export async function titleExtras(
   type: string,
   id: string,
@@ -382,8 +389,11 @@ export async function titleExtras(
   const meta = await deps.meta();
   throwIfCancelled(deps.signal);
   const now = deps.now?.() ?? Date.now();
+  // An addon that names titles its own way (`mpa:sosac:…`) still carries the IMDb id in the meta;
+  // without it the title would have no TMDB answer at all.
+  const lookupId = /(?:^|:)tt\d+$/.test(id) || /^tmdb:\d+$/.test(id) ? id : imdbIdOfMeta(meta) ?? id;
   const part = deps.tmdb
-    ? await cachedTmdbPart(type, id, language, { ...deps, tmdb: deps.tmdb }, now)
+    ? await cachedTmdbPart(type, lookupId, language, { ...deps, tmdb: deps.tmdb }, now)
     : null;
   const people = part?.people.length ? part.people : addonPeople(meta);
   const related = await Promise.all((part?.related ?? []).map(async (item) => {

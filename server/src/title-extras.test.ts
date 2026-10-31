@@ -538,3 +538,23 @@ test("unknown title types answer an empty addon result", async (t) => {
   });
   assert.deepEqual(result, { people: [], related: [], ratings: {}, videos: [], source: "addon" });
 });
+
+test("an addon id without IMDb finds TMDB through the meta's imdb_id", async (t) => {
+  fresh(t);
+  const calls: string[] = [];
+  const fetchImpl: FetchLike = async (raw) => {
+    const url = new URL(raw);
+    calls.push(url.pathname);
+    if (url.pathname === "/3/find/tt0241527") return json({ movie_results: [{ id: 671 }] });
+    if (url.pathname === "/3/movie/671") {
+      return json({ credits: { cast: [{ name: "Daniel Radcliffe", character: "Harry", order: 0 }], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+    }
+    return json({}, 404);
+  };
+  const extras = await titleExtras("movie", "mpa:sosac:35da1549e221b6b74237", "cs", deps(fetchImpl, {
+    meta: async () => ({ id: "mpa:sosac:35da1549e221b6b74237", type: "movie", name: "Harry Potter a Kámen mudrců", imdb_id: "tt0241527" }),
+  }));
+  assert.equal(extras.source, "tmdb");
+  assert.equal(extras.people[0]?.name, "Daniel Radcliffe");
+  assert.ok(calls.includes("/3/find/tt0241527"));
+});
