@@ -26,6 +26,7 @@ import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
+import cz.stremiooffline.tv.data.TitleRatingsDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
@@ -465,5 +466,22 @@ class DetailScreenTest {
     press(Key.DirectionDown)
     compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsFocused()
     compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsDisplayed()
+  }
+
+  @Test
+  fun `a bound library file shows ratings from its title extras`() {
+    val path = "Films/It/It.mkv"
+    val api = FakeTvApi().apply {
+      libraryTitleValues[path] = LibraryTitleDto(type = "movie", id = "tt1", name = "It")
+      titleExtrasValue = TitleExtrasDto(
+        ratings = TitleRatingsDto(imdb = "9.3", tmdb = 8.7, tmdbVotes = 31_720),
+      )
+    }
+    mount(detail(listOf(file(path))), sourcesApi = api)
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagTitleExtrasImdb).assertExists()
+    compose.onNodeWithTag(TagTitleExtrasTmdb).assertExists()
   }
 }

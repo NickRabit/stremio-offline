@@ -445,6 +445,7 @@ fun Shell(
                 libraryPush = action.path
                 shellState.pick(Section.Library)
               }
+              is HomeAction.OpenDetail -> detail = action.detail
               is HomeAction.OpenCatalog -> openCatalog(action.args)
               is HomeAction.OpenRemote -> remoteDetail = action.data
             }

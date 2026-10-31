@@ -42,6 +42,7 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
+import cz.stremiooffline.tv.data.TitleRatingsDto
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.actionRowOrder
 import cz.stremiooffline.tv.ui.catalog.nativeQueueLibraryTag
@@ -521,7 +522,7 @@ class RemoteDetailTest {
     // Choosing only picks: the panel closes, the caption names the row, nothing plays.
     assertTrue(played.isEmpty())
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
-    compose.onNodeWithTag(TagRemoteDetailPickCaption).assertTextContains("Source · Version a2")
+    compose.onNodeWithTag(TagRemoteDetailPickCaption).assertTextContains("Version a2")
 
     activate(TagRemoteDetailPlay)
     assertEquals(1, played.size)
@@ -750,6 +751,7 @@ class RemoteDetailTest {
     api.remoteStateValue = RemoteItemStateDto()
     api.titleExtrasValue = TitleExtrasDto(
       people = listOf(TitlePersonDto(name = "Tom Hanks", role = "cast", character = "Woody")),
+      ratings = TitleRatingsDto(imdb = "9.3", tmdb = 8.7, tmdbVotes = 31_720),
     )
     scenario.onActivity { activity ->
       activity.setContent {
@@ -767,6 +769,8 @@ class RemoteDetailTest {
 
     assertEquals(Triple("movie", "tt1", null), api.titleExtrasRequests.single())
     compose.onNodeWithText("Tom Hanks").assertExists()
+    compose.onNodeWithTag(TagTitleExtrasImdb).assertExists()
+    compose.onNodeWithTag(TagTitleExtrasTmdb).assertExists()
     compose.onNodeWithTag(TagRemoteDetailPlay).performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionDown)
     compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsFocused()

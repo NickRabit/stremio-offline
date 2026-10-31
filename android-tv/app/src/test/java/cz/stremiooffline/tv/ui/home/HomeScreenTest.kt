@@ -437,7 +437,7 @@ class HomeScreenTest {
   }
 
   @Test
-  fun `ok on a completed card plays the file`() {
+  fun `ok on a completed card opens the file detail`() {
     val api = FakeTvApi()
     serve(
       api,
@@ -450,14 +450,13 @@ class HomeScreenTest {
 
     compose.onNodeWithTag(homeCardTag("file:b")).performKeyInput { pressKey(Key.DirectionCenter) }
 
-    assertEquals(
-      HomeAction.Play(PlayTarget(key = "file:browse/Films/Done.mkv", title = "Done", resume = true, path = "browse/Films/Done.mkv")),
-      actions.single(),
-    )
+    val action = actions.single() as HomeAction.OpenDetail
+    assertEquals("Done", action.detail.title)
+    assertEquals("browse/Films/Done.mkv", action.detail.files.single().path)
   }
 
   @Test
-  fun `ok on a recent card plays the file`() {
+  fun `ok on a recent card opens the file detail`() {
     val api = FakeTvApi()
     serve(
       api,
@@ -470,10 +469,9 @@ class HomeScreenTest {
 
     compose.onNodeWithTag(homeCardTag("file:d")).performKeyInput { pressKey(Key.DirectionCenter) }
 
-    assertEquals(
-      HomeAction.Play(PlayTarget(key = "file:browse/New.mkv", title = "New", resume = true, path = "browse/New.mkv")),
-      actions.single(),
-    )
+    val action = actions.single() as HomeAction.OpenDetail
+    assertEquals("New", action.detail.title)
+    assertEquals("browse/New.mkv", action.detail.files.single().path)
   }
 
   @Test

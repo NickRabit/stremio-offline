@@ -37,12 +37,16 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
+import cz.stremiooffline.tv.data.TitleRatingsDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.TagTitleExtrasImdb
+import cz.stremiooffline.tv.ui.detail.TagTitleExtrasTmdb
 import cz.stremiooffline.tv.ui.detail.relatedTitleTag
 import cz.stremiooffline.tv.ui.detail.titlePersonTag
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -453,7 +457,7 @@ class CatalogDetailTest {
     assertTrue(played.isEmpty())
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
-    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("alpha · small · 1.0 GB")
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("alpha · 1.0 GB")
   }
 
   @Test
@@ -521,7 +525,7 @@ class CatalogDetailTest {
 
     assertTrue(played.isEmpty())
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
-    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("alpha · External · 8.0 GB")
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("alpha · 8.0 GB")
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains("A torrent cannot be played directly.", substring = true)
   }
@@ -1022,7 +1026,7 @@ class CatalogDetailTest {
   }
 
   @Test
-  fun `an icon action names itself beside the row while it holds the remote`() {
+  fun `an icon action has its name underneath the remote`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
     api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
@@ -1030,8 +1034,7 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    // Icons carry their name as the description only; no text node says it until one is focused.
-    compose.onNodeWithText("Mark as unwatched").assertDoesNotExist()
+    compose.onNodeWithText("Mark as unwatched").assertExists()
     focusOn(TagCatalogForget)
     compose.onNodeWithText("Mark as unwatched").assertExists()
   }
@@ -1272,5 +1275,29 @@ class CatalogDetailTest {
     compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
 
     assertEquals(Triple("movie", "tt1", "cs"), api.titleExtrasRequests.single())
+  }
+
+  @Test
+  fun `catalogue ratings are visible and IMDb falls back to the meta rating`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.metaValues["movie:tt1"] = MetaDto(
+      id = "tt1",
+      type = "movie",
+      name = "It",
+      releaseInfo = "2017",
+      imdbRating = JsonPrimitive("8.2"),
+    )
+    api.titleExtrasValue = TitleExtrasDto(
+      ratings = TitleRatingsDto(tmdb = 8.7, tmdbVotes = 31_720),
+    )
+    mount(api, movieArgs())
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagTitleExtrasImdb).assertExists()
+    compose.onNodeWithTag(TagTitleExtrasTmdb).assertExists()
+    compose.onNodeWithText("8.2").assertExists()
+    compose.onNodeWithText("2017").assertExists()
   }
 }

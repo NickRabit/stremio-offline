@@ -396,4 +396,17 @@
   <string name="detail_age_rating">Classificazione per età %1$s</string>
   <string name="detail_in_library">In una libreria</string>
   <string name="detail_will_play">In riproduzione</string>
+  <string name="detail_tech_video">Video</string>
+  <string name="detail_tech_audio">Audio</string>
+  <string name="detail_tech_subtitles">Sottotitoli</string>
+  <string name="detail_videos">Trailer ed extra</string>
+  <string name="detail_video_trailer">Trailer</string>
+  <string name="detail_video_teaser">Teaser</string>
+  <string name="detail_video_clip">Clip</string>
+  <string name="detail_video_featurette">Speciale</string>
+  <string name="detail_video_behind_the_scenes">Dietro le quinte</string>
+  <string name="detail_action_from_start">Dall’inizio</string>
+  <string name="detail_action_watched">Visto</string>
+  <string name="detail_action_favorite">Preferito</string>
+  <string name="home_open_detail">Apri dettaglio</string>
 </resources>

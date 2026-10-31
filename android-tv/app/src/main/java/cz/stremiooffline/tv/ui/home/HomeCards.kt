@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.ui.home
 import androidx.annotation.StringRes
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.ResumeEpisode
+import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
@@ -12,6 +13,7 @@ import cz.stremiooffline.tv.data.episodeCodeText
 import cz.stremiooffline.tv.data.yearText
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
+import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 
@@ -22,6 +24,9 @@ sealed interface HomeAction {
   data class OpenLibrary(val path: String) : HomeAction
 
   data class OpenCatalog(val args: CatalogDetailArgs) : HomeAction
+
+  /** A local file opens the same detail the Library draws for it. */
+  data class OpenDetail(val detail: DetailData) : HomeAction
 
   /** A remote media-server card: the shell opens its playable detail. */
   data class OpenRemote(val data: RemoteDetailData) : HomeAction
@@ -43,7 +48,8 @@ fun builtinRowTitle(id: String): Int? = when (id) {
 @StringRes
 fun cardLabel(card: HomeCard): Int? = when (card) {
   is HomeCard.ResumeFile -> R.string.home_resume
-  is HomeCard.Completed -> R.string.player_play
+  is HomeCard.Completed -> R.string.home_open_detail
+  is HomeCard.Recent -> R.string.home_open_detail
   is HomeCard.Episode -> R.string.home_new_episode
   is HomeCard.ResumeCatalogue -> if (card.pending) R.string.home_next_episode else R.string.home_resume
   else -> null
@@ -132,8 +138,8 @@ fun heroDescription(card: HomeCard, meta: MetaDto?): String? =
  *  other kinds keep the player, library folder or catalogue detail they have always opened. */
 fun actionFor(card: HomeCard): HomeAction = when (card) {
   is HomeCard.ResumeFile -> play(card.path, card.title)
-  is HomeCard.Completed -> play(card.path, card.title)
-  is HomeCard.Recent -> play(card.path, card.label)
+  is HomeCard.Completed -> fileDetail(card.path, card.title, card.season, card.episode, card.poster, card.wide)
+  is HomeCard.Recent -> fileDetail(card.path, card.label, card.season, card.episode, card.poster, card.wide)
   is HomeCard.Favorite -> when {
     card.title != null -> titleDetail(card.title, card.label, card.poster)
     card.itemKind == "folder" -> HomeAction.OpenLibrary(card.path)
@@ -181,6 +187,26 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
 
 private fun play(path: String, title: String): HomeAction.Play =
   HomeAction.Play(PlayTarget(key = Progress.libraryKey(path), title = title, resume = true, path = path))
+
+private fun fileDetail(
+  path: String,
+  title: String,
+  season: Int?,
+  episode: Int?,
+  poster: String?,
+  wide: String?,
+): HomeAction.OpenDetail = HomeAction.OpenDetail(
+  DetailData.ofFile(
+    BrowseItem.File(
+      path = path,
+      label = title,
+      season = season,
+      episode = episode,
+      poster = poster,
+      wide = wide,
+    ),
+  ),
+)
 
 /** The catalogue detail of the title a bound card stands for, named by the card's own label. */
 private fun titleDetail(title: TitleRefDto, label: String, poster: String?): HomeAction.OpenCatalog =

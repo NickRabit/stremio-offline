@@ -80,10 +80,10 @@ import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.detail.SavedPlaybackProgress
 import cz.stremiooffline.tv.ui.detail.PlayTarget
-import cz.stremiooffline.tv.ui.detail.ChosenSourceCaption
 import cz.stremiooffline.tv.ui.detail.TitleExtraFacts
 import cz.stremiooffline.tv.ui.detail.TitleExtrasRows
 import cz.stremiooffline.tv.ui.detail.TitleExtrasState
+import cz.stremiooffline.tv.ui.detail.TitleTechBlock
 import cz.stremiooffline.tv.ui.detail.downIntoExtras
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
@@ -1042,6 +1042,7 @@ fun CatalogDetailScreen(
         name = meta.name,
         metaLine = metaLine(meta),
         uiLanguage = settings.uiLanguage,
+        imdbFallback = meta.ratingText,
       )
       val description = meta.description
       if (description != null) {
@@ -1086,6 +1087,7 @@ fun CatalogDetailScreen(
         // A stored position is what offers a fresh start beside Play, for the row Play would play.
         startOver = if (forgetKeys.isNotEmpty()) catalogAction(
           TagCatalogStartOver, stringResource(R.string.tv_start_over), ReplayIcon,
+          displayLabel = stringResource(R.string.detail_action_from_start),
           modifier = Modifier.onFocusChanged { focus.startOverFocused = it.isFocused },
         ) { startOverPressed() } else null,
         sources = {
@@ -1112,6 +1114,7 @@ fun CatalogDetailScreen(
           TagCatalogFavourite,
           stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
           glyph = if (favourite) "★" else "☆",
+          displayLabel = stringResource(R.string.detail_action_favorite),
         ) { toggleFavourite() },
         unwatched = if (forgetKeys.isNotEmpty()) catalogAction(
           TagCatalogForget, stringResource(R.string.media_server_unwatch), EyeOffIcon,
@@ -1123,6 +1126,7 @@ fun CatalogDetailScreen(
           TagCatalogMarkWatched,
           stringResource(R.string.media_server_mark_watched),
           EyeIcon,
+          displayLabel = stringResource(R.string.detail_action_watched),
         ) {
             scope.launch {
               runCatching {
@@ -1165,10 +1169,12 @@ fun CatalogDetailScreen(
         ),
       )
       activeStream?.let { stream ->
-        val caption = chosenSourceCaption(stream).joinToString(" · ")
-        if (caption.isNotEmpty()) {
-          ChosenSourceCaption(caption, Modifier.testTag(TagCatalogChosenSource))
-        }
+        TitleTechBlock(
+          stream = stream,
+          modifier = Modifier.testTag(TagCatalogChosenSource),
+          uiLanguage = settings.uiLanguage,
+          titleLanguage = titleLanguage,
+        )
       }
       val shown = message
       if (shown != null) {
@@ -1748,6 +1754,7 @@ private fun catalogAction(
   label: String,
   icon: ImageVector? = null,
   glyph: String = "",
+  displayLabel: String? = label,
   enabled: Boolean = true,
   modifier: Modifier = Modifier,
   onClick: () -> Unit,
@@ -1758,6 +1765,7 @@ private fun catalogAction(
   tag = tag,
   enabled = enabled,
   glyph = glyph,
+  displayLabel = displayLabel,
   modifier = modifier,
 )
 

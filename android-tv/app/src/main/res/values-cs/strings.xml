@@ -412,4 +412,17 @@
   <string name="detail_age_rating">Věková hranice %1$s</string>
   <string name="detail_in_library">V knihovně</string>
   <string name="detail_will_play">Přehraje se</string>
+  <string name="detail_tech_video">Video</string>
+  <string name="detail_tech_audio">Zvuk</string>
+  <string name="detail_tech_subtitles">Titulky</string>
+  <string name="detail_videos">Trailery a bonusy</string>
+  <string name="detail_video_trailer">Trailer</string>
+  <string name="detail_video_teaser">Upoutávka</string>
+  <string name="detail_video_clip">Ukázka</string>
+  <string name="detail_video_featurette">Bonus</string>
+  <string name="detail_video_behind_the_scenes">Ze zákulisí</string>
+  <string name="detail_action_from_start">Od začátku</string>
+  <string name="detail_action_watched">Zhlédnuto</string>
+  <string name="detail_action_favorite">Oblíbené</string>
+  <string name="home_open_detail">Otevřít detail</string>
 </resources>

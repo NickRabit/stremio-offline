@@ -113,13 +113,11 @@ class DetailActionRowTest {
   }
 
   @Test
-  fun `the focused icon's name is shown beside the row`() {
+  fun `every icon has its name underneath`() {
     mount()
 
-    compose.onNodeWithText("row_watched").assertDoesNotExist()
-    compose.onNodeWithTag("row_watched").performSemanticsAction(SemanticsActions.RequestFocus)
-    compose.waitForIdle()
-
     compose.onNodeWithText("row_watched").assertExists()
+    compose.onNodeWithText("row_favourite").assertExists()
+    compose.onNodeWithText("row_start_over").assertExists()
   }
 }

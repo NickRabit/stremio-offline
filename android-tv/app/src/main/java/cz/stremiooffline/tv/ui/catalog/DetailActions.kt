@@ -2,6 +2,7 @@ package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -22,9 +23,8 @@ import cz.stremiooffline.tv.ui.components.outlineIcon
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 /**
- * The name of the icon button that holds the remote, shown beside the action row. An icon alone
- * says little from the sofa, so the focused one spells itself out; the state sits in an object of
- * its own because the detail screens are already near the size ART can verify.
+ * The name of the icon button that holds the remote, used to brighten its label. The state sits in
+ * an object of its own because the detail screens are already near the size ART can verify.
  */
 class ActionCaption {
   var text by mutableStateOf("")
@@ -41,12 +41,14 @@ class DetailAction(
   val glyph: String = "",
   /** Extra modifiers the caller needs on the button (focus requesters, focus listeners). */
   val modifier: Modifier = Modifier,
+  /** A short label under the icon; [label] remains the full spoken name. */
+  val displayLabel: String? = label,
 )
 
 /**
  * The one action row every title detail draws, in the one order the details share: Play, Start
  * over, Sources, To library, Favourite, Mark as unwatched, Mark watched, then [extras] in the order
- * given. A null action is not drawn. The focused icon's name is shown after the last button.
+ * given. A null action is not drawn. Every icon has its name underneath; the focused one is brighter.
  */
 @Composable
 fun DetailActionRow(
@@ -74,26 +76,33 @@ fun DetailActionRow(
     unwatched?.let { DetailActionButton(it, caption) }
     watched?.let { DetailActionButton(it, caption) }
     extras.forEach { DetailActionButton(it, caption) }
-    if (caption.text.isNotEmpty()) {
-      Text(caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
-    }
   }
 }
 
 @Composable
 private fun DetailActionButton(action: DetailAction, caption: ActionCaption) {
-  ActionIconButton(
-    label = action.label,
-    icon = action.icon,
-    onClick = action.onClick,
-    caption = caption,
-    modifier = action.modifier.testTag(action.tag),
-    enabled = action.enabled,
-    glyph = action.glyph,
-  )
+  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+    ActionIconButton(
+      label = action.label,
+      icon = action.icon,
+      onClick = action.onClick,
+      caption = caption,
+      modifier = action.modifier.testTag(action.tag),
+      enabled = action.enabled,
+      glyph = action.glyph,
+    )
+    action.displayLabel?.takeIf { it.isNotBlank() }?.let {
+      Text(
+        it,
+        color = if (caption.text == action.label) Tokens.Text else Tokens.Muted,
+        fontSize = 9.sp,
+        maxLines = 1,
+      )
+    }
+  }
 }
 
-/** A square icon button for a secondary action; [label] is its spoken name and its caption. */
+/** A square icon button for a secondary action; [label] is its spoken name and focus caption. */
 @Composable
 fun ActionIconButton(
   label: String,

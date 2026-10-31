@@ -75,7 +75,25 @@ data class TitleExtrasDto(
   val originalTitle: String? = null,
   val originalLanguage: String? = null,
   val nextEpisode: NextEpisodeDto? = null,
+  val ratings: TitleRatingsDto = TitleRatingsDto(),
+  val videos: List<TitleVideoDto> = emptyList(),
   val source: String = "",
+)
+
+@Serializable
+data class TitleRatingsDto(
+  val imdb: String? = null,
+  val tmdb: Double? = null,
+  val tmdbVotes: Long? = null,
+)
+
+@Serializable
+data class TitleVideoDto(
+  val key: String = "",
+  val name: String = "",
+  val kind: String = "",
+  val thumbnail: String? = null,
+  val language: String? = null,
 )
 
 @Serializable

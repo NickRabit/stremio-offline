@@ -396,4 +396,17 @@
   <string name="detail_age_rating">Classificação etária %1$s</string>
   <string name="detail_in_library">Em uma biblioteca</string>
   <string name="detail_will_play">Vai reproduzir</string>
+  <string name="detail_tech_video">Vídeo</string>
+  <string name="detail_tech_audio">Áudio</string>
+  <string name="detail_tech_subtitles">Legendas</string>
+  <string name="detail_videos">Trailers e extras</string>
+  <string name="detail_video_trailer">Trailer</string>
+  <string name="detail_video_teaser">Teaser</string>
+  <string name="detail_video_clip">Clipe</string>
+  <string name="detail_video_featurette">Especial</string>
+  <string name="detail_video_behind_the_scenes">Nos bastidores</string>
+  <string name="detail_action_from_start">Do início</string>
+  <string name="detail_action_watched">Assistido</string>
+  <string name="detail_action_favorite">Favorito</string>
+  <string name="home_open_detail">Abrir detalhes</string>
 </resources>

@@ -69,7 +69,6 @@ import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.catalog.SourceFilterState
 import cz.stremiooffline.tv.ui.catalog.SourceSaveRequest
 import cz.stremiooffline.tv.ui.catalog.SourceSaveState
-import cz.stremiooffline.tv.ui.catalog.chosenSourceCaption
 import cz.stremiooffline.tv.ui.catalog.nativeAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeCopySubject
@@ -776,12 +775,15 @@ fun RemoteDetailScreen(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.width(820.dp),
       )
-      Text(
-        listOfNotNull(detail.provider.ifBlank { null }, detail.libraryName.ifBlank { null }, stringResource(R.string.media_server_read_only))
-          .joinToString(" · "),
-        color = Tokens.Muted,
-        fontSize = 11.5.sp,
-        fontWeight = FontWeight.Medium,
+      TitleExtraFacts(
+        state = extras,
+        name = titleOf(detail),
+        metaLine = listOfNotNull(
+          detail.provider.ifBlank { null },
+          detail.libraryName.ifBlank { null },
+          stringResource(R.string.media_server_read_only),
+        ).joinToString(" · "),
+        uiLanguage = null,
       )
       // The same bar the local detail draws, from the same saved position numbers.
       if (stateLoaded && sameVersion) {
@@ -809,6 +811,7 @@ fun RemoteDetailScreen(
           label = stringResource(R.string.tv_start_over),
           icon = ReplayIcon,
           tag = TagRemoteDetailStartOver,
+          displayLabel = stringResource(R.string.detail_action_from_start),
           onClick = { startOverPressed() },
         ) else null,
         sources = if (versionsAvailable) {
@@ -843,6 +846,7 @@ fun RemoteDetailScreen(
           icon = null,
           glyph = if (favorite) "★" else "☆",
           tag = TagRemoteDetailFavorite,
+          displayLabel = stringResource(R.string.detail_action_favorite),
           enabled = stateLoaded && !favouriteBusy && !watchedBusy,
           onClick = { toggleFavourite() },
         ),
@@ -859,6 +863,7 @@ fun RemoteDetailScreen(
           label = stringResource(R.string.media_server_mark_watched),
           icon = EyeIcon,
           tag = TagRemoteDetailMarkWatched,
+          displayLabel = stringResource(R.string.detail_action_watched),
           enabled = !favouriteBusy && !watchedBusy,
           onClick = { toggleWatched() },
         ) else null,
@@ -866,17 +871,7 @@ fun RemoteDetailScreen(
         modifier = Modifier.downIntoExtras(extras),
       )
       actionRow?.let { row ->
-        val pickedCaption = chosenSourceCaption(row).joinToString(" · ")
-        if (pickedCaption.isNotEmpty()) {
-          Text(
-            stringResource(R.string.tv_chosen_source) + " · " + pickedCaption,
-            color = Tokens.Muted,
-            fontSize = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag(TagRemoteDetailPickCaption),
-          )
-        }
+        TitleTechBlock(row, Modifier.testTag(TagRemoteDetailPickCaption))
       }
 
       // A copy that never opened its panel (no readable destinations, no native right) says why

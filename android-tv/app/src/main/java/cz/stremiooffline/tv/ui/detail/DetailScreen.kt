@@ -76,7 +76,6 @@ import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.catalog.SourceFilterState
 import cz.stremiooffline.tv.ui.catalog.SourceSaveRequest
 import cz.stremiooffline.tv.ui.catalog.SourceSaveState
-import cz.stremiooffline.tv.ui.catalog.chosenSourceCaption
 import cz.stremiooffline.tv.ui.catalog.libraryAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.libraryCopySubject
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
@@ -689,11 +688,11 @@ fun DetailScreen(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.width(760.dp),
       )
-      Text(
-        metaLine(current, stringResource(R.string.tv_library_files, current.fileCount.toString())),
-        color = Tokens.Muted,
-        fontSize = 11.5.sp,
-        fontWeight = FontWeight.Medium,
+      TitleExtraFacts(
+        state = extras,
+        name = current.title,
+        metaLine = metaLine(current, stringResource(R.string.tv_library_files, current.fileCount.toString())),
+        uiLanguage = null,
       )
       val description = current.description
       if (description != null) {
@@ -726,6 +725,7 @@ fun DetailScreen(
           label = stringResource(R.string.tv_start_over),
           icon = ReplayIcon,
           tag = TagDetailStartOver,
+          displayLabel = stringResource(R.string.detail_action_from_start),
           onClick = { startOverPressed() },
         ) else null,
         // One text action for the whole Sources panel, whatever the file turned out to be: the
@@ -758,6 +758,7 @@ fun DetailScreen(
           icon = null,
           glyph = if (favourite) "★" else "☆",
           tag = TagDetailFavourite,
+          displayLabel = stringResource(R.string.detail_action_favorite),
           onClick = { toggleFavourite() },
         ),
         unwatched = if (forgetKeys.isNotEmpty()) DetailAction(
@@ -771,23 +772,14 @@ fun DetailScreen(
           label = stringResource(R.string.media_server_mark_watched),
           icon = EyeIcon,
           tag = TagDetailMarkWatched,
+          displayLabel = stringResource(R.string.detail_action_watched),
           enabled = !markingWatched,
           onClick = { playFile?.let(::markWatchedNow) },
         ) else null,
         caption = caption,
       )
       actionRow?.let { row ->
-        val captionParts = chosenSourceCaption(row).joinToString(" · ")
-        if (captionParts.isNotEmpty()) {
-          Text(
-            stringResource(R.string.tv_chosen_source) + " · " + captionParts,
-            color = Tokens.Muted,
-            fontSize = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag(TagDetailPickCaption),
-          )
-        }
+        TitleTechBlock(row, Modifier.testTag(TagDetailPickCaption))
       }
       if (forgetError) {
         Text(stringResource(R.string.tv_err_generic), color = Tokens.Red, fontSize = 11.5.sp)

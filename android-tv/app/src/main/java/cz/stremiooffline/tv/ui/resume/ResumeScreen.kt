@@ -184,7 +184,7 @@ private fun openResume(
     is HomeAction.Play -> onPlay(action.target)
     is HomeAction.OpenCatalog -> onOpenCatalog(action.args)
     is HomeAction.OpenRemote -> onOpenRemote(action.data)
-    is HomeAction.OpenLibrary -> Unit
+    is HomeAction.OpenLibrary, is HomeAction.OpenDetail -> Unit
   }
 }
 
