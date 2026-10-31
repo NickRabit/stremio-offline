@@ -20,6 +20,7 @@ import { contentOf } from "../revocation.js";
 import { cancelResponseBody } from "../response-body.js";
 import type { UserPrefs } from "../store.js";
 import { trailerFor } from "../trailers.js";
+import { titleExtras } from "../title-extras.js";
 import { tmdbGallery } from "../tmdb.js";
 import type { MetaItem, StreamItem } from "../types.js";
 import { subtitleVtt } from "../subtitle-text.js";
@@ -164,6 +165,31 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
         return;
       }
       res.json(images.rewriteMeta(meta, true));
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
+    }
+  }));
+  app.get("/api/meta/:type/:id/extras", asyncRoute(async (req, res) => {
+    const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      if (disconnect.signal.aborted) return;
+      const type = String(req.params.type);
+      const id = String(req.params.id);
+      const viewer = viewerOf(currentUser(req));
+      const apiKey = store.settings().tmdbApiKey;
+      const extras = await titleExtras(type, id, language, {
+        ...(apiKey ? { tmdb: { apiKey, language } } : {}),
+        meta: () => cachedMeta(type, id, language, viewer, { artwork: true, signal: disconnect.signal }),
+        copies: (copyType, copyId) =>
+          viewer ? localCopies(copyType, copyId, viewer) : Promise.resolve([]),
+        signal: disconnect.signal,
+      });
+      if (disconnect.signal.aborted) return;
+      res.json(imageProxy.rewriteExtras(extras));
     } catch (error) {
       if (disconnect.signal.aborted) return;
       throw error;

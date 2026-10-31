@@ -201,6 +201,36 @@ test("secure mode off leaves the payload as it came", async () => {
   } finally { configureSecureMode(() => true); }
 });
 
+test("extras artwork is proxied only while secure mode is on", async () => {
+  const { proxy } = await harness();
+  const extras = {
+    people: [
+      { name: "Actor", photo: "https://images.example/actor.jpg" },
+      { name: "No photo" },
+    ],
+    related: [
+      { type: "movie" as const, id: "tt2", name: "Related", poster: "https://images.example/poster.jpg" },
+      { type: "movie" as const, id: "tt3", name: "No poster" },
+    ],
+    source: "tmdb" as const,
+  };
+
+  configureSecureMode(() => false);
+  try {
+    assert.equal(proxy.rewriteExtras(extras), extras);
+  } finally {
+    configureSecureMode(() => true);
+  }
+
+  const rewritten = proxy.rewriteExtras(extras);
+  assert.notEqual(rewritten, extras);
+  assert.match(String(rewritten.people[0]?.photo), /^\/api\/image\//);
+  assert.match(String(rewritten.related[0]?.poster), /^\/api\/image\//);
+  assert.equal("photo" in rewritten.people[1]!, false);
+  assert.equal("poster" in rewritten.related[1]!, false);
+  assert.equal(rewritten.source, "tmdb");
+});
+
 test("the image is fetched once and then served from disk", async () => {
   const { proxy, calls, dir } = await harness();
   const id = proxy.proxied(REMOTE)!.split("/").pop()!;

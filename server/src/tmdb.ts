@@ -35,7 +35,7 @@ const IMDB_ID = /^tt\d{5,}$/;
 
 /** The sizes TMDB serves. `original` is the full file -- for a hero it is three to eight
  *  times the bytes of w1280 and buys nothing at the widths this interface renders. */
-export type TmdbImageSize = "w300" | "w500" | "w780" | "w1280" | "original";
+export type TmdbImageSize = "w185" | "w300" | "w342" | "w500" | "w780" | "w1280" | "original";
 
 /** An absolute image URL, or undefined when TMDB has no file for that slot. */
 export function tmdbImage(path: string | null | undefined, size: TmdbImageSize): string | undefined {
@@ -515,6 +515,212 @@ async function resolveId(
   if (idCache.size > ID_CACHE_LIMIT) idCache.clear();
   idCache.set(key, resolved);
   return resolved;
+}
+
+/** The TMDB id a catalogue id resolves to, through the same cached /find as tmdbMeta. */
+export function tmdbIdOf(
+  type: string,
+  id: string,
+  config: TmdbConfig,
+  fetchImpl?: FetchLike,
+  signal?: AbortSignal,
+): Promise<number | null> {
+  return resolveId(type, id, config, fetchImpl ?? guardedFetch, signal);
+}
+
+export interface TmdbTitleExtras {
+  originalTitle?: string;
+  originalLanguage?: string;
+  createdBy: Array<{ name: string; profilePath?: string }>;
+  cast: Array<{ name: string; character?: string; profilePath?: string; order: number }>;
+  crew: Array<{ name: string; job: string; profilePath?: string }>;
+  recommendations: Array<{ tmdbId: number; name: string; date?: string; posterPath?: string }>;
+  /** Certifications by ISO 3166-1 region, first non-empty one per region. */
+  certifications: Record<string, string>;
+}
+
+interface TmdbExtraCredit {
+  name?: string;
+  character?: string;
+  job?: string;
+  profile_path?: string | null;
+  order?: number;
+  roles?: Array<{ character?: string }>;
+  jobs?: Array<{ job?: string }>;
+}
+
+interface TmdbExtraResponse {
+  original_title?: string;
+  original_name?: string;
+  original_language?: string;
+  created_by?: TmdbExtraCredit[];
+  credits?: { cast?: TmdbExtraCredit[]; crew?: TmdbExtraCredit[] };
+  aggregate_credits?: { cast?: TmdbExtraCredit[]; crew?: TmdbExtraCredit[] };
+  recommendations?: {
+    results?: Array<{
+      id?: number;
+      title?: string;
+      name?: string;
+      release_date?: string;
+      first_air_date?: string;
+      poster_path?: string | null;
+    }>;
+  };
+  release_dates?: {
+    results?: Array<{
+      iso_3166_1?: string;
+      release_dates?: Array<{ certification?: string; type?: number }>;
+    }>;
+  };
+  content_ratings?: {
+    results?: Array<{ iso_3166_1?: string; rating?: string }>;
+  };
+}
+
+const text = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() ? value.trim() : undefined;
+
+const profilePath = (value: unknown): string | undefined => text(value);
+
+/** One request: the title details with every extras section TMDB can append. */
+export async function tmdbTitleExtras(
+  type: "movie" | "series",
+  tmdbId: number,
+  config: TmdbConfig,
+  fetchImpl?: FetchLike,
+  signal?: AbortSignal,
+): Promise<TmdbTitleExtras | null> {
+  throwIfCancelled(signal);
+  const append = type === "movie"
+    ? "credits,recommendations,release_dates"
+    : "aggregate_credits,recommendations,content_ratings";
+  let reply: TmdbReply<TmdbExtraResponse>;
+  try {
+    reply = await tmdbReply<TmdbExtraResponse>(
+      `/${mediaType(type)}/${tmdbId}`,
+      { api_key: config.apiKey, language: config.language, append_to_response: append },
+      fetchImpl ?? guardedFetch,
+      signal,
+    );
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    log("WARN", "TMDB title extras lookup failed", {
+      operation: "extras",
+      type,
+      id: tmdbId,
+      reason: reasonOf(error, config.apiKey),
+    });
+    return null;
+  }
+  const { response } = reply;
+  throwIfCancelled(signal);
+  if (!response.ok) {
+    log("WARN", "TMDB title extras lookup failed", {
+      operation: "extras",
+      type,
+      id: tmdbId,
+      status: response.status,
+      retryAfterMs: tmdbRetryAfterMs(response),
+    });
+    return null;
+  }
+
+  let body: TmdbExtraResponse;
+  try {
+    if (reply.parseError) throw reply.parseError;
+    body = reply.body ?? await readTmdbJson<TmdbExtraResponse>(response, signal);
+    if (!body || typeof body !== "object") throw new Error("TMDB title extras response is not an object.");
+    throwIfCancelled(signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    log("WARN", "TMDB answered with malformed JSON", {
+      operation: "extras",
+      type,
+      id: tmdbId,
+      reason: reasonOf(error, config.apiKey),
+    });
+    return null;
+  }
+
+  const credits = type === "movie" ? body.credits : body.aggregate_credits;
+  const cast = (Array.isArray(credits?.cast) ? credits.cast : []).flatMap((row) => {
+    const name = text(row.name);
+    if (!name) return [];
+    const character = type === "movie" ? text(row.character) : text(row.roles?.[0]?.character);
+    return [{
+      name,
+      ...(character ? { character } : {}),
+      ...(profilePath(row.profile_path) ? { profilePath: profilePath(row.profile_path) } : {}),
+      order: typeof row.order === "number" && Number.isFinite(row.order) ? row.order : Number.MAX_SAFE_INTEGER,
+    }];
+  });
+  const crew = (Array.isArray(credits?.crew) ? credits.crew : []).flatMap((row) => {
+    const name = text(row.name);
+    if (!name) return [];
+    const jobs = type === "movie"
+      ? [text(row.job)].filter((job): job is string => Boolean(job))
+      : (Array.isArray(row.jobs) ? row.jobs.flatMap((entry) => text(entry.job) ?? []) : []);
+    return jobs.map((job) => ({
+      name,
+      job,
+      ...(profilePath(row.profile_path) ? { profilePath: profilePath(row.profile_path) } : {}),
+    }));
+  });
+  const createdBy = type === "series" && Array.isArray(body.created_by)
+    ? body.created_by.flatMap((row) => {
+      const name = text(row.name);
+      if (!name) return [];
+      return [{
+        name,
+        ...(profilePath(row.profile_path) ? { profilePath: profilePath(row.profile_path) } : {}),
+      }];
+    })
+    : [];
+  const recommendations = (Array.isArray(body.recommendations?.results) ? body.recommendations.results : []).flatMap((row) => {
+    const name = text(row.title) ?? text(row.name);
+    if (!name || typeof row.id !== "number" || !Number.isInteger(row.id)) return [];
+    const date = text(row.release_date) ?? text(row.first_air_date);
+    return [{
+      tmdbId: row.id,
+      name,
+      ...(date ? { date } : {}),
+      ...(profilePath(row.poster_path) ? { posterPath: profilePath(row.poster_path) } : {}),
+    }];
+  });
+
+  const certifications: Record<string, string> = {};
+  if (type === "movie") {
+    const preference = new Map([[3, 0], [4, 1], [5, 2], [6, 3], [2, 4], [1, 5]]);
+    for (const country of Array.isArray(body.release_dates?.results) ? body.release_dates.results : []) {
+      const region = text(country.iso_3166_1);
+      if (!region || certifications[region]) continue;
+      const rows = (Array.isArray(country.release_dates) ? country.release_dates : [])
+        .map((row, index) => ({ row, index }))
+        .sort((left, right) =>
+          (preference.get(left.row.type ?? -1) ?? 6) - (preference.get(right.row.type ?? -1) ?? 6)
+          || left.index - right.index);
+      const certification = rows.flatMap(({ row }) => [text(row.certification)]).find(Boolean);
+      if (certification) certifications[region] = certification;
+    }
+  } else {
+    for (const row of Array.isArray(body.content_ratings?.results) ? body.content_ratings.results : []) {
+      const region = text(row.iso_3166_1);
+      const certification = text(row.rating);
+      if (region && certification && !certifications[region]) certifications[region] = certification;
+    }
+  }
+
+  return {
+    ...(text(type === "movie" ? body.original_title : body.original_name) ? {
+      originalTitle: text(type === "movie" ? body.original_title : body.original_name),
+    } : {}),
+    ...(text(body.original_language) ? { originalLanguage: text(body.original_language) } : {}),
+    createdBy,
+    cast,
+    crew,
+    recommendations,
+    certifications,
+  };
 }
 
 const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;

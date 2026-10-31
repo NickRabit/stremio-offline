@@ -374,6 +374,25 @@ export class ImageProxy {
     };
   }
 
+  rewriteExtras<T extends { people: Array<{ photo?: string }>; related: Array<{ poster?: string }> }>(extras: T): T {
+    if (!secureMode()) return extras;
+    const people = extras.people.map((person) => {
+      const next = { ...person };
+      if (typeof person.photo === "string") next.photo = this.proxied(person.photo);
+      return next;
+    });
+    const related = extras.related.map((item) => {
+      const next = { ...item };
+      if (typeof item.poster === "string") next.poster = this.proxied(item.poster);
+      return next;
+    });
+    return {
+      ...extras,
+      people,
+      related,
+    };
+  }
+
   private path(id: string, ext: string) { return path.join(this.dir, `${id}.${ext}`); }
 
   /** Fewer bytes on disk: the fetched picture is re-encoded once, or comes back as it was.

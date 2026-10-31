@@ -6,7 +6,7 @@ import test from "node:test";
 import { AppError } from "./errors.js";
 import { flushLog, initLogger } from "./logger.js";
 import { outbound, OutboundError } from "./outbound.js";
-import { clearTmdbCache, clearTmdbSearchPause, tmdbExternalId, tmdbGallery, tmdbImage, tmdbMeta, tmdbMovieReleases, tmdbSearch, tmdbSeasonAirDates, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
+import { clearTmdbCache, clearTmdbSearchPause, tmdbExternalId, tmdbGallery, tmdbIdOf, tmdbImage, tmdbMeta, tmdbMovieReleases, tmdbSearch, tmdbSeasonAirDates, tmdbTitleExtras, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
 import type { FetchLike } from "./debrid.js";
 
 const json = (body: unknown, status = 200) =>
@@ -250,9 +250,167 @@ test("a series is read from the tv endpoint", async () => {
 
 test("tmdbImage composes a URL and answers undefined without a path", () => {
   assert.equal(tmdbImage("/back.jpg", "w500"), "https://image.tmdb.org/t/p/w500/back.jpg");
+  assert.equal(tmdbImage("/cast.jpg", "w185"), "https://image.tmdb.org/t/p/w185/cast.jpg");
+  assert.equal(tmdbImage("/poster.jpg", "w342"), "https://image.tmdb.org/t/p/w342/poster.jpg");
   assert.equal(tmdbImage(undefined, "w1280"), undefined);
   assert.equal(tmdbImage(null, "w1280"), undefined);
   assert.equal(tmdbImage("", "w1280"), undefined);
+});
+
+test("tmdbIdOf resolves through the shared find cache", async () => {
+  clearTmdbCache();
+  let finds = 0;
+  const fetchImpl: FetchLike = async () => {
+    finds += 1;
+    return json(findMovie);
+  };
+  assert.equal(await tmdbIdOf("movie", "tt0090257", config, fetchImpl), 31410);
+  assert.equal(await tmdbIdOf("movie", "tt0090257", config, fetchImpl), 31410);
+  assert.equal(finds, 1);
+});
+
+test("tmdbTitleExtras reads movie credits, recommendations and certifications in one request", async () => {
+  const calls: string[] = [];
+  const fetchImpl: FetchLike = async (url) => {
+    calls.push(url);
+    return json({
+      original_title: "Back to the Future",
+      original_language: "en",
+      credits: {
+        cast: [
+          { name: "Michael J. Fox", character: "Marty McFly", profile_path: "/fox.jpg", order: 0 },
+          { character: "Ignored without a name", profile_path: "/nobody.jpg", order: 1 },
+        ],
+        crew: [
+          { name: "Robert Zemeckis", job: "Director", profile_path: "/zemeckis.jpg" },
+          { name: "Robert Zemeckis", job: "Writer" },
+          { name: "Bob Gale", job: "Novel" },
+        ],
+      },
+      recommendations: {
+        results: [
+          { id: 105, title: "Back to the Future Part II", release_date: "1989-11-22", poster_path: "/part2.jpg" },
+          { id: 106, name: "Back to the Future Part III", first_air_date: "1990-05-25" },
+        ],
+      },
+      release_dates: {
+        results: [
+          { iso_3166_1: "CZ", release_dates: [
+            { certification: "", type: 3 },
+            { certification: "12", type: 4 },
+            { certification: "15", type: 3 },
+          ] },
+          { iso_3166_1: "US", release_dates: [{ certification: "PG", type: 4 }] },
+        ],
+      },
+    });
+  };
+
+  const result = await tmdbTitleExtras("movie", 31410, config, fetchImpl);
+
+  assert.equal(calls.length, 1);
+  const url = new URL(calls[0]!);
+  assert.equal(url.pathname, "/3/movie/31410");
+  assert.equal(url.searchParams.get("append_to_response"), "credits,recommendations,release_dates");
+  assert.equal(url.searchParams.get("language"), "cs");
+  assert.deepEqual(result, {
+    originalTitle: "Back to the Future",
+    originalLanguage: "en",
+    createdBy: [],
+    cast: [{
+      name: "Michael J. Fox",
+      character: "Marty McFly",
+      profilePath: "/fox.jpg",
+      order: 0,
+    }],
+    crew: [
+      { name: "Robert Zemeckis", job: "Director", profilePath: "/zemeckis.jpg" },
+      { name: "Robert Zemeckis", job: "Writer" },
+      { name: "Bob Gale", job: "Novel" },
+    ],
+    recommendations: [
+      { tmdbId: 105, name: "Back to the Future Part II", date: "1989-11-22", posterPath: "/part2.jpg" },
+      { tmdbId: 106, name: "Back to the Future Part III", date: "1990-05-25" },
+    ],
+    certifications: { CZ: "15", US: "PG" },
+  });
+});
+
+test("tmdbTitleExtras reads TV aggregate roles, jobs, creators and ratings", async () => {
+  const calls: string[] = [];
+  const result = await tmdbTitleExtras("series", 1396, config, async (url) => {
+    calls.push(url);
+    return json({
+      original_name: "Breaking Bad",
+      original_language: "en",
+      created_by: [{ name: "Vince Gilligan", profile_path: "/vince.jpg" }],
+      aggregate_credits: {
+        cast: [{
+          name: "Bryan Cranston",
+          profile_path: "/bryan.jpg",
+          order: 2,
+          roles: [{ character: "Walter White" }, { character: "Other role" }],
+        }],
+        crew: [{
+          name: "Vince Gilligan",
+          profile_path: "/vince.jpg",
+          jobs: [{ job: "Creator" }, { job: "Director" }, { job: "Writer" }],
+        }],
+      },
+      recommendations: { results: [{ id: 60059, name: "Better Call Saul", first_air_date: "2015-02-08" }] },
+      content_ratings: {
+        results: [
+          { iso_3166_1: "CZ", rating: "18" },
+          { iso_3166_1: "US", rating: "TV-MA" },
+        ],
+      },
+    });
+  });
+
+  assert.equal(calls.length, 1);
+  const url = new URL(calls[0]!);
+  assert.equal(url.pathname, "/3/tv/1396");
+  assert.equal(url.searchParams.get("append_to_response"), "aggregate_credits,recommendations,content_ratings");
+  assert.deepEqual(result?.createdBy, [{ name: "Vince Gilligan", profilePath: "/vince.jpg" }]);
+  assert.deepEqual(result?.cast, [{
+    name: "Bryan Cranston",
+    character: "Walter White",
+    profilePath: "/bryan.jpg",
+    order: 2,
+  }]);
+  assert.deepEqual(result?.crew, [
+    { name: "Vince Gilligan", job: "Creator", profilePath: "/vince.jpg" },
+    { name: "Vince Gilligan", job: "Director", profilePath: "/vince.jpg" },
+    { name: "Vince Gilligan", job: "Writer", profilePath: "/vince.jpg" },
+  ]);
+  assert.deepEqual(result?.recommendations, [{
+    tmdbId: 60059,
+    name: "Better Call Saul",
+    date: "2015-02-08",
+  }]);
+  assert.deepEqual(result?.certifications, { CZ: "18", US: "TV-MA" });
+});
+
+test("tmdbTitleExtras answers null on refusals, malformed JSON and a transport failure", async () => {
+  assert.equal(await tmdbTitleExtras("movie", 1, config, async () => json({}, 401)), null);
+  assert.equal(await tmdbTitleExtras("movie", 2, config, async () => json({}, 404)), null);
+  assert.equal(await tmdbTitleExtras("movie", 3, config, async () => json({}, 429)), null);
+  assert.equal(await tmdbTitleExtras("movie", 4, config, async () =>
+    new Response("<html>", { headers: { "content-type": "application/json" } })), null);
+  assert.equal(await tmdbTitleExtras("movie", 5, config, async () => {
+    throw new Error("TMDB timed out");
+  }), null);
+});
+
+test("tmdbTitleExtras tolerates every appended section being absent", async () => {
+  const result = await tmdbTitleExtras("movie", 6, config, async () => json({}));
+  assert.deepEqual(result, {
+    createdBy: [],
+    cast: [],
+    crew: [],
+    recommendations: [],
+    certifications: {},
+  });
 });
 
 test("an imdb id TMDB does not know answers null", async () => {
@@ -669,6 +827,8 @@ test("neither the log nor the answered metadata carries the API key", async () =
     assert.equal(await tmdbExternalId("movie", 1, { apiKey: "secret-key-42", language: "cs" }, refused), null);
     const meta = await tmdbMeta("movie", "tmdb:1", { apiKey: "secret-key-42", language: "cs" }, refused);
     assert.equal(meta, null);
+    const extras = await tmdbTitleExtras("movie", 1, { apiKey: "secret-key-42", language: "cs" }, refused);
+    assert.equal(extras, null);
     await flushLog();
     const { readFile } = await import("node:fs/promises");
     const text = await readFile(path.join(directory, "app.log"), "utf8").catch(() => "");

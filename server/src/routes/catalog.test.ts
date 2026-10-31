@@ -20,7 +20,9 @@ import type { UserRecord } from "../users.js";
 import { metadata, resetImdbTargets } from "../addons.js";
 import { mediaResources } from "../media-resources.js";
 import { outbound } from "../outbound.js";
+import { configureSecureMode } from "../secure.js";
 import { setFetchTransport } from "../security.js";
+import { clearTitleExtrasCache } from "../title-extras.js";
 import { clearTmdbCache, tmdbMeta } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
 import { RULE_PRESETS, SOURCE_PROFILE_IDS } from "../source-profiles.js";
@@ -236,6 +238,97 @@ test("an explicit gallery request keeps metadata usable without a TMDB key", asy
   assert.equal(meta.name, "Film");
   assert.deepEqual(meta.images, []);
   assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt1", language: "cs", artwork: true }]);
+});
+
+test("GET extras composes TMDB data for the viewer and proxies every image in secure mode", async (t) => {
+  clearTitleExtrasCache();
+  clearTmdbCache();
+  const directory = await mkdtemp(path.join(os.tmpdir(), "catalog-extras-images-"));
+  const imageProxy = new ImageProxy(directory);
+  await imageProxy.load();
+  configureSecureMode(() => true);
+  t.after(async () => {
+    clearTitleExtrasCache();
+    clearTmdbCache();
+    configureSecureMode(() => true);
+    await rm(directory, { recursive: true, force: true });
+  });
+  const copyLookups: Array<{ type: string; id: string; viewer: string }> = [];
+  const harness = await mount([], {
+    id: "tt0111161",
+    type: "movie",
+    name: "Vykoupení z věznice Shawshank",
+    videos: [],
+  }, {
+    viewer: alice,
+    tmdbApiKey: "test-key",
+    imageProxy,
+    localCopies: async (type, id, viewer) => {
+      copyLookups.push({ type, id, viewer: viewer.id });
+      return id === "tt0000012" ? [{ key: "copy", libraryId: "lib", libraryName: "Films", path: "/copy", size: 1 }] : [];
+    },
+  });
+  t.after(harness.close);
+
+  await withStubbedAddons((raw) => {
+    const url = new URL(raw);
+    if (url.pathname === "/3/find/tt0111161") {
+      return json({ movie_results: [{ id: 278 }], tv_results: [] });
+    }
+    if (url.pathname === "/3/movie/278") {
+      assert.equal(url.searchParams.get("append_to_response"), "credits,recommendations,release_dates");
+      return json({
+        original_title: "The Shawshank Redemption",
+        original_language: "en",
+        credits: {
+          cast: [{ name: "Tim Robbins", character: "Andy Dufresne", profile_path: "/tim.jpg", order: 0 }],
+          crew: [{ name: "Frank Darabont", job: "Director", profile_path: "/frank.jpg" }],
+        },
+        recommendations: {
+          results: [{ id: 12, title: "The Green Mile", release_date: "1999-12-10", poster_path: "/green.jpg" }],
+        },
+        release_dates: { results: [{ iso_3166_1: "CZ", release_dates: [{ certification: "15", type: 3 }] }] },
+      });
+    }
+    if (url.pathname === "/3/movie/12/external_ids") return json({ imdb_id: "tt0000012" });
+    throw new Error(`Unexpected URL ${raw}`);
+  }, async () => {
+    const response = await api(harness.base, "/api/meta/movie/tt0111161/extras?language=cs");
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      people: Array<{ name: string; role: string; character?: string; photo?: string }>;
+      related: Array<{ id: string; inLibrary?: boolean; poster?: string }>;
+      ageRating?: string;
+      ageRatingRegion?: string;
+      originalTitle?: string;
+      originalLanguage?: string;
+      source: string;
+    };
+    assert.deepEqual(body.people.map(({ name, role, character }) => ({ name, role, character })), [
+      { name: "Tim Robbins", role: "cast", character: "Andy Dufresne" },
+      { name: "Frank Darabont", role: "director", character: undefined },
+    ]);
+    assert.deepEqual(body.related, [{
+      type: "movie",
+      id: "tt0000012",
+      name: "The Green Mile",
+      year: "1999",
+      poster: body.related[0]?.poster,
+      inLibrary: true,
+    }]);
+    assert.equal(body.ageRating, "15");
+    assert.equal(body.ageRatingRegion, "CZ");
+    assert.equal(body.originalTitle, "The Shawshank Redemption");
+    assert.equal(body.originalLanguage, "en");
+    assert.equal(body.source, "tmdb");
+    assert.match(body.people[0]?.photo ?? "", /^\/api\/image\//);
+    assert.match(body.related[0]?.poster ?? "", /^\/api\/image\//);
+    assert.doesNotMatch(body.people[0]?.photo ?? "", /^https?:\/\//);
+    assert.doesNotMatch(body.related[0]?.poster ?? "", /^https?:\/\//);
+  });
+
+  assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt0111161", language: "cs", artwork: true }]);
+  assert.deepEqual(copyLookups, [{ type: "movie", id: "tt0000012", viewer: alice.id }]);
 });
 
 const library = (id: string, visibleTo?: string[]): LibraryRecord => ({
