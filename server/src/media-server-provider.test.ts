@@ -1048,6 +1048,20 @@ test("searchTypes pins the recursive type set, ordering and mode", async () => {
   }
 });
 
+test("a filter in a folder searches everything beneath it", async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  const { provider } = fixture((_operation, args) => {
+    seen.push(args);
+    return { Items: [{ Id: "c1", Name: "Initial Casting", Type: "MusicVideo" }], TotalRecordCount: 1 };
+  });
+  const page = await provider.pageDirectory("tok", "user-1", "folder-1", { mode: "folders", search: "casting", limit: 10 });
+  assert.deepEqual(page.items.map((item) => item.name), ["Initial Casting"]);
+  assert.equal(seen.at(-1)!.recursive, true);
+  assert.equal(seen.at(-1)!.parentId, "folder-1");
+  await provider.pageDirectory("tok", "user-1", "folder-1", { mode: "folders", limit: 10 });
+  assert.equal(seen.at(-1)!.recursive, false, "browsing a folder still lists only its children");
+});
+
 test("a search Emby answers with a total of 0 still lists its matches and pages on", async () => {
   // Emby 4.x sends the matches of a SearchTerm query with TotalRecordCount 0.
   const matches = ["Alenka", "Alita", "Alvin"];
