@@ -42,6 +42,7 @@ import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.components.leftToNeighbour
+import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.home.HomeAction
@@ -66,6 +67,7 @@ fun ResumeRoute(
   onOpenCatalog: (CatalogDetailArgs) -> Unit,
   /** A remote media-server card opens its own playable detail. */
   onOpenRemote: (RemoteDetailData) -> Unit = {},
+  onOpenDetail: (DetailData) -> Unit = {},
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
   refreshToken: Int = 0,
@@ -154,7 +156,7 @@ fun ResumeRoute(
                 completed = false,
                 caption = captionOf(card, label),
                 cardTag = resumeCardTag(card.key),
-                onClick = { openResume(card, onPlay, onOpenCatalog, onOpenRemote) },
+                onClick = { openResume(card, onPlay, onOpenCatalog, onOpenRemote, onOpenDetail) },
                 modifier = Modifier
                   .focusRequester(requester)
                   .onFocusChanged {
@@ -179,12 +181,14 @@ private fun openResume(
   onPlay: (PlayTarget) -> Unit,
   onOpenCatalog: (CatalogDetailArgs) -> Unit,
   onOpenRemote: (RemoteDetailData) -> Unit,
+  onOpenDetail: (DetailData) -> Unit,
 ) {
   when (val action = actionFor(card)) {
     is HomeAction.Play -> onPlay(action.target)
     is HomeAction.OpenCatalog -> onOpenCatalog(action.args)
     is HomeAction.OpenRemote -> onOpenRemote(action.data)
-    is HomeAction.OpenLibrary, is HomeAction.OpenDetail -> Unit
+    is HomeAction.OpenDetail -> onOpenDetail(action.detail)
+    is HomeAction.OpenLibrary -> Unit
   }
 }
 

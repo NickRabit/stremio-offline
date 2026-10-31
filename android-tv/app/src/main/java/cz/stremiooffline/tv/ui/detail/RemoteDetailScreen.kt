@@ -22,6 +22,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -56,6 +57,7 @@ import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
 import cz.stremiooffline.tv.ui.catalog.DetailAction
+import cz.stremiooffline.tv.ui.catalog.DetailActionHeight
 import cz.stremiooffline.tv.ui.catalog.DetailActionRow
 import cz.stremiooffline.tv.ui.catalog.DownloadIcon
 import cz.stremiooffline.tv.ui.catalog.EyeIcon
@@ -761,7 +763,11 @@ fun RemoteDetailScreen(
     }
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Tokens.Panel2.copy(alpha = 0.4f), Tokens.Bg, Tokens.Bg))))
     Column(
-      Modifier.fillMaxSize().padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
+      Modifier
+        .fillMaxSize()
+        .clipToBounds()
+        .verticalScroll(extras.scroll)
+        .padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
       verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
       Text(eyebrow(detail), color = Tokens.Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.8.sp)
@@ -804,6 +810,7 @@ fun RemoteDetailScreen(
             onClick = { playPressed() },
             kind = FocusButtonKind.Primary,
             enabled = primary != null,
+            height = DetailActionHeight,
             modifier = Modifier.focusRequester(playFocus).testTag(TagRemoteDetailPlay),
           )
         },
@@ -811,7 +818,6 @@ fun RemoteDetailScreen(
           label = stringResource(R.string.tv_start_over),
           icon = ReplayIcon,
           tag = TagRemoteDetailStartOver,
-          displayLabel = stringResource(R.string.detail_action_from_start),
           onClick = { startOverPressed() },
         ) else null,
         sources = if (versionsAvailable) {
@@ -824,6 +830,7 @@ fun RemoteDetailScreen(
                 save.resolving = false
                 sourceListOpen = true
               },
+              height = DetailActionHeight,
               modifier = Modifier.focusRequester(versionsFocus).testTag(TagRemoteDetailVersions),
             )
           }
@@ -846,7 +853,6 @@ fun RemoteDetailScreen(
           icon = null,
           glyph = if (favorite) "★" else "☆",
           tag = TagRemoteDetailFavorite,
-          displayLabel = stringResource(R.string.detail_action_favorite),
           enabled = stateLoaded && !favouriteBusy && !watchedBusy,
           onClick = { toggleFavourite() },
         ),
@@ -863,15 +869,14 @@ fun RemoteDetailScreen(
           label = stringResource(R.string.media_server_mark_watched),
           icon = EyeIcon,
           tag = TagRemoteDetailMarkWatched,
-          displayLabel = stringResource(R.string.detail_action_watched),
           enabled = !favouriteBusy && !watchedBusy,
           onClick = { toggleWatched() },
         ) else null,
         caption = caption,
-        modifier = Modifier.downIntoExtras(extras),
+        modifier = Modifier.scrollToTopOnFocus(extras, scope).downIntoExtras(extras),
       )
       actionRow?.let { row ->
-        TitleTechBlock(row, Modifier.testTag(TagRemoteDetailPickCaption))
+        TitleTechBlock(row, Modifier.testTag(TagRemoteDetailPickCaption), versionCount = sources.size)
       }
 
       // A copy that never opened its panel (no readable destinations, no native right) says why
@@ -892,11 +897,7 @@ fun RemoteDetailScreen(
       }
       if (mutationError) Text(stringResource(R.string.media_server_state_error), color = Tokens.Red, fontSize = 11.5.sp)
 
-      Column(
-        Modifier
-          .weight(1f)
-          .then(if (loadExtras != null) Modifier.verticalScroll(extras.scroll) else Modifier),
-      ) {
+      Column {
         Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
           when {
             sourcesLoading -> Text(
@@ -918,7 +919,7 @@ fun RemoteDetailScreen(
             ) {
               Text(stringResource(R.string.media_server_sources_empty), color = Tokens.Muted, fontSize = 11.5.sp)
             }
-            else -> Text(stringResource(R.string.media_server_versions_available, sources.size.toString()), color = Tokens.Muted, fontSize = 11.sp)
+            else -> {}
           }
           if (stateError) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

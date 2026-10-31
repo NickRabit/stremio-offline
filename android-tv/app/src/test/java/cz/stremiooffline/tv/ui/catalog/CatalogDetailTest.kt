@@ -2,6 +2,8 @@
 
 package cz.stremiooffline.tv.ui.catalog
 
+import android.content.pm.ActivityInfo
+import android.content.pm.ResolveInfo
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -16,6 +18,8 @@ import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -38,6 +42,7 @@ import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.data.TitleRatingsDto
+import cz.stremiooffline.tv.data.TitleVideoDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
@@ -45,6 +50,9 @@ import cz.stremiooffline.tv.ui.detail.TagTitleExtrasImdb
 import cz.stremiooffline.tv.ui.detail.TagTitleExtrasTmdb
 import cz.stremiooffline.tv.ui.detail.relatedTitleTag
 import cz.stremiooffline.tv.ui.detail.titlePersonTag
+import cz.stremiooffline.tv.ui.detail.videoCardTag
+import cz.stremiooffline.tv.ui.detail.videoIntent
+import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
@@ -55,6 +63,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -120,6 +129,19 @@ class CatalogDetailTest {
   private fun press(key: Key) {
     compose.onRoot().performKeyInput { pressKey(key) }
     compose.waitForIdle()
+  }
+
+  private fun resolveTrailer() {
+    val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+    shadowOf(context.packageManager).addResolveInfoForIntent(
+      videoIntent("trailer"),
+      ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply {
+          packageName = context.packageName
+          name = "${context.packageName}.Video"
+        }
+      },
+    )
   }
 
   private fun focused(tag: String): Boolean =
@@ -1026,7 +1048,7 @@ class CatalogDetailTest {
   }
 
   @Test
-  fun `an icon action has its name underneath the remote`() {
+  fun `the focused icon action is named under the whole row`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
     api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
@@ -1034,9 +1056,9 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    compose.onNodeWithText("Mark as unwatched").assertExists()
+    compose.onNodeWithTag(TagActionCaption).assertDoesNotExist()
     focusOn(TagCatalogForget)
-    compose.onNodeWithText("Mark as unwatched").assertExists()
+    compose.onNodeWithTag(TagActionCaption).assertTextContains("Mark as unwatched")
   }
 
   // --- The one action row ------------------------------------------------------------------------
@@ -1053,8 +1075,8 @@ class CatalogDetailTest {
     assertEquals(
       listOf(
         TagCatalogPrimary,
-        TagCatalogStartOver,
         TagCatalogSources,
+        TagCatalogStartOver,
         TagCatalogToLibrary,
         TagCatalogFavourite,
         TagCatalogForget,
@@ -1062,8 +1084,8 @@ class CatalogDetailTest {
       ),
       compose.actionRowOrder(
         TagCatalogPrimary,
-        TagCatalogStartOver,
         TagCatalogSources,
+        TagCatalogStartOver,
         TagCatalogToLibrary,
         TagCatalogFavourite,
         TagCatalogForget,
@@ -1299,5 +1321,37 @@ class CatalogDetailTest {
     compose.onNodeWithTag(TagTitleExtrasTmdb).assertExists()
     compose.onNodeWithText("8.2").assertExists()
     compose.onNodeWithText("2017").assertExists()
+  }
+
+  @Test
+  fun `DOWN walks the whole detail and UP returns it to the hero`() {
+    resolveTrailer()
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    api.titleExtrasValue = TitleExtrasDto(
+      people = listOf(TitlePersonDto(name = "Tom Hanks", role = "cast", character = "Woody")),
+      videos = listOf(TitleVideoDto(key = "trailer", name = "Trailer", kind = "trailer")),
+      related = listOf(RelatedTitleDto(type = "movie", id = "tt2", name = "Toy Story 2")),
+    )
+    mount(api, movieArgs())
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(videoCardTag("trailer")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(relatedTitleTag("tt2")).assertIsFocused()
+
+    val root = compose.onRoot().getBoundsInRoot()
+    assertTrue(compose.onNodeWithText("It").getUnclippedBoundsInRoot().top < root.top)
+
+    repeat(3) { press(Key.DirectionUp) }
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    compose.onNodeWithText("It").assertIsDisplayed()
+    val title = compose.onNodeWithText("It").getUnclippedBoundsInRoot()
+    assertTrue(title.top >= root.top && title.bottom <= root.bottom)
   }
 }

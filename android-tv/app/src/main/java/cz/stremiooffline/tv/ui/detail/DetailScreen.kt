@@ -26,8 +26,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -64,6 +66,7 @@ import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
 import cz.stremiooffline.tv.ui.catalog.DetailAction
+import cz.stremiooffline.tv.ui.catalog.DetailActionHeight
 import cz.stremiooffline.tv.ui.catalog.DetailActionRow
 import cz.stremiooffline.tv.ui.catalog.DownloadIcon
 import cz.stremiooffline.tv.ui.catalog.EyeIcon
@@ -81,6 +84,7 @@ import cz.stremiooffline.tv.ui.catalog.libraryCopySubject
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.nativeRowTarget
+import cz.stremiooffline.tv.ui.detail.scrollToTopOnFocus
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.WideCard
@@ -644,7 +648,7 @@ fun DetailScreen(
       // not on whatever card happens to sit below the button. An open panel keeps the remote.
       .onPreviewKeyEvent { event ->
         val panelUp = forgetPanelOpen || sourcesOpen || save.request != null
-        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && !panelUp) {
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && !panelUp && extras.actionsFocused) {
           if (current.files.size > 1) {
             runCatching { rowFocus.requestFocus() }.isSuccess
           } else {
@@ -667,7 +671,8 @@ fun DetailScreen(
     Column(
       modifier = Modifier
         .fillMaxSize()
-        .then(if (sourcesApi != null) Modifier.verticalScroll(extras.scroll) else Modifier)
+        .clipToBounds()
+        .verticalScroll(extras.scroll)
         .padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
       verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
@@ -718,6 +723,7 @@ fun DetailScreen(
             text = stringResource(if (resuming) R.string.tv_resume else R.string.tv_play),
             onClick = { playPressed() },
             kind = FocusButtonKind.Primary,
+            height = DetailActionHeight,
             modifier = Modifier.focusRequester(primaryFocus).testTag(TagDetailPrimary),
           )
         },
@@ -725,7 +731,6 @@ fun DetailScreen(
           label = stringResource(R.string.tv_start_over),
           icon = ReplayIcon,
           tag = TagDetailStartOver,
-          displayLabel = stringResource(R.string.detail_action_from_start),
           onClick = { startOverPressed() },
         ) else null,
         // One text action for the whole Sources panel, whatever the file turned out to be: the
@@ -736,6 +741,7 @@ fun DetailScreen(
             FocusButton(
               text = stringResource(R.string.sources_heading),
               onClick = { openSources(playFile, sourcesFocus) },
+              height = DetailActionHeight,
               modifier = Modifier.focusRequester(sourcesFocus).testTag(TagDetailSources),
             )
           }
@@ -758,7 +764,6 @@ fun DetailScreen(
           icon = null,
           glyph = if (favourite) "★" else "☆",
           tag = TagDetailFavourite,
-          displayLabel = stringResource(R.string.detail_action_favorite),
           onClick = { toggleFavourite() },
         ),
         unwatched = if (forgetKeys.isNotEmpty()) DetailAction(
@@ -772,11 +777,13 @@ fun DetailScreen(
           label = stringResource(R.string.media_server_mark_watched),
           icon = EyeIcon,
           tag = TagDetailMarkWatched,
-          displayLabel = stringResource(R.string.detail_action_watched),
           enabled = !markingWatched,
           onClick = { playFile?.let(::markWatchedNow) },
         ) else null,
         caption = caption,
+        modifier = Modifier
+          .scrollToTopOnFocus(extras, scope)
+          .onFocusChanged { extras.actionsFocused = it.hasFocus },
       )
       actionRow?.let { row ->
         TitleTechBlock(row, Modifier.testTag(TagDetailPickCaption))

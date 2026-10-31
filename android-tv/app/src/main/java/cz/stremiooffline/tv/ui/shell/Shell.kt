@@ -355,6 +355,7 @@ fun Shell(
           },
           onOpenCatalog = ::openCatalog,
           onOpenRemote = { remoteDetail = it },
+          onOpenDetail = { detail = it },
           restoreToken = returnToken,
           refreshToken = resumeRefreshToken,
         )

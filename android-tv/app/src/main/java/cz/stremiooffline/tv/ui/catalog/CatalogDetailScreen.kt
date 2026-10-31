@@ -25,6 +25,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -85,6 +86,7 @@ import cz.stremiooffline.tv.ui.detail.TitleExtrasRows
 import cz.stremiooffline.tv.ui.detail.TitleExtrasState
 import cz.stremiooffline.tv.ui.detail.TitleTechBlock
 import cz.stremiooffline.tv.ui.detail.downIntoExtras
+import cz.stremiooffline.tv.ui.detail.scrollToTopOnFocus
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -1006,6 +1008,7 @@ fun CatalogDetailScreen(
     Column(
       modifier = Modifier
         .fillMaxSize()
+        .clipToBounds()
         .verticalScroll(ui.extras.scroll)
         .padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
       verticalArrangement = Arrangement.spacedBy(9.dp),
@@ -1027,6 +1030,13 @@ fun CatalogDetailScreen(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.width(760.dp),
       )
+      TitleExtraFacts(
+        state = ui.extras,
+        name = meta.name,
+        metaLine = metaLine(meta),
+        uiLanguage = settings.uiLanguage,
+        imdbFallback = meta.ratingText,
+      )
       val selectedEpisodeLine = if (isSeries) pick.selectedVideo?.let { episodeLine(it) } else null
       if (selectedEpisodeLine != null) {
         Text(
@@ -1037,13 +1047,6 @@ fun CatalogDetailScreen(
           modifier = Modifier.testTag(TagCatalogEpisode),
         )
       }
-      TitleExtraFacts(
-        state = ui.extras,
-        name = meta.name,
-        metaLine = metaLine(meta),
-        uiLanguage = settings.uiLanguage,
-        imdbFallback = meta.ratingText,
-      )
       val description = meta.description
       if (description != null) {
         Text(
@@ -1081,13 +1084,13 @@ fun CatalogDetailScreen(
             onClick = { playPressed() },
             kind = FocusButtonKind.Primary,
             leading = if (pendingPlay || findingSources) ({ TvSpinner() }) else null,
+            height = DetailActionHeight,
             modifier = Modifier.focusRequester(focus.primary).testTag(TagCatalogPrimary),
           )
         },
         // A stored position is what offers a fresh start beside Play, for the row Play would play.
         startOver = if (forgetKeys.isNotEmpty()) catalogAction(
           TagCatalogStartOver, stringResource(R.string.tv_start_over), ReplayIcon,
-          displayLabel = stringResource(R.string.detail_action_from_start),
           modifier = Modifier.onFocusChanged { focus.startOverFocused = it.isFocused },
         ) { startOverPressed() } else null,
         sources = {
@@ -1098,6 +1101,7 @@ fun CatalogDetailScreen(
               pick.sourcesOpen = true
             },
             leading = if (anyAsking) ({ TvSpinner() }) else null,
+            height = DetailActionHeight,
             modifier = Modifier.focusRequester(focus.sourcesOpener).testTag(TagCatalogSources),
           )
         },
@@ -1114,7 +1118,6 @@ fun CatalogDetailScreen(
           TagCatalogFavourite,
           stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
           glyph = if (favourite) "★" else "☆",
-          displayLabel = stringResource(R.string.detail_action_favorite),
         ) { toggleFavourite() },
         unwatched = if (forgetKeys.isNotEmpty()) catalogAction(
           TagCatalogForget, stringResource(R.string.media_server_unwatch), EyeOffIcon,
@@ -1126,7 +1129,6 @@ fun CatalogDetailScreen(
           TagCatalogMarkWatched,
           stringResource(R.string.media_server_mark_watched),
           EyeIcon,
-          displayLabel = stringResource(R.string.detail_action_watched),
         ) {
             scope.launch {
               runCatching {
@@ -1140,7 +1142,9 @@ fun CatalogDetailScreen(
             }
         } else null,
         caption = ui.caption,
-        modifier = Modifier.onFocusChanged { focus.actionRowFocused = it.hasFocus },
+        modifier = Modifier
+          .scrollToTopOnFocus(ui.extras, scope)
+          .onFocusChanged { focus.actionRowFocused = it.hasFocus },
         extras = listOfNotNull(
           // The web's bulk download, for the whole batch at once: it needs no source of its own, so
           // it sits beside To library for any series with an episode selected. A native pick has no
@@ -1754,7 +1758,6 @@ private fun catalogAction(
   label: String,
   icon: ImageVector? = null,
   glyph: String = "",
-  displayLabel: String? = label,
   enabled: Boolean = true,
   modifier: Modifier = Modifier,
   onClick: () -> Unit,
@@ -1765,7 +1768,6 @@ private fun catalogAction(
   tag = tag,
   enabled = enabled,
   glyph = glyph,
-  displayLabel = displayLabel,
   modifier = modifier,
 )
 

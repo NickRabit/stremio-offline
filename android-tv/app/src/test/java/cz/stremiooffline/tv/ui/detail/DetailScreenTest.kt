@@ -2,6 +2,9 @@
 
 package cz.stremiooffline.tv.ui.detail
 
+import android.content.Context
+import android.content.pm.ActivityInfo
+import android.content.pm.ResolveInfo
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -12,6 +15,8 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -19,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
+import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BrowseItem
@@ -27,6 +33,8 @@ import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.data.TitleRatingsDto
+import cz.stremiooffline.tv.data.TitleVideoDto
+import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
@@ -35,6 +43,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -123,6 +132,19 @@ class DetailScreenTest {
   private fun press(key: Key) {
     compose.onRoot().performKeyInput { pressKey(key) }
     compose.waitForIdle()
+  }
+
+  private fun resolveTrailer() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    shadowOf(context.packageManager).addResolveInfoForIntent(
+      videoIntent("trailer"),
+      ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply {
+          packageName = context.packageName
+          name = "${context.packageName}.Video"
+        }
+      },
+    )
   }
 
   /** RIGHT from the primary action reaches the star, whether or not Start over sits between. */
@@ -483,5 +505,37 @@ class DetailScreenTest {
 
     compose.onNodeWithTag(TagTitleExtrasImdb).assertExists()
     compose.onNodeWithTag(TagTitleExtrasTmdb).assertExists()
+  }
+
+  @Test
+  fun `DOWN walks the whole detail and UP returns it to the hero`() {
+    resolveTrailer()
+    val path = "Films/It/It.mkv"
+    val api = FakeTvApi()
+    api.libraryTitleValues[path] = LibraryTitleDto(type = "movie", id = "tt1", name = "It")
+    api.titleExtrasValue = TitleExtrasDto(
+      people = listOf(TitlePersonDto(name = "Tom Hanks", role = "cast", character = "Woody")),
+      videos = listOf(TitleVideoDto(key = "trailer", name = "Trailer", kind = "trailer")),
+      related = listOf(RelatedTitleDto(type = "movie", id = "tt2", name = "Toy Story 2")),
+    )
+    mount(detail(listOf(file(path))), sourcesApi = api)
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(videoCardTag("trailer")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(relatedTitleTag("tt2")).assertIsFocused()
+
+    val root = compose.onRoot().getBoundsInRoot()
+    assertTrue(compose.onNodeWithText("It").getUnclippedBoundsInRoot().top < root.top)
+
+    repeat(3) { press(Key.DirectionUp) }
+    compose.onNodeWithTag(TagDetailPrimary).assertIsFocused()
+    compose.onNodeWithText("It").assertIsDisplayed()
+    val title = compose.onNodeWithText("It").getUnclippedBoundsInRoot()
+    assertTrue(title.top >= root.top && title.bottom <= root.bottom)
   }
 }

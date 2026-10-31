@@ -259,6 +259,28 @@ class TitleExtrasTest {
   }
 
   @Test
+  fun `the original title and language share one line under the title`() {
+    val state = TitleExtrasState().apply {
+      extras = TitleExtrasDto(
+        originalTitle = "Original",
+        originalLanguage = "en",
+      )
+    }
+    compose.setContent {
+      TitleExtraFacts(
+        state = state,
+        name = "Movie",
+        metaLine = "1994 · Drama",
+        uiLanguage = "cs",
+      )
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithText("Original title Original · English").assertExists()
+    compose.onNodeWithText("Original language English").assertDoesNotExist()
+  }
+
+  @Test
   fun `the technical block names source video audio and subtitle facts`() {
     val stream = StreamDto(
       sourceId = "s1",
@@ -274,7 +296,7 @@ class TitleExtrasTest {
       behaviorHints = cz.stremiooffline.tv.data.BehaviorHintsDto(videoSize = 6_700_000_000.0),
     )
     compose.setContent {
-      TitleTechBlock(stream, uiLanguage = "en")
+      TitleTechBlock(stream, uiLanguage = "en", versionCount = 1)
     }
     compose.waitForIdle()
 
@@ -286,6 +308,7 @@ class TitleExtrasTest {
     compose.onNodeWithText("Czech, English", substring = true).assertExists()
     compose.onNodeWithText("DTS-HD MA 5.1", substring = true).assertExists()
     compose.onNodeWithText("Subtitles", substring = true).assertExists()
+    compose.onNodeWithText("1 versions available", substring = true).assertExists()
   }
 
   @Test

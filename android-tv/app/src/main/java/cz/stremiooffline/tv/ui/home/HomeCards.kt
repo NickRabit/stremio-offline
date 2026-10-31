@@ -133,11 +133,10 @@ fun heroDescription(card: HomeCard, meta: MetaDto?): String? =
     (card as? HomeCard.ResumeFile)?.subtitle?.takeIf { it.isNotBlank() }
   }
 
-/** Where OK on a card goes, for Home and for Continue watching alike: a remembered title opens
- *  its detail and plays at once, a pending next episode opens its detail without playing, and the
- *  other kinds keep the player, library folder or catalogue detail they have always opened. */
+/** Where OK on a card goes, for Home and for Continue watching alike: a continue card opens the
+ *  same detail as its non-resume counterpart, and the other kinds keep their existing destination. */
 fun actionFor(card: HomeCard): HomeAction = when (card) {
-  is HomeCard.ResumeFile -> play(card.path, card.title)
+  is HomeCard.ResumeFile -> fileDetail(card.path, card.title, card.season, card.episode, card.poster, card.wide)
   is HomeCard.Completed -> fileDetail(card.path, card.title, card.season, card.episode, card.poster, card.wide)
   is HomeCard.Recent -> fileDetail(card.path, card.label, card.season, card.episode, card.poster, card.wide)
   is HomeCard.Favorite -> when {
@@ -157,7 +156,7 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
       type = card.type,
       episode = card.episode?.let { episode -> card.season?.let { season -> ResumeEpisode(card.key, season, episode) } },
       forgetKeys = card.forgetKeys,
-      autoPlay = !card.pending,
+      autoPlay = false,
     ),
   )
   is HomeCard.Episode -> HomeAction.OpenCatalog(
@@ -182,7 +181,7 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
       type = card.type,
     ),
   )
-  is HomeCard.Remote -> HomeAction.OpenRemote(remoteDetailOf(card).copy(autoPlay = true))
+  is HomeCard.Remote -> HomeAction.OpenRemote(remoteDetailOf(card).copy(autoPlay = false))
 }
 
 private fun play(path: String, title: String): HomeAction.Play =

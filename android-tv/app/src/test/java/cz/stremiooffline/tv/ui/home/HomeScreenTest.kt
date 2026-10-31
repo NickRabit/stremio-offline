@@ -361,7 +361,7 @@ class HomeScreenTest {
   }
 
   @Test
-  fun `ok on a resume-file card plays the file directly`() {
+  fun `ok on a resume-file card opens the file detail directly`() {
     val api = FakeTvApi()
     serve(api, order("resume"), mapOf("resume" to row(resumeFile("a", "It", path = "browse/Films/It.mkv"))))
     val actions = mutableListOf<HomeAction>()
@@ -370,10 +370,9 @@ class HomeScreenTest {
 
     compose.onNodeWithTag(homeCardTag("a")).performKeyInput { pressKey(Key.DirectionCenter) }
 
-    assertEquals(
-      HomeAction.Play(PlayTarget(key = "file:browse/Films/It.mkv", title = "It", resume = true, path = "browse/Films/It.mkv")),
-      actions.single(),
-    )
+    val action = actions.single() as HomeAction.OpenDetail
+    assertEquals("It", action.detail.title)
+    assertEquals("browse/Films/It.mkv", action.detail.files.single().path)
   }
 
   @Test
@@ -503,7 +502,7 @@ class HomeScreenTest {
   }
 
   @Test
-  fun `ok on a resume-catalogue card opens the catalogue at its episode`() {
+  fun `ok on a resume-catalogue card opens the catalogue at its episode without playing`() {
     val api = FakeTvApi()
     serve(
       api,
@@ -532,7 +531,7 @@ class HomeScreenTest {
     assertEquals("series", action.args.type)
     assertEquals("tt1", action.args.meta.id)
     assertEquals(ResumeEpisode("series:x:1:2", 1, 2), action.args.episode)
-    assertEquals(true, action.args.autoPlay)
+    assertEquals(false, action.args.autoPlay)
   }
 
   @Test
@@ -912,6 +911,31 @@ class HomeScreenTest {
     val width = card.right - card.left
     val height = card.bottom - card.top
     assertTrue("the card is $width x $height, not a wide one", width > height)
+  }
+
+  @Test
+  fun `ok on a remote continue card opens its detail without auto-playing`() {
+    val api = FakeTvApi()
+    val remote = HomeCard.Remote(
+      key = "remote:1",
+      title = "Heat",
+      provider = "jellyfin",
+      libraryId = "rlibA",
+      libraryName = "Filmy",
+      itemId = "iA",
+      itemType = "movie",
+    )
+    serve(api, order("resume"), mapOf("resume" to row(remote)))
+    val actions = mutableListOf<HomeAction>()
+    mount(api, onAction = { actions += it })
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(homeCardTag("remote:1")).performKeyInput { pressKey(Key.DirectionCenter) }
+
+    val action = actions.single() as HomeAction.OpenRemote
+    assertEquals("rlibA", action.data.libraryId)
+    assertEquals("iA", action.data.item.id)
+    assertFalse(action.data.autoPlay)
   }
 
   @Test

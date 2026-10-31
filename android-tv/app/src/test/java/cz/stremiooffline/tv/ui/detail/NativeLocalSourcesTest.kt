@@ -823,8 +823,8 @@ class NativeLocalSourcesTest {
     assertEquals(
       listOf(
         TagDetailPrimary,
-        TagDetailStartOver,
         TagDetailSources,
+        TagDetailStartOver,
         TagDetailToLibrary,
         TagDetailFavourite,
         TagDetailForget,
@@ -832,8 +832,8 @@ class NativeLocalSourcesTest {
       ),
       compose.actionRowOrder(
         TagDetailPrimary,
-        TagDetailStartOver,
         TagDetailSources,
+        TagDetailStartOver,
         TagDetailToLibrary,
         TagDetailFavourite,
         TagDetailForget,

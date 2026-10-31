@@ -1,9 +1,10 @@
 package cz.stremiooffline.tv.ui.catalog
 
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,12 +24,16 @@ import cz.stremiooffline.tv.ui.components.outlineIcon
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 /**
- * The name of the icon button that holds the remote, used to brighten its label. The state sits in
+ * The name of the icon button that holds the remote, shown under the action row. The state sits in
  * an object of its own because the detail screens are already near the size ART can verify.
  */
 class ActionCaption {
   var text by mutableStateOf("")
 }
+
+const val TagActionCaption = "detail_action_caption"
+
+val DetailActionHeight = 44.dp
 
 /** One secondary action of a detail's action row. */
 class DetailAction(
@@ -41,14 +46,11 @@ class DetailAction(
   val glyph: String = "",
   /** Extra modifiers the caller needs on the button (focus requesters, focus listeners). */
   val modifier: Modifier = Modifier,
-  /** A short label under the icon; [label] remains the full spoken name. */
-  val displayLabel: String? = label,
 )
 
 /**
- * The one action row every title detail draws, in the one order the details share: Play, Start
- * over, Sources, To library, Favourite, Mark as unwatched, Mark watched, then [extras] in the order
- * given. A null action is not drawn. Every icon has its name underneath; the focused one is brighter.
+ * The one action row every title detail draws: Play, Sources, Start over, To library, Favourite,
+ * Mark as unwatched, Mark watched, then [extras] in the order given. A null action is not drawn.
  */
 @Composable
 fun DetailActionRow(
@@ -63,43 +65,43 @@ fun DetailActionRow(
   modifier: Modifier = Modifier,
   extras: List<DetailAction> = emptyList(),
 ) {
-  Row(
-    modifier = modifier,
-    horizontalArrangement = Arrangement.spacedBy(11.dp),
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    primary()
-    startOver?.let { DetailActionButton(it, caption) }
-    sources?.invoke()
-    toLibrary?.let { DetailActionButton(it, caption) }
-    DetailActionButton(favourite, caption)
-    unwatched?.let { DetailActionButton(it, caption) }
-    watched?.let { DetailActionButton(it, caption) }
-    extras.forEach { DetailActionButton(it, caption) }
+  Column(modifier) {
+    Row(
+      horizontalArrangement = Arrangement.spacedBy(11.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      primary()
+      sources?.invoke()
+      startOver?.let { DetailActionButton(it, caption) }
+      toLibrary?.let { DetailActionButton(it, caption) }
+      DetailActionButton(favourite, caption)
+      unwatched?.let { DetailActionButton(it, caption) }
+      watched?.let { DetailActionButton(it, caption) }
+      extras.forEach { DetailActionButton(it, caption) }
+    }
+    if (caption.text.isNotEmpty()) {
+      Text(
+        caption.text,
+        color = Tokens.Muted,
+        fontSize = 12.sp,
+        maxLines = 1,
+        modifier = Modifier.padding(start = 2.dp, top = 4.dp).testTag(TagActionCaption),
+      )
+    }
   }
 }
 
 @Composable
 private fun DetailActionButton(action: DetailAction, caption: ActionCaption) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-    ActionIconButton(
-      label = action.label,
-      icon = action.icon,
-      onClick = action.onClick,
-      caption = caption,
-      modifier = action.modifier.testTag(action.tag),
-      enabled = action.enabled,
-      glyph = action.glyph,
-    )
-    action.displayLabel?.takeIf { it.isNotBlank() }?.let {
-      Text(
-        it,
-        color = if (caption.text == action.label) Tokens.Text else Tokens.Muted,
-        fontSize = 9.sp,
-        maxLines = 1,
-      )
-    }
-  }
+  ActionIconButton(
+    label = action.label,
+    icon = action.icon,
+    onClick = action.onClick,
+    caption = caption,
+    modifier = action.modifier.testTag(action.tag),
+    enabled = action.enabled,
+    glyph = action.glyph,
+  )
 }
 
 /** A square icon button for a secondary action; [label] is its spoken name and focus caption. */
@@ -119,6 +121,7 @@ fun ActionIconButton(
     onClick = onClick,
     enabled = enabled,
     kind = FocusButtonKind.Icon,
+    height = DetailActionHeight,
     leading = icon?.let { vector -> { Icon(vector, contentDescription = null, modifier = Modifier.size(18.dp)) } },
     contentDescription = label,
     modifier = modifier.onFocusChanged {

@@ -88,8 +88,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 const val TagTitleExtrasCast = "title_extras_cast"
 const val TagTitleExtrasRelated = "title_extras_related"
@@ -112,6 +114,7 @@ private val StripOrder = listOf("creator", "director", "cast", "writer", "novel"
 class TitleExtrasState {
   var extras by mutableStateOf<TitleExtrasDto?>(null)
   var loading by mutableStateOf(false)
+  var actionsFocused by mutableStateOf(false)
   val scroll = ScrollState(0)
   val castFocus = FocusRequester()
   val videoFocus = FocusRequester()
@@ -282,6 +285,12 @@ fun TitleExtraFacts(
   val originalLanguage = extras.originalLanguage?.trim()?.takeIf { it.isNotEmpty() }
   val languageDiffers = originalLanguage != null && languageCode(originalLanguage) != languageCode(uiLanguage ?: uiLocale.language)
   val languageName = originalLanguage?.takeIf { languageDiffers }?.let { Locale(it).getDisplayLanguage(uiLocale) }
+  val originalLine = when {
+    titleDiffers -> stringResource(R.string.detail_original_title, originalTitle.orEmpty()) +
+      languageName?.let { " · $it" }.orEmpty()
+    languageDiffers -> stringResource(R.string.detail_original_language, languageName.orEmpty())
+    else -> null
+  }
   val release = parseReleaseTime(extras.nextEpisode?.released)
   var nowMillis by remember { mutableLongStateOf(clock()) }
   val nextEpisodeShown = release != null && release > nowMillis
@@ -294,9 +303,9 @@ fun TitleExtraFacts(
   }
 
   Column(modifier, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-    if (titleDiffers) {
+    if (originalLine != null) {
       Text(
-        stringResource(R.string.detail_original_title, originalTitle.orEmpty()),
+        originalLine,
         color = Tokens.Muted,
         fontSize = 10.5.sp,
       )
@@ -306,13 +315,6 @@ fun TitleExtraFacts(
     }
     if (age != null || imdb != null || tmdb != null) {
       RatingsRow(age = age, imdb = imdb, tmdb = tmdb, tmdbVotes = extras.ratings.tmdbVotes, locale = uiLocale)
-    }
-    if (languageDiffers) {
-      Text(
-        stringResource(R.string.detail_original_language, languageName.orEmpty()),
-        color = Tokens.Muted,
-        fontSize = 10.5.sp,
-      )
     }
     if (nextEpisodeShown) {
       val next = extras.nextEpisode ?: return@Column
@@ -638,18 +640,29 @@ fun Modifier.downIntoExtras(state: TitleExtrasState): Modifier = onPreviewKeyEve
   event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && state.focusFirst()
 }
 
+fun Modifier.scrollToTopOnFocus(state: TitleExtrasState, scope: CoroutineScope): Modifier = onFocusChanged {
+  if (it.hasFocus) scope.launch { state.scroll.animateScrollTo(0) }
+}
+
 @Composable
 fun TitleTechBlock(
   stream: StreamDto,
   modifier: Modifier = Modifier,
   uiLanguage: String? = null,
   titleLanguage: String? = null,
+  versionCount: Int = 0,
 ) {
   val locale = uiLanguage?.takeIf { it.isNotBlank() }?.let(::Locale) ?: LocalConfiguration.current.locales[0]
   val sourceName = sourceGroupName(stream)
     ?: stream.behaviorHints?.filename?.takeIf { Streams.isLocalStream(stream) && it.isNotBlank() }
     ?: stream.name?.takeIf { it.isNotBlank() }
-  val source = listOfNotNull(sourceName, formatSize(Streams.streamSize(stream))).joinToString(" · ")
+  val source = listOfNotNull(
+    sourceName,
+    formatSize(Streams.streamSize(stream)),
+    versionCount.takeIf { it > 0 }?.let {
+      stringResource(R.string.media_server_versions_available, it.toString())
+    },
+  ).joinToString(" · ")
   val facts = stream.videoFacts
   val resolution = when {
     (facts?.heightPixels ?: 0) >= 2_000 -> "2160p"
