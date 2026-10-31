@@ -361,7 +361,7 @@ export function SearchResults({ search, shape, onOpenMember, onOpenCanonical, on
   </div>;
 }
 
-export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical, onBackToLibrary }: {
+export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical }: {
   search: SearchEverywhereController;
   shape: TileShape;
   onToggleShape: () => void;
@@ -375,7 +375,6 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   onOpenMember: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
   onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
   /** Returns to the Library place Search was opened from. */
-  onBackToLibrary?: () => void;
 }) {
   const root = useRef<HTMLElement>(null);
   const composing = useRef(false);
@@ -450,7 +449,6 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   };
 
   return <section className="search-everywhere" ref={root}>
-    {onBackToLibrary && <button type="button" className="search-return" onClick={onBackToLibrary}><ChevronLeft/> {t("searchAll.backToLibrary")}</button>}
     <Heading eyebrow={t("searchAll.eyebrow")} title={t("searchAll.title")}/>
     <form className="search-everywhere-form" role="search" onSubmit={submit}>
       <div className="search-input">

@@ -27,7 +27,6 @@ import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage 
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes, hideBroken } from "./settings-ui";
 import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
-import type { LibrarySearchChip } from "./useSearchEverywhere";
 import type { SaveTarget } from "./save-target";
 import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, SourceProfile, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
 
@@ -78,10 +77,6 @@ interface Props {
   addons?: Addon[];
   /** Whether a debrid token is configured, so a torrent row may be queued. */
   realDebridConfigured?: boolean;
-  /** When search everywhere is on, the filter field is a button that opens Search. */
-  searchEverywhere: boolean;
-  /** Opens Search limited to the folder on screen. */
-  onOpenSearch?: (chip: LibrarySearchChip | null) => void;
   sourceProfiles?: SourceProfile[] | null;
   defaultSort?: string;
 }
@@ -237,7 +232,7 @@ const groupEpisodes = (items: RemoteItem[]) => {
   return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
 };
 
-export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onNotify, accountScope = "", addons = [], realDebridConfigured = false, searchEverywhere, onOpenSearch, sourceProfiles = null, defaultSort }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onNotify, accountScope = "", addons = [], realDebridConfigured = false, sourceProfiles = null, defaultSort }: Props) {
   useI18n();
   // The listing effect must not restart when the shape changes. It still warms only the
   // picture that shape draws, so the other role is fetched when a tile actually asks for it.
@@ -499,16 +494,6 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const parentId = stack.length ? stack[stack.length - 1]!.id : undefined;
   /** The identity of the listing on screen: the library and the folder path that leads to it. */
   const navKey = selected ? `${selected.id}:${stack.map((folder) => folder.id).join("/")}` : "";
-  /** The folder on screen. A series keeps the folder it was opened from; the list has no chip. */
-  const remoteSearchChip = (): LibrarySearchChip | null => {
-    if (!selected) return null;
-    const folder = stack.at(-1);
-    return {
-      scope: folder ? { libraryId: selected.id, parentId: folder.id } : { libraryId: selected.id },
-      source: "remote",
-      title: [selected.name, ...stack.map((item) => item.name)].join(" – "),
-    };
-  };
 
   // One bounded page per request; a fresh search, sort, folder or library starts the listing over.
   useEffect(() => {
@@ -1575,8 +1560,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           </nav>
           <div className="browse-tools">
             <div className={`fold browse-fold${compact ? " closed" : ""}`}><div className="browse-fold-inner">
-              {searchEverywhere && (!detail || detail.type === "series") && <button type="button" className="library-search-button" onClick={() => onOpenSearch?.(remoteSearchChip())}><Search/> {t("searchAll.open")}</button>}
-              {!searchEverywhere && !detail && <div className="search-input"><Search/><input value={searchInput} aria-label={t("mediaServer.searchPlaceholder")} placeholder={t("mediaServer.searchPlaceholder")} onChange={(event) => setSearchInput(event.target.value)}/></div>}
+              {!detail && <div className="search-input"><Search/><input value={searchInput} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setSearchInput(event.target.value)}/></div>}
               {!detail && <select aria-label={t("common.sorting")} value={sort} onChange={(event) => changeSort(event.target.value as RemoteItemSort)}>
                 <option value="name">{t("library.sortName")}</option>
                 <option value="added">{t("library.sortAdded")}</option>

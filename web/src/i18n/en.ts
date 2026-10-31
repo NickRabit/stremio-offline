@@ -1967,7 +1967,6 @@ export const en = {
   "mediaServer.orderDown": "Move {name} down",
   "mediaServer.remoteTitle": "Remote libraries",
   "mediaServer.remoteHint": "Read-only libraries on a connected Jellyfin or Emby server. Playback, position and favorites stay in this app.",
-  "mediaServer.searchPlaceholder": "Search this library",
   "mediaServer.search": "Search",
   "mediaServer.clearSearch": "Clear",
   "mediaServer.filterLabel": "Type",
@@ -2078,7 +2077,6 @@ export const en = {
   "searchAll.backToSearch": "Back to search",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Search all libraries",
-  "searchAll.backToLibrary": "Back to the library",
   "searchAll.homeAction": "Open search",
   "searchAll.restartFailed": "The search expired. Search again.",
 
