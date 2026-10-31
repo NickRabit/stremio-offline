@@ -160,7 +160,9 @@ class TitleExtrasState {
 
   suspend fun load(type: String, id: String, fetch: suspend () -> TitleExtrasDto?) {
     val nextKey = "$type:$id"
-    if (key == nextKey && (loading || extras != null)) return
+    // Only a finished answer is reused: a load that was cancelled midway (the remote detail
+    // relaunches once its metadata resolves) leaves `loading` set and must not block the next one.
+    if (key == nextKey && extras != null) return
     val current = begin(nextKey)
     val loaded = try {
       fetch()
