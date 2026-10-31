@@ -1048,6 +1048,52 @@ test("searchTypes pins the recursive type set, ordering and mode", async () => {
   }
 });
 
+test("a filter in a folder searches everything beneath it", async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  const { provider } = fixture((_operation, args) => {
+    seen.push(args);
+    return { Items: [{ Id: "c1", Name: "Initial Casting", Type: "MusicVideo" }], TotalRecordCount: 1 };
+  });
+  const page = await provider.pageDirectory("tok", "user-1", "folder-1", { mode: "folders", search: "casting", limit: 10 });
+  assert.deepEqual(page.items.map((item) => item.name), ["Initial Casting"]);
+  assert.equal(seen.at(-1)!.recursive, true);
+  assert.equal(seen.at(-1)!.parentId, "folder-1");
+  await provider.pageDirectory("tok", "user-1", "folder-1", { mode: "folders", limit: 10 });
+  assert.equal(seen.at(-1)!.recursive, false, "browsing a folder still lists only its children");
+});
+
+test("a search Emby answers with a total of 0 still lists its matches and pages on", async () => {
+  // Emby 4.x sends the matches of a SearchTerm query with TotalRecordCount 0.
+  const matches = ["Alenka", "Alita", "Alvin"];
+  const { provider } = fixture((_operation, args) => {
+    const start = Number(args.startIndex ?? 0);
+    const items = matches.slice(start, start + Number(args.limit)).map((name) => ({ Id: name, Name: name, Type: "Movie" }));
+    return { Items: items, TotalRecordCount: args.searchTerm === undefined ? matches.length : 0 };
+  });
+
+  for (const mode of ["folders", "titles"] as const) {
+    const first = await provider.pageDirectory("tok", "user-1", "library-1", { mode, search: "al", limit: 2 });
+    assert.deepEqual(first.items.map((item) => item.name), ["Alenka", "Alita"]);
+    assert.equal(first.total, 2);
+    assert.ok(first.cursor, "a full page may have another behind it");
+    const second = await provider.pageDirectory("tok", "user-1", "library-1", { mode, search: "al", limit: 2, cursor: first.cursor });
+    assert.deepEqual(second.items.map((item) => item.name), ["Alvin"]);
+    assert.equal(second.total, 3);
+    assert.equal(second.cursor, undefined);
+  }
+
+  const items = await provider.pageItems("tok", "user-1", "library-1", { search: "al", limit: 2 });
+  assert.equal(items.items.length, 2);
+  assert.ok(items.cursor);
+  const rest = await provider.pageItems("tok", "user-1", "library-1", { search: "al", limit: 2, cursor: items.cursor });
+  assert.deepEqual(rest.items.map((item) => item.name), ["Alvin"]);
+  assert.equal(rest.cursor, undefined);
+
+  // Without a search the same short total is still a broken answer.
+  const broken = fixture(() => ({ Items: [{ Id: "a", Name: "a", Type: "Movie" }], TotalRecordCount: 0 }));
+  await assert.rejects(broken.provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", limit: 2 }), { code: "invalid-response" });
+});
+
 test("searchTypes cursors bind the type set and refuse browse or another search", async () => {
   let calls = 0;
   const { provider } = fixture(() => {

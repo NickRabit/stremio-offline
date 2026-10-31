@@ -77,7 +77,7 @@ test.describe("layout invariants", () => {
     await openView(page, "Knihovna");
     const fixtureLibrary = page.getByRole("button", { name: /^downloads\b.*Otevřít složku/ });
     if (await fixtureLibrary.count()) await fixtureLibrary.click();
-    await expect(page.locator(".browse-panel:not(.remote-libraries) .browse-tools").getByRole("button", { name: "Hledat", exact: true })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Filtrovat knihovnu" })).toBeVisible();
     expect(await smallFields(page), "Library").toEqual([]);
 
     await openView(page, "Stahování");

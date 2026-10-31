@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
-import type { LibrarySearchChip } from "./useSearchEverywhere";
 import { clearRemoteMosaicCache } from "./remote-mosaic";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
@@ -190,7 +189,6 @@ const render = async (over: Partial<Parameters<typeof RemoteLibraryBrowser>[0]> 
     compact: false, onCompactChange: vi.fn(), onPersonalChange: vi.fn(),
     uiLanguage: "en", secureMode: true, onTrailer: vi.fn(),
     downloadLibraries: [],
-    searchEverywhere: false,
     ...over,
   };
   await act(async () => { root.render(<RemoteLibraryBrowser {...props}/>); });
@@ -206,53 +204,36 @@ const openRootLibrary = async (which = 0) => {
 };
 
 describe("RemoteLibraryBrowser listing", () => {
-  it("replaces the search field with Search and reports the chip for each level", async () => {
-    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
-    const opened: Array<LibrarySearchChip | null> = [];
+  it("filters inside a library and a folder, and offers no field on the list of libraries", async () => {
     browse = (url) => {
-      if (url.searchParams.get("type") === "episode") return json(page([]));
-      if (url.searchParams.get("parentId") === "f1") return json(page([show]));
+      if (url.searchParams.get("parentId") === "f1") return json(page([movie("m1", "One")]));
       return json(page([folder("f1", "Shows")]));
     };
-    await render({
-      searchEverywhere: true,
-      onOpenSearch: (chip) => { opened.push(chip); },
-    });
+    await render({});
 
     expect(host.querySelector(".remote-libraries .search-input")).toBeNull();
-    // The list of media-server libraries is not a place to search from, like the local list.
-    const rootSearch = [...host.querySelectorAll<HTMLButtonElement>(".remote-libraries button")]
+    const searchButton = () => [...host.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.trim() === "Search");
-    expect(rootSearch).toBeUndefined();
+    expect(searchButton()).toBeUndefined();
 
     await click(host.querySelector(".remote-libraries .library-open")!);
-    expect(host.querySelector(".browse-panel .search-input")).toBeNull();
-    const librarySearch = [...host.querySelectorAll<HTMLButtonElement>(".browse-panel button")]
-      .find((button) => button.textContent?.trim() === "Search");
-    await click(librarySearch!);
-    expect(opened.at(-1)).toEqual({ scope: { libraryId: "rlib_a" }, source: "remote", title: "Music videos" });
+    expect(host.querySelector(".browse-panel .search-input input")).not.toBeNull();
+    expect(searchButton()).toBeUndefined();
 
     await click(tileButtons()[0]!);
-    const folderSearch = [...host.querySelectorAll<HTMLButtonElement>(".browse-panel button")]
-      .find((button) => button.textContent?.trim() === "Search");
-    await click(folderSearch!);
-    expect(opened.at(-1)).toEqual({
-      scope: { libraryId: "rlib_a", parentId: "f1" },
-      source: "remote",
-      title: "Music videos – Shows",
+    const input = host.querySelector<HTMLInputElement>(".browse-panel .search-input input")!;
+    expect(input.getAttribute("aria-label")).toBe("Filter the library");
+    expect(input.placeholder).toBe("Filter…");
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setValue.call(input, "One");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise((done) => setTimeout(done, 350));
     });
-
-    await click(tileButtons()[0]!);
-    expect(host.querySelector(".remote-series-detail, .remote-detail")).not.toBeNull();
-    const seriesSearch = [...host.querySelectorAll<HTMLButtonElement>(".browse-panel button")]
-      .find((button) => button.textContent?.trim() === "Search");
-    expect(seriesSearch).toBeTruthy();
-    await click(seriesSearch!);
-    expect(opened.at(-1)).toEqual({
-      scope: { libraryId: "rlib_a", parentId: "f1" },
-      source: "remote",
-      title: "Music videos – Shows",
-    });
+    await flush();
+    const last = calls.browse.at(-1)!;
+    expect(last.searchParams.get("parentId")).toBe("f1");
+    expect(last.searchParams.get("search")).toBe("One");
   });
 
   it("opens a targeted remote folder as that library's current listing", async () => {

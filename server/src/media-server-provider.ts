@@ -788,15 +788,17 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     };
     const response = asObject(await transport.requestJson("items", args, token, signal), "The item page response");
     if (!Array.isArray(response.Items)) throw invalidResponse("The item page response has no item array.");
-    const total = response.TotalRecordCount;
-    if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 || total > CURSOR_OFFSET_MAX) throw invalidResponse("The item page response has no supported total.");
+    const reported = response.TotalRecordCount;
+    if (typeof reported !== "number" || !Number.isSafeInteger(reported) || reported < 0 || reported > CURSOR_OFFSET_MAX) throw invalidResponse("The item page response has no supported total.");
     const items = response.Items.map((raw) => providerItem(raw));
     if (items.length > limit) throw invalidResponse("The item page returned more items than requested.");
-    if (offset + items.length > total || (items.length === 0 && offset < total)) {
+    const open = search !== undefined && offset + items.length > reported;
+    const total = open ? offset + items.length : reported;
+    if (!open && (offset + items.length > total || (items.length === 0 && offset < total))) {
       throw invalidResponse("The item page is inconsistent with its total.");
     }
     const page: ProviderPage = { items, total };
-    if (items.length > 0 && offset + items.length < total) {
+    if (items.length > 0 && (open ? items.length === limit : offset + items.length < total)) {
       page.cursor = encodeCursor({ offset: offset + items.length, accountId, libraryId, search: search ?? "" });
     }
     return page;
@@ -881,7 +883,8 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       userId: accountId,
       parentId,
       includeItemTypes,
-      recursive: mode === "titles",
+      // A filter in a folder looks through everything beneath it, not only its own children.
+      recursive: mode === "titles" || search !== undefined,
       sortBy: type === "episode" && sort === "name" ? "ParentIndexNumber,IndexNumber,SortName" : SORT_BY[sort],
       sortOrder: SORT_ORDER[order],
       startIndex: offset,
@@ -892,22 +895,26 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     };
     const response = asObject(await transport.requestJson("directory", args, token, signal), "The browse response");
     if (!Array.isArray(response.Items)) throw invalidResponse("The browse response has no item array.");
-    let total: number;
+    let reported: number;
     if (continuation) {
-      total = storedTotal;
+      reported = storedTotal;
     } else {
-      total = response.TotalRecordCount as number;
-      if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 || total > CURSOR_OFFSET_MAX) {
+      reported = response.TotalRecordCount as number;
+      if (typeof reported !== "number" || !Number.isSafeInteger(reported) || reported < 0 || reported > CURSOR_OFFSET_MAX) {
         throw invalidResponse("The browse response has no supported total.");
       }
     }
     const items = response.Items.map((raw) => providerItem(raw));
     if (items.length > limit) throw invalidResponse("The browse page returned more items than requested.");
-    if (offset + items.length > total || (items.length === 0 && offset < total)) {
+    // Emby answers a search with its matches and a total of 0. Such a total is unknown rather than
+    // wrong: the count is what has arrived so far, and a full page means there may be another.
+    const open = search !== undefined && offset + items.length > reported;
+    const total = open ? offset + items.length : reported;
+    if (!open && (offset + items.length > total || (items.length === 0 && offset < total))) {
       throw invalidResponse("The browse page is inconsistent with its total.");
     }
     const page: ProviderPage = { items, total };
-    if (items.length > 0 && offset + items.length < total) {
+    if (items.length > 0 && (open ? items.length === limit : offset + items.length < total)) {
       page.cursor = encodeDirectoryCursor({ o: offset + items.length, a: accountId, p: parentId, m: mode, t: type ?? "", q: search ?? "", s: sort, r: order, i: seasonKey, y: searchTypes ?? "", n: total });
     }
     return page;

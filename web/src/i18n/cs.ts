@@ -1961,7 +1961,6 @@ export const cs: Catalog = {
   "mediaServer.orderDown": "Posunout {name} dolů",
   "mediaServer.remoteTitle": "Vzdálené knihovny",
   "mediaServer.remoteHint": "Knihovny jen pro čtení na připojeném serveru Jellyfin nebo Emby. Přehrávání, pozice a oblíbené zůstávají v této aplikaci.",
-  "mediaServer.searchPlaceholder": "Hledat v této knihovně",
   "mediaServer.search": "Hledat",
   "mediaServer.clearSearch": "Vymazat",
   "mediaServer.filterLabel": "Typ",
@@ -2084,7 +2083,6 @@ export const cs: Catalog = {
   "searchAll.backToSearch": "Zpět na hledání",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Hledat ve všech knihovnách",
-  "searchAll.backToLibrary": "Zpět do knihovny",
   "searchAll.homeAction": "Otevřít hledání",
   "searchAll.restartFailed": "Hledání vypršelo. Hledejte znovu.",
 

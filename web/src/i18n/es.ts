@@ -1908,7 +1908,6 @@ export const es: Catalog = {
   "mediaServer.orderDown": "Bajar {name}",
   "mediaServer.remoteTitle": "Bibliotecas remotas",
   "mediaServer.remoteHint": "Bibliotecas de solo lectura en un servidor Jellyfin o Emby conectado. La reproducción, la posición y los favoritos se quedan en esta aplicación.",
-  "mediaServer.searchPlaceholder": "Buscar en esta biblioteca",
   "mediaServer.search": "Buscar",
   "mediaServer.clearSearch": "Borrar",
   "mediaServer.filterLabel": "Tipo",
@@ -2019,7 +2018,6 @@ export const es: Catalog = {
   "searchAll.backToSearch": "Volver a la búsqueda",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Buscar en todas las bibliotecas",
-  "searchAll.backToLibrary": "Volver a la biblioteca",
   "searchAll.homeAction": "Abrir búsqueda",
   "searchAll.restartFailed": "La búsqueda ha caducado. Vuelve a buscar.",
 

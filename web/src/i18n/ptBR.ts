@@ -1908,7 +1908,6 @@ export const ptBR: Catalog = {
   "mediaServer.orderDown": "Mover {name} para baixo",
   "mediaServer.remoteTitle": "Bibliotecas remotas",
   "mediaServer.remoteHint": "Bibliotecas somente leitura em um servidor Jellyfin ou Emby conectado. Reprodução, posição e favoritos ficam neste aplicativo.",
-  "mediaServer.searchPlaceholder": "Pesquisar nesta biblioteca",
   "mediaServer.search": "Pesquisar",
   "mediaServer.clearSearch": "Limpar",
   "mediaServer.filterLabel": "Tipo",
@@ -2019,7 +2018,6 @@ export const ptBR: Catalog = {
   "searchAll.backToSearch": "Voltar à pesquisa",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Pesquisar em todas as bibliotecas",
-  "searchAll.backToLibrary": "Voltar à biblioteca",
   "searchAll.homeAction": "Abrir pesquisa",
   "searchAll.restartFailed": "A pesquisa expirou. Pesquise novamente.",
 
