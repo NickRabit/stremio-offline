@@ -2262,7 +2262,7 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .extras-row{min-width:0;max-width:100%}
 .extras-row h3{display:flex;align-items:baseline;gap:10px;margin:0 0 10px;font-size:14px}
 .extras-row h3 small{font-size:11px;font-weight:600;color:var(--muted)}
-.extras-strip{display:flex;gap:14px;overflow-x:auto;overflow-y:hidden;padding:3px 2px 8px;scroll-snap-type:x proximity;overscroll-behavior-x:contain}
+.extras-strip{display:flex;gap:14px;overflow-x:auto;overflow-y:hidden;padding:6px 6px 10px;margin:0 -6px;scroll-snap-type:x proximity;overscroll-behavior-x:contain}
 .person{flex:0 0 96px;width:96px;min-height:0;display:grid;align-content:start;justify-items:center;gap:6px;border:0;background:none;padding:4px 0;color:inherit;text-align:center;scroll-snap-align:start;border-radius:10px}
 .person:hover .person-face,.person:focus-visible .person-face{outline:2px solid var(--accent);outline-offset:2px;border-color:transparent}
 .person-face{width:78px;height:78px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:22px;color:#ffffffcc;background:linear-gradient(140deg,#2b3446,#1a2029);border:1px solid var(--line);overflow:hidden}

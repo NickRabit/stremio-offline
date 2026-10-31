@@ -10,7 +10,7 @@ import { hideBroken } from "./settings-ui";
 import { languageName, t, useI18n } from "./i18n";
 import { defaultSource, orderSources, playableSources, sourceIdentity, sourceRowKey } from "./library-detail-sources";
 import { librarySourceEntries, librarySourceRows, type LibrarySourceGroup, type LibrarySourcePanel } from "./library-sources";
-import { providerLabel } from "./source-rows";
+import { providerLabel, streamLabel } from "./source-rows";
 import { isLocalStream, isRemoteStream, pickDefaultStream, resolveStreamSort, sortRuleId, streamBadge, streamLanguages, streamSize } from "./streams";
 import { audioFormat } from "./release-audio";
 import { bytes } from "./settings-ui";
@@ -317,6 +317,10 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const placeName = shown ? sourcePlace(shown) : "";
   const sizeLabel = shown && streamSize(shown) ? bytes(streamSize(shown)) : "";
   const sourceLabel = [placeName, sizeLabel].filter(Boolean).join(" · ");
+  // The version itself, named as its row in the chooser names it, so it is plain which one Play,
+  // To library and To device act on; a file name is already its own row below.
+  const shownLabel = shown ? streamLabel(shown) : "";
+  const versionName = shownLabel && shownLabel !== placeName && shownLabel !== fileName ? shownLabel : "";
   const moreCount = pickable.length > 1 ? pickable.length - 1 : 0;
   const watchedName = watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched");
   const hasSecondary = Boolean(trailer || savedPosition || onToggleWatched || canDownloadToDevice || onToggleFavorite || onOpenFolder);
@@ -409,6 +413,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
       <dt>{t("detail.tech.source")}</dt>
       <dd>
         {ruleRefusal || !shown ? t("detail.willPlayChoose") : <>
+          {versionName && <strong className="detail-version">{versionName}</strong>}
           {sourceLabel}
           {moreCount > 0 && <button type="button" className="detail-versions" onClick={openPicker}>
             {t("detail.moreVersions", { count: moreCount })} <ChevronDown/>

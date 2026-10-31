@@ -917,7 +917,7 @@ describe("LibraryTitleDetail stored source", () => {
       defaultSort: "rule:balanced",
     });
     expect(host.querySelector(".detail-tech")!.textContent).toContain("Jellyfin");
-    expect(host.querySelector(".detail-tech")!.textContent).not.toContain("SMALL");
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("SMALL");
     click(host.querySelector(".split-button-toggle"));
     expect(chosenRow()!.textContent).toContain("SMALL");
     act(() => {
@@ -1118,5 +1118,12 @@ describe("LibraryTitleDetail video row of a local file", () => {
     render({ sources: [local("films/12 let v řetězech.avi", "12 let v řetězech.avi")] });
     expect(terms()).not.toContain("Video");
     expect(host.querySelector(".detail-tech")!.textContent).not.toContain("LOCAL");
+  });
+});
+
+describe("LibraryTitleDetail source row names the version", () => {
+  it("shows the selected version's own label beside its addon", () => {
+    render({ sources: [addon("a1", "E2E 720p", 900)] });
+    expect(host.querySelector(".detail-tech .detail-version")!.textContent).toBe("E2E 720p");
   });
 });
