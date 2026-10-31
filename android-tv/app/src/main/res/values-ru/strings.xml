@@ -399,4 +399,17 @@
   <string name="tv_global_search_member_label">%1$s: %2$s</string>
   <string name="tv_global_search_episode_label">S%1$sE%2$s</string>
   <string name="tv_global_search_episode_range">S%1$sE%2$s–E%3$s</string>
+  <string name="detail_people">Актёры и создатели</string>
+  <string name="detail_people_hint_tv">OK ищет имя</string>
+  <string name="detail_related">Похожие названия</string>
+  <string name="detail_role_director">Режиссёр</string>
+  <string name="detail_role_creator">Создатель</string>
+  <string name="detail_role_writer">Сценарий</string>
+  <string name="detail_role_novel">Первоисточник</string>
+  <string name="detail_original_title">Оригинальное название %1$s</string>
+  <string name="detail_original_language">Оригинальный язык %1$s</string>
+  <string name="detail_next_episode">Следующая серия %1$s · %2$s</string>
+  <string name="detail_age_rating">Возрастной рейтинг %1$s</string>
+  <string name="detail_in_library">В библиотеке</string>
+  <string name="detail_will_play">Будет воспроизведено</string>
 </resources>

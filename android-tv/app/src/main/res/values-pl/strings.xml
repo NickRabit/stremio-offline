@@ -399,4 +399,17 @@
   <string name="tv_global_search_member_label">%1$s: %2$s</string>
   <string name="tv_global_search_episode_label">S%1$sE%2$s</string>
   <string name="tv_global_search_episode_range">S%1$sE%2$s–E%3$s</string>
+  <string name="detail_people">Obsada i twórcy</string>
+  <string name="detail_people_hint_tv">OK wyszuka nazwisko</string>
+  <string name="detail_related">Podobne tytuły</string>
+  <string name="detail_role_director">Reżyseria</string>
+  <string name="detail_role_creator">Twórca</string>
+  <string name="detail_role_writer">Scenariusz</string>
+  <string name="detail_role_novel">Pierwowzór</string>
+  <string name="detail_original_title">Tytuł oryginalny %1$s</string>
+  <string name="detail_original_language">Język oryginalny %1$s</string>
+  <string name="detail_next_episode">Następny odcinek %1$s · %2$s</string>
+  <string name="detail_age_rating">Kategoria wiekowa %1$s</string>
+  <string name="detail_in_library">W bibliotece</string>
+  <string name="detail_will_play">Do odtworzenia</string>
 </resources>

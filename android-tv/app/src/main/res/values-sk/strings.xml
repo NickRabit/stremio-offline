@@ -399,4 +399,17 @@
   <string name="tv_global_search_member_label">%1$s: %2$s</string>
   <string name="tv_global_search_episode_label">S%1$sE%2$s</string>
   <string name="tv_global_search_episode_range">S%1$sE%2$s–E%3$s</string>
+  <string name="detail_people">Herci a tvorcovia</string>
+  <string name="detail_people_hint_tv">OK vyhľadá meno v katalógoch</string>
+  <string name="detail_related">Podobné tituly</string>
+  <string name="detail_role_director">Réžia</string>
+  <string name="detail_role_creator">Tvorca</string>
+  <string name="detail_role_writer">Scenár</string>
+  <string name="detail_role_novel">Predloha</string>
+  <string name="detail_original_title">Pôvodný názov %1$s</string>
+  <string name="detail_original_language">Pôvodný jazyk %1$s</string>
+  <string name="detail_next_episode">Ďalšia epizóda %1$s · %2$s</string>
+  <string name="detail_age_rating">Veková hranica %1$s</string>
+  <string name="detail_in_library">V knižnici</string>
+  <string name="detail_will_play">Prehrá sa</string>
 </resources>

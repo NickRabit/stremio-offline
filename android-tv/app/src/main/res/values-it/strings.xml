@@ -383,4 +383,17 @@
   <string name="tv_global_search_member_label">%1$s: %2$s</string>
   <string name="tv_global_search_episode_label">S%1$sE%2$s</string>
   <string name="tv_global_search_episode_range">S%1$sE%2$s–E%3$s</string>
+  <string name="detail_people">Cast e troupe</string>
+  <string name="detail_people_hint_tv">OK cerca il nome</string>
+  <string name="detail_related">Titoli simili</string>
+  <string name="detail_role_director">Regia</string>
+  <string name="detail_role_creator">Creato da</string>
+  <string name="detail_role_writer">Sceneggiatura</string>
+  <string name="detail_role_novel">Romanzo</string>
+  <string name="detail_original_title">Titolo originale %1$s</string>
+  <string name="detail_original_language">Lingua originale %1$s</string>
+  <string name="detail_next_episode">Prossimo episodio %1$s · %2$s</string>
+  <string name="detail_age_rating">Classificazione per età %1$s</string>
+  <string name="detail_in_library">In una libreria</string>
+  <string name="detail_will_play">In riproduzione</string>
 </resources>

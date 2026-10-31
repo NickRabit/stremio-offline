@@ -364,3 +364,16 @@ tv.globalSearch.loadMore
 tv.globalSearch.memberLabel
 tv.globalSearch.episodeLabel
 tv.globalSearch.episodeRange
+detail.people
+detail.peopleHintTv
+detail.related
+detail.role.director
+detail.role.creator
+detail.role.writer
+detail.role.novel
+detail.originalTitle
+detail.originalLanguage
+detail.nextEpisode
+detail.ageRating
+detail.inLibrary
+detail.willPlay

@@ -352,7 +352,7 @@ fun TitleExtrasRows(
       )
       if (cast.isNotEmpty()) {
         Text(
-          stringResource(R.string.detail_people_hint),
+          stringResource(R.string.detail_people_hint_tv),
           color = Tokens.Muted,
           fontSize = 9.5.sp,
         )
