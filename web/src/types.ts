@@ -38,6 +38,31 @@ export interface Meta {
   year?: string | number; genres?: string[]; videos?: Video[];
   addonName?: string; sources?: string[]; [key: string]: unknown;
 }
+export interface TitlePerson {
+  name: string;
+  role: "cast" | "director" | "creator" | "writer" | "novel";
+  character?: string;
+  photo?: string;
+}
+export interface RelatedTitle {
+  type: "movie" | "series";
+  id: string;
+  name: string;
+  year?: string;
+  poster?: string;
+  inLibrary?: boolean;
+}
+export interface TitleExtras {
+  people: TitlePerson[];
+  related: RelatedTitle[];
+  ageRating?: string;
+  /** The region the age rating was issued for, as an ISO region code. */
+  ageRatingRegion?: string;
+  originalTitle?: string;
+  originalLanguage?: string;
+  nextEpisode?: { season: number; episode: number; name?: string; released: string };
+  source: "tmdb" | "addon";
+}
 export interface SearchResult { items: Meta[]; cursor: string; hasMore: boolean; sources: number }
 export interface CatalogSearchRequest {
   query: string;

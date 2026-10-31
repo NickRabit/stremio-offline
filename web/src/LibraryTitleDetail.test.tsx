@@ -999,3 +999,59 @@ describe("LibraryTitleDetail initial source", () => {
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
   });
 });
+
+describe("LibraryTitleDetail hero slots and the source that will play", () => {
+  const follows = (earlier: Element, later: Element) =>
+    Boolean(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it("draws the facts line from factsExtra alone and places the hero lines and the rows", () => {
+    render({
+      factsExtra: <em className="age-badge">PG</em>,
+      heroExtra: <p className="original-line">Original</p>,
+      extras: <section className="title-extras">Cast</section>,
+      description: "A quiet film.",
+    });
+    const copy = host.querySelector(".detail-copy")!;
+    const facts = copy.querySelector(".meta-line")!;
+    const hero = copy.querySelector(".original-line")!;
+    const synopsis = copy.querySelector(".library-detail-synopsis")!;
+    expect(facts.textContent).toBe("PG");
+    expect(follows(facts, hero)).toBe(true);
+    expect(follows(hero, synopsis)).toBe(true);
+    const actions = host.querySelector(".library-detail-actions")!;
+    expect(follows(actions, host.querySelector(".title-extras")!)).toBe(true);
+    expect(host.querySelector(".split-button-toggle")).toBeNull();
+    expect(host.querySelector(".library-detail-source strong")!.textContent).toContain("1080p");
+  });
+
+  it("keeps the host facts and appends the extra at the end of the same line", () => {
+    render({ facts: "1995 · Crime", factsExtra: <em className="age-badge">R</em> });
+    const line = host.querySelector(".library-detail-hero .meta-line")!;
+    expect(line.textContent).toBe("1995 · Crime R");
+    expect(line.querySelector(".age-badge")!.textContent).toBe("R");
+  });
+
+  it("names the source that will play and the release file when it is not already the label", () => {
+    render({ sources: [addon("a1", "FullHD", 1_000)] });
+    expect(host.querySelector(".source-will-play")!.textContent).toBe("Will play");
+    expect(host.querySelector(".library-detail-source strong")!.textContent).toBe("FullHD");
+    expect(host.querySelector(".source-file")).toBeNull();
+    rerender({ sources: [{ ...addon("a1", "FullHD", 1_000), behaviorHints: { filename: "Show.2020.1080p.mkv", videoSize: 1_000 } }] });
+    expect(host.querySelector(".library-detail-source strong")!.textContent).toBe("FullHD");
+    expect(host.querySelector(".source-file")!.textContent).toBe("Show.2020.1080p.mkv");
+  });
+
+  it("omits the file line when the filename is the label, and the skeleton stays unlabelled", () => {
+    render({ sources: [{
+      sourceId: "lib:Films/Heat.mkv", kind: "library", playable: true, localPath: "Films/Heat.mkv", libraryName: "Films",
+      name: "Heat.mkv", behaviorHints: { filename: "Heat.mkv" },
+    }] });
+    expect(host.querySelector(".source-will-play")!.textContent).toBe("Will play");
+    expect(host.querySelector(".library-detail-source strong")!.textContent).toBe("Heat.mkv");
+    expect(host.querySelector(".source-file")).toBeNull();
+    rerender({ sources: null });
+    expect(host.querySelector(".library-detail-source.detail-skeleton")).not.toBeNull();
+    expect(host.querySelector(".source-will-play")).toBeNull();
+    expect(host.querySelector(".source-file")).toBeNull();
+  });
+});

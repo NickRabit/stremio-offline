@@ -27,6 +27,8 @@ import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage 
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes, hideBroken } from "./settings-ui";
 import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
+import { TitleExtraFacts, TitleExtrasRows } from "./TitleExtras";
+import { useTitleExtras } from "./title-extras";
 import type { SaveTarget } from "./save-target";
 import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, SourceProfile, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
 
@@ -1099,6 +1101,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     ? catalogueRef(detail.type, detail.providerIds)
     : detail?.type === "episode" ? catalogueRef("series", series?.providerIds) : null;
   const enrichment = useTitleEnrichment(catalogue ? { kind: "catalogue", ref: catalogue } : null, catalogue, uiLanguage);
+  const titleExtras = useTitleExtras(catalogue?.type, catalogue?.id);
   const detailPreview = remoteDetailArtwork(detail?.poster);
   const detailBackdrops: Array<string | undefined> = detail
     ? [enrichment.meta?.background, detail.fanart, detail.type === "episode" ? series?.fanart : undefined, detailPreview]
@@ -1219,11 +1222,13 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
    *  overview. Its chips are the hero's own row, drawn above this block like every other detail's,
    *  so the corner art beside that row cannot narrow it. A playable title reads the same through
    *  the shared shell instead. */
+  const detailPieces = TitleExtraFacts({ extras: titleExtras.extras, language: uiLanguage, name: detail?.name });
   const seriesHeroCopy = (item: RemoteItem): ReactNode => {
     const facts = detailFacts(item);
     return <>
       <h2>{item.name}</h2>
-      {facts && <p className="meta-line">{facts}</p>}
+      {(facts || detailPieces.ageBadge) && <p className="meta-line">{facts}{facts && detailPieces.ageBadge ? " " : null}{detailPieces.ageBadge}</p>}
+      {detailPieces.heroLines}
       <p className="library-detail-synopsis">{item.overview || t("catalog.noDescription")}</p>
     </>;
   };
@@ -1618,6 +1623,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           {!episodes.loading && !episodes.error && !grouped.length && !episodes.cursor && <p className="identify-hint">{t("mediaServer.noEpisodes")}</p>}
           {episodes.cursor && <div className="load-more" ref={loadMoreEpisodesRef}><button type="button" disabled={episodes.loading} onClick={() => void loadEpisodes()}>{t("common.loadMore")}</button></div>}
           {episodes.loading && grouped.length > 0 && <div className="loading" role="status">{t("common.loadingMore")}</div>}
+          <TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading}/>
         </div>}
         {detail && detail.type !== "series" && <div className="remote-detail">
           <LibraryTitleDetail
@@ -1629,6 +1635,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             gallery={seriesGallery}
             {...(onGallery ? { onGallery: (images) => onGallery(images, catalogue) } : {})}
             {...(detailFacts(detail) ? { facts: detailFacts(detail) } : {})}
+            factsExtra={detailPieces.ageBadge}
+            heroExtra={detailPieces.heroLines}
+            extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading}/>}
             {...(detail.overview ? { description: detail.overview } : {})}
             chips={detailChips(detail)}
             favorite={state?.favorite ?? false}

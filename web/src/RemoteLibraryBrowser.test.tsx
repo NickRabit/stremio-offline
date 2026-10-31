@@ -5,6 +5,7 @@ import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { clearRemoteMosaicCache } from "./remote-mosaic";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
+import { clearTitleExtras } from "./title-extras";
 import { emptyViews } from "./views";
 import type { Addon, LibraryView, RemoteCapabilities, RemoteItem, RemoteItemPage, RemoteLibrary, Stream } from "./types";
 
@@ -40,6 +41,7 @@ let addonProviders: Handler;
 let addonStreams: Handler;
 let addonSubtitles: Handler;
 let addonProgress: Handler;
+let extrasReply: Handler;
 let localCopies: Handler;
 let remoteLibraryStreams: Handler;
 let forgetReply: Handler | undefined;
@@ -82,6 +84,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   clearTitleEnrichment();
+  clearTitleExtras();
   clearRemoteMosaicCache();
   FakeIntersectionObserver.live = [];
   calls.browse = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = []; calls.title = [];
@@ -100,6 +103,7 @@ beforeEach(() => {
   addonStreams = () => json([]);
   addonSubtitles = () => json([]);
   addonProgress = () => json(null);
+  extrasReply = () => json({ people: [], related: [], source: "addon" });
   localCopies = () => json([]);
   remoteLibraryStreams = () => json({ streams: [] });
   forgetReply = undefined;
@@ -154,6 +158,7 @@ beforeEach(() => {
       return Promise.resolve(state(url, init));
     }
     if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+$/.test(path)) { calls.item.push(url); return Promise.resolve(item(url, init)); }
+    if (path.endsWith("/extras")) return Promise.resolve(extrasReply(url, init));
     if (path.startsWith("/api/meta/") || path.startsWith("/api/links/") || path.startsWith("/api/trailer/")) {
       calls.title.push(path);
       if (path.startsWith("/api/links/")) return Promise.resolve(json({ links: [{ site: "imdb", url: "https://www.imdb.com/title/tt5000" }] }));
@@ -2294,5 +2299,34 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await flush();
     expect(playbackCalls[0]!.sourceId).toBe("addon-1");
     expect(playbackCalls[0]!.time).toBe(600);
+  });
+
+  it("shows the cast and similar titles under a series' episode grid", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", year: 2011, providerIds: { imdb: "tt7000" }, overview: "A long show." };
+    const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    item = () => json({ item: show, capabilities });
+    extrasReply = () => json({
+      people: [{ name: "The Creator", role: "creator" }, { name: "Lead", role: "cast", character: "Lead", photo: "/lead.jpg" }],
+      related: [{ type: "series", id: "tt8", name: "Other Show", year: "2012", poster: "/other.jpg" }],
+      ageRating: "TV-MA",
+      originalTitle: "Šou",
+      source: "tmdb",
+    });
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+    const surface = host.querySelector(".remote-series-detail")!;
+    const facts = surface.querySelector(".meta-line")!;
+    expect(facts.textContent).toContain("2011");
+    expect(facts.querySelector(".age-badge")!.textContent).toBe("TV-MA");
+    expect(surface.querySelector(".original-line")!.textContent).toContain("Šou");
+    const grid = surface.querySelector(".remote-season-group")!;
+    const rows = surface.querySelector(".title-extras")!;
+    expect(grid.compareDocumentPosition(rows) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(rows.querySelector(".person strong")!.textContent).toBe("Lead");
+    expect(rows.querySelector(".related strong")!.textContent).toBe("Other Show");
+    expect(calls.title).toContain("/api/meta/series/tt7000");
+    expect(calls.title.some((path) => path.endsWith("/extras"))).toBe(false);
   });
 });

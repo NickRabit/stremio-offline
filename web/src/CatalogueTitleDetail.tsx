@@ -3,7 +3,10 @@ import { ChevronRight } from "lucide-react";
 import { api, describeError } from "./api";
 import { catalogueGalleryImages, type GalleryImage } from "./gallery-images";
 import { t, useI18n } from "./i18n";
+import { ImdbRating, imdbRating } from "./ImdbRating";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
+import { TitleExtraFacts, TitleExtrasRows } from "./TitleExtras";
+import { useTitleExtras } from "./title-extras";
 import { useLibrarySources } from "./library-sources";
 import { titleLanguage } from "./languages";
 import { arrangeStreams, catalogSourceRows, isLocalStream, pickDefaultStream, resolveStreamSort, sortRuleId } from "./streams";
@@ -102,6 +105,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const { target, initialSources, libraryFirst = false, onGallery, chips, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended" } = props;
   const { locale } = useI18n();
   const { type, id, name } = target;
+  const titleExtras = useTitleExtras(type, id);
   const incomingId = catalogueStreamId(target);
   const [snapshot, setSnapshot] = useState<Meta | null>(target.initialMeta ?? null);
   const [metaError, setMetaError] = useState("");
@@ -287,10 +291,17 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
 
   const gallery = useMemo(() => catalogueGalleryImages(snapshot), [snapshot]);
   const backdrops = useMemo(() => [snapshot?.background, snapshot?.poster, target.poster], [snapshot, target.poster]);
-  const facts = snapshot
+  const factText = snapshot
     ? [String(snapshot.releaseInfo ?? snapshot.year ?? ""), ...(snapshot.genres ?? []).slice(0, 3)]
       .map((value) => value.trim()).filter(Boolean).join(" · ")
     : "";
+  const rating = imdbRating(snapshot);
+  const facts = rating || factText ? <>
+    {rating ? <ImdbRating rating={rating}/> : null}
+    {rating && factText ? " · " : null}
+    {factText}
+  </> : undefined;
+  const pieces = TitleExtraFacts({ extras: titleExtras.extras, language: locale, name });
   const seasons = [...new Set(videos.map((video) => video.season).filter((value): value is number => typeof value === "number"))]
     .sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
   const activeSeason = pickerSeason ?? episode?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? 0;
@@ -340,6 +351,9 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       gallery={gallery}
       {...(onGallery ? { onGallery: (images: GalleryImage[]) => onGallery(images, effective) } : {})}
       {...(facts ? { facts } : {})}
+      factsExtra={pieces.ageBadge}
+      heroExtra={pieces.heroLines}
+      extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading}/>}
       {...(snapshot?.description ? { description: snapshot.description } : {})}
       descriptionLoading={snapshot === null && !metaError}
       {...(chips ? { chips } : {})}
