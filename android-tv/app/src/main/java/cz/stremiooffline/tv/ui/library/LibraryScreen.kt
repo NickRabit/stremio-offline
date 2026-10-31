@@ -54,6 +54,7 @@ import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
 import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.detail.seriesFiles
 import cz.stremiooffline.tv.ui.detail.episodeLabel
 import cz.stremiooffline.tv.ui.search.LibrarySearchScope
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -256,6 +257,15 @@ fun LibraryRoute(
   fun openFolder(folder: BrowseItem.Folder) {
     restoreKey = ""
     scope.launch {
+      // A show opens as one series detail with its seasons, the way a media-server series does,
+      // rather than as a grid of season folders. A show that cannot be read whole stays a folder.
+      if (folder.titleType == "series") {
+        val episodes = seriesFiles(api, folder.path)
+        if (episodes != null && episodes.any { it.season != null || it.episode != null }) {
+          onOpenDetail(DetailData.ofFolder(folder, episodes))
+          return@launch
+        }
+      }
       val result = runCatching { api.browse(folder.path, limit = LibraryViewModel.PAGE, skip = 0) }.getOrNull()
       if (result == null) {
         viewModel.open(folder.path, folder.title)

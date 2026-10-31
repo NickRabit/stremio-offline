@@ -124,6 +124,17 @@ app keeps a stack of up to ten previous catalogue titles.
 A Jellyfin/Emby **series** does not use this surface today (it has its own
 hero and episode grid); there the two rows go under the episode grid.
 
+On Android TV a series looks the same wherever it lives: a show folder in a
+local library and a Jellyfin/Emby series both open one detail with the hero,
+the episode line, the saved position, the action row, the tech block of the
+episode Play stands for, a row of season chips and the episodes side by side.
+Play continues the episode in progress (the last one started, or the next
+once it is finished) and focusing a card makes it the episode the actions
+act on; Enter on a card plays it. Several copies of one local episode fold
+into one card, and its Sources panel lists them all. On a media server Play
+goes through the episode's own detail and closes it again, so Back from the
+player lands on the series; Sources opens that detail to choose a version.
+
 On a phone the same rows stack under the actions, with 62 px portraits and
 108 px tiles, scrolling sideways.
 

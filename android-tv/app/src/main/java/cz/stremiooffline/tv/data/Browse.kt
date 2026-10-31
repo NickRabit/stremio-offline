@@ -57,6 +57,8 @@ sealed class BrowseItem {
     val catalogName: String? = null,
     val posters: List<String>? = null,
     val favorite: Boolean = false,
+    /** The kind of title the folder stands for, `series` for a show and each of its seasons. */
+    val titleType: String? = null,
     @SerialName("mosaic") override val mosaicImage: String? = null,
     override val poster: String? = null,
     override val wide: String? = null,

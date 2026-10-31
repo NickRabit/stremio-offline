@@ -54,6 +54,7 @@ import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.leftToNeighbour
 import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.detail.seriesFiles
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.CoroutineScope
@@ -264,8 +265,12 @@ private fun openFavorite(
     } else {
       scope.launch {
         val page = runCatching { api.browse(item.path, limit = FavoritesViewModel.PAGE, skip = 0) }.getOrNull()
-        val files = page?.items?.filterIsInstance<BrowseItem.File>().orEmpty()
-        if (page != null && files.isNotEmpty() && files.size == page.items.size) {
+        // A starred show holds season folders: it opens as one series detail, the way the library
+        // grid opens it.
+        val show = page?.items?.firstOrNull() is BrowseItem.Folder &&
+          page?.items?.all { it is BrowseItem.Folder && it.titleType == "series" } == true
+        val files = if (show) seriesFiles(api, item.path).orEmpty() else page?.items?.filterIsInstance<BrowseItem.File>().orEmpty()
+        if (page != null && files.isNotEmpty() && (show || files.size == page.items.size)) {
           onOpenDetail(
             DetailData.ofFolder(
               BrowseItem.Folder(

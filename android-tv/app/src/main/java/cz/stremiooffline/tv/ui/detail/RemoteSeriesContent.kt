@@ -36,7 +36,12 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.RelatedTitleDto
+import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.playback.Progress
+import cz.stremiooffline.tv.ui.catalog.EyeIcon
+import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
@@ -53,6 +58,11 @@ import cz.stremiooffline.tv.ui.library.TagRemoteLoadMore
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesOverview
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesPrimary
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesToLibrary
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesProgress
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesSources
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesStartOver
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesTech
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesWatched
 import cz.stremiooffline.tv.ui.library.remoteItemTag
 import cz.stremiooffline.tv.ui.theme.Tokens
 
@@ -68,6 +78,14 @@ internal class RemoteSeriesUiState {
   var actionsFocused by mutableStateOf(false)
   var started by mutableStateOf(false)
   var restoreEpisodeFocus by mutableStateOf(false)
+  /** Set while a play the series started is out: the player's close hands focus to Play. */
+  var restorePrimary by mutableStateOf(false)
+  /** This library's own Continue watching rows, the episode in progress among them. */
+  var resume by mutableStateOf<List<HomeCard.Remote>>(emptyList())
+  /** The selected episode's versions once read, and the episode they belong to. */
+  var versions by mutableStateOf<List<StreamDto>?>(null)
+  var versionsFor by mutableStateOf<String?>(null)
+  var watchedBusy by mutableStateOf(false)
 }
 
 internal fun RemoteItemDto.asVideo(): VideoDto = VideoDto(
@@ -94,10 +112,16 @@ internal fun RemoteSeriesContent(
   error: RemoteErrorKind?,
   appendFailed: Boolean,
   staleCursor: Boolean,
+  resumeVideo: VideoDto?,
+  resumePosition: Double,
+  resumeDuration: Double,
   copyNotice: String?,
   copyBusy: Boolean,
   canCopy: Boolean,
   onOpenEpisode: (RemoteItemDto) -> Unit,
+  /** Plays one episode, resuming it unless the flag asks for the beginning. */
+  onPlayEpisode: (RemoteItemDto, Boolean) -> Unit,
+  onWatched: (RemoteItemDto) -> Unit,
   onCopy: (RemoteItemDto) -> Unit,
   onRetry: () -> Unit,
   onRetryAppend: () -> Unit,
@@ -175,19 +199,45 @@ internal fun RemoteSeriesContent(
           modifier = Modifier.fillMaxWidth(0.76f).testTag(TagRemoteSeriesOverview),
         )
       }
+      // The position belongs to the episode in progress; another selected episode starts fresh.
+      val inProgress = selectedVideo != null && selectedVideo.id == resumeVideo?.id
+      SavedPlaybackProgress(
+        position = if (inProgress) resumePosition else 0.0,
+        duration = if (inProgress) resumeDuration else 0.0,
+        tag = TagRemoteSeriesProgress,
+      )
       DetailActionRow(
         primary = {
           FocusButton(
-            text = stringResource(R.string.tv_play),
-            onClick = { selectedItem?.let(onOpenEpisode) },
+            text = stringResource(
+              if (inProgress && Progress.resumePosition(resumePosition, resumeDuration) != null) R.string.tv_resume else R.string.tv_play,
+            ),
+            onClick = { selectedItem?.let { onPlayEpisode(it, false) } },
             kind = FocusButtonKind.Primary,
             height = DetailActionHeight,
             enabled = selectedItem != null,
             modifier = Modifier.focusRequester(ui.primary).testTag(TagRemoteSeriesPrimary),
           )
         },
-        startOver = null,
-        sources = null,
+        startOver = selectedItem?.takeIf { inProgress && resumePosition > 0 }?.let {
+          DetailAction(
+            label = stringResource(R.string.tv_start_over),
+            icon = ReplayIcon,
+            tag = TagRemoteSeriesStartOver,
+            onClick = { onPlayEpisode(it, true) },
+          )
+        },
+        // The episode's own detail is where its versions and every other source are chosen.
+        sources = selectedItem?.let {
+          {
+            FocusButton(
+              text = stringResource(R.string.sources_heading),
+              onClick = { onOpenEpisode(it) },
+              height = DetailActionHeight,
+              modifier = Modifier.testTag(TagRemoteSeriesSources),
+            )
+          }
+        },
         toLibrary = selectedItem?.takeIf { canCopy }?.let {
           DetailAction(
             label = stringResource(R.string.save_to_library),
@@ -199,7 +249,15 @@ internal fun RemoteSeriesContent(
         },
         favourite = null,
         unwatched = null,
-        watched = null,
+        watched = selectedItem?.let {
+          DetailAction(
+            label = stringResource(R.string.media_server_mark_watched),
+            icon = EyeIcon,
+            tag = TagRemoteSeriesWatched,
+            enabled = !ui.watchedBusy,
+            onClick = { onWatched(it) },
+          )
+        },
         caption = ui.caption,
         modifier = Modifier
           .scrollToTopOnFocus(ui.extras, scope)
@@ -214,6 +272,9 @@ internal fun RemoteSeriesContent(
             }
           },
       )
+      ui.versions?.takeIf { ui.versionsFor == selectedItem?.id }?.firstOrNull()?.let { row ->
+        TitleTechBlock(row, Modifier.testTag(TagRemoteSeriesTech), versionCount = ui.versions?.size ?: 0)
+      }
       when {
         loading -> Box(Modifier.fillMaxWidth().height(260.dp)) { ShimmerCards() }
         error != null -> Box(Modifier.fillMaxWidth().height(220.dp), contentAlignment = Alignment.Center) {
@@ -238,12 +299,12 @@ internal fun RemoteSeriesContent(
             ui.season = season
             ui.selectedEpisodeId = videos.firstOrNull { it.season == season }?.id
           },
-          resumeEpisode = null,
+          resumeEpisode = resumeVideo,
           focusVideo = selectedVideo,
-          seriesPosition = 0.0,
-          seriesDuration = 0.0,
+          seriesPosition = resumePosition,
+          seriesDuration = resumeDuration,
           imageUrl = imageUrl,
-          onSelect = { video -> items.firstOrNull { it.id == video.id }?.let(onOpenEpisode) },
+          onSelect = { video -> items.firstOrNull { it.id == video.id }?.let { onPlayEpisode(it, false) } },
           focusRequester = ui.episode,
           seasonFocus = ui.seasons,
           extras = ui.extras,

@@ -43,6 +43,10 @@ import cz.stremiooffline.tv.ui.library.RemoteSeriesScreen
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesRoot
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesOverview
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesPrimary
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesSources
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.performSemanticsAction
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -143,15 +147,54 @@ class RemoteSeriesRoutingTest {
     }
     compose.waitUntil(5_000) { api.remoteEpisodesRequests.isNotEmpty() }
     compose.waitForIdle()
-    press(Key.DirectionCenter)
-    compose.waitUntil(5_000) { api.remoteSourcesRequests.contains("rlibA" to "e1") }
-    compose.waitForIdle()
+    openSources()
 
     compose.onNodeWithTag(TagRemoteDetailPlay).assertTextContains("Resume")
     press(Key.DirectionCenter)
 
     assertEquals(listOf("series:tt7:1:1"), played.map { it.key })
     assertTrue(played.single().resume)
+  }
+
+  @Test
+  fun `Play on the series plays the selected episode and leaves the series on screen`() {
+    val api = FakeTvApi()
+    api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(items = listOf(episode("e1")), total = 1)
+    api.remoteSourcesValue = listOf(version())
+    api.remoteStateValue = RemoteItemStateDto()
+    api.progressValues["series:tt7:1:1"] = ProgressDto(position = 900.0, duration = 3600.0)
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = series(RemoteProviderIdsDto(imdb = "tt7")),
+          onPlay = { played += it },
+          onBack = {},
+          titleProgress = api::progress,
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteEpisodesRequests.isNotEmpty() }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagRemoteSeriesPrimary).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+    compose.waitForIdle()
+
+    // The play went straight through the episode, which is gone again: the player's Back lands on
+    // the series, not on an episode detail the viewer never asked to see.
+    assertEquals(listOf("series:tt7:1:1"), played.map { it.key })
+    assertTrue(played.single().resume)
+    compose.onNodeWithTag(TagRemoteDetailPlay).assertDoesNotExist()
+    compose.onNodeWithTag(TagRemoteSeriesRoot).assertExists()
+  }
+
+  private fun openSources() {
+    compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TagRemoteSeriesSources)).fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag(TagRemoteSeriesSources).performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TagRemoteDetailPlay)).fetchSemanticsNodes().isNotEmpty() }
+    compose.waitForIdle()
   }
 
   @Test
@@ -176,8 +219,6 @@ class RemoteSeriesRoutingTest {
     compose.waitUntil(5_000) { api.remoteEpisodesRequests.isNotEmpty() }
     compose.waitForIdle()
 
-    // The series itself never asks for versions: its episodes are the whole detail.
-    assertTrue(api.remoteSourcesRequests.isEmpty())
     compose.onNodeWithTag(TagRemoteSeriesRoot).assertExists()
     compose.onNodeWithTag(TagRemoteSeriesPrimary).assertIsFocused()
     val still = compose.onNodeWithTag(remoteItemTag("e1")).getBoundsInRoot()
@@ -187,16 +228,14 @@ class RemoteSeriesRoutingTest {
     compose.onNodeWithTag(seasonChipTag(1)).assertIsFocused()
     press(Key.DirectionDown)
     compose.onNodeWithTag(remoteItemTag("e1")).assertIsFocused()
-    press(Key.DirectionCenter)
-    compose.waitUntil(5_000) { api.remoteSourcesRequests.contains("rlibA" to "e1") }
-    compose.waitForIdle()
-    compose.onNodeWithTag(TagRemoteDetailPlay).assertExists()
+    openSources()
     compose.onNodeWithTag(remoteItemTag("e1")).assertDoesNotExist()
+    val asked = api.remoteSourcesRequests.count { it == "rlibA" to "e1" }
 
     api.remoteStateValue = RemoteItemStateDto(favorite = true)
     compose.runOnIdle { restoreToken.intValue++ }
     compose.waitForIdle()
-    compose.waitUntil(5_000) { api.remoteSourcesRequests.count { it == "rlibA" to "e1" } == 2 }
+    compose.waitUntil(5_000) { api.remoteSourcesRequests.count { it == "rlibA" to "e1" } == asked + 1 }
     compose.onNodeWithTag(TagRemoteDetailFavorite).assertContentDescriptionEquals("Remove from favorites")
 
     host!!.onBackPressedDispatcher.onBackPressed()

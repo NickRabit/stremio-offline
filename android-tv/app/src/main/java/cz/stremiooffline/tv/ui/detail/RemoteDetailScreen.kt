@@ -116,6 +116,8 @@ data class RemoteDetailData(
   val seriesIds: RemoteProviderIdsDto? = null,
   /** Opened from Continue watching: Play is pressed once the item and a version have loaded. */
   val autoPlay: Boolean = false,
+  /** With [autoPlay]: the play starts from the beginning instead of resuming. */
+  val autoStartOver: Boolean = false,
 ) {
   val isEpisode: Boolean get() = item.type == "episode"
 }
@@ -309,9 +311,13 @@ fun RemoteDetailScreen(
   suspend fun loadState(mine: Pair<String, String>) {
     stateLoading = true
     stateError = false
-    titleRow = null
-    val loadedTitle = loadTitleRow()
-    if (live.value == mine) titleRow = loadedTitle
+    // Until the metadata names the title, its own effect reads the row: a read made here with the
+    // identity this load started under is null, and landing after that effect it would wipe the
+    // position a Continue play is about to resume.
+    if (titleRowReady) {
+      val loadedTitle = loadTitleRow()
+      if (live.value == mine) titleRow = loadedTitle
+    }
     try {
       val loaded = api.remoteItemState(detail.libraryId, detail.item.id)
       if (live.value != mine) return
@@ -335,11 +341,9 @@ fun RemoteDetailScreen(
     loadSources(mine)
     loadState(mine)
   }
-  LaunchedEffect(metadataResolved, sourcesIdentity) {
-    if (metadataResolved) {
-      titleRow = loadTitleRow()
-      titleRowReady = true
-    }
+  TitleRowLoader(metadataResolved, sourcesIdentity, titleProgress) { row ->
+    titleRow = row
+    titleRowReady = true
   }
 
   val stateLoaded = state != null && !stateError
@@ -433,7 +437,8 @@ fun RemoteDetailScreen(
   var autoPlayed by remember(identity) { mutableStateOf(false) }
   LaunchedEffect(stateLoaded, primary, playbackMetadataReady) {
     if (detail.autoPlay && stateLoaded && primary != null && playbackMetadataReady && pendingStartOver == null && !autoPlayed) {
-      playPressed()
+      // A start over waits for the same readiness, so it goes through the pending press below.
+      if (detail.autoStartOver) pendingStartOver = true else playPressed()
       autoPlayed = true
     }
   }
@@ -1029,3 +1034,34 @@ private fun titleOf(data: RemoteDetailData): String =
   } else {
     data.item.name
   }
+
+/**
+ * Reads the title's own row once the metadata has resolved, under exactly the identity that
+ * resolution named. Both arrive as parameters: an effect reading the resolved flag live while it
+ * holds the identity of an earlier composition would store "no row" just as the real identity
+ * lands, and a Continue play would start that title from the beginning.
+ */
+@Composable
+private fun TitleRowLoader(
+  resolved: Boolean,
+  identity: Pair<String, String>?,
+  read: (suspend (String) -> ProgressDto?)?,
+  onLoaded: (ProgressDto?) -> Unit,
+) {
+  LaunchedEffect(resolved, identity) {
+    if (!resolved) return@LaunchedEffect
+    val wanted = identity
+    val row = if (read == null || wanted == null) {
+      null
+    } else {
+      try {
+        read(ProgressKey.of(wanted.first, wanted.second))
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        null
+      }
+    }
+    onLoaded(row)
+  }
+}

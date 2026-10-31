@@ -52,6 +52,10 @@ internal fun SeriesRows(
   onNearEnd: () -> Unit = {},
   onMenu: ((VideoDto) -> Unit)? = null,
   cardTag: (VideoDto) -> String = ::episodeCardTag,
+  /** A card's own progress and finished mark, when every episode keeps its own position; left
+   *  null, only [resumeEpisode] shows progress and the episodes before it read as finished. */
+  cardProgress: ((VideoDto) -> Float?)? = null,
+  cardCompleted: ((VideoDto) -> Boolean)? = null,
 ) {
   val seasons = seasonsOf(videos)
   val current = season ?: seasons.firstOrNull()
@@ -101,7 +105,9 @@ internal fun SeriesRows(
   ) {
     itemsIndexed(episodes, key = { _, video -> video.id ?: video.label }) { index, video ->
       val resumeIndex = episodes.indexOfFirst { resumeEpisode != null && it.id != null && it.id == resumeEpisode.id }
-      val progress = if (video.id != null && video.id == resumeEpisode?.id && seriesDuration > 0) {
+      val progress = if (cardProgress != null) {
+        cardProgress(video)
+      } else if (video.id != null && video.id == resumeEpisode?.id && seriesDuration > 0) {
         (seriesPosition / seriesDuration).toFloat()
       } else {
         null
@@ -111,7 +117,7 @@ internal fun SeriesRows(
         caption = video.title ?: video.name,
         imageUrl = imageUrl(video.thumbnail),
         progress = progress,
-        completed = resumeIndex >= 0 && index < resumeIndex,
+        completed = cardCompleted?.invoke(video) ?: (resumeIndex >= 0 && index < resumeIndex),
         cardTag = cardTag(video),
         onClick = { onSelect(video) },
         modifier = Modifier

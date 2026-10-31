@@ -286,9 +286,12 @@ class DetailScreenTest {
       ),
     )
     mount(data)
-    // The row is below the actions; DOWN from the primary action enters it.
+    // The seasons sit below the actions and the episodes below them, as on a media-server series:
+    // DOWN twice from the primary action lands on the first episode not yet finished.
     compose.onNodeWithTag(TagDetailPrimary).performKeyInput { pressKey(Key.DirectionDown) }
     compose.waitForIdle()
+    compose.onNodeWithTag(cz.stremiooffline.tv.ui.catalog.seasonChipTag(1)).assertIsFocused()
+    press(Key.DirectionDown)
 
     compose.onNodeWithTag("Films/It/S2.mkv").assertIsFocused()
   }
