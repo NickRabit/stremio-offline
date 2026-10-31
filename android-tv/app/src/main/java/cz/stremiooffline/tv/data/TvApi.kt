@@ -63,6 +63,8 @@ interface CatalogApi : SearchHistoryApi {
   suspend fun pageCatalogSearch(id: String): Int = throw ApiError(ApiFailure.Generic)
   suspend fun deleteCatalogSearch(id: String): Unit = throw ApiError(ApiFailure.Generic)
   suspend fun meta(type: String, id: String, language: String?): MetaDto
+  suspend fun titleExtras(type: String, id: String, language: String?): TitleExtrasDto =
+    throw ApiError(ApiFailure.Generic)
   suspend fun streamSources(type: String, id: String): List<StreamSourceDto>
   suspend fun streams(type: String, id: String, addon: String? = null): List<StreamDto>
   /** The viewer's own library copies of one title or episode (`GET /api/local-streams`). */

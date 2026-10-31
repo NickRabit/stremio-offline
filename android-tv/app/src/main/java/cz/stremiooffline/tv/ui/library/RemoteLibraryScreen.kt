@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -66,6 +67,8 @@ import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.RelatedTitleDto
+import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
@@ -85,6 +88,8 @@ import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
+import cz.stremiooffline.tv.ui.detail.TitleExtrasRows
+import cz.stremiooffline.tv.ui.detail.TitleExtrasState
 import cz.stremiooffline.tv.ui.detail.initialRemoteMetadata
 import cz.stremiooffline.tv.ui.detail.resolveRemoteMetadata
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -448,12 +453,16 @@ internal fun RemoteSeriesScreen(
    *  show's, exactly as it is for the same episode opened from the catalogue. */
   titleProgress: (suspend (String) -> ProgressDto?)? = null,
   forgetTitle: (suspend (String) -> Unit)? = null,
+  loadExtras: (suspend (type: String, id: String) -> TitleExtrasDto)? = null,
+  onSearchPerson: (String) -> Unit = {},
+  onOpenRelated: (RelatedTitleDto) -> Unit = {},
 ) {
   val viewModel = viewModel<RemoteLibraryViewModel>(
     key = "remote-series:${data.libraryId}:${data.item.id}",
     factory = RemoteLibraryViewModel.factory(api),
   )
   val parentIdentity = data.libraryId to data.item.id
+  val extras = remember(parentIdentity) { TitleExtrasState() }
   var metadata by remember(parentIdentity) { mutableStateOf(initialRemoteMetadata(data)) }
   var metadataResolved by remember(parentIdentity) { mutableStateOf(false) }
   LaunchedEffect(data.libraryId, data.item.id) {
@@ -462,6 +471,9 @@ internal fun RemoteSeriesScreen(
   LaunchedEffect(parentIdentity, data.item, data.seriesName, data.seriesIds) {
     metadata = resolveRemoteMetadata(api, data)
     metadataResolved = true
+  }
+  LaunchedEffect(metadataResolved, metadata) {
+    if (metadataResolved) extras.loadRemote(metadata, loadExtras) else extras.clear()
   }
   DisposableEffect(viewModel) { onDispose { viewModel.onHidden() } }
 
@@ -598,33 +610,55 @@ internal fun RemoteSeriesScreen(
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
-      Box(Modifier.weight(1f).fillMaxWidth()) {
-        if (level == null) {
-          ShimmerCards()
-        } else {
-          ItemBrowser(
-            level = level,
-            items = items,
-            imageUrl = imageUrl,
-            viewModel = viewModel,
-            committed = "",
-            requesters = requesters,
-            gridFocus = gridFocus,
-            loadMoreFocus = loadMoreFocus,
-            errorFocus = errorFocus,
-            onMenu = if (loadDestinations != null) { item -> openCardCopy(item) } else null,
-            onOpenItem = { libraryId, libraryName, provider, item ->
-              episode = RemoteDetailData(
-                libraryId = libraryId,
-                libraryName = libraryName,
-                provider = provider,
-                item = item,
-                seriesName = metadata.seriesName ?: metadata.item.seriesName,
-                seriesIds = metadata.seriesIds.takeIf { metadataResolved },
-              )
-            },
-          )
+      Column(
+        Modifier
+          .weight(1f)
+          .then(if (loadExtras != null) Modifier.verticalScroll(extras.scroll) else Modifier),
+      ) {
+        Box(
+          Modifier
+            .fillMaxWidth()
+            .then(if (loadExtras == null) Modifier.weight(1f) else Modifier.height(300.dp)),
+        ) {
+          if (level == null) {
+            ShimmerCards()
+          } else {
+            ItemBrowser(
+              level = level,
+              items = items,
+              imageUrl = imageUrl,
+              viewModel = viewModel,
+              committed = "",
+              requesters = requesters,
+              gridFocus = gridFocus,
+              loadMoreFocus = loadMoreFocus,
+              errorFocus = errorFocus,
+              onMenu = if (loadDestinations != null) { item -> openCardCopy(item) } else null,
+              onDownFromLastRow = if (metadataResolved) ({ extras.focusFirst() }) else null,
+              onOpenItem = { libraryId, libraryName, provider, item ->
+                episode = RemoteDetailData(
+                  libraryId = libraryId,
+                  libraryName = libraryName,
+                  provider = provider,
+                  item = item,
+                  seriesName = metadata.seriesName ?: metadata.item.seriesName,
+                  seriesIds = metadata.seriesIds.takeIf { metadataResolved },
+                )
+              },
+            )
+          }
         }
+        TitleExtrasRows(
+          state = extras,
+          imageUrl = imageUrl,
+          onPerson = onSearchPerson,
+          onRelated = onOpenRelated,
+          onUpFromRows = {
+            runCatching {
+              (viewModel.selectedFor(levelKey)?.let { requesters[it] } ?: gridFocus).requestFocus()
+            }
+          },
+        )
       }
     }
 
@@ -646,6 +680,9 @@ internal fun RemoteSeriesScreen(
         catalogueApi = catalogueApi,
         titleProgress = titleProgress,
         forgetTitle = forgetTitle,
+        loadExtras = loadExtras,
+        onSearchPerson = onSearchPerson,
+        onOpenRelated = onOpenRelated,
       )
     }
 
@@ -863,6 +900,7 @@ private fun ItemBrowser(
   errorFocus: FocusRequester,
   firstRowUp: FocusRequester? = null,
   onMenu: ((RemoteItemDto) -> Unit)? = null,
+  onDownFromLastRow: (() -> Boolean)? = null,
   onOpenItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit,
 ) {
   val search = level.state
@@ -915,6 +953,7 @@ private fun ItemBrowser(
               loadMoreFocus = loadMoreFocus,
               firstRowUp = firstRowUp,
               onMenu = onMenu,
+              onDownFromLastRow = onDownFromLastRow,
               onOpen = { item ->
                 // A folder opens one directory level deeper; it is never playable, so it never
                 // reaches the shell's item detail.
@@ -941,6 +980,7 @@ private fun ItemGrid(
   firstRowUp: FocusRequester? = null,
   /** Invoked for a playable card when the viewer presses Menu or Info on it; null disables it. */
   onMenu: ((RemoteItemDto) -> Unit)? = null,
+  onDownFromLastRow: (() -> Boolean)? = null,
   onOpen: (RemoteItemDto) -> Unit,
 ) {
   val isEpisodes = level is RemoteLevel.Episodes
@@ -989,6 +1029,15 @@ private fun ItemGrid(
                 }
               }
             } else Modifier,
+          )
+          .then(
+            if (onDownFromLastRow != null && !hasMore && index >= items.size - columns) {
+              Modifier.onPreviewKeyEvent { event ->
+                event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && onDownFromLastRow()
+              }
+            } else {
+              Modifier
+            },
           )
         // A show the server could not identify has no picture of its own; it borrows the folder fan,
         // which the server draws from its episodes when its seasons have none either.

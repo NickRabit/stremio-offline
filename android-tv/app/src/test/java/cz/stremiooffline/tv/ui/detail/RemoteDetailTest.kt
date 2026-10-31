@@ -34,11 +34,14 @@ import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.RemoteItemDetailDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
+import cz.stremiooffline.tv.data.TitleExtrasDto
+import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.actionRowOrder
 import cz.stremiooffline.tv.ui.catalog.nativeQueueLibraryTag
@@ -738,5 +741,112 @@ class RemoteDetailTest {
 
     compose.onNodeWithTag(nativeQueueLibraryTag("libA")).assertDoesNotExist()
     assertEquals(0, api.downloadCalls)
+  }
+
+  @Test
+  fun `remote extras prefer the IMDb identity`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"))
+    api.remoteStateValue = RemoteItemStateDto()
+    api.titleExtrasValue = TitleExtrasDto(
+      people = listOf(TitlePersonDto(name = "Tom Hanks", role = "cast", character = "Woody")),
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = data(RemoteProviderIdsDto(imdb = "tt1", tmdb = "949")),
+          onPlay = {},
+          onBack = {},
+          loadExtras = { type, id -> api.titleExtras(type, id, null) },
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    assertEquals(Triple("movie", "tt1", null), api.titleExtrasRequests.single())
+    compose.onNodeWithText("Tom Hanks").assertExists()
+    compose.onNodeWithTag(TagRemoteDetailPlay).performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsFocused()
+  }
+
+  @Test
+  fun `remote extras fall back to the tmdb identity`() {
+    val api = FakeTvApi()
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = data(RemoteProviderIdsDto(imdb = "not-imdb", tmdb = "949")),
+          onPlay = {},
+          onBack = {},
+          loadExtras = { type, id -> api.titleExtras(type, id, null) },
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+
+    assertEquals(Triple("movie", "tmdb:949", null), api.titleExtrasRequests.single())
+  }
+
+  @Test
+  fun `remote extras stay absent without a catalogue identity`() {
+    val api = FakeTvApi()
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = data(),
+          onPlay = {},
+          onBack = {},
+          loadExtras = { type, id -> api.titleExtras(type, id, null) },
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteItemRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    assertTrue(api.titleExtrasRequests.isEmpty())
+    compose.onNodeWithText("Cast and crew").assertDoesNotExist()
+  }
+
+  @Test
+  fun `an episode loads extras under its resolved series identity`() {
+    val api = FakeTvApi()
+    api.remoteItemValues["rlibA:s1"] = RemoteItemDetailDto(
+      item = RemoteItemDto(
+        id = "s1",
+        name = "Show",
+        type = "series",
+        providerIds = RemoteProviderIdsDto(imdb = "tt7"),
+      ),
+    )
+    val episode = data().copy(
+      item = RemoteItemDto(
+        id = "e1",
+        name = "Pilot",
+        type = "episode",
+        seriesId = "s1",
+        season = 1,
+        episode = 1,
+      ),
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = episode,
+          onPlay = {},
+          onBack = {},
+          loadExtras = { type, id -> api.titleExtras(type, id, null) },
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    assertEquals(Triple("series", "tt7", null), api.titleExtrasRequests.single())
   }
 }

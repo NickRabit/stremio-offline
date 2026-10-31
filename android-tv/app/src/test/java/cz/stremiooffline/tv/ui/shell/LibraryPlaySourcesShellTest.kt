@@ -213,8 +213,8 @@ class LibraryPlaySourcesShellTest {
     compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("It.mkv"))
     compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Alpha"))
     press(Key.Back)
-    // One read for the sources and one for the subtitles of the file, neither repeated by the switch.
-    assertEquals(2, fake.libraryTitleRequests.size)
+    // The detail, Sources and subtitles each name the file once; the switch repeats none of them.
+    assertEquals(3, fake.libraryTitleRequests.size)
     assertEquals(1, fake.streamSourcesRequests.size)
     assertEquals(1, fake.localStreamsRequests.size)
     assertEquals(1, fake.remoteMatchRequests.size)

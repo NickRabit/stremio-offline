@@ -62,6 +62,7 @@ import cz.stremiooffline.tv.data.SourceDto
 import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
+import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TrackChange
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.bulkDownloadBody
@@ -120,6 +121,9 @@ open class FakeTvApi : TvApi {
   var addonStreams: MutableMap<String, List<StreamDto>> = mutableMapOf()
   var streamSourcesValues: MutableMap<String, List<StreamSourceDto>> = mutableMapOf()
   var streamSourcesRequests: MutableList<String> = mutableListOf()
+  var titleExtrasValue: TitleExtrasDto = TitleExtrasDto()
+  var titleExtrasFailure: ApiError? = null
+  val titleExtrasRequests: MutableList<Triple<String, String, String?>> = mutableListOf()
   var streamsRequests: MutableList<String> = mutableListOf()
   /** Each `streams()` request that has finished answering, in completion order. */
   var streamsCompleted: MutableList<String> = mutableListOf()
@@ -488,6 +492,12 @@ open class FakeTvApi : TvApi {
     metaRequests += Triple(type, id, language)
     metaGates["$type:$id"]?.await()
     return metaValues["$type:$id"] ?: throw ApiError(ApiFailure.NotFound)
+  }
+
+  override suspend fun titleExtras(type: String, id: String, language: String?): TitleExtrasDto {
+    titleExtrasRequests += Triple(type, id, language)
+    titleExtrasFailure?.let { throw it }
+    return titleExtrasValue
   }
 
   override suspend fun streamSources(type: String, id: String): List<StreamSourceDto> {

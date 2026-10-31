@@ -501,6 +501,16 @@ class ApiClient(
       ?: throw ApiError(ApiFailure.Generic)
   }
 
+  override suspend fun titleExtras(type: String, id: String, language: String?): TitleExtrasDto {
+    val suffix = if (!language.isNullOrEmpty()) "?language=" + encode(language) else ""
+    return request(
+      Request.Builder()
+        .url(address.resolve("/api/meta/" + encode(type) + "/" + encode(id) + "/extras" + suffix))
+        .get()
+        .build(),
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
   /** The source addons of one video, in the caller's own order. */
   override suspend fun streamSources(type: String, id: String): List<StreamSourceDto> =
     request(Request.Builder().url(address.resolve("/api/stream-sources/" + encode(type) + "/" + encode(id))).get().build()).decode()

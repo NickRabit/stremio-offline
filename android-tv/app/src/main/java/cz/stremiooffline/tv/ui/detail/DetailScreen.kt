@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +56,7 @@ import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.playback.Progress
@@ -246,6 +248,8 @@ fun DetailScreen(
   /** Stores one file as finished; null keeps Mark watched off the action row, which is what a
    *  harness without a playback surface passes. */
   markWatched: (suspend (BrowseItem.File) -> Unit)? = null,
+  onSearchPerson: (String) -> Unit = {},
+  onOpenRelated: (RelatedTitleDto) -> Unit = {},
 ) {
   BackHandler(enabled = backEnabled) { onBack() }
   val scope = rememberCoroutineScope()
@@ -260,6 +264,7 @@ fun DetailScreen(
   var forgetting by remember { mutableStateOf(false) }
   var forgetError by remember { mutableStateOf(false) }
   val caption = remember { ActionCaption() }
+  val extras = remember(detail.gridPath) { TitleExtrasState() }
   // The card's own keys stop counting once they have been forgotten.
   var forgotten by remember { mutableStateOf(false) }
   LaunchedEffect(detail.gridPath, restoreToken) {
@@ -293,6 +298,9 @@ fun DetailScreen(
 
   val playIndex = current.files.indexOfFirst { !isCompleted(it) }.let { if (it < 0) 0 else it }
   val playFile = current.files.getOrNull(playIndex)
+  LaunchedEffect(detail.gridPath, playFile?.path, sourcesApi) {
+    extras.loadLibrary(sourcesApi ?: return@LaunchedEffect, playFile?.path, null)
+  }
   val resuming = playFile?.let { Progress.resumePosition(positionOf(it), durationOf(it)) != null } == true
   /** A saved position that is not offered as Resume still gets a Start over beside Play. */
   val hasStoredProgress = positionOf(playFile) > 0.0
@@ -389,7 +397,11 @@ fun DetailScreen(
     if (!sourcesOpen || panelPath.isEmpty() || binding != null || probing) return@LaunchedEffect
     probing = true
     try {
-      binding = port.libraryTitle(panelPath)
+      binding = if (extras.hasLibraryTitle(panelPath)) {
+        extras.cachedLibraryTitle(panelPath)
+      } else {
+        port.libraryTitle(panelPath)
+      }
     } catch (cancelled: CancellationException) {
       throw cancelled
     } catch (_: ApiError) {
@@ -633,9 +645,12 @@ fun DetailScreen(
       // not on whatever card happens to sit below the button. An open panel keeps the remote.
       .onPreviewKeyEvent { event ->
         val panelUp = forgetPanelOpen || sourcesOpen || save.request != null
-        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && current.files.size > 1 && !panelUp) {
-          runCatching { rowFocus.requestFocus() }
-          true
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && !panelUp) {
+          if (current.files.size > 1) {
+            runCatching { rowFocus.requestFocus() }.isSuccess
+          } else {
+            extras.focusFirst()
+          }
         } else {
           false
         }
@@ -651,7 +666,10 @@ fun DetailScreen(
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Tokens.Bg.copy(alpha = 0f), Tokens.Bg.copy(alpha = 0.6f), Tokens.Bg))))
 
     Column(
-      modifier = Modifier.fillMaxSize().padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
+      modifier = Modifier
+        .fillMaxSize()
+        .then(if (sourcesApi != null) Modifier.verticalScroll(extras.scroll) else Modifier)
+        .padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
       verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
       Text(
@@ -794,8 +812,18 @@ fun DetailScreen(
           onPlay = onPlay,
           focusRequester = rowFocus,
           onSources = { file, card -> openSources(file, card, fromCard = true) },
+          extras = extras,
         )
       }
+      TitleExtrasRows(
+        state = extras,
+        imageUrl = imageUrl,
+        onPerson = onSearchPerson,
+        onRelated = onOpenRelated,
+        onUpFromRows = {
+          runCatching { (if (current.files.size > 1) rowFocus else primaryFocus).requestFocus() }
+        },
+      )
     }
 
     if (sourcesOpen) {
@@ -880,6 +908,7 @@ private fun EpisodeRow(
   /** Menu/Info on one card opens the Sources panel for exactly that file, and closing it hands the
    *  remote back to that same card; Enter still plays the file. */
   onSources: (BrowseItem.File, FocusRequester) -> Unit,
+  extras: TitleExtrasState,
 ) {
   val state = rememberLazyListState()
   LaunchedEffect(detail.gridPath) {
@@ -891,6 +920,7 @@ private fun EpisodeRow(
     state = state,
     contentPadding = PaddingValues(horizontal = CardRowInset),
     horizontalArrangement = Arrangement.spacedBy(18.dp),
+    modifier = Modifier.downIntoExtras(extras),
   ) {
     itemsIndexed(detail.files, key = { _, file -> file.path }) { index, file ->
       // The card the actions' DOWN lands on keeps the caller's requester; every other card owns

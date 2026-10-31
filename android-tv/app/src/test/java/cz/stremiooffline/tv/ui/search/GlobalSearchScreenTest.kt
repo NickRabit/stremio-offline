@@ -440,6 +440,19 @@ class GlobalSearchScreenTest {
   }
 
   @Test
+  fun `a query preset sets the draft and submits it once`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1", title = "Tom Hanks")))
+    mount(api, preset = SearchPreset(query = "Tom Hanks"))
+    compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagGlobalSearchInput).assertTextContains("Tom Hanks")
+    assertEquals("Tom Hanks", api.globalStartCalls.single().query)
+    assertEquals(listOf("Tom Hanks"), api.recordedSearches)
+  }
+
+  @Test
   fun `RIGHT from the mic reaches the reset, which brings the page back to its defaults`() {
     val api = FakeTvApi()
     api.searchStateValue = SearchStateDto(recent = recent("Heat"))

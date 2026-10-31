@@ -66,6 +66,44 @@ data class MetaDto(
   val ratingText: String? get() = imdbRating?.text()?.trim()?.takeIf { Regex("^\\d+(\\.\\d+)?$").matches(it) }
 }
 
+@Serializable
+data class TitleExtrasDto(
+  val people: List<TitlePersonDto> = emptyList(),
+  val related: List<RelatedTitleDto> = emptyList(),
+  val ageRating: String? = null,
+  val ageRatingRegion: String? = null,
+  val originalTitle: String? = null,
+  val originalLanguage: String? = null,
+  val nextEpisode: NextEpisodeDto? = null,
+  val source: String = "",
+)
+
+@Serializable
+data class TitlePersonDto(
+  val name: String = "",
+  val role: String = "",
+  val character: String? = null,
+  val photo: String? = null,
+)
+
+@Serializable
+data class RelatedTitleDto(
+  val type: String = "",
+  val id: String = "",
+  val name: String = "",
+  val year: String? = null,
+  val poster: String? = null,
+  val inLibrary: Boolean = false,
+)
+
+@Serializable
+data class NextEpisodeDto(
+  val season: Int = 0,
+  val episode: Int = 0,
+  val name: String? = null,
+  val released: String? = null,
+)
+
 private fun JsonElement.text(): String? = (this as? JsonPrimitive)?.contentOrNull
 
 @Serializable
