@@ -222,7 +222,8 @@ describe("RemoteLibraryBrowser listing", () => {
 
     await click(tileButtons()[0]!);
     const input = host.querySelector<HTMLInputElement>(".browse-panel .search-input input")!;
-    expect(input).not.toBeNull();
+    expect(input.getAttribute("aria-label")).toBe("Filter the library");
+    expect(input.placeholder).toBe("Filter…");
     await act(async () => {
       const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
       setValue.call(input, "One");

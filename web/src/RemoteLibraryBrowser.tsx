@@ -1560,7 +1560,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           </nav>
           <div className="browse-tools">
             <div className={`fold browse-fold${compact ? " closed" : ""}`}><div className="browse-fold-inner">
-              {!detail && <div className="search-input"><Search/><input value={searchInput} aria-label={t("mediaServer.searchPlaceholder")} placeholder={t("mediaServer.searchPlaceholder")} onChange={(event) => setSearchInput(event.target.value)}/></div>}
+              {!detail && <div className="search-input"><Search/><input value={searchInput} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setSearchInput(event.target.value)}/></div>}
               {!detail && <select aria-label={t("common.sorting")} value={sort} onChange={(event) => changeSort(event.target.value as RemoteItemSort)}>
                 <option value="name">{t("library.sortName")}</option>
                 <option value="added">{t("library.sortAdded")}</option>

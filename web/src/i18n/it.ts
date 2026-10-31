@@ -1908,7 +1908,6 @@ export const it: Catalog = {
   "mediaServer.orderDown": "Sposta {name} giù",
   "mediaServer.remoteTitle": "Librerie remote",
   "mediaServer.remoteHint": "Librerie di sola lettura su un server Jellyfin o Emby collegato. Riproduzione, posizione e preferiti restano in questa app.",
-  "mediaServer.searchPlaceholder": "Cerca in questa libreria",
   "mediaServer.search": "Cerca",
   "mediaServer.clearSearch": "Cancella",
   "mediaServer.filterLabel": "Tipo",

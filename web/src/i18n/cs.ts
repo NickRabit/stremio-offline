@@ -1961,7 +1961,6 @@ export const cs: Catalog = {
   "mediaServer.orderDown": "Posunout {name} dolů",
   "mediaServer.remoteTitle": "Vzdálené knihovny",
   "mediaServer.remoteHint": "Knihovny jen pro čtení na připojeném serveru Jellyfin nebo Emby. Přehrávání, pozice a oblíbené zůstávají v této aplikaci.",
-  "mediaServer.searchPlaceholder": "Hledat v této knihovně",
   "mediaServer.search": "Hledat",
   "mediaServer.clearSearch": "Vymazat",
   "mediaServer.filterLabel": "Typ",

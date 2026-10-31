@@ -1967,7 +1967,6 @@ export const en = {
   "mediaServer.orderDown": "Move {name} down",
   "mediaServer.remoteTitle": "Remote libraries",
   "mediaServer.remoteHint": "Read-only libraries on a connected Jellyfin or Emby server. Playback, position and favorites stay in this app.",
-  "mediaServer.searchPlaceholder": "Search this library",
   "mediaServer.search": "Search",
   "mediaServer.clearSearch": "Clear",
   "mediaServer.filterLabel": "Type",

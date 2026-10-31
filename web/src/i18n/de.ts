@@ -1908,7 +1908,6 @@ export const de: Catalog = {
   "mediaServer.orderDown": "{name} nach unten verschieben",
   "mediaServer.remoteTitle": "Remote-Bibliotheken",
   "mediaServer.remoteHint": "Schreibgeschützte Bibliotheken auf einem verbundenen Jellyfin- oder Emby-Server. Wiedergabe, Position und Favoriten bleiben in dieser App.",
-  "mediaServer.searchPlaceholder": "Diese Bibliothek durchsuchen",
   "mediaServer.search": "Suchen",
   "mediaServer.clearSearch": "Leeren",
   "mediaServer.filterLabel": "Typ",
