@@ -93,7 +93,7 @@ main.view-library{height:100dvh;overflow:hidden;display:flex;flex-direction:colu
 main.view-library>.library-page{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
 /* Kept mounted behind a catalogue detail opened from it, so Back finds it as it was; its own
    display would otherwise win over the hidden attribute. */
-.library-page[hidden]{display:none}
+.library-page[hidden]{display:none!important}
 main.view-library .browse-panel{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 main.view-library .browse-head{flex:0 0 auto}
 main.view-library .browse-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
