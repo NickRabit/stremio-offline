@@ -477,6 +477,9 @@ private fun PersonCard(
         .testTag(titlePersonTag(person.name))
         .onFocusChanged { focused = it.isFocused },
       shape = ClickableSurfaceDefaults.shape(CircleShape),
+      // The card scales itself from its top edge; the Surface's own centred focus scale on top of
+      // that grew it down over its caption.
+      scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
       glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Color.White.copy(alpha = 0.28f), 18.dp)),
       border = ClickableSurfaceDefaults.border(
         border = Border.None,
@@ -511,6 +514,7 @@ private fun PersonCard(
       person.name,
       color = if (focused) Tokens.Text else Tokens.Text.copy(alpha = 0.82f),
       fontSize = 10.5.sp,
+      lineHeight = 13.sp,
       fontWeight = FontWeight.SemiBold,
       textAlign = TextAlign.Center,
       maxLines = 2,
@@ -556,6 +560,9 @@ private fun RelatedCard(
         .testTag(relatedTitleTag(title.id))
         .onFocusChanged { focused = it.isFocused },
       shape = ClickableSurfaceDefaults.shape(shape),
+      // The card scales itself from its top edge; the Surface's own centred focus scale on top of
+      // that grew it down over its caption.
+      scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
       glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Color.White.copy(alpha = 0.28f), 18.dp)),
       border = ClickableSurfaceDefaults.border(
         border = Border.None,
