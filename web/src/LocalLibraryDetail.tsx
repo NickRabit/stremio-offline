@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, describeError } from "./api";
+import { DetailRatings, ratingsFrom } from "./detail-copy";
 import { bytes } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
@@ -271,10 +272,11 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
       ...(item.poster ? { poster: item.poster } : {}),
     };
   };
-  const chips = <TitleChips kind={t(episode ? "episodes.one" : "catalog.oneMovie")} trailer={enrichment.trailer} links={enrichment.links}
+  const chips = <TitleChips kind={t(episode ? "episodes.one" : "catalog.oneMovie")} links={enrichment.links}
     onTrailer={onTrailer} secureMode={secureMode}/>;
   const facts = [item.year, sources?.length === 1 && item.size ? bytes(item.size) : ""].filter(Boolean).join(" · ");
   const pieces = TitleExtraFacts({ extras: titleExtras.extras, language: uiLanguage, name: title });
+  const scores = ratingsFrom(titleExtras.extras, enrichment.meta);
   // Prefer full-resolution backdrops; unmatched files can still use their existing preview.
   const backdrops = [enrichment.meta?.background, item.wide, item.poster];
   // The file's own poster and wide artwork merge with the exact catalogue pictures; the saved
@@ -290,9 +292,14 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     gallery={gallery}
     {...(onGallery ? { onGallery: (images) => onGallery(images, item.path, bound) } : {})}
     {...(facts ? { facts } : {})}
-    factsExtra={pieces.ageBadge}
-    heroExtra={pieces.heroLines}
-    extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading}/>}
+    originalLine={pieces.originalLine}
+    ratings={<DetailRatings age={pieces.ageBadge} imdb={scores.imdb} tmdb={scores.tmdb} tmdbVotes={scores.tmdbVotes}/>}
+    heroExtra={pieces.nextLine}
+    people={titleExtras.extras?.people}
+    trailer={enrichment.trailer}
+    onTrailer={onTrailer}
+    secureMode={secureMode}
+    extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
     {...(item.description ? { description: item.description } : {})}
     chips={chips}
     favorite={favorite}

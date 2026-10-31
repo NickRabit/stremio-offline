@@ -124,7 +124,7 @@ describe("a star and a follow name the add-on the title came from", () => {
     expect(app).toContain("void toggleWatchlist(item, panelAddonKey())");
     expect(app).toContain("detailPlaying.stream.addonKey);");
     expect(app).toContain("progressAddonKey={localStream ? undefined : detailPlaying ? detailPlaying.stream.addonKey : playerSubject?.panel ? panelAddonKey(selectedStream?.addonKey)");
-    expect(app).toContain("}, detailAddonKey)}><Star/></button>");
+    expect(app).toMatch(/onToggleFavorite=\{\(\) => void toggleWatchlist\(\{ type: catalogueDetail\.type[\s\S]{0,280}?detailAddonKey\)\}/);
   });
 
   it("hands the add-on to the follow it creates", () => {

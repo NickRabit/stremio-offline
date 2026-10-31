@@ -1,5 +1,5 @@
 import { memo, useState } from "react";
-import { Film, FolderOpen, HardDrive, MoreVertical, RotateCcw } from "lucide-react";
+import { CirclePlay, Film, FolderOpen, HardDrive, MoreVertical, RotateCcw } from "lucide-react";
 import { TileArt } from "./TileArt";
 import { localeTag, t } from "./i18n";
 import { cardLabel, cardNumbering, cardProgress, relativeAge } from "./home-cards";
@@ -61,6 +61,7 @@ export const HomeCard = memo(function HomeCard({ card, shape, actions }: { card:
     if (card.kind === "favorite" && card.title) { actions.open(card); return; }
     // A Tonight card the libraries bound to a title opens that title instead of its folder.
     if (card.kind === "tonight" && card.title) { actions.open(card); return; }
+    if (card.kind === "completed" || card.kind === "recent") { actions.open(card); return; }
     if (folder) { actions.reveal(card.path); return; }
     actions.play(card);
   };
@@ -76,6 +77,7 @@ export const HomeCard = memo(function HomeCard({ card, shape, actions }: { card:
       {menu && <button className="browse-menu" aria-label={t("home.menu", { title })} aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><MoreVertical/></button>}
     </div>
     {menu && menuOpen && <span className="browse-actions home-actions" onClick={(event) => event.stopPropagation()}>
+      {(card.kind === "completed" || card.kind === "recent") && <button onClick={() => { setMenuOpen(false); actions.play(card); }}><CirclePlay/> {t("player.play")}</button>}
       {((card.kind === "resume-file" && card.identity) || card.kind === "resume-catalogue") && <button onClick={() => { setMenuOpen(false); actions.open(card); }}><Film/> {t("home.openDetail")}</button>}
       {hasPath(card) && <button onClick={() => { setMenuOpen(false); actions.reveal(card.path); }}><HardDrive/> {t("library.showInLibrary")}</button>}
       {(card.kind === "resume-file" || card.kind === "resume-catalogue" || card.kind === "remote") && <button onClick={() => { setMenuOpen(false); actions.forget(card); }}><RotateCcw/> {t("home.forget")}</button>}

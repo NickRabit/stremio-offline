@@ -2806,6 +2806,28 @@ export function App() {
     if (card.kind === "discovery") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
     if (card.kind === "favorite-catalogue") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
+    if (card.kind === "completed" || card.kind === "recent") {
+      const slash = card.path.lastIndexOf("/");
+      navigated.current = true;
+      setMenuFor(null);
+      setFromFavorites(false);
+      setBrowseQuery("");
+      setRemoteOpen(false);
+      setBrowsePath(slash > 0 ? card.path.slice(0, slash) : "");
+      openLocalDetail({
+        kind: "file",
+        path: card.path,
+        label: card.kind === "recent" ? card.label : card.title,
+        season: card.season ?? null,
+        episode: card.episode ?? null,
+        size: 0,
+        modified: "",
+        ...(card.poster ? { poster: card.poster } : {}),
+        ...(card.wide ? { wide: card.wide } : {}),
+      });
+      setView("library");
+      return;
+    }
     if (card.kind !== "resume-catalogue") return;
     openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(card.path || card.pending ? {} : { resume: { ...(resumeKeyOf(card.key) ? { stableKey: resumeKeyOf(card.key)! } : {}) } }),
       ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
@@ -3324,16 +3346,13 @@ export function App() {
   const detailWatchlisted = inWatchlist(catalogueDetail?.type, catalogueDetail?.id);
   // The shared detail has no catalogue behind it: the source it has selected names the add-on.
   const detailAddonKey = detailSource?.addonKey || catalogueDetail?.initialSource?.addonKey || undefined;
+  const detailWatchTitle = t(detailWatchlisted ? "watchlist.remove" : "watchlist.add");
   const detailChips = catalogueDetail ? <TitleChips
     kind={t(catalogueDetail.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}
-    trailer={detailTrailer} links={detailLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
-    leading={<>
-      <button className={`watch-star ${detailWatchlisted ? "on" : ""}`} title={t(detailWatchlisted ? "watchlist.remove" : "watchlist.add")}
-        onClick={() => void toggleWatchlist({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}) }, detailAddonKey)}><Star/></button>
-      {(catalogueDetail.type === "series" || (detailRead !== null && !detailRead.pending && !detailRead.playable)) && (catalogueFollow
-        ? <button className="follow-chip on" onClick={() => setDetailFollowOpen(true)}><BellRing/>{t("follow.following")}{catalogueFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button>
-        : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}), ...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })}><Bell/>{t("follow.follow")}</button>)}
-    </>}/> : undefined;
+    links={detailLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
+    leading={(catalogueDetail.type === "series" || (detailRead !== null && !detailRead.pending && !detailRead.playable)) && (catalogueFollow
+      ? <button className="follow-chip on" onClick={() => setDetailFollowOpen(true)}><BellRing/>{t("follow.following")}{catalogueFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button>
+      : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}), ...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })}><Bell/>{t("follow.follow")}</button>)}/> : undefined;
   const panelExtras = useTitleExtras(selected?.type, selected?.id);
 
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
@@ -3412,6 +3431,10 @@ export function App() {
             addonPriority={addonPriority} showTorrents={settings.realDebridConfigured}
             onRead={setDetailRead}
             {...(detailChips ? { chips: detailChips } : {})}
+            trailer={detailTrailer} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
+            favorite={detailWatchlisted}
+            favoriteAriaLabel={detailWatchTitle} favoriteTitle={detailWatchTitle}
+            onToggleFavorite={() => void toggleWatchlist({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}) }, detailAddonKey)}
             onSourceChange={(stream, explicitlyPicked) => { setDetailSource(stream); setDetailSourcePicked(explicitlyPicked); }}
             {...(detailProgress ? { progress: detailProgress } : {})}
             {...(detailResumeStableKey ? { resumeStableKey: detailResumeStableKey } : {})}

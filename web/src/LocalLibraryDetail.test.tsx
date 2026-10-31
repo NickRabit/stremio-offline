@@ -208,7 +208,7 @@ describe("LocalLibraryDetail actions", () => {
   it("keeps file management reachable from a movie folder detail", async () => {
     const onOpenFolder = vi.fn();
     await render({ kind: "folder", path: "Movie", name: "Movie", fileCount: 2, size: 100 }, { onOpenFolder });
-    const open = [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find(button => button.textContent?.includes("Open folder"));
+    const open = host.querySelector<HTMLButtonElement>('button[aria-label="Open folder"]');
     expect(open).toBeDefined();
     await click(open!);
     expect(onOpenFolder).toHaveBeenCalledOnce();
@@ -231,7 +231,7 @@ describe("LocalLibraryDetail actions", () => {
   it("toggles the clicked file's favorite and clears its saved position", async () => {
     progressOf = (url) => json(savedEntry(progressKey(url), 10, 100));
     const { onToggleFavorite, props } = await render(file(), { favorite: true, progress: { position: 10, duration: 100 } });
-    await click(host.querySelector('.library-detail-chips button[aria-label="Remove from favorites"]'));
+    await click(host.querySelector('.detail-secondary button[aria-label="Remove from favorites"]'));
     expect(onToggleFavorite).toHaveBeenCalledWith(false);
     expect(props.onResetProgress).not.toHaveBeenCalled();
     await click(host.querySelector('.library-detail-progress button[aria-label="Forget progress"]'));
@@ -240,7 +240,7 @@ describe("LocalLibraryDetail actions", () => {
 
   it("keeps the favorite control pressed and shows no position controls when nothing is saved", async () => {
     await render(file(), { favorite: true });
-    const favorite = host.querySelector('.library-detail-chips button[aria-label="Remove from favorites"]');
+    const favorite = host.querySelector('.detail-secondary button[aria-label="Remove from favorites"]');
     expect(favorite?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector(".library-detail-progress")).toBeNull();
   });
@@ -651,6 +651,7 @@ describe("LocalLibraryDetail extra sources", () => {
       related: [{ type: "movie", id: "tt2", name: "Collateral", year: "2004", poster: "/collateral.jpg", inLibrary: true }],
       ageRating: "R",
       originalTitle: "Heat",
+      ratings: { imdb: "8.3", tmdb: 7.9, tmdbVotes: 21000 },
       source: "tmdb",
     });
     await render(file());
@@ -658,7 +659,11 @@ describe("LocalLibraryDetail extra sources", () => {
     expect(calls.extras.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt1/extras"]);
     expect(calls.meta.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt1"]);
     const line = [...host.querySelectorAll(".library-detail-hero .meta-line")].find((node) => node.textContent?.includes("GB"))!;
-    expect(line.querySelector(".age-badge")!.textContent).toBe("R");
+    expect(line.querySelector(".age-badge")).toBeNull();
+    const ratings = host.querySelector(".detail-ratings")!;
+    expect(ratings.querySelector(".age-badge")!.textContent).toBe("R");
+    expect(ratings.textContent).toContain("8.3");
+    expect(ratings.querySelector(".tmdb")!.textContent).toBe("TMDB");
     expect(host.querySelector(".original-line")!.textContent).toContain("Heat");
     expect([...host.querySelectorAll(".person strong")].map((name) => name.textContent)).toEqual(["Michael Mann", "Al Pacino"]);
     expect(host.querySelector(".related .in-library")!.textContent).toBe("In a library");

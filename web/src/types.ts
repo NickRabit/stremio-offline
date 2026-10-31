@@ -52,6 +52,18 @@ export interface RelatedTitle {
   poster?: string;
   inLibrary?: boolean;
 }
+export interface TitleRatings {
+  imdb?: string;
+  tmdb?: number;
+  tmdbVotes?: number;
+}
+export interface TitleVideo {
+  key: string;
+  name: string;
+  kind: "trailer" | "teaser" | "clip" | "featurette" | "behindTheScenes";
+  thumbnail: string;
+  language?: string;
+}
 export interface TitleExtras {
   people: TitlePerson[];
   related: RelatedTitle[];
@@ -61,6 +73,10 @@ export interface TitleExtras {
   originalTitle?: string;
   originalLanguage?: string;
   nextEpisode?: { season: number; episode: number; name?: string; released: string };
+  /** Absent on an answer from a server that predates the ratings row. */
+  ratings?: TitleRatings;
+  /** Absent on an answer from a server that predates the trailers row. */
+  videos?: TitleVideo[];
   source: "tmdb" | "addon";
 }
 export interface SearchResult { items: Meta[]; cursor: string; hasMore: boolean; sources: number }

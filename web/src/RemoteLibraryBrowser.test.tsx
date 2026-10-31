@@ -718,7 +718,7 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     await flush();
     // Two versions open a picker behind the arrow, not an always-visible list.
     expect(host.querySelector(".library-title-detail .remote-streams")).toBeNull();
-    const favorite = host.querySelector<HTMLButtonElement>('.library-detail-chips button[aria-label="Add to favorites"]')!;
+    const favorite = host.querySelector<HTMLButtonElement>('.detail-secondary button[aria-label="Add to favorites"]')!;
     expect(favorite.disabled).toBe(false);
     await click(favorite);
     expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { favorite: true } });
@@ -1152,7 +1152,7 @@ it("keeps the favorite learned in detail on its tile after Back", async () => {
   await render();
   await click(host.querySelector(".remote-libraries .library-open")!);
   await click(host.querySelector(".browse-panel .library-open")!);
-  expect(host.querySelector('.library-detail-chips button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
+  expect(host.querySelector('.detail-secondary button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
   await click(host.querySelector(".library-back")!);
   expect(host.querySelector(".fav-mark")).not.toBeNull();
 });
@@ -1220,7 +1220,7 @@ describe("RemoteLibraryBrowser saved position", () => {
     await click(clearButton()!);
     expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { position: 0, duration: 0 } });
     expect(host.querySelector(".library-detail-progress")).toBeNull();
-    expect(host.querySelector('.library-detail-chips button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector('.detail-secondary button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector('.library-detail-actions button[aria-label="Mark unwatched"]')?.getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -1260,7 +1260,7 @@ describe("RemoteLibraryBrowser saved position", () => {
     await flush();
     expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Two");
     expect(host.querySelector(".library-detail-progress")).toBeNull();
-    expect(host.querySelector('.library-detail-chips button[aria-label="Add to favorites"]')?.getAttribute("aria-pressed")).toBe("false");
+    expect(host.querySelector('.detail-secondary button[aria-label="Add to favorites"]')?.getAttribute("aria-pressed")).toBe("false");
   });
 });
 
@@ -2311,6 +2311,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
       related: [{ type: "series", id: "tt8", name: "Other Show", year: "2012", poster: "/other.jpg" }],
       ageRating: "TV-MA",
       originalTitle: "Šou",
+      ratings: { imdb: "8.6", tmdb: 8.1, tmdbVotes: 4500 },
       source: "tmdb",
     });
     await openRootLibrary();
@@ -2319,7 +2320,11 @@ describe("RemoteLibraryBrowser addon sources", () => {
     const surface = host.querySelector(".remote-series-detail")!;
     const facts = surface.querySelector(".meta-line")!;
     expect(facts.textContent).toContain("2011");
-    expect(facts.querySelector(".age-badge")!.textContent).toBe("TV-MA");
+    expect(facts.querySelector(".age-badge")).toBeNull();
+    const ratings = surface.querySelector(".detail-ratings")!;
+    expect(ratings.querySelector(".age-badge")!.textContent).toBe("TV-MA");
+    expect(ratings.textContent).toContain("8.6");
+    expect(ratings.querySelector(".tmdb")!.textContent).toBe("TMDB");
     expect(surface.querySelector(".original-line")!.textContent).toContain("Šou");
     const grid = surface.querySelector(".remote-season-group")!;
     const rows = surface.querySelector(".title-extras")!;

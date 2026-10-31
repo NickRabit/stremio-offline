@@ -256,12 +256,16 @@ describe("Home", () => {
     expect(row("resume")!.querySelector(".resume-bar")).toBeNull();
   });
 
-  it("plays a completed card and a favourite file, and opens a favourite folder", async () => {
+  it("opens a completed card's detail, plays it from the menu, and keeps a favourite file and folder", async () => {
     const play = completedCard();
     const file = favoriteCard("file");
     const folder = favoriteCard("folder", "lib_00000000/e");
-    const { onPlay, onReveal } = await render({ rows: allEmpty({ completed: rowState({ items: [play] }), favorites: rowState({ items: [file, folder] }) }) });
+    const { onPlay, onOpenCatalogue, onReveal } = await render({ rows: allEmpty({ completed: rowState({ items: [play] }), favorites: rowState({ items: [file, folder] }) }) });
     await click(primary("completed"));
+    expect(onOpenCatalogue).toHaveBeenCalledWith(play);
+    expect(onPlay).not.toHaveBeenCalled();
+    await openMenu("completed");
+    await click(menuItem("Play")!);
     expect(onPlay).toHaveBeenCalledWith(play);
     const opens = [...row("favorites")!.querySelectorAll<HTMLButtonElement>(".browse-open")];
     await click(opens[0]!);
@@ -408,14 +412,19 @@ describe("Home", () => {
     expect(row("episodes")!.querySelector(".browse-menu")).toBeNull();
   });
 
-  it("plays a recently added card and reveals it from the menu", async () => {
+  it("opens a recently added card's detail, plays it from the menu and reveals it", async () => {
     const card = recentCard();
-    const { onPlay, onReveal } = await render({ rows: allEmpty({ recent: rowState({ items: [card] }) }) });
+    const { onPlay, onOpenCatalogue, onReveal } = await render({ rows: allEmpty({ recent: rowState({ items: [card] }) }) });
     await click(primary("recent"));
-    expect(onPlay).toHaveBeenCalledWith(card);
+    expect(onOpenCatalogue).toHaveBeenCalledWith(card);
+    expect(onPlay).not.toHaveBeenCalled();
     await openMenu("recent");
+    expect(menuItem("Play")).toBeDefined();
     await click(menuItem("Show in library")!);
     expect(onReveal).toHaveBeenCalledWith(card.path);
+    await openMenu("recent");
+    await click(menuItem("Play")!);
+    expect(onPlay).toHaveBeenCalledWith(card);
   });
 
   it("plays a Tonight file, opens a Tonight folder in the library, and captions the year", async () => {
