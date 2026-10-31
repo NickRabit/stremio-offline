@@ -400,7 +400,10 @@ test("a media server that forbids downloading mints no ticket for its own origin
   assert.equal(harness.tickets.size, 0, "no ticket is minted for a row the media server forbids");
 });
 
-test("a device HLS transfer gives FFmpeg only an internal proxied URL and releases its claim", async (t) => {
+// The fake FFmpeg below is a #! script, which Windows cannot start.
+const FAKE_FFMPEG_UNSUPPORTED = process.platform === "win32" ? "a #! script is not an executable on Windows" : false;
+
+test("a device HLS transfer gives FFmpeg only an internal proxied URL and releases its claim", { skip: FAKE_FFMPEG_UNSUPPORTED }, async (t) => {
   const addonUrl = "http://127.0.0.1:1/private/master.m3u8?token=addon-secret";
   const harness = await mount({
     source: {
@@ -451,7 +454,7 @@ else process.stdout.write("assembled");
   assert.throws(() => mediaResources.get(resourceId, undefined, "media", true), { status: 404 });
 });
 
-test("a device HLS transfer with no FFmpeg output is killed and releases its claim", async (t) => {
+test("a device HLS transfer with no FFmpeg output is killed and releases its claim", { skip: FAKE_FFMPEG_UNSUPPORTED }, async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const harness = await mount({ source: { url: "http://127.0.0.1:1/private/master.m3u8" } });
   t.after(harness.close);

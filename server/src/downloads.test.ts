@@ -2140,7 +2140,10 @@ test("proxied playlist input allows only the loopback protocols in use", () => {
   );
 });
 
-test("an HLS download hands FFmpeg only an internal proxied URL and releases its claim", async () => {
+// The fake FFmpeg below is a #! script, which Windows cannot start.
+const FAKE_FFMPEG_UNSUPPORTED = process.platform === "win32" ? "a #! script is not an executable on Windows" : false;
+
+test("an HLS download hands FFmpeg only an internal proxied URL and releases its claim", { skip: FAKE_FFMPEG_UNSUPPORTED }, async () => {
   const { directory, queue, downloads } = await tempQueue();
   const ffmpeg = path.join(directory, "ffmpeg");
   const logFile = path.join(directory, "ffmpeg-args.jsonl");
@@ -2186,7 +2189,7 @@ if (output >= 0) writeFileSync(args[output + 1], "assembled");
   }
 });
 
-test("a stalled HLS assembly is killed and fails the job", async () => {
+test("a stalled HLS assembly is killed and fails the job", { skip: FAKE_FFMPEG_UNSUPPORTED }, async () => {
   let clock = Date.now();
   const { directory, queue } = await tempQueue({ now: () => clock });
   const ffmpeg = path.join(directory, "ffmpeg");
@@ -2233,7 +2236,7 @@ setInterval(() => {}, 1000);
   }
 });
 
-test("an HLS assembly is killed at the overall cap even while it keeps growing", async () => {
+test("an HLS assembly is killed at the overall cap even while it keeps growing", { skip: FAKE_FFMPEG_UNSUPPORTED }, async () => {
   let clock = Date.now();
   const { directory, queue } = await tempQueue({ now: () => clock });
   const ffmpeg = path.join(directory, "ffmpeg");
@@ -2281,7 +2284,7 @@ setInterval(() => {}, 1000);
   }
 });
 
-test("an HLS assembly error never exposes the internal proxy URL", async () => {
+test("an HLS assembly error never exposes the internal proxy URL", { skip: FAKE_FFMPEG_UNSUPPORTED }, async () => {
   const { directory, queue } = await tempQueue();
   const ffmpeg = path.join(directory, "ffmpeg");
   await writeFile(ffmpeg, `#!/usr/bin/env node
