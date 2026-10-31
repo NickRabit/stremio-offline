@@ -9,27 +9,23 @@ const heroTop = (focus) => `<div class="eyebrow">CINEMETA · FILM</div><h1>Vykou
   <div class="meta"><span class="star">★ 9.3</span> · 1994 · 2 h 22 min · <span class="age">12+</span> · Drama · Krimi</div>
   <div class="meta">Původní název <b style="color:#f1f4f8">The Shawshank Redemption</b> · angličtina</div>
   <div class="desc">Bankéř Andy Dufresne je odsouzen za vraždu manželky a jejího milence. Ve věznici Shawshank si získá přátelství Reda a postupně i respekt dozorců.</div>
-  <div class="source"><span class="label">PŘEHRAJE SE</span><i>HTTP</i><b>FullHD</b><span>Cineshare - Tišnov</span><b>2.0 GB</b><em>EN</em><em>CZ</em></div>
-  <div class="actions"><div class="btn primary ${focus === "play" ? "focus" : ""}">▶ Přehrát</div><div class="btn icon">↺</div><div class="btn">Zdroje (32)</div><div class="btn">⬇ Do knihovny</div><div class="btn icon">☆</div><div class="btn icon">👁</div></div>`;
+  <div class="actions"><div class="btn primary ${focus === "play" ? "focus" : ""}">▶ Přehrát</div><div class="btn icon">↺</div><div class="btn">Zdroje (32)</div><div class="btn">⬇ Do knihovny</div><div class="btn icon">☆</div><div class="btn icon">👁</div></div>
+  <div class="source"><span class="label">PŘEHRAJE SE</span><i>HTTP</i><b>FullHD</b><span>Cineshare - Tišnov</span><b>2.0 GB</b><em>EN</em><em>CZ</em></div>`;
 const people = (focusIndex, list = PEOPLE) => `<div class="row"><h2>Herci a tvůrci</h2><p class="hint">OK vyhledá jméno v katalozích</p><div class="strip">${list.map(([name, role, photo], index) => `<div class="person ${index === focusIndex ? "focus" : ""}"><div class="face ${photo ? "photo" : ""}">${photo ? "" : initials(name)}</div><strong>${name}</strong><small>${role}</small></div>`).join("")}</div></div>`;
 const related = (focusIndex) => `<div class="row"><h2>Podobné tituly</h2><div class="strip">${RELATED.map(([name, year, owned], index) => `<div class="poster ${index === focusIndex ? "focus" : ""}"><div class="art" style="background:linear-gradient(160deg,${ART[index % ART.length]})">${name}</div><strong>${name}</strong><small>${year}${owned ? ` · <span class="lib">V knihovně</span>` : ""}</small></div>`).join("")}</div></div>`;
 
 const views = {
-  top: { label: "Film: úvod", html: () => `<div class="content">${heroTop("play")}</div><div class="peek"><div class="row" style="margin:0"><h2>Herci a tvůrci</h2></div></div>
-    <div class="note">Obrazovka se otevře jako dnes. Spodní okraj ukazuje, že pod tlačítky je další obsah; šipka dolů do něj sjede.</div>` },
-  cast: { label: "Film: herci", html: () => `<div class="content" style="transform:translateY(-360px)">${heroTop()}${people(1)}${related(-1)}</div>
-    <div class="note">Fokus v řádku herců: obsah vyjede nahoru, hero zůstane nad ním. OK otevře Hledat s předvyplněným jménem.</div>` },
-  related: { label: "Film: podobné", html: () => `<div class="content" style="transform:translateY(-640px)">${heroTop()}${people(-1)}${related(2)}</div>
-    <div class="note">OK otevře detail vybraného titulu; Zpět vrací na tento detail se stejným fokusem.</div>` },
+  top: { label: "Film: úvod", html: () => `<div class="content">${heroTop("play")}${people(-1)}</div>` },
+  cast: { label: "Film: herci", html: () => `<div class="content" style="transform:translateY(-250px)">${heroTop()}${people(1)}${related(-1)}</div>` },
+  related: { label: "Film: podobné", html: () => `<div class="content" style="transform:translateY(-470px)">${heroTop()}${people(-1)}${related(2)}</div>` },
   series: { label: "Seriál: pod epizodami", html: () => `<div class="content" style="transform:translateY(-420px)"><div class="eyebrow">CINEMETA · SERIÁL</div><h1>Perníkový táta</h1>
     <div class="meta"><span class="star">★ 9.5</span> · 2008–2013 · <span class="age">15+</span> · Krimi · Drama</div><div class="next">Další díl <b>S06E03 „Nový začátek“</b> · čt 7. 11.</div>
     <div class="desc">Středoškolský učitel chemie se po zjištění, že má rakovinu plic, spojí s bývalým studentem a začne vařit pervitin.</div>
-    <div class="source"><span class="label">PŘEHRAJE SE</span><i>HTTP</i><b>FullHD</b><span>Cineshare - Tišnov</span><b>1.4 GB</b><em>EN</em><em>CZ</em></div>
     <div class="actions"><div class="btn primary">▶ Pokračovat S01E04</div><div class="btn icon">↺</div><div class="btn">Zdroje (18)</div><div class="btn">⬇ Do knihovny</div><div class="btn">Stáhnout sérii</div><div class="btn icon">☆</div></div>
+    <div class="source"><span class="label">PŘEHRAJE SE</span><i>HTTP</i><b>FullHD</b><span>Cineshare - Tišnov</span><b>1.4 GB</b><em>EN</em><em>CZ</em></div>
     <div class="seasons"><div class="chip on">1. série</div><div class="chip">2. série</div><div class="chip">3. série</div></div>
     <div class="episodes">${[1, 2, 3, 4].map((n) => `<div class="episode"><b>S01E0${n}</b><small>Epizoda ${n}</small></div>`).join("")}</div>
-    ${people(0, SERIES_PEOPLE)}</div>
-    <div class="note">U seriálu jsou řádky až pod epizodami: šipka dolů z epizod vede do herců.</div>` },
+    ${people(0, SERIES_PEOPLE)}</div>` },
 };
 
 function fit() {

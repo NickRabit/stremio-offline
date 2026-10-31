@@ -13,12 +13,12 @@ h1{margin:14px 0 6px;font-size:84px;line-height:1.02;letter-spacing:-2.4px;font-
 .age{display:inline-block;font-weight:800;font-size:19px;line-height:1;padding:5px 8px;border:2px solid #f1f4f899;border-radius:6px;color:var(--text);vertical-align:2px}
 .next{display:inline-flex;gap:12px;font-size:22px;border:2px solid #ff5b3866;background:#ff5b381f;border-radius:99px;padding:8px 20px;margin:6px 0 8px}
 .next b{color:var(--accent2)}
-.desc{max-width:1400px;font-size:25px;line-height:36px;color:#f1f4f8d1;margin:14px 0 24px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.desc{max-width:1400px;font-size:25px;line-height:36px;color:#f1f4f8d1;margin:10px 0 18px;-webkit-line-clamp:2;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .actions{display:flex;gap:20px}
 .btn{height:84px;padding:0 40px;border-radius:16px;display:flex;align-items:center;gap:14px;font-size:26px;font-weight:700;background:var(--panel2);border:2px solid var(--line)}
 .btn.primary{background:linear-gradient(90deg,var(--accent),var(--accent2));border-color:transparent}
 .focus{outline:6px solid #fff;outline-offset:4px;transform:scale(1.06)}
-.row{margin-top:44px}
+.row{margin-top:34px}
 .row h2{font-size:30px;margin:0 0 6px;font-weight:800}
 .row .hint{font-size:21px;color:var(--muted);margin:0 0 18px}
 .strip{display:flex;gap:34px;align-items:flex-start}
@@ -27,9 +27,10 @@ h1{margin:14px 0 6px;font-size:84px;line-height:1.02;letter-spacing:-2.4px;font-
 .face.photo{background:linear-gradient(160deg,#c4a487,#6d5141 60%,#2c2420)}
 .person.focus{outline:none;transform:none}.person.focus .face{border-color:#fff;box-shadow:0 0 0 6px #fff;transform:scale(1.08)}
 .person strong{font-size:22px;line-height:1.2}.person small{font-size:19px;color:var(--muted)}
-.poster{width:220px;flex:none;display:grid;gap:10px}
+.poster{width:220px;flex:none;display:grid;gap:22px}
 .poster .art{height:330px;overflow:hidden;overflow-wrap:anywhere;border-radius:16px;border:2px solid var(--line);display:flex;align-items:flex-end;padding:16px;font:700 24px Georgia,serif;text-transform:uppercase;line-height:1.1;text-shadow:0 2px 8px #0008}
-.poster.focus{outline:none;transform:none}.poster.focus .art{box-shadow:0 0 0 6px #fff;transform:scale(1.06)}
+.poster.focus{outline:none;transform:none}.poster.focus .art{box-shadow:0 0 0 6px #fff;transform:scale(1.05);transform-origin:center top}
+.poster strong{margin-top:6px}
 .poster strong{font-size:22px}.poster small{font-size:19px;color:var(--muted)}.poster .lib{color:var(--green)}
 .episodes{display:flex;gap:24px;margin-top:40px}
 .episode{width:360px;height:202px;border-radius:16px;border:2px solid var(--line);background:linear-gradient(160deg,#28323f,#141922);padding:18px;display:flex;flex-direction:column;justify-content:flex-end;font-size:22px}
@@ -43,7 +44,7 @@ h1{margin:14px 0 6px;font-size:84px;line-height:1.02;letter-spacing:-2.4px;font-
 
 .btn.icon{width:84px;padding:0;justify-content:center}
 /* The row that will play, as on the web: label, kind, quality, provider, size, languages. */
-.source{display:flex;align-items:center;gap:16px;font-size:21px;color:#c3ccd8;margin:-6px 0 22px;padding:10px 18px;border:2px solid var(--line);border-radius:14px;background:#0f131acc;width:max-content}
+.source{display:flex;align-items:center;gap:16px;font-size:21px;color:#c3ccd8;margin:18px 0 0;padding:10px 18px;border:2px solid var(--line);border-radius:14px;background:#0f131acc;width:max-content}
 .source .label{font-size:17px;font-weight:800;letter-spacing:2px;color:var(--accent2)}
 .source i{font-style:normal;font-size:17px;font-weight:800;color:var(--green)}
 .source b{color:var(--text)}
