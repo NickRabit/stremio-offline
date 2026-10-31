@@ -16,8 +16,13 @@ import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.NextEpisodeDto
 import cz.stremiooffline.tv.data.RelatedTitleDto
+import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
+import cz.stremiooffline.tv.data.TitleRatingsDto
+import cz.stremiooffline.tv.data.TitleVideoDto
+import cz.stremiooffline.tv.data.VideoFactsDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -57,6 +62,8 @@ class TitleExtrasTest {
     onPerson: (String) -> Unit = {},
     onRelated: (RelatedTitleDto) -> Unit = {},
     onUpFromRows: () -> Unit = {},
+    videoResolver: ((String) -> Boolean)? = null,
+    onVideo: ((TitleVideoDto) -> Unit)? = null,
   ) {
     compose.setContent {
       TitleExtrasRows(
@@ -65,6 +72,8 @@ class TitleExtrasTest {
         onPerson = onPerson,
         onRelated = onRelated,
         onUpFromRows = onUpFromRows,
+        videoResolver = videoResolver,
+        onVideo = onVideo,
       )
     }
     compose.waitForIdle()
@@ -222,5 +231,177 @@ class TitleExtrasTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagTitleExtrasNextEpisode).assertDoesNotExist()
+  }
+
+  @Test
+  fun `ratings draw the age IMDb and TMDB pills and remove the duplicate facts rating`() {
+    val state = TitleExtrasState().apply {
+      extras = TitleExtrasDto(
+        ageRating = "15",
+        ratings = TitleRatingsDto(imdb = "9.3", tmdb = 8.7, tmdbVotes = 31_720),
+      )
+    }
+    compose.setContent {
+      TitleExtraFacts(
+        state = state,
+        name = "Movie",
+        metaLine = "1994 · Drama · ★ 9.3",
+        uiLanguage = "en",
+      )
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagTitleExtrasAge).assertExists()
+    compose.onNodeWithTag(TagTitleExtrasImdb).assertExists()
+    compose.onNodeWithTag(TagTitleExtrasTmdb).assertExists()
+    compose.onNodeWithText("1994 · Drama").assertExists()
+    compose.onNodeWithText("1994 · Drama · ★ 9.3").assertDoesNotExist()
+  }
+
+  @Test
+  fun `the original title and language share one line under the title`() {
+    val state = TitleExtrasState().apply {
+      extras = TitleExtrasDto(
+        originalTitle = "Original",
+        originalLanguage = "en",
+      )
+    }
+    compose.setContent {
+      TitleExtraFacts(
+        state = state,
+        name = "Movie",
+        metaLine = "1994 · Drama",
+        uiLanguage = "cs",
+      )
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithText("Original title Original · English").assertExists()
+    compose.onNodeWithText("Original language English").assertDoesNotExist()
+  }
+
+  @Test
+  fun `the technical block names source video audio and subtitle facts`() {
+    val stream = StreamDto(
+      sourceId = "s1",
+      kind = "remote",
+      playable = true,
+      name = "Movie.2026.2160p.HEVC.HDR10.DTS-HD.MA.5.1.mkv",
+      provider = "Cineshare",
+      libraryName = "Tišnov",
+      remoteItem = RemoteItemContext(libraryId = "l1", itemId = "i1", progressKey = "remote:l1:i1"),
+      audioLanguages = listOf("cs", "en"),
+      subtitleLanguages = listOf("cs"),
+      videoFacts = VideoFactsDto(heightPixels = 2160, codec = "hevc", range = "hdr"),
+      behaviorHints = cz.stremiooffline.tv.data.BehaviorHintsDto(videoSize = 6_700_000_000.0),
+    )
+    compose.setContent {
+      TitleTechBlock(stream, uiLanguage = "en", versionCount = 1)
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithText("Cineshare", substring = true).assertExists()
+    compose.onNodeWithText("6.7 GB", substring = true).assertExists()
+    compose.onNodeWithText("2160p", substring = true).assertExists()
+    compose.onNodeWithText("HDR10", substring = true).assertExists()
+    compose.onNodeWithText("HEVC", substring = true).assertExists()
+    compose.onNodeWithText("Czech, English", substring = true).assertExists()
+    compose.onNodeWithText("DTS-HD MA 5.1", substring = true).assertExists()
+    compose.onNodeWithText("Subtitles", substring = true).assertExists()
+    compose.onNodeWithText("1 versions available", substring = true).assertExists()
+  }
+
+  @Test
+  fun `the videos row is hidden without a resolving activity`() {
+    val state = TitleExtrasState().apply {
+      extras = extras().copy(
+        videos = listOf(
+          TitleVideoDto(
+            key = "abcdefghijk",
+            name = "Official trailer",
+            kind = "trailer",
+            thumbnail = "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg",
+          ),
+        ),
+      )
+    }
+    mount(state, videoResolver = { false })
+    compose.onNodeWithTag(TagTitleExtrasVideos).assertDoesNotExist()
+  }
+
+  @Test
+  fun `the videos row is shown with a resolving activity`() {
+    val state = TitleExtrasState().apply {
+      extras = extras().copy(
+        videos = listOf(
+          TitleVideoDto(
+            key = "abcdefghijk",
+            name = "Official trailer",
+            kind = "trailer",
+            thumbnail = "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg",
+          ),
+        ),
+      )
+    }
+    mount(state, videoResolver = { true })
+    compose.onNodeWithTag(TagTitleExtrasVideos).assertExists()
+    compose.onNodeWithTag(videoCardTag("abcdefghijk")).assertExists()
+    compose.onNodeWithText("Trailer").assertExists()
+  }
+
+  @Test
+  fun `the activity check is cached on the state`() {
+    val state = TitleExtrasState().apply {
+      extras = extras().copy(videos = listOf(TitleVideoDto(key = "abcdefghijk")))
+    }
+    var checks = 0
+
+    assertTrue(state.videosShown { checks++; true })
+    assertTrue(state.videosShown { checks++; false })
+    assertEquals(1, checks)
+  }
+
+  @Test
+  fun `OK on a video fires the injected intent callback`() {
+    var opened: TitleVideoDto? = null
+    val state = TitleExtrasState().apply {
+      extras = extras().copy(videos = listOf(TitleVideoDto(key = "abcdefghijk", name = "Trailer", kind = "trailer")))
+    }
+    mount(state, videoResolver = { true }, onVideo = { opened = it })
+
+    compose.onNodeWithTag(videoCardTag("abcdefghijk"))
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    assertEquals("abcdefghijk", opened?.key)
+  }
+
+  @Test
+  fun `focus walks cast to videos to related and back up`() {
+    val state = TitleExtrasState().apply {
+      extras = extras().copy(
+        videos = listOf(TitleVideoDto(key = "abcdefghijk", name = "Trailer", kind = "trailer")),
+      )
+    }
+    mount(state, videoResolver = { true })
+    compose.runOnIdle { assertTrue(state.focusFirst()) }
+    compose.onNodeWithTag(titlePersonTag("Jane Doe")).assertIsFocused()
+
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(videoCardTag("abcdefghijk")).assertIsFocused()
+
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(relatedTitleTag("tt2")).assertIsFocused()
+
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionUp) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(videoCardTag("abcdefghijk")).assertIsFocused()
+
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionUp) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(titlePersonTag("Jane Doe")).assertIsFocused()
   }
 }

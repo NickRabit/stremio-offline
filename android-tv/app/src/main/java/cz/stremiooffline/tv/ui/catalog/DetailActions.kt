@@ -1,8 +1,10 @@
 package cz.stremiooffline.tv.ui.catalog
 
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,13 +24,16 @@ import cz.stremiooffline.tv.ui.components.outlineIcon
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 /**
- * The name of the icon button that holds the remote, shown beside the action row. An icon alone
- * says little from the sofa, so the focused one spells itself out; the state sits in an object of
- * its own because the detail screens are already near the size ART can verify.
+ * The name of the icon button that holds the remote, shown under the action row. The state sits in
+ * an object of its own because the detail screens are already near the size ART can verify.
  */
 class ActionCaption {
   var text by mutableStateOf("")
 }
+
+const val TagActionCaption = "detail_action_caption"
+
+val DetailActionHeight = 44.dp
 
 /** One secondary action of a detail's action row. */
 class DetailAction(
@@ -44,9 +49,8 @@ class DetailAction(
 )
 
 /**
- * The one action row every title detail draws, in the one order the details share: Play, Start
- * over, Sources, To library, Favourite, Mark as unwatched, Mark watched, then [extras] in the order
- * given. A null action is not drawn. The focused icon's name is shown after the last button.
+ * The one action row every title detail draws: Play, Sources, Start over, To library, Favourite,
+ * Mark as unwatched, Mark watched, then [extras] in the order given. A null action is not drawn.
  */
 @Composable
 fun DetailActionRow(
@@ -54,28 +58,35 @@ fun DetailActionRow(
   startOver: DetailAction?,
   sources: (@Composable () -> Unit)?,
   toLibrary: DetailAction?,
-  favourite: DetailAction,
+  favourite: DetailAction?,
   unwatched: DetailAction?,
   watched: DetailAction?,
   caption: ActionCaption,
   modifier: Modifier = Modifier,
   extras: List<DetailAction> = emptyList(),
 ) {
-  Row(
-    modifier = modifier,
-    horizontalArrangement = Arrangement.spacedBy(11.dp),
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    primary()
-    startOver?.let { DetailActionButton(it, caption) }
-    sources?.invoke()
-    toLibrary?.let { DetailActionButton(it, caption) }
-    DetailActionButton(favourite, caption)
-    unwatched?.let { DetailActionButton(it, caption) }
-    watched?.let { DetailActionButton(it, caption) }
-    extras.forEach { DetailActionButton(it, caption) }
+  Column(modifier) {
+    Row(
+      horizontalArrangement = Arrangement.spacedBy(11.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      primary()
+      sources?.invoke()
+      startOver?.let { DetailActionButton(it, caption) }
+      toLibrary?.let { DetailActionButton(it, caption) }
+      favourite?.let { DetailActionButton(it, caption) }
+      unwatched?.let { DetailActionButton(it, caption) }
+      watched?.let { DetailActionButton(it, caption) }
+      extras.forEach { DetailActionButton(it, caption) }
+    }
     if (caption.text.isNotEmpty()) {
-      Text(caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
+      Text(
+        caption.text,
+        color = Tokens.Muted,
+        fontSize = 12.sp,
+        maxLines = 1,
+        modifier = Modifier.padding(start = 2.dp, top = 4.dp).testTag(TagActionCaption),
+      )
     }
   }
 }
@@ -93,7 +104,7 @@ private fun DetailActionButton(action: DetailAction, caption: ActionCaption) {
   )
 }
 
-/** A square icon button for a secondary action; [label] is its spoken name and its caption. */
+/** A square icon button for a secondary action; [label] is its spoken name and focus caption. */
 @Composable
 fun ActionIconButton(
   label: String,
@@ -110,6 +121,7 @@ fun ActionIconButton(
     onClick = onClick,
     enabled = enabled,
     kind = FocusButtonKind.Icon,
+    height = DetailActionHeight,
     leading = icon?.let { vector -> { Icon(vector, contentDescription = null, modifier = Modifier.size(18.dp)) } },
     contentDescription = label,
     modifier = modifier.onFocusChanged {
@@ -180,18 +192,6 @@ val DownloadIcon: ImageVector = outlineIcon("Download") {
   lineTo(17f, 10f)
   moveTo(4f, 20f)
   lineTo(20f, 20f)
-}
-
-val SeriesDownloadIcon: ImageVector = outlineIcon("SeriesDownload") {
-  moveTo(12f, 2.5f)
-  lineTo(12f, 12f)
-  moveTo(8f, 8.5f)
-  lineTo(12f, 12.5f)
-  lineTo(16f, 8.5f)
-  moveTo(4f, 16f)
-  lineTo(20f, 16f)
-  moveTo(6f, 20.5f)
-  lineTo(18f, 20.5f)
 }
 
 val CheckIcon: ImageVector = outlineIcon("Check") {

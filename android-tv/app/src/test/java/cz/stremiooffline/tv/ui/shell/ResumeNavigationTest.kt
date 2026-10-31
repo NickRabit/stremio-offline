@@ -133,10 +133,8 @@ class ResumeNavigationTest {
     compose.onNodeWithTag(second).assertIsFocused()
     press(Key.DirectionCenter)
 
-    // OK plays the file now, so the card is removed elsewhere while the player is up. Leaving the
-    // player takes two Backs: the first hides its controls, the second exits and re-reads the list.
+    // OK opens the file's detail, so the card can be removed elsewhere while that detail is up.
     api.merged.removeAll { it.key == "file:browse/B.mkv" }
-    back()
     back()
 
     compose.onNodeWithTag(second).assertDoesNotExist()

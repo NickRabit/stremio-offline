@@ -611,6 +611,8 @@ class NativeSourcesDetailTest {
       withCopy = false,
     )
     compose.waitUntil(5_000) { api.remoteEpisodesRequests.isNotEmpty() }
+    press(Key.DirectionDown)
+    press(Key.DirectionDown)
     compose.onNodeWithTag(remoteItemTag("eA")).assertIsFocused()
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.remoteSourcesRequests.contains("rlibA" to "eA") }

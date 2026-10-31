@@ -26,8 +26,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -64,6 +66,7 @@ import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
 import cz.stremiooffline.tv.ui.catalog.DetailAction
+import cz.stremiooffline.tv.ui.catalog.DetailActionHeight
 import cz.stremiooffline.tv.ui.catalog.DetailActionRow
 import cz.stremiooffline.tv.ui.catalog.DownloadIcon
 import cz.stremiooffline.tv.ui.catalog.EyeIcon
@@ -76,12 +79,12 @@ import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.catalog.SourceFilterState
 import cz.stremiooffline.tv.ui.catalog.SourceSaveRequest
 import cz.stremiooffline.tv.ui.catalog.SourceSaveState
-import cz.stremiooffline.tv.ui.catalog.chosenSourceCaption
 import cz.stremiooffline.tv.ui.catalog.libraryAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.libraryCopySubject
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.nativeRowTarget
+import cz.stremiooffline.tv.ui.detail.scrollToTopOnFocus
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.WideCard
@@ -645,7 +648,7 @@ fun DetailScreen(
       // not on whatever card happens to sit below the button. An open panel keeps the remote.
       .onPreviewKeyEvent { event ->
         val panelUp = forgetPanelOpen || sourcesOpen || save.request != null
-        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && !panelUp) {
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && !panelUp && extras.actionsFocused) {
           if (current.files.size > 1) {
             runCatching { rowFocus.requestFocus() }.isSuccess
           } else {
@@ -668,7 +671,8 @@ fun DetailScreen(
     Column(
       modifier = Modifier
         .fillMaxSize()
-        .then(if (sourcesApi != null) Modifier.verticalScroll(extras.scroll) else Modifier)
+        .clipToBounds()
+        .verticalScroll(extras.scroll)
         .padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
       verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
@@ -689,11 +693,11 @@ fun DetailScreen(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.width(760.dp),
       )
-      Text(
-        metaLine(current, stringResource(R.string.tv_library_files, current.fileCount.toString())),
-        color = Tokens.Muted,
-        fontSize = 11.5.sp,
-        fontWeight = FontWeight.Medium,
+      TitleExtraFacts(
+        state = extras,
+        name = current.title,
+        metaLine = metaLine(current, stringResource(R.string.tv_library_files, current.fileCount.toString())),
+        uiLanguage = null,
       )
       val description = current.description
       if (description != null) {
@@ -719,6 +723,7 @@ fun DetailScreen(
             text = stringResource(if (resuming) R.string.tv_resume else R.string.tv_play),
             onClick = { playPressed() },
             kind = FocusButtonKind.Primary,
+            height = DetailActionHeight,
             modifier = Modifier.focusRequester(primaryFocus).testTag(TagDetailPrimary),
           )
         },
@@ -736,6 +741,7 @@ fun DetailScreen(
             FocusButton(
               text = stringResource(R.string.sources_heading),
               onClick = { openSources(playFile, sourcesFocus) },
+              height = DetailActionHeight,
               modifier = Modifier.focusRequester(sourcesFocus).testTag(TagDetailSources),
             )
           }
@@ -775,19 +781,12 @@ fun DetailScreen(
           onClick = { playFile?.let(::markWatchedNow) },
         ) else null,
         caption = caption,
+        modifier = Modifier
+          .scrollToTopOnFocus(extras, scope)
+          .onFocusChanged { extras.actionsFocused = it.hasFocus },
       )
       actionRow?.let { row ->
-        val captionParts = chosenSourceCaption(row).joinToString(" · ")
-        if (captionParts.isNotEmpty()) {
-          Text(
-            stringResource(R.string.tv_chosen_source) + " · " + captionParts,
-            color = Tokens.Muted,
-            fontSize = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag(TagDetailPickCaption),
-          )
-        }
+        TitleTechBlock(row, Modifier.testTag(TagDetailPickCaption))
       }
       if (forgetError) {
         Text(stringResource(R.string.tv_err_generic), color = Tokens.Red, fontSize = 11.5.sp)

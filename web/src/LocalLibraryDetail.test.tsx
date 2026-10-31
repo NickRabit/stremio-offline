@@ -208,7 +208,7 @@ describe("LocalLibraryDetail actions", () => {
   it("keeps file management reachable from a movie folder detail", async () => {
     const onOpenFolder = vi.fn();
     await render({ kind: "folder", path: "Movie", name: "Movie", fileCount: 2, size: 100 }, { onOpenFolder });
-    const open = [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find(button => button.textContent?.includes("Open folder"));
+    const open = host.querySelector<HTMLButtonElement>('button[aria-label="Open folder"]');
     expect(open).toBeDefined();
     await click(open!);
     expect(onOpenFolder).toHaveBeenCalledOnce();
@@ -231,7 +231,7 @@ describe("LocalLibraryDetail actions", () => {
   it("toggles the clicked file's favorite and clears its saved position", async () => {
     progressOf = (url) => json(savedEntry(progressKey(url), 10, 100));
     const { onToggleFavorite, props } = await render(file(), { favorite: true, progress: { position: 10, duration: 100 } });
-    await click(host.querySelector('.library-detail-chips button[aria-label="Remove from favorites"]'));
+    await click(host.querySelector('.detail-secondary button[aria-label="Remove from favorites"]'));
     expect(onToggleFavorite).toHaveBeenCalledWith(false);
     expect(props.onResetProgress).not.toHaveBeenCalled();
     await click(host.querySelector('.library-detail-progress button[aria-label="Forget progress"]'));
@@ -240,7 +240,7 @@ describe("LocalLibraryDetail actions", () => {
 
   it("keeps the favorite control pressed and shows no position controls when nothing is saved", async () => {
     await render(file(), { favorite: true });
-    const favorite = host.querySelector('.library-detail-chips button[aria-label="Remove from favorites"]');
+    const favorite = host.querySelector('.detail-secondary button[aria-label="Remove from favorites"]');
     expect(favorite?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector(".library-detail-progress")).toBeNull();
   });
@@ -651,6 +651,7 @@ describe("LocalLibraryDetail extra sources", () => {
       related: [{ type: "movie", id: "tt2", name: "Collateral", year: "2004", poster: "/collateral.jpg", inLibrary: true }],
       ageRating: "R",
       originalTitle: "Heat",
+      ratings: { imdb: "8.3", tmdb: 7.9, tmdbVotes: 21000 },
       source: "tmdb",
     });
     await render(file());
@@ -658,9 +659,69 @@ describe("LocalLibraryDetail extra sources", () => {
     expect(calls.extras.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt1/extras"]);
     expect(calls.meta.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt1"]);
     const line = [...host.querySelectorAll(".library-detail-hero .meta-line")].find((node) => node.textContent?.includes("GB"))!;
-    expect(line.querySelector(".age-badge")!.textContent).toBe("R");
+    expect(line.querySelector(".age-badge")).toBeNull();
+    const ratings = host.querySelector(".detail-ratings")!;
+    expect(ratings.querySelector(".age-badge")!.textContent).toBe("R");
+    expect(ratings.textContent).toContain("8.3");
+    expect(ratings.querySelector(".tmdb")!.textContent).toBe("TMDB");
     expect(host.querySelector(".original-line")!.textContent).toContain("Heat");
     expect([...host.querySelectorAll(".person strong")].map((name) => name.textContent)).toEqual(["Michael Mann", "Al Pacino"]);
     expect(host.querySelector(".related .in-library")!.textContent).toBe("In a library");
+  });
+
+  const refusedFile = () => json({
+    sourceId: "exact", kind: "library", playable: true, libraryName: "Films",
+    behaviorHints: { filename: "Heat.mkv", videoSize: 2_000_000_000 },
+    stableKey: `f:${"a".repeat(24)}`,
+    rules: { balanced: { profileId: "balanced", status: "breaks" as const, reasons: ["size" as const], rank: [1, 2] } },
+  });
+  const until = async (ready: () => boolean) => {
+    for (let attempt = 0; attempt < 12 && !ready(); attempt += 1) await flush();
+  };
+
+  it("opens on the resumed remote copy when the rule refuses every own row, without opening the chooser", async () => {
+    identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    source = refusedFile;
+    copies = () => json([]);
+    const stableKey = `m:${"e".repeat(24)}`;
+    const emby: Stream = {
+      sourceId: "src-emby", kind: "remote", playable: true, name: "Emby 1080p", provider: "emby", libraryName: "Emby Films", stableKey,
+      remoteItem: { libraryId: "rlib_emby", itemId: "avatar", mediaSourceId: "ms1", progressKey: "k" },
+    };
+    progressOf = (url) => progressKey(url) === "movie:tt1"
+      ? json({ ...savedEntry("movie:tt1", 600, 7200), stableKey })
+      : json(null);
+    providers = () => json([]);
+    remoteLibraries = () => json({ libraries: [{ ...remoteLibrary("rlib_emby", "Emby Films"), provider: "emby" as const }] });
+    remoteMatches = () => json({ streams: [emby] });
+    const onPlayAlternative = vi.fn();
+    await render(file(), { onPlayAlternative, defaultSort: "rule:balanced" });
+    await until(() => host.querySelector(".detail-version")?.textContent === "Emby 1080p");
+    expect(host.querySelector(".detail-version")!.textContent).toBe("Emby 1080p");
+    expect(document.querySelector(".library-source-card")).toBeNull();
+    expect(calls.libraries.length).toBeGreaterThan(0);
+    expect(calls.remote.length).toBeGreaterThan(0);
+    expect(calls.progress.map(progressKey).every((key) => key === "movie:tt1")).toBe(true);
+    await click(host.querySelector(".library-detail-play button.primary"));
+    expect(onPlayAlternative).toHaveBeenCalledWith(expect.objectContaining({
+      stream: expect.objectContaining({ sourceId: "src-emby", stableKey }),
+      catalogue: { type: "movie", id: "tt1" },
+    }));
+  });
+
+  it("asks no other group when a refused title has no resume record", async () => {
+    identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    source = refusedFile;
+    copies = () => json([]);
+    progressOf = () => json(null);
+    await render(file(), { defaultSort: "rule:balanced" });
+    await until(() => calls.progress.some((url) => progressKey(url) === "movie:tt1"));
+    expect(calls.progress.map(progressKey).every((key) => key === "movie:tt1")).toBe(true);
+    expect(calls.providers).toHaveLength(0);
+    expect(calls.addon).toHaveLength(0);
+    expect(calls.libraries).toHaveLength(0);
+    expect(calls.remote).toHaveLength(0);
+    expect(document.querySelector(".library-source-card")).toBeNull();
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("you choose when you press Play");
   });
 });

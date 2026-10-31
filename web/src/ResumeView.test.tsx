@@ -69,15 +69,15 @@ describe("ResumeView", () => {
     expect(onToggleShape).toHaveBeenCalledTimes(1);
   });
 
-  it("plays a library card and the episode a catalogue card remembers alike", async () => {
+  it("opens the detail of a library card and of a catalogue card alike", async () => {
     const actions = { play: vi.fn(), open: vi.fn(), reveal: vi.fn(), forget: vi.fn() } as HomeCardActions;
     await render({ items: [file(), series], actions });
     expect(cards().map((card) => card.dataset.kind)).toEqual(["resume-file", "resume-catalogue"]);
     await click(cards()[0]!.querySelector<HTMLButtonElement>(".browse-open")!);
-    expect(actions.play).toHaveBeenCalledWith(expect.objectContaining({ kind: "resume-file", key: "file:Films/Heat.mkv" }));
+    expect(actions.open).toHaveBeenCalledWith(expect.objectContaining({ kind: "resume-file", key: "file:Films/Heat.mkv" }));
     await click(cards()[1]!.querySelector<HTMLButtonElement>(".browse-open")!);
-    expect(actions.play).toHaveBeenCalledWith(expect.objectContaining({ kind: "resume-catalogue", key: "series:tt2:2:4" }));
-    expect(actions.open).not.toHaveBeenCalled();
+    expect(actions.open).toHaveBeenCalledWith(expect.objectContaining({ kind: "resume-catalogue", key: "series:tt2:2:4" }));
+    expect(actions.play).not.toHaveBeenCalled();
   });
 
   it("forgets every key a card stands for from its menu", async () => {

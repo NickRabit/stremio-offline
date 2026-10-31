@@ -377,3 +377,16 @@ detail.nextEpisode
 detail.ageRating
 detail.inLibrary
 detail.willPlay
+detail.tech.video
+detail.tech.audio
+detail.tech.subtitles
+detail.videos
+detail.video.trailer
+detail.video.teaser
+detail.video.clip
+detail.video.featurette
+detail.video.behindTheScenes
+detail.action.fromStart
+detail.action.watched
+detail.action.favorite
+home.openDetail

@@ -205,9 +205,9 @@ test("a film watched from its library file and from the catalogue is one card", 
   }
 });
 
-/** A catalogue card written from a bound library file names that file, so a click plays it at once,
- *  with the title's detail behind the player the way every Continue watching card leaves it. */
-test("a catalogue card written from a library file plays on click", async ({ page, request }) => {
+/** A Continue watching card opens the title's detail; its menu's Play still resumes the file at
+ *  once, with the detail behind the player. */
+test("a catalogue card written from a library file opens its detail and plays from its menu", async ({ page, request }) => {
   const directory = path.resolve("e2e/.tmp/downloads/resume-click");
   const fileRelative = "resume-click/film.mp4";
   const fileKey = `file:${fileRelative}`;
@@ -231,7 +231,12 @@ test("a catalogue card written from a library file plays on click", async ({ pag
     await goToView(page, "Pokračovat ve sledování");
     await expect(card()).toBeVisible();
     await card().locator(".browse-open").click();
+    await expect(page.locator("main.view-title-detail")).toHaveCount(1);
+    await expect(page.locator(".player-overlay")).toHaveCount(0);
 
+    await goToView(page, "Pokračovat ve sledování");
+    await card().locator(".browse-menu").click();
+    await card().locator(".home-actions").getByRole("button", { name: "Přehrát" }).click();
     // Played at once: the player covers the page, and closing it lands on the title's detail.
     await expect(page.locator(".player-overlay")).toBeVisible();
     await expect(page.locator("main.view-title-detail")).toHaveCount(1);

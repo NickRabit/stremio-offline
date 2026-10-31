@@ -3,6 +3,8 @@
 package cz.stremiooffline.tv.ui.detail
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.pm.ResolveInfo
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
@@ -11,8 +13,11 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isFocused
@@ -42,6 +47,9 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
+import cz.stremiooffline.tv.data.TitleRatingsDto
+import cz.stremiooffline.tv.data.TitleVideoDto
+import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.actionRowOrder
 import cz.stremiooffline.tv.ui.catalog.nativeQueueLibraryTag
@@ -59,6 +67,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /** The native remote detail persists its clear through the state endpoint, keeps its flags and
@@ -229,6 +238,19 @@ class RemoteDetailTest {
     compose.waitForIdle()
   }
 
+  private fun resolveTrailer() {
+    val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+    shadowOf(context.packageManager).addResolveInfoForIntent(
+      videoIntent("trailer"),
+      ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply {
+          packageName = context.packageName
+          name = "${context.packageName}.Video"
+        }
+      },
+    )
+  }
+
   @Test
   fun `the effective default version is named before a manual pick`() {
     val api = FakeTvApi()
@@ -318,11 +340,7 @@ class RemoteDetailTest {
     press(Key.DirectionCenter)
 
     compose.onNodeWithContentDescription("Start over").assertExists()
-    // Back to the primary action, then one step right onto Start over.
-    compose.onNodeWithTag(TagRemoteDetailPlay).performSemanticsAction(SemanticsActions.RequestFocus)
-    compose.waitForIdle()
-    press(Key.DirectionRight)
-    press(Key.DirectionCenter)
+    activate(TagRemoteDetailStartOver)
 
     assertEquals(1, played.size)
     assertEquals(false, played.single().resume)
@@ -475,8 +493,8 @@ class RemoteDetailTest {
   /** The action row's own buttons, read left to right. */
   private fun rowOrder(): List<String> = compose.actionRowOrder(
     TagRemoteDetailPlay,
-    TagRemoteDetailStartOver,
     TagRemoteDetailVersions,
+    TagRemoteDetailStartOver,
     TagRemoteDetailToLibrary,
     TagRemoteDetailFavorite,
     TagRemoteDetailMarkUnwatched,
@@ -494,8 +512,8 @@ class RemoteDetailTest {
     assertEquals(
       listOf(
         TagRemoteDetailPlay,
-        TagRemoteDetailStartOver,
         TagRemoteDetailVersions,
+        TagRemoteDetailStartOver,
         TagRemoteDetailToLibrary,
         TagRemoteDetailFavorite,
         TagRemoteDetailMarkUnwatched,
@@ -521,7 +539,7 @@ class RemoteDetailTest {
     // Choosing only picks: the panel closes, the caption names the row, nothing plays.
     assertTrue(played.isEmpty())
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
-    compose.onNodeWithTag(TagRemoteDetailPickCaption).assertTextContains("Source · Version a2")
+    compose.onNodeWithTag(TagRemoteDetailPickCaption).assertTextContains("Version a2", substring = true)
 
     activate(TagRemoteDetailPlay)
     assertEquals(1, played.size)
@@ -750,6 +768,7 @@ class RemoteDetailTest {
     api.remoteStateValue = RemoteItemStateDto()
     api.titleExtrasValue = TitleExtrasDto(
       people = listOf(TitlePersonDto(name = "Tom Hanks", role = "cast", character = "Woody")),
+      ratings = TitleRatingsDto(imdb = "9.3", tmdb = 8.7, tmdbVotes = 31_720),
     )
     scenario.onActivity { activity ->
       activity.setContent {
@@ -767,6 +786,8 @@ class RemoteDetailTest {
 
     assertEquals(Triple("movie", "tt1", null), api.titleExtrasRequests.single())
     compose.onNodeWithText("Tom Hanks").assertExists()
+    compose.onNodeWithTag(TagTitleExtrasImdb).assertExists()
+    compose.onNodeWithTag(TagTitleExtrasTmdb).assertExists()
     compose.onNodeWithTag(TagRemoteDetailPlay).performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionDown)
     compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsFocused()
@@ -848,5 +869,80 @@ class RemoteDetailTest {
     compose.waitForIdle()
 
     assertEquals(Triple("series", "tt7", null), api.titleExtrasRequests.single())
+  }
+
+  @Test
+  fun `DOWN walks the whole detail and UP returns it to the hero`() {
+    resolveTrailer()
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"))
+    api.remoteStateValue = RemoteItemStateDto()
+    api.titleExtrasValue = TitleExtrasDto(
+      people = listOf(TitlePersonDto(name = "Tom Hanks", role = "cast", character = "Woody")),
+      videos = listOf(TitleVideoDto(key = "trailer", name = "Trailer", kind = "trailer")),
+      related = listOf(RelatedTitleDto(type = "movie", id = "tt2", name = "Toy Story 2")),
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = data(RemoteProviderIdsDto(imdb = "tt1")),
+          onPlay = {},
+          onBack = {},
+          loadExtras = { type, id -> api.titleExtras(type, id, null) },
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(videoCardTag("trailer")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(relatedTitleTag("tt2")).assertIsFocused()
+
+    val root = compose.onRoot().getBoundsInRoot()
+    assertTrue(compose.onNodeWithText("Heat").getUnclippedBoundsInRoot().top < root.top)
+
+    repeat(3) { press(Key.DirectionUp) }
+    compose.onNodeWithTag(TagRemoteDetailPlay).assertIsFocused()
+    compose.onNodeWithText("Heat").assertIsDisplayed()
+    val title = compose.onNodeWithText("Heat").getUnclippedBoundsInRoot()
+    assertTrue(title.top >= root.top && title.bottom <= root.bottom)
+  }
+
+  @Test
+  fun `a long extras list is clipped to the remote detail bounds`() {
+    resolveTrailer()
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"))
+    api.remoteStateValue = RemoteItemStateDto()
+    api.titleExtrasValue = TitleExtrasDto(
+      people = List(8) { index -> TitlePersonDto(name = "Actor $index", role = "cast") },
+      videos = listOf(TitleVideoDto(key = "trailer", name = "Trailer", kind = "trailer")),
+      related = List(8) { index -> RelatedTitleDto(type = "movie", id = "tt$index", name = "Related $index") },
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = data(RemoteProviderIdsDto(imdb = "tt1")),
+          onPlay = {},
+          onBack = {},
+          loadExtras = { type, id -> api.titleExtras(type, id, null) },
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(titlePersonTag("Actor 0")).assertIsFocused()
+    val root = compose.onRoot().getBoundsInRoot()
+    val related = compose.onNodeWithTag(TagTitleExtrasRelated)
+    assertTrue(related.getUnclippedBoundsInRoot().bottom > root.bottom)
+    assertTrue(related.getBoundsInRoot().bottom <= root.bottom)
   }
 }

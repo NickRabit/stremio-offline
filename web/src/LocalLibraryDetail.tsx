@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, describeError } from "./api";
+import { DetailRatings, ratingsFrom } from "./detail-copy";
 import { bytes } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
@@ -12,6 +13,7 @@ import { canQueue, isLocalStream } from "./streams";
 import { useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
 import { TitleExtraFacts, TitleExtrasRows } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
+import { genericProgressKey } from "./native-addon-sources";
 import { playbackIdentity } from "./playback-identity";
 import type { CatalogueDetailTarget } from "./CatalogueTitleDetail";
 import type { BrowseFile, BrowseFolder, IdentityPreview, SourceProfile, Stream, Trailer } from "./types";
@@ -89,6 +91,11 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   const [identity, setIdentity] = useState<IdentityPreview | null>(null);
   const [chooserOpen, setChooserOpen] = useState(false);
   const [selected, setSelected] = useState<Stream | null>(null);
+  /** The source list the detail has already reported a selection for. A null report only counts
+   *  once that list is the one on screen, so a list still loading is not a refusal. */
+  const [decidedSources, setDecidedSources] = useState<Stream[] | null>(null);
+  const sourcesRef = useRef(sources);
+  sourcesRef.current = sources;
   const [saved, setSaved] = useState<{ sourceKey: string; position: number; duration: number } | null>(null);
   /** The source the title's stored position names, as the read of it answered. */
   const [resumeStableKey, setResumeStableKey] = useState<string | undefined>(undefined);
@@ -110,9 +117,18 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   // the detail was opened on.
   const owner = selected ? sourceProgressOwner(selected, catalogue) : null;
   const ownerKey = owner?.key ?? null;
+  // The title's own key, the one a non-file version writes. It is what names the version to open
+  // on when the rule has refused every row this library holds, so nothing is selected to read.
+  const catalogueKey = catalogue ? genericProgressKey(catalogue) : null;
+  const selectionSettled = sources !== null && decidedSources === sources;
+  const readTitle = selectionSettled && !selected && catalogueKey !== null;
+  // A stored version that is not one of this library's own rows lives in another group. Those
+  // groups are read without opening the chooser, and only then: a title with no resume record
+  // never asks an addon or a media server merely because its detail opened.
+  const resumeElsewhere = Boolean(resumeStableKey && sources !== null && !sources.some((stream) => stream.stableKey === resumeStableKey));
   const extra = useLibrarySources({
     scope: `${accountScope}\u0000${item.path}`,
-    open: chooserOpen,
+    open: chooserOpen || resumeElsewhere,
     catalogue,
     ...(identity?.bound?.type === "series" ? { nameHint: identity.bound.name } : {}),
     libraries: null,
@@ -187,28 +203,42 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   // authoritative read replaces it. The viewer's own file reads its own key; every other version
   // reads the title's, falling back to the version's own remote state, where a media server kept
   // the position before the title held it. A failed read keeps only what already belonged to this
-  // same version, so nothing of another one can flash over it.
+  // same version, so nothing of another one can flash over it. With no row selected, the title's
+  // own key is the record a non-file version wrote, and its stableKey is the version to open on.
   useEffect(() => {
-    if (!selectedKey || !ownerKey || !owner) { setSaved(null); setResumeStableKey(undefined); return; }
+    if (selected && selectedKey && ownerKey && owner) {
+      const controller = new AbortController();
+      const mine = ++progressEpoch.current;
+      const live = () => mine === progressEpoch.current && !controller.signal.aborted;
+      const initial = isFile && selectedPath === item.path && progress && progress.position > 0
+        ? { sourceKey: selectedKey, position: progress.position, duration: progress.duration }
+        : null;
+      setSaved(initial);
+      void versionSavedRow(owner.kind === "remote" ? undefined : owner.progressKey, ownerRemote, controller.signal)
+        .then((entry) => {
+          if (!live()) return;
+          const own = entry && entry.position > 0 ? entry : { position: 0, duration: 0 };
+          setSaved({ sourceKey: selectedKey, position: own.position, duration: own.duration });
+          // The record the row was read through names the source it was played from, which the
+          // detail uses to open on that source rather than on its own default.
+          setResumeStableKey(entry?.stableKey);
+        })
+        .catch(() => undefined);
+      return () => { controller.abort(); if (progressEpoch.current === mine) progressEpoch.current += 1; };
+    }
+    if (!readTitle || !catalogueKey) { setSaved(null); setResumeStableKey(undefined); return; }
     const controller = new AbortController();
     const mine = ++progressEpoch.current;
     const live = () => mine === progressEpoch.current && !controller.signal.aborted;
-    const initial = isFile && selectedPath === item.path && progress && progress.position > 0
-      ? { sourceKey: selectedKey, position: progress.position, duration: progress.duration }
-      : null;
-    setSaved(initial);
-    void versionSavedRow(owner.kind === "remote" ? undefined : owner.progressKey, ownerRemote, controller.signal)
+    setSaved(null);
+    void versionSavedRow(catalogueKey, undefined, controller.signal)
       .then((entry) => {
         if (!live()) return;
-        const own = entry && entry.position > 0 ? entry : { position: 0, duration: 0 };
-        setSaved({ sourceKey: selectedKey, position: own.position, duration: own.duration });
-        // The record the row was read through names the source it was played from, which the
-        // detail uses to open on that source rather than on its own default.
         setResumeStableKey(entry?.stableKey);
       })
       .catch(() => undefined);
     return () => { controller.abort(); if (progressEpoch.current === mine) progressEpoch.current += 1; };
-  }, [ownerKey, owner?.kind, selectedPath, selectedRemote?.libraryId, selectedRemote?.itemId, selectedRemote?.mediaSourceId, selectedKey, progressRevision]);
+  }, [ownerKey, owner?.kind, selectedPath, selectedRemote?.libraryId, selectedRemote?.itemId, selectedRemote?.mediaSourceId, selectedKey, progressRevision, readTitle, catalogueKey]);
 
   const clearSelectedProgress = async (stream: Stream): Promise<boolean> => {
     const key = sourceIdentity(stream);
@@ -271,10 +301,11 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
       ...(item.poster ? { poster: item.poster } : {}),
     };
   };
-  const chips = <TitleChips kind={t(episode ? "episodes.one" : "catalog.oneMovie")} trailer={enrichment.trailer} links={enrichment.links}
+  const chips = <TitleChips kind={t(episode ? "episodes.one" : "catalog.oneMovie")} links={enrichment.links}
     onTrailer={onTrailer} secureMode={secureMode}/>;
   const facts = [item.year, sources?.length === 1 && item.size ? bytes(item.size) : ""].filter(Boolean).join(" · ");
   const pieces = TitleExtraFacts({ extras: titleExtras.extras, language: uiLanguage, name: title });
+  const scores = ratingsFrom(titleExtras.extras, enrichment.meta);
   // Prefer full-resolution backdrops; unmatched files can still use their existing preview.
   const backdrops = [enrichment.meta?.background, item.wide, item.poster];
   // The file's own poster and wide artwork merge with the exact catalogue pictures; the saved
@@ -290,9 +321,14 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     gallery={gallery}
     {...(onGallery ? { onGallery: (images) => onGallery(images, item.path, bound) } : {})}
     {...(facts ? { facts } : {})}
-    factsExtra={pieces.ageBadge}
-    heroExtra={pieces.heroLines}
-    extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading}/>}
+    originalLine={pieces.originalLine}
+    ratings={<DetailRatings age={pieces.ageBadge} imdb={scores.imdb} tmdb={scores.tmdb} tmdbVotes={scores.tmdbVotes}/>}
+    heroExtra={pieces.nextLine}
+    people={titleExtras.extras?.people}
+    trailer={enrichment.trailer}
+    onTrailer={onTrailer}
+    secureMode={secureMode}
+    extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
     {...(item.description ? { description: item.description } : {})}
     chips={chips}
     favorite={favorite}
@@ -303,7 +339,11 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     {...(resumeStableKey ? { resumeStableKey } : {})}
     {...(error ? { sourceError: error } : {})}
     onRetry={() => setNonce((value) => value + 1)}
-    onSourceChange={setSelected}
+    onSourceChange={(stream) => {
+      setSelected(stream);
+      const current = sourcesRef.current;
+      if (current) setDecidedSources(current);
+    }}
     sourceProfiles={sourceProfiles}
     {...(defaultSort ? { defaultSort } : {})}
     {...(saved && saved.sourceKey === selectedKey ? { progress: saved } : {})}

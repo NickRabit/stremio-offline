@@ -26,3 +26,19 @@ fun outlineIcon(name: String, builder: PathBuilder.() -> Unit): ImageVector =
       pathBuilder = builder,
     )
   }.build()
+
+val SeriesDownloadIcon: ImageVector = outlineIcon("SeriesDownloadList") {
+  moveTo(3f, 4f)
+  lineTo(14f, 4f)
+  moveTo(3f, 8f)
+  lineTo(12f, 8f)
+  moveTo(3f, 12f)
+  lineTo(10f, 12f)
+  moveTo(18f, 4f)
+  lineTo(18f, 15f)
+  moveTo(14f, 11f)
+  lineTo(18f, 15f)
+  lineTo(22f, 11f)
+  moveTo(5f, 20f)
+  lineTo(21f, 20f)
+}

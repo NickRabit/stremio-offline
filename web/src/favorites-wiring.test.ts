@@ -99,7 +99,7 @@ describe("one click rule in the shell", () => {
   });
 
   it("opens the catalogue detail a resume file is bound to, at its episode", () => {
-    expect(app).toMatch(/card\.kind === "resume-file"\) \{[\s\S]{0,120}?if \(!card\.identity\) return;[\s\S]{0,400}?openCatalogueDetail\(\{ type: card\.identity\.type, id: card\.identity\.id, name: card\.title/);
+    expect(app).toMatch(/card\.kind === "resume-file" && card\.identity\) \{[\s\S]{0,120}?openCatalogueDetail\(\{ type: card\.identity\.type, id: card\.identity\.id, name: card\.title/);
   });
 
   it("opens the catalogue detail a Home favourite is bound to", () => {
@@ -124,7 +124,7 @@ describe("a star and a follow name the add-on the title came from", () => {
     expect(app).toContain("void toggleWatchlist(item, panelAddonKey())");
     expect(app).toContain("detailPlaying.stream.addonKey);");
     expect(app).toContain("progressAddonKey={localStream ? undefined : detailPlaying ? detailPlaying.stream.addonKey : playerSubject?.panel ? panelAddonKey(selectedStream?.addonKey)");
-    expect(app).toContain("}, detailAddonKey)}><Star/></button>");
+    expect(app).toMatch(/onToggleFavorite=\{\(\) => void toggleWatchlist\(\{ type: catalogueDetail\.type[\s\S]{0,280}?detailAddonKey\)\}/);
   });
 
   it("hands the add-on to the follow it creates", () => {

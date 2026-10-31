@@ -57,6 +57,7 @@ fun FocusButton(
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
   kind: FocusButtonKind = FocusButtonKind.Normal,
+  height: Dp = 36.dp,
   leading: (@Composable () -> Unit)? = null,
   contentDescription: String? = null,
   enabled: Boolean = true,
@@ -76,7 +77,7 @@ fun FocusButton(
     onClick = onClick,
     enabled = enabled,
     modifier = modifier
-      .then(if (kind == FocusButtonKind.Icon) Modifier.size(36.dp) else Modifier.height(36.dp))
+      .then(if (kind == FocusButtonKind.Icon) Modifier.size(height) else Modifier.height(height))
       .then(if (labelMaxWidth != null) Modifier.widthIn(max = labelMaxWidth) else Modifier)
       .then(if (contentDescription != null) Modifier.semantics { this.contentDescription = contentDescription } else Modifier)
       .background(if (focused) Tokens.AccentGradient else SolidColor(Color.Transparent), shape),

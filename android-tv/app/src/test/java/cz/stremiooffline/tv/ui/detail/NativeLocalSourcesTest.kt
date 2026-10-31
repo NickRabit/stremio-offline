@@ -10,6 +10,8 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -219,7 +221,7 @@ class NativeLocalSourcesTest {
     compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Version ms9"))
     compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Czech 40 GB"))
     // The library's own copy of this exact file is the row above, never a second row of itself.
-    compose.onAllNodesWithText("It.mkv").assertCountEquals(1)
+    compose.onAllNodes(hasText("It.mkv") and hasAnyAncestor(hasTestTag(TagSourcesPanel))).assertCountEquals(1)
     compose.onNodeWithTag(TagSourcesFilters).assertExists()
   }
 
@@ -270,7 +272,9 @@ class NativeLocalSourcesTest {
     // Only the episode the panel was opened on, under its own video id, never the series or a
     // sibling episode.
     compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Show.S01E02.mkv"))
-    compose.onAllNodesWithText("Show.S01E01.mkv").assertCountEquals(0)
+    compose.onAllNodes(
+      hasText("Show.S01E01.mkv") and hasAnyAncestor(hasTestTag(TagSourcesPanel)),
+    ).assertCountEquals(0)
     assertEquals(listOf(episodes.first().path, secondEpisode), api.libraryTitleRequests)
     assertEquals(listOf("series:tt5:1:2"), api.streamSourcesRequests)
     assertTrue(played.isEmpty())
@@ -387,7 +391,7 @@ class NativeLocalSourcesTest {
       compose.onAllNodesWithTag(sourceRowTag(1)).fetchSemanticsNodes().isEmpty()
     }
     compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("It.mkv"))
-    compose.onAllNodesWithText("It.mkv").assertCountEquals(1)
+    compose.onAllNodes(hasText("It.mkv") and hasAnyAncestor(hasTestTag(TagSourcesPanel))).assertCountEquals(1)
   }
 
   @Test
@@ -819,8 +823,8 @@ class NativeLocalSourcesTest {
     assertEquals(
       listOf(
         TagDetailPrimary,
-        TagDetailStartOver,
         TagDetailSources,
+        TagDetailStartOver,
         TagDetailToLibrary,
         TagDetailFavourite,
         TagDetailForget,
@@ -828,8 +832,8 @@ class NativeLocalSourcesTest {
       ),
       compose.actionRowOrder(
         TagDetailPrimary,
-        TagDetailStartOver,
         TagDetailSources,
+        TagDetailStartOver,
         TagDetailToLibrary,
         TagDetailFavourite,
         TagDetailForget,
@@ -849,7 +853,7 @@ class NativeLocalSourcesTest {
 
     assertTrue(played.isEmpty())
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
-    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("Source · Alpha · Czech 40 GB · 40.0 GB")
+    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("Alpha · 40.0 GB")
 
     focusOn(TagDetailPrimary)
     press(Key.DirectionCenter)

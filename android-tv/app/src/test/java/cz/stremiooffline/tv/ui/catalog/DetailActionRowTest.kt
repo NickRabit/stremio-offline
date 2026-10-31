@@ -10,6 +10,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
@@ -54,9 +55,9 @@ class DetailActionRowTest {
   ) {
     compose.setContent {
       DetailActionRow(
-        primary = { FocusButton(primaryLabel, {}, Modifier.testTag(primaryTag)) },
+        primary = { FocusButton(primaryLabel, {}, Modifier.testTag(primaryTag), height = DetailActionHeight) },
         startOver = startOver,
-        sources = { FocusButton("Sources", {}, Modifier.testTag("row_sources")) },
+        sources = { FocusButton("Sources", {}, Modifier.testTag("row_sources"), height = DetailActionHeight) },
         toLibrary = toLibrary,
         favourite = DetailAction(
           label = "row_favourite",
@@ -89,8 +90,8 @@ class DetailActionRowTest {
     assertEquals(
       listOf(
         primaryTag,
-        "row_start_over",
         "row_sources",
+        "row_start_over",
         "row_to_library",
         "row_favourite",
         "row_unwatched",
@@ -113,13 +114,26 @@ class DetailActionRowTest {
   }
 
   @Test
-  fun `the focused icon's name is shown beside the row`() {
+  fun `every action is the same height and icon actions show no label`() {
     mount()
 
-    compose.onNodeWithText("row_watched").assertDoesNotExist()
+    val heights = (listOf(primaryTag, "row_sources") + everything)
+      .associateWith { compose.onNodeWithTag(it).fetchSemanticsNode().size.height }
+    assertEquals(1, heights.values.distinct().size)
+
+    everything.forEach { compose.onNodeWithText(it).assertDoesNotExist() }
+  }
+
+  @Test
+  fun `the caption names the focused icon and clears on the primary`() {
+    mount()
+
     compose.onNodeWithTag("row_watched").performSemanticsAction(SemanticsActions.RequestFocus)
     compose.waitForIdle()
+    compose.onNodeWithTag(TagActionCaption).assertTextEquals("row_watched")
 
-    compose.onNodeWithText("row_watched").assertExists()
+    compose.onNodeWithTag(primaryTag).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagActionCaption).assertDoesNotExist()
   }
 }

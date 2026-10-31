@@ -102,8 +102,8 @@ test("a film opens the full detail over the catalogue and comes back to it", asy
   await expect(detail.locator(".library-detail-actions").getByRole("button", { name: "Přehrát", exact: true })).toBeVisible();
   // The row the buttons act on is named above them, so Play, To library and To device visibly act
   // on the version the catalogue had chosen.
-  await expect(detail.locator(".library-detail-source strong")).toHaveText(pickedRow);
-  await expect(detail.locator(".library-detail-source")).toContainText("900.0 MB");
+  await expect(detail.locator(".detail-tech")).toContainText(pickedRow);
+  await expect(detail.locator(".detail-tech")).toContainText("900.0 MB");
 
   // The way back is outside the scroller, so it is reachable from wherever the reader has got to.
   const back = main.locator(".browse-head .library-back");
@@ -144,8 +144,9 @@ test("the full detail draws the title's own chips, watch star and follow", async
   const chips = main.locator(".library-detail-chips");
   await expect(chips).toBeVisible();
   // What the panel offered to add the title to the list with travels into the full detail: the star
-  // writes the same watchlist entry, and the show can be followed from either place.
-  await expect(chips.getByRole("button", { name: "Přidat do seznamu" })).toBeVisible();
+  // writes the same watchlist entry (among the labelled actions), and the show can be followed from
+  // either place.
+  await expect(main.locator(".detail-secondary").getByRole("button", { name: "Přidat do seznamu" })).toBeVisible();
   const follow = chips.getByRole("button", { name: /Sledovat/ });
   await expect(follow).toBeVisible();
   await follow.click();
@@ -267,7 +268,7 @@ test("a series opens the full detail on the episode the catalogue had and lets a
   await expect(main).toBeVisible();
   const episodes = main.locator(".catalogue-episodes");
   await expect(episodes.locator(".episode-current")).toContainText("První díl");
-  await expect(main.locator(".library-detail-source strong")).toHaveText(pickedRow);
+  await expect(main.locator(".detail-tech")).toContainText(pickedRow);
   await expect(main.locator(".library-detail-actions").getByRole("button", { name: "Přehrát", exact: true })).toBeVisible();
   const back = main.locator(".browse-head .library-back");
   await expect(back).toBeInViewport();

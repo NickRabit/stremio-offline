@@ -1,7 +1,9 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { Play } from "lucide-react";
 import { localeTag, t, useI18n, type Locale } from "./i18n";
 import { hideBroken } from "./settings-ui";
-import type { RelatedTitle, TitleExtras, TitlePerson } from "./types";
+import { trailerAction } from "./trailers";
+import type { RelatedTitle, TitleExtras, TitlePerson, TitleVideo, Trailer } from "./types";
 
 export interface TitleExtrasTarget {
   type: "movie" | "series";
@@ -107,7 +109,7 @@ function NextEpisodePill({ next, language }: { next: NonNullable<TitleExtras["ne
  * A plain function, so a host can call it after an early return. The pill is its own component
  * because only it has to tick.
  */
-export function TitleExtraFacts({ extras, language, name }: { extras: TitleExtras | null; language: string; name?: string }): { ageBadge: ReactNode; heroLines: ReactNode } {
+export function TitleExtraFacts({ extras, language, name }: { extras: TitleExtras | null; language: string; name?: string }): { ageBadge: ReactNode; originalLine: ReactNode; nextLine: ReactNode; heroLines: ReactNode } {
   const rating = extras?.ageRating?.trim();
   const regionCode = extras?.ageRatingRegion?.trim();
   const ageBadge = rating
@@ -128,8 +130,9 @@ export function TitleExtraFacts({ extras, language, name }: { extras: TitleExtra
       ? <p className="original-line">{t("detail.originalLanguage", { language: languageLabel(spoken, language) })}</p>
       : null;
   const next = extras?.nextEpisode;
-  const heroLines = originalLine || next ? <>{originalLine}{next ? <NextEpisodePill next={next} language={language}/> : null}</> : null;
-  return { ageBadge, heroLines };
+  const nextLine = next ? <NextEpisodePill next={next} language={language}/> : null;
+  const heroLines = originalLine || nextLine ? <>{originalLine}{nextLine}</> : null;
+  return { ageBadge, originalLine, nextLine, heroLines };
 }
 
 function nextEpisodeLine(episode: string, date: string): ReactNode {
@@ -156,7 +159,12 @@ export function peopleInStripOrder(people: TitlePerson[]): TitlePerson[] {
 
 /** Cast, crew and similar titles under the actions. Nothing while there is nothing to show,
  *  and never an error: a failed read looks the same as an empty one. */
-export function TitleExtrasRows({ extras, loading }: { extras: TitleExtras | null; loading: boolean }) {
+export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer }: {
+  extras: TitleExtras | null;
+  loading: boolean;
+  secureMode?: boolean;
+  onTrailer?: (trailer: Trailer) => void;
+}) {
   const { t: translate } = useI18n();
   const actions = useContext(TitleExtrasActions);
   if (loading) return <section className="title-extras" aria-busy="true">
@@ -171,8 +179,16 @@ export function TitleExtrasRows({ extras, loading }: { extras: TitleExtras | nul
   </section>;
   const people = extras?.people ?? [];
   const related = extras?.related ?? [];
-  if (!people.length && !related.length) return null;
+  const videos = extras?.videos ?? [];
+  if (!people.length && !related.length && !videos.length) return null;
   const strip = peopleInStripOrder(people);
+  const openVideo = (video: TitleVideo) => {
+    const trailer: Trailer = { youtubeId: video.key, title: video.name, provider: "tmdb" };
+    const action = trailerAction(trailer, secureMode);
+    if (!action) return;
+    if (action.kind === "external") window.open(action.href, "_blank", "noopener");
+    else onTrailer?.(action.trailer);
+  };
   return <section className="title-extras">
     {people.length > 0 && <div className="extras-row">
       <h3>{translate("detail.people")} <small>{translate("detail.peopleHint")}</small></h3>
@@ -183,6 +199,15 @@ export function TitleExtrasRows({ extras, loading }: { extras: TitleExtras | nul
         {person.role === "cast"
           ? person.character ? <small>{person.character}</small> : null
           : <small>{translate(`detail.role.${person.role}`)}</small>}
+      </button>)}</div>
+    </div>}
+    {videos.length > 0 && <div className="extras-row">
+      <h3>{translate("detail.videos")}</h3>
+      <div className="extras-strip">{videos.map((video) => <button type="button" className="detail-video" key={video.key}
+        onClick={() => openVideo(video)}>
+        <span className="thumb">{video.thumbnail ? <img src={video.thumbnail} alt="" onError={hideBroken}/> : null}<Play/></span>
+        <strong>{video.name}</strong>
+        <small>{translate(`detail.video.${video.kind}`)}</small>
       </button>)}</div>
     </div>}
     {related.length > 0 && <div className="extras-row">

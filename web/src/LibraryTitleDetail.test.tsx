@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { DetailRatings } from "./detail-copy";
 import { LibraryTitleDetail, type LibraryTitleDetailProps } from "./LibraryTitleDetail";
 import { TitleChips } from "./TitleChips";
 import type { LibrarySourceGroup } from "./library-sources";
@@ -66,7 +67,7 @@ const saved = () => host.querySelector(".library-detail-progress");
 const savedText = () => host.querySelector(".library-detail-progress span")!.textContent;
 const clearButton = () => host.querySelector<HTMLButtonElement>('.library-detail-progress button[aria-label="Forget progress"]');
 const startOverButton = () => host.querySelector<HTMLButtonElement>('.library-detail-actions button[aria-label="Play from the start"]');
-const favoriteButton = () => host.querySelector<HTMLButtonElement>(".library-detail-chips > button.watch-star");
+const favoriteButton = () => host.querySelector<HTMLButtonElement>(".detail-secondary button.watch-star");
 const lowerActions = () => host.querySelector(".library-detail-actions")!;
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -222,7 +223,7 @@ describe("LibraryTitleDetail sources", () => {
     expect(hero.style.backgroundImage).toBe("");
   });
 
-  it("draws the play, watched and open-folder controls on the lower row, with the favourite above them", () => {
+  it("draws the play, watched, favourite and open-folder controls on the lower row", () => {
     const onToggleFavorite = vi.fn();
     const onToggleWatched = vi.fn();
     const onOpenFolder = vi.fn();
@@ -235,9 +236,8 @@ describe("LibraryTitleDetail sources", () => {
     expect(onToggleWatched).toHaveBeenCalled();
     click(row.querySelector('button[aria-label="Open folder"]'));
     expect(onOpenFolder).toHaveBeenCalled();
-    // The star is not drawn a second time beside the actions.
-    expect(row.querySelector(".watch-star")).toBeNull();
-    expect(row.querySelector('button[aria-label="Remove from favorites"]')).toBeNull();
+    expect(row.querySelector(".detail-secondary .watch-star")).not.toBeNull();
+    expect(host.querySelector(".library-detail-chips .watch-star")).toBeNull();
   });
 });
 
@@ -249,8 +249,8 @@ describe("LibraryTitleDetail source picker", () => {
     };
     const { onPlay } = render({ sources: [breaking], defaultSort: "rule:balanced" });
 
-    expect(host.querySelector(".library-detail-source")!.textContent).toBe(
-      "Will playyou choose when you press Play — the source rule allowed no version",
+    expect(host.querySelector(".detail-tech dd")!.textContent).toBe(
+      "you choose when you press Play — the source rule allowed no version",
     );
     expect(playButton().disabled).toBe(false);
     click(playButton());
@@ -427,14 +427,13 @@ describe("LibraryTitleDetail favourite and action row", () => {
   const versions = () => [remote("s1", "720p", 1_000_000_000), remote("s2", "1080p", 3_000_000_000)];
   const saved = { position: 120, duration: 3600, sourceKey: key("s2") };
 
-  it("leads the caller's own chip row with the favourite, and keeps its own semantics", () => {
+  it("keeps the favourite out of the chip row, and keeps its own semantics", () => {
     const onToggleFavorite = vi.fn();
     render({ chips: titleChips("One film"), favorite: true, onToggleFavorite });
     const row = chipsRow()!;
     const star = favoriteButton()!;
-    // The star comes first and the caller's own chips follow it, still the shared component's row.
-    expect(row.firstElementChild).toBe(star);
-    expect(star.nextElementSibling).toBe(row.querySelector(".title-chips"));
+    expect(row.querySelector("button.watch-star")).toBeNull();
+    expect(row.querySelector(".title-chips")).not.toBeNull();
     expect(star.classList.contains("watch-star")).toBe(true);
     expect(star.classList.contains("on")).toBe(true);
     expect(star.getAttribute("aria-pressed")).toBe("true");
@@ -470,7 +469,7 @@ describe("LibraryTitleDetail favourite and action row", () => {
     const onClearProgress = vi.fn();
     render({ sources: versions(), progress: saved, onPlay, onClearProgress });
     const start = startOverButton()!;
-    expect(start.textContent).toBe("");
+    expect(start.textContent).toContain("From start");
     expect(start.querySelector("svg")).not.toBeNull();
     expect(start.title).toBe("Play from the start");
     click(start);
@@ -489,14 +488,17 @@ describe("LibraryTitleDetail favourite and action row", () => {
     const onOpenFolder = vi.fn();
     render({ sources: versions(), onSaveToLibrary, watched: true, onToggleWatched, onOpenFolder });
     const action = (name: string) => lowerActions().querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
-    // A labelled action keeps its own name, so hiding the label at a narrow width cannot rename it.
-    for (const [name, className] of [["To library", "To library"], ["Open folder", "Open folder"]] as const) {
-      const button = action(name);
-      expect(button.title).toBe(className);
-      expect(button.querySelector(".library-detail-action-label")!.textContent).toBe(className);
-    }
+    // The save split keeps the label it had. The folder's accessible name stays, and its visible label is the short one.
+    const save = action("To library");
+    expect(save.title).toBe("To library");
+    expect(save.querySelector(".library-detail-action-label")!.textContent).toBe("To library");
+    const folder = action("Open folder");
+    expect(folder.title).toBe("Open folder");
+    expect(folder.textContent).toContain("Folder");
+    expect(folder.querySelector(".library-detail-action-label")).toBeNull();
     const watched = action("Mark unwatched");
     expect(watched.getAttribute("aria-pressed")).toBe("true");
+    expect(watched.textContent).toContain("Watched");
     expect(watched.querySelector(".library-detail-action-label")).toBeNull();
     click(action("To library"));
     expect(onSaveToLibrary).toHaveBeenCalled();
@@ -914,7 +916,8 @@ describe("LibraryTitleDetail stored source", () => {
       sourceProfiles: qualityProfiles,
       defaultSort: "rule:balanced",
     });
-    expect(host.querySelector(".library-detail-source")!.textContent).toContain("SMALL");
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("Jellyfin");
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("SMALL");
     click(host.querySelector(".split-button-toggle"));
     expect(chosenRow()!.textContent).toContain("SMALL");
     act(() => {
@@ -1024,7 +1027,8 @@ describe("LibraryTitleDetail hero slots and the source that will play", () => {
     const actions = host.querySelector(".library-detail-actions")!;
     expect(follows(actions, host.querySelector(".title-extras")!)).toBe(true);
     expect(host.querySelector(".split-button-toggle")).toBeNull();
-    expect(host.querySelector(".library-detail-source strong")!.textContent).toContain("1080p");
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("Jellyfin");
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("2.0 GB");
   });
 
   it("keeps the host facts and appends the extra at the end of the same line", () => {
@@ -1034,27 +1038,92 @@ describe("LibraryTitleDetail hero slots and the source that will play", () => {
     expect(line.querySelector(".age-badge")!.textContent).toBe("R");
   });
 
-  it("names the source that will play and the release file when it is not already the label", () => {
+  it("names the source and the release file when the file name is not that source", () => {
     render({ sources: [addon("a1", "FullHD", 1_000)] });
-    expect(host.querySelector(".source-will-play")!.textContent).toBe("Will play");
-    expect(host.querySelector(".library-detail-source strong")!.textContent).toBe("FullHD");
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("Torrentio");
     expect(host.querySelector(".source-file")).toBeNull();
     rerender({ sources: [{ ...addon("a1", "FullHD", 1_000), behaviorHints: { filename: "Show.2020.1080p.mkv", videoSize: 1_000 } }] });
-    expect(host.querySelector(".library-detail-source strong")!.textContent).toBe("FullHD");
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("Torrentio");
     expect(host.querySelector(".source-file")!.textContent).toBe("Show.2020.1080p.mkv");
   });
 
-  it("omits the file line when the filename is the label, and the skeleton stays unlabelled", () => {
+  it("shows a local file name beside its library, and the skeleton stays unlabelled", () => {
     render({ sources: [{
       sourceId: "lib:Films/Heat.mkv", kind: "library", playable: true, localPath: "Films/Heat.mkv", libraryName: "Films",
       name: "Heat.mkv", behaviorHints: { filename: "Heat.mkv" },
     }] });
-    expect(host.querySelector(".source-will-play")!.textContent).toBe("Will play");
-    expect(host.querySelector(".library-detail-source strong")!.textContent).toBe("Heat.mkv");
-    expect(host.querySelector(".source-file")).toBeNull();
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("Films");
+    expect(host.querySelector(".source-file")!.textContent).toBe("Heat.mkv");
     rerender({ sources: null });
     expect(host.querySelector(".library-detail-source.detail-skeleton")).not.toBeNull();
-    expect(host.querySelector(".source-will-play")).toBeNull();
+    expect(host.querySelector(".detail-tech")).toBeNull();
     expect(host.querySelector(".source-file")).toBeNull();
+  });
+
+  it("draws the ratings that are known and leaves the row out when none are", () => {
+    render({ ratings: <DetailRatings age={<em className="age-badge">15+</em>} imdb="9.3" tmdb={8.7} tmdbVotes={32000}/> });
+    const row = host.querySelector(".detail-ratings")!;
+    expect(row.querySelector(".age-badge")!.textContent).toBe("15+");
+    expect(row.querySelector(".imdb")!.textContent).toBe("IMDb");
+    expect(row.textContent).toContain("9.3");
+    expect(row.querySelector(".tmdb")!.textContent).toBe("TMDB");
+    expect(row.textContent).toContain(new Intl.NumberFormat("en-GB", { notation: "compact" }).format(32000));
+    rerender({});
+    expect(host.querySelector(".detail-ratings")).toBeNull();
+  });
+
+  it("reads video, audio, subtitles and the file from the selected version", () => {
+    render({ sources: [{
+      ...addon("a1", "Release", 6_700_000_000),
+      audioLanguages: ["cs", "en"],
+      subtitleLanguages: ["cs"],
+      subtitles: [{ subtitleId: "one" }, { subtitleId: "two" }],
+      videoFacts: { heightPixels: 2160, codec: "hevc", range: "hdr" },
+      behaviorHints: { filename: "Film.DTS-HD.MA.7.1.mkv", videoSize: 6_700_000_000 },
+    }] });
+    const tech = host.querySelector(".detail-tech")!;
+    expect(tech.textContent).toContain("2160p");
+    expect(tech.querySelector(".tag.hdr")!.textContent).toBe("HDR10");
+    expect(tech.textContent).toContain("HEVC");
+    expect(tech.textContent).toContain("Czech");
+    expect(tech.textContent).toContain("English");
+    expect(tech.textContent).toContain("DTS-HD MA 7.1");
+    expect(tech.textContent).toContain("+ 2 from addons");
+    expect(host.querySelector(".source-file")!.textContent).toBe("Film.DTS-HD.MA.7.1.mkv");
+  });
+
+  it("opens the source chooser from the count of the other versions", () => {
+    render({ sources: [remote("s1", "720p", 1), remote("s2", "1080p", 3_000_000_000), remote("s3", "Small", 10)] });
+    const more = host.querySelector<HTMLButtonElement>(".detail-versions")!;
+    expect(more.textContent).toContain("2 more");
+    click(more);
+    expect(document.querySelector(".library-source-card")).not.toBeNull();
+  });
+
+  it("opens the trailer overlay from the secondary action", () => {
+    const onTrailer = vi.fn();
+    render({ trailer: { youtubeId: "abcdefghijk", title: "Trailer", provider: "tmdb" }, onTrailer });
+    click(host.querySelector('.detail-secondary button[aria-label="TRAILER"]'));
+    expect(onTrailer).toHaveBeenCalledWith({ youtubeId: "abcdefghijk", title: "Trailer", provider: "tmdb" });
+  });
+});
+
+describe("LibraryTitleDetail video row of a local file", () => {
+  it("reads the resolution from the file name and never shows the source badge as video", () => {
+    render({ sources: [local("films/Heat.1995.1080p.BluRay.mkv", "Heat.1995.1080p.BluRay.mkv")] });
+    const terms = () => [...host.querySelectorAll(".detail-tech dt")].map((term) => term.textContent);
+    expect(terms()).toContain("Video");
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("1080p");
+
+    render({ sources: [local("films/12 let v řetězech.avi", "12 let v řetězech.avi")] });
+    expect(terms()).not.toContain("Video");
+    expect(host.querySelector(".detail-tech")!.textContent).not.toContain("LOCAL");
+  });
+});
+
+describe("LibraryTitleDetail source row names the version", () => {
+  it("shows the selected version's own label beside its addon", () => {
+    render({ sources: [addon("a1", "E2E 720p", 900)] });
+    expect(host.querySelector(".detail-tech .detail-version")!.textContent).toBe("E2E 720p");
   });
 });

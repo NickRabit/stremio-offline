@@ -531,10 +531,13 @@ export function tmdbIdOf(
 export interface TmdbTitleExtras {
   originalTitle?: string;
   originalLanguage?: string;
+  voteAverage?: number;
+  voteCount?: number;
   createdBy: Array<{ name: string; profilePath?: string }>;
   cast: Array<{ name: string; character?: string; profilePath?: string; order: number }>;
   crew: Array<{ name: string; job: string; profilePath?: string }>;
   recommendations: Array<{ tmdbId: number; name: string; date?: string; posterPath?: string }>;
+  videos: Array<{ key: string; name: string; type: string; site: string; official?: boolean; language?: string }>;
   /** Certifications by ISO 3166-1 region, first non-empty one per region. */
   certifications: Record<string, string>;
 }
@@ -553,6 +556,8 @@ interface TmdbExtraResponse {
   original_title?: string;
   original_name?: string;
   original_language?: string;
+  vote_average?: number;
+  vote_count?: number;
   created_by?: TmdbExtraCredit[];
   credits?: { cast?: TmdbExtraCredit[]; crew?: TmdbExtraCredit[] };
   aggregate_credits?: { cast?: TmdbExtraCredit[]; crew?: TmdbExtraCredit[] };
@@ -575,12 +580,16 @@ interface TmdbExtraResponse {
   content_ratings?: {
     results?: Array<{ iso_3166_1?: string; rating?: string }>;
   };
+  videos?: TmdbVideos;
 }
 
 const text = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined;
 
 const profilePath = (value: unknown): string | undefined => text(value);
+
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
 /** One request: the title details with every extras section TMDB can append. */
 export async function tmdbTitleExtras(
@@ -592,13 +601,20 @@ export async function tmdbTitleExtras(
 ): Promise<TmdbTitleExtras | null> {
   throwIfCancelled(signal);
   const append = type === "movie"
-    ? "credits,recommendations,release_dates"
-    : "aggregate_credits,recommendations,content_ratings";
+    ? "credits,recommendations,release_dates,videos"
+    : "aggregate_credits,recommendations,content_ratings,videos";
+  const language = normalizeLanguage(config.language);
+  const includeVideoLanguage = [...new Set([...(language ? [language] : []), "en", "null"])].join(",");
   let reply: TmdbReply<TmdbExtraResponse>;
   try {
     reply = await tmdbReply<TmdbExtraResponse>(
       `/${mediaType(type)}/${tmdbId}`,
-      { api_key: config.apiKey, language: config.language, append_to_response: append },
+      {
+        api_key: config.apiKey,
+        language: config.language,
+        append_to_response: append,
+        include_video_language: includeVideoLanguage,
+      },
       fetchImpl ?? guardedFetch,
       signal,
     );
@@ -687,6 +703,22 @@ export async function tmdbTitleExtras(
       ...(profilePath(row.poster_path) ? { posterPath: profilePath(row.poster_path) } : {}),
     }];
   });
+  const videos = (Array.isArray(body.videos?.results) ? body.videos.results : []).flatMap((row) => {
+    const key = text(row.key);
+    const name = text(row.name);
+    const type = text(row.type);
+    const site = text(row.site);
+    if (!key || !name || !type || !site) return [];
+    const videoLanguage = normalizeLanguage(row.iso_639_1 ?? undefined);
+    return [{
+      key,
+      name,
+      type,
+      site,
+      ...(typeof row.official === "boolean" ? { official: row.official } : {}),
+      ...(videoLanguage ? { language: videoLanguage } : {}),
+    }];
+  });
 
   const certifications: Record<string, string> = {};
   if (type === "movie") {
@@ -715,10 +747,13 @@ export async function tmdbTitleExtras(
       originalTitle: text(type === "movie" ? body.original_title : body.original_name),
     } : {}),
     ...(text(body.original_language) ? { originalLanguage: text(body.original_language) } : {}),
+    ...(finiteNumber(body.vote_average) != null ? { voteAverage: finiteNumber(body.vote_average) } : {}),
+    ...(finiteNumber(body.vote_count) != null ? { voteCount: finiteNumber(body.vote_count) } : {}),
     createdBy,
     cast,
     crew,
     recommendations,
+    videos,
     certifications,
   };
 }
