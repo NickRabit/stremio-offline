@@ -2,16 +2,20 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 export async function checkDetailActions(page: Page, detail: Locator) {
   const actions = detail.locator(".library-detail-actions");
-  const buttons = actions.getByRole("button");
-  const boxes = await buttons.evaluateAll(nodes => nodes.map(node => {
+  const boxesOf = (selector: string) => actions.locator(selector).evaluateAll(nodes => nodes.map(node => {
     const box = node.getBoundingClientRect();
     return { x: box.x, y: box.y, width: box.width, height: box.height };
   }));
-  expect(boxes.length).toBeGreaterThan(2);
-  for (const box of boxes) {
+  // The two split buttons are one toolbar and share a height; the labelled round actions beside
+  // them are taller by their caption and only need a full touch target.
+  const splits = await boxesOf(".split-button > button, .library-detail-play > button");
+  const all = await boxesOf("button");
+  expect(splits.length).toBeGreaterThan(0);
+  expect(all.length).toBeGreaterThan(2);
+  for (const box of splits) expect(Math.abs(box.height - splits[0].height)).toBeLessThanOrEqual(1);
+  for (const box of all) {
     expect(box.height).toBeGreaterThanOrEqual(44);
     expect(box.width).toBeGreaterThanOrEqual(44);
-    expect(Math.abs(box.height - boxes[0].height)).toBeLessThanOrEqual(1);
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
   }
@@ -21,19 +25,13 @@ export async function checkDetailActions(page: Page, detail: Locator) {
     const bar = await progress.getByRole("progressbar").boundingBox();
     expect(Math.abs(reset!.y + reset!.height / 2 - bar!.y - bar!.height / 2)).toBeLessThanOrEqual(1);
   }
+  // The favourite is one of the labelled actions beside the splits, once, below the title.
   const favorite = detail.getByRole("button", { name: "Přidat do oblíbených", exact: true });
   await expect(favorite).toHaveCount(1);
-  await expect(actions.getByRole("button", { name: "Přidat do oblíbených", exact: true })).toHaveCount(0);
+  await expect(actions.locator(".detail-secondary").getByRole("button", { name: "Přidat do oblíbených", exact: true })).toHaveCount(1);
   const position = await favorite.boundingBox();
   const title = await detail.getByRole("heading").first().boundingBox();
-  expect(position!.y + position!.height).toBeLessThanOrEqual(title!.y + 1);
-  // The star is one of the title's chips: the same height as its neighbours, on their line.
-  const chip = await detail.locator(".library-detail-chips .pill").first().boundingBox();
-  if (chip) {
-    expect(Math.abs(position!.height - chip.height)).toBeLessThanOrEqual(1);
-    expect(Math.abs(position!.y + position!.height / 2 - chip.y - chip.height / 2)).toBeLessThanOrEqual(1);
-  }
-  expect(position!.width).toBeGreaterThanOrEqual(position!.height);
+  expect(position!.y).toBeGreaterThanOrEqual(title!.y + title!.height - 1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 }
 
