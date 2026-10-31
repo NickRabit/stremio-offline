@@ -1107,3 +1107,16 @@ describe("LibraryTitleDetail hero slots and the source that will play", () => {
     expect(onTrailer).toHaveBeenCalledWith({ youtubeId: "abcdefghijk", title: "Trailer", provider: "tmdb" });
   });
 });
+
+describe("LibraryTitleDetail video row of a local file", () => {
+  it("reads the resolution from the file name and never shows the source badge as video", () => {
+    render({ sources: [local("films/Heat.1995.1080p.BluRay.mkv", "Heat.1995.1080p.BluRay.mkv")] });
+    const terms = () => [...host.querySelectorAll(".detail-tech dt")].map((term) => term.textContent);
+    expect(terms()).toContain("Video");
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("1080p");
+
+    render({ sources: [local("films/12 let v řetězech.avi", "12 let v řetězech.avi")] });
+    expect(terms()).not.toContain("Video");
+    expect(host.querySelector(".detail-tech")!.textContent).not.toContain("LOCAL");
+  });
+});

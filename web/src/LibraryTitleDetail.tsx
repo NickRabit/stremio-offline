@@ -307,6 +307,10 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const audioNames = shown ? streamLanguages(shown).map((code) => languageName(code)).filter(Boolean) : [];
   const releaseText = shown?.behaviorHints?.filename ?? shown?.title ?? shown?.name;
   const audioTag = releaseText ? audioFormat(releaseText) : undefined;
+  // Without probed facts the release name may still say the resolution; a source badge such as a
+  // library's LOCAL says nothing about the picture, so only an addon's own quality label stands in.
+  const releaseHeight = releaseText ? /\b(2160|1440|1080|720|576|480)[pi]\b/i.exec(releaseText)?.[1] ?? (/\b4k\b|\buhd\b/i.test(releaseText) ? "2160" : undefined) : undefined;
+  const addonQuality = shown && (shown.addonName || shown.addonKey) ? streamBadge(shown) : "";
   const subtitleNames = shown ? (shown.subtitleLanguages ?? []).map((code) => languageName(code)).filter(Boolean) : [];
   const addonSubtitleCount = shown?.subtitles?.length ?? 0;
   const fileName = shown?.behaviorHints?.filename;
@@ -412,10 +416,12 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         </>}
       </dd>
       {shown && <>
-        <dt>{t("detail.tech.video")}</dt>
-        <dd>{video
-          ? <>{video.height}{video.tags.map((tag) => <span key={tag.text} className={tag.hdr ? "tag hdr" : "tag"}>{tag.text}</span>)}</>
-          : streamBadge(shown)}</dd>
+        {(video || releaseHeight || addonQuality) && <>
+          <dt>{t("detail.tech.video")}</dt>
+          <dd>{video
+            ? <>{video.height}{video.tags.map((tag) => <span key={tag.text} className={tag.hdr ? "tag hdr" : "tag"}>{tag.text}</span>)}</>
+            : releaseHeight ? t("rules.resolutionValue", { height: Number(releaseHeight) }) : addonQuality}</dd>
+        </>}
         {(audioNames.length > 0 || audioTag) && <>
           <dt>{t("detail.tech.audio")}</dt>
           <dd>{audioNames.join(", ")}{audioTag && <span className="tag">{audioTag}</span>}</dd>
