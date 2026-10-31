@@ -322,7 +322,8 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   // The version itself, named as its row in the chooser names it, so it is plain which one Play,
   // To library and To device act on; a file name is already its own row below.
   const shownLabel = shown ? streamLabel(shown) : "";
-  const versionName = shownLabel && shownLabel !== placeName && shownLabel !== fileName ? shownLabel : "";
+  // A label that is only the file name without its extension says nothing the File row does not.
+  const versionName = shownLabel && shownLabel !== placeName && !(fileName && fileName.replace(/\.[^.]+$/, "") === shownLabel) && shownLabel !== fileName ? shownLabel : "";
   const moreCount = pickable.length > 1 ? pickable.length - 1 : 0;
   const watchedName = watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched");
   const hasSecondary = Boolean(trailer || savedPosition || onToggleWatched || canDownloadToDevice || onToggleFavorite || onOpenFolder);
