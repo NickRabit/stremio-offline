@@ -266,7 +266,11 @@ related row. Worst cold open: 1 + 1 + 16 requests; a warm one: none.
   `bound`, the remote title's catalogue identity). A session cache with a
   lifetime: an answer with `source: "addon"` is kept 10 minutes, any other
   one hour, a failure not at all; the cache is emptied when the signed-in
-  account changes. The client shows the original-title line only when
+  account changes and whenever the app learns that a library changed (a
+  finished download, a library operation, a rescan), so `V knihovně` is not
+  left behind. The next-episode pill is filtered at render time against the
+  current clock and re-checked every minute, so an episode that has aired
+  disappears from an open detail. The client shows the original-title line only when
   `originalTitle` differs from the name on screen (trimmed, case-insensitive)
   or `originalLanguage` differs from the interface language.
 - **Search entry:** `App.openSearch(query?: string)`; with a query it closes
@@ -308,8 +312,8 @@ order; screenshots and the UX pass once, at the end.
 
 | Slice | What | Main files | Tests that must exist |
 | --- | --- | --- | --- |
-| 1 | Server: `/extras`, TMDB appends, certification by region, related → IMDb, cache, `rewriteExtras`, `inLibrary` | `title-extras.ts`, `tmdb.ts`, `images.ts`, `routes/catalog.ts` | movie and series from TMDB fixtures; no key → addon names; TMDB 401/429/down → fallback and cached failure; secure mode proxies every photo/poster; `inLibrary` only for granted libraries; region fallback to US |
-| 2 | Web: rows, hero facts (rating, age, original title, next episode), readable source row, person → search | `TitleExtras.tsx`, `LibraryTitleDetail.tsx`, the three hosts, `App.tsx`, `api.ts`, `style.css`, i18n | rows render and hide on empty/failure; skeleton; person click submits search; related click opens detail and Back returns; side panel unchanged except the badge |
+| 1 | Server: `/extras`, TMDB appends, certification by region, related → IMDb, cache, `rewriteExtras`, `inLibrary` | `title-extras.ts`, `tmdb.ts`, `images.ts`, `routes/catalog.ts` | movie and series from TMDB fixtures; no key → addon names; TMDB 401/429/down → fallback and cached failure; **an invalid key replaced by a valid one asks TMDB again at once; a removed key answers the addon fallback although a TMDB success is cached**; concurrent requests share one fetch; one failed related lookup drops only that title; secure mode proxies every photo/poster; `inLibrary` only for granted libraries and never inherited by another viewer; region fallback to US with `ageRatingRegion` |
+| 2 | Web: rows, hero facts (rating, age, original title, next episode), readable source row, person → search | `TitleExtras.tsx`, `LibraryTitleDetail.tsx`, the three hosts, `App.tsx`, `api.ts`, `style.css`, i18n | rows render and hide on empty/failure; skeleton; person click submits search; related click opens detail and Back returns; side panel unchanged except the badge; client cache TTLs, cleared on account change and on a library change; an aired next episode disappears without reopening |
 | 3 | TV catalogue detail: DTO, rows, focus path, source row, search with query | `TitleExtras.kt`, `CatalogDetailScreen.kt` (calls only), `SearchPreset.kt`, shell | Compose tests for DOWN/UP between actions, episodes and rows; OK on a person opens search with the query; Back restores focus; **APK launched on the emulator** (VerifyError) |
 | 4 | TV local and remote detail | `DetailScreen.kt`, `RemoteDetailScreen.kt` | same rows for a bound local title and an identified remote title; nothing for an unidentified one |
 | 5 | Docs and finish | `docs/playback.md` or `libraries.md` note, roadmap | screenshot baselines through the workflow; version bump |
