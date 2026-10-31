@@ -92,8 +92,8 @@ Top to bottom, inside the existing `library-title-detail` surface:
    language name comes from `Intl.DisplayNames` in the interface language
    (the app's `label()` gives only codes such as `EN`).
 4. **Next episode pill** (series only) — `Další díl S06E03 „…“ · čt 7. 11.`
-   when a future episode is known; nothing when the series is ended or no
-   date is known.
+   when a future episode is known; nothing otherwise. Works with or without
+   a TMDB key.
 5. **Description** — unchanged.
 6. **Saved position and the row that will play** — unchanged in content and
    order. The row is made readable: a `Přehraje se` label, more contrast, and
@@ -172,11 +172,16 @@ interface TitleExtras {
   related: RelatedTitle[];
   /** As written on the certification, e.g. "12", "PG-13", "TV-MA". */
   ageRating?: string;
-  /** Present only when it differs from the name /api/meta shows. */
+  /** The ISO 3166-1 region the rating belongs to ("CZ", or "US" after the fallback);
+   *  the badge's tooltip names it. */
+  ageRatingRegion?: string;
+  /** Whenever TMDB knows it. The client decides whether it differs from the
+   *  name it shows, since that name depends on the viewer and the screen. */
   originalTitle?: string;
   /** ISO 639-1, from TMDB. */
   originalLanguage?: string;
-  /** The first episode whose release is after now, from the meta's videos. */
+  /** The episode with the earliest valid release date after now, from the
+   *  meta's videos; season 0 (specials) and unparseable dates are ignored. */
   nextEpisode?: { season: number; episode: number; name?: string; released: string };
   /** Where people and related came from, for the client's empty states. */
   source: "tmdb" | "addon";
@@ -230,12 +235,17 @@ related row. Worst cold open: 1 + 1 + 16 requests; a warm one: none.
 - A new module `server/src/title-extras.ts` builds the answer; the route is
   registered beside `/api/meta` in `routes/catalog.ts`. `/api/meta`'s answer
   and its six-hour cache do not change.
-- Cache: only the TMDB part is shared — in memory, keyed by type, id and
-  language, 24 hours, at most 500 titles; failures are cached for 10 minutes
+- Cache: only the TMDB part is shared — in memory, keyed by type, id,
+  language and a fingerprint of the TMDB key (so a replaced key never reuses
+  the old key's failures, and no key means no TMDB part at all), 24 hours, at most 500 titles; failures are cached for 10 minutes
   so a dead TMDB is not asked on every open. Everything that depends on the
   viewer is computed per request and never written into the cached object:
   the addon fallback (it comes from the viewer's own addons), `nextEpisode`
   (from the viewer's six-hour `cachedMeta`) and `inLibrary`.
+- Concurrent requests for the same title share one TMDB fetch (an in-flight
+  map). The related lookups run at most four at a time; a failed
+  `external_ids` drops that one title only, never the people or the rating.
+  Every TMDB call keeps the module's existing timeout.
 - `inLibrary` is `localCopies(type, id, viewer)` (already filtered by
   `visibleLibraries`) — never another account's view. Local libraries only;
   Jellyfin/Emby copies do not count in this work.
@@ -253,8 +263,12 @@ related row. Worst cold open: 1 + 1 + 16 requests; a warm one: none.
   component (`web/src/TitleExtras.tsx`) that `LibraryTitleDetail` renders
   under its actions through a new optional prop, so the three hosts pass the
   identity they already know (catalogue target, `/api/library/identity`'s
-  `bound`, the remote title's catalogue identity). A session cache like
-  `useTitleEnrichment`'s, with failures not cached.
+  `bound`, the remote title's catalogue identity). A session cache with a
+  lifetime: an answer with `source: "addon"` is kept 10 minutes, any other
+  one hour, a failure not at all; the cache is emptied when the signed-in
+  account changes. The client shows the original-title line only when
+  `originalTitle` differs from the name on screen (trimmed, case-insensitive)
+  or `originalLanguage` differs from the interface language.
 - **Search entry:** `App.openSearch(query?: string)`; with a query it closes
   the catalogue detail, sets the Search everywhere draft and submits it.
 - **TV:** `TitleExtrasDto` in `data/`, `TvApi.titleExtras`, and composables in
@@ -317,8 +331,8 @@ a device shows the register-limit crash.
 - A film and a series with a TMDB key show photos, characters, a crew line,
   similar titles, the age rating and the original title on web, desktop and
   TV; a series with an upcoming episode shows its date.
-- Without a TMDB key the cast row shows the addon's names and nothing else
-  new appears; no error is shown.
+- Without a TMDB key the cast row shows the addon's names and a series still
+  shows its next episode; nothing else new appears and no error is shown.
 - In secure mode no response from `/extras` contains an `http(s)://` image
   address.
 - The catalogue side panel looks as before apart from the badge; the full
@@ -327,3 +341,7 @@ a device shows the register-limit crash.
   and Back returns.
 - A local file bound to a title and a Jellyfin/Emby title with an IMDb or
   TMDB id show the same rows; an unidentified one shows none.
+- Navigation edge cases are tested: a related title with no cast, a title
+  where both rows are empty, Back from a related title into a local or
+  remote library detail, and the selected episode, scroll position and (TV)
+  focus restored after Back.
