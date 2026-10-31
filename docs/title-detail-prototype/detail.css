@@ -1,0 +1,66 @@
+/* Prototype layer on top of the real style.css. Everything below is new and is what the
+   specification proposes for web/src/style.css. */
+.proto-main{padding:48px 26px 26px;min-height:100vh;max-width:1280px;margin:0 auto}
+.proto-frame{border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden}
+.proto-frame>.browse-head{display:flex;align-items:center;gap:10px;font-size:12px;font-weight:700}
+.proto-art{background:linear-gradient(115deg,#3c2a4d,#1d3a4e 45%,#5a3424)}
+.library-title-detail.proto-art{background-image:linear-gradient(90deg,#121721f2 0%,#121721c9 46%,#1217215e 78%,#12172122 100%),linear-gradient(0deg,#121721f2 0%,#121721b8 34%,transparent 62%),linear-gradient(115deg,#3c2a4d,#1d3a4e 45%,#5a3424)}
+
+/* Facts the hero gains: the age rating as a bordered badge and the original title. */
+.age-badge{display:inline-block;font-style:normal;font-weight:800;font-size:10px;line-height:1;padding:3px 5px;border:1px solid #f1f4f866;border-radius:4px;color:var(--text);vertical-align:1px}
+.original-line{font-size:12px;color:var(--muted)}
+.original-line b{color:var(--text);font-weight:600}
+.next-episode{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--text);background:#ff5b3814;border:1px solid #ff5b3844;border-radius:99px;padding:5px 11px;width:max-content;max-width:100%}
+.next-episode b{color:var(--accent2)}
+
+/* The extras: two rows under the actions, inside the same detail surface. */
+.title-extras{position:relative;z-index:1;display:grid;grid-template-columns:minmax(0,1fr);gap:22px;margin-top:18px}
+.extras-row{min-width:0}
+.extras-row h3{display:flex;align-items:baseline;gap:10px;margin:0 0 10px;font-size:14px}
+.extras-row h3 small{font-size:11px;font-weight:600;color:var(--muted)}
+.extras-crew{margin:-4px 0 10px;font-size:12px;color:var(--muted)}
+.extras-crew button{border:0;background:none;padding:0;color:var(--text);font-weight:600}
+.extras-crew button:hover{color:var(--accent2);text-decoration:underline}
+.extras-strip{display:flex;gap:14px;overflow-x:auto;overflow-y:hidden;padding:3px 2px 8px;scroll-snap-type:x proximity;overscroll-behavior-x:contain}
+.person{flex:0 0 96px;width:96px;min-height:0;display:grid;align-content:start;justify-items:center;gap:6px;border:0;background:none;padding:4px 0;color:inherit;text-align:center;scroll-snap-align:start;border-radius:10px}
+.person:hover .person-face,.person:focus-visible .person-face{box-shadow:0 0 0 2px var(--accent)}
+.person-face{width:78px;height:78px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:22px;color:#ffffffcc;background:linear-gradient(140deg,#2b3446,#1a2029);border:1px solid var(--line);overflow:hidden}
+.person-face.photo{background:linear-gradient(160deg,#c4a487,#6d5141 60%,#2c2420)}
+.person strong{font-size:12px;line-height:1.25;max-width:96px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.person small{font-size:11px;color:var(--muted);line-height:1.25;max-width:96px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.related{flex:0 0 132px;width:132px;min-height:0;display:grid;grid-template-columns:100%;justify-items:stretch;align-content:start;gap:6px;border:0;background:none;padding:0;color:inherit;text-align:left;scroll-snap-align:start}
+.related-art{width:100%;aspect-ratio:2/3;border-radius:9px;border:1px solid var(--line);display:flex;align-items:flex-end;padding:9px;font:700 13px Georgia,serif;letter-spacing:.5px;text-transform:uppercase;text-shadow:0 2px 8px #0008;line-height:1.1}
+.related:hover .related-art,.related:focus-visible .related-art{box-shadow:0 0 0 2px var(--accent)}
+.related strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.related small{font-size:11px;color:var(--muted)}
+.related .in-library{color:var(--green)}
+.extras-skeleton .person-face,.extras-skeleton .related-art{background:linear-gradient(90deg,#1b222d,#232b38,#1b222d);background-size:200% 100%;animation:proto-shimmer 1.4s infinite linear;border-color:transparent}
+.extras-skeleton strong,.extras-skeleton small{display:block;height:9px;width:70px;border-radius:5px;background:#1b222d}
+@keyframes proto-shimmer{to{background-position:-200% 0}}
+
+.proto-caption{font-size:12px;color:var(--muted);margin:0 0 12px}
+.proto-caption b{color:var(--text)}
+.proto-switch{position:fixed;z-index:90;top:8px;left:50%;transform:translateX(-50%);display:flex;gap:6px}
+.proto-switch a{font-size:11px;font-weight:700;color:var(--muted);text-decoration:none;border:1px solid var(--line);border-radius:99px;padding:5px 10px;background:#0f131aee}
+.proto-switch a.on{color:var(--text);border-color:var(--accent)}
+
+@media(max-width:700px){
+  .proto-main{padding:16px}
+  .proto-switch{position:static;transform:none;flex-wrap:wrap;justify-content:center;margin:8px 16px 0}
+  .person{flex-basis:76px;width:76px}.person-face{width:62px;height:62px;font-size:18px}
+  .related{flex-basis:108px;width:108px}
+  .title-extras{gap:18px}
+  .extras-row h3 small{display:none}
+  .library-title-detail{padding:16px}
+}
+
+/* The row that will play, made readable: a label, the release name, and more contrast than
+   today's muted line. The pieces and their order are LibraryTitleDetail's own. */
+.proto-source{position:relative;z-index:1;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;width:max-content;max-width:min(760px,100%);padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:#0f131acc}
+.proto-source>*{opacity:1}
+.proto-source strong{color:var(--text)}
+.proto-source small{color:#c3ccd8}
+.proto-source b{color:var(--text)}
+.proto-source-label{font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent2)}
+.proto-file{flex-basis:100%;font:500 11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
