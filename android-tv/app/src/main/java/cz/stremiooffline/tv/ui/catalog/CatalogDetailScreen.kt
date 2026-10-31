@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,6 +66,7 @@ import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
@@ -78,6 +80,11 @@ import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.detail.SavedPlaybackProgress
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.ChosenSourceCaption
+import cz.stremiooffline.tv.ui.detail.TitleExtraFacts
+import cz.stremiooffline.tv.ui.detail.TitleExtrasRows
+import cz.stremiooffline.tv.ui.detail.TitleExtrasState
+import cz.stremiooffline.tv.ui.detail.downIntoExtras
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -168,6 +175,8 @@ fun CatalogDetailScreen(
   onSources: (OfferedSources) -> Unit = {},
   /** Opens one local file's folder in the Library view. */
   onShowInLibrary: (String) -> Unit = {},
+  onSearchPerson: (String) -> Unit = {},
+  onOpenRelated: (RelatedTitleDto) -> Unit = {},
 ) {
   // An OK while the sources load waits for them; Back or a second OK drops the wait.
   var pendingPlay by remember { mutableStateOf(args.autoPlay) }
@@ -228,6 +237,10 @@ fun CatalogDetailScreen(
   // The key the title's own position (and the source it was played from) is stored under.
   val progressKey = ProgressKey.of(streamType, meta.id, pick.selectedVideo?.id)
 
+  LaunchedEffect(args.meta.id, args.focusRelatedId) {
+    ui.extras.restoreRelatedId = args.focusRelatedId
+  }
+
   // The title's own requests do not depend on each other, so they all leave at once; only the
   // metadata waits for the settings it takes its language from.
   LaunchedEffect(args.meta.id) {
@@ -249,6 +262,7 @@ fun CatalogDetailScreen(
       }
       val loadedSettings = settingsJob.await()
       settings = loadedSettings
+      launch { ui.extras.load(api, args.type, args.meta.id, loadedSettings.uiLanguage) }
       val metaJob = async { runCatching { api.meta(args.type, args.meta.id, loadedSettings.uiLanguage) }.getOrNull() }
       val detail = metaJob.await()
       if (detail != null) meta = mergeMeta(args.meta, detail)
@@ -965,13 +979,16 @@ fun CatalogDetailScreen(
       .fillMaxSize()
       .background(Tokens.Bg)
       .onPreviewKeyEvent { event ->
-        // DOWN drops into the episode row from the action row only; inside an open panel it must
+        // DOWN drops into the title's rows from the action row only; inside an open panel it must
         // reach the next source instead.
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
-          isSeries && meta.videos.orEmpty().isNotEmpty() &&
           !pick.sourcesOpen && !ui.series.open && !ui.titleDownload && focus.actionRowFocused
         ) {
-          runCatching { focus.row.requestFocus() }.isSuccess
+          if (isSeries && meta.videos.orEmpty().isNotEmpty()) {
+            runCatching { focus.row.requestFocus() }.isSuccess
+          } else {
+            ui.extras.focusFirst()
+          }
         } else {
           false
         }
@@ -987,7 +1004,10 @@ fun CatalogDetailScreen(
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Tokens.Bg.copy(alpha = 0f), Tokens.Bg.copy(alpha = 0.7f), Tokens.Bg))))
 
     Column(
-      modifier = Modifier.fillMaxSize().padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
+      modifier = Modifier
+        .fillMaxSize()
+        .verticalScroll(ui.extras.scroll)
+        .padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
       verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
       Text(
@@ -1017,7 +1037,12 @@ fun CatalogDetailScreen(
           modifier = Modifier.testTag(TagCatalogEpisode),
         )
       }
-      Text(metaLine(meta), color = Tokens.Muted, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+      TitleExtraFacts(
+        state = ui.extras,
+        name = meta.name,
+        metaLine = metaLine(meta),
+        uiLanguage = settings.uiLanguage,
+      )
       val description = meta.description
       if (description != null) {
         Text(
@@ -1142,14 +1167,7 @@ fun CatalogDetailScreen(
       activeStream?.let { stream ->
         val caption = chosenSourceCaption(stream).joinToString(" · ")
         if (caption.isNotEmpty()) {
-          Text(
-            stringResource(R.string.tv_chosen_source) + " · " + caption,
-            color = Tokens.Muted,
-            fontSize = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag(TagCatalogChosenSource),
-          )
+          ChosenSourceCaption(caption, Modifier.testTag(TagCatalogChosenSource))
         }
       }
       val shown = message
@@ -1183,8 +1201,18 @@ fun CatalogDetailScreen(
           },
           focusRequester = focus.row,
           seasonFocus = focus.season,
+          extras = ui.extras,
         )
       }
+      TitleExtrasRows(
+        state = ui.extras,
+        imageUrl = imageUrl,
+        onPerson = onSearchPerson,
+        onRelated = onOpenRelated,
+        onUpFromRows = {
+          runCatching { (if (isSeries) focus.row else focus.primary).requestFocus() }
+        },
+      )
     }
 
     if (pick.sourcesOpen) {
@@ -1375,6 +1403,7 @@ private fun SeriesRows(
   onSelect: (VideoDto) -> Unit,
   focusRequester: FocusRequester,
   seasonFocus: FocusRequester,
+  extras: TitleExtrasState,
 ) {
   val seasons = seasonsOf(videos)
   val current = season ?: seasons.firstOrNull()
@@ -1413,7 +1442,7 @@ private fun SeriesRows(
       } else {
         false
       }
-    },
+    }.downIntoExtras(extras),
   ) {
     itemsIndexed(episodes, key = { _, video -> video.id ?: video.label }) { index, video ->
       val resumeIndex = episodes.indexOfFirst { resumeEpisode != null && it.id != null && it.id == resumeEpisode.id }
@@ -1626,6 +1655,7 @@ private class DetailUiState {
   val forget = ForgetState()
   val series = SeriesDownloadState()
   val caption = ActionCaption()
+  val extras = TitleExtrasState()
   /** The ↓ button's panel for this film or the selected episode. */
   var titleDownload by mutableStateOf(false)
 }

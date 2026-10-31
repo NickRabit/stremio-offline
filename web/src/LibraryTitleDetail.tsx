@@ -31,6 +31,12 @@ export interface LibraryTitleDetailProps {
   onGallery?: (images: GalleryImage[], path?: string) => void;
   /** The metadata line: what the catalogue, the provider or the file record said. */
   facts?: ReactNode;
+  /** Appended inside the facts line. The line is drawn for this alone when `facts` is empty. */
+  factsExtra?: ReactNode;
+  /** Between the facts line and the synopsis. */
+  heroExtra?: ReactNode;
+  /** After the actions, before the source picker. */
+  extras?: ReactNode;
   description?: string;
   /** The title's chips, drawn by the shared row so a library matches the catalogue. */
   chips?: ReactNode;
@@ -120,7 +126,7 @@ const clock = (value: number) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, heroExtra, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -174,6 +180,8 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const preferred = preferredSource && preferredSource.playable
     ? pickable.find((row) => sourceRowKey(row) === sourceRowKey(preferredSource)) : undefined;
   const selected = picked ?? seeded ?? stored ?? preferred ?? defaultPick;
+  const selectedLabel = selected ? streamLabel(selected) : "";
+  const releaseFile = selected?.behaviorHints?.filename;
   const ruleRefusal = Boolean(ruleAware && !selected && pickable.some((stream) => stream.playable));
   const multiple = own.length > 1 || sourceGroups != null || ruleRefusal;
   const canSave = selected !== null && (saveSupported?.(selected) ?? true);
@@ -268,7 +276,8 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const copy = <>
     <h2>{title}</h2>
     {subtitle && <p className="meta-line">{subtitle}</p>}
-    {facts && <p className="meta-line">{facts}</p>}
+    {(facts || factsExtra) && <p className="meta-line">{facts}{facts && factsExtra ? " " : null}{factsExtra}</p>}
+    {heroExtra}
     {descriptionLoading && !description
       ? <div className="library-detail-synopsis detail-skeleton" role="status" aria-label={t("common.loading")}><i/><i/><i/></div>
       : <p className="library-detail-synopsis">{description || t("catalog.noDescription")}</p>}
@@ -312,12 +321,18 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     </div>}
     {/* What the buttons act on: the row the viewer has chosen, named and measured the way its own
         row reads, so Play, To library and To device visibly act on one version of the title. */}
+    {!selected && ruleRefusal && <div className="library-detail-source">
+      <span className="source-will-play">{t("detail.willPlay")}</span>
+      <small>{t("detail.willPlayChoose")}</small>
+    </div>}
     {selected && <div className="library-detail-source">
+      <span className="source-will-play">{t("detail.willPlay")}</span>
       {!isLocalStream(selected) && <i className={isRemoteStream(selected) ? "remote" : undefined}>{badgeOf(selected)}</i>}
-      <strong>{streamLabel(selected)}</strong>
+      <strong>{selectedLabel}</strong>
       {!isLocalStream(selected) && <small>{selected.addonName || [selected.provider ? providerLabel(selected.provider) : "", selected.libraryName].filter(Boolean).join(" · ")}</small>}
       {streamSize(selected) ? <b>{bytes(streamSize(selected)!)}</b> : null}
       <small>{streamLanguages(selected, preferredLanguage ?? "").map((code) => <em className="lang-badge" key={code}>{label(code)}</em>)}</small>
+      {releaseFile && releaseFile !== selectedLabel ? <span className="source-file">{releaseFile}</span> : null}
     </div>}
     <div className="library-detail-actions">
       <div className="actions library-detail-play">
@@ -348,6 +363,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         onClick={() => selected && onDownloadToDevice?.(selected)}><Download/> <span className="library-detail-action-label">{t("library.downloadToDevice")}</span></button>}
       {onOpenFolder && <button type="button" aria-label={t("library.openFolder")} title={t("library.openFolder")} onClick={onOpenFolder}><FolderOpen/> <span className="library-detail-action-label">{t("library.openFolder")}</span></button>}
     </div>
+    {extras}
     {pickerOpen && <SourcePicker own={own} groups={groups} panel={sourceGroups} selected={selected} badgeOf={badgeOf} {...(addonPriority ? { priority: addonPriority } : {})}
       nativeLabel={nativeSourceLabel ?? t("sources.localFilter")} preferredLanguage={preferredLanguage ?? ""}
       sourceProfiles={sourceProfiles} defaultSort={defaultSort}

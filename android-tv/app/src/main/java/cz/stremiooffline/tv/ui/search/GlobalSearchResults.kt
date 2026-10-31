@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.ui.search
 
 import android.widget.Toast
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -389,13 +390,18 @@ private fun GlobalResultGrid(
       }
       if (unidentified.isNotEmpty()) {
         item(key = "unidentified-toggle", span = { GridItemSpan(maxLineSpan) }) {
-          FocusButton(
-            text = stringResource(R.string.tv_global_search_unidentified, unidentified.size),
-            onClick = onUnidentified,
-            modifier = Modifier
-              .testTag(TagGlobalSearchUnidentified)
-              .onFocusChanged { if (it.isFocused) onClearFocus() },
-          )
+          // The full-span cell would stretch the button across the grid, and its focus scale then
+          // pushed the label past the left edge of its own background.
+          Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.CenterStart) {
+            FocusButton(
+              text = stringResource(R.string.tv_global_search_unidentified, unidentified.size),
+              onClick = onUnidentified,
+              modifier = Modifier
+                .wrapContentWidth()
+                .testTag(TagGlobalSearchUnidentified)
+                .onFocusChanged { if (it.isFocused) onClearFocus() },
+            )
+          }
         }
       }
       if (unidentifiedExpanded) {

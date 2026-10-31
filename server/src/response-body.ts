@@ -80,7 +80,7 @@ export async function readLimitedBody(response: Response, maxBytes: number, sign
       const required = total + value.byteLength;
       if (required > data.length) {
         const grown = Buffer.allocUnsafe(Math.min(maxBytes, Math.max(required, data.length * 2, INITIAL_BUFFER_BYTES)));
-        data.copy(grown, 0, total);
+        data.copy(grown, 0, 0, total);
         data = grown;
       }
       data.set(value, total);

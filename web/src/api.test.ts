@@ -149,6 +149,14 @@ describe("query building", () => {
     expect(url()).toBe("/api/meta/series/tt123%3A1%3A2?language=cs");
   });
 
+  it("asks for title extras with the same language encoding as metadata", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(json({})));
+    await api.titleExtras("series", "tt123:1:2", "cs");
+    await api.titleExtras("movie", "tt1");
+    expect(url(0)).toBe("/api/meta/series/tt123%3A1%3A2/extras?language=cs");
+    expect(url(1)).toBe("/api/meta/movie/tt1/extras");
+  });
+
   it("adds the addon filter to streams only when one is picked", async () => {
     fetchMock.mockImplementation(() => Promise.resolve(json([])));
     await api.streams("movie", "tt1");

@@ -31,12 +31,17 @@ import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
+import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
+import cz.stremiooffline.tv.data.TitleExtrasDto
+import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.relatedTitleTag
+import cz.stremiooffline.tv.ui.detail.titlePersonTag
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -69,9 +74,22 @@ class CatalogDetailTest {
 
   private fun movieArgs() = CatalogDetailArgs(MetaDto(id = "tt1", type = "movie", name = "It", description = "A film", releaseInfo = "2017"), "Cinemeta", "movie")
 
-  private fun mount(api: FakeTvApi, args: CatalogDetailArgs) {
+  private fun mount(
+    api: FakeTvApi,
+    args: CatalogDetailArgs,
+    onSearchPerson: (String) -> Unit = {},
+    onOpenRelated: (RelatedTitleDto) -> Unit = {},
+  ) {
     compose.setContent {
-      CatalogDetailScreen(api = api, args = args, imageUrl = { null }, onPlay = { played += it }, onBack = {})
+      CatalogDetailScreen(
+        api = api,
+        args = args,
+        imageUrl = { null },
+        onPlay = { played += it },
+        onBack = {},
+        onSearchPerson = onSearchPerson,
+        onOpenRelated = onOpenRelated,
+      )
     }
   }
 
@@ -435,7 +453,7 @@ class CatalogDetailTest {
     assertTrue(played.isEmpty())
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
-    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Source · alpha · small · 1.0 GB")
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("alpha · small · 1.0 GB")
   }
 
   @Test
@@ -503,7 +521,7 @@ class CatalogDetailTest {
 
     assertTrue(played.isEmpty())
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
-    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Source · alpha · External · 8.0 GB")
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("alpha · External · 8.0 GB")
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains("A torrent cannot be played directly.", substring = true)
   }
@@ -1186,5 +1204,73 @@ class CatalogDetailTest {
 
     assertEquals(listOf(listOf("series:tt1:1:1")), api.forgetCalls)
     compose.onNodeWithText("Play").assertIsDisplayed()
+  }
+
+  @Test
+  fun `DOWN from a film's action row focuses the first portrait and UP returns`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.titleExtrasValue = TitleExtrasDto(
+      people = listOf(TitlePersonDto(name = "Tom Hanks", role = "cast", character = "Woody")),
+      related = listOf(RelatedTitleDto(type = "movie", id = "tt2", name = "Toy Story 2")),
+    )
+    mount(api, movieArgs())
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsFocused()
+    compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsDisplayed()
+
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+  }
+
+  @Test
+  fun `DOWN from a series episode row focuses the cast strip`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.titleExtrasValue = TitleExtrasDto(
+      people = listOf(TitlePersonDto(name = "Jane Doe", role = "cast", character = "Jo")),
+    )
+    mount(api, seriesArgs())
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(episodeCardTag(v1())).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(titlePersonTag("Jane Doe")).assertIsFocused()
+    compose.onNodeWithTag(titlePersonTag("Jane Doe")).assertIsDisplayed()
+  }
+
+  @Test
+  fun `focusRelatedId restores the card after the extras load`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.titleExtrasValue = TitleExtrasDto(
+      related = listOf(
+        RelatedTitleDto(type = "movie", id = "tt2", name = "One"),
+        RelatedTitleDto(type = "movie", id = "tt3", name = "Two"),
+      ),
+    )
+    mount(api, movieArgs().copy(focusRelatedId = "tt3"))
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(relatedTitleTag("tt3")).assertIsFocused()
+  }
+
+  @Test
+  fun `the extras request carries the interface language`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.settingsValue = api.settingsValue.copy(uiLanguage = "cs")
+    mount(api, movieArgs())
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+
+    assertEquals(Triple("movie", "tt1", "cs"), api.titleExtrasRequests.single())
   }
 }

@@ -171,6 +171,20 @@ class CatalogApiTest {
   }
 
   @Test
+  fun `title extras ask the extras route with the interface language`() = runTest {
+    server.enqueue(
+      MockResponse().setBody(
+        """{"people":[],"related":[],"source":"tmdb","nextEpisode":{"season":6,"episode":3}}""",
+      ),
+    )
+    val extras = client(start()).titleExtras("series", "tt1", "cs")
+
+    assertEquals("/api/meta/series/tt1/extras?language=cs", server.takeRequest().path)
+    assertEquals(6, extras.nextEpisode?.season)
+    assertEquals(3, extras.nextEpisode?.episode)
+  }
+
+  @Test
   fun `streamSources lists the addons that offer a source`() = runTest {
     server.enqueue(MockResponse().setBody("""[{"key":"alpha","name":"Alpha"}]"""))
     val sources = client(start()).streamSources("movie", "tt1")

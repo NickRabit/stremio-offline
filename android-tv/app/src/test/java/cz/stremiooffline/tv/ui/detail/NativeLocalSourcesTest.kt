@@ -194,7 +194,7 @@ class NativeLocalSourcesTest {
     mount(api)
 
     compose.onNodeWithTag(TagDetailSources).assertExists()
-    assertTrue(api.libraryTitleRequests.isEmpty())
+    assertEquals(listOf(film), api.libraryTitleRequests)
     assertTrue(api.streamSourcesRequests.isEmpty())
     assertTrue(api.streamsRequests.isEmpty())
     assertTrue(api.localStreamsRequests.isEmpty())
@@ -271,7 +271,7 @@ class NativeLocalSourcesTest {
     // sibling episode.
     compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Show.S01E02.mkv"))
     compose.onAllNodesWithText("Show.S01E01.mkv").assertCountEquals(0)
-    assertEquals(listOf(secondEpisode), api.libraryTitleRequests)
+    assertEquals(listOf(episodes.first().path, secondEpisode), api.libraryTitleRequests)
     assertEquals(listOf("series:tt5:1:2"), api.streamSourcesRequests)
     assertTrue(played.isEmpty())
   }

@@ -28,6 +28,8 @@ import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.TitleExtrasDto
+import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.library.remoteItemTag
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesRoot
@@ -216,6 +218,34 @@ class RemoteSeriesRoutingTest {
     compose.onNodeWithTag(remoteItemTag("a1")).assertDoesNotExist()
     compose.onNodeWithText("S7 · E1").assertExists()
   }
+
+  @Test
+  fun `a series loads extras under its identity and the grid reaches its cast`() {
+    val api = FakeTvApi()
+    api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(items = listOf(episode("e1")), total = 1)
+    api.titleExtrasValue = TitleExtrasDto(
+      people = listOf(TitlePersonDto(name = "Jane Doe", role = "cast", character = "Jo")),
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = series(RemoteProviderIdsDto(imdb = "tt7")),
+          onPlay = {},
+          onBack = {},
+          loadExtras = { type, id -> api.titleExtras(type, id, null) },
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    assertEquals(Triple("series", "tt7", null), api.titleExtrasRequests.single())
+    compose.onNodeWithTag(remoteItemTag("e1")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(titlePersonTag("Jane Doe")).assertIsFocused()
+  }
+
   private fun assertEarlyPlayKeepsIdentity(autoPlay: Boolean) {
     val api = FakeTvApi()
     val gate = CompletableDeferred<Unit>()

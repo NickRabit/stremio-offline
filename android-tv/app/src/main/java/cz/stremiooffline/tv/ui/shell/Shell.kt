@@ -62,6 +62,8 @@ import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
+import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.diagnostics.AppLog
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.components.BrandMark
@@ -124,6 +126,7 @@ private val Section.labelRes: Int
 const val TAG_RAIL_PREFIX = "rail_"
 
 private enum class SearchOrigin { Rail, Catalog, Library }
+private enum class CatalogReturnOrigin { Local, Remote }
 
 /** The rail item of the section on screen, which LEFT out of the content goes to. A focus group in
  *  the content does not inherit the shell's own LEFT, so one that has to leave by it reads this. */
@@ -131,6 +134,38 @@ val LocalRailFocus = compositionLocalOf<FocusRequester?> { null }
 
 /** The rail is always icons only: it never widens on focus. */
 private val CollapsedRail = 60.dp
+
+internal class CatalogDetailStack {
+  var entries by mutableStateOf<List<CatalogDetailArgs>>(emptyList())
+    private set
+
+  fun clear() {
+    entries = emptyList()
+  }
+
+  fun pushRelated(current: CatalogDetailArgs, related: RelatedTitleDto) {
+    entries = (entries + current.copy(focusRelatedId = related.id)).takeLast(10)
+  }
+
+  fun pop(): CatalogDetailArgs? {
+    val previous = entries.lastOrNull() ?: return null
+    entries = entries.dropLast(1)
+    return previous
+  }
+
+  fun detailFor(related: RelatedTitleDto, current: CatalogDetailArgs? = null): CatalogDetailArgs = CatalogDetailArgs(
+    meta = MetaDto(
+      id = related.id,
+      type = related.type,
+      name = related.name,
+      poster = related.poster,
+      releaseInfo = related.year,
+    ),
+    addonName = current?.addonName.orEmpty(),
+    type = related.type,
+    addonKey = current?.addonKey,
+  )
+}
 
 @Composable
 fun Shell(
@@ -149,6 +184,8 @@ fun Shell(
 
   var detail by remember { mutableStateOf<DetailData?>(null) }
   var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
+  val catalogStack = remember { CatalogDetailStack() }
+  var catalogReturnOrigin by remember { mutableStateOf<CatalogReturnOrigin?>(null) }
   /** One native remote item's detail over the library; its versions play through the same player. */
   var remoteDetail by remember { mutableStateOf<RemoteDetailData?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
@@ -217,6 +254,29 @@ fun Shell(
   var searchPreset by remember { mutableStateOf<SearchPreset?>(null) }
   var librarySearchReturnToken by remember { mutableIntStateOf(0) }
   var searchEverywhereEnabled by remember { mutableStateOf(false) }
+  fun clearCatalogHistory() {
+    catalogStack.clear()
+    catalogReturnOrigin = null
+  }
+  fun openCatalog(args: CatalogDetailArgs) {
+    clearCatalogHistory()
+    catalogDetail = args
+  }
+  fun openPersonSearch(name: String) {
+    detail = null
+    remoteDetail = null
+    catalogDetail = null
+    clearCatalogHistory()
+    searchScope = SearchScope()
+    searchOrigin = SearchOrigin.Rail
+    searchPreset = SearchPreset(query = name)
+    shellState.pick(Section.Search)
+  }
+  fun openRelatedFromUnderlying(related: RelatedTitleDto, origin: CatalogReturnOrigin) {
+    catalogStack.clear()
+    catalogReturnOrigin = origin
+    catalogDetail = catalogStack.detailFor(related)
+  }
   LaunchedEffect(Unit) {
     searchEverywhereEnabled = runCatching { api.searchEverywhereEnabled() }.getOrDefault(false)
   }
@@ -293,7 +353,7 @@ fun Shell(
             playedSourceId = null
             player = target
           },
-          onOpenCatalog = { catalogDetail = it },
+          onOpenCatalog = ::openCatalog,
           onOpenRemote = { remoteDetail = it },
           restoreToken = returnToken,
           refreshToken = resumeRefreshToken,
@@ -301,7 +361,7 @@ fun Shell(
         Section.Favorites -> FavoritesRoute(
           api = api,
           onOpenDetail = { detail = it },
-          onOpenCatalog = { catalogDetail = it },
+          onOpenCatalog = ::openCatalog,
           onOpenRemote = { remoteDetail = it },
           onOpenLibrary = { path ->
             libraryPush = path
@@ -312,7 +372,7 @@ fun Shell(
         )
         Section.Catalog -> CatalogScreen(
           api = api,
-          onOpenDetail = { catalogDetail = it },
+          onOpenDetail = ::openCatalog,
           onOpenSearch = { scope ->
             searchScope = scope
             searchOrigin = SearchOrigin.Catalog
@@ -326,7 +386,7 @@ fun Shell(
           if (searchOrigin == SearchOrigin.Library || searchEverywhereEnabled) {
             GlobalSearchScreen(
               api = api,
-              onOpenCatalog = { catalogDetail = it },
+              onOpenCatalog = ::openCatalog,
               onOpenRemote = { remoteDetail = it },
               onOpenLibrary = { path ->
                 libraryPush = path
@@ -359,7 +419,7 @@ fun Shell(
               api = api,
               scope = searchScope,
               onScopeChange = { searchScope = it },
-              onOpenDetail = { catalogDetail = it },
+              onOpenDetail = ::openCatalog,
               imageUrl = { path -> path?.let(api::url) },
               onBackToCatalog = if (searchOrigin == SearchOrigin.Catalog) {
                 {
@@ -385,7 +445,7 @@ fun Shell(
                 libraryPush = action.path
                 shellState.pick(Section.Library)
               }
-              is HomeAction.OpenCatalog -> catalogDetail = action.args
+              is HomeAction.OpenCatalog -> openCatalog(action.args)
               is HomeAction.OpenRemote -> remoteDetail = action.data
             }
           },
@@ -413,6 +473,7 @@ fun Shell(
         player = it
       },
       onBack = {
+        clearCatalogHistory()
         detail = null
         returnToken++
       },
@@ -428,6 +489,40 @@ fun Shell(
       onQueue = nativeQueue,
       // Mark watched stores the file's own key as finished, exactly as the player's last seconds do.
       markWatched = { file -> api.saveProgress(Progress.libraryKey(file.path), 1.0, 1.0, file.label, file.path, null, null, null) },
+      onSearchPerson = ::openPersonSearch,
+      onOpenRelated = { related -> openRelatedFromUnderlying(related, CatalogReturnOrigin.Local) },
+    )
+  }
+
+  val openRemoteDetail = remoteDetail
+  if (openRemoteDetail != null) OverlayFocusTrap(fenced = player == null) {
+    RemoteDetailScreen(
+      api = api,
+      data = openRemoteDetail,
+      imageUrl = { path -> path?.let(api::url) },
+      onPlay = {
+        // The item's versions stay available while the player discovers supplementary groups.
+        player = it
+      },
+      onBack = {
+        clearCatalogHistory()
+        remoteDetail = null
+        returnToken++
+      },
+      backEnabled = player == null,
+      restoreToken = detailReturnToken,
+      loadDestinations = nativeDestinations,
+      onQueue = nativeQueue,
+      // The screen's own RemoteLibraryApi stays exactly that; the addon discovery needs the
+      // catalogue surface, which the shell's real api already implements.
+      catalogueApi = api,
+      // The title's own row outranks the item's remote state, so the TV reads the same key the
+      // web does for a version the catalogue can name.
+      titleProgress = api::progress,
+      forgetTitle = { key -> api.forgetProgress(listOf(key)) },
+      loadExtras = { type, id -> api.titleExtras(type, id, null) },
+      onSearchPerson = ::openPersonSearch,
+      onOpenRelated = { related -> openRelatedFromUnderlying(related, CatalogReturnOrigin.Remote) },
     )
   }
 
@@ -444,44 +539,34 @@ fun Shell(
       onSources = { playerSources = it },
       playedSourceId = playedSourceId,
       onShowInLibrary = { folder ->
+        detail = null
+        remoteDetail = null
+        clearCatalogHistory()
         catalogDetail = null
         libraryPush = folder
         shellState.pick(Section.Library)
       },
       onBack = {
-        catalogDetail = null
-        returnToken++
+        val previous = catalogStack.pop()
+        if (previous != null) {
+          catalogDetail = previous
+        } else if (catalogReturnOrigin != null) {
+          catalogDetail = null
+          catalogStack.clear()
+          catalogReturnOrigin = null
+        } else {
+          clearCatalogHistory()
+          catalogDetail = null
+          returnToken++
+        }
+      },
+      onSearchPerson = ::openPersonSearch,
+      onOpenRelated = { related ->
+        catalogStack.pushRelated(openCatalogDetail, related)
+        catalogDetail = catalogStack.detailFor(related, openCatalogDetail)
       },
       restoreToken = detailReturnToken,
       retryToken = catalogueSourcesRetry,
-    )
-  }
-
-  val openRemoteDetail = remoteDetail
-  if (openRemoteDetail != null) OverlayFocusTrap(fenced = player == null) {
-    RemoteDetailScreen(
-      api = api,
-      data = openRemoteDetail,
-      imageUrl = { path -> path?.let(api::url) },
-      onPlay = {
-        // The item's versions stay available while the player discovers supplementary groups.
-        player = it
-      },
-      onBack = {
-        remoteDetail = null
-        returnToken++
-      },
-      backEnabled = player == null,
-      restoreToken = detailReturnToken,
-      loadDestinations = nativeDestinations,
-      onQueue = nativeQueue,
-      // The screen's own RemoteLibraryApi stays exactly that; the addon discovery needs the
-      // catalogue surface, which the shell's real api already implements.
-      catalogueApi = api,
-      // The title's own row outranks the item's remote state, so the TV reads the same key the
-      // web does for a version the catalogue can name.
-      titleProgress = api::progress,
-      forgetTitle = { key -> api.forgetProgress(listOf(key)) },
     )
   }
 

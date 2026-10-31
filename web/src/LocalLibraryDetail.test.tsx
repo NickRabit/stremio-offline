@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { LocalLibraryDetail, type LocalDetailItem } from "./LocalLibraryDetail";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
+import { clearTitleExtras } from "./title-extras";
 import type { IdentityPreview, Stream } from "./types";
 
 const json = (body: unknown, status = 200) =>
@@ -29,13 +30,14 @@ let links: Handler;
 let trailer: Handler;
 let gallery: Handler;
 let meta: Handler;
+let extras: Handler;
 let progressOf: Handler;
 let providers: Handler;
 let addonStreams: Handler;
 let remoteLibraries: Handler;
 let remoteMatches: Handler;
 let remoteState: Handler;
-const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], links: [] as URL[], trailer: [] as URL[], gallery: [] as URL[], progress: [] as URL[], providers: [] as URL[], addon: [] as URL[], libraries: [] as URL[], remote: [] as URL[], remoteState: [] as URL[], remoteWrites: [] as Record<string, unknown>[] };
+const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], extras: [] as URL[], links: [] as URL[], trailer: [] as URL[], gallery: [] as URL[], progress: [] as URL[], providers: [] as URL[], addon: [] as URL[], libraries: [] as URL[], remote: [] as URL[], remoteState: [] as URL[], remoteWrites: [] as Record<string, unknown>[] };
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -53,7 +55,8 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   clearTitleEnrichment();
-  calls.source = []; calls.identity = []; calls.localStreams = []; calls.meta = []; calls.links = []; calls.trailer = []; calls.gallery = []; calls.progress = [];
+  clearTitleExtras();
+  calls.source = []; calls.identity = []; calls.localStreams = []; calls.meta = []; calls.extras = []; calls.links = []; calls.trailer = []; calls.gallery = []; calls.progress = [];
   calls.providers = []; calls.addon = []; calls.libraries = []; calls.remote = []; calls.remoteState = []; calls.remoteWrites = [];
   source = () => json({ sourceId: "exact", kind: "library", playable: true, behaviorHints: { filename: "Heat.mkv" } });
   identityHandler = () => json(identity());
@@ -62,6 +65,7 @@ beforeEach(() => {
   trailer = () => json({ trailer: null });
   gallery = () => json({ images: [] });
   meta = () => json({ id: "x", type: "movie", name: "X", background: "/catalogue-backdrop.jpg" });
+  extras = () => json({ people: [], related: [], source: "addon" });
   progressOf = () => json(null);
   providers = () => json([]);
   addonStreams = () => json([]);
@@ -77,6 +81,7 @@ beforeEach(() => {
     if (path === "/api/library/links") { calls.links.push(url); return Promise.resolve(links(url, init)); }
     if (path === "/api/library/trailer") { calls.trailer.push(url); return Promise.resolve(trailer(url, init)); }
     if (path === "/api/library/gallery") { calls.gallery.push(url); return Promise.resolve(gallery(url, init)); }
+    if (path.endsWith("/extras")) { calls.extras.push(url); return Promise.resolve(extras(url, init)); }
     if (path.startsWith("/api/meta/")) { calls.meta.push(url); return Promise.resolve(meta(url, init)); }
     if (/^\/api\/local-streams\/[^/]+\/[^/]+$/.test(path)) { calls.localStreams.push(url); return Promise.resolve(copies(url, init)); }
     if (path.startsWith("/api/stream-sources/")) { calls.providers.push(url); return Promise.resolve(providers(url, init)); }
@@ -122,6 +127,7 @@ describe("LocalLibraryDetail discovery", () => {
     expect(calls.localStreams).toHaveLength(0);
     expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Heat.mkv");
     expect([...host.querySelectorAll(".library-detail-hero .meta-line")].map((node) => node.textContent)).toContain("2.0 GB");
+    expect(calls.extras).toEqual([]);
     await click(host.querySelector(".library-detail-play button.primary"));
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Heat.mkv" }), undefined, null);
   });
@@ -636,5 +642,25 @@ describe("LocalLibraryDetail extra sources", () => {
     expect(calls.progress.map(progressKey).at(-1)).toBe("movie:tt1");
     expect(calls.remoteWrites).toEqual([{ position: 0, duration: 0, mediaSourceId: "msX" }]);
     expect(host.querySelector(".library-detail-progress")).toBeNull();
+  });
+
+  it("shows the cast and similar titles of a bound title and nothing for an unbound file", async () => {
+    identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    extras = () => json({
+      people: [{ name: "Michael Mann", role: "director" }, { name: "Al Pacino", role: "cast", character: "Vincent" }],
+      related: [{ type: "movie", id: "tt2", name: "Collateral", year: "2004", poster: "/collateral.jpg", inLibrary: true }],
+      ageRating: "R",
+      originalTitle: "Heat",
+      source: "tmdb",
+    });
+    await render(file());
+    await flush();
+    expect(calls.extras.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt1/extras"]);
+    expect(calls.meta.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt1"]);
+    const line = [...host.querySelectorAll(".library-detail-hero .meta-line")].find((node) => node.textContent?.includes("GB"))!;
+    expect(line.querySelector(".age-badge")!.textContent).toBe("R");
+    expect(host.querySelector(".original-line")!.textContent).toContain("Heat");
+    expect([...host.querySelectorAll(".person strong")].map((name) => name.textContent)).toEqual(["Michael Mann", "Al Pacino"]);
+    expect(host.querySelector(".related .in-library")!.textContent).toBe("In a library");
   });
 });

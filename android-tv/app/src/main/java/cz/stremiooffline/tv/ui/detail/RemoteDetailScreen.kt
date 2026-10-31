@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -48,7 +49,9 @@ import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
 import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
+import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
@@ -142,6 +145,9 @@ fun RemoteDetailScreen(
   titleProgress: (suspend (String) -> ProgressDto?)? = null,
   /** Forgets the title's own row; Forget and Mark watched clear it beside the item's own state. */
   forgetTitle: (suspend (String) -> Unit)? = null,
+  loadExtras: (suspend (type: String, id: String) -> TitleExtrasDto)? = null,
+  onSearchPerson: (String) -> Unit = {},
+  onOpenRelated: (RelatedTitleDto) -> Unit = {},
 ) {
   // A series has no playable versions of its own: its card opens the episode grid instead.
   if (data.item.type == "series" || data.item.type == "season") {
@@ -158,6 +164,9 @@ fun RemoteDetailScreen(
       catalogueApi = catalogueApi,
       titleProgress = titleProgress,
       forgetTitle = forgetTitle,
+      loadExtras = loadExtras,
+      onSearchPerson = onSearchPerson,
+      onOpenRelated = onOpenRelated,
     )
     return
   }
@@ -171,6 +180,7 @@ fun RemoteDetailScreen(
   BackHandler(enabled = backEnabled) { onBack() }
   val identity = data.libraryId to data.item.id
   val live = rememberUpdatedState(identity)
+  val extras = remember(identity) { TitleExtrasState() }
   var metadata by remember(identity) { mutableStateOf(initialRemoteMetadata(data)) }
   var metadataResolved by remember(identity) { mutableStateOf(false) }
   var titleRowReady by remember(identity) { mutableStateOf(false) }
@@ -179,6 +189,9 @@ fun RemoteDetailScreen(
     titleRowReady = false
     metadata = resolveRemoteMetadata(api, data)
     metadataResolved = true
+  }
+  LaunchedEffect(metadataResolved, metadata) {
+    if (metadataResolved) extras.loadRemote(metadata, loadExtras) else extras.clear()
   }
   val detail = data.copy(
     item = metadata.item,
@@ -850,6 +863,7 @@ fun RemoteDetailScreen(
           onClick = { toggleWatched() },
         ) else null,
         caption = caption,
+        modifier = Modifier.downIntoExtras(extras),
       )
       actionRow?.let { row ->
         val pickedCaption = chosenSourceCaption(row).joinToString(" · ")
@@ -883,7 +897,11 @@ fun RemoteDetailScreen(
       }
       if (mutationError) Text(stringResource(R.string.media_server_state_error), color = Tokens.Red, fontSize = 11.5.sp)
 
-      Box(Modifier.weight(1f)) {
+      Column(
+        Modifier
+          .weight(1f)
+          .then(if (loadExtras != null) Modifier.verticalScroll(extras.scroll) else Modifier),
+      ) {
         Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
           when {
             sourcesLoading -> Text(
@@ -918,6 +936,13 @@ fun RemoteDetailScreen(
             }
           }
         }
+        TitleExtrasRows(
+          state = extras,
+          imageUrl = imageUrl,
+          onPerson = onSearchPerson,
+          onRelated = onOpenRelated,
+          onUpFromRows = { runCatching { playFocus.requestFocus() } },
+        )
       }
     }
 

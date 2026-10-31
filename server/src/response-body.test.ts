@@ -128,3 +128,18 @@ test("a null body is empty", async () => {
   const data = await readLimitedBody(new Response(null), 4 * MiB);
   assert.equal(data.length, 0);
 });
+
+test("a body that outgrows the first buffer keeps every byte in order", async () => {
+  const expected = new Uint8Array(200 * 1024).map((_, index) => index % 251);
+  const pieces = [expected.subarray(0, 40_000), expected.subarray(40_000, 120_000), expected.subarray(120_000)];
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const piece of pieces) controller.enqueue(piece);
+      controller.close();
+    },
+  });
+  // A compressed response declares fewer bytes than the decoded body it streams.
+  const read = await readLimitedBody(new Response(body, { headers: { "content-length": "30000" } }), MiB);
+  assert.equal(read.length, expected.length);
+  assert.ok(Buffer.from(expected).equals(read), "the bytes arrive unchanged");
+});

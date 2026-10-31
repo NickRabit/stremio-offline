@@ -47,6 +47,9 @@ import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } 
 import { Empty, Nav, Onboarding } from "./app-chrome";
 import { FavoritesView } from "./FavoritesView";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget } from "./CatalogueTitleDetail";
+import { ImdbRating, imdbRating } from "./ImdbRating";
+import { TitleExtraFacts, TitleExtrasActions } from "./TitleExtras";
+import { clearTitleExtrasCache, useTitleExtras } from "./title-extras";
 import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
 import { clearHomeCache } from "./home-cache";
@@ -132,13 +135,6 @@ const orderedVideos = (videos: Video[]) => videos.map((video, index) => ({ video
   const season = (value: Video) => value.season === 0 ? Number.MAX_SAFE_INTEGER : value.season ?? Number.MAX_SAFE_INTEGER - 1;
   return season(a.video) - season(b.video) || (a.video.episode ?? a.index) - (b.video.episode ?? b.index) || a.index - b.index;
 }).map(({ video }) => video);
-/** The IMDb score the catalogue addon carries, as it writes it. Absent for a title nobody
- *  has rated, and never TMDB's own average, which is a different number. */
-const imdbRating = (item: Meta | null): string | null => {
-  const raw = item?.imdbRating;
-  const value = typeof raw === "number" ? String(raw) : typeof raw === "string" ? raw.trim() : "";
-  return /^\d+(\.\d+)?$/.test(value) ? value : null;
-};
 export function App() {
   const { t } = useI18n();
   const [view, setView] = useState<View>("catalog"); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
@@ -287,6 +283,9 @@ export function App() {
     initialSources?: Stream[];
     libraryFirst?: boolean;
   }) | null>(null);
+  const catalogueDetailScroll = useRef<HTMLDivElement | null>(null);
+  const detailStack = useRef<Array<{ target: NonNullable<typeof catalogueDetail>; scrollTop: number }>>([]);
+  const pendingCatalogueScroll = useRef<number | null>(null);
   const [searchReturn, setSearchReturn] = useState(false);
   /** The destination dialog the shared detail's save arrow opens, with the row it was clicked for. */
   const [catalogueSave, setCatalogueSave] = useState<{ title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; season?: number; rule?: AddonDownloadSettings; ruleUnavailable?: boolean } | null>(null);
@@ -386,6 +385,7 @@ export function App() {
   const finishLibraryOp = async (job: LibraryOpsState) => {
     if (finishingOps.current.has(job.id)) return;
     finishingOps.current.add(job.id);
+    clearTitleExtrasCache();
     opsStatus.current.set(job.id, job.status);
     try {
       // A move the user asked for by hand lands somewhere they did not see before, so the
@@ -575,6 +575,7 @@ export function App() {
       scanWanted.current = false;
       notify(t("library.scanDone", { matched: state.matched, skipped: state.skipped, failed: state.failed }));
       setScanEpoch((value) => value + 1);
+      clearTitleExtrasCache();
       void loadSuggestionCount();
     }
   };
@@ -736,8 +737,8 @@ export function App() {
   // A query is remembered once somebody acted on it -- Enter, a suggestion, an opened result --
   // and only after its first page came back. Whatever was merely typed past is not.
   const firstPageOk = useRef<string | null>(null); const recordIntent = useRef<string | null>(null); const recordedQuery = useRef<string | null>(null);
-  // Another account must never see this one's history, not even until its own arrives.
-  useEffect(() => { setSearchState(null); recordedQuery.current = null; }, [session?.username]);
+  // Another account must never see this one's history, nor the library marks cached for the previous one.
+  useEffect(() => { setSearchState(null); recordedQuery.current = null; clearTitleExtrasCache(); }, [session?.username]);
   const recordSearch = (query: string) => {
     if (!searchStateRef.current?.saveHistory || recordedQuery.current === query) return;
     recordedQuery.current = query;
@@ -1256,6 +1257,7 @@ export function App() {
         }
         if (previous && previous !== "completed" && job.status === "completed") {
           notify(t("downloads.inLibrary", { title: job.title }));
+          clearTitleExtrasCache();
           // Ready to play and Recently added gained a card; Home refreshes only those rows, and
           // only while it is the view on screen -- the answer would otherwise land behind another view.
           if (viewRef.current === "home") home.refresh(["completed", "recent"]);
@@ -1316,8 +1318,13 @@ export function App() {
   };
   /** The top bar's Search always lands at the top of Search with the field ready for a new query;
    *  the way back to a position in the results is Back from the title that was opened. */
-  const openSearch = () => {
+  const openSearch = (query?: string) => {
     scrollByView.current.search = 0;
+    // The top-bar button passes its click through; only a real query string starts a search.
+    if (typeof query === "string" && query.trim()) {
+      searchEverywhere.setDraft(query);
+      searchEverywhere.submit();
+    }
     if (view === "search" && !catalogueDetail) {
       window.scrollTo({ top: 0, behavior: "smooth" });
       focusSearchInput();
@@ -2884,11 +2891,15 @@ export function App() {
   const openCatalogueDetail = (
     target: Omit<CatalogueDetailTarget, "type"> & { type: string },
     initialSources?: Stream[],
-    options?: { libraryFirst?: boolean },
+    options?: { libraryFirst?: boolean; keepStack?: boolean },
   ) => {
     if (target.type !== "movie" && target.type !== "series") return;
     navigated.current = true;
-    if (!catalogueDetail) detailReturn.current = { view, windowY: window.scrollY, pane: view === "catalog" ? "catalog" : null, paneY: gridRef.current?.scrollTop ?? 0 };
+    if (!catalogueDetail) {
+      detailReturn.current = { view, windowY: window.scrollY, pane: view === "catalog" ? "catalog" : null, paneY: gridRef.current?.scrollTop ?? 0 };
+      detailStack.current = [];
+    } else if (!options?.keepStack) detailStack.current = [];
+    if (options?.keepStack) pendingCatalogueScroll.current = 0;
     // Nothing the previous title read survives the next one: the episode it was on, the source it
     // selected, the follow it carried and the saved position drawn beside it all belong to it.
     setDetailRead(null); setDetailSource(null); setDetailSourcePicked(false); setCatalogueFollow(null); setDetailFollowOpen(false);
@@ -2953,8 +2964,62 @@ export function App() {
   /** The one way out of the shared detail: the breadcrumb's Back, the menu, and anything else
    *  that asks for the page the detail was drawn over. */
   const closeCatalogueDetail = () => {
+    detailStack.current = [];
+    pendingCatalogueScroll.current = null;
     setCatalogueDetail(null);
     setDetailSource(null); setDetailFollowOpen(false);
+  };
+  /** The title on screen, with the episode the detail last reported written over the one it was
+   *  opened on. Back restores that episode; a film has none, so its target is stored as it is. */
+  const detailOnScreen = () => {
+    if (!catalogueDetail) return null;
+    const read = detailRead;
+    if (!read || read.target.type !== catalogueDetail.type || read.target.id !== catalogueDetail.id) return catalogueDetail;
+    if (read.target.season == null && read.target.episode == null && read.target.videoId == null) return catalogueDetail;
+    return {
+      ...catalogueDetail,
+      season: read.target.season,
+      episode: read.target.episode,
+      videoId: read.target.videoId,
+      episodeTitle: read.target.episodeTitle,
+    };
+  };
+  /** A similar title opened from the one on screen. Back returns here, with its episode and scroll. */
+  const openRelatedTitle = (title: { type: "movie" | "series"; id: string; name: string; poster?: string }) => {
+    const current = detailOnScreen();
+    if (current) {
+      if (detailStack.current.length >= 10) detailStack.current.shift();
+      detailStack.current.push({ target: current, scrollTop: catalogueDetailScroll.current?.scrollTop ?? 0 });
+    }
+    openCatalogueDetail({
+      type: title.type, id: title.id, name: title.name, ...(title.poster ? { poster: title.poster } : {}),
+    }, undefined, { keepStack: true });
+  };
+  const backFromCatalogueDetail = () => {
+    const previous = detailStack.current.pop();
+    if (!previous) { closeCatalogueDetail(); return; }
+    pendingCatalogueScroll.current = previous.scrollTop;
+    setDetailRead(null); setDetailSource(null); setDetailSourcePicked(false); setCatalogueFollow(null); setDetailFollowOpen(false);
+    setCatalogueDetail(previous.target);
+  };
+  /** A name from the cast row: leave whichever detail is covering the page, then search for it. */
+  const searchPerson = (name: string) => {
+    closeLocalDetail();
+    if (!buildInfo?.searchEverywhere) {
+      navigated.current = true;
+      if (catalogueDetail) closeCatalogueDetail();
+      if (view !== "catalog") {
+        setRemoteTarget(null);
+        setSearchReturn(false);
+        setView("catalog");
+      }
+      live.cancel();
+      setSearch(name);
+      actOnSearch(name);
+      setSubmittedQuery(name);
+      return;
+    }
+    openSearch(name);
   };
   // Back on the section the detail covered, its position is given back. The listing is read again
   // as the section mounts, so the offset is chased for as long as it may still be filling.
@@ -2984,6 +3049,17 @@ export function App() {
       for (const event of ["wheel", "touchstart", "keydown"]) window.removeEventListener(event, stop);
     };
   }, [catalogueDetail, view]);
+  // A related title starts at the top; Back puts the previous title's own scroll back.
+  useEffect(() => {
+    const top = pendingCatalogueScroll.current;
+    if (top == null || !catalogueDetail) return;
+    pendingCatalogueScroll.current = null;
+    const node = catalogueDetailScroll.current;
+    if (!node) return;
+    node.scrollTop = top;
+    const handle = requestAnimationFrame(() => { node.scrollTop = top; });
+    return () => cancelAnimationFrame(handle);
+  }, [catalogueDetail]);
   /** The way into the full detail for whatever the panel holds: its title, the episode it is on,
    *  the row it picked and, once the panel has read them, its own metadata and rows. */
   const openSelectedDetail = () => {
@@ -3258,6 +3334,7 @@ export function App() {
         ? <button className="follow-chip on" onClick={() => setDetailFollowOpen(true)}><BellRing/>{t("follow.following")}{catalogueFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button>
         : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}), ...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })}><Bell/>{t("follow.follow")}</button>)}
     </>}/> : undefined;
+  const panelExtras = useTitleExtras(selected?.type, selected?.id);
 
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
   if (!ready) return <LoginScreen setup={setupNeeded} onSession={(next) => { setSetupNeeded(false); setSession(next); }}/>;
@@ -3265,6 +3342,9 @@ export function App() {
   // one's own name and signing out, and nothing else. Rendering the application here would
   // render a shell whose every request comes back refused with nothing to explain it.
   if (session?.mustChangePassword) return <PasswordChangeRequired session={session} onSession={setSession}/>;
+  const selectedRating = imdbRating(selected);
+  const selectedFactText = [selected?.releaseInfo || selected?.year, ...(selected?.genres || []).slice(0, 3)].filter(Boolean).join(" · ");
+  const panelAge = TitleExtraFacts({ extras: panelExtras.extras, language: settings.uiLanguage, name: selected?.name }).ageBadge;
 
   // Favourites, Following, Addons, Settings and Statistics are the destinations the compact
   // chrome folds into More, which is what keeps the bar at exactly five slots. `badge` on More
@@ -3284,8 +3364,9 @@ export function App() {
   // the row a catalogue tile played. It leads the player's chooser under its own class's name.
   const playingStream = localStream ?? detailPlaying?.stream ?? selectedStream;
 
-  return <div className={`app-shell tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-    <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={openSearch}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
+  return <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
+  <div className={`app-shell tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+    <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user"><span className="topbar-user-name">
         <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
         {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
@@ -3312,14 +3393,14 @@ export function App() {
           puts that page back: Home is never turned into an unfiltered catalogue on the way. Its
           browse bar holds its place while the body inside the panel is the only thing that
           scrolls, so the way back is reachable wherever the viewer has read to. */}
-      {catalogueDetail ? <section className="panel browse-panel" aria-label={catalogueDetail.name}>
+      {catalogueDetail && <section className="panel browse-panel" aria-label={catalogueDetail.name}>
         <div className="browse-head"><div className="browse-bar">
           <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
-            <button type="button" className="library-back" aria-label={t("mediaServer.back")} title={t("mediaServer.back")} onClick={() => setCatalogueDetail(null)}><ChevronLeft/></button>
+            <button type="button" className="library-back" aria-label={t("mediaServer.back")} title={t("mediaServer.back")} onClick={backFromCatalogueDetail}><ChevronLeft/></button>
             <button type="button" disabled>{catalogueDetail.name}</button>
           </nav>
         </div></div>
-        <div className="browse-scroll">
+        <div className="browse-scroll" ref={catalogueDetailScroll}>
           <CatalogueTitleDetail
             target={catalogueDetail}
             {...(catalogueDetail.initialSources ? { initialSources: catalogueDetail.initialSources } : {})}
@@ -3344,13 +3425,16 @@ export function App() {
             saveSupported={(stream) => canQueue(stream, settings.realDebridConfigured)}
             onDownloadToDevice={(stream, effective) => void downloadCatalogueStream(effective, stream)}/>
         </div>
-      </section> : <>
+      </section>}
+      {/* The library stays mounted under a catalogue detail opened from it: a remote title lives
+          in the browser, and unmounting it would land Back on the list instead of that title. */}
+      {(!catalogueDetail || view === "library") && <>
       {view === "home" && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
         onShuffle={(row, shuffle) => home.refresh([row], { shuffle })} onVisible={home.reveal} onOpenCatalog={(row) => { const pick = parseHomeCatalogRowId(row); if (pick) resetCatalog(pick); }}
         onReveal={revealInLibrary} onForgotten={refreshPersonal} onError={fail}
-        {...(buildInfo?.searchEverywhere ? { onOpenSearch: openSearch } : {})}/>}
+        {...(buildInfo?.searchEverywhere ? { onOpenSearch: () => openSearch() } : {})}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
@@ -3478,7 +3562,7 @@ export function App() {
               chips={<TitleChips leading={<><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
                 onClick={() => void toggleWatchlist(selected, panelAddonKey(selectedStream?.addonKey))}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => { const addonKey = panelAddonKey(selectedStream?.addonKey); setFollowStart(addonKey ? { ...selected, addonKey } : selected); }}><Bell/>{t("follow.follow")}</button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
                 {...(selected.type === "movie" || selected.type === "series" ? { trailing: <button type="button" className="detail-info" aria-label={t("catalog.openDetail")} title={t("catalog.openDetail")} onClick={openSelectedDetail}><Info/></button> } : {})}/>}
-              copy={<><h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/></>}/></div>
+              copy={<><h2>{selected.name}</h2><p className="meta-line">{selectedRating && <ImdbRating rating={selectedRating}/>}{selectedRating && selectedFactText ? " · " : ""}{selectedFactText}{panelAge && (selectedRating || selectedFactText) ? " " : ""}{panelAge}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/></>}/></div>
 
             <div className="detail-workflow">
             {selected.videos?.length ? !(chosenEpisode && sourcesLoaded) && <div className={`episodes ${chosenEpisode ? "collapsed" : ""}`}>{chosenEpisode ?? <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && !remoteFilterId(streamAddon) && !(selectedStream && isRemoteStream(selectedStream)) && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}{!remoteFilterId(streamAddon) && !(selectedStream && isRemoteStream(selectedStream)) && <button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>}{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
@@ -3524,7 +3608,7 @@ export function App() {
       {view === "search" && buildInfo?.searchEverywhere && <SearchEverywhere search={searchEverywhere} shape={settings.searchTileShape} onToggleShape={() => void toggleShape("searchTileShape")}
         searchable={searchable} recent={searchState?.saveHistory ? searchState.recent.map((entry) => entry.query) : []}
         onRecord={recordSearch} onForget={forgetSearch} onRefreshRecent={() => void loadSearchState()} onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}/>}
-      {view === "library" && <section ref={libraryPageRef} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
+      {view === "library" && <section ref={libraryPageRef} hidden={catalogueDetail ? true : undefined} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
         <Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
         <RemoteLibraryBrowser onRootPresenceChange={setRemoteRootsPresent} hideRoots={Boolean(browsePath) || Boolean(localDetail)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
@@ -3925,5 +4009,6 @@ export function App() {
       follow={{ create: { metaId: followStart.id, name: followStart.name, poster: followStart.poster, ...(followStart.addonKey ? { addonKey: followStart.addonKey } : {}) }, onFollowed: (follow) => followed(followStart, follow) }} onClose={() => setFollowStart(null)}/>}
     {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
-  </div>;
+  </div>
+  </TitleExtrasActions.Provider>;
 }

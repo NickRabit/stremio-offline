@@ -58,6 +58,8 @@ data class CatalogDetailArgs(
   val forgetKeys: List<String> = emptyList(),
   /** Opened from Continue watching: Play is pressed as soon as the sources allow. */
   val autoPlay: Boolean = false,
+  /** A related card to restore after returning to this detail. */
+  val focusRelatedId: String? = null,
 )
 
 private enum class CatalogPanel { Catalogs, Genres }

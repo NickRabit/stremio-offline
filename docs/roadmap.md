@@ -25,7 +25,7 @@ metadata store, or scheduler for each platform.
 
 | Order | Current opportunity | What remains |
 | --- | --- | --- |
-| 1 | Richer title detail | Cast and crew, related titles, age rating and the next episode's date from one server route, in small steps on the existing detail screens (no detail rewrite). See [Richer title detail](#richer-title-detail). |
+| 1 | Richer title detail | Cast and crew, related titles, age rating and the next episode's date from one server route, in small steps on the existing detail screens (no detail rewrite). [Specification](title-detail-spec.md); see also [Richer title detail](#richer-title-detail). |
 | 2 | Player chapters and badges | Chapter marks on the timeline, the current chapter's name and a chapter list; badges for what is playing (resolution, HDR, audio). Web and Android TV. See [Player and mobile chrome](#player-and-mobile-chrome). |
 | 3 | Intro skip and next-episode threshold | Skip intro, recap and outro from IntroDB segments, with optional auto-skip; a configurable point before the end where the next episode is offered. Web and Android TV. See [Player and mobile chrome](#player-and-mobile-chrome). |
 | 4 | Queue controls | Night-only window first, then an aggregate speed limit and a completion notice; current download limits cover concurrency, not these controls. |

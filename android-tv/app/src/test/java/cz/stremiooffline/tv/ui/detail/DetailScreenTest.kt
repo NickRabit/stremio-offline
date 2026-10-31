@@ -22,9 +22,14 @@ import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BrowseItem
+import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.ProgressDto
+import cz.stremiooffline.tv.data.TitleExtrasDto
+import cz.stremiooffline.tv.data.TitlePersonDto
+import cz.stremiooffline.tv.ui.FakeTvApi
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,7 +65,11 @@ class DetailScreenTest {
     files = files,
   )
 
-  private fun mount(data: DetailData, forgetProgress: suspend (List<String>) -> Unit = {}) {
+  private fun mount(
+    data: DetailData,
+    forgetProgress: suspend (List<String>) -> Unit = {},
+    sourcesApi: FakeTvApi? = null,
+  ) {
     compose.setContent {
       DetailScreen(
         detail = data,
@@ -76,6 +85,7 @@ class DetailScreenTest {
         },
         forgetProgress = forgetProgress,
         restoreToken = 0,
+        sourcesApi = sourcesApi,
       )
     }
   }
@@ -405,5 +415,55 @@ class DetailScreenTest {
     compose.onNodeWithTag(TagDetailWatched).assertTextContains("32 % watched")
     compose.onNodeWithTag(TagDetailFavourite).assertTextContains("★")
     compose.onNodeWithText("Something went wrong. Try again.").assertIsDisplayed()
+  }
+
+  @Test
+  fun `a bound library file loads extras for the bound title`() {
+    val path = "Films/It/It.mkv"
+    val api = FakeTvApi().apply {
+      libraryTitleValues[path] = LibraryTitleDto(type = "movie", id = "tt1", name = "It")
+      titleExtrasValue = TitleExtrasDto(
+        people = listOf(TitlePersonDto(name = "Tom Hanks", role = "cast", character = "Woody")),
+      )
+    }
+    mount(detail(listOf(file(path))), sourcesApi = api)
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    assertEquals(Triple("movie", "tt1", null), api.titleExtrasRequests.single())
+    compose.onNodeWithText("Cast and crew").assertIsDisplayed()
+    compose.onNodeWithText("Tom Hanks").assertExists()
+  }
+
+  @Test
+  fun `an unbound library file asks for no extras and draws no rows`() {
+    val path = "Films/Loose.mkv"
+    val api = FakeTvApi()
+    mount(detail(listOf(file(path))), sourcesApi = api)
+    compose.waitUntil(5_000) { api.libraryTitleRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    assertEquals(listOf(path), api.libraryTitleRequests)
+    assertTrue(api.titleExtrasRequests.isEmpty())
+    compose.onNodeWithText("Cast and crew").assertDoesNotExist()
+  }
+
+  @Test
+  fun `DOWN from a bound file's action row reaches the first portrait`() {
+    val path = "Films/It/It.mkv"
+    val api = FakeTvApi().apply {
+      libraryTitleValues[path] = LibraryTitleDto(type = "movie", id = "tt1", name = "It")
+      titleExtrasValue = TitleExtrasDto(
+        people = listOf(TitlePersonDto(name = "Tom Hanks", role = "cast", character = "Woody")),
+      )
+    }
+    mount(detail(listOf(file(path))), sourcesApi = api)
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagDetailPrimary).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsFocused()
+    compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsDisplayed()
   }
 }

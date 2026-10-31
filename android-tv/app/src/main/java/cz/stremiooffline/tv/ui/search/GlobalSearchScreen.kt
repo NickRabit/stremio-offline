@@ -177,7 +177,13 @@ fun GlobalSearchScreen(
     }
   }
   LaunchedEffect(viewModel, preset) {
-    if (preset != null) viewModel.applyPreset(preset)
+    if (preset != null) {
+      viewModel.applyPreset(preset)
+      preset.query?.trim()?.takeIf { it.isNotEmpty() }?.let { query ->
+        draft = query
+        viewModel.submit(query)
+      }
+    }
   }
   LaunchedEffect(libraryClearToken) {
     if (libraryClearToken == 0) return@LaunchedEffect

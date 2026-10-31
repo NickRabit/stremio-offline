@@ -15,4 +15,5 @@ data class SearchPreset(
   val sources: Set<SourceClass> = emptySet(),
   val scope: SearchScope = SearchScope(),
   val library: LibraryFilter? = null,
+  val query: String? = null,
 )

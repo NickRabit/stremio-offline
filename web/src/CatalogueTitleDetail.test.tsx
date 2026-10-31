@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget, type CatalogueTitleDetailProps } from "./CatalogueTitleDetail";
 import { setLocale } from "./i18n";
+import { clearTitleExtras } from "./title-extras";
 import type { Meta, RemoteLibrary, Stream, Video } from "./types";
 
 const json = (body: unknown, status = 200) =>
@@ -47,12 +48,13 @@ const deferred = <T,>() => {
 
 type Handler = (url: URL) => Response | Promise<Response>;
 let metaReply: Handler;
+let extrasReply: Handler;
 let providerReply: Handler;
 let streamReply: Handler;
 let localReply: Handler;
 let remoteReply: Handler;
 const calls = {
-  meta: [] as URL[], providers: [] as URL[], streams: [] as URL[],
+  meta: [] as URL[], extras: [] as URL[], providers: [] as URL[], streams: [] as URL[],
   libraries: [] as URL[], remoteStreams: [] as URL[],
 };
 
@@ -62,8 +64,10 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
-  calls.meta = []; calls.providers = []; calls.streams = []; calls.libraries = []; calls.remoteStreams = [];
+  clearTitleExtras();
+  calls.meta = []; calls.extras = []; calls.providers = []; calls.streams = []; calls.libraries = []; calls.remoteStreams = [];
   metaReply = () => json(film());
+  extrasReply = () => json({ people: [], related: [], source: "addon" });
   providerReply = () => json([{ key: "torrentio", name: "Torrentio" }]);
   streamReply = () => json([addon("a1", "1080p", 1_000)]);
   localReply = () => json([]);
@@ -71,6 +75,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
+    if (path.endsWith("/extras")) { calls.extras.push(url); return Promise.resolve(extrasReply(url)); }
     if (path.startsWith("/api/meta/")) { calls.meta.push(url); return Promise.resolve(metaReply(url)); }
     if (path.startsWith("/api/stream-sources/")) { calls.providers.push(url); return Promise.resolve(providerReply(url)); }
     if (path.startsWith("/api/streams/")) { calls.streams.push(url); return Promise.resolve(streamReply(url)); }
@@ -423,5 +428,35 @@ describe("CatalogueTitleDetail series", () => {
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "a1" }), expect.objectContaining({ videoId: "tt-series:1:1" }), false);
     await click(pickerArrow());
     expect(pickerRows().some((row) => row.textContent?.includes("Show S01E02.mkv"))).toBe(false);
+  });
+});
+
+describe("CatalogueTitleDetail extras", () => {
+  it("shows the cast, similar titles and the hero facts of an identified title", async () => {
+    metaReply = () => json(film({ imdbRating: "8.2" }));
+    extrasReply = () => json({
+      people: [
+        { name: "Rob Reiner", role: "director" },
+        { name: "Meg Ryan", role: "cast", character: "Sally", photo: "/meg.jpg" },
+      ],
+      related: [{ type: "movie", id: "tt-next", name: "Sleepless", year: "1993", poster: "/sleepless.jpg" }],
+      ageRating: "PG-13",
+      originalTitle: "When Harry Met Sally",
+      source: "tmdb",
+    });
+    await render();
+    expect(calls.meta.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt-film"]);
+    expect(calls.extras.map((url) => `${url.pathname}${url.search}`)).toEqual(["/api/meta/movie/tt-film/extras?language=en"]);
+    const line = host.querySelector(".library-detail-hero .meta-line")!;
+    expect(line.querySelector(".imdb-rating")!.textContent).toContain("8.2");
+    expect(line.textContent).toContain("1995 · Crime · Drama");
+    expect(line.querySelector(".age-badge")!.textContent).toBe("PG-13");
+    expect(host.querySelector(".original-line")!.textContent).toContain("When Harry Met Sally");
+    const people = [...host.querySelectorAll(".person strong")].map((name) => name.textContent);
+    expect(people).toContain("Rob Reiner");
+    expect(people).toContain("Meg Ryan");
+    expect(host.querySelector(".related strong")!.textContent).toBe("Sleepless");
+    const actions = host.querySelector(".library-detail-actions")!;
+    expect(actions.compareDocumentPosition(host.querySelector(".title-extras")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
