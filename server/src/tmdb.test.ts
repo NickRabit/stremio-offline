@@ -276,6 +276,8 @@ test("tmdbTitleExtras reads movie credits, recommendations and certifications in
     return json({
       original_title: "Back to the Future",
       original_language: "en",
+      vote_average: 8.69,
+      vote_count: 23_000,
       credits: {
         cast: [
           { name: "Michael J. Fox", character: "Marty McFly", profile_path: "/fox.jpg", order: 0 },
@@ -303,6 +305,13 @@ test("tmdbTitleExtras reads movie credits, recommendations and certifications in
           { iso_3166_1: "US", release_dates: [{ certification: "PG", type: 4 }] },
         ],
       },
+      videos: {
+        results: [
+          { key: "abcDEF12345", name: "Official Trailer", type: "Trailer", site: "YouTube", official: true, iso_639_1: "en" },
+          { name: "Missing key", type: "Trailer", site: "YouTube" },
+          { key: "missingName", type: "Teaser", site: "YouTube" },
+        ],
+      },
     });
   };
 
@@ -311,11 +320,14 @@ test("tmdbTitleExtras reads movie credits, recommendations and certifications in
   assert.equal(calls.length, 1);
   const url = new URL(calls[0]!);
   assert.equal(url.pathname, "/3/movie/31410");
-  assert.equal(url.searchParams.get("append_to_response"), "credits,recommendations,release_dates");
+  assert.equal(url.searchParams.get("append_to_response"), "credits,recommendations,release_dates,videos");
   assert.equal(url.searchParams.get("language"), "cs");
+  assert.equal(url.searchParams.get("include_video_language"), "cs,en,null");
   assert.deepEqual(result, {
     originalTitle: "Back to the Future",
     originalLanguage: "en",
+    voteAverage: 8.69,
+    voteCount: 23_000,
     createdBy: [],
     cast: [{
       name: "Michael J. Fox",
@@ -331,6 +343,9 @@ test("tmdbTitleExtras reads movie credits, recommendations and certifications in
     recommendations: [
       { tmdbId: 105, name: "Back to the Future Part II", date: "1989-11-22", posterPath: "/part2.jpg" },
       { tmdbId: 106, name: "Back to the Future Part III", date: "1990-05-25" },
+    ],
+    videos: [
+      { key: "abcDEF12345", name: "Official Trailer", type: "Trailer", site: "YouTube", official: true, language: "en" },
     ],
     certifications: { CZ: "15", US: "PG" },
   });
@@ -370,7 +385,8 @@ test("tmdbTitleExtras reads TV aggregate roles, jobs, creators and ratings", asy
   assert.equal(calls.length, 1);
   const url = new URL(calls[0]!);
   assert.equal(url.pathname, "/3/tv/1396");
-  assert.equal(url.searchParams.get("append_to_response"), "aggregate_credits,recommendations,content_ratings");
+  assert.equal(url.searchParams.get("append_to_response"), "aggregate_credits,recommendations,content_ratings,videos");
+  assert.equal(url.searchParams.get("include_video_language"), "cs,en,null");
   assert.deepEqual(result?.createdBy, [{ name: "Vince Gilligan", profilePath: "/vince.jpg" }]);
   assert.deepEqual(result?.cast, [{
     name: "Bryan Cranston",
@@ -409,6 +425,7 @@ test("tmdbTitleExtras tolerates every appended section being absent", async () =
     cast: [],
     crew: [],
     recommendations: [],
+    videos: [],
     certifications: {},
   });
 });

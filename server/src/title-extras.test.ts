@@ -180,6 +180,89 @@ test("series extras put creators first and use aggregate roles and TV ratings", 
   assert.equal(result.source, "tmdb");
 });
 
+test("TMDB ratings require 20 votes and round the average to one decimal", async (t) => {
+  fresh(t);
+  const fetchImpl: FetchLike = async (raw) => {
+    const id = Number(/\/movie\/(\d+)$/.exec(new URL(raw).pathname)?.[1]);
+    return json({
+      vote_average: id === 23 ? 8.66 : 9.91,
+      vote_count: id === 23 ? 20 : 19,
+      credits: { cast: [], crew: [] },
+      recommendations: { results: [] },
+      release_dates: { results: [] },
+    });
+  };
+
+  const sufficient = await titleExtras("movie", "tmdb:23", "cs", deps(fetchImpl));
+  const insufficient = await titleExtras("movie", "tmdb:24", "cs", deps(fetchImpl));
+
+  assert.deepEqual(sufficient.ratings, { tmdb: 8.7, tmdbVotes: 20 });
+  assert.deepEqual(insufficient.ratings, {});
+});
+
+test("IMDb ratings come from the viewer meta in a one-decimal form", async (t) => {
+  fresh(t);
+  const cases: Array<[unknown, string | undefined]> = [
+    ["9.3", "9.3"],
+    [8, "8.0"],
+    ["N/A", undefined],
+  ];
+
+  for (const [rating, expected] of cases) {
+    const result = await titleExtras("movie", `tt-${String(rating)}`, "cs", {
+      meta: async () => ({ id: "tt1", type: "movie", name: "Film", imdbRating: rating }),
+      copies: async () => [],
+    });
+    assert.equal(result.ratings.imdb, expected);
+    assert.deepEqual(result.videos, []);
+  }
+});
+
+test("TMDB videos are filtered, mapped, ordered, de-duplicated and capped", async (t) => {
+  fresh(t);
+  const result = await titleExtras("movie", "tmdb:25", "cs", deps(async () => json({
+    credits: { cast: [], crew: [] },
+    recommendations: { results: [] },
+    release_dates: { results: [] },
+    videos: { results: [
+      { key: "eeeeeeeeeee", name: "English trailer", type: "Trailer", site: "YouTube", official: true, iso_639_1: "en" },
+      { key: "cccccccccc1", name: "Czech clip", type: "Clip", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "fffffffffff", name: "French featurette", type: "Featurette", site: "YouTube", official: true, iso_639_1: "fr" },
+      { key: "ddddddddddd", name: "German featurette", type: "Featurette", site: "YouTube", official: true, iso_639_1: "de" },
+      { key: "cccccccccc2", name: "Czech teaser trailer", type: "Trailer", site: "YouTube", official: false, iso_639_1: "cs" },
+      { key: "cccccccccc3", name: "Czech teaser", type: "Teaser", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "cccccccccc4", name: "Czech trailer", type: "Trailer", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "eeeeeeeeee2", name: "English teaser", type: "Teaser", site: "YouTube", official: false, iso_639_1: "en" },
+      { key: "cccccccccc6", name: "Czech extras", type: "Behind the Scenes", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "cccccccccc4", name: "Duplicate", type: "Clip", site: "YouTube", official: true, iso_639_1: "en" },
+      { key: "vvvvvvvvvvv", name: "Vimeo trailer", type: "Trailer", site: "Vimeo", official: true, iso_639_1: "cs" },
+      { key: "short", name: "Short key", type: "Trailer", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "uuuuuuuuuuu", name: "Unknown kind", type: "Other", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "cccccccccc7", type: "Trailer", site: "YouTube", official: true, iso_639_1: "cs" },
+    ] },
+  })));
+
+  assert.equal(result.videos.length, 8);
+  assert.deepEqual(result.videos.map(({ key, kind, language }) => ({ key, kind, language })), [
+    { key: "cccccccccc4", kind: "trailer", language: "cs" },
+    { key: "cccccccccc2", kind: "trailer", language: "cs" },
+    { key: "cccccccccc1", kind: "clip", language: "cs" },
+    { key: "cccccccccc3", kind: "teaser", language: "cs" },
+    { key: "cccccccccc6", kind: "behindTheScenes", language: "cs" },
+    { key: "eeeeeeeeeee", kind: "trailer", language: "en" },
+    { key: "eeeeeeeeee2", kind: "teaser", language: "en" },
+    { key: "fffffffffff", kind: "featurette", language: "fr" },
+  ]);
+  assert.equal(result.videos.filter((video) => video.key === "cccccccccc4").length, 1);
+  assert.deepEqual(result.videos[0], {
+    key: "cccccccccc4",
+    name: "Czech trailer",
+    kind: "trailer",
+    thumbnail: "https://i.ytimg.com/vi/cccccccccc4/hqdefault.jpg",
+    language: "cs",
+  });
+});
+
 test("a successful empty TMDB people list falls back to addon names and the US rating", async (t) => {
   fresh(t);
   const result = await titleExtras("movie", "tmdb:10", "cs", deps(async () => json({
@@ -238,6 +321,7 @@ test("without a TMDB key the addon names answer and no related titles are invent
       id: "tt1",
       type: "movie",
       name: "Film",
+      imdbRating: "8.5",
       cast: ["First", { name: "Second" }, { nope: true }, null],
       director: "Director",
       writer: ["Writer A", { name: "Writer B" }],
@@ -256,6 +340,8 @@ test("without a TMDB key the addon names answer and no related titles are invent
       { name: "Writer B", role: "writer" },
     ],
     related: [],
+    ratings: { imdb: "8.5" },
+    videos: [],
     source: "addon",
   });
 });
@@ -375,12 +461,12 @@ test("a successful TMDB part is shared across viewers while library membership i
   };
   const first = deps(fetchImpl, {
     now: () => now,
-    meta: async () => ({ id: "tt1", type: "movie", name: "First viewer meta" }),
+    meta: async () => ({ id: "tt1", type: "movie", name: "First viewer meta", imdbRating: "9.3" }),
     copies: async () => [{}],
   });
   const second = deps(fetchImpl, {
     now: () => now,
-    meta: async () => ({ id: "tt1", type: "movie", name: "Second viewer meta", videos: [] }),
+    meta: async () => ({ id: "tt1", type: "movie", name: "Second viewer meta", imdbRating: 8 }),
     copies: async () => [],
   });
 
@@ -394,6 +480,8 @@ test("a successful TMDB part is shared across viewers while library membership i
   assert.equal(withoutCopy.related[0]?.inLibrary, undefined);
   assert.notEqual(withoutCopy.related[0], withCopy.related[0], "viewer membership is composed into new objects");
   assert.deepEqual(withoutCopy.people, withCopy.people);
+  assert.equal(withCopy.ratings.imdb, "9.3");
+  assert.equal(withoutCopy.ratings.imdb, "8.0", "the viewer's own metadata supplies IMDb");
   assert.notEqual(withoutCopy, withCopy, "the viewer-dependent answer is composed afresh");
 });
 
@@ -448,5 +536,5 @@ test("unknown title types answer an empty addon result", async (t) => {
     meta: async () => meta,
     copies: async () => [],
   });
-  assert.deepEqual(result, { people: [], related: [], source: "addon" });
+  assert.deepEqual(result, { people: [], related: [], ratings: {}, videos: [], source: "addon" });
 });

@@ -258,6 +258,7 @@ test("GET extras composes TMDB data for the viewer and proxies every image in se
     id: "tt0111161",
     type: "movie",
     name: "Vykoupení z věznice Shawshank",
+    imdbRating: "9.3",
     videos: [],
   }, {
     viewer: alice,
@@ -276,10 +277,13 @@ test("GET extras composes TMDB data for the viewer and proxies every image in se
       return json({ movie_results: [{ id: 278 }], tv_results: [] });
     }
     if (url.pathname === "/3/movie/278") {
-      assert.equal(url.searchParams.get("append_to_response"), "credits,recommendations,release_dates");
+      assert.equal(url.searchParams.get("append_to_response"), "credits,recommendations,release_dates,videos");
+      assert.equal(url.searchParams.get("include_video_language"), "cs,en,null");
       return json({
         original_title: "The Shawshank Redemption",
         original_language: "en",
+        vote_average: 8.71,
+        vote_count: 27_000,
         credits: {
           cast: [{ name: "Tim Robbins", character: "Andy Dufresne", profile_path: "/tim.jpg", order: 0 }],
           crew: [{ name: "Frank Darabont", job: "Director", profile_path: "/frank.jpg" }],
@@ -288,6 +292,14 @@ test("GET extras composes TMDB data for the viewer and proxies every image in se
           results: [{ id: 12, title: "The Green Mile", release_date: "1999-12-10", poster_path: "/green.jpg" }],
         },
         release_dates: { results: [{ iso_3166_1: "CZ", release_dates: [{ certification: "15", type: 3 }] }] },
+        videos: { results: [{
+          key: "abcDEF12345",
+          name: "Official Trailer",
+          type: "Trailer",
+          site: "YouTube",
+          official: true,
+          iso_639_1: "en",
+        }] },
       });
     }
     if (url.pathname === "/3/movie/12/external_ids") return json({ imdb_id: "tt0000012" });
@@ -298,6 +310,8 @@ test("GET extras composes TMDB data for the viewer and proxies every image in se
     const body = await response.json() as {
       people: Array<{ name: string; role: string; character?: string; photo?: string }>;
       related: Array<{ id: string; inLibrary?: boolean; poster?: string }>;
+      ratings: { imdb?: string; tmdb?: number; tmdbVotes?: number };
+      videos: Array<{ key: string; name: string; kind: string; thumbnail: string; language?: string }>;
       ageRating?: string;
       ageRatingRegion?: string;
       originalTitle?: string;
@@ -320,11 +334,21 @@ test("GET extras composes TMDB data for the viewer and proxies every image in se
     assert.equal(body.ageRatingRegion, "CZ");
     assert.equal(body.originalTitle, "The Shawshank Redemption");
     assert.equal(body.originalLanguage, "en");
+    assert.deepEqual(body.ratings, { imdb: "9.3", tmdb: 8.7, tmdbVotes: 27_000 });
+    assert.deepEqual(body.videos, [{
+      key: "abcDEF12345",
+      name: "Official Trailer",
+      kind: "trailer",
+      thumbnail: body.videos[0]?.thumbnail,
+      language: "en",
+    }]);
     assert.equal(body.source, "tmdb");
     assert.match(body.people[0]?.photo ?? "", /^\/api\/image\//);
     assert.match(body.related[0]?.poster ?? "", /^\/api\/image\//);
     assert.doesNotMatch(body.people[0]?.photo ?? "", /^https?:\/\//);
     assert.doesNotMatch(body.related[0]?.poster ?? "", /^https?:\/\//);
+    assert.match(body.videos[0]?.thumbnail ?? "", /^\/api\/image\//);
+    assert.doesNotMatch(JSON.stringify(body), /https?:\/\//);
   });
 
   assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt0111161", language: "cs", artwork: true }]);
