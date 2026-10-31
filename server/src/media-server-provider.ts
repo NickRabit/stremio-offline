@@ -883,7 +883,8 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       userId: accountId,
       parentId,
       includeItemTypes,
-      recursive: mode === "titles",
+      // A filter in a folder looks through everything beneath it, not only its own children.
+      recursive: mode === "titles" || search !== undefined,
       sortBy: type === "episode" && sort === "name" ? "ParentIndexNumber,IndexNumber,SortName" : SORT_BY[sort],
       sortOrder: SORT_ORDER[order],
       startIndex: offset,
