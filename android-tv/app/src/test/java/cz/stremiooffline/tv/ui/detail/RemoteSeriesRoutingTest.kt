@@ -3,6 +3,8 @@
 package cz.stremiooffline.tv.ui.detail
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.pm.ResolveInfo
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableIntStateOf
@@ -12,6 +14,7 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -27,12 +30,19 @@ import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
+import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
+import cz.stremiooffline.tv.data.TitleRatingsDto
+import cz.stremiooffline.tv.data.TitleVideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.catalog.seasonChipTag
 import cz.stremiooffline.tv.ui.library.remoteItemTag
+import cz.stremiooffline.tv.ui.library.RemoteSeriesScreen
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesRoot
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesOverview
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesPrimary
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -42,6 +52,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /** A remote series card opens its episodes, not the playable-item detail the server refuses. */
@@ -97,6 +108,19 @@ class RemoteSeriesRoutingTest {
     compose.waitForIdle()
   }
 
+  private fun resolveTrailer() {
+    val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+    shadowOf(context.packageManager).addResolveInfoForIntent(
+      videoIntent("trailer"),
+      ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply {
+          packageName = context.packageName
+          name = "${context.packageName}.Video"
+        }
+      },
+    )
+  }
+
   @Test
   fun `an episode of a named show resumes the show's own row`() {
     val api = FakeTvApi()
@@ -131,7 +155,7 @@ class RemoteSeriesRoutingTest {
   }
 
   @Test
-  fun `a series card opens its episodes and Back returns to the grid before closing`() {
+  fun `a series card opens an episode and Back restores its row before closing`() {
     val api = FakeTvApi()
     api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(items = listOf(episode("e1"), episode("e2")), total = 2)
     api.remoteSourcesValue = listOf(version())
@@ -155,10 +179,14 @@ class RemoteSeriesRoutingTest {
     // The series itself never asks for versions: its episodes are the whole detail.
     assertTrue(api.remoteSourcesRequests.isEmpty())
     compose.onNodeWithTag(TagRemoteSeriesRoot).assertExists()
-    compose.onNodeWithTag(remoteItemTag("e1")).assertIsFocused()
+    compose.onNodeWithTag(TagRemoteSeriesPrimary).assertIsFocused()
     val still = compose.onNodeWithTag(remoteItemTag("e1")).getBoundsInRoot()
     assertTrue("episode still is ${still.right - still.left}x${still.bottom - still.top}", still.right - still.left > still.bottom - still.top)
 
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(seasonChipTag(1)).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(remoteItemTag("e1")).assertIsFocused()
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.remoteSourcesRequests.contains("rlibA" to "e1") }
     compose.waitForIdle()
@@ -174,7 +202,7 @@ class RemoteSeriesRoutingTest {
     host!!.onBackPressedDispatcher.onBackPressed()
     compose.waitForIdle()
 
-    // The episode's Back closed only the episode; the series grid is up with its card focused.
+    // The episode's Back closed only the episode; the series screen restores its episode card.
     assertEquals(0, backs)
     compose.onNodeWithTag(TagRemoteDetailPlay).assertDoesNotExist()
     compose.onNodeWithTag(remoteItemTag("e1")).assertIsFocused()
@@ -216,11 +244,11 @@ class RemoteSeriesRoutingTest {
     compose.onNodeWithText("Show B").assertExists()
     compose.onNodeWithTag(remoteItemTag("b1")).assertExists()
     compose.onNodeWithTag(remoteItemTag("a1")).assertDoesNotExist()
-    compose.onNodeWithText("S7 · E1").assertExists()
+    compose.onNodeWithTag(seasonChipTag(7)).assertExists()
   }
 
   @Test
-  fun `a series loads extras under its identity and the grid reaches its cast`() {
+  fun `a series loads extras under its identity and the episode row reaches cast`() {
     val api = FakeTvApi()
     api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(items = listOf(episode("e1")), total = 1)
     api.titleExtrasValue = TitleExtrasDto(
@@ -241,9 +269,73 @@ class RemoteSeriesRoutingTest {
     compose.waitForIdle()
 
     assertEquals(Triple("series", "tt7", null), api.titleExtrasRequests.single())
+    compose.onNodeWithTag(TagRemoteSeriesPrimary).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(seasonChipTag(1)).assertIsFocused()
+    press(Key.DirectionDown)
     compose.onNodeWithTag(remoteItemTag("e1")).assertIsFocused()
     press(Key.DirectionDown)
     compose.onNodeWithTag(titlePersonTag("Jane Doe")).assertIsFocused()
+  }
+
+  @Test
+  fun `the series hero scrolls through the episode rows and returns to the top`() {
+    val api = FakeTvApi()
+    api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(
+      items = listOf(
+        episode("e1").copy(name = "One"),
+        episode("e2").copy(name = "Two", season = 2, episode = 1),
+      ),
+      total = 2,
+    )
+    api.titleExtrasValue = TitleExtrasDto(
+      ratings = TitleRatingsDto(imdb = "8.7", tmdb = 8.2, tmdbVotes = 1234),
+      people = listOf(TitlePersonDto(name = "Jane Doe", role = "cast", character = "Jo")),
+      videos = listOf(TitleVideoDto(key = "trailer", name = "Trailer", kind = "trailer")),
+      related = listOf(RelatedTitleDto(type = "movie", id = "tt9", name = "Related")),
+    )
+    resolveTrailer()
+    val show = series(RemoteProviderIdsDto(imdb = "tt7")).copy(
+      item = series(RemoteProviderIdsDto(imdb = "tt7")).item.copy(overview = "A provider overview."),
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteSeriesScreen(
+          api = api,
+          data = show,
+          imageUrl = { null },
+          onPlay = {},
+          onBack = {},
+          loadExtras = { type, id -> api.titleExtras(type, id, null) },
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagRemoteSeriesPrimary).assertIsFocused()
+    compose.onNodeWithTag(TagTitleExtrasImdb).assertExists()
+    compose.onNodeWithTag(TagTitleExtrasTmdb).assertExists()
+    compose.onNodeWithTag(TagRemoteSeriesOverview).assertTextContains("A provider overview.")
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(seasonChipTag(1)).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(remoteItemTag("e1")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(titlePersonTag("Jane Doe")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(videoCardTag("trailer")).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(relatedTitleTag("tt9")).assertIsFocused()
+
+    val root = compose.onRoot().getBoundsInRoot()
+    assertTrue(compose.onNodeWithText("Show").getUnclippedBoundsInRoot().top < root.top)
+
+    repeat(5) { press(Key.DirectionUp) }
+    compose.onNodeWithTag(TagRemoteSeriesPrimary).assertIsFocused()
+    val title = compose.onNodeWithText("Show").getUnclippedBoundsInRoot()
+    assertTrue(title.top >= root.top && title.bottom <= root.bottom)
   }
 
   private fun assertEarlyPlayKeepsIdentity(autoPlay: Boolean) {

@@ -1017,7 +1017,7 @@ fun RemoteDetailScreen(
 }
 
 @Composable
-private fun eyebrow(data: RemoteDetailData): String =
+internal fun eyebrow(data: RemoteDetailData): String =
   when {
     data.isEpisode && !data.seriesName.isNullOrBlank() -> stringResource(R.string.media_server_eyebrow_episode, data.seriesName)
     else -> stringResource(R.string.media_server_eyebrow)

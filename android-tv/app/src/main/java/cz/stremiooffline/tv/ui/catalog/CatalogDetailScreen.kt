@@ -11,9 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -77,10 +74,12 @@ import cz.stremiooffline.tv.playback.VersionProgress
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.components.SeriesDownloadIcon
 import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.detail.SavedPlaybackProgress
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.SeriesRows
 import cz.stremiooffline.tv.ui.detail.TitleExtraFacts
 import cz.stremiooffline.tv.ui.detail.TitleExtrasRows
 import cz.stremiooffline.tv.ui.detail.TitleExtrasState
@@ -1399,81 +1398,6 @@ private fun eyebrow(addonName: String, series: Boolean): String =
   } else {
     stringResource(if (series) R.string.tv_detail_eyebrow_series else R.string.tv_detail_eyebrow_movie, addonName)
   }
-
-@Composable
-private fun SeriesRows(
-  videos: List<VideoDto>,
-  season: Int?,
-  onSeason: (Int) -> Unit,
-  resumeEpisode: VideoDto?,
-  focusVideo: VideoDto?,
-  seriesPosition: Double,
-  seriesDuration: Double,
-  imageUrl: (String?) -> String?,
-  onSelect: (VideoDto) -> Unit,
-  focusRequester: FocusRequester,
-  seasonFocus: FocusRequester,
-  extras: TitleExtrasState,
-) {
-  val seasons = seasonsOf(videos)
-  val current = season ?: seasons.firstOrNull()
-  val seasonState = remember { LazyListState() }
-  var focusedSeason by remember { mutableIntStateOf(seasons.indexOf(current)) }
-  // A series can carry more seasons than fit; scrolling the row keeps the focused chip in view.
-  LaunchedEffect(focusedSeason) {
-    if (focusedSeason >= 0) seasonState.animateScrollToItem(focusedSeason)
-  }
-  LazyRow(
-    state = seasonState,
-    contentPadding = PaddingValues(horizontal = CardRowInset),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    itemsIndexed(seasons, key = { _, value -> value }) { index, value ->
-      FocusButton(
-        text = stringResource(R.string.episodes_season_number, value.toString()),
-        onClick = { onSeason(value) },
-        kind = if (value == current) FocusButtonKind.Primary else FocusButtonKind.Normal,
-        modifier = Modifier
-          .testTag(seasonChipTag(value))
-          // The chip the row is scrolled to carries the requester the episode row's UP returns to.
-          .then(if (index == focusedSeason) Modifier.focusRequester(seasonFocus) else Modifier)
-          .onFocusChanged { if (it.hasFocus) focusedSeason = index },
-      )
-    }
-  }
-  val episodes = videos.filter { it.season == current }.ifEmpty { videos }
-  LazyRow(
-    contentPadding = PaddingValues(horizontal = CardRowInset),
-    horizontalArrangement = Arrangement.spacedBy(18.dp),
-    // UP from the episodes goes to the season chips; the chips never trap the remote.
-    modifier = Modifier.onPreviewKeyEvent { event ->
-      if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
-        runCatching { seasonFocus.requestFocus() }.isSuccess
-      } else {
-        false
-      }
-    }.downIntoExtras(extras),
-  ) {
-    itemsIndexed(episodes, key = { _, video -> video.id ?: video.label }) { index, video ->
-      val resumeIndex = episodes.indexOfFirst { resumeEpisode != null && it.id != null && it.id == resumeEpisode.id }
-      val progress = if (video.id != null && video.id == resumeEpisode?.id && seriesDuration > 0) {
-        (seriesPosition / seriesDuration).toFloat()
-      } else {
-        null
-      }
-      WideCard(
-        label = video.numbered ?: video.label,
-        caption = video.title ?: video.name,
-        imageUrl = imageUrl(video.thumbnail),
-        progress = progress,
-        completed = resumeIndex >= 0 && index < resumeIndex,
-        cardTag = episodeCardTag(video),
-        onClick = { onSelect(video) },
-        modifier = if (video.id != null && video.id == focusVideo?.id) Modifier.focusRequester(focusRequester) else Modifier,
-      )
-    }
-  }
-}
 
 /** The selected episode under the title: the card's `S1 · E1` label and the episode's name. */
 internal fun episodeLine(video: VideoDto): String {

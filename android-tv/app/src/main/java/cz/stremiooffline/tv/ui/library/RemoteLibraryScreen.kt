@@ -71,6 +71,7 @@ import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
+import cz.stremiooffline.tv.ui.catalog.defaultSeason
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
@@ -86,10 +87,11 @@ import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.RemoteSeriesContent
+import cz.stremiooffline.tv.ui.detail.RemoteSeriesUiState
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
-import cz.stremiooffline.tv.ui.detail.TitleExtrasRows
-import cz.stremiooffline.tv.ui.detail.TitleExtrasState
+import cz.stremiooffline.tv.ui.detail.asVideo
 import cz.stremiooffline.tv.ui.detail.initialRemoteMetadata
 import cz.stremiooffline.tv.ui.detail.resolveRemoteMetadata
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -103,6 +105,9 @@ const val TagLibrarySegments = "library_segments"
 const val TagRemoteLoadMore = "remote_load_more"
 const val TagRemoteBreadcrumb = "remote_breadcrumb"
 const val TagRemoteSeriesRoot = "remote_series_root"
+const val TagRemoteSeriesPrimary = "remote_series_primary"
+const val TagRemoteSeriesToLibrary = "remote_series_to_library"
+const val TagRemoteSeriesOverview = "remote_series_overview"
 
 fun remoteLibraryTag(id: String): String = "remote_library_$id"
 fun remoteItemTag(id: String): String = "remote_item_$id"
@@ -431,10 +436,9 @@ fun RemoteLibraryRoute(
 }
 
 /**
- * One remote series opened from a Home or Favourites card. Its episodes page lazily through the
- * browse route and are drawn by the same [ItemBrowser] as the Servers half, in a view-model of
- * its own so the Library section never loses its own. An episode opens the playable detail as a
- * nested child; Back returns to the grid with the card that opened it focused, then closes this.
+ * One remote series opened from a Home or Favourites card. Its already-paged episodes are drawn
+ * as the catalogue's chips and horizontal episode row. An episode opens the playable detail as a
+ * nested child; Back restores that episode card before another Back closes this screen.
  */
 @Composable
 internal fun RemoteSeriesScreen(
@@ -462,7 +466,7 @@ internal fun RemoteSeriesScreen(
     factory = RemoteLibraryViewModel.factory(api),
   )
   val parentIdentity = data.libraryId to data.item.id
-  val extras = remember(parentIdentity) { TitleExtrasState() }
+  val ui = remember(parentIdentity) { RemoteSeriesUiState() }
   var metadata by remember(parentIdentity) { mutableStateOf(initialRemoteMetadata(data)) }
   var metadataResolved by remember(parentIdentity) { mutableStateOf(false) }
   LaunchedEffect(data.libraryId, data.item.id) {
@@ -473,7 +477,7 @@ internal fun RemoteSeriesScreen(
     metadataResolved = true
   }
   LaunchedEffect(metadataResolved, metadata) {
-    if (metadataResolved) extras.loadRemote(metadata, loadExtras) else extras.clear()
+    if (metadataResolved) ui.extras.loadRemote(metadata, loadExtras) else ui.extras.clear()
   }
   DisposableEffect(viewModel) { onDispose { viewModel.onHidden() } }
 
@@ -485,15 +489,13 @@ internal fun RemoteSeriesScreen(
   val state = viewModel.state
   val level = state.current
   val items = level?.state?.items ?: emptyList()
-  val levelKey = level?.key.orEmpty()
+  val videos = remember(items) { items.map(RemoteItemDto::asVideo) }
+  val currentSeason = ui.season ?: defaultSeason(videos)
+  val visibleEpisodes = videos.filter { it.season == currentSeason }.ifEmpty { videos }
+  val selectedVideo = visibleEpisodes.firstOrNull { it.id == ui.selectedEpisodeId } ?: visibleEpisodes.firstOrNull()
+  val selectedItem = items.firstOrNull { it.id == selectedVideo?.id }
 
-  val gridFocus = remember { FocusRequester() }
-  val loadMoreFocus = remember { FocusRequester() }
-  val errorFocus = remember { FocusRequester() }
-  val searchSurface = remember { FocusRequester() }
-  val requesters = remember(levelKey) { mutableMapOf<String, FocusRequester>() }
-
-  // The episode grid's copy panel, opened by Menu/Info on a playable episode card.
+  // The selected episode's copy panel, opened by the row action or Menu/Info on its card.
   var copyCard by remember(parentIdentity) { mutableStateOf<RemoteItemDto?>(null) }
   var copyRequest by remember(parentIdentity) { mutableStateOf<NativeCopyRequest?>(null) }
   var copyResolving by remember(parentIdentity) { mutableStateOf(false) }
@@ -545,10 +547,9 @@ internal fun RemoteSeriesScreen(
       try {
         queue(nativeCopyTitle(subject), stream.sourceId, subject.media(), nativeQueueTarget(stream, libraryId))
         if (mine == copyToken) {
-          val id = copyCard?.id
           copyRequest = null
           copyCard = null
-          runCatching { id?.let { requesters[it] }?.requestFocus() }
+          runCatching { ui.episode.requestFocus() }
         }
       } catch (cancelled: CancellationException) {
         throw cancelled
@@ -563,29 +564,50 @@ internal fun RemoteSeriesScreen(
   }
 
   fun closeCardCopy() {
-    val id = copyCard?.id
     copyToken++
     copyRequest = null
     copyCard = null
     copyNotice = null
     copyResolving = false
     copyBusy = false
-    runCatching { id?.let { requesters[it] }?.requestFocus() }
+    runCatching { ui.episode.requestFocus() }
   }
 
-  // A page change focuses the card last used; coming back from an episode restores the card that
-  // opened it, so the viewer lands where they left rather than on the first card.
-  LaunchedEffect(levelKey, items.map { it.id }, restoreToken, returnToken, episode) {
+  fun openEpisode(item: RemoteItemDto) {
+    ui.selectedEpisodeId = item.id
+    ui.restoreEpisodeFocus = true
+    episode = RemoteDetailData(
+      libraryId = data.libraryId,
+      libraryName = data.libraryName,
+      provider = data.provider,
+      item = item,
+      seriesName = metadata.seriesName ?: metadata.item.seriesName,
+      seriesIds = metadata.seriesIds.takeIf { metadataResolved },
+    )
+  }
+
+  LaunchedEffect(level?.key, items.size, restoreToken, returnToken, episode) {
     if (episode != null) return@LaunchedEffect
     awaitFrame()
-    val remembered = viewModel.selectedFor(levelKey)?.let { requesters[it] }
-    val requester = remembered ?: requesters.values.firstOrNull() ?: gridFocus
-    runCatching { requester.requestFocus() }
+    when {
+      ui.restoreEpisodeFocus && items.isNotEmpty() -> {
+        ui.restoreEpisodeFocus = false
+        runCatching { ui.episode.requestFocus() }
+      }
+      !ui.started && items.isNotEmpty() -> {
+        ui.started = true
+        runCatching { ui.primary.requestFocus() }
+      }
+      !ui.started && level?.state?.error != null -> {
+        ui.started = true
+        runCatching { ui.error.requestFocus() }
+      }
+    }
   }
 
   // A copy still being resolved belongs to the card that asked for it: leaving the level or
   // opening an episode drops it, so a late answer never opens a panel over another screen.
-  LaunchedEffect(parentIdentity, levelKey, episode) {
+  LaunchedEffect(parentIdentity, level?.key, episode) {
     copyToken++
     copyCard = null
     copyRequest = null
@@ -595,71 +617,32 @@ internal fun RemoteSeriesScreen(
   }
 
   Box(Modifier.fillMaxSize().appBackground().testTag(TagRemoteSeriesRoot)) {
-    if (episode == null) Column(Modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX)) {
-      if (copyNotice != null && copyRequest == null) {
-        Text(copyNotice!!, color = Tokens.Red, fontSize = 11.sp, modifier = Modifier.padding(bottom = 6.dp))
-      }
-      // This screen is opened on its own from a Home or Favourites card, so it names the series once
-      // and nothing above it carries that name.
-      Text(
-        (if (data.item.type == "series") metadata.seriesName else null) ?: level?.title.orEmpty(),
-        color = Tokens.Text,
-        fontSize = 25.sp,
-        fontWeight = FontWeight.ExtraBold,
-        letterSpacing = (-0.8).sp,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
+    if (episode == null) {
+      RemoteSeriesContent(
+        data = data,
+        metadata = metadata,
+        items = items,
+        videos = videos,
+        currentSeason = currentSeason,
+        selectedVideo = selectedVideo,
+        selectedItem = selectedItem,
+        imageUrl = imageUrl,
+        ui = ui,
+        loading = level == null || (level.state.loading && items.isEmpty()),
+        error = level?.state?.error,
+        appendFailed = level?.state?.appendError != null,
+        staleCursor = level?.state?.staleCursor == true,
+        copyNotice = copyNotice.takeIf { copyRequest == null },
+        copyBusy = copyBusy || copyResolving,
+        canCopy = loadDestinations != null,
+        onOpenEpisode = ::openEpisode,
+        onCopy = ::openCardCopy,
+        onRetry = viewModel::retry,
+        onRetryAppend = viewModel::retryAppend,
+        onLoadMore = viewModel::loadMore,
+        onSearchPerson = onSearchPerson,
+        onOpenRelated = onOpenRelated,
       )
-      Column(
-        Modifier
-          .weight(1f)
-          .then(if (loadExtras != null) Modifier.verticalScroll(extras.scroll) else Modifier),
-      ) {
-        Box(
-          Modifier
-            .fillMaxWidth()
-            .then(if (loadExtras == null) Modifier.weight(1f) else Modifier.height(300.dp)),
-        ) {
-          if (level == null) {
-            ShimmerCards()
-          } else {
-            ItemBrowser(
-              level = level,
-              items = items,
-              imageUrl = imageUrl,
-              viewModel = viewModel,
-              committed = "",
-              requesters = requesters,
-              gridFocus = gridFocus,
-              loadMoreFocus = loadMoreFocus,
-              errorFocus = errorFocus,
-              onMenu = if (loadDestinations != null) { item -> openCardCopy(item) } else null,
-              onDownFromLastRow = if (metadataResolved) ({ extras.focusFirst() }) else null,
-              onOpenItem = { libraryId, libraryName, provider, item ->
-                episode = RemoteDetailData(
-                  libraryId = libraryId,
-                  libraryName = libraryName,
-                  provider = provider,
-                  item = item,
-                  seriesName = metadata.seriesName ?: metadata.item.seriesName,
-                  seriesIds = metadata.seriesIds.takeIf { metadataResolved },
-                )
-              },
-            )
-          }
-        }
-        TitleExtrasRows(
-          state = extras,
-          imageUrl = imageUrl,
-          onPerson = onSearchPerson,
-          onRelated = onOpenRelated,
-          onUpFromRows = {
-            runCatching {
-              (viewModel.selectedFor(levelKey)?.let { requesters[it] } ?: gridFocus).requestFocus()
-            }
-          },
-        )
-      }
     }
 
     val openEpisode = episode

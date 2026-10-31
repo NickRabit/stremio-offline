@@ -58,7 +58,7 @@ fun DetailActionRow(
   startOver: DetailAction?,
   sources: (@Composable () -> Unit)?,
   toLibrary: DetailAction?,
-  favourite: DetailAction,
+  favourite: DetailAction?,
   unwatched: DetailAction?,
   watched: DetailAction?,
   caption: ActionCaption,
@@ -74,7 +74,7 @@ fun DetailActionRow(
       sources?.invoke()
       startOver?.let { DetailActionButton(it, caption) }
       toLibrary?.let { DetailActionButton(it, caption) }
-      DetailActionButton(favourite, caption)
+      favourite?.let { DetailActionButton(it, caption) }
       unwatched?.let { DetailActionButton(it, caption) }
       watched?.let { DetailActionButton(it, caption) }
       extras.forEach { DetailActionButton(it, caption) }
@@ -192,18 +192,6 @@ val DownloadIcon: ImageVector = outlineIcon("Download") {
   lineTo(17f, 10f)
   moveTo(4f, 20f)
   lineTo(20f, 20f)
-}
-
-val SeriesDownloadIcon: ImageVector = outlineIcon("SeriesDownload") {
-  moveTo(12f, 2.5f)
-  lineTo(12f, 12f)
-  moveTo(8f, 8.5f)
-  lineTo(12f, 12.5f)
-  lineTo(16f, 8.5f)
-  moveTo(4f, 16f)
-  lineTo(20f, 16f)
-  moveTo(6f, 20.5f)
-  lineTo(18f, 20.5f)
 }
 
 val CheckIcon: ImageVector = outlineIcon("Check") {

@@ -52,11 +52,14 @@ import cz.stremiooffline.tv.ui.detail.relatedTitleTag
 import cz.stremiooffline.tv.ui.detail.titlePersonTag
 import cz.stremiooffline.tv.ui.detail.videoCardTag
 import cz.stremiooffline.tv.ui.detail.videoIntent
+import cz.stremiooffline.tv.ui.catalog.DownloadIcon
+import cz.stremiooffline.tv.ui.components.SeriesDownloadIcon
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -1159,6 +1162,12 @@ class CatalogDetailTest {
       listOf(TagCatalogSeriesDownload, TagCatalogShowInLibrary),
       compose.actionRowOrder(TagCatalogSeriesDownload, TagCatalogShowInLibrary),
     )
+  }
+
+  @Test
+  fun `the series download uses its own list icon`() {
+    assertNotEquals(DownloadIcon, SeriesDownloadIcon)
+    assertEquals("SeriesDownloadList", SeriesDownloadIcon.name)
   }
 
   @Test
