@@ -417,12 +417,12 @@
   <string name="detail_tech_subtitles">Titulky</string>
   <string name="detail_videos">Trailery a bonusy</string>
   <string name="detail_video_trailer">Trailer</string>
-  <string name="detail_video_teaser">Ukážka</string>
-  <string name="detail_video_clip">Klip</string>
+  <string name="detail_video_teaser">Teaser</string>
+  <string name="detail_video_clip">Ukážka</string>
   <string name="detail_video_featurette">Bonus</string>
   <string name="detail_video_behind_the_scenes">Zo zákulisia</string>
   <string name="detail_action_from_start">Od začiatku</string>
-  <string name="detail_action_watched">Zhliadnuté</string>
+  <string name="detail_action_watched">Pozreté</string>
   <string name="detail_action_favorite">Obľúbené</string>
   <string name="home_open_detail">Otvoriť detail</string>
 </resources>

@@ -403,10 +403,10 @@
   <string name="detail_video_trailer">Trailer</string>
   <string name="detail_video_teaser">Teaser</string>
   <string name="detail_video_clip">Clipe</string>
-  <string name="detail_video_featurette">Especial</string>
+  <string name="detail_video_featurette">Featurette</string>
   <string name="detail_video_behind_the_scenes">Nos bastidores</string>
   <string name="detail_action_from_start">Do início</string>
-  <string name="detail_action_watched">Assistido</string>
+  <string name="detail_action_watched">Visto</string>
   <string name="detail_action_favorite">Favorito</string>
   <string name="home_open_detail">Abrir detalhes</string>
 </resources>

@@ -403,9 +403,9 @@
   <string name="detail_video_trailer">Trailer</string>
   <string name="detail_video_teaser">Teaser</string>
   <string name="detail_video_clip">Clip</string>
-  <string name="detail_video_featurette">Speciale</string>
+  <string name="detail_video_featurette">Featurette</string>
   <string name="detail_video_behind_the_scenes">Dietro le quinte</string>
-  <string name="detail_action_from_start">Dall’inizio</string>
+  <string name="detail_action_from_start">Dall\'inizio</string>
   <string name="detail_action_watched">Visto</string>
   <string name="detail_action_favorite">Preferito</string>
   <string name="home_open_detail">Apri dettaglio</string>

@@ -417,12 +417,12 @@
   <string name="detail_tech_subtitles">Napisy</string>
   <string name="detail_videos">Zwiastuny i dodatki</string>
   <string name="detail_video_trailer">Zwiastun</string>
-  <string name="detail_video_teaser">Zajawka</string>
+  <string name="detail_video_teaser">Teaser</string>
   <string name="detail_video_clip">Klip</string>
-  <string name="detail_video_featurette">Materiał dodatkowy</string>
+  <string name="detail_video_featurette">Featurette</string>
   <string name="detail_video_behind_the_scenes">Za kulisami</string>
   <string name="detail_action_from_start">Od początku</string>
-  <string name="detail_action_watched">Obejrzano</string>
+  <string name="detail_action_watched">Obejrzane</string>
   <string name="detail_action_favorite">Ulubione</string>
   <string name="home_open_detail">Otwórz szczegóły</string>
 </resources>

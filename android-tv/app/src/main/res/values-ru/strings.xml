@@ -419,7 +419,7 @@
   <string name="detail_video_trailer">Трейлер</string>
   <string name="detail_video_teaser">Тизер</string>
   <string name="detail_video_clip">Клип</string>
-  <string name="detail_video_featurette">Фильм о фильме</string>
+  <string name="detail_video_featurette">Бонус</string>
   <string name="detail_video_behind_the_scenes">За кадром</string>
   <string name="detail_action_from_start">С начала</string>
   <string name="detail_action_watched">Просмотрено</string>
