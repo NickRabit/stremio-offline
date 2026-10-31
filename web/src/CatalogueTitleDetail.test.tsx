@@ -452,8 +452,9 @@ describe("CatalogueTitleDetail extras", () => {
     expect(line.textContent).toContain("1995 · Crime · Drama");
     expect(line.querySelector(".age-badge")!.textContent).toBe("PG-13");
     expect(host.querySelector(".original-line")!.textContent).toContain("When Harry Met Sally");
-    expect(host.querySelector(".extras-crew")!.textContent).toContain("Director Rob Reiner");
-    expect(host.querySelector(".person strong")!.textContent).toBe("Meg Ryan");
+    const people = [...host.querySelectorAll(".person strong")].map((name) => name.textContent);
+    expect(people).toContain("Rob Reiner");
+    expect(people).toContain("Meg Ryan");
     expect(host.querySelector(".related strong")!.textContent).toBe("Sleepless");
     const actions = host.querySelector(".library-detail-actions")!;
     expect(actions.compareDocumentPosition(host.querySelector(".title-extras")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

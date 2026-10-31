@@ -321,6 +321,10 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     </div>}
     {/* What the buttons act on: the row the viewer has chosen, named and measured the way its own
         row reads, so Play, To library and To device visibly act on one version of the title. */}
+    {!selected && ruleRefusal && <div className="library-detail-source">
+      <span className="source-will-play">{t("detail.willPlay")}</span>
+      <small>{t("detail.willPlayChoose")}</small>
+    </div>}
     {selected && <div className="library-detail-source">
       <span className="source-will-play">{t("detail.willPlay")}</span>
       {!isLocalStream(selected) && <i className={isRemoteStream(selected) ? "remote" : undefined}>{badgeOf(selected)}</i>}

@@ -395,6 +395,7 @@ export const ptBR: Catalog = {
   "detail.inLibrary": "Em uma biblioteca",
   "detail.searchPerson": "Pesquisar {name}",
   "detail.willPlay": "Vai reproduzir",
+  "detail.willPlayChoose": "você escolhe ao apertar Reproduzir — a regra de fontes não aceitou nenhuma versão",
   "detail.originalLanguage": "Idioma original {language}",
   "detail.ageRatingIn": "Classificação etária {rating} ({region})",
   "detail.peopleHintTv": "OK pesquisa o nome",

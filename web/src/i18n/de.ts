@@ -395,6 +395,7 @@ export const de: Catalog = {
   "detail.inLibrary": "In einer Bibliothek",
   "detail.searchPerson": "Nach {name} suchen",
   "detail.willPlay": "Wird abgespielt",
+  "detail.willPlayChoose": "Sie wählen nach „Abspielen“ — die Quellenregel hat keine Version zugelassen",
   "detail.originalLanguage": "Originalsprache {language}",
   "detail.ageRatingIn": "Altersfreigabe {rating} ({region})",
   "detail.peopleHintTv": "OK sucht nach dem Namen",

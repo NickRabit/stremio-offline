@@ -268,7 +268,7 @@ describe("title detail from the catalogue", () => {
     await until(() => detailTitle() === "Heat");
     expect(top).toBe(320);
 
-    await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .person")!.click(); });
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>(".view-title-detail .person")].find((button) => button.textContent?.includes("Ada Lovelace"))!.click(); });
     await until(() => host.querySelector<HTMLInputElement>("[data-search-input]") !== null);
     expect(startBodies.map((body) => body.query)).toEqual(["Ada Lovelace"]);
     expect(host.querySelector<HTMLInputElement>("[data-search-input]")!.value).toBe("Ada Lovelace");
@@ -283,7 +283,7 @@ describe("title detail from the catalogue", () => {
     await until(() => host.querySelector(".detail-panel .age-badge") !== null);
     await act(async () => { host.querySelector<HTMLButtonElement>(".detail-info")!.click(); });
     await until(() => host.querySelector(".view-title-detail .person") !== null);
-    await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .person")!.click(); });
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>(".view-title-detail .person")].find((button) => button.textContent?.includes("Ada Lovelace"))!.click(); });
     await until(() => host.querySelector(".panel-head h3")?.textContent === "Search: Ada Lovelace");
     expect(host.querySelector<HTMLInputElement>(".searchbar input")!.value).toBe("Ada Lovelace");
     expect(searchQueries).toContain("Ada Lovelace");

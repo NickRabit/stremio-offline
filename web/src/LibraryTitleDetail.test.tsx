@@ -249,6 +249,9 @@ describe("LibraryTitleDetail source picker", () => {
     };
     const { onPlay } = render({ sources: [breaking], defaultSort: "rule:balanced" });
 
+    expect(host.querySelector(".library-detail-source")!.textContent).toBe(
+      "Will playyou choose when you press Play — the source rule allowed no version",
+    );
     expect(playButton().disabled).toBe(false);
     click(playButton());
     expect(onPlay).not.toHaveBeenCalled();

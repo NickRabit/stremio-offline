@@ -144,21 +144,15 @@ function PersonButton({ name, onSearch, children }: { name: string; onSearch: (n
   return <button type="button" title={t("detail.searchPerson", { name })} onClick={() => onSearch(name)}>{children}</button>;
 }
 
-function CrewLine({ people, onSearch }: { people: TitlePerson[]; onSearch: (name: string) => void }) {
-  const groups = CREW_ROLES.map((role) => ({ role, names: people.filter((person) => person.role === role) }))
-    .filter((group) => group.names.length > 0);
-  if (!groups.length) return null;
-  return <p className="extras-crew">{groups.map((group, index) => <span key={group.role}>
-    {index > 0 ? " · " : null}
-    {t(ROLE_KEY[group.role])}{" "}
-    {group.names.map((person, nameIndex) => <span key={`${person.name}:${nameIndex}`}>
-      {nameIndex > 0 ? ", " : null}
-      <PersonButton name={person.name} onSearch={onSearch}>{person.name}</PersonButton>
-    </span>)}
-  </span>)}</p>;
-}
 
 const SKELETONS = [0, 1, 2, 3, 4, 5, 6];
+const STRIP_ORDER: TitlePerson["role"][] = ["creator", "director", "cast", "writer", "novel"];
+
+/** One strip for everybody: who made it first, then the cast, then the writers. A crew member
+ *  carries the role where a cast member carries the character. */
+export function peopleInStripOrder(people: TitlePerson[]): TitlePerson[] {
+  return STRIP_ORDER.flatMap((role) => people.filter((person) => person.role === role));
+}
 
 /** Cast, crew and similar titles under the actions. Nothing while there is nothing to show,
  *  and never an error: a failed read looks the same as an empty one. */
@@ -178,17 +172,18 @@ export function TitleExtrasRows({ extras, loading }: { extras: TitleExtras | nul
   const people = extras?.people ?? [];
   const related = extras?.related ?? [];
   if (!people.length && !related.length) return null;
-  const cast = people.filter((person) => person.role === "cast");
+  const strip = peopleInStripOrder(people);
   return <section className="title-extras">
     {people.length > 0 && <div className="extras-row">
       <h3>{translate("detail.people")} <small>{translate("detail.peopleHint")}</small></h3>
-      <CrewLine people={people} onSearch={actions.searchPerson}/>
-      {cast.length > 0 && <div className="extras-strip">{cast.map((person, index) => <button type="button" className="person" key={`${person.name}:${person.photo ?? ""}:${index}`}
+      <div className="extras-strip">{strip.map((person, index) => <button type="button" className="person" key={`${person.name}:${person.role}:${index}`}
         title={translate("detail.searchPerson", { name: person.name })} onClick={() => actions.searchPerson(person.name)}>
         <PersonFace name={person.name} photo={person.photo}/>
         <strong>{person.name}</strong>
-        {person.character ? <small>{person.character}</small> : null}
-      </button>)}</div>}
+        {person.role === "cast"
+          ? person.character ? <small>{person.character}</small> : null
+          : <small>{translate(`detail.role.${person.role}`)}</small>}
+      </button>)}</div>
     </div>}
     {related.length > 0 && <div className="extras-row">
       <h3>{translate("detail.related")}</h3>

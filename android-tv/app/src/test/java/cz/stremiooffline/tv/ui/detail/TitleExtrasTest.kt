@@ -86,6 +86,17 @@ class TitleExtrasTest {
   }
 
   @Test
+  fun `the director leads the strip with the role where a character would be`() {
+    val state = TitleExtrasState().apply { this.extras = extras() }
+    mount(state)
+
+    assertEquals(listOf("Jane Doe", "Tom Hanks"), state.cast.map { it.name })
+    compose.onNodeWithText("Jane Doe").assertExists()
+    compose.onNodeWithText("Director").assertExists()
+    compose.onNodeWithText("JD").assertExists()
+  }
+
+  @Test
   fun `empty and failed replies draw no rows`() {
     val empty = TitleExtrasState()
     val api = FakeTvApi()
@@ -113,7 +124,7 @@ class TitleExtrasTest {
     val cast = TitleExtrasState().apply { extras = extras() }
     mount(cast)
     compose.runOnIdle { assertTrue(cast.focusFirst()) }
-    compose.onNodeWithTag(titlePersonTag("Tom Hanks")).assertIsFocused()
+    compose.onNodeWithTag(titlePersonTag("Jane Doe")).assertIsFocused()
   }
 
   @Test

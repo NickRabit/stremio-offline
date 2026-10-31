@@ -395,6 +395,7 @@ export const sk: Catalog = {
   "detail.inLibrary": "V knižnici",
   "detail.searchPerson": "Hľadať „{name}“",
   "detail.willPlay": "Prehrá sa",
+  "detail.willPlayChoose": "vyberiete po stlačení Prehrať — pravidlo pre zdroje nepustilo žiadnu verziu",
   "detail.originalLanguage": "Pôvodný jazyk {language}",
   "detail.ageRatingIn": "Veková hranica {rating} ({region})",
   "detail.peopleHintTv": "OK vyhľadá meno v katalógoch",

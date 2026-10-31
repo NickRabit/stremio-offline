@@ -416,6 +416,7 @@ export const cs: Catalog = {
   "detail.inLibrary": "V knihovně",
   "detail.searchPerson": "Hledat „{name}“",
   "detail.willPlay": "Přehraje se",
+  "detail.willPlayChoose": "vyberete po stisku Přehrát — pravidlo pro zdroje nepustilo žádnou verzi",
   "detail.originalLanguage": "Původní jazyk {language}",
   "detail.ageRatingIn": "Věková hranice {rating} ({region})",
   "detail.peopleHintTv": "OK vyhledá jméno v katalozích",

@@ -395,6 +395,7 @@ export const it: Catalog = {
   "detail.inLibrary": "In una libreria",
   "detail.searchPerson": "Cerca {name}",
   "detail.willPlay": "In riproduzione",
+  "detail.willPlayChoose": "scegli premendo Riproduci: la regola delle fonti non ha ammesso alcuna versione",
   "detail.originalLanguage": "Lingua originale {language}",
   "detail.ageRatingIn": "Classificazione per età {rating} ({region})",
   "detail.peopleHintTv": "OK cerca il nome",

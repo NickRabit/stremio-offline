@@ -2324,7 +2324,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     const grid = surface.querySelector(".remote-season-group")!;
     const rows = surface.querySelector(".title-extras")!;
     expect(grid.compareDocumentPosition(rows) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(rows.querySelector(".person strong")!.textContent).toBe("Lead");
+    expect([...rows.querySelectorAll(".person strong")].map((name) => name.textContent)).toEqual(["The Creator", "Lead"]);
     expect(rows.querySelector(".related strong")!.textContent).toBe("Other Show");
     expect(calls.title).toContain("/api/meta/series/tt7000");
     expect(calls.title.some((path) => path.endsWith("/extras"))).toBe(false);

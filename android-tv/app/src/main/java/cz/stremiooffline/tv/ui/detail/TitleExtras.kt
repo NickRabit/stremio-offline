@@ -86,7 +86,8 @@ const val TagTitleExtrasNextEpisode = "title_extras_next_episode"
 fun titlePersonTag(name: String): String = "title_person_$name"
 fun relatedTitleTag(id: String): String = "related_title_$id"
 
-private val CrewRoles = listOf("creator", "director", "writer", "novel")
+/** Who made it first, then the cast, then the writers: one strip for everybody. */
+private val StripOrder = listOf("creator", "director", "cast", "writer", "novel")
 
 class TitleExtrasState {
   var extras by mutableStateOf<TitleExtrasDto?>(null)
@@ -102,7 +103,9 @@ class TitleExtrasState {
   private var libraryReady = false
   private var libraryValue: LibraryTitleDto? = null
 
-  val cast: List<TitlePersonDto> get() = extras?.people.orEmpty().filter { it.role.equals("cast", ignoreCase = true) }
+  val cast: List<TitlePersonDto> get() = extras?.people.orEmpty().let { people ->
+    StripOrder.flatMap { role -> people.filter { it.role.equals(role, ignoreCase = true) } }
+  }
 
   fun focusFirst(): Boolean {
     val target = when {
@@ -315,20 +318,16 @@ fun TitleExtrasRows(
   }
   if (extras.people.isEmpty() && extras.related.isEmpty()) return
 
-  val cast = state.cast
-  val crew = CrewRoles.mapNotNull { role ->
-    val names = extras.people.filter { it.role.equals(role, ignoreCase = true) }
-      .map { it.name.trim() }
-      .filter { it.isNotEmpty() }
-      .distinct()
-    if (names.isEmpty()) null else role to names
-  }
   val crewLabels = mapOf(
     "creator" to stringResource(R.string.detail_role_creator),
     "director" to stringResource(R.string.detail_role_director),
     "writer" to stringResource(R.string.detail_role_writer),
     "novel" to stringResource(R.string.detail_role_novel),
   )
+  // A crew member carries the role where a cast member carries the character.
+  val cast = state.cast.map { person ->
+    crewLabels[person.role.lowercase()]?.let { person.copy(character = it) } ?: person
+  }
   val relatedState = rememberLazyListState()
 
   LaunchedEffect(extras.related, state.restoreRelatedId) {
@@ -343,7 +342,7 @@ fun TitleExtrasRows(
   }
 
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    if (cast.isNotEmpty() || crew.isNotEmpty()) {
+    if (cast.isNotEmpty()) {
       Text(
         stringResource(R.string.detail_people),
         color = Tokens.Text,
@@ -355,17 +354,6 @@ fun TitleExtrasRows(
           stringResource(R.string.detail_people_hint_tv),
           color = Tokens.Muted,
           fontSize = 9.5.sp,
-        )
-      }
-      if (crew.isNotEmpty()) {
-        Text(
-          crew.joinToString(" · ") { (role, names) ->
-            crewLabels.getValue(role) + " " + names.joinToString(", ")
-          },
-          color = Tokens.Muted,
-          fontSize = 10.5.sp,
-          maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
         )
       }
       if (cast.isNotEmpty()) {

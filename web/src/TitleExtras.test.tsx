@@ -52,27 +52,31 @@ const mount = (node: ReactNode, actions?: TitleExtrasActionsValue) => {
 };
 
 describe("TitleExtrasRows", () => {
-  it("renders the crew line in role order and the cast with photos or initials", () => {
+  it("puts the crew in the strip around the cast, with their role in place of a character", () => {
     mount(<TitleExtrasRows extras={cast} loading={false}/>);
-    expect(host.querySelector(".extras-crew")!.textContent).toBe(
-      "Created by Show Runner · Director Rob Reiner · Writer Nora Ephron, Aaron Sorkin · Novel Jane Austen",
-    );
+    expect(host.querySelector(".extras-crew")).toBeNull();
     const portraits = [...host.querySelectorAll(".person")];
-    expect(portraits.map((button) => button.querySelector("strong")!.textContent)).toEqual(["Ada Lovelace", "Grace Hopper", "Cher"]);
-    expect(portraits[0]!.querySelector("img")!.getAttribute("src")).toBe("/ada.jpg");
-    expect(portraits[0]!.querySelector("small")!.textContent).toBe("Ada");
-    expect(portraits[1]!.querySelector("img")).toBeNull();
-    expect(portraits[1]!.querySelector(".person-face")!.textContent).toBe("GH");
-    expect(portraits[2]!.querySelector(".person-face")!.textContent).toBe("C");
-    expect(portraits[0]!.getAttribute("title")).toBe("Search for Ada Lovelace");
-    expect(host.querySelector(".extras-crew button")!.getAttribute("title")).toBe("Search for Show Runner");
+    expect(portraits.map((button) => button.querySelector("strong")!.textContent)).toEqual(
+      ["Show Runner", "Rob Reiner", "Ada Lovelace", "Grace Hopper", "Cher", "Nora Ephron", "Aaron Sorkin", "Jane Austen"],
+    );
+    expect(portraits.map((button) => button.querySelector("small")?.textContent ?? null)).toEqual(
+      ["Created by", "Director", "Ada", "Grace", null, "Writer", "Writer", "Novel"],
+    );
+    const ada = portraits[2]!;
+    expect(ada.querySelector("img")!.getAttribute("src")).toBe("/ada.jpg");
+    expect(portraits[3]!.querySelector("img")).toBeNull();
+    expect(portraits[3]!.querySelector(".person-face")!.textContent).toBe("GH");
+    expect(portraits[4]!.querySelector(".person-face")!.textContent).toBe("C");
+    expect(ada.getAttribute("title")).toBe("Search for Ada Lovelace");
+    expect(portraits[0]!.getAttribute("title")).toBe("Search for Show Runner");
   });
 
   it("falls back to initials when a portrait fails to load", () => {
     mount(<TitleExtrasRows extras={cast} loading={false}/>);
-    const image = host.querySelector<HTMLImageElement>(".person img")!;
+    const ada = [...host.querySelectorAll(".person")].find((button) => button.textContent?.includes("Ada Lovelace"))!;
+    const image = ada.querySelector<HTMLImageElement>("img")!;
     act(() => { image.dispatchEvent(new Event("error")); });
-    const face = host.querySelector(".person")!.querySelector(".person-face")!;
+    const face = ada.querySelector(".person-face")!;
     expect(face.querySelector("img")).toBeNull();
     expect(face.textContent).toBe("AL");
   });
@@ -89,12 +93,12 @@ describe("TitleExtrasRows", () => {
     expect(tiles[1]!.querySelector(".in-library")).toBeNull();
   });
 
-  it("searches a person from the portrait and the crew line, and opens a related title", () => {
+  it("searches a person from a cast or crew portrait, and opens a related title", () => {
     const actions = mount(<TitleExtrasRows extras={cast} loading={false}/>);
     const portrait = [...host.querySelectorAll<HTMLButtonElement>(".person")].find((button) => button.textContent?.includes("Grace Hopper"))!;
     act(() => { portrait.click(); });
     expect(actions.searchPerson).toHaveBeenCalledWith("Grace Hopper");
-    const writer = [...host.querySelectorAll<HTMLButtonElement>(".extras-crew button")].find((button) => button.textContent === "Aaron Sorkin")!;
+    const writer = [...host.querySelectorAll<HTMLButtonElement>(".person")].find((button) => button.textContent?.includes("Aaron Sorkin"))!;
     act(() => { writer.click(); });
     expect(actions.searchPerson).toHaveBeenCalledWith("Aaron Sorkin");
     act(() => { host.querySelector<HTMLButtonElement>(".related")!.click(); });

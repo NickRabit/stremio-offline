@@ -421,6 +421,7 @@ export const en = {
   "detail.inLibrary": "In a library",
   "detail.searchPerson": "Search for {name}",
   "detail.willPlay": "Will play",
+  "detail.willPlayChoose": "you choose when you press Play — the source rule allowed no version",
   "detail.originalLanguage": "Original language {language}",
   "detail.ageRatingIn": "Age rating {rating} ({region})",
   "detail.peopleHintTv": "OK searches for the name",

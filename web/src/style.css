@@ -91,6 +91,9 @@
    browse bar hold their place and the listing inside the panel is the only thing that scrolls. */
 main.view-library{height:100dvh;overflow:hidden;display:flex;flex-direction:column;padding-bottom:22px}
 main.view-library>.library-page{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+/* Kept mounted behind a catalogue detail opened from it, so Back finds it as it was; its own
+   display would otherwise win over the hidden attribute. */
+.library-page[hidden]{display:none}
 main.view-library .browse-panel{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 main.view-library .browse-head{flex:0 0 auto}
 main.view-library .browse-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
@@ -2259,9 +2262,6 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .extras-row{min-width:0;max-width:100%}
 .extras-row h3{display:flex;align-items:baseline;gap:10px;margin:0 0 10px;font-size:14px}
 .extras-row h3 small{font-size:11px;font-weight:600;color:var(--muted)}
-.extras-crew{margin:-4px 0 10px;min-width:0;max-width:100%;font-size:13px;line-height:1.45;color:var(--muted)}
-.extras-crew button{border:0;background:none;padding:0;color:var(--text);font-weight:600}
-.extras-crew button:hover{color:var(--accent2);text-decoration:underline}
 .extras-strip{display:flex;gap:14px;overflow-x:auto;overflow-y:hidden;padding:3px 2px 8px;scroll-snap-type:x proximity;overscroll-behavior-x:contain}
 .person{flex:0 0 96px;width:96px;min-height:0;display:grid;align-content:start;justify-items:center;gap:6px;border:0;background:none;padding:4px 0;color:inherit;text-align:center;scroll-snap-align:start;border-radius:10px}
 .person:hover .person-face,.person:focus-visible .person-face{box-shadow:0 0 0 2px var(--accent)}

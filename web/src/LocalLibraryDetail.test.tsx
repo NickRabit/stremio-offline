@@ -660,7 +660,7 @@ describe("LocalLibraryDetail extra sources", () => {
     const line = [...host.querySelectorAll(".library-detail-hero .meta-line")].find((node) => node.textContent?.includes("GB"))!;
     expect(line.querySelector(".age-badge")!.textContent).toBe("R");
     expect(host.querySelector(".original-line")!.textContent).toContain("Heat");
-    expect(host.querySelector(".person strong")!.textContent).toBe("Al Pacino");
+    expect([...host.querySelectorAll(".person strong")].map((name) => name.textContent)).toEqual(["Michael Mann", "Al Pacino"]);
     expect(host.querySelector(".related .in-library")!.textContent).toBe("In a library");
   });
 });

@@ -395,6 +395,7 @@ export const ru: Catalog = {
   "detail.inLibrary": "В библиотеке",
   "detail.searchPerson": "Искать «{name}»",
   "detail.willPlay": "Будет воспроизведено",
+  "detail.willPlayChoose": "выберете после нажатия «Воспроизвести» — правило источников не пропустило ни одной версии",
   "detail.originalLanguage": "Оригинальный язык {language}",
   "detail.ageRatingIn": "Возрастной рейтинг {rating} ({region})",
   "detail.peopleHintTv": "OK ищет имя",
