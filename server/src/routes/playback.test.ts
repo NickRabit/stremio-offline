@@ -25,7 +25,7 @@ import type { StatsLog } from "../stats.js";
 import { defaultPrefs, type Store } from "../store.js";
 import type { StreamItem } from "../types.js";
 import type { UserRecord } from "../users.js";
-import { registerPlaybackRoutes, type PlaybackDeps } from "./playback.js";
+import { registerPlaybackRoutes, servedMediaType, type PlaybackDeps } from "./playback.js";
 
 const ID = "pb_000001";
 const TOKEN = "airplay-token";
@@ -871,6 +871,74 @@ test("a direct-play read of an addon playlist sends no block request", async (t)
   assert.match(await response.text(), /\/api\/media\//, "the segment is proxied, not handed out as the host's address");
   assert.deepEqual(host.ranges, ["bytes=0-"]);
   assert.equal(remoteReadAhead.size, 0);
+});
+
+test("a playlist content type is matched case-insensitively without an .m3u8 path", async (t) => {
+  const harness = await mount(new RemoteReadAhead(), { internalMediaRequest: () => true });
+  t.after(harness.close);
+  const host = await addonHost(t, Buffer.from("#EXTM3U\n#EXTINF:4,\nsegment-1.ts\n"), "application/x-mpegURL");
+  const resourceId = registry.mediaStream({ url: host.url.replace("film.avi", "stream") } as StreamItem, ADA).resourceId;
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-" } });
+  const text = await response.text();
+  assert.match(text, /\/api\/media\//);
+  assert.equal(text.includes(new URL(host.url).host), false);
+});
+
+test("a text playlist is detected from the first body chunk", async (t) => {
+  const harness = await mount(new RemoteReadAhead(), { internalMediaRequest: () => true });
+  t.after(harness.close);
+  const host = await addonHost(t, Buffer.from("\ufeff#EXTM3U\n#EXTINF:4,\nsegment-1.ts\n"), "text/plain");
+  const resourceId = registry.mediaStream({ url: host.url.replace("film.avi", "stream") } as StreamItem, ADA).resourceId;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-" } });
+    const text = await response.text();
+    assert.match(text, /\/api\/media\//);
+    assert.equal(text.includes(new URL(host.url).host), false);
+  }
+  assert.equal(host.ranges.filter((range) => /^bytes=\d+-\d+$/.test(range)).length, 1, "the bounded read is tried once across both requests");
+});
+
+test("a binary body is streamed unchanged and the upstream is asked once", async (t) => {
+  const harness = await mount(new RemoteReadAhead(), { internalMediaRequest: () => true });
+  t.after(harness.close);
+  const file = Buffer.from([0, 1, 2, 3, 4, 5, 255]);
+  const host = await addonHost(t, file, "application/octet-stream");
+  const resourceId = registry.mediaStream({ url: host.url.replace("film.avi", "stream") } as StreamItem, ADA).resourceId;
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-" } });
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), file);
+  assert.equal(host.ranges.length, 1);
+});
+
+test("an upstream document content type is served as an opaque download", async (t) => {
+  const harness = await mount(new RemoteReadAhead(), { internalMediaRequest: () => true });
+  t.after(harness.close);
+  const host = await addonHost(t, Buffer.from("<html>not media</html>"), "text/html; charset=utf-8");
+  const resourceId = registry.mediaStream({ url: host.url.replace("film.avi", "stream") } as StreamItem, ADA).resourceId;
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-" } });
+  assert.equal(response.headers.get("content-type"), "application/octet-stream");
+  assert.equal(await response.text(), "<html>not media</html>");
+});
+
+test("a DASH manifest is refused whatever the case of its content type", async (t) => {
+  const harness = await mount(new RemoteReadAhead(), { internalMediaRequest: () => true });
+  t.after(harness.close);
+  const host = await addonHost(t, Buffer.from("<MPD></MPD>"), "application/DASH+XML");
+  const resourceId = registry.mediaStream({ url: host.url.replace("film.avi", "stream") } as StreamItem, ADA).resourceId;
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada" } });
+  assert.ok(response.status >= 400);
+  assert.equal((await response.text()).includes("<MPD>"), false);
+});
+
+test("servedMediaType downgrades document types only", () => {
+  assert.equal(servedMediaType("video/mp4"), "video/mp4");
+  assert.equal(servedMediaType("text/html; charset=utf-8"), "application/octet-stream");
+  assert.equal(servedMediaType("image/svg+xml"), "application/octet-stream");
+  assert.equal(servedMediaType("application/rss+xml"), "application/octet-stream");
 });
 
 test("the remote media proxy maps a media-server failure to its fixed sentence", async (t) => {

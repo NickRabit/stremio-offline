@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test, type TestContext } from "node:test";
 import express from "express";
+import { withProxiedArtwork } from "../addon-view.js";
 import { addonIdentity, applyAddonManifestRefreshes } from "../addon-identity.js";
 import type { RefreshOutcome } from "../addon-refresh.js";
 import { messageKeyOf } from "../errors.js";
+import { ImageProxy } from "../images.js";
 import { defaultDownloadSettings } from "../naming.js";
 import { roleMiddleware } from "../roles.js";
 import { publicAddon, setDnsLookup, setFetchTransport } from "../security.js";
@@ -50,9 +55,13 @@ const other = { id: CAROL, username: "carol", role: "user" } as unknown as UserR
 /** An addon both ordinary accounts may see; one without `allowedUsers` is the administrator's alone. */
 const granted = (key: string): AddonRecord => ({ ...addon(key), allowedUsers: [BOB, CAROL] });
 
+interface MountOptions {
+  publicAddonView?: AddonsDeps["publicAddonView"];
+}
+
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
-const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness> => {
+const mount = async (records: AddonRecord[] = [addon("alpha")], options: MountOptions = {}): Promise<Harness> => {
   // `users` lives in the state, not only behind `store.users()`: a mutator reads the state,
   // and the write-time role check is one of the things that does.
   const state = { addons: records, users: [admin, ordinary, other], userData: { [BOB]: emptyUserData(), [CAROL]: emptyUserData() } as Record<string, UserData> };
@@ -93,11 +102,11 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
       refreshes.push(outcomes);
       for (const addonKey of applyAddonManifestRefreshes(state.addons, outcomes)) stopCalls.push({ addonKey });
     },
-    publicAddonView: (record) => {
+    publicAddonView: options.publicAddonView ?? ((record) => {
       viewed.push(record);
       const view = { ...publicAddon(record), viewed: true };
       return view;
-    },
+    }),
   };
   const app = express();
   app.use(express.json());
@@ -170,6 +179,28 @@ test("GET /api/addons passes every record through publicAddonView", async (t) =>
   assert.deepEqual(body.map((item) => item.key), ["alpha", "beta"]);
   assert.deepEqual(body.map((item) => item.viewed), [true, true]);
   assert.deepEqual(harness.viewed.map((record) => record.key), ["alpha", "beta"]);
+});
+
+test("an addon view proxies its manifest background", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "addon-view-artwork-"));
+  const proxy = new ImageProxy(directory);
+  await proxy.load();
+  t.after(async () => {
+    await proxy.flush();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const background = "https://art.example/background.jpg";
+  const record = addon("art");
+  (record.manifest as typeof record.manifest & { background?: string }).background = background;
+  const harness = await mount([record], {
+    publicAddonView: (item) => withProxiedArtwork(publicAddon(item), proxy),
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/addons");
+  assert.equal(response.status, 200);
+  const body = await response.json() as Array<{ manifest: { background?: string } }>;
+  assert.match(body[0]!.manifest.background!, /^\/api\/image\//);
 });
 
 test("GET /api/addons answers an ordinary user with the addons granted to them", async (t) => {

@@ -29,6 +29,7 @@ import { sourcePace } from "./conversion-pace.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, publicAddonRestricted } from "./security.js";
+import { withProxiedArtwork } from "./addon-view.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { passwordChangeMiddleware, roleMiddleware } from "./roles.js";
 import { GuardRejection, outbound } from "./outbound.js";
@@ -900,13 +901,10 @@ const currentTargetArtwork = async (target: string | undefined, revision = ""): 
   });
 };
 
-/** An addon logo sits on the provider's server as well, so it takes the same detour. */
-const withProxiedLogo = <T extends { manifest: { logo?: string } }>(view: T): T =>
-  (images.proxied(view.manifest.logo) === view.manifest.logo
-    ? view
-    : { ...view, manifest: { ...view.manifest, logo: images.proxied(view.manifest.logo) } });
 const publicAddonView = (addon: AddonRecord) =>
-  (restrictedMode() ? withProxiedLogo(publicAddonRestricted(addon)) : withProxiedLogo(publicAddon(addon)));
+  (restrictedMode()
+    ? withProxiedArtwork(publicAddonRestricted(addon), images)
+    : withProxiedArtwork(publicAddon(addon), images));
 
 app.get("/api/status", (_req, res) => res.json({
   status: "ok",
@@ -2698,7 +2696,7 @@ const freeSpace = async (target: string) => {
   catch { return { path: target }; }
 };
 registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
-registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
+registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache, publicAddonView });
 registerMediaServerRoutes(app, { ...routeContext, mediaServers, mosaics, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, playbackReports, ownerOf });
 registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
 if (searchSessions !== undefined && catalogSearchSessions !== undefined) {

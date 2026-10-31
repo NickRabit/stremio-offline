@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test, type TestContext } from "node:test";
 import express from "express";
+import { withProxiedArtwork } from "../addon-view.js";
 import type { DownloadQueue } from "../downloads.js";
 import { messageKeyOf } from "../errors.js";
+import { ImageProxy } from "../images.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { MediaServerAuthority, MediaServerManager } from "../media-server-manager.js";
 import { prepareMediaServerConfiguration } from "../media-server-store.js";
 import { assertStillAdmin, ForbiddenError } from "../roles.js";
+import { publicAddon } from "../security.js";
 import { defaultInstanceSettings, defaultPrefs, type State, type Store, type StoredSourceProfile, type UserPrefs } from "../store.js";
 import type { AddonRecord } from "../types.js";
 import { emptyUserData, type Role, type UserData, type UserRecord } from "../users.js";
@@ -49,9 +55,13 @@ interface Harness {
   close(): Promise<void>;
 }
 
+interface MountOptions {
+  publicAddonView?: SettingsDeps["publicAddonView"];
+}
+
 /** The routes read the instance half and one person's half out of the same state object, so
  *  the harness keeps a real one and remembers which caller a request speaks for. */
-const mount = async (): Promise<Harness> => {
+const mount = async (options: MountOptions = {}): Promise<Harness> => {
   const state = {
     // `users` lives in the state, not only behind a stub: a mutator reads the state, and the
     // write-time role check is one of the things that does.
@@ -164,6 +174,7 @@ const mount = async (): Promise<Harness> => {
     prefsOf,
     queue: { changed: () => undefined } as unknown as DownloadQueue,
     streamCache: new Map(),
+    publicAddonView: options.publicAddonView ?? ((addon) => publicAddon(addon)),
   };
   const app = express();
   app.use(express.json());
@@ -491,6 +502,46 @@ test("an import keeps the grants and the keys of the addons this instance alread
   assert.equal(restored?.key, "alpha-key", "the key a grant and a personal order both point at was replaced");
   // The addon the backup does not carry is gone for everybody, which no counter records.
   assert.deepEqual(stopped, [{ addonKey: "beta-key" }]);
+});
+
+test("an import answer uses the public addon view for secure artwork", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "settings-import-artwork-"));
+  const proxy = new ImageProxy(directory);
+  await proxy.load();
+  t.after(async () => {
+    await proxy.flush();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const harness = await mount({
+    publicAddonView: (record) => withProxiedArtwork(publicAddon(record), proxy),
+  });
+  t.after(harness.close);
+  const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => { if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS; else process.env.ALLOW_PRIVATE_ADDONS = originalFlag; });
+  const manifests = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify({
+        id: "artwork", name: "Artwork", version: "1.0.0", resources: ["stream"],
+        types: ["movie"], catalogs: [], logo: "https://art.example/logo.png",
+      }));
+  });
+  manifests.listen(0, "127.0.0.1");
+  await once(manifests, "listening");
+  t.after(() => new Promise<void>((resolve) => manifests.close(() => resolve())));
+  const manifestUrl = `http://127.0.0.1:${(manifests.address() as AddressInfo).port}/manifest.json`;
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: {
+      format: "stremio-offline-settings", version: 2, exportedAt: new Date().toISOString(),
+      settings: {}, addons: [{ manifestUrl, role: "source", enabled: true, globalSearch: true }], libraries: [],
+    },
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { addons: Array<{ manifest: { logo?: string } }> };
+  assert.match(body.addons[0]!.manifest.logo!, /^\/api\/image\//);
 });
 
 test("an import sweeps a preserved addon key when its effective identity changes", async (t) => {

@@ -778,6 +778,36 @@ test("two image clients share one download and one disconnect leaves the other a
   assert.equal(outbound.diagnostics().find((entry) => entry.host === host)?.failures ?? 0, 0);
 });
 
+test("SVG images carry a sandbox policy on every successful answer", async (t) => {
+  const svg = Buffer.from("<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+  const { proxy } = await routeImages(t, async (url) =>
+    new Response(url.endsWith(".svg") ? svg : PNG, {
+      headers: { "content-type": url.endsWith(".svg") ? "image/svg+xml" : "image/png" },
+    }));
+  const harness = await mount([], null, { imageProxy: proxy });
+  t.after(harness.close);
+  const svgRoute = `/api/image/${proxy.proxied("https://art.example/picture.svg")!.split("/").pop()}`;
+  const pngRoute = `/api/image/${proxy.proxied("https://art.example/picture.png")!.split("/").pop()}`;
+  const policy = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+
+  const svgResponse = await api(harness.base, svgRoute);
+  assert.equal(svgResponse.status, 200);
+  assert.equal(svgResponse.headers.get("content-security-policy"), policy);
+  const etag = svgResponse.headers.get("etag")!;
+
+  const head = await api(harness.base, svgRoute, { method: "HEAD" });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get("content-security-policy"), policy);
+
+  const notModified = await api(harness.base, svgRoute, { headers: { "if-none-match": etag } });
+  assert.equal(notModified.status, 304);
+  assert.equal(notModified.headers.get("content-security-policy"), policy);
+
+  const png = await api(harness.base, pngRoute);
+  assert.equal(png.status, 200);
+  assert.equal(png.headers.get("content-security-policy"), null);
+});
+
 test("the last image client disconnect cancels its body and a retry caches afresh", async (t) => {
   const host = "image-route-cancel.example";
   const held = heldImage();

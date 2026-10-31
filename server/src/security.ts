@@ -1,35 +1,12 @@
 import { AppError } from "./errors.js";
 import nodeDns, { type LookupAddress, type LookupOptions } from "node:dns";
-import net, { type LookupFunction } from "node:net";
+import { type LookupFunction } from "node:net";
 import { Agent, fetch as undiciFetch } from "undici";
+import { addressRefusal, type AddressPolicy } from "./address-policy.js";
 import { log } from "./logger.js";
 
-/** Ranges the server must not reach on an outside request: its own machine, the LAN, and cloud metadata. */
-function privateReason(ip: string): string | undefined {
-  // ::ffff:10.0.0.1 is IPv4 written inside IPv6; without unwrapping it the check would pass for nothing.
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
-  const address = mapped ? mapped[1] : ip;
-
-  if (net.isIPv4(address)) {
-    const [a, b] = address.split(".").map(Number);
-    if (a === 0) return "an unspecified address";
-    if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return "a private network";
-    if (a === 127) return "localhost";
-    if (a === 169 && b === 254) return "link-local and cloud metadata";
-    if (a === 100 && b >= 64 && b <= 127) return "CGNAT";
-    if (a === 198 && (b === 18 || b === 19)) return "a test range";
-    if (a >= 224) return "a multicast or reserved range";
-    return undefined;
-  }
-
-  const normalized = address.toLowerCase();
-  if (normalized === "::1") return "localhost";
-  if (normalized === "::") return "an unspecified address";
-  if (/^f[cd]/.test(normalized)) return "a private network";
-  if (normalized.startsWith("fe80:")) return "link-local";
-  if (normalized.startsWith("ff")) return "multicast";
-  return undefined;
-}
+const STRICT: AddressPolicy = { allowLan: false, allowLoopback: false };
+function privateReason(ip: string): string | undefined { return addressRefusal(ip, STRICT); }
 
 /** Read at call time, not at load: a test points ALLOW_ADDON_HOSTS at a name it controls. */
 const privateAddressAllowed = (host: string): boolean =>
@@ -53,6 +30,7 @@ export function privateAddressRefusal(host: string, address: string, env: NodeJS
 
 export async function validateRemoteUrl(raw: string): Promise<URL> {
   let url: URL;
+  // WHATWG URL refuses an IPv6 zone identifier outright, so a zoned literal never gets this far.
   try { url = new URL(raw.replace(/^stremio:\/\//i, "https://")); }
   catch { throw new AppError("Invalid URL.", "err.invalidUrl"); }
   if (!["http:", "https:"].includes(url.protocol)) throw new AppError("Only HTTP(S) addresses are supported.", "err.onlyHttp");

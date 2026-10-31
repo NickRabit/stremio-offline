@@ -16,6 +16,8 @@ import { safeFetch } from "./security.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { ffmpegPath, mediaStopping, trackMedia } from "./media-tools.js";
+import { internalUrl, redactMediaText } from "./internal-url.js";
+import { mediaResources } from "./media-resources.js";
 import { retryAfterMs } from "./outbound.js";
 import {
   classifyFailure, expectedSize, HttpSourceError, IncompleteDownloadError, parseContentRange,
@@ -65,6 +67,9 @@ import type {
   TravelProfileResolution,
   TravelProfileResolverInput,
 } from "./source-profile-resolver.js";
+
+export const HLS_STALL_MS = 5 * 60_000;
+const HLS_MAX_MS = 12 * 60 * 60_000;
 
 export type { DownloadStatus, PauseReason, QueueHalt };
 export type SubtitleMode = "off" | "optional" | "required";
@@ -212,6 +217,11 @@ export const isExecutableDownloadSnapshot = (
   snapshot: SourceAdmissionSnapshotV1 | undefined,
 ): snapshot is SourceAdmissionSnapshotV1 =>
   snapshot?.operation === "downloadToLibrary" && isExecutableDownloadProfile(snapshot.profile);
+
+/** FFmpeg input options for an HLS source that is already behind the media proxy. */
+export function proxiedPlaylistInput(source: string, playlistFlags: string[]): string[] {
+  return ["-protocol_whitelist", "http,tcp,crypto", ...playlistFlags, "-i", source];
+}
 
 export const isSelectedProfileJob = (
   job: Pick<DownloadJob, "sourceAdmission" | "stream">,
@@ -3048,16 +3058,10 @@ export class DownloadQueue {
     await unlink(partial).catch(() => undefined);
     job.received = 0; job.total = undefined; job.segments = undefined;
 
-    const headers = Object.entries(stream.behaviorHints?.proxyHeaders?.request ?? {})
-      .map(([name, value]) => `${name}: ${value}\r\n`)
-      .join("");
-
+    const claim = mediaResources.claimInternal(stream, 24 * 60 * 60_000);
     const args = [
       "-hide_banner", "-loglevel", "error", "-nostdin",
-      "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-      ...await playlistArgs("ffmpeg"),
-      ...(headers ? ["-headers", headers] : []),
-      "-i", stream.url!,
+      ...proxiedPlaylistInput(internalUrl(claim.path), await playlistArgs("ffmpeg")),
       ...(job.resolution?.audioTrack != null
         ? ["-map", "0:v:0?", "-map", `0:a:${job.resolution.audioTrack}?`,
           ...(job.resolution.subtitleTrack != null ? ["-map", `0:s:${job.resolution.subtitleTrack}?`] : []),
@@ -3073,23 +3077,37 @@ export class DownloadQueue {
     ];
 
     log("INFO", "Assembling a playlist", { id: job.id, target: job.target });
-    const child = trackMedia(spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] }));
+    let child;
+    try {
+      child = trackMedia(spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] }));
+    } catch (error) {
+      claim.release();
+      throw error;
+    }
 
     let stderr = "";
     child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4000); });
 
-    let lastSize = 0; let lastAt = this.now();
-    const progress = setInterval(() => {
-      void stat(partial).then((info) => {
-        const grown = info.size - lastSize;
-        if (grown <= 0) return;
-        job.received = info.size;
-        const now = this.now();
+    const spawnedAt = this.now();
+    let lastSize = 0; let lastAt = spawnedAt; let lastGrowthAt = spawnedAt;
+    let assemblyFailure: SourceError | undefined;
+    const checkBounds = (size?: number) => {
+      const now = this.now();
+      if (size !== undefined && size > lastSize) {
+        const grown = size - lastSize;
+        job.received = size;
         job.speed = grown / Math.max(0.001, (now - lastAt) / 1000);
-        lastSize = info.size; lastAt = now; job.updatedAt = new Date().toISOString();
+        lastSize = size; lastAt = now; lastGrowthAt = now; job.updatedAt = new Date().toISOString();
         this.onProgress?.(job, grown);
         this.saveSoon();
-      }, () => undefined);
+      }
+      if (assemblyFailure) return;
+      if (now - spawnedAt >= HLS_MAX_MS) assemblyFailure = new SourceError("The playlist assembly took too long.");
+      else if (now - lastGrowthAt >= HLS_STALL_MS) assemblyFailure = new SourceError("The playlist stopped delivering data.");
+      if (assemblyFailure) child.kill("SIGKILL");
+    };
+    const progress = setInterval(() => {
+      void stat(partial).then((info) => checkBounds(info.size), () => checkBounds());
     }, 1000);
 
     const abort = () => child.kill("SIGKILL");
@@ -3100,14 +3118,19 @@ export class DownloadQueue {
         child.once("error", reject);
         child.once("close", resolve);
       });
+      if (assemblyFailure) throw assemblyFailure;
       if (controller.signal.aborted) throw new Error("The assembly was stopped.");
       // Killed by the shutdown: nothing is recorded, so the job is still downloading on disk and
       // the next start queues it again, as it did before the shutdown took FFmpeg with it.
       if (code !== 0 && mediaStopping()) await new Promise<never>(() => {});
-      if (code !== 0) throw new SourceError(`The playlist could not be assembled. ${stderr.trim().split("\n").pop() ?? ""}`.trim());
+      if (code !== 0) {
+        const detail = redactMediaText(stderr.trim().split("\n").pop() ?? "");
+        throw new SourceError(`The playlist could not be assembled. ${detail}`.trim());
+      }
     } finally {
       clearInterval(progress);
       controller.signal.removeEventListener("abort", abort);
+      claim.release();
     }
 
     const written = await stat(partial).then((info) => info.size, () => 0);

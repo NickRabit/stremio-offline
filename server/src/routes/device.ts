@@ -3,14 +3,15 @@ import { randomBytes } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { isPlaylist, mayDownloadToDevice } from "../downloads.js";
+import { HLS_STALL_MS, isPlaylist, mayDownloadToDevice, proxiedPlaylistInput } from "../downloads.js";
 import type { DeviceTransfers } from "../device-transfers.js";
 import { AppError } from "../errors.js";
+import { internalUrl } from "../internal-url.js";
 import { posixBase, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { isRemoteMediaStream } from "../media-server-reference.js";
 import { isMediaServerError } from "../media-server-types.js";
-import { ResourceError, type DeviceDownloadTicket, type ResourceOwner } from "../media-resources.js";
+import { mediaResources, ResourceError, type DeviceDownloadTicket, type ResourceOwner } from "../media-resources.js";
 import type { MediaServerSources } from "../media-server-sources.js";
 import { defaultDownloadSettings, deviceFilename, type MediaInfo } from "../naming.js";
 import { contentOf, type AccessNeed } from "../revocation.js";
@@ -160,18 +161,13 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
       const { spawn } = await import("node:child_process");
       const { ffmpegPath, trackMedia } = await import("../media-tools.js");
       const { playlistArgs } = await import("../probe.js");
-      const headerLines = Object.entries(headers)
-        .filter(([name]) => name.toLowerCase() !== "range")
-        .map(([name, value]) => `${name}: ${value}\r\n`)
-        .join("");
 
       if (expired()) return expiredAnswer();
+      const claim = mediaResources.claimInternal(stream, 24 * 60 * 60_000);
+      res.once("close", claim.release);
       const child = trackMedia(spawn(ffmpegPath(), [
         "-hide_banner", "-loglevel", "error", "-nostdin",
-        "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-        ...(await playlistArgs("ffmpeg")),
-        ...(headerLines ? ["-headers", headerLines] : []),
-        "-i", stream.url!,
+        ...proxiedPlaylistInput(internalUrl(claim.path), await playlistArgs("ffmpeg")),
         "-c", "copy",
         // ADTS frames out of a transport stream need this to be legal inside MP4.
         "-bsf:a", "aac_adtstoasc",
@@ -181,7 +177,17 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
 
       let stderr = "";
       child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-2000); });
-      res.on("close", () => { if (!res.writableEnded) child.kill("SIGKILL"); });
+      let lastOutputAt = Date.now();
+      const stall = setInterval(() => {
+        if (Date.now() - lastOutputAt >= HLS_STALL_MS) child.kill("SIGKILL");
+      }, 1000);
+      stall.unref();
+      child.stdout?.on("data", () => { lastOutputAt = Date.now(); });
+      child.once("close", () => { clearInterval(stall); claim.release(); });
+      res.on("close", () => {
+        clearInterval(stall);
+        if (!res.writableEnded) child.kill("SIGKILL");
+      });
 
       countBytes(res, statMeta({ source: "download", url: stream.url, title, addonKey: stream.addonKey, addonName: stream.addonName, kind: media?.kind }));
       deviceTransfers.attach(ticketId, { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "hls", addonName: stream.addonName }, res);

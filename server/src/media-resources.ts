@@ -309,6 +309,18 @@ export class MediaResources {
     return { stream, resourceId };
   }
 
+  /** A media-proxy entry for a reader inside the server -- a download, a device transfer --
+   *  that outlives no one's session. Released by the caller when the read ends. */
+  claimInternal(stream: StreamItem, lifetimeMs: number): { path: string; release(): void } {
+    if (isRemoteMediaStream(stream)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    const id = this.add(stream, {
+      userId: "internal",
+      sid: `internal-${randomBytes(12).toString("base64url")}`,
+      expiresAt: this.now() + lifetimeMs,
+    }, "media", undefined, true, false);
+    return { path: `/api/media/${id}`, release: () => this.remove(id) };
+  }
+
   path(stream: StreamItem): string {
     const claimed = this.bindings.get(stream);
     if (claimed) return `/api/media/${claimed}`;

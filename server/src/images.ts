@@ -330,7 +330,7 @@ export class ImageProxy {
       const item = entry as Record<string, unknown>;
       const next = { ...item };
       const target = item.kind === "poster" || item.shape === "poster" ? TILE_WIDTH : width;
-      for (const key of ["url", "src"]) if (typeof item[key] === "string") next[key] = this.proxied(item[key] as string, target);
+      for (const key of ["url", "src", "thumbnail"]) if (typeof item[key] === "string") next[key] = this.proxied(item[key] as string, target);
       return next;
     });
   }
@@ -346,18 +346,31 @@ export class ImageProxy {
     // Secure mode off still narrows a background: the page then loads it from the CDN itself.
     if (!secureMode()) return background === item.background && !duplicated ? item : { ...item, background: duplicated ? undefined : background };
     const videos = item.videos?.map((video) => {
-      const thumbnail = typeof video.thumbnail === "string" ? this.proxied(video.thumbnail) : video.thumbnail;
-      return thumbnail === video.thumbnail ? video : { ...video, thumbnail };
+      const next = { ...video };
+      for (const key of ["thumbnail", "poster"]) if (typeof video[key] === "string") next[key] = this.proxied(video[key] as string);
+      return next.thumbnail === video.thumbnail && next.poster === video.poster ? video : next;
     });
+    const cast = Array.isArray(item.cast)
+      ? item.cast.map((member) => {
+        if (!member || typeof member !== "object") return member;
+        const next = { ...member as Record<string, unknown> };
+        for (const key of ["profile", "photo"]) if (typeof next[key] === "string") next[key] = this.proxied(next[key] as string);
+        return next;
+      })
+      : item.cast;
     const galleries: Record<string, unknown> = {};
     for (const key of ["images", "screenshots"]) if (key in item) galleries[key] = this.rewriteGallery(item[key], width);
+    const safe = { ...item };
+    delete safe.website;
+    delete safe.links;
     return {
-      ...item,
+      ...safe,
       ...galleries,
       poster: this.proxied(item.poster),
       background: duplicated ? undefined : this.proxied(background, width),
       logo: typeof item.logo === "string" ? this.proxied(item.logo) : item.logo,
       ...(videos ? { videos } : {}),
+      ...(cast !== undefined ? { cast } : {}),
     };
   }
 

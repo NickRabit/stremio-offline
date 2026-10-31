@@ -38,6 +38,18 @@ kind of thing worth trying both ways without recreating the container. It is on
 for a new install and stays on across upgrades; turning it off makes the browser
 load artwork straight from the provider again.
 
+What secure mode covers, and what it deliberately leaves out:
+
+- Proxied: posters, backdrops, logos, episode stills and posters, gallery
+  pictures, cast photos, and addon logos and backgrounds. An SVG is served
+  with a sandboxing policy, so opening one directly cannot run anything.
+- Dropped from metadata: an addon's `website` and `links` fields; the site
+  links on a title come from the server's own `/api/links`.
+- Not affected by the switch: streams, subtitles and downloads always go
+  through the server, in secure mode or not.
+- Left out on purpose: in-app trailers. They play from YouTube only with
+  secure mode off; with it on, a trailer opens in a new tab.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `IMAGE_CACHE_MB` | `512` | Disk the cached artwork may take before the oldest images are dropped. |
@@ -156,6 +168,14 @@ Removing a library never touches the media. `?forget=1` drops what the server
 remembers about it — the match history and its thumbnails — and nothing else.
 
 ## Addon access
+
+Every connection the server opens for an addon -- manifests, catalogues,
+artwork, subtitles, streams, every redirect, and every segment and key of an
+HLS playlist -- is checked against the private ranges first: loopback, the LAN,
+link-local and cloud metadata, carrier-grade NAT, and the IPv6 forms of all of
+them (mapped, NAT64, 6to4, Teredo, unique-local). The name is checked again when
+the socket opens, so a DNS answer that changes in between is caught. FFmpeg never
+receives an addon URL: it reads through the server's own media proxy.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

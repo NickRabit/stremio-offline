@@ -8,7 +8,7 @@ import { mediaResources, safeSourceText } from "./media-resources.js";
 import { createHash } from "node:crypto";
 import { PlayerPreviews } from "./player-previews.js";
 import { PlayerSidecars } from "./player-sidecars.js";
-import { INTERNAL_TOKEN } from "./auth.js";
+import { internalUrl } from "./internal-url.js";
 import { log } from "./logger.js";
 import { ConversionMonitor, sourcePace } from "./conversion-pace.js";
 import { pickByLanguage } from "./language.js";
@@ -944,10 +944,7 @@ export class PlaybackManager {
   }
 
   private proxyPath(stream: StreamItem) { return mediaResources.path(stream); }
-  /** A call from inside the server proves itself with the process token, having no browser cookie. */
-  private localUrl(relative: string) {
-    return `http://127.0.0.1:${process.env.PORT ?? 8080}${relative}${relative.includes("?") ? "&" : "?"}token=${INTERNAL_TOKEN}`;
-  }
+  private localUrl(relative: string) { return internalUrl(relative); }
 
   private extension(stream: StreamItem) {
     let name = stream.behaviorHints?.filename ?? "";

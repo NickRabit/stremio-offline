@@ -115,6 +115,83 @@ test("every field the interface can show ends up rewritten", async () => {
   assert.equal(meta.description, "https://cdn.example/not-an-image is only text");
 });
 
+test("secure metadata rewrites the remaining artwork and drops site links", async () => {
+  const { proxy } = await harness();
+  const meta = proxy.rewriteMeta({
+    id: "tt1",
+    type: "series",
+    name: "Show",
+    videos: [
+      { id: "1", poster: "https://cdn.example/episode-poster.jpg", thumbnail: "https://cdn.example/episode-still.jpg" },
+    ],
+    images: [
+      { url: "https://cdn.example/gallery.jpg", src: "https://cdn.example/gallery-src.jpg", thumbnail: "https://cdn.example/gallery-thumb.jpg" },
+    ],
+    screenshots: [
+      { thumbnail: "https://cdn.example/screenshot-thumb.jpg" },
+    ],
+    cast: [
+      { name: "Actor", profile: "https://cdn.example/profile.jpg", photo: "https://cdn.example/photo.jpg" },
+      { name: "No picture" },
+      { name: "Not a string", profile: 7 },
+      "unrelated",
+    ],
+    website: "https://studio.example",
+    links: [{ name: "Site", url: "https://site.example" }],
+  });
+
+  const [video] = meta.videos as Array<Record<string, unknown>>;
+  assert.match(String(video?.poster), /^\/api\/image\//);
+  assert.match(String(video?.thumbnail), /^\/api\/image\//);
+  const [image] = meta.images as Array<Record<string, unknown>>;
+  assert.match(String(image?.thumbnail), /^\/api\/image\//);
+  const [screenshot] = meta.screenshots as Array<Record<string, unknown>>;
+  assert.match(String(screenshot?.thumbnail), /^\/api\/image\//);
+  const [cast, noPicture, numericProfile] = meta.cast as Array<Record<string, unknown> | string>;
+  assert.ok(cast && typeof cast === "object");
+  assert.match(String(cast.profile), /^\/api\/image\//);
+  assert.match(String(cast.photo), /^\/api\/image\//);
+  assert.ok(noPicture && typeof noPicture === "object");
+  assert.equal("profile" in noPicture, false);
+  assert.ok(numericProfile && typeof numericProfile === "object");
+  assert.equal(numericProfile.profile, 7);
+  assert.equal(meta.cast?.[3], "unrelated");
+  assert.equal("website" in meta, false);
+  assert.equal("links" in meta, false);
+
+  const walk = (value: unknown) => {
+    if (typeof value === "string") {
+      assert.doesNotMatch(value, /^https?:\/\//);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) walk(entry);
+      return;
+    }
+    if (value && typeof value === "object") for (const entry of Object.values(value)) walk(entry);
+  };
+  walk(meta);
+});
+
+test("secure mode off leaves the additional metadata fields unchanged", async () => {
+  const { proxy } = await harness();
+  configureSecureMode(() => false);
+  try {
+    const input = {
+      id: "tt1",
+      type: "series",
+      name: "Show",
+      videos: [{ poster: "https://cdn.example/episode-poster.jpg", thumbnail: "https://cdn.example/episode-still.jpg" }],
+      images: [{ thumbnail: "https://cdn.example/gallery-thumb.jpg" }],
+      screenshots: [{ thumbnail: "https://cdn.example/screenshot-thumb.jpg" }],
+      cast: [{ profile: "https://cdn.example/profile.jpg", photo: "https://cdn.example/photo.jpg" }, "unrelated"],
+      website: "https://studio.example",
+      links: [{ url: "https://site.example" }],
+    };
+    assert.deepEqual(proxy.rewriteMeta(input), input);
+  } finally { configureSecureMode(() => true); }
+});
+
 test("secure mode off leaves the payload as it came", async () => {
   const { proxy } = await harness();
   configureSecureMode(() => false);
