@@ -304,7 +304,8 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
       ...(item.poster ? { poster: item.poster } : {}),
     };
   };
-  const chips = <TitleChips kind={t(episode ? "episodes.one" : "catalog.oneMovie")} links={enrichment.links}
+  // Opened as a show with its episode picker, the title is the series, as in the catalogue.
+  const chips = <TitleChips kind={t(episodes ? "catalog.oneSeries" : episode ? "episodes.one" : "catalog.oneMovie")} links={enrichment.links}
     onTrailer={onTrailer} secureMode={secureMode}/>;
   const facts = [item.year, sources?.length === 1 && item.size ? bytes(item.size) : ""].filter(Boolean).join(" · ");
   const pieces = TitleExtraFacts({ extras: titleExtras.extras, language: uiLanguage, name: title });
