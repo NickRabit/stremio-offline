@@ -10,6 +10,7 @@ import {
   attachTitleExtrasDisk,
   clearTitleExtrasCache,
   detachTitleExtrasDisk,
+  flushTitleExtrasDisk,
   setTitleExtrasCacheLimitForTests,
   titleExtras,
   type TitleExtrasDeps,
@@ -47,6 +48,16 @@ const fresh = (t: TestContext) => {
     clearTitleExtrasCache();
     clearTmdbCache();
   });
+};
+
+const diskCache = async (t: TestContext) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-title-extras-"));
+  t.after(async () => {
+    await flushTitleExtrasDisk();
+    await rm(dir, { recursive: true, force: true });
+  });
+  await attachTitleExtrasDisk(dir);
+  return dir;
 };
 
 test("movie extras map ordered cast, bounded crew, IMDb recommendations and the regional rating", async (t) => {
@@ -402,9 +413,7 @@ test("a partial build is retried after thirty minutes while a full success lasts
 
 test("a complete disk build survives an empty memory cache", async (t) => {
   fresh(t);
-  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-title-extras-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  await attachTitleExtrasDisk(dir);
+  const dir = await diskCache(t);
   let now = 1_000;
   let details = 0;
   let externalRequests = 0;
@@ -447,9 +456,7 @@ test("a complete disk build survives an empty memory cache", async (t) => {
 
 test("concurrent empty-memory requests share one disk read", async (t) => {
   fresh(t);
-  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-title-extras-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  await attachTitleExtrasDisk(dir);
+  const dir = await diskCache(t);
   let details = 0;
   const fetchImpl: FetchLike = async (raw) => {
     if (new URL(raw).pathname !== "/3/movie/41") throw new Error(`Unexpected URL ${raw}`);
@@ -470,9 +477,7 @@ test("concurrent empty-memory requests share one disk read", async (t) => {
 
 test("a partial build writes no disk file", async (t) => {
   fresh(t);
-  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-title-extras-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  await attachTitleExtrasDisk(dir);
+  const dir = await diskCache(t);
   const fetchImpl: FetchLike = async (raw) => {
     const url = new URL(raw);
     if (url.pathname === "/3/movie/42") {
@@ -857,9 +862,7 @@ test("an addon id without IMDb finds TMDB through the meta's imdb_id", async (t)
 
 test("a disk file with malformed entries is a miss, not a failure", async (t) => {
   fresh(t);
-  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-title-extras-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  await attachTitleExtrasDisk(dir);
+  const dir = await diskCache(t);
   const key = `movie:tmdb:41:cs:${createHash("sha256").update(config.apiKey).digest("hex").slice(0, 12)}`;
   const name = `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`;
   await writeFile(path.join(dir, name), JSON.stringify({
