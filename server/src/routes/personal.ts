@@ -10,12 +10,12 @@ import {
 } from "../favorites.js";
 import type { RemoteHomeCard } from "../home.js";
 import type { MediaServerAuthority } from "../media-server-manager.js";
-import { CARD_LIMIT_MAX as REMOTE_FAVORITE_LIMIT, type MediaServerPersonal } from "../media-server-personal.js";
+import { CARD_LIMIT_MAX as REMOTE_FAVORITE_LIMIT, type MediaServerPersonal, type RemoteCards } from "../media-server-personal.js";
 import { HOME_FORGET_LIMIT, HOME_LOOKUP_DEADLINE_MS, HOME_RESUME_FILE_LIMIT, type ResumeIdentity } from "../home.js";
 import { images } from "../images.js";
 import { remoteArtworkPath } from "../media-server-types.js";
 import { stableKeyOfFile, stableKeyOfRemote } from "../media-resources.js";
-import { knownTitleEntry, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { artworkBindingKey, knownTitleEntry, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
@@ -54,6 +54,8 @@ export interface PersonalDeps extends RouteContext {
   scheduleFileArtwork(key: string, shape?: ArtShape): void;
   scheduleFolderArtwork(key: string, shape?: ArtShape): void;
   setLibraryFavorite(relative: string, wanted: boolean, userId: string | undefined): Promise<void>;
+  /** Normal title art plus the stored gallery's usable wide fallback, as same-origin URLs. */
+  titleArtworkUrls(key: string): Promise<TitleArtwork>;
   thumbUrl(param: "path" | "dir" | "key", value: string, art: string | undefined, shape?: ArtShape): Promise<string | undefined>;
   updateData(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
   watchlistOf(data: UserData): Record<string, WatchlistEntry>;
@@ -139,12 +141,24 @@ export interface FavoritesPage {
   partial?: boolean;
 }
 
+export interface TitleArtwork {
+  poster?: string;
+  wide?: string;
+}
+
+export interface TitleArtworkOptions {
+  /** The path that stands for the title. Its own art wins each slot it fills. */
+  boundKey?: string;
+  /** Time still available to this projection, measured from the caller's request deadline. */
+  deadlineMs?: number;
+}
+
 /** The pieces `registerHomeRoutes` reads from the personal routes instead of reaching into
  *  the store itself, so exactly one place applies the permission rules. */
 export interface PersonalApi {
   progressRows(req: express.Request, options?: ProgressRowOptions): Promise<ProgressPage>;
   libraryResumeItems(req: express.Request, options?: ResumeRowOptions): Promise<ResumePage>;
-  titlePoster(req: express.Request, identity: ResumeIdentity, options?: { boundKey?: string; deadlineMs?: number }): Promise<string | undefined>;
+  titleArtwork(req: express.Request, identity: ResumeIdentity, options?: TitleArtworkOptions): Promise<TitleArtwork>;
   favoritesPage(req: express.Request, options?: FavoritesOptions): Promise<FavoritesPage>;
   pathVisible(key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean;
   /** The catalogue keys the account starred: a media-server record of one of them is that title,
@@ -154,7 +168,7 @@ export interface PersonalApi {
 
 const LOOKUP_TIMEOUT = Symbol("home-lookup-timeout");
 /** One request repairs at most one full Resume page, however long its history is. */
-const TITLE_POSTER_LOOKUP_LIMIT = 120;
+const TITLE_ARTWORK_LOOKUP_LIMIT = 120;
 
 /** Races one promise against a deadline. `undefined` means there is no deadline. */
 async function withDeadline<T>(work: Promise<T>, ms?: number): Promise<T | typeof LOOKUP_TIMEOUT> {
@@ -165,48 +179,104 @@ async function withDeadline<T>(work: Promise<T>, ms?: number): Promise<T | typeo
   } finally { if (timer) clearTimeout(timer); }
 }
 
+const artworkText = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() ? value.trim() : undefined;
+
+async function mapBounded<T, R>(items: T[], limit: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await work(items[index] as T, index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** A wide gallery entry, excluding the pictures a provider commonly labels as posters or logos. */
+const galleryWide = (value: unknown, screenshots: boolean): string | undefined => {
+  if (typeof value === "string") return artworkText(value);
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as Record<string, unknown>;
+  const kind = artworkText(item.kind)?.toLocaleLowerCase();
+  const type = artworkText(item.type)?.toLocaleLowerCase();
+  const shape = artworkText(item.shape)?.toLocaleLowerCase();
+  if (kind === "logo" || type === "logo" || kind === "poster" || type === "poster" || shape === "poster") return undefined;
+  if (shape !== undefined && shape !== "wide") return undefined;
+  const url = artworkText(item.url) ?? artworkText(item.src) ?? artworkText(item.thumbnail);
+  if (!url) return undefined;
+  if (shape === "wide" || kind === "background" || kind === "still" || screenshots) return url;
+  return kind === undefined && type === undefined ? url : undefined;
+};
+
+/** The actual title-wide picture metadata offers: a distinct background first, then a usable
+ * gallery still. A duplicated poster is a portrait fallback, not a backdrop. */
+const metadataArtwork = (meta: MetaItem | null): TitleArtwork => {
+  const poster = artworkText(meta?.poster);
+  const logo = artworkText(meta?.logo);
+  const sameAsPoster = (value: string | undefined) => value !== undefined && poster !== undefined && value === poster;
+  const knownPortraitOrLogo = (value: string | undefined) =>
+    sameAsPoster(value) || (value !== undefined && logo !== undefined && value === logo);
+  let wide = artworkText(meta?.background);
+  if (knownPortraitOrLogo(wide)) wide = undefined;
+  if (!wide) {
+    for (const [key, screenshots] of [["images", false], ["screenshots", true]] as const) {
+      const gallery = meta?.[key];
+      if (!Array.isArray(gallery)) continue;
+      wide = gallery
+        .map((entry) => galleryWide(entry, screenshots))
+        .find((url) => url !== undefined && !knownPortraitOrLogo(url));
+      if (wide) break;
+    }
+  }
+  return {
+    ...(poster ? { poster: images.proxied(poster) } : {}),
+    ...(wide ? { wide: images.proxied(wide) } : {}),
+  };
+};
+
 export function registerPersonalRoutes(app: express.Application, deps: PersonalDeps): PersonalApi {
-  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath, remotePersonal, authorityOf } = deps;
-  const titlePosters = new WeakMap<express.Request, {
+  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls, thumbUrl, updateData, watchlistOf, wirePath, remotePersonal, authorityOf } = deps;
+  const titleArtworks = new WeakMap<express.Request, {
     titles: Set<string>;
-    metadata: Map<string, Promise<string | undefined>>;
-    folders: Map<string, Promise<string | undefined>>;
+    metadata: Map<string, Promise<TitleArtwork>>;
+    paths: Map<string, Promise<TitleArtwork>>;
   }>();
 
-  /** One title picture per request. A bound folder is already the title's own art; metadata
-   * is the fallback for catalogue-only rows and for folders whose art is still being made. */
-  const titlePoster = (req: express.Request, identity: ResumeIdentity, options: { boundKey?: string; deadlineMs?: number } = {}) => {
+  /** One title's pictures per request. A bound folder supplies each slot it can; metadata and
+   * its stored gallery fill the rest without one slot withholding the other. */
+  const titleArtwork = async (req: express.Request, identity: ResumeIdentity, options: TitleArtworkOptions = {}): Promise<TitleArtwork> => {
     const startedAt = Date.now();
-    let state = titlePosters.get(req);
+    let state = titleArtworks.get(req);
     if (!state) {
-      state = { titles: new Set(), metadata: new Map(), folders: new Map() };
-      titlePosters.set(req, state);
+      state = { titles: new Set(), metadata: new Map(), paths: new Map() };
+      titleArtworks.set(req, state);
     }
     const identityKey = `${identity.type}:${identity.id}`;
     if (!state.titles.has(identityKey)) {
-      if (state.titles.size >= TITLE_POSTER_LOOKUP_LIMIT) return Promise.resolve(undefined);
+      if (state.titles.size >= TITLE_ARTWORK_LOOKUP_LIMIT) return {};
       state.titles.add(identityKey);
     }
-    const boundKey = options.boundKey && !isVideo(posixBase(options.boundKey)) ? options.boundKey : undefined;
-    const folder = (() => {
-      if (!boundKey) return Promise.resolve(undefined);
-      const known = state.folders.get(boundKey);
+    const boundKey = options.boundKey;
+    const local: Promise<TitleArtwork | undefined> = (() => {
+      if (!boundKey) return Promise.resolve<TitleArtwork | undefined>(undefined);
+      const known = state.paths.get(boundKey);
       if (known) return known;
-      const work = (async () => {
-        const { poster } = await locateFolderArtworkPair(boundKey);
-        if (!poster) scheduleFolderArtwork(boundKey);
-        return thumbUrl("dir", wirePath(boundKey), poster);
-      })().catch(() => undefined);
-      state.folders.set(boundKey, work);
+      const work = titleArtworkUrls(boundKey).catch((): TitleArtwork => ({}));
+      state.paths.set(boundKey, work);
       return work;
     })();
-    return folder.then(async (picture) => {
-      if (picture) return picture;
-      const remainingMs = options.deadlineMs === undefined
-        ? HOME_LOOKUP_DEADLINE_MS
-        : Math.max(0, options.deadlineMs - (Date.now() - startedAt));
-      if (remainingMs <= 0) return undefined;
-      let metadata = state.metadata.get(identityKey);
+    const own = await local;
+    if (own?.poster && own.wide) return own;
+    const remainingMs = options.deadlineMs === undefined
+      ? Math.max(0, HOME_LOOKUP_DEADLINE_MS - (Date.now() - startedAt))
+      : Math.max(0, options.deadlineMs - (Date.now() - startedAt));
+    let metadata: Promise<TitleArtwork> | undefined;
+    if (remainingMs > 0) {
+      metadata = state.metadata.get(identityKey);
       if (!metadata) {
         const viewer = viewerOf(currentUser(req));
         const controller = new AbortController();
@@ -216,14 +286,18 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         ).then((answer) => {
           if (answer === LOOKUP_TIMEOUT) {
             controller.abort();
-            return undefined;
+            return {};
           }
-          return images.proxied(answer?.poster);
-        }).catch(() => undefined);
+          return metadataArtwork(answer);
+        }).catch((): TitleArtwork => ({}));
         state.metadata.set(identityKey, metadata);
       }
-      return metadata;
-    });
+    }
+    const fromMetadata: TitleArtwork = metadata ? await metadata : {};
+    return {
+      ...((own?.poster ?? fromMetadata.poster) ? { poster: own?.poster ?? fromMetadata.poster } : {}),
+      ...((own?.wide ?? fromMetadata.wide) ? { wide: own?.wide ?? fromMetadata.wide } : {}),
+    };
   };
 
   /** Whether the caller may see the library a stored path names. A path that names no
@@ -787,9 +861,11 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     } satisfies FavoriteLibraryItem;
   };
 
+  type FavoriteRemoteProjection = FavoriteRemoteItem & { identity?: ResumeIdentity };
+
   /** One remote card as the Favourites grid shows it: the library it belongs to and the item its
    *  own detail opens, never a token, a stream address or a user id. */
-  const favoriteRemoteItem = (card: RemoteHomeCard): FavoriteRemoteItem => ({
+  const favoriteRemoteItem = (card: RemoteHomeCard): FavoriteRemoteProjection => ({
     kind: "remote",
     libraryId: card.libraryId,
     itemId: card.itemId,
@@ -801,13 +877,20 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     ...(card.wide ? { wide: card.wide } : {}),
     ...(card.season === undefined ? {} : { season: card.season }),
     ...(card.episode === undefined ? {} : { episode: card.episode }),
+    ...(card.identity ? { identity: card.identity } : {}),
   });
+
+  const publicFavoriteItem = (item: FavoriteItem | FavoriteRemoteProjection): FavoriteItem => {
+    if (item.kind !== "remote" || !("identity" in item) || item.identity === undefined) return item;
+    const { identity: _identity, ...card } = item;
+    return card;
+  };
 
   /** The stars a media server holds. A library that cannot be confirmed, or a projection that
    *  no longer stands, leaves the answer partial instead of failing it or blocking the local
    *  stars, so the one list is never emptied by a server that is slow or down. */
   const remoteFavorites = async (req: express.Request, skip: number, limit: number, onHome: boolean, excludeTitles?: ReadonlySet<string>):
-    Promise<{ items: FavoriteRemoteItem[]; total: number; partial: boolean } | undefined> => {
+    Promise<{ items: FavoriteRemoteProjection[]; total: number; partial: boolean; proof: { authority: MediaServerAuthority; cards: RemoteCards } } | undefined> => {
     try {
       const authority = authorityOf(req);
       const cards = await remotePersonal.cards(authority, {
@@ -815,10 +898,50 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         ...(onHome ? { onHome: true } : {}),
         ...(excludeTitles?.size ? { excludeTitles } : {}),
       });
-      remotePersonal.assertCardsCurrent(authority, cards);
-      return { items: cards.items.map(favoriteRemoteItem), total: cards.total, partial: cards.partial === true };
+      return { items: cards.items.map(favoriteRemoteItem), total: cards.total, partial: cards.partial === true, proof: { authority, cards } };
     } catch { return undefined; }
   };
+
+  const favoriteIdentityOf = (item: FavoriteItem | FavoriteRemoteProjection): ResumeIdentity | undefined => {
+    if (item.kind === "remote") return "identity" in item ? item.identity : undefined;
+    if (item.kind === "catalog") return item.type === "movie" || item.type === "series" ? { type: item.type, id: item.id } : undefined;
+    return item.title;
+  };
+
+  const favoriteBoundKey = (item: FavoriteItem, identity: ResumeIdentity, units: TitleUnit[]): string | undefined => {
+    if (item.kind !== "library") return undefined;
+    const known = favoriteIdentity(libraryKey(item.path), metaStore.qualifiedMeta(), units);
+    return known ? artworkBindingKey(known, identity) : undefined;
+  };
+
+  const enrichFavoriteArtwork = async (req: express.Request, items: Array<FavoriteItem | FavoriteRemoteProjection>): Promise<Array<FavoriteItem | FavoriteRemoteProjection>> => {
+    const deadline = Date.now() + HOME_LOOKUP_DEADLINE_MS;
+    const units = items.some((item) => item.kind === "library") ? await libraryUnits() : [];
+    return mapBounded(items, 4, async (item) => {
+      const identity = favoriteIdentityOf(item);
+      if (!identity) return item;
+      const boundKey = item.kind === "library" ? favoriteBoundKey(item, identity, units) : undefined;
+      const art = await titleArtwork(req, identity, {
+        ...(boundKey ? { boundKey } : {}),
+        deadlineMs: Math.max(0, deadline - Date.now()),
+      });
+      return {
+        ...item,
+        ...(art.poster ? { poster: art.poster } : {}),
+        ...(art.wide ? { wide: art.wide } : {}),
+      };
+    });
+  };
+
+  const remoteStillCurrent = (remote: Awaited<ReturnType<typeof remoteFavorites>>): boolean => {
+    if (!remote) return true;
+    try {
+      remotePersonal.assertCardsCurrent(remote.proof.authority, remote.proof.cards);
+      return true;
+    } catch { return false; }
+  };
+
+  const pendingIn = (items: FavoriteItem[]) => items.some((item) => item.kind === "library" && (!item.poster || !item.wide));
 
   const favoritesPage = async (req: express.Request, options: FavoritesOptions = {}): Promise<FavoritesPage> => {
     const filter = options.filter ?? "all";
@@ -829,9 +952,15 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const starredTitles = new Set(Object.keys(watchlistOf(dataOf(req))));
     if (filter === "remote") {
       const remote = await remoteFavorites(req, skip, limit, options.onHome === true, starredTitles);
-      return remote
-        ? { items: remote.items, total: remote.total, pending: false, ...(remote.partial ? { partial: true } : {}) }
-        : { items: [], total: 0, pending: false, partial: true };
+      if (!remote) return { items: [], total: 0, pending: false, partial: true };
+      const enriched = await enrichFavoriteArtwork(req, remote.items);
+      if (!remoteStillCurrent(remote)) return { items: [], total: 0, pending: false, partial: true };
+      return {
+        items: enriched.map((item) => publicFavoriteItem(item)),
+        total: remote.total,
+        pending: false,
+        ...(remote.partial ? { partial: true } : {}),
+      };
     }
     // The two title filters read the media server's own stars too: one call for every card, kept
     // by the kind of item, and merged with the local half the way `all` merges them.
@@ -844,11 +973,16 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       const remoteItems = (remote?.items ?? []).filter((item) =>
         wanted === "movie" ? item.itemType === "movie" : item.itemType === "series" || item.itemType === "episode");
       const merged = [...described, ...remoteItems];
+      const page = merged.slice(skip, skip + limit);
+      const enriched = await enrichFavoriteArtwork(req, page);
+      const current = remoteStillCurrent(remote);
+      const items = current ? enriched : enriched.filter((item) => item.kind !== "remote");
+      const remoteCount = current ? remoteItems.length : 0;
       return {
-        items: merged.slice(skip, skip + limit),
-        total: described.length + remoteItems.length,
-        pending: described.some((item) => item.kind === "library" && (!item.poster || !item.wide)),
-        ...(remote === undefined ? { partial: true } : {}),
+        items: items.map((item) => publicFavoriteItem(item)),
+        total: described.length + remoteCount,
+        pending: pendingIn(items),
+        ...(remote === undefined || !current ? { partial: true } : {}),
       };
     }
     const entries = await favoritesEntries(req, options);
@@ -856,10 +990,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // a key the disk no longer answers cannot make a page repeat or stall the "load more".
     const local = (await Promise.all(entries.map((entry) => describeFavorite(req, entry))))
       .filter((item): item is FavoriteItem => item !== undefined);
-    const pendingIn = (items: FavoriteItem[]) => items.some((item) => item.kind === "library" && (!item.poster || !item.wide));
     if (filter !== "all" || options.remote === false) {
-      const items = local.slice(skip, skip + limit);
-      return { items, total: local.length, pending: pendingIn(items) };
+      const items = await enrichFavoriteArtwork(req, local.slice(skip, skip + limit));
+      return { items: items.map((item) => publicFavoriteItem(item)), total: local.length, pending: pendingIn(items) };
     }
     // The local stars lead the page and the media server's fill what is left of it. The remote
     // slice starts past the local entries the request already asked for, so a page boundary
@@ -867,9 +1000,20 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // the server for one row alone, which is enough for `total`.
     const page = local.slice(skip, skip + limit);
     const remote = await remoteFavorites(req, Math.max(0, skip - local.length), page.length < limit ? limit : 1, options.onHome === true, starredTitles);
-    if (!remote) return { items: page, total: local.length, pending: pendingIn(page), partial: true };
-    const items = [...page, ...remote.items.slice(0, Math.max(0, limit - page.length))];
-    return { items, total: local.length + remote.total, pending: pendingIn(items), ...(remote.partial ? { partial: true } : {}) };
+    if (!remote) {
+      const items = await enrichFavoriteArtwork(req, page);
+      return { items: items.map((item) => publicFavoriteItem(item)), total: local.length, pending: pendingIn(items), partial: true };
+    }
+    const merged = [...page, ...remote.items.slice(0, Math.max(0, limit - page.length))];
+    const enriched = await enrichFavoriteArtwork(req, merged);
+    const current = remoteStillCurrent(remote);
+    const items = current ? enriched : enriched.filter((item) => item.kind !== "remote");
+    return {
+      items: items.map((item) => publicFavoriteItem(item)),
+      total: local.length + (current ? remote.total : 0),
+      pending: pendingIn(items),
+      ...(remote.partial || !current ? { partial: true } : {}),
+    };
   };
   /** One Favourites list for every signed-in account: its own library stars first (newest
    *  star first by the stored order, because a library star carries no time) and then the
@@ -987,5 +1131,5 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
   }));
 
-  return { progressRows, libraryResumeItems, titlePoster, favoritesPage, pathVisible, watchlistKeys: (req) => Object.keys(watchlistOf(dataOf(req))) };
+  return { progressRows, libraryResumeItems, titleArtwork, favoritesPage, pathVisible, watchlistKeys: (req) => Object.keys(watchlistOf(dataOf(req))) };
 }

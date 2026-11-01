@@ -93,6 +93,9 @@ interface Harness {
   artwork?: string;
   /** What a bound title folder answers; this is preferred over the file's episode frame. */
   folderArtwork?: string;
+  /** Bound-title URLs supplied directly, including a stored gallery fallback. */
+  localTitleArtwork?: (key: string) => Promise<{ poster?: string; wide?: string }>;
+  artworkKeyCalls: string[];
   /** Whether `attachBrowseMeta` reports that it found metadata beyond the scan. */
   backfill?: boolean;
   /** Every series id the catalogue side was asked about, in order. */
@@ -105,6 +108,10 @@ interface Harness {
   remoteCards: RemoteHomeCard[];
   /** Every card page the favourite routes asked for. */
   remoteCalls: Array<{ filter: string; skip: number; limit: number; onHome: boolean }>;
+  /** Every remote projection re-check, in the order it happened relative to other work. */
+  remoteAssertions: number;
+  remoteInvalid: boolean;
+  events: string[];
   remoteThrows: boolean;
   remotePartial: boolean;
   data(user: string): UserData;
@@ -145,7 +152,8 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     episodes: [], episodesThrows: false, newEpisodesCalls: [], suggestions: [], suggestionsThrow: false, suggestionCalls: 0,
     now: options.now ?? Date.parse("2026-01-15T12:00:00.000Z"),
     metaDelayMs: 0, metaAnswer: null, metaThrows: false, metaCalls: [], metaSignals: [], lookups: [], catalogCalls: [], catalogDelayMs: 0,
-    remoteCards: [], remoteCalls: [], remoteThrows: false, remotePartial: false,
+    artworkKeyCalls: [],
+    remoteCards: [], remoteCalls: [], remoteAssertions: 0, remoteInvalid: false, events: [], remoteThrows: false, remotePartial: false,
     data: () => { throw new Error("not mounted"); }, close: async () => undefined,
   };
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()], [ADMIN, emptyUserData()]]);
@@ -171,6 +179,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     cachedMeta: async (_type, id, _language, viewer, opts) => {
       state.lookups.push(id);
       state.metaCalls.push({ id, viewer: viewer?.id, artwork: opts?.artwork === true });
+      state.events.push(`meta:${id}`);
       state.metaSignals.push(opts?.signal);
       if (state.metaDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.metaDelayMs));
       if (state.metaThrows) throw new Error("metadata is unavailable");
@@ -213,6 +222,14 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     scheduleFileArtwork: () => undefined,
     scheduleFolderArtwork: () => undefined,
     setLibraryFavorite: async () => undefined,
+    titleArtworkUrls: async (key) => {
+      state.artworkKeyCalls.push(key);
+      if (state.localTitleArtwork) return state.localTitleArtwork(key);
+      if (!state.folderArtwork || (!state.folders.has(key) && !state.records[key])) return {};
+      const parsed = parseLibraryPath(key);
+      const wire = parsed && libraries.length === 1 ? relativeWithin(libraries[0]!.id, key) : key;
+      return { poster: `thumb:${wire}` };
+    },
     thumbUrl: async (_param, value, art, shape) => (art ? `thumb:${value}${shape === "wide" ? ":wide" : ""}` : undefined),
     updateData: async (req, mutate) => {
       const id = userOf(req);
@@ -232,7 +249,11 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
         return { items: state.remoteCards.slice(skip, skip + limit), total: state.remoteCards.length,
           ...(state.remotePartial ? { partial: true } : {}) };
       },
-      assertCardsCurrent: () => undefined,
+      assertCardsCurrent: () => {
+        state.remoteAssertions += 1;
+        state.events.push("assert");
+        if (state.remoteInvalid) throw new Error("the remote projection changed");
+      },
     } as unknown as PersonalDeps["remotePersonal"],
     authorityOf: () => ({ actor: { id: ALICE, secret: "unused" }, assertCurrent: () => undefined }),
     wirePath: (key) => {
@@ -441,7 +462,31 @@ test("a completed job whose library is switched off or whose file is gone yields
   assert.deepEqual(rows.completed!.items.map((item) => item.title), ["On"]);
 });
 
-test("a stored catalogue row of a revoked addon is dropped while its own title poster is still repaired", async (t) => {
+test("completed and tonight share a bound title's poster and real backdrop", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const titleKey = "lib_00000001/Films/Heat";
+  const wide = "https://images.example/heat-wide.jpg";
+  harness.records[titleKey] = { type: "movie", id: "tt9", name: "Heat" };
+  harness.folders.add(titleKey);
+  harness.folderArtwork = "heat-poster.jpg";
+  harness.artwork = "episode-frame.jpg";
+  harness.metaAnswer = { id: "tt9", type: "movie", name: "Heat", poster: "https://images.example/heat.jpg", background: wide } as MetaItem;
+  harness.completed = [{
+    id: "done", title: "Heat", ownerUserId: ALICE, status: "completed",
+    target: "lib_00000001/Films/Heat/Heat.mkv", completedAt: "2024-02-01T00:00:00.000Z",
+  }];
+
+  const rows = (await (await api(harness.base, "/api/home?rows=completed,tonight", ALICE)).json() as { rows: Record<string, HomeRowView> }).rows;
+
+  assert.equal(rows.completed!.items[0]!.poster, "thumb:Films/Heat");
+  assert.equal(rows.completed!.items[0]!.wide, images.proxied(wide));
+  assert.equal(rows.tonight!.items[0]!.poster, "thumb:Films/Heat");
+  assert.equal(rows.tonight!.items[0]!.wide, images.proxied(wide));
+  assert.deepEqual(harness.metaCalls, [{ id: "tt9", viewer: ALICE, artwork: true }]);
+});
+
+test("a stored catalogue row of a revoked addon is dropped while its own title artwork is still repaired", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media" })] });
   t.after(harness.close);
   harness.addons.push(
@@ -828,12 +873,16 @@ test("GET /api/resume is the first page of Home's resume row", async (t) => {
   assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["file:Shows/01.mkv", "series:tt1:1:2"]);
 });
 
-test("old saved episode art is replaced by the title poster on Home and the full resume screen", async (t) => {
+test("old saved episode art is replaced by the title poster and backdrop on Home and full resume", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
   t.after(harness.close);
   const path = "lib_00000001/Shows/Show/Show.S01E02.mkv";
   harness.records["lib_00000001/Shows/Show"] = { type: "series", id: "tt1", name: "Show" };
-  harness.metaAnswer = { id: "tt1", type: "series", name: "Show", poster: "https://images.example/show.jpg" } as MetaItem;
+  harness.metaAnswer = {
+    id: "tt1", type: "series", name: "Show",
+    poster: "https://images.example/show.jpg",
+    background: "https://images.example/show-wide.jpg",
+  } as MetaItem;
   harness.data(ALICE).progress = {
     "series:tt1:1:2": {
       position: 123, duration: 900, title: "Show · Second", path,
@@ -846,6 +895,7 @@ test("old saved episode art is replaced by the title poster on Home and the full
 
   const home = (await allRows(harness, ALICE)).resume!.items[0]!;
   assert.equal(home.poster, images.proxied("https://images.example/show.jpg"));
+  assert.equal(home.wide, images.proxied("https://images.example/show-wide.jpg"));
   assert.equal(home.path, "Shows/Show/Show.S01E02.mkv", "the playable source is unchanged");
   assert.deepEqual(home.progress, { position: 123, duration: 900 });
   assert.equal(home.season, 1);
@@ -857,6 +907,7 @@ test("old saved episode art is replaced by the title poster on Home and the full
   harness.metaCalls.length = 0;
   const page = await resumePageOf(harness, "?limit=20");
   assert.equal(page.items[0]!.poster, images.proxied("https://images.example/show.jpg"));
+  assert.equal(page.items[0]!.wide, images.proxied("https://images.example/show-wide.jpg"));
   assert.equal(page.items[0]!.path, "Shows/Show/Show.S01E02.mkv");
   assert.deepEqual(page.items[0]!.progress, { position: 123, duration: 900 });
   assert.deepEqual(harness.metaCalls, [{ id: "tt1", viewer: ALICE, artwork: true }]);
@@ -885,6 +936,73 @@ test("failed or late title metadata keeps the saved episode art without failing 
     assert.equal(row.items[0]!.poster, fallback);
     assert.equal((harness.data(ALICE).progress["series:tt1:1:2"] as StoredProgress).position, 123);
   }
+});
+
+test("a stored title gallery supplies a wide picture while metadata is unavailable", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const galleryWide = "/api/library/thumb?path=Shows%2FShow&gallery=0&v=abc-123";
+  const fallbackPoster = "/api/remote-libraries/rlib_a/items/episode-2/artwork/Primary?tag=old";
+  harness.records["lib_00000001/Shows/Show"] = { type: "series", id: "tt1", name: "Show" };
+  harness.localTitleArtwork = async (key) => key === "lib_00000001/Shows/Show" ? { wide: galleryWide } : {};
+  harness.metaThrows = true;
+  harness.data(ALICE).progress = {
+    "series:tt1:1:2": {
+      position: 123, duration: 900, title: "Show · Second",
+      path: "lib_00000001/Shows/Show/Show.S01E02.mkv", poster: fallbackPoster,
+      series: { id: "tt1", name: "Show", season: 1, episode: 2 }, updatedAt: "2024-01-02T00:00:00.000Z",
+    },
+  };
+
+  const card = (await allRows(harness, ALICE)).resume!.items[0]!;
+  assert.equal(card.poster, fallbackPoster);
+  assert.equal(card.wide, galleryWide);
+  assert.equal(card.path, "Shows/Show/Show.S01E02.mkv");
+  assert.deepEqual(card.progress, { position: 123, duration: 900 });
+});
+
+test("a standalone movie file uses its own stored wide gallery", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const fileKey = "lib_00000001/Films/Standalone.mkv";
+  const galleryWide = "/api/library/thumb?path=Films%2FStandalone.mkv&gallery=0&v=abc-123";
+  harness.records[fileKey] = { type: "movie", id: "tt9", name: "Standalone" };
+  harness.localTitleArtwork = async (key) => key === fileKey ? { wide: galleryWide } : {};
+  harness.metaThrows = true;
+  harness.data(ALICE).progress = {
+    [`file:${fileKey}`]: {
+      position: 120, duration: 600, title: "Standalone", path: fileKey,
+      poster: "/api/remote-libraries/rlib_a/items/old/artwork/Primary", updatedAt: "2024-01-02T00:00:00.000Z",
+    },
+  };
+
+  const card = (await allRows(harness, ALICE)).resume!.items[0]!;
+  assert.equal(card.wide, galleryWide);
+  assert.equal(card.path, "Films/Standalone.mkv");
+  assert.deepEqual(card.progress, { position: 120, duration: 600 });
+  assert.deepEqual(harness.artworkKeyCalls, [fileKey]);
+});
+
+test("an episode-specific series file never borrows its file gallery as title art", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const fileKey = "lib_00000001/Shows/Show/Show.S01E02.mkv";
+  harness.records[fileKey] = { type: "series", id: "tt1", name: "Show", season: 1, episode: 2 };
+  const galleryWide = "/api/library/thumb?path=Shows%2FShow%2FShow.S01E02.mkv&gallery=0&v=abc-123";
+  harness.localTitleArtwork = async () => ({ wide: galleryWide });
+  harness.artwork = "episode-frame.jpg";
+  harness.metaThrows = true;
+  harness.data(ALICE).progress = {
+    [`file:${fileKey}`]: {
+      position: 30, duration: 600, title: "Second", path: fileKey,
+      updatedAt: "2024-01-02T00:00:00.000Z",
+    },
+  };
+
+  const card = (await allRows(harness, ALICE)).resume!.items[0]!;
+  assert.equal(card.wide, "thumb:Shows/Show/Show.S01E02.mkv:wide");
+  assert.notEqual(card.wide, galleryWide);
+  assert.deepEqual(harness.artworkKeyCalls, []);
 });
 
 test("a stalled resume page spends one metadata deadline instead of starting a new wave", async (t) => {
@@ -942,7 +1060,49 @@ test("a native remote card prefers catalogue metadata and keeps its landscape ar
   assert.deepEqual(harness.metaCalls, [{ id: "tt1", viewer: ALICE, artwork: true }]);
 });
 
-test("a resume page bounds title poster lookups to its API page ceiling", async (t) => {
+test("resume rejects a duplicated poster and a logo before using a wide still", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const portrait = "https://images.example/poster.jpg";
+  const still = "https://images.example/still-wide.jpg";
+  const logo = "https://images.example/logo.png";
+  const remoteWide = "/api/remote-libraries/rlib_a/items/episode-2/artwork/Thumb?tag=old";
+  harness.metaAnswer = {
+    id: "tt1", type: "series", name: "Show", poster: portrait, background: logo, logo,
+    images: [
+      portrait,
+      logo,
+      { url: logo, kind: "logo", shape: "wide" },
+      { url: "https://images.example/landscape-poster.jpg", type: "poster", shape: "wide" },
+      { url: "https://images.example/portrait.jpg", kind: "background", shape: "poster" },
+    ],
+    screenshots: [{ url: still, kind: "still", shape: "wide" }],
+  } as MetaItem;
+  harness.remoteCards = [{
+    kind: "remote", key: "remote:one", title: "Second", provider: "jellyfin",
+    libraryId: "rlib_a", libraryName: "Shows", itemId: "episode-2", itemType: "episode",
+    season: 1, episode: 2, poster: portrait, wide: remoteWide,
+    progress: { position: 40, duration: 800 }, identity: { type: "series", id: "tt1" },
+    updatedAt: "2024-01-02T00:00:00.000Z",
+  }];
+
+  const rows = await allRows(harness, ALICE);
+  const card = rows.resume!.items[0]!;
+  assert.equal(card.poster, images.proxied(portrait));
+  assert.equal(card.wide, images.proxied(still));
+  assert.notEqual(card.wide, images.proxied(portrait));
+  assert.deepEqual(card.progress, { position: 40, duration: 800 });
+
+  harness.metaAnswer = {
+    id: "tt1", type: "series", name: "Show", poster: portrait, background: portrait,
+    images: [{ url: portrait, kind: "poster", shape: "poster" }, { url: "https://images.example/logo.png", kind: "logo", shape: "wide" }],
+  } as MetaItem;
+  const fallback = (await allRows(harness, ALICE)).resume!.items[0]!;
+  assert.equal(fallback.wide, remoteWide, "a portrait fallback is retained when no real title-wide exists");
+  assert.deepEqual(fallback.progress, { position: 40, duration: 800 });
+});
+
+test("a resume page bounds title artwork lookups to its API page ceiling", async (t) => {
   const harness = await mount();
   t.after(harness.close);
   harness.metaAnswer = { id: "tt1", type: "movie", name: "Film", poster: "https://images.example/film.jpg" } as MetaItem;
@@ -1227,10 +1387,12 @@ test("a thumbnail is addressed by the wire path, which is the qualified one when
   assert.equal(rows.favorites!.items[0]!.poster, "thumb:lib_00000002/Shows/01.mkv");
 });
 
-test("new episodes are newest first, only the caller's, and the poster goes through the proxy", async (t) => {
+test("new episodes are newest first, only the caller's, and carry the title's poster and backdrop", async (t) => {
   const harness = await mount();
   t.after(harness.close);
   const poster = "https://images.example/poster.jpg";
+  const wide = "https://images.example/show-wide.jpg";
+  harness.metaAnswer = { id: "tt1", type: "series", name: "Show", poster, background: wide } as MetaItem;
   harness.episodes = [
     { ownerUserId: ALICE, followId: "f1", type: "series", metaId: "tt1", name: "Show", poster, videoId: "e1", season: 1, episode: 1, title: "One", released: "2024-03-02T00:00:00.000Z" },
     { ownerUserId: ALICE, followId: "f1", type: "series", metaId: "tt1", name: "Show", poster, videoId: "e2", season: 1, episode: 2, title: "Two", released: "2024-03-01T00:00:00.000Z" },
@@ -1238,9 +1400,12 @@ test("new episodes are newest first, only the caller's, and the poster goes thro
   ];
   harness.data(ALICE).watchedSeries = { tt1: { name: "Show", season: 1, episode: 1, updatedAt: "2024-03-02T00:00:00.000Z" } };
 
-  const rows = await allRows(harness, ALICE);
+  const rows = (await (await api(harness.base, "/api/home?rows=episodes", ALICE)).json() as { rows: Record<string, HomeRowView> }).rows;
   assert.deepEqual(rows.episodes!.items.map((item) => item.key), ["episode:f1:e1", "episode:f1:e2"]);
   assert.equal(rows.episodes!.items[0]!.poster, images.proxied(poster));
+  assert.equal(rows.episodes!.items[0]!.wide, images.proxied(wide));
+  assert.equal(rows.episodes!.items[1]!.wide, images.proxied(wide));
+  assert.equal(harness.metaCalls.filter((call) => call.id === "tt1").length, 1, "one title lookup serves both episodes");
   assert.deepEqual(harness.newEpisodesCalls, [ALICE]);
   assert.deepEqual(harness.watched?.("tt1"), { season: 1, episode: 1 }, "the row reads the caller's markers");
 });
@@ -1545,6 +1710,29 @@ test("a throwing proposals source leaves the other rows ok", async (t) => {
 
 const walk = (relative: string, size: number, modified: string) => ({ relative, size, modified });
 
+test("a file-bound movie uses its own gallery in recent, completed and tonight", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const fileKey = "lib_00000001/Films/Standalone.mkv";
+  const galleryWide = "/api/library/thumb?path=Films%2FStandalone.mkv&gallery=0&v=abc-123";
+  harness.records[fileKey] = { type: "movie", id: "tt9", name: "Standalone" };
+  harness.localTitleArtwork = async (key) => key === fileKey ? { wide: galleryWide } : {};
+  harness.metaThrows = true;
+  harness.completed = [{
+    id: "done", title: "Standalone", ownerUserId: ALICE, status: "completed",
+    target: fileKey, completedAt: "2024-02-02T00:00:00.000Z",
+  }];
+  harness.seen.observe("lib_00000001", [], new Date("2024-01-01T00:00:00.000Z"));
+  harness.seen.observe("lib_00000001", [walk("Films/Standalone.mkv", 11, "2024-02-01T00:00:00.000Z")], new Date("2024-02-02T00:00:00.000Z"));
+
+  const rows = (await (await api(harness.base, "/api/home?rows=recent,completed,tonight", ALICE)).json() as { rows: Record<string, HomeRowView> }).rows;
+
+  assert.equal(rows.recent!.items[0]!.wide, galleryWide);
+  assert.equal(rows.completed!.items[0]!.wide, galleryWide);
+  assert.equal(rows.tonight!.items[0]!.wide, galleryWide);
+  assert.deepEqual(harness.artworkKeyCalls, [fileKey], "one request reuses the file's title artwork");
+});
+
 test("the recent row shows a file the app met after the baseline, and never a baseline file", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
   t.after(harness.close);
@@ -1634,20 +1822,23 @@ test("film and unbound file cards carry no series folder", async (t) => {
   for (const card of cards) assert.equal(card.seriesPath, undefined);
 });
 
-test("a recent series card uses the bound show poster and keeps the episode's wide art", async (t) => {
+test("a recent series card keeps the bound poster and uses the title's real backdrop", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
   t.after(harness.close);
   harness.records["lib_00000001/Shows/Show"] = { type: "series", id: "tt1", name: "Show" };
   harness.artwork = "episode-frame.jpg";
   harness.folderArtwork = "show-poster.jpg";
+  const wide = "https://images.example/show-wide.jpg";
+  harness.metaAnswer = { id: "tt1", type: "series", name: "Show", poster: "https://images.example/show.jpg", background: wide } as MetaItem;
   harness.seen.observe("lib_00000001", [], new Date("2024-01-01T00:00:00.000Z"));
   harness.seen.observe("lib_00000001", [walk("Shows/Show/Show.S01E02.mkv", 11, "2024-01-03T00:00:00.000Z")], new Date("2024-02-02T00:00:00.000Z"));
 
   const card = (await allRows(harness, ALICE)).recent!.items[0]!;
 
   assert.equal(card.poster, "thumb:Shows/Show");
-  assert.equal(card.wide, "thumb:Shows/Show/Show.S01E02.mkv:wide");
-  assert.deepEqual(harness.metaCalls, [], "the bound folder already supplied the title picture");
+  assert.equal(card.wide, images.proxied(wide));
+  assert.deepEqual(harness.metaCalls, [{ id: "tt1", viewer: ALICE, artwork: true }],
+    "the folder poster does not suppress the missing title backdrop");
 });
 
 test("the recent row draws nothing from a library off Home, disabled, away or not granted", async (t) => {
@@ -1984,6 +2175,66 @@ test("Home Favourites shows a catalogue star and opens the catalogue", async (t)
   assert.deepEqual([card.type, card.id, card.name], ["movie", "tt9", "Starred"]);
 });
 
+test("a catalogue favourite takes its poster and wide artwork on both Favourites screens", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const poster = "https://images.example/starred.jpg";
+  const wide = "https://images.example/starred-wide.jpg";
+  harness.metaAnswer = { id: "tt9", type: "movie", name: "Starred", poster, background: wide } as MetaItem;
+  harness.data(ALICE).watchlist = {
+    "movie:tt9": { type: "movie", id: "tt9", name: "Starred", poster: "https://images.example/old.jpg", addedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const full = await favorites(harness, "?filter=catalog");
+  assert.equal(full.items[0]!.poster, images.proxied(poster));
+  assert.equal(full.items[0]!.wide, images.proxied(wide));
+  assert.deepEqual(harness.metaCalls, [{ id: "tt9", viewer: ALICE, artwork: true }]);
+
+  harness.metaCalls.length = 0;
+  const home = (await allRows(harness, ALICE)).favorites!.items[0]!;
+  assert.equal(home.poster, images.proxied(poster));
+  assert.equal(home.wide, images.proxied(wide));
+  assert.deepEqual(harness.metaCalls, [{ id: "tt9", viewer: ALICE, artwork: true }]);
+});
+
+test("a file-bound movie favourite uses its own gallery on both Favourites screens", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const fileKey = "lib_00000001/Films/Standalone.mkv";
+  const galleryWide = "/api/library/thumb?path=Films%2FStandalone.mkv&gallery=0&v=abc-123";
+  harness.records[fileKey] = { type: "movie", id: "tt9", name: "Standalone" };
+  harness.localTitleArtwork = async (key) => key === fileKey ? { wide: galleryWide } : {};
+  harness.metaThrows = true;
+  harness.data(ALICE).favorites = [fileKey];
+
+  const full = await favorites(harness, "?filter=library");
+  assert.equal(full.items[0]!.wide, galleryWide);
+  assert.deepEqual(harness.artworkKeyCalls, [fileKey]);
+
+  harness.artworkKeyCalls.length = 0;
+  const home = (await allRows(harness, ALICE)).favorites!.items[0]!;
+  assert.equal(home.wide, galleryWide);
+  assert.deepEqual(harness.artworkKeyCalls, [fileKey]);
+});
+
+test("Home Favourites gives a native remote star its title-wide artwork", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const wide = "https://images.example/remote-wide.jpg";
+  harness.remoteCards = [remoteCard("m1", { identity: { type: "movie", id: "tt9" } })];
+  harness.metaAnswer = {
+    id: "tt9", type: "movie", name: "Remote m1",
+    poster: "https://images.example/remote.jpg", background: wide,
+  } as MetaItem;
+
+  const rows = (await (await api(harness.base, "/api/home?rows=favorites", ALICE)).json() as { rows: Record<string, HomeRowView> }).rows;
+
+  assert.equal(rows.favorites!.items[0]!.kind, "remote");
+  assert.equal(rows.favorites!.items[0]!.poster, images.proxied("https://images.example/remote.jpg"));
+  assert.equal(rows.favorites!.items[0]!.wide, images.proxied(wide));
+  assert.deepEqual(harness.metaCalls, [{ id: "tt9", viewer: ALICE, artwork: true }]);
+});
+
 test("a starred episode folds with its show's catalogue star, on the show's folder", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
   t.after(harness.close);
@@ -2048,6 +2299,30 @@ test("the remote filter returns the media-server stars and only reads it there a
   assert.deepEqual(all.items.map((item) => item.kind), ["library", "catalog", "remote", "remote"]);
   assert.equal(all.total, 4);
   assert.deepEqual(harness.remoteCalls.map((call) => [call.filter, call.skip, call.onHome]), [["favorites", 0, false]]);
+});
+
+test("a remote favourite uses title-wide art without exposing its title handle and is re-authorised last", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.remoteCards = [remoteCard("m1", { identity: { type: "movie", id: "tt9" } })];
+  harness.metaAnswer = {
+    id: "tt9", type: "movie", name: "Film",
+    poster: "https://images.example/film.jpg", background: "https://images.example/film-wide.jpg",
+  } as MetaItem;
+
+  const page = await favorites(harness, "?filter=remote");
+  assert.equal(page.items[0]!.wide, images.proxied("https://images.example/film-wide.jpg"));
+  assert.equal("identity" in page.items[0]!, false);
+  assert.deepEqual(harness.events, ["meta:tt9", "assert"]);
+
+  harness.events.length = 0;
+  harness.remoteInvalid = true;
+  const stale = await favorites(harness, "?filter=remote");
+  assert.deepEqual(stale.items, []);
+  assert.equal(stale.total, 0);
+  assert.equal(stale.partial, true);
+  assert.equal(harness.remoteAssertions, 2);
+  assert.deepEqual(harness.events, ["meta:tt9", "assert"]);
 });
 
 test("a media server that fails leaves the local stars and marks the page partial", async (t) => {
