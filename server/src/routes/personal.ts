@@ -11,7 +11,7 @@ import {
 import type { RemoteHomeCard } from "../home.js";
 import type { MediaServerAuthority } from "../media-server-manager.js";
 import { CARD_LIMIT_MAX as REMOTE_FAVORITE_LIMIT, type MediaServerPersonal } from "../media-server-personal.js";
-import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT, type ResumeIdentity } from "../home.js";
+import { HOME_FORGET_LIMIT, HOME_LOOKUP_DEADLINE_MS, HOME_RESUME_FILE_LIMIT, type ResumeIdentity } from "../home.js";
 import { images } from "../images.js";
 import { remoteArtworkPath } from "../media-server-types.js";
 import { stableKeyOfFile, stableKeyOfRemote } from "../media-resources.js";
@@ -36,7 +36,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface PersonalDeps extends RouteContext {
   attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string): Promise<{ item: T; backfill: boolean }>;
-  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
+  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer, opts?: { artwork?: boolean; signal?: AbortSignal }): Promise<MetaItem | null>;
   dataOf(req: express.Request): UserData;
   describeLibraryPath(key: string, read?: { stale?: boolean }): Promise<BrowseItem | undefined>;
   libraryKey(value: string): string;
@@ -143,6 +143,7 @@ export interface FavoritesPage {
 export interface PersonalApi {
   progressRows(req: express.Request, options?: ProgressRowOptions): Promise<ProgressPage>;
   libraryResumeItems(req: express.Request, options?: ResumeRowOptions): Promise<ResumePage>;
+  titlePoster(req: express.Request, identity: ResumeIdentity, options?: { boundKey?: string; deadlineMs?: number }): Promise<string | undefined>;
   favoritesPage(req: express.Request, options?: FavoritesOptions): Promise<FavoritesPage>;
   pathVisible(key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean;
   /** The catalogue keys the account starred: a media-server record of one of them is that title,
@@ -151,6 +152,8 @@ export interface PersonalApi {
 }
 
 const LOOKUP_TIMEOUT = Symbol("home-lookup-timeout");
+/** One request repairs at most one full Resume page, however long its history is. */
+const TITLE_POSTER_LOOKUP_LIMIT = 120;
 
 /** Races one promise against a deadline. `undefined` means there is no deadline. */
 async function withDeadline<T>(work: Promise<T>, ms?: number): Promise<T | typeof LOOKUP_TIMEOUT> {
@@ -163,6 +166,64 @@ async function withDeadline<T>(work: Promise<T>, ms?: number): Promise<T | typeo
 
 export function registerPersonalRoutes(app: express.Application, deps: PersonalDeps): PersonalApi {
   const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath, remotePersonal, authorityOf } = deps;
+  const titlePosters = new WeakMap<express.Request, {
+    titles: Set<string>;
+    metadata: Map<string, Promise<string | undefined>>;
+    folders: Map<string, Promise<string | undefined>>;
+  }>();
+
+  /** One title picture per request. A bound folder is already the title's own art; metadata
+   * is the fallback for catalogue-only rows and for folders whose art is still being made. */
+  const titlePoster = (req: express.Request, identity: ResumeIdentity, options: { boundKey?: string; deadlineMs?: number } = {}) => {
+    const startedAt = Date.now();
+    let state = titlePosters.get(req);
+    if (!state) {
+      state = { titles: new Set(), metadata: new Map(), folders: new Map() };
+      titlePosters.set(req, state);
+    }
+    const identityKey = `${identity.type}:${identity.id}`;
+    if (!state.titles.has(identityKey)) {
+      if (state.titles.size >= TITLE_POSTER_LOOKUP_LIMIT) return Promise.resolve(undefined);
+      state.titles.add(identityKey);
+    }
+    const boundKey = options.boundKey && !isVideo(posixBase(options.boundKey)) ? options.boundKey : undefined;
+    const folder = (() => {
+      if (!boundKey) return Promise.resolve(undefined);
+      const known = state.folders.get(boundKey);
+      if (known) return known;
+      const work = (async () => {
+        const { poster } = await locateFolderArtworkPair(boundKey);
+        if (!poster) scheduleFolderArtwork(boundKey);
+        return thumbUrl("dir", wirePath(boundKey), poster);
+      })().catch(() => undefined);
+      state.folders.set(boundKey, work);
+      return work;
+    })();
+    return folder.then(async (picture) => {
+      if (picture) return picture;
+      const remainingMs = options.deadlineMs === undefined
+        ? HOME_LOOKUP_DEADLINE_MS
+        : Math.max(0, options.deadlineMs - (Date.now() - startedAt));
+      if (remainingMs <= 0) return undefined;
+      let metadata = state.metadata.get(identityKey);
+      if (!metadata) {
+        const viewer = viewerOf(currentUser(req));
+        const controller = new AbortController();
+        metadata = withDeadline(
+          cachedMeta(identity.type, identity.id, prefsOf(req).uiLanguage, viewer, { artwork: true, signal: controller.signal }).catch(() => null),
+          remainingMs,
+        ).then((answer) => {
+          if (answer === LOOKUP_TIMEOUT) {
+            controller.abort();
+            return undefined;
+          }
+          return images.proxied(answer?.poster);
+        }).catch(() => undefined);
+        state.metadata.set(identityKey, metadata);
+      }
+      return metadata;
+    });
+  };
 
   /** Whether the caller may see the library a stored path names. A path that names no
    *  library -- an unqualified row from before, or one whose library is gone -- is kept:
@@ -921,5 +982,5 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
   }));
 
-  return { progressRows, libraryResumeItems, favoritesPage, pathVisible, watchlistKeys: (req) => Object.keys(watchlistOf(dataOf(req))) };
+  return { progressRows, libraryResumeItems, titlePoster, favoritesPage, pathVisible, watchlistKeys: (req) => Object.keys(watchlistOf(dataOf(req))) };
 }
