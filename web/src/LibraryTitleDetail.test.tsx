@@ -908,6 +908,25 @@ describe("LibraryTitleDetail stored source", () => {
     if (close) click(close);
   };
 
+  it("plays the item's own version when the rule passes none of them, on a library or media server item", () => {
+    const refused = (id: string, size: number) => ({
+      ...remote(id, id.toUpperCase(), size),
+      rules: { balanced: { profileId: "balanced", status: "breaks" as const, reasons: ["language" as const], rank: [1] } },
+    });
+    const own = [refused("small", 2_600_000_000), refused("big", 9_800_000_000)];
+    const { onPlay } = render({ sources: own, defaultSources: own, ownFallback: true, sourceProfiles: qualityProfiles, defaultSort: "rule:balanced" });
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("BIG");
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
+  });
+
+  it("asks for a choice when the rule passes no addon row of a catalogue title", () => {
+    const refused = { ...remote("only", "ONLY", 2_600_000_000),
+      rules: { balanced: { profileId: "balanced", status: "breaks" as const, reasons: ["language" as const], rank: [1] } } };
+    render({ sources: [refused], sourceProfiles: qualityProfiles, defaultSort: "rule:balanced" });
+    expect(host.querySelector(".detail-tech")!.textContent).not.toContain("ONLY");
+  });
+
   it("re-picks the rule's winner when the viewer changes sort in the chooser", () => {
     const { small, big } = smallAndBig();
     const { onPlay } = render({

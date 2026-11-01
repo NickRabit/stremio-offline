@@ -1712,6 +1712,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             onToggleWatched={() => void toggleWatched()}
             sources={detail.type === "series" ? [] : sources}
             defaultSources={sources}
+            ownFallback
             episodes={episodePicker}
             placeholder={detail.type === "series" ? <></> : undefined}
             sourceProfiles={sourceProfiles}

@@ -85,6 +85,10 @@ export interface LibraryTitleDetailProps {
   /** The native rows alone, when `sources` merges them with loaded addon rows: the default
    *  version is then drawn from these, so a larger addon answer never replaces it. */
   defaultSources?: Stream[] | null;
+  /** The item itself is what the viewer opened -- a file on disk, a media server's own item -- so
+   *  when the source rule passes none of the rows, its own version is still the one Play plays.
+   *  Left off (the catalogue), a refusal asks the viewer to choose. */
+  ownFallback?: boolean;
   /** The groups beside the title's own versions: addon answers, the viewer's other copies and the
    *  other libraries. Its presence alone makes the arrow appear, and opening it reads them all. */
   sourceGroups?: LibrarySourcePanel;
@@ -153,7 +157,7 @@ const videoLine = (facts: VideoFacts | undefined): { height: string; tags: Array
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, originalLine, ratings, heroExtra, people, trailer, onTrailer, secureMode, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, originalLine, ratings, heroExtra, people, trailer, onTrailer, secureMode, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, ownFallback = false, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -193,7 +197,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const defaultPick = defaultSources === null
     ? null
     : ruleAware
-      ? pickDefaultStream(pickable, activeRuleId) ?? null
+      ? pickDefaultStream(pickable, activeRuleId) ?? (ownFallback ? defaultSource(defaultSources ?? own) : null)
       : defaultSource(defaultSources === undefined ? own : defaultSources);
   const picked = chosen?.identity === identityKey ? pickable.find((stream) => sourceRowKey(stream) === chosen.key) : undefined;
   // The row this detail was opened on is the selection until the viewer picks another one: later
