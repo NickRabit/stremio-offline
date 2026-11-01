@@ -601,6 +601,7 @@ export const it: Catalog = {
   "seriesBulk.what": "Cosa scaricare",
   "seriesBulk.season": "Stagione",
   "seriesBulk.wholeSeries": "Tutta la serie",
+  "seriesBulk.thisSource": "Questo episodio · fonte scelta",
   "seriesBulk.includeSpecials": "Includi episodi speciali",
   "seriesBulk.source": "Origine",
   "seriesBulk.fromLibrary": "Da questa libreria — {provider} / {library}",

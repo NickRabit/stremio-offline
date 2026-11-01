@@ -264,6 +264,7 @@
   <string name="series_bulk_remote_button">Скопировать в библиотеку…</string>
   <string name="series_bulk_title">Скачать сериал</string>
   <string name="series_bulk_whole_series">Весь сериал</string>
+  <string name="series_bulk_this_source">Эта серия · выбранный источник</string>
   <string name="series_bulk_source">Источник</string>
   <string name="series_bulk_from_library">Из этой библиотеки — %1$s / %2$s</string>
   <string name="series_bulk_from_library_hint">Копируются только эпизоды, которые есть в этой библиотеке. Ничего не дополняется из других мест.</string>

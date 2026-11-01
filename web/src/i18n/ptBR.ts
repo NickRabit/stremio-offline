@@ -601,6 +601,7 @@ export const ptBR: Catalog = {
   "seriesBulk.what": "O que baixar",
   "seriesBulk.season": "Temporada",
   "seriesBulk.wholeSeries": "Série inteira",
+  "seriesBulk.thisSource": "Este episódio · fonte escolhida",
   "seriesBulk.includeSpecials": "Incluir episódios especiais",
   "seriesBulk.source": "Origem",
   "seriesBulk.fromLibrary": "Desta biblioteca — {provider} / {library}",

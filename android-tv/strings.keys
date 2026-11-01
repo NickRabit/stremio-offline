@@ -248,6 +248,7 @@ bulk.episodeCount
 seriesBulk.remoteButton
 seriesBulk.title
 seriesBulk.wholeSeries
+seriesBulk.thisSource
 seriesBulk.source
 seriesBulk.fromLibrary
 seriesBulk.fromLibraryHint

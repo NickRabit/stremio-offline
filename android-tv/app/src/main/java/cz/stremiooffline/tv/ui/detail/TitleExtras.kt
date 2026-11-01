@@ -839,10 +839,10 @@ private fun VideoCard(
         .onFocusChanged { focused = it.isFocused },
       shape = ClickableSurfaceDefaults.shape(shape),
       scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
-      glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Color.White.copy(alpha = 0.28f), 18.dp)),
+      glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Tokens.Accent2.copy(alpha = 0.35f), 18.dp)),
       border = ClickableSurfaceDefaults.border(
         border = Border.None,
-        focusedBorder = Border(BorderStroke(2.dp, Color.White), shape = shape),
+        focusedBorder = Border(BorderStroke(2.dp, Tokens.Accent2), shape = shape),
       ),
       colors = ClickableSurfaceDefaults.colors(
         containerColor = Tokens.Panel2,
@@ -932,10 +932,10 @@ private fun PersonCard(
       // The card scales itself from its top edge; the Surface's own centred focus scale on top of
       // that grew it down over its caption.
       scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
-      glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Color.White.copy(alpha = 0.28f), 18.dp)),
+      glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Tokens.Accent2.copy(alpha = 0.35f), 18.dp)),
       border = ClickableSurfaceDefaults.border(
         border = Border.None,
-        focusedBorder = Border(BorderStroke(2.dp, Color.White), shape = CircleShape),
+        focusedBorder = Border(BorderStroke(2.dp, Tokens.Accent2), shape = CircleShape),
       ),
       colors = ClickableSurfaceDefaults.colors(
         containerColor = Tokens.Panel2,
@@ -1015,10 +1015,10 @@ private fun RelatedCard(
       // The card scales itself from its top edge; the Surface's own centred focus scale on top of
       // that grew it down over its caption.
       scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
-      glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Color.White.copy(alpha = 0.28f), 18.dp)),
+      glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Tokens.Accent2.copy(alpha = 0.35f), 18.dp)),
       border = ClickableSurfaceDefaults.border(
         border = Border.None,
-        focusedBorder = Border(BorderStroke(2.dp, Color.White), shape = shape),
+        focusedBorder = Border(BorderStroke(2.dp, Tokens.Accent2), shape = shape),
       ),
       colors = ClickableSurfaceDefaults.colors(
         containerColor = Tokens.Panel2,

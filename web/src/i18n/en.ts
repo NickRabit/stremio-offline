@@ -636,6 +636,7 @@ export const en = {
   "seriesBulk.what": "What to download",
   "seriesBulk.season": "Season",
   "seriesBulk.wholeSeries": "Whole series",
+  "seriesBulk.thisSource": "This episode · chosen source",
   "seriesBulk.includeSpecials": "Include specials",
   "seriesBulk.source": "Source",
   "seriesBulk.fromLibrary": "From this library — {provider} / {library}",

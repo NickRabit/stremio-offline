@@ -264,6 +264,7 @@
   <string name="series_bulk_remote_button">Kopírovat do knihovny…</string>
   <string name="series_bulk_title">Stáhnout seriál</string>
   <string name="series_bulk_whole_series">Celý seriál</string>
+  <string name="series_bulk_this_source">Tento díl · vybraný zdroj</string>
   <string name="series_bulk_source">Zdroj</string>
   <string name="series_bulk_from_library">Z této knihovny — %1$s / %2$s</string>
   <string name="series_bulk_from_library_hint">Zkopíruje jen díly, které tato knihovna má. Nic se nedoplňuje odjinud.</string>

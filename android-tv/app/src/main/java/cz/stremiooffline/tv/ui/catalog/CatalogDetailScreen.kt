@@ -74,7 +74,6 @@ import cz.stremiooffline.tv.playback.VersionProgress
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
-import cz.stremiooffline.tv.ui.components.SeriesDownloadIcon
 import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.detail.SavedPlaybackProgress
@@ -117,7 +116,6 @@ const val TagCatalogMarkWatched = "catalog_mark_watched"
 const val TagCatalogForgetPanel = "catalog_forget_panel"
 const val TagCatalogForgetCancel = "catalog_forget_cancel"
 const val TagCatalogForgetRemove = "catalog_forget_remove"
-const val TagCatalogSeriesDownload = "catalog_series_download"
 
 fun libraryOptionTag(libraryId: String): String = "catalog_library_$libraryId"
 
@@ -1113,15 +1111,25 @@ fun CatalogDetailScreen(
             modifier = Modifier.focusRequester(focus.sourcesOpener).testTag(TagCatalogSources),
           )
         },
-        toLibrary = if (canQueueActive) catalogAction(
+        // A series opens one panel for this episode's chosen source, a season or the whole show.
+        // A native pick still has no bulk: the batch would queue addons the viewer never chose.
+        toLibrary = if (canQueueActive || seriesBulkAvailable(isSeries, meta.videos, activeStream)) catalogAction(
           TagCatalogToLibrary,
           if (queued) texts.queued else texts.toLibrary,
           if (queued) CheckIcon else DownloadIcon,
           enabled = !save.queueBusy,
           modifier = Modifier
             .focusRequester(focus.libraryOpener)
+            .focusRequester(ui.series.focus)
             .onFocusChanged { focus.toLibraryFocused = it.isFocused },
-        ) { ui.titleDownload = true } else null,
+        ) {
+          if (seriesBulkAvailable(isSeries, meta.videos, activeStream)) {
+            cancelPendingPlay()
+            ui.series.open = true
+          } else {
+            ui.titleDownload = true
+          }
+        } else null,
         favourite = catalogAction(
           TagCatalogFavourite,
           stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
@@ -1154,20 +1162,6 @@ fun CatalogDetailScreen(
           .scrollToTopOnFocus(ui.extras, scope)
           .onFocusChanged { focus.actionRowFocused = it.hasFocus },
         extras = listOfNotNull(
-          // The web's bulk download needs no source of its own. A native pick still has no bulk
-          // action: the batch would queue addons the viewer never chose.
-          if (isSeries && !meta.videos.isNullOrEmpty()
-            && activeStream?.let(Streams::isRemoteStream) != true) {
-            catalogAction(
-              TagCatalogSeriesDownload, stringResource(R.string.bulk_title), SeriesDownloadIcon,
-              modifier = Modifier.focusRequester(ui.series.focus),
-            ) {
-              if (activeStream?.let(Streams::isRemoteStream) != true) {
-                cancelPendingPlay()
-                ui.series.open = true
-              }
-            }
-          } else null,
           // Show in library is offered whenever the list holds a copy on disk, not only while that
           // copy is the active pick: it opens the active row's folder when that row is the copy.
           if (showInLibraryFolder(activeStream, rows) != null) {
@@ -1205,7 +1199,7 @@ fun CatalogDetailScreen(
           season = pick.season,
           onSeason = { pick.season = it },
           resumeEpisode = resumeEpisode,
-          focusVideo = nextRelevantEpisode(videos, resumeEpisode),
+          focusVideo = pick.selectedVideo ?: nextRelevantEpisode(videos, resumeEpisode),
           seriesPosition = storedPosition,
           seriesDuration = storedDuration,
           imageUrl = imageUrl,
@@ -1353,6 +1347,13 @@ fun CatalogDetailScreen(
           notice(addedText + skippedText, CatalogNotice.Success)
         },
         onClose = { ui.series.open = false },
+        onThisEpisode = if (canQueueActive) ({
+          // The chosen-source panel takes focus over, so closing this one must not pull it back.
+          ui.series.wasOpen = false
+          ui.series.open = false
+          ui.titleDownload = true
+        }) else null,
+        thisEpisodeLabel = pick.selectedVideo?.let(::episodeLine),
       )
     }
 
@@ -1539,6 +1540,10 @@ private class ForgetState {
   /** The card's own keys stop counting once they have been forgotten. */
   var done by mutableStateOf(false)
 }
+
+/** A catalogue series offers season and whole-show downloads unless the pick is native. */
+private fun seriesBulkAvailable(isSeries: Boolean, videos: List<VideoDto>?, active: StreamDto?): Boolean =
+  isSeries && !videos.isNullOrEmpty() && active?.let(Streams::isRemoteStream) != true
 
 /** The series-download panel's flags and its opener's focus, in one object: this screen is one
  *  composable close to the limit ART can verify, so every extra local risks a VerifyError. */

@@ -11,6 +11,7 @@ import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -130,6 +131,12 @@ class TitleDownloadPanelTest {
   private fun openPanel() {
     focusRight(TagCatalogToLibrary)
     press(Key.DirectionCenter)
+    // A series asks first which episodes; its chosen-source row leads to this panel.
+    if (compose.onAllNodesWithTag(TagSeriesDownloadPanel).fetchSemanticsNodes().isNotEmpty()) {
+      compose.waitUntil(5_000) { compose.onAllNodesWithTag(TagSeriesDownloadThisEpisode).fetchSemanticsNodes().isNotEmpty() }
+      compose.onNodeWithTag(TagSeriesDownloadThisEpisode).assertIsFocused()
+      press(Key.DirectionCenter)
+    }
     compose.onNodeWithTag(TagTitleDownloadPanel).assertExists()
   }
 

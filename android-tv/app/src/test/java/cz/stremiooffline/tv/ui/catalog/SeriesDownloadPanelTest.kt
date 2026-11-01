@@ -170,7 +170,7 @@ class SeriesDownloadPanelTest {
 
   /** Opens the bulk panel from the action row, the way the remote gets there. */
   private fun openPanel(waitForPrepare: Boolean = true) {
-    focusRight(TagCatalogSeriesDownload)
+    focusRight(TagCatalogToLibrary)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagSeriesDownloadPanel).assertExists()
     if (waitForPrepare) compose.waitUntil(5_000) { currentApi!!.bulkPrepareCalls > 0 }
@@ -223,14 +223,24 @@ class SeriesDownloadPanelTest {
   }
 
   @Test
-  fun `this episode queues the selected one alone`() {
+  fun `this episode with its chosen source hands over to the source panel`() {
     val api = ready()
+    api.streamsValues["series:s1e2"] = listOf(cz.stremiooffline.tv.data.StreamDto(sourceId = "s1", kind = "remote", playable = true, name = "FullHD"))
     mount(api)
-    openSettings(DownloadScope.Episode)
+    compose.waitUntil(5_000) { api.streamsRequests.any { it.startsWith("series:s1e2") } }
+    compose.waitForIdle()
+    openPanel(waitForPrepare = false)
 
+    // The first row stands for To library's own single save, so the rules-picked episode is gone.
+    compose.onNodeWithTag(TagSeriesDownloadThisEpisode)
+      .assertIsFocused()
+      .assertTextContains("This episode · chosen source", substring = true)
+    compose.onNodeWithTag(seriesScopeTag(DownloadScope.Episode)).assertDoesNotExist()
     press(Key.DirectionCenter)
 
-    assertEquals(listOf("s1e2"), api.bulkDownloads.single().episodes.map { it.id })
+    compose.onNodeWithTag(TagSeriesDownloadPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagTitleDownloadPanel).assertExists()
+    assertEquals(0, api.bulkDownloads.size)
   }
 
   @Test
@@ -298,7 +308,7 @@ class SeriesDownloadPanelTest {
       rule("nightly", name = "Nightly", revision = 7, min = 480, audio = "strict"),
     )
     mount(api)
-    openSettings(DownloadScope.Episode)
+    openSettings(DownloadScope.Season)
     assertNoLegacyRows()
     compose.onNodeWithTag(TagSeriesDownloadRules).assertTextContains("Balanced", substring = true)
 
@@ -321,7 +331,7 @@ class SeriesDownloadPanelTest {
     focusDown(TagSeriesDownloadAdd)
     press(Key.DirectionCenter)
 
-    assertEquals(listOf("s1e2"), api.bulkDownloads.single().episodes.map { it.id })
+    assertEquals(listOf("s1e1", "s1e2"), api.bulkDownloads.single().episodes.map { it.id })
     assertEquals(
       """{"profile":{"profileId":"smaller","revision":4}}""",
       json.encodeToString(DownloadSelectionDto.serializer(), api.bulkDownloads.single().selection),
@@ -383,7 +393,7 @@ class SeriesDownloadPanelTest {
       rule("smaller", nameKey = "rules.preset.smaller", revision = 2),
     )
     mount(api)
-    openSettings(DownloadScope.Episode)
+    openSettings(DownloadScope.Season)
 
     compose.onNodeWithTag(TagSeriesDownloadRules).assertTextContains("Smaller files", substring = true)
     assertNoLegacyRows()
@@ -402,7 +412,7 @@ class SeriesDownloadPanelTest {
       rule("balanced", nameKey = "rules.preset.balanced", revision = 3),
     )
     mount(api)
-    openSettings(DownloadScope.Episode)
+    openSettings(DownloadScope.Season)
 
     compose.onNodeWithTag(TagSeriesDownloadRules).assertTextContains("Balanced", substring = true)
     focusUp(TagSeriesDownloadRules)
@@ -419,7 +429,7 @@ class SeriesDownloadPanelTest {
       rule("best", nameKey = "rules.preset.best"),
     )
     mount(api)
-    openSettings(DownloadScope.Episode)
+    openSettings(DownloadScope.Season)
 
     compose.onNodeWithTag(TagSeriesDownloadRules).assertTextContains("Nightly", substring = true)
     focusUp(TagSeriesDownloadRules)
@@ -431,7 +441,7 @@ class SeriesDownloadPanelTest {
   fun `picking another library puts it in the target`() {
     val api = ready()
     mount(api)
-    openSettings(DownloadScope.Episode)
+    openSettings(DownloadScope.Season)
 
     focusUp(TagSeriesDownloadLibrary)
     press(Key.DirectionCenter)
@@ -451,7 +461,7 @@ class SeriesDownloadPanelTest {
     api.bulkDownloadFailure = ApiFailure.Forbidden
     api.bulkDownloadFailureMessage = "This account may not download to the library."
     mount(api)
-    openSettings(DownloadScope.Episode)
+    openSettings(DownloadScope.Season)
 
     press(Key.DirectionCenter)
 
@@ -470,7 +480,7 @@ class SeriesDownloadPanelTest {
 
     compose.onNodeWithTag(TagSeriesDownloadPanel).assertDoesNotExist()
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains("3 episodes added to the queue. 1 skipped, already queued.")
-    compose.onNodeWithTag(TagCatalogSeriesDownload).assertIsFocused()
+    compose.onNodeWithTag(TagCatalogToLibrary).assertIsFocused()
   }
 
   @Test
@@ -478,7 +488,7 @@ class SeriesDownloadPanelTest {
     val api = ready()
     api.bulkDownloadGate = CompletableDeferred()
     mount(api)
-    openSettings(DownloadScope.Episode)
+    openSettings(DownloadScope.Season)
 
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagSeriesDownloadAdd).assertIsNotEnabled()
@@ -504,7 +514,7 @@ class SeriesDownloadPanelTest {
       ),
     )
     mount(api)
-    openSettings(DownloadScope.Episode)
+    openSettings(DownloadScope.Season)
     focusUp(TagSeriesDownloadRules)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(seriesRuleTag("english"))
@@ -530,7 +540,7 @@ class SeriesDownloadPanelTest {
     compose.onNodeWithTag(seriesScopeTag(DownloadScope.Season)).assertIsFocused()
     back()
     compose.onNodeWithTag(TagSeriesDownloadPanel).assertDoesNotExist()
-    compose.onNodeWithTag(TagCatalogSeriesDownload).assertIsFocused()
+    compose.onNodeWithTag(TagCatalogToLibrary).assertIsFocused()
   }
 
   @Test

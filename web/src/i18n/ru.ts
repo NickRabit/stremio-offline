@@ -601,6 +601,7 @@ export const ru: Catalog = {
   "seriesBulk.what": "Что скачать",
   "seriesBulk.season": "Сезон",
   "seriesBulk.wholeSeries": "Весь сериал",
+  "seriesBulk.thisSource": "Эта серия · выбранный источник",
   "seriesBulk.includeSpecials": "Включить спецэпизоды",
   "seriesBulk.source": "Источник",
   "seriesBulk.fromLibrary": "Из этой библиотеки — {provider} / {library}",

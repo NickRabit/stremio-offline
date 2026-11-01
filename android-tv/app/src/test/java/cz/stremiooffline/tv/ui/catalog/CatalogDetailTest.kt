@@ -52,14 +52,11 @@ import cz.stremiooffline.tv.ui.detail.relatedTitleTag
 import cz.stremiooffline.tv.ui.detail.titlePersonTag
 import cz.stremiooffline.tv.ui.detail.videoCardTag
 import cz.stremiooffline.tv.ui.detail.videoIntent
-import cz.stremiooffline.tv.ui.catalog.DownloadIcon
-import cz.stremiooffline.tv.ui.components.SeriesDownloadIcon
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -1169,8 +1166,8 @@ class CatalogDetailTest {
     compose.waitForIdle()
 
     assertEquals(
-      listOf(TagCatalogSeriesDownload, TagCatalogShowInLibrary),
-      compose.actionRowOrder(TagCatalogSeriesDownload, TagCatalogShowInLibrary),
+      listOf(TagCatalogToLibrary, TagCatalogShowInLibrary),
+      compose.actionRowOrder(TagCatalogToLibrary, TagCatalogShowInLibrary),
     )
   }
 
@@ -1190,7 +1187,10 @@ class CatalogDetailTest {
     mount(api, CatalogDetailArgs(MetaDto(id = "tt1", type = "series", name = "Show"), "Cinemeta", "series"))
     compose.waitForIdle()
 
-    compose.onNodeWithTag(TagCatalogSeriesDownload).assertExists()
+    // One To library action opens the season and whole-series choices; no separate bulk button.
+    compose.onNodeWithTag(TagCatalogToLibrary).performSemanticsAction(SemanticsActions.OnClick)
+    compose.onNodeWithTag(TagSeriesDownloadPanel).assertExists()
+    compose.onNodeWithText("Whole series").assertDoesNotExist()
   }
 
   @Test
@@ -1201,13 +1201,8 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    compose.onNodeWithTag(TagCatalogSeriesDownload).assertDoesNotExist()
-  }
-
-  @Test
-  fun `the series download uses its own list icon`() {
-    assertNotEquals(DownloadIcon, SeriesDownloadIcon)
-    assertEquals("SeriesDownloadList", SeriesDownloadIcon.name)
+    compose.onNodeWithTag(TagCatalogToLibrary).performSemanticsAction(SemanticsActions.OnClick)
+    compose.onNodeWithTag(TagSeriesDownloadPanel).assertDoesNotExist()
   }
 
   @Test

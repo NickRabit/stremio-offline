@@ -601,6 +601,7 @@ export const sk: Catalog = {
   "seriesBulk.what": "Čo stiahnuť",
   "seriesBulk.season": "Sezóna",
   "seriesBulk.wholeSeries": "Celá séria",
+  "seriesBulk.thisSource": "Tento diel · vybraný zdroj",
   "seriesBulk.includeSpecials": "Zahrnúť špeciály",
   "seriesBulk.source": "Zdroj",
   "seriesBulk.fromLibrary": "Z tejto knižnice — {provider} / {library}",

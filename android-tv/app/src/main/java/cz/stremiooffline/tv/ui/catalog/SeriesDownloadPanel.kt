@@ -106,7 +106,8 @@ internal fun SeriesDownloadPanel(
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
   /** A media-server series offers its selected episode first; that row hands off to the exact
-   *  single-episode copy instead of a rules job. [thisEpisodeLabel] names the episode under it. */
+   *  single-episode copy instead of a rules job, and a catalogue series its chosen source.
+   *  [thisEpisodeLabel] names the episode under it. */
   onThisEpisode: (() -> Unit)? = null,
   thisEpisodeLabel: String? = null,
 ) {
@@ -676,21 +677,33 @@ private fun ColumnScope.ScopeRows(
     if (prepared) "$label · ${ready(scope, season, episode)}" else label
 
   if (catalogueWithEpisode) {
-    listOf(DownloadScope.Episode, DownloadScope.Season, DownloadScope.FromEpisode, DownloadScope.All).forEach { picked ->
-      val label = when (picked) {
-        DownloadScope.Episode -> stringResource(R.string.tv_download_this_episode)
-        DownloadScope.Season -> stringResource(R.string.tv_download_this_season, (selected?.season ?: 0).toString())
-        DownloadScope.FromEpisode -> stringResource(R.string.tv_download_from_episode)
-        DownloadScope.All -> stringResource(R.string.tv_download_all_episodes)
-      }
+    // The chosen source of this episode replaces the rules-picked single episode.
+    if (onThisEpisode != null) {
       PanelOption(
-        text = rowText(label, picked),
-        supportingText = preparingText,
-        onClick = { onScope(picked) },
-        modifier = Modifier.panelRow(rowFocuses, seriesScopeTag(picked), first = first, opening = openingFocus),
+        text = stringResource(R.string.series_bulk_this_source),
+        supportingText = thisEpisodeLabel,
+        onClick = onThisEpisode,
+        modifier = Modifier.panelRow(rowFocuses, TagSeriesDownloadThisEpisode, first = true, opening = openingFocus),
       )
       first = false
     }
+    listOf(DownloadScope.Episode, DownloadScope.Season, DownloadScope.FromEpisode, DownloadScope.All)
+      .filter { it != DownloadScope.Episode || onThisEpisode == null }
+      .forEach { picked ->
+        val label = when (picked) {
+          DownloadScope.Episode -> stringResource(R.string.tv_download_this_episode)
+          DownloadScope.Season -> stringResource(R.string.tv_download_this_season, (selected?.season ?: 0).toString())
+          DownloadScope.FromEpisode -> stringResource(R.string.tv_download_from_episode)
+          DownloadScope.All -> stringResource(R.string.tv_download_all_episodes)
+        }
+        PanelOption(
+          text = rowText(label, picked),
+          supportingText = preparingText,
+          onClick = { onScope(picked) },
+          modifier = Modifier.panelRow(rowFocuses, seriesScopeTag(picked), first = first, opening = openingFocus),
+        )
+        first = false
+      }
   } else {
     if (onThisEpisode != null) {
       PanelOption(

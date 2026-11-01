@@ -258,6 +258,7 @@
   <string name="series_bulk_remote_button">Copy to library…</string>
   <string name="series_bulk_title">Download series</string>
   <string name="series_bulk_whole_series">Whole series</string>
+  <string name="series_bulk_this_source">This episode · chosen source</string>
   <string name="series_bulk_source">Source</string>
   <string name="series_bulk_from_library">From this library — %1$s / %2$s</string>
   <string name="series_bulk_from_library_hint">Copies only episodes this library has. Nothing is filled in from elsewhere.</string>

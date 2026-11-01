@@ -258,6 +258,7 @@
   <string name="series_bulk_remote_button">Copia nella libreria…</string>
   <string name="series_bulk_title">Scarica serie</string>
   <string name="series_bulk_whole_series">Tutta la serie</string>
+  <string name="series_bulk_this_source">Questo episodio · fonte scelta</string>
   <string name="series_bulk_source">Origine</string>
   <string name="series_bulk_from_library">Da questa libreria — %1$s / %2$s</string>
   <string name="series_bulk_from_library_hint">Copia solo gli episodi presenti in questa libreria. Nulla viene completato da altrove.</string>
