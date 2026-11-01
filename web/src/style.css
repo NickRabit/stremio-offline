@@ -2102,7 +2102,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
    button, the first half giving up on its left what the arrow takes on the right. */
 @media(max-height:500px) and (orientation:landscape){
   .library-detail-play>.split-button>.split-button-toggle{flex:0 0 44px}
-  .library-detail-play>.split-button>button:first-child{padding-left:44px}
+  .library-detail-play>.split-button>button:first-child{padding:0 0 0 44px}
 }
 .remote-episodes-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .remote-season{margin:8px 0 2px;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}

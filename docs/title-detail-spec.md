@@ -121,8 +121,14 @@ where the instance runs that one). Selecting a similar title opens its
 catalogue full detail; Back returns to the title the viewer came from: the
 app keeps a stack of up to ten previous catalogue titles.
 
-A Jellyfin/Emby **series** does not use this surface today (it has its own
-hero and episode grid); there the two rows go under the episode grid.
+On the web every series reads like the catalogue's series detail: a show
+folder in a local library and a Jellyfin/Emby series open on the episode in
+progress (else the first one not watched) in this same surface, with the
+catalogue's episode block (`EpisodePicker`: the chosen episode, "Změnit
+epizodu", the season select and the list) above the split Play, To library
+and the source row of that episode. When the source rule passes none of a
+library or media-server item's own versions, its own version is still the one
+Play plays; only a catalogue title asks the viewer to choose.
 
 On Android TV a series looks the same wherever it lives: a show folder in a
 local library and a Jellyfin/Emby series both open one detail with the hero,

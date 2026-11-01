@@ -46,7 +46,7 @@ test("a matched local series opens like its catalogue detail and Back leaves the
   };
   const fileFor = (code: string) => series.files.find((file) => codeFor(file) === code)!;
   const fileRow = () => detail.locator(".detail-tech dt").filter({ hasText: "Soubor" })
-    .locator("xpath=following-sibling::dd[1] .source-file");
+    .locator("xpath=following-sibling::dd[1]");
 
   const firstCode = (await episodeBlock.locator(".episode-current b").textContent())!.trim();
   const otherCode = series.files.map(codeFor).find((code) => code !== firstCode)!;
