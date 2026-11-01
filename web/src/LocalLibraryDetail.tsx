@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, describeError } from "./api";
 import { DetailRatings, ratingsFrom } from "./detail-copy";
 import { bytes } from "./settings-ui";
@@ -77,13 +77,14 @@ interface Props {
   realDebridConfigured?: boolean;
   sourceProfiles?: SourceProfile[] | null;
   defaultSort?: string;
+  episodes?: ReactNode;
 }
 
 /** The local counterpart of a remote title's detail: it discovers the exact file and, when the
  *  file or its folder is bound to a title, the other copies of that same title, then hands them to
  *  the shared shell. The catalogue hero, the synopsis and the source picker are the ones a remote
  *  library uses. */
-export function LocalLibraryDetail({ item, favorite, progress, progressRevision = 0, onToggleFavorite, onResetProgress, onToggleWatched, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery, accountScope = "", onPlayAlternative, onSaveAlternative, onDownloadToDevice: downloadToDevice, preferredLanguage, realDebridConfigured = false, sourceProfiles = null, defaultSort }: Props) {
+export function LocalLibraryDetail({ item, favorite, progress, progressRevision = 0, onToggleFavorite, onResetProgress, onToggleWatched, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery, accountScope = "", onPlayAlternative, onSaveAlternative, onDownloadToDevice: downloadToDevice, preferredLanguage, realDebridConfigured = false, sourceProfiles = null, defaultSort, episodes }: Props) {
   useI18n();
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [error, setError] = useState("");
@@ -269,7 +270,9 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   const enrichment = useTitleEnrichment({ kind: "local", path: item.path }, bound, uiLanguage);
   const titleExtras = useTitleExtras(bound?.type, bound?.id);
   const episode = isFile && item.season != null;
-  const title = item.catalogName || (isFile ? item.label : item.name);
+  const title = episode
+    ? item.series?.name || (identity?.bound?.type === "series" ? identity.bound.name : "") || item.catalogName || item.label
+    : item.catalogName || (isFile ? item.label : item.name);
   /** The subject an alternative row is saved under: the identity the file already carries, never
    *  the file's own path. */
   const alternativeMedia = (): Record<string, unknown> => {
@@ -333,6 +336,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     chips={chips}
     favorite={favorite}
     onToggleFavorite={onToggleFavorite}
+    episodes={episodes}
     {...(!isFile && onOpenFolder ? { onOpenFolder } : {})}
     sources={sources}
     {...(folderSource ? { preferredSource: folderSource } : {})}

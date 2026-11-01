@@ -12,7 +12,8 @@ import { AddonManager } from "./AddonManager";
 import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { LocalLibraryDetail, type AlternativePlay } from "./LocalLibraryDetail";
-import { LocalSeriesDetail } from "./LocalSeriesDetail";
+import { EpisodePicker } from "./EpisodePicker";
+import { episodeName, nextEpisode, useLocalSeries } from "./LocalSeriesDetail";
 import { DetailDescription, DetailHero } from "./DetailHero";
 import { folderTitle, LibraryItem, LibraryItemMenu, rowDescription } from "./library-item";
 import { LibraryTile } from "./library-tile";
@@ -277,6 +278,9 @@ export function App() {
    *  sat, so Back returns to the exact spot. */
   const [localDetail, setLocalDetail] = useState<{ item: TreeItem } | null>(null);
   const [localSeries, setLocalSeries] = useState<Extract<TreeItem, { kind: "folder" }> | null>(null);
+  const [localSeriesEpisode, setLocalSeriesEpisode] = useState<string | null>(null);
+  const [localSeriesPickerOpen, setLocalSeriesPickerOpen] = useState(false);
+  const [localSeriesSeason, setLocalSeriesSeason] = useState<number | null>(null);
   const localCrumbsRef = useCrumbsAtEnd<HTMLElement>(`${browsePath}|${localDetail?.item.path ?? ""}`);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
   const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series"; paths?: string[]; copy?: boolean } | null>(null);
@@ -1843,6 +1847,15 @@ export function App() {
   const liveLocalItem = localDetail ? browseItemAt(localDetail.item.path) : null;
   const openLocalSeries = !localDetail && localSeries?.path === browsePath ? localSeries : null;
   const liveLocalSeries = openLocalSeries ? browseItemAt(openLocalSeries.path) : null;
+  const localSeriesState = useLocalSeries(openLocalSeries?.path ?? "", localProgressRevision);
+  useEffect(() => {
+    setLocalSeriesEpisode(null);
+    setLocalSeriesPickerOpen(false);
+    setLocalSeriesSeason(null);
+  }, [openLocalSeries?.path]);
+  const seriesEpisode = localSeriesEpisode == null
+    ? nextEpisode(localSeriesState.episodes)
+    : localSeriesState.episodes.find((file) => file.path === localSeriesEpisode) ?? nextEpisode(localSeriesState.episodes);
   /** A library file carries no watched flag of its own, and the store keeps resume positions only:
    *  a finished film is already dropped by the server. So "seen" for a file is that there is nothing
    *  left to resume, and marking one seen drops the position it kept. */
@@ -3380,6 +3393,43 @@ export function App() {
       : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}), ...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })} aria-label={t("follow.follow")} title={t("follow.follow")}><Bell/><span className="follow-chip-label">{t("follow.follow")}</span></button>)}/> : undefined;
   const panelExtras = useTitleExtras(selected?.type, selected?.id);
 
+  const localLibraryDetailProps = (
+    item: TreeItem,
+    options: { live?: TreeItem | null; episodes?: ReactNode; favorite?: boolean; favoritePath?: string } = {},
+  ) => {
+    const progress = options.live?.kind === "file" ? options.live.progress : item.kind === "file" ? item.progress : undefined;
+    const favoritePath = options.favoritePath ?? item.path;
+    return {
+      item,
+      ...(options.episodes !== undefined ? { episodes: options.episodes } : {}),
+      progressRevision: localProgressRevision,
+      favorite: options.favorite ?? options.live?.favorite ?? item.favorite ?? false,
+      ...(progress ? { progress } : {}),
+      onToggleFavorite: (favorite: boolean) => void toggleFavorite(favoritePath, favorite),
+      onResetProgress: (path: string) => forgetWatched(path),
+      onToggleWatched: (path: string) => void markLocalWatched(path),
+      onOpenFolder: () => { if (item.kind === "folder") goLocalFolder(item.path); },
+      uiLanguage: settings.uiLanguage,
+      secureMode: settings.secureMode,
+      onTrailer: setTrailerOpen,
+      accountScope: session!.username,
+      preferredLanguage: settings.audioLanguage,
+      onGallery: (images: GalleryImage[], path: string, ref?: CatalogueRef | null) => { setMenuFor(null); presentGallery(images, ref, path); },
+      onPlayAlternative: playAlternative,
+      sourceProfiles,
+      defaultSort: defaultStreamSort,
+      realDebridConfigured: settings.realDebridConfigured,
+      onSaveAlternative: openAlternativeSave,
+      onDownloadToDevice: (stream: Stream) => void downloadAlternativeToDevice(stream),
+      onPlay: (stream: Stream, fromBeginning: boolean | undefined, catalogue: CatalogueRef | null) => {
+        if (!stream.localPath) return;
+        void playLocal(item.kind === "file" ? item.label : item.name, stream.localPath, item.poster,
+          item.kind === "file" && item.season != null, { kind: "library", key: item.path }, fromBeginning,
+          catalogue ?? undefined);
+      },
+    };
+  };
+
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
   if (!ready) return <LoginScreen setup={setupNeeded} onSession={(next) => { setSetupNeeded(false); setSession(next); }}/>;
   // Signed in, but on a password an administrator chose: the server allows this form, reading
@@ -3794,40 +3844,29 @@ export function App() {
           scheduleViewAnchor();
         }}>
         {localDetail ? <LocalLibraryDetail key={localDetail.item.path}
-          item={localDetail.item}
-          progressRevision={localProgressRevision}
-          favorite={liveLocalItem?.favorite ?? localDetail.item.favorite ?? false}
-          {...(liveLocalItem?.kind === "file" && liveLocalItem.progress ? { progress: liveLocalItem.progress } : {})}
-          onToggleFavorite={(favorite) => void toggleFavorite(localDetail.item.path, favorite)}
-          onResetProgress={(path) => forgetWatched(path)}
-          onToggleWatched={(path) => void markLocalWatched(path)}
-          onOpenFolder={() => { if (localDetail.item.kind === "folder") goLocalFolder(localDetail.item.path); }}
-          uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
-          accountScope={session!.username} preferredLanguage={settings.audioLanguage}
-          onGallery={(images, path, ref) => { setMenuFor(null); presentGallery(images, ref, path); }}
-          onPlayAlternative={playAlternative}
-          sourceProfiles={sourceProfiles} defaultSort={defaultStreamSort}
-          realDebridConfigured={settings.realDebridConfigured}
-          onSaveAlternative={openAlternativeSave}
-          onDownloadToDevice={(stream) => void downloadAlternativeToDevice(stream)}
-          onPlay={(stream, fromBeginning, catalogue) => {
-            // Only the library's own file goes through the library player: a row that arrived from
-            // an addon or from another media server is started as the source it really is, and the
-            // clicked folder's path must never stand in for a copy that lives somewhere else.
-            if (!stream.localPath) return;
-            const clicked = localDetail.item;
-            void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath, clicked.poster,
-              clicked.kind === "file" && clicked.season != null, { kind: "library", key: clicked.path }, fromBeginning,
-              catalogue ?? undefined);
-          }}/> : openLocalSeries ? <LocalSeriesDetail
-            folder={openLocalSeries}
-            favorite={liveLocalSeries?.favorite ?? openLocalSeries.favorite ?? false}
-            onToggleFavorite={(favorite) => void toggleFavorite(openLocalSeries.path, favorite)}
-            onOpenEpisode={(file) => openLocalDetail({ kind: "file", ...file })}
-            onPlayEpisode={(file, fromBeginning, catalogue) => void playLocal(file.label, file.path, file.poster, true, { kind: "library", key: file.path }, fromBeginning, catalogue ?? undefined)}
-            uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
-            onGallery={(images, path, ref) => { setMenuFor(null); presentGallery(images, ref, path); }}
-            tileShape={settings.libraryTileShape} revision={localProgressRevision}/> : <>
+          {...localLibraryDetailProps(localDetail.item, { live: liveLocalItem })}/> : openLocalSeries ? localSeriesState.loading
+          ? <div className="loading" role="status">{t("common.loading")}</div>
+          : localSeriesState.error ? <div className="remote-error" role="alert"><span>{localSeriesState.error}</span></div>
+          : !localSeriesState.episodes.length ? <p className="identify-hint">{t("mediaServer.noEpisodes")}</p>
+          : seriesEpisode ? <LocalLibraryDetail key={seriesEpisode.path}
+            {...localLibraryDetailProps({ kind: "file", ...seriesEpisode, series: { name: openLocalSeries.catalogName || openLocalSeries.name } }, {
+              episodes: <EpisodePicker
+                episodes={localSeriesState.episodes.map((file) => ({
+                  key: file.path,
+                  ...(file.season != null ? { season: file.season } : {}),
+                  ...(file.episode != null ? { episode: file.episode } : {}),
+                  title: episodeName(file),
+                }))}
+                selectedKey={seriesEpisode.path}
+                onPick={setLocalSeriesEpisode}
+                open={localSeriesPickerOpen}
+                onOpenChange={setLocalSeriesPickerOpen}
+                loading={false}
+                season={localSeriesSeason}
+                onSeason={setLocalSeriesSeason}/>,
+              favorite: liveLocalSeries?.favorite ?? openLocalSeries.favorite ?? false,
+              favoritePath: openLocalSeries.path,
+            })}/> : null : <>
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
           <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>

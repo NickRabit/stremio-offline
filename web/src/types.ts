@@ -602,7 +602,7 @@ export interface BrowseFolder extends BrowseMeta {
 }
 export interface BrowseFile extends LibraryFile, BrowseMeta {
   poster?: string; wide?: string; progress?: { position: number; duration: number };
-  /** The show this episode belongs to, on a Continue watching row only. */
+  /** The show this episode belongs to, when the caller already knows it. */
   series?: { name: string };
 }
 export type LibraryType = "movie" | "series" | "mixed";

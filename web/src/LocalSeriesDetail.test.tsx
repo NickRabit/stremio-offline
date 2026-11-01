@@ -1,11 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { episodeFiles, episodeName, LocalSeriesDetail, nextEpisode } from "./LocalSeriesDetail";
-import { setLocale } from "./i18n";
-import { clearTitleEnrichment } from "./title-enrichment";
-import { clearTitleExtras } from "./title-extras";
-import type { BrowseFile, BrowseFolder, IdentityPreview } from "./types";
+import { episodeFiles, episodeName, nextEpisode, useLocalSeries } from "./LocalSeriesDetail";
+import type { BrowseFile } from "./types";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -15,25 +12,11 @@ const episode = (path: string, season: number, number: number, over: Partial<Bro
   season, episode: number, size: 1_000_000_000, modified: "2026-09-01", ...over,
 });
 
-const show: BrowseFolder = {
-  path: "Shows/Show", name: "Show", fileCount: 3, size: 3_000_000_000,
-  match: "matched", titleType: "series",
-};
-
-const identity: IdentityPreview = {
-  path: show.path, key: show.path, kind: "series", file: false, label: show.name,
-  parsed: { title: show.name, query: show.name }, match: "matched",
-  bound: { type: "series", id: "tt-show", name: show.name },
-};
-
 let root: Root;
 let host: HTMLDivElement;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  setLocale("cs");
-  clearTitleEnrichment();
-  clearTitleExtras();
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -46,9 +29,15 @@ afterEach(() => {
 });
 
 const flush = () => act(async () => { await new Promise((done) => setTimeout(done, 0)); });
-const click = async (element: Element | null) => { await act(async () => { (element as HTMLElement).click(); }); await flush(); };
 
-describe("LocalSeriesDetail episodes", () => {
+function SeriesProbe({ path, revision = 0 }: { path: string; revision?: number }) {
+  const series = useLocalSeries(path, revision);
+  return <div data-loading={String(series.loading)} data-error={series.error}>
+    {series.episodes.map((file) => <i key={file.path} data-path={file.path}/>)}
+  </div>;
+}
+
+describe("local series helpers", () => {
   it("folds copies, keeps the watched or largest copy, and puts specials last", () => {
     const files = [
       episode("/special.mkv", 0, 1, { size: 900 }),
@@ -81,14 +70,10 @@ describe("LocalSeriesDetail episodes", () => {
   });
 });
 
-describe("LocalSeriesDetail", () => {
-  beforeEach(() => {
-    const first = episode("Shows/Show/Season 1/Show - S01E01 - First.mkv", 1, 1, {
-      progress: { position: 100, duration: 100 },
-    });
-    const second = episode("Shows/Show/Season 1/Show - S01E02 - Second.mkv", 1, 2, {
-      progress: { position: 40, duration: 100 },
-    });
+describe("useLocalSeries", () => {
+  it("recursively loads and folds a show's episode files", async () => {
+    const first = episode("Shows/Show/Season 1/Show - S01E01 - First.mkv", 1, 1);
+    const second = episode("Shows/Show/Season 1/Show - S01E02 - Second.mkv", 1, 2);
     const third = episode("Shows/Show/Season 2/Show - S02E01 - Third.mkv", 2, 1);
     const folders = [
       { kind: "folder", path: "Shows/Show/Season 1", name: "Season 1", fileCount: 2, size: 2_000_000_000 },
@@ -97,49 +82,39 @@ describe("LocalSeriesDetail", () => {
 
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
       const url = new URL(String(input), "http://localhost");
-      if (url.pathname === "/api/library/identity") return Promise.resolve(json(identity));
-      if (url.pathname === "/api/library/links") return Promise.resolve(json({ links: [] }));
-      if (url.pathname === "/api/library/trailer") return Promise.resolve(json({ trailer: null }));
       if (url.pathname === "/api/library/browse") {
         const path = url.searchParams.get("path");
-        const items = path === show.path ? folders
+        const items = path === "Shows/Show" ? folders
           : path === folders[0].path ? [{ kind: "file", ...first }, { kind: "file", ...second }]
             : path === folders[1].path ? [{ kind: "file", ...third }]
               : [];
         return Promise.resolve(json({ path, items, total: items.length, pending: false }));
       }
-      if (url.pathname.endsWith("/extras")) return Promise.resolve(json({ people: [], related: [], source: "addon" }));
       return Promise.resolve(json({}, 404));
     }));
+
+    await act(async () => { root.render(<SeriesProbe path="Shows/Show"/>); });
+    await flush();
+    await flush();
+
+    expect(host.firstElementChild?.getAttribute("data-loading")).toBe("false");
+    expect(host.firstElementChild?.getAttribute("data-error")).toBe("");
+    expect([...host.querySelectorAll("[data-path]")].map((node) => node.getAttribute("data-path"))).toEqual([
+      "Shows/Show/Season 1/Show - S01E01 - First.mkv",
+      "Shows/Show/Season 1/Show - S01E02 - Second.mkv",
+      "Shows/Show/Season 2/Show - S02E01 - Third.mkv",
+    ]);
   });
 
-  it("groups episodes by season and resumes the part-way episode", async () => {
-    const onPlayEpisode = vi.fn();
-    const onOpenEpisode = vi.fn();
-    const props = {
-      folder: show, favorite: false, onToggleFavorite: vi.fn(), onOpenEpisode, onPlayEpisode,
-      uiLanguage: "cs", secureMode: true, onTrailer: vi.fn(), tileShape: "poster" as const,
-    };
+  it("does not read a series when no path is open", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
 
-    await act(async () => { root.render(<LocalSeriesDetail {...props}/>); });
-    await flush();
+    await act(async () => { root.render(<SeriesProbe path=""/>); });
     await flush();
 
-    expect([...host.querySelectorAll(".remote-season")].map((node) => node.textContent)).toEqual(["Série 1", "Série 2"]);
-    expect(host.querySelectorAll(".remote-season-group .browse-item")).toHaveLength(3);
-
-    const primary = host.querySelector<HTMLButtonElement>(".library-detail-play button.primary")!;
-    expect(primary.textContent?.trim()).toBe("Pokračovat · S1 E2");
-    await click(primary);
-    expect(onPlayEpisode).toHaveBeenCalledWith(
-      expect.objectContaining({ path: "Shows/Show/Season 1/Show - S01E02 - Second.mkv" }),
-      false,
-      { type: "series", id: "tt-show" },
-    );
-
-    await click(host.querySelector('[data-path="Shows/Show/Season 1/Show - S01E01 - First.mkv"] .library-open'));
-    expect(onOpenEpisode).toHaveBeenCalledWith(expect.objectContaining({
-      path: "Shows/Show/Season 1/Show - S01E01 - First.mkv",
-    }));
+    expect(fetch).not.toHaveBeenCalled();
+    expect(host.firstElementChild?.getAttribute("data-loading")).toBe("false");
+    expect(host.querySelectorAll("[data-path]")).toHaveLength(0);
   });
 });

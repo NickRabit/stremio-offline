@@ -157,8 +157,10 @@ describe("LocalLibraryDetail discovery", () => {
   it("asks for exactly one episode's copies, never the whole show", async () => {
     identityHandler = () => json(identity({ kind: "series", bound: { type: "series", id: "tt9", name: "Show" } }));
     copies = () => json([copy("Show/S01E02.mkv", "S01E02.mkv", 1_000_000_000, "Shows")]);
-    await render(file({ path: "Show/S01E02.mkv", label: "S01E02.mkv", season: 1, episode: 2 }));
+    await render(file({ path: "Show/S01E02.mkv", label: "S01E02.mkv", season: 1, episode: 2, catalogName: "The Second Episode" }));
     expect(calls.localStreams[0]!.pathname).toBe("/api/local-streams/series/tt9%3A1%3A2");
+    expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Show");
+    expect([...host.querySelectorAll(".library-detail-hero .meta-line")].map((node) => node.textContent)).toContain("S1 E2");
   });
 
   it("reads a matched movie folder's versions without ever guessing a single file", async () => {

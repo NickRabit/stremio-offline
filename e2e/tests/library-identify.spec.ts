@@ -107,14 +107,25 @@ test("each episode of a matched series shows its own plot", async ({ page }) => 
   await expect(dialog).toHaveCount(0);
 
   await seriesTile.getByRole("button", { name: /Otevřít titul/ }).click();
-  const seriesDetail = page.locator(".local-series-detail");
+  const seriesDetail = page.locator(".library-local-detail");
   await expect(seriesDetail).toBeVisible();
-  for (const [code, plot] of [["S01E01", "V prvním dílu"], ["S01E02", "Ve druhém dílu"]]) {
-    await seriesDetail.locator(".browse-item", { hasText: code }).locator(".library-open").click();
-    const episodeDetail = page.locator(".library-title-detail:not(.local-series-detail)");
-    await expect(episodeDetail.locator(".library-detail-synopsis")).toContainText(plot);
-    await page.locator(".library-back").click();
-    await expect(seriesDetail).toBeVisible();
+  await expect(seriesDetail.locator(".library-detail-hero h2")).toHaveText(seriesName);
+  const episodeBlock = seriesDetail.locator(".catalogue-episodes");
+  await expect(episodeBlock.locator(".episode-current")).toBeVisible();
+
+  const episodes = [
+    { code: "01×01", plot: "V prvním dílu" },
+    { code: "01×02", plot: "Ve druhém dílu" },
+  ];
+  const current = (await episodeBlock.locator(".episode-current b").textContent())!.trim();
+  const ordered = current === episodes[0].code ? episodes : [episodes[1], episodes[0]];
+  for (const [index, episode] of ordered.entries()) {
+    await expect(episodeBlock.locator(".episode-current")).toContainText(episode.code);
+    await expect(seriesDetail.locator(".library-detail-synopsis")).toContainText(episode.plot);
+    if (index === 0) {
+      await episodeBlock.locator(".episode-current button").click();
+      await episodeBlock.locator(".episode-list button", { hasText: ordered[1].code }).click();
+    }
   }
 });
 

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronRight } from "lucide-react";
 import { api, describeError } from "./api";
 import { catalogueGalleryImages, type GalleryImage } from "./gallery-images";
 import { DetailRatings, ratingsFrom } from "./detail-copy";
+import { EpisodePicker } from "./EpisodePicker";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { synopsisOf, TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
@@ -100,9 +100,6 @@ export interface CatalogueTitleDetailProps {
 /** One provider's answer: its rows, or the failure that kept them away. A provider that failed
  *  never hides the rows the others answered. */
 type ProviderAnswer = { rows: Stream[] } | { error: unknown };
-
-/** The pad an episode's own numbering is written with, the way the catalogue writes it. */
-const pad = (value: number) => String(value).padStart(2, "0");
 
 /** One row per source id: an addon that repeats a source under two labels is still one thing. */
 const dedupe = (streams: Stream[]): Stream[] => {
@@ -310,38 +307,36 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     : "";
   const pieces = TitleExtraFacts({ extras: titleExtras.extras, language: locale, name });
   const scores = ratingsFrom(titleExtras.extras, snapshot);
-  const seasons = [...new Set(videos.map((video) => video.season).filter((value): value is number => typeof value === "number"))]
-    .sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
-  const activeSeason = pickerSeason ?? episode?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? 0;
-  const visibleEpisodes = videos.filter((video) => seasons.length <= 1 || video.season === activeSeason);
-  const sameEpisode = (video: Video) => episode?.id != null && video.id != null && String(video.id) === String(episode.id);
-
-  const episodes = type !== "series" ? undefined : <div className="catalogue-episodes">
-    {waitingEpisode || pickerOpen ? <>
-      <div className="subhead episode-head"><h3>{t("episodes.heading")}</h3>
-        <div className="episode-tools">
-          {seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason}
-            onChange={(event) => setPickerSeason(Number(event.target.value))}>
-            {seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}
-          </select>}
-          <span>{visibleEpisodes.length}</span>
-        </div>
-      </div>
-      {snapshot === null && !metaError ? <div className="loading" role="status">{t("common.loading")}</div>
-        : !videos.length ? <p className="identify-hint">{t("mediaServer.noEpisodes")}</p>
-          : <div className="episode-list">{visibleEpisodes.map((video, index) => <button type="button" key={String(video.id ?? index)}
-            className={sameEpisode(video) ? "selected" : ""} onClick={() => { setPickedEpisode(video); setPickerOpen(false); }}>
-            <b>{video.season != null ? `${pad(video.season)}×${pad(video.episode ?? 0)}` : index + 1}</b>
-            <span>{video.title || video.name || t("episodes.one")}</span>
-            <ChevronRight/>
-          </button>)}</div>}
-    </> : episode ? <div className="episode-current">
-      <small>{t("episodes.chosen")}</small>
-      <b>{episode.season != null ? `${pad(episode.season)}×${pad(episode.episode ?? 0)}` : t("episodes.part")}</b>
-      <span>{episode.title || episode.name || t("episodes.one")}</span>
-      <button type="button" onClick={() => setPickerOpen(true)}>{t("episodes.change")}</button>
-    </div> : null}
-  </div>;
+  const catalogueEpisodes = videos.map((video, index) => ({
+    key: String(video.id ?? index),
+    ...(video.season != null ? { season: video.season } : {}),
+    ...(video.episode != null ? { episode: video.episode } : {}),
+    ...(video.title || video.name ? { title: video.title || video.name } : {}),
+  }));
+  const selectedEpisode = episode?.id == null ? undefined
+    : catalogueEpisodes.find((candidate, index) => String(videos[index]?.id) === String(episode.id));
+  const selectedKey = selectedEpisode?.key ?? (episode
+    ? episode.id != null ? String(episode.id) : `catalogue:${episode.season ?? ""}:${episode.episode ?? ""}`
+    : null);
+  const pickerEpisodes = episode && !selectedEpisode && !pickerOpen ? [{
+    key: selectedKey!,
+    ...(episode.season != null ? { season: episode.season } : {}),
+    ...(episode.episode != null ? { episode: episode.episode } : {}),
+    ...(episode.title || episode.name ? { title: episode.title || episode.name } : {}),
+  }, ...catalogueEpisodes] : catalogueEpisodes;
+  const episodePicker = type !== "series" ? undefined : <EpisodePicker
+    episodes={pickerEpisodes}
+    selectedKey={selectedKey}
+    onPick={(key) => {
+      const index = pickerEpisodes.findIndex((candidate) => candidate.key === key);
+      if (index >= 0) setPickedEpisode(videos[index] ?? null);
+    }}
+    open={pickerOpen}
+    onOpenChange={setPickerOpen}
+    loading={snapshot === null && !metaError}
+    season={pickerSeason}
+    onSeason={setPickerSeason}
+  />;
 
   return <div className="catalogue-title-detail">
     {metaError && <div className="remote-error" role="alert">
@@ -376,7 +371,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       {...(addonPriority ? { addonPriority } : {})}
       defaultSources={firstPlayable ? [firstPlayable] : []}
       {...(seed ? { initialSource: seed } : {})}
-      episodes={episodes}
+      episodes={episodePicker}
       {...(waitingEpisode ? { placeholder: null } : {})}
       {...(waitingEpisode ? {} : { sourceGroups: { groups: showTorrents ? extra.groups : extra.groups.map((group) => ({ ...group, streams: group.streams.filter(offered) })), retry: extra.retry }, onOpenSources: () => setChooserOpen(true) })}
       nativeSourceLabel={t("sources.heading")}
