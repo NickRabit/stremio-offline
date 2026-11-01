@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ActionMenu } from "./ActionMenu";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { Check, ChevronDown, CirclePlay, Download, FolderOpen, HardDrive, Images, ListRestart, RotateCcw, X } from "lucide-react";
@@ -128,8 +127,6 @@ export interface LibraryTitleDetailProps {
   /** The other half of the save split: the viewer wants to choose the destination themselves.
    *  Absent keeps the single save button the local detail draws. */
   onSaveElsewhere?: (stream: Stream) => void;
-  /** Series-wide destinations offered beside Save elsewhere. */
-  bulkActions?: { season?: number; onSeason: () => void; onSeries: () => void };
   /** Saves the selected version to the device at the keyboard. Absent for a remote original and
    *  wherever the account may not do it. */
   onDownloadToDevice?: (stream: Stream) => void;
@@ -162,7 +159,7 @@ const videoLine = (facts: VideoFacts | undefined): { height: string; tags: Array
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, originalLine, ratings, heroExtra, people, trailer, onTrailer, secureMode, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, ownFallback = false, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, bulkActions, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, originalLine, ratings, heroExtra, people, trailer, onTrailer, secureMode, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, ownFallback = false, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -408,28 +405,8 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         ? <div className="split-button library-detail-save">
           <button type="button" aria-label={t("save.toLibrary")} title={t("save.toLibrary")} disabled={!canSave}
             onClick={() => selected && canSave && onSaveToLibrary(selected)}><HardDrive/> <span className="library-detail-action-label">{t("save.toLibrary")}</span></button>
-          {bulkActions
-            ? <ActionMenu className="split-button-toggle" label={t("seriesBulk.menuLabel")} title={t("seriesBulk.menuLabel")}
-              items={[
-                {
-                  key: "season",
-                  label: bulkActions.season === 0
-                    ? t("seriesBulk.menuSpecials")
-                    : typeof bulkActions.season === "number" && bulkActions.season >= 1
-                      ? t("seriesBulk.menuSeason", { season: bulkActions.season })
-                      : t("seriesBulk.menuAnySeason"),
-                  onSelect: bulkActions.onSeason,
-                },
-                { key: "series", label: t("seriesBulk.menuSeries"), onSelect: bulkActions.onSeries },
-                {
-                  key: "elsewhere",
-                  label: t("seriesBulk.menuElsewhere"),
-                  disabled: !canSave,
-                  onSelect: () => { if (selected && canSave) onSaveElsewhere(selected); },
-                },
-              ]}><ChevronDown/></ActionMenu>
-            : <button type="button" className="split-button-toggle" aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} disabled={!canSave}
-              onClick={() => selected && canSave && onSaveElsewhere(selected)}><ChevronDown/></button>}
+          <button type="button" className="split-button-toggle" aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} disabled={!canSave}
+            onClick={() => selected && canSave && onSaveElsewhere(selected)}><ChevronDown/></button>
         </div>
         : <button type="button" aria-label={t("save.toLibrary")} title={t("save.toLibrary")} disabled={!canSave}
           onClick={() => selected && canSave && onSaveToLibrary(selected)}><HardDrive/> <span className="library-detail-action-label">{t("save.toLibrary")}</span></button>)}

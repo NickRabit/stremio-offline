@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, describeError } from "./api";
 import { catalogueGalleryImages, type GalleryImage } from "./gallery-images";
 import { DetailRatings, ratingsFrom } from "./detail-copy";
-import { EpisodePicker, episodePickerSeason } from "./EpisodePicker";
+import { EpisodePicker } from "./EpisodePicker";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { galleryPayload, gridArt } from "./meta";
@@ -322,10 +322,9 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const selectedKey = selectedEpisode?.key ?? (episode
     ? episode.id != null ? String(episode.id) : `catalogue:${episode.season ?? ""}:${episode.episode ?? ""}`
     : null);
-  const activeSeason = episodePickerSeason(catalogueEpisodes, selectedKey, pickerSeason);
-  const bulkRequest = (scope: "season" | "series"): CatalogueBulkRequest => ({
+  const bulkRequest = (scope: "season" | "series", season?: number): CatalogueBulkRequest => ({
     scope,
-    ...(scope === "season" ? { season: activeSeason } : {}),
+    ...(scope === "season" && season !== undefined ? { season } : {}),
     title: name,
     media: { id, metaType: type, ...gridArt(snapshot, snapshot), gallery: galleryPayload(gallery) },
     episodes: videos.flatMap((video) => {
@@ -357,6 +356,12 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     loading={snapshot === null && !metaError}
     season={pickerSeason}
     onSeason={setPickerSeason}
+    {...(snapshot !== null && videos.length > 0 && onBulkDownload ? {
+      bulk: {
+        onSeason: (season: number) => onBulkDownload(bulkRequest("season", season)),
+        onSeries: () => onBulkDownload(bulkRequest("series")),
+      },
+    } : {})}
   />;
 
   return <div className="catalogue-title-detail">
@@ -395,13 +400,6 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       episodes={episodePicker}
       {...(waitingEpisode ? { placeholder: null } : {})}
       {...(waitingEpisode ? {} : { sourceGroups: { groups: showTorrents ? extra.groups : extra.groups.map((group) => ({ ...group, streams: group.streams.filter(offered) })), retry: extra.retry }, onOpenSources: () => setChooserOpen(true) })}
-      {...(type === "series" && snapshot !== null && videos.length > 0 && onBulkDownload ? {
-        bulkActions: {
-          season: activeSeason,
-          onSeason: () => onBulkDownload(bulkRequest("season")),
-          onSeries: () => onBulkDownload(bulkRequest("series")),
-        },
-      } : {})}
       nativeSourceLabel={t("sources.heading")}
       {...(preferredLanguage ? { preferredLanguage } : {})}
       sourceProfiles={sourceProfiles}

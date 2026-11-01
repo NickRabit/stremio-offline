@@ -211,7 +211,7 @@ describe("LocalLibraryDetail actions", () => {
     identityHandler = () => json(identity({ kind: "series", bound: { type: "series", id: "tt9", name: "Show" } }));
     copies = () => json([copy("Show/S01E02.mkv", "S01E02.mkv", 1_000_000_000, "Shows")]);
     await render(file({ path: "Show/S01E02.mkv", label: "S01E02.mkv", season: 1, episode: 2, catalogName: "The Second Episode" }));
-    expect(document.querySelector(".action-menu")).toBeNull();
+    expect(document.querySelector(".episode-bulk")).toBeNull();
     expect(host.textContent).not.toContain("Download the whole series");
   });
 

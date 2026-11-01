@@ -785,10 +785,6 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .remote-episodes-head>.episode-tools{margin-left:auto}
 .remote-episodes-head>button{display:inline-flex;align-items:center;gap:6px;padding:6px 9px;font-size:11px}
 .remote-episodes-head>button svg{width:14px;height:14px}
-.action-menu{position:fixed;z-index:320;display:grid;gap:2px;width:max-content;min-width:220px;max-width:calc(100vw - 24px);overflow:auto;overscroll-behavior:contain;padding:6px;border:1px solid var(--line);border-radius:11px;background:#141922;box-shadow:0 18px 50px #000a}
-.action-menu button{display:flex;justify-content:flex-start;min-height:44px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:var(--text);text-align:left;font-size:12px;font-weight:600;white-space:normal}
-.action-menu button:hover:not(:disabled),.action-menu button:focus-visible{background:var(--panel2)}
-.action-menu button:disabled{opacity:.42;cursor:not-allowed}
 @media(prefers-reduced-motion:reduce){.loading-spinner{animation:none}}
 @media(max-width:700px){.identify-overlay{padding:0;align-items:end}.identify-card{width:100%;max-height:100%;border-radius:16px 16px 0 0}.dialog-split>.identify-head{padding:16px 16px 10px}.dialog-body{padding:0 16px 14px}.dialog-foot{padding:12px 16px max(14px,env(safe-area-inset-bottom,0px))}.bulk-strategy,.bulk-language-grid,.bulk-subtitle-grid,.bulk-audio-grid{grid-template-columns:1fr}}
 .library-action{display:flex;align-items:center;gap:7px;min-height:44px;font-size:12px;color:var(--accent2);padding:8px 2px}

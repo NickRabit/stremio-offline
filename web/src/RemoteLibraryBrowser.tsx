@@ -1325,14 +1325,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       seriesItemId: series.id,
     };
   };
-  const seriesCopyAction = onSeriesBulk ? <button type="button" onClick={() => {
-    const request = seriesBulkRequest("series");
-    if (request) onSeriesBulk(request);
-  }}><HardDrive/> {t("seriesBulk.remoteButton")}</button> : undefined;
   const episodePicker = series && detail && (detail.type === "series" || detail.type === "episode") ? <>
-    {detail.type === "episode" && seriesCopyAction && <div className="subhead episode-head remote-episodes-head">
-      {seriesCopyAction}
-    </div>}
     <EpisodePicker
       episodes={pickerEpisodes.map((episode) => ({
         key: episode.id,
@@ -1351,7 +1344,12 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       season={episodeSeason}
       onSeason={setEpisodeSeason}
       {...(detail.type === "series" ? { headClassName: "remote-episodes-head" } : {})}
-      {...(detail.type === "series" && seriesCopyAction ? { action: seriesCopyAction } : {})}/>
+      {...(onSeriesBulk ? {
+        bulk: {
+          onSeason: (season: number) => { const request = seriesBulkRequest("season", season); if (request) onSeriesBulk(request); },
+          onSeries: () => { const request = seriesBulkRequest("series"); if (request) onSeriesBulk(request); },
+        },
+      } : {})}/>
     {episodes.error && <div className="remote-error" role="alert">
       <span>{episodes.error}</span>
       <button type="button" onClick={retryEpisodes}>{t("mediaServer.retry")}</button>
@@ -1756,19 +1754,6 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             placeholder={detail.type === "series" ? <></> : undefined}
             sourceProfiles={sourceProfiles}
             {...(defaultSort ? { defaultSort } : {})}
-            {...(detail.type === "episode" && series && onSeriesBulk ? {
-              bulkActions: {
-                season: detail.season,
-                onSeason: () => {
-                  const request = seriesBulkRequest("season", detail.season);
-                  if (request) onSeriesBulk(request);
-                },
-                onSeries: () => {
-                  const request = seriesBulkRequest("series");
-                  if (request) onSeriesBulk(request);
-                },
-              },
-            } : {})}
             {...(addonIdentity ? {
               sourceGroups: { groups: extra.groups, retry: extra.retry },
               onOpenSources: () => setChooserOpen(true),

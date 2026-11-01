@@ -442,7 +442,7 @@ describe("CatalogueTitleDetail series", () => {
     expect(pickerRows().some((row) => row.textContent?.includes("Show S01E02.mkv"))).toBe(false);
   });
 
-  it("offers bulk download for the picker's active season and follows a season change", async () => {
+  it("offers bulk download beside the season choice, the way the catalogue panel does", async () => {
     const onBulkDownload = vi.fn();
     const allVideos = [
       episode("tt-series:1:1", 1, 1, "The first one"),
@@ -452,36 +452,21 @@ describe("CatalogueTitleDetail series", () => {
       target: { type: "series", id: "tt-series", name: "A show", initialMeta: series(allVideos) },
       onBulkDownload,
     });
-    const bulkArrow = () => host.querySelector<HTMLButtonElement>(".library-detail-save button[aria-haspopup='menu']")!;
-    await click(bulkArrow());
-    expect([...document.querySelectorAll(".action-menu [role='menuitem']")].map((item) => item.textContent))
-      .toContain("Download season 1…");
-    await act(async () => document.body.click());
+    const bulkButtons = () => [...host.querySelectorAll<HTMLButtonElement>(".catalogue-episodes .episode-tools button.episode-bulk")];
+    expect(bulkButtons().map((button) => button.textContent?.trim())).toEqual(["Season 1", "Whole series"]);
+    // The To library arrow stays the plain Save elsewhere action.
+    expect(host.querySelector(".library-detail-save button[aria-haspopup='menu']")).toBeNull();
     const picker = host.querySelector<HTMLSelectElement>(".catalogue-episodes .season-select")!;
     await act(async () => {
       picker.value = "2";
       picker.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await flush();
-    await click(bulkArrow());
-    expect([...document.querySelectorAll(".action-menu [role='menuitem']")].map((item) => item.textContent))
-      .toContain("Download season 2…");
-  });
-
-  it("sends the full video list for a whole-series bulk request", async () => {
-    const onBulkDownload = vi.fn();
-    const allVideos = [
-      episode("tt-series:1:1", 1, 1, "The first one"),
-      episode("tt-series:2:1", 2, 1, "The next season"),
-    ];
-    await render({
-      target: { type: "series", id: "tt-series", name: "A show", initialMeta: series(allVideos) },
-      onBulkDownload,
-    });
-    await click(host.querySelector(".library-detail-save button[aria-haspopup='menu']"));
-    await click([...document.querySelectorAll<HTMLButtonElement>(".action-menu [role='menuitem']")]
-      .find((item) => item.textContent === "Download the whole series…")!);
-    expect(onBulkDownload).toHaveBeenCalledWith({
+    expect(bulkButtons()[0]!.textContent?.trim()).toBe("Season 2");
+    await click(bulkButtons()[0]!);
+    expect(onBulkDownload).toHaveBeenLastCalledWith(expect.objectContaining({ scope: "season", season: 2 }));
+    await click(bulkButtons()[1]!);
+    expect(onBulkDownload).toHaveBeenLastCalledWith({
       scope: "series",
       title: "A show",
       media: expect.objectContaining({ id: "tt-series", metaType: "series" }),
@@ -492,12 +477,19 @@ describe("CatalogueTitleDetail series", () => {
     });
   });
 
+  it("offers no bulk download without the app's handler", async () => {
+    await render({
+      target: { type: "series", id: "tt-series", name: "A show", initialMeta: series([episode("tt-series:1:1", 1, 1, "One")]) },
+    });
+    expect(host.querySelector(".catalogue-episodes .episode-bulk")).toBeNull();
+  });
+
   it("offers no bulk action for a film", async () => {
     await render({
       target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() },
       onBulkDownload: vi.fn(),
     });
-    expect(host.querySelector(".library-detail-save button[aria-haspopup='menu']")).toBeNull();
+    expect(host.querySelector(".episode-bulk")).toBeNull();
   });
 });
 

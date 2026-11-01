@@ -360,8 +360,9 @@ describe("RemoteLibraryBrowser listing", () => {
     await click(host.querySelector(".remote-libraries button.library-open")!);
     await click(tileButtons()[0]!);
     await flush();
-    const copy = byText(".remote-episodes-head button", "Copy to library…")!;
-    expect(copy).not.toBeNull();
+    if (!host.querySelector(".catalogue-episodes .episode-bulk")) await click(host.querySelector(".catalogue-episodes .episode-current button")!);
+    const copy = byText(".catalogue-episodes .episode-bulk", "Whole series")!;
+    expect(copy).not.toBeUndefined();
     await click(copy);
     expect(onSeriesBulk).toHaveBeenCalledWith({
       scope: "series",
@@ -378,7 +379,8 @@ describe("RemoteLibraryBrowser listing", () => {
     await click(host.querySelector(".remote-libraries button.library-open")!);
     await click(tileButtons()[0]!);
     await flush();
-    expect(byText(".remote-episodes-head button", "Copy to library…")).toBeUndefined();
+    if (host.querySelector(".catalogue-episodes .episode-current button")) await click(host.querySelector(".catalogue-episodes .episode-current button")!);
+    expect(host.querySelector(".catalogue-episodes .episode-bulk")).toBeNull();
   });
 
   it("offers the episode's season in the bulk menu and offers none on a movie", async () => {
@@ -391,10 +393,9 @@ describe("RemoteLibraryBrowser listing", () => {
     await click(host.querySelector(".remote-libraries button.library-open")!);
     await click(tileButtons()[0]!);
     await flush();
-    await click(host.querySelector(".library-detail-save button[aria-haspopup='menu']")!);
-    const season = [...document.querySelectorAll<HTMLElement>(".action-menu [role='menuitem']")]
-      .find((item) => item.textContent?.includes("Download season 2…"))!;
-    expect(season).not.toBeNull();
+    if (!host.querySelector(".catalogue-episodes .episode-bulk")) await click(host.querySelector(".catalogue-episodes .episode-current button")!);
+    const season = byText(".catalogue-episodes .episode-bulk", "Season 2")!;
+    expect(season).not.toBeUndefined();
     await click(season);
     expect(onSeriesBulk).toHaveBeenCalledWith(expect.objectContaining({ scope: "season", season: 2, seriesItemId: "ser1" }));
 
@@ -406,7 +407,7 @@ describe("RemoteLibraryBrowser listing", () => {
     await click(host.querySelector(".remote-libraries button.library-open")!);
     await click(tileButtons()[0]!);
     await flush();
-    expect(host.querySelector(".library-detail-save button[aria-haspopup='menu']")).toBeNull();
+    expect(host.querySelector(".episode-bulk")).toBeNull();
   });
 
   it("opens a series on the episode in progress even when it is past the first page", async () => {

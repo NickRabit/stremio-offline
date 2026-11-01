@@ -828,66 +828,6 @@ describe("LibraryTitleDetail save split", () => {
   });
 });
 
-describe("LibraryTitleDetail bulk save menu", () => {
-  const saveArrow = () => host.querySelector<HTMLButtonElement>(".library-detail-save .split-button-toggle")!;
-  const menuItems = () => [...document.querySelectorAll<HTMLButtonElement>(".action-menu [role='menuitem']")];
-
-  it("keeps the direct Save elsewhere behavior without bulk actions", () => {
-    const onSaveElsewhere = vi.fn();
-    render({
-      sources: [remote("s1", "1080p", 1)],
-      onSaveToLibrary: vi.fn(),
-      onSaveElsewhere,
-    });
-    click(saveArrow());
-    expect(onSaveElsewhere).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "s1" }));
-    expect(document.querySelector(".action-menu")).toBeNull();
-  });
-
-  it("shows the bulk choices in order and skips Save elsewhere when no row can be saved", () => {
-    const onSeason = vi.fn();
-    const onSeries = vi.fn();
-    render({
-      sources: [],
-      onSaveToLibrary: vi.fn(),
-      onSaveElsewhere: vi.fn(),
-      bulkActions: { season: 2, onSeason, onSeries },
-    });
-    const arrow = saveArrow();
-    expect(arrow.disabled).toBe(false);
-    expect(arrow.getAttribute("aria-haspopup")).toBe("menu");
-    click(arrow);
-    expect(menuItems().map((item) => item.textContent)).toEqual([
-      "Download season 2…",
-      "Download the whole series…",
-      "Save elsewhere…",
-    ]);
-    expect(menuItems()[0]!.disabled).toBe(false);
-    expect(menuItems()[1]!.disabled).toBe(false);
-    expect(menuItems()[2]!.disabled).toBe(true);
-    click(menuItems()[0]!);
-    expect(onSeason).toHaveBeenCalledOnce();
-    click(arrow);
-    click(menuItems()[1]!);
-    expect(onSeries).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    [3, "Download season 3…"],
-    [0, "Download specials…"],
-    [undefined, "Download a season…"],
-  ])("labels the season action for %s", (season, expected) => {
-    render({
-      sources: [remote("s1", "1080p", 1)],
-      onSaveToLibrary: vi.fn(),
-      onSaveElsewhere: vi.fn(),
-      bulkActions: { season, onSeason: vi.fn(), onSeries: vi.fn() },
-    });
-    click(saveArrow());
-    expect(menuItems()[0]!.textContent).toBe(expected);
-  });
-});
-
 /** A file the viewer's own library holds: named by its path, and by a name that may match
  *  another copy of the same film. */
 const local = (path: string, name: string, bytes?: number): Stream => ({
