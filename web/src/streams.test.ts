@@ -259,11 +259,13 @@ describe("torrent listing", () => {
     expect(pickDefaultStream([breaks], "balanced")).toBeUndefined();
   });
 
-  it("picks a library copy before an addon that meets the rule, even when the copy breaks it", () => {
-    const local = stream({ name: "local", kind: "library", localPath: "lib/film.mkv", rules: { balanced: verdict([0], "breaks") } });
+  it("lets the rule decide and takes a library copy only as the last resort", () => {
+    const local = stream({ name: "local", kind: "library", localPath: "lib/film.mkv", rules: { balanced: verdict([2], "breaks") } });
     const meets = stream({ name: "meets", rules: { balanced: verdict([0]) } });
-    expect(pickDefaultStream([meets, local], "balanced")?.name).toBe("local");
-    expect(pickDefaultStream([meets, local])?.name).toBe("local");
+    const addonBreaks = stream({ name: "addon breaks", rules: { balanced: verdict([2], "breaks") } });
+    expect(pickDefaultStream([local, meets], "balanced")?.name).toBe("meets");
+    expect(pickDefaultStream([addonBreaks, local], "balanced")?.name).toBe("local");
+    expect(pickDefaultStream([addonBreaks], "balanced")).toBeUndefined();
   });
 
   it("reopens the source the title was last played from before the active rule default", () => {
@@ -414,11 +416,11 @@ describe("pickNextEpisodeStream", () => {
     expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(local);
   });
 
-  it("takes a local copy even when it breaks the active rule", () => {
+  it("prefers an addon that meets the active rule over a local copy that breaks it", () => {
     const current = stream({ addonKey: "same", addonName: "Same" });
     const local = stream({ name: "local breaks", kind: "library", localPath: "lib/next.mkv", rules: { balanced: verdict([0], "breaks") } });
     const addon = stream({ name: "addon meets", addonKey: "same", addonName: "Same", rules: { balanced: verdict([1]) } });
-    expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(local);
+    expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(addon);
   });
 
   it("keeps the provider the viewer picked by hand even under a rule sort", () => {

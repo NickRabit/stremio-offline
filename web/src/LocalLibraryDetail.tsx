@@ -318,6 +318,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
 
   return <div className="library-local-detail" data-path={item.path} tabIndex={-1}><LibraryTitleDetail
     identityKey={item.path}
+    preferLocalCopy
     title={title}
     {...(episode ? { subtitle: t("mediaServer.episodeLabel", { season: item.season ?? 0, episode: item.episode ?? 0 }) } : {})}
     poster={item.poster}

@@ -261,11 +261,13 @@ class StreamsTest {
   }
 
   @Test
-  fun `pickDefaultStream takes a library copy even when it breaks the rule`() {
-    val local = stream(name = "local", kind = "library", localPath = "lib/film.mkv", rule = verdict("breaks", listOf(0.0), listOf("resolutionLow")))
+  fun `pickDefaultStream lets the rule decide and takes a library copy only as the last resort`() {
+    val local = stream(name = "local", kind = "library", localPath = "lib/film.mkv", rule = verdict("breaks", listOf(2.0), listOf("resolutionLow")))
     val meets = stream(name = "meets", rule = verdict("meets", listOf(0.0)))
-    assertEquals("local", Streams.pickDefaultStream(listOf(meets, local), ruleId = "p1")?.name)
-    assertEquals("local", Streams.pickDefaultStream(listOf(meets, local))?.name)
+    val addonBreaks = stream(name = "addon breaks", rule = verdict("breaks", listOf(2.0), listOf("language")))
+    assertEquals("meets", Streams.pickDefaultStream(listOf(local, meets), ruleId = "p1")?.name)
+    assertEquals("local", Streams.pickDefaultStream(listOf(addonBreaks, local), ruleId = "p1")?.name)
+    assertEquals(null, Streams.pickDefaultStream(listOf(addonBreaks), ruleId = "p1"))
   }
 
   @Test
