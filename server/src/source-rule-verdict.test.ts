@@ -394,3 +394,16 @@ test("a read local copy breaks a language rule only by the language its tracks n
     "an untagged track is judged as if the file were not read");
   assert.equal(ruleVerdicts(czechOnly, [english]).get(english.sourceId)!.status, "breaks");
 });
+
+test("a local copy that breaks the rules still ranks ahead of sources that meet them", () => {
+  const local = listedLocalCopyEvidence({ key: "lib_00000001/movie.webm", size: 10 }, 0, "movie.webm", {
+    info: { container: "webm", video: { codec: "vp9", width: 160, height: 120 }, audioTracks: [], subtitleTracks: [] },
+    subtitleSidecars: [],
+  });
+  const remote = addon("addon", { url: "https://cdn.example/movie.mp4", name: "1080p" });
+  const verdicts = ruleVerdicts(snapshot(rule({ resolution: { min: 720, max: 1080 } })), [local, remote]);
+  const localVerdict = verdicts.get(local.sourceId)!;
+  assert.equal(localVerdict.status, "breaks");
+  assert.deepEqual(localVerdict.reasons, ["resolutionLow"]);
+  assert.equal(localVerdict.rank[1], 0, "ranked as if it met the rules");
+});

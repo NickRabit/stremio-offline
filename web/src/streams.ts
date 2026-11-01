@@ -98,6 +98,9 @@ export function pickDefaultStream(streams: Stream[], ruleId?: string, stableKey?
   // still falls through to the ordinary default.
   const resumed = stableKey ? playable.find((stream) => stream.stableKey === stableKey) : undefined;
   if (resumed) return resumed;
+  // A copy already in a library is played before anything the rules would pick.
+  const local = playable.find(isLocalStream);
+  if (local) return local;
   if (!ruleId || !playable.some((stream) => stream.rules?.[ruleId])) {
     return playable[0] ?? streams[0];
   }
