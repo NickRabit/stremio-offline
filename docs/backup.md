@@ -20,6 +20,7 @@ hashes. Store them like passwords. The settings export is described in
 
 | Path | Holds | Back it up? |
 | --- | --- | --- |
+| `application.sqlite` (with `-wal`/`-shm`) | The image link registry | **Yes** — copy it with the rest of `DATA_PATH` while the server is stopped |
 | `state.json` | Accounts, grants, libraries, settings, addons, each account's favourites, resume positions, watchlist and search history | **Yes** — cannot be rebuilt |
 | `media-server.key` | Key that decrypts saved Jellyfin and Emby logins. Present only when the server created it; a deployment that sets `MEDIA_SERVER_KEY_FILE` keeps the key at that path instead | **Yes** — without it those logins cannot be read |
 | `media-server-secrets/` | Encrypted provider tokens | **Yes** — together with the key and `state.json` |
@@ -35,7 +36,8 @@ hashes. Store them like passwords. The settings export is described in
 | `tmdb-ids.json` | Learned pairs of IMDb and TMDB identifiers | Optional — rebuilt on demand |
 | `title-extras/` | Cached cast, similar titles and ratings of opened titles | **No** — refetched on demand |
 | `artwork/` | Thumbnails the server generated from the media | Optional — regenerated, which takes ffmpeg time |
-| `images/` | Cached posters and backgrounds from the catalogues | **No** — refetched on demand; often the largest folder |
+| `images/*.jpg`, `images/*.png`, and other image files | Cached posters and backgrounds from the catalogues | Optional — the links are in `application.sqlite`; the bytes are refetched on demand |
+| `migration-backup/` | The pre-migration `images/index.json` | Optional — safe to delete once the migration is satisfactory |
 | `remote-images/` | Cached Jellyfin and Emby posters | **No** — refetched on demand |
 | `app.log` | The log | No |
 | `*.damaged-*` | A state file that could not be read at start, kept aside | Keep until you have looked at it |
@@ -64,7 +66,11 @@ server the few seconds it takes to stop: on the way out it writes the accounts,
 the library metadata and the library operations that are still waiting in
 memory. Statistics collected in the last minute before the stop are not kept.
 
-Leave `images/` out to keep the backup small.
+Copy `application.sqlite` and its `-wal` or `-shm` files whenever they are present,
+together with the rest of `DATA_PATH`, while the server is stopped. The image files
+under `images/` remain optional to back up and can be left out to keep the backup
+small. `migration-backup/` keeps the pre-migration `images/index.json`; it is safe to
+delete once you are satisfied with the migration.
 
 ## Restoring
 

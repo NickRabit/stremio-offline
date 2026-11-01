@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
@@ -8,6 +8,8 @@ import { guardedBody } from "./outbound.js";
 import { cancelResponseBody, readLimitedBody, ResponseTooLargeError } from "./response-body.js";
 import { safeFetch } from "./security.js";
 import { secureMode } from "./secure.js";
+import type { AppDatabase, Statement } from "./storage/app-database.js";
+import { TrackedMap } from "./storage/tracked-map.js";
 import type { MetaItem } from "./types.js";
 
 /**
@@ -157,7 +159,7 @@ const indexDays = (value: string | undefined) => {
 };
 
 export class ImageProxy {
-  private index = new Map<string, Entry>();
+  private index = new TrackedMap<string, Entry>();
   private inflight = new Map<string, Inflight>();
   private memory = new Map<string, Buffer>();
   private memoryBytes = 0;
@@ -169,6 +171,7 @@ export class ImageProxy {
   private maintenance?: Promise<void>;
   private chain: Promise<unknown> = Promise.resolve();
   private indexWrites: Promise<void> = Promise.resolve();
+  private loaded = false;
 
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "images"),
@@ -180,9 +183,15 @@ export class ImageProxy {
     private memoryCap = memoryMegabytes(process.env.IMAGE_MEMORY_MB, 32),
     private renameFile: typeof renameWithRetry = renameWithRetry,
     private saveTimers: SaveTimers = { set: (run, ms) => setTimeout(run, ms).unref(), clear: (handle) => clearTimeout(handle as NodeJS.Timeout) },
+    private database?: AppDatabase,
   ) {}
 
   private get indexFile() { return path.join(this.dir, "index.json"); }
+
+  attachDatabase(database: AppDatabase): void {
+    if (this.loaded) throw new Error("The image database must be attached before load.");
+    this.database = database;
+  }
 
   /**
    * The map has to survive a restart: a poster the client already holds is an id,
@@ -191,6 +200,11 @@ export class ImageProxy {
    */
   async load() {
     await mkdir(this.dir, { recursive: true });
+    this.loaded = true;
+    if (this.database) {
+      await this.loadDatabase(this.database);
+      return;
+    }
     let stored: Record<string, Entry> = {};
     try { stored = JSON.parse(await readFile(this.indexFile, "utf8")) as Record<string, Entry>; }
     catch { stored = {}; }
@@ -206,11 +220,109 @@ export class ImageProxy {
       this.index.set(id, onDisk ? { url: entry.url, ext: entry.ext, bytes: entry.bytes, at, ...sized } : { url: entry.url, at, ...sized });
       if (onDisk) files.delete(`${id}.${entry.ext}`);
     }
+    this.index.forget(this.index.snapshot());
     // Anything the index does not know about cannot be served, so it is only waste.
     for (const orphan of files) await rm(path.join(this.dir, orphan), { force: true });
     // A lowered cap, or an index nobody has touched for a long time, is dealt with here
     // as well, so the first paint after a restart already sees the enforcement.
     if (await this.enforce()) await this.writeIndex();
+  }
+
+  private async loadDatabase(database: AppDatabase) {
+    const marker = await database.get("SELECT value FROM meta WHERE key = ?", ["domain.images"]);
+    const files = new Set((await readdir(this.dir)).filter((name) => name !== "index.json"));
+    if (marker) {
+      const rows = await database.all<{
+        id: string; url: string; width: number | null; ext: string | null; bytes: number | null; at: number;
+      }>("SELECT id, url, width, ext, bytes, at FROM image_sources");
+      for (const row of rows) {
+        const entry = this.normalizeEntry(row.id, row, files, true);
+        if (entry) this.index.set(row.id, entry);
+      }
+      this.index.forget(this.index.snapshot());
+      await this.moveIndexToBackup();
+    } else {
+      const imported = await this.readIndexForImport();
+      if (imported.kind === "missing") {
+        await database.run("INSERT INTO meta (key, value) VALUES (?, ?)", [
+          "domain.images",
+          JSON.stringify({ importedAt: this.now(), source: "index.json", count: 0 }),
+        ]);
+      } else if (imported.kind === "invalid") {
+        log("ERROR", "The image cache index could not be imported", { reason: imported.reason });
+        return;
+      } else {
+        const entries: Array<[string, Entry]> = [];
+        for (const [id, value] of Object.entries(imported.value)) {
+          const entry = this.normalizeEntry(id, value, files, true);
+          if (entry) entries.push([id, entry]);
+        }
+        const importedAt = this.now();
+        const statements: Statement[] = entries.map(([id, entry]) => ({
+          sql: "INSERT INTO image_sources (id, url, width, ext, bytes, at) VALUES (?, ?, ?, ?, ?, ?)",
+          params: [id, entry.url, entry.width ?? null, entry.ext ?? null, entry.bytes ?? null, entry.at],
+        }));
+        statements.push({
+          sql: "INSERT INTO meta (key, value) VALUES (?, ?)",
+          params: ["domain.images", JSON.stringify({ importedAt, source: "index.json", count: entries.length })],
+        });
+        await database.batch(statements);
+        for (const [id, entry] of entries) this.index.set(id, entry);
+        this.index.forget(this.index.snapshot());
+        await this.moveIndexToBackup(importedAt);
+      }
+    }
+    for (const orphan of files) await rm(path.join(this.dir, orphan), { force: true });
+    if (await this.enforce()) await this.writeIndex();
+  }
+
+  private normalizeEntry(
+    id: string,
+    value: unknown,
+    files: Set<string>,
+    consumeFile: boolean,
+  ): Entry | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const stored = value as Record<string, unknown>;
+    if (typeof stored.url !== "string" || !stored.url) return undefined;
+    const at = typeof stored.at === "number" && Number.isFinite(stored.at) && stored.at > 0 ? stored.at : this.now();
+    const width = stored.width === DETAIL_WIDTH ? DETAIL_WIDTH : undefined;
+    const ext = typeof stored.ext === "string" && stored.ext && files.has(`${id}.${stored.ext}`) ? stored.ext : undefined;
+    const bytes = ext && typeof stored.bytes === "number" && Number.isFinite(stored.bytes) ? stored.bytes : undefined;
+    if (ext && consumeFile) files.delete(`${id}.${ext}`);
+    return { url: stored.url, at, ...(width ? { width } : {}), ...(ext ? { ext, bytes } : {}) };
+  }
+
+  private async readIndexForImport(): Promise<
+    { kind: "missing" } | { kind: "invalid"; reason: string } | { kind: "parsed"; value: Record<string, unknown> }
+  > {
+    let text: string;
+    try {
+      text = await readFile(this.indexFile, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+      return { kind: "invalid", reason: String(error).slice(0, 120) };
+    }
+    try {
+      const value = JSON.parse(text) as unknown;
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The index is not an object.");
+      return { kind: "parsed", value: value as Record<string, unknown> };
+    } catch (error) {
+      return { kind: "invalid", reason: String(error).slice(0, 120) };
+    }
+  }
+
+  private async moveIndexToBackup(importedAt = this.now()): Promise<void> {
+    try {
+      await stat(this.indexFile);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    const backupDir = path.join(path.dirname(this.dir), "migration-backup");
+    await mkdir(backupDir, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") await chmod(backupDir, 0o700);
+    await this.renameFile(this.indexFile, path.join(backupDir, `images-index-${importedAt}.json`));
   }
 
   /** Removals run one at a time: each candidate is a snapshot, and two passes must never
@@ -274,8 +386,12 @@ export class ImageProxy {
    *  next load, which deletes what it does not list, so a failed write is owed again. */
   private writeIndex() {
     const run = this.indexWrites.then(async () => {
-      const temp = `${this.indexFile}.tmp`;
       try {
+        if (this.database) {
+          await this.writeDatabaseIndex(this.database);
+          return;
+        }
+        const temp = `${this.indexFile}.tmp`;
         await writeFile(temp, JSON.stringify(Object.fromEntries(this.index)), { mode: 0o600 });
         await this.renameFile(temp, this.indexFile);
       } catch (error) {
@@ -285,6 +401,25 @@ export class ImageProxy {
     });
     this.indexWrites = run;
     return run;
+  }
+
+  private async writeDatabaseIndex(database: AppDatabase) {
+    const snapshot = this.index.snapshot();
+    if (snapshot.size === 0) return;
+    const statements: Statement[] = [];
+    for (const key of snapshot.keys()) {
+      const entry = this.index.get(key);
+      if (entry) {
+        statements.push({
+          sql: "INSERT INTO image_sources (id, url, width, ext, bytes, at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET url = excluded.url, width = excluded.width, ext = excluded.ext, bytes = excluded.bytes, at = excluded.at",
+          params: [key, entry.url, entry.width ?? null, entry.ext ?? null, entry.bytes ?? null, entry.at],
+        });
+      } else {
+        statements.push({ sql: "DELETE FROM image_sources WHERE id = ?", params: [key] });
+      }
+    }
+    await database.batch(statements);
+    this.index.forget(snapshot);
   }
 
   async flush() {
@@ -304,6 +439,7 @@ export class ImageProxy {
     const known = this.index.get(id);
     if (known) {
       known.at = this.now();
+      this.index.set(id, known);
       this.save(TOUCH_SAVE_MS);
     } else {
       this.index.set(id, { url: value, at: this.now(), ...(target === DETAIL_WIDTH ? { width: target } : {}) });
@@ -437,6 +573,8 @@ export class ImageProxy {
     if (!entry) { log("DEBUG", "An unknown image id was requested", { id }); return undefined; }
     if (entry.ext) {
       entry.at = this.now();
+      this.index.set(id, entry);
+      if (this.database) this.save(TOUCH_SAVE_MS);
       return { file: this.path(id, entry.ext), type: TYPES[entry.ext]!, etag: `"${id}-${entry.bytes ?? 0}"` };
     }
     let flight = this.inflight.get(id);
@@ -623,6 +761,7 @@ export class ImageProxy {
           entry.ext = storedExt;
           entry.bytes = data.length;
           entry.at = this.now();
+          this.index.set(id, entry);
           this.save();
         });
       } finally {
@@ -690,6 +829,7 @@ export class ImageProxy {
     const bytes = current.bytes ?? 0;
     current.ext = undefined;
     current.bytes = undefined;
+    this.index.set(id, current);
     const remembered = this.memory.get(id);
     if (remembered) { this.memory.delete(id); this.memoryBytes -= remembered.length; }
     return bytes;

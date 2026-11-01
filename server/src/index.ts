@@ -36,6 +36,7 @@ import { GuardRejection, outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProgress, type WatchedMarker } from "./store.js";
+import { openAppDatabase, StorageError, type AppDatabase } from "./storage/app-database.js";
 import { emptyUserData, findUserById, forEachUserData, type UserData, type UserRecord } from "./users.js";
 import type { ProgressSeries } from "./progress-series.js";
 import { advanceTorrent } from "./debrid.js";
@@ -217,6 +218,16 @@ log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
 configureSecureMode(() => store.settings().secureMode !== false);
 await initLogger(); startLogMaintenance();
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
+let database: AppDatabase | undefined;
+try {
+  database = await openAppDatabase({ dataDir: process.env.DATA_DIR ?? "/data" });
+  images.attachDatabase(database);
+} catch (error) {
+  log("ERROR", "The application database could not be opened", {
+    code: error instanceof StorageError ? error.code : "sql",
+    reason: error instanceof Error ? error.message : String(error),
+  });
+}
 await images.load();
 await artworks.load();
 await remoteImages.load();
@@ -2883,7 +2894,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.flush(), () => stats.activity.flush(), () => imageStats.flush(), () => providerStats.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => libraryFileFacts.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  flushes: [() => stats.flush(), () => stats.activity.flush(), () => imageStats.flush(), () => providerStats.flush(), () => images.flush().then(() => database?.close()), () => artworks.flush(), () => metaStore.flush(), () => libraryFileFacts.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,

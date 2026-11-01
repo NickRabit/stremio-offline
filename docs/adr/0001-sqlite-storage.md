@@ -8,7 +8,8 @@
 The application currently persists several domains as whole JSON files. The
 selective migration plan in issue #644 moves one domain at a time so each move
 can be tested independently. This ADR records the shared storage decisions and
-the phase 0-1 infrastructure. No running server code uses the database yet.
+the phase 0-1 infrastructure. Phase 1 starts using it for the image link
+registry.
 
 ## Decision
 
@@ -91,6 +92,14 @@ There are no permanent dual writes. When a domain moves, the old JSON file
 remains a read-only migration source or fallback only for the bounded cutover
 window required by that phase. The SQLite representation becomes authoritative
 when the domain moves, and subsequent writes have one owner.
+
+### Phase 1: image registry
+
+The `ImageProxy` URL registry moved from `images/index.json` to the
+`image_sources` table and the `domain.images` marker in `meta`. The in-memory map
+remains the synchronous read path. Scheduled flushes write only changed rows in
+one transaction; image bytes remain in `images/` and their eviction policy is
+unchanged. No other JSON store moved in this phase.
 
 ### Backup
 
