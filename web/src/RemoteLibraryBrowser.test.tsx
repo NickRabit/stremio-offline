@@ -55,7 +55,7 @@ const playbackCalls: Array<Record<string, unknown>> = [];
 const addonCalls = {
   sources: [] as URL[], streams: [] as URL[], subtitles: [] as URL[],
   local: [] as URL[], remote: [] as URL[],
-  progress: [] as Array<{ method: string; path: string }>, subtitleSignals: [] as Array<AbortSignal | null | undefined>,
+  progress: [] as Array<{ method: string; path: string; body?: unknown }>, subtitleSignals: [] as Array<AbortSignal | null | undefined>,
 };
 
 /** A controllable IntersectionObserver: tiles only ask for a preview once it fires. */
@@ -146,7 +146,10 @@ beforeEach(() => {
     if (/^\/api\/local-streams\/[^/]+\/[^/]+$/.test(path)) { addonCalls.local.push(url); return Promise.resolve(localCopies(url, init)); }
     if (/^\/api\/remote-libraries\/[^/]+\/streams\/[^/]+\/[^/]+$/.test(path)) { addonCalls.remote.push(url); return Promise.resolve(remoteLibraryStreams(url, init)); }
     if (path.startsWith("/api/progress")) {
-      addonCalls.progress.push({ method: init?.method ?? "GET", path });
+      addonCalls.progress.push({
+        method: init?.method ?? "GET", path,
+        ...(typeof init?.body === "string" ? { body: JSON.parse(init.body) as unknown } : {}),
+      });
       if (init?.method === "DELETE") return Promise.resolve(forgetReply ? forgetReply(url, init) : new Response(null, { status: 204 }));
       return Promise.resolve(addonProgress(url, init));
     }
@@ -1598,6 +1601,39 @@ describe("RemoteLibraryBrowser addon sources", () => {
     // The episode has no version of its own, so the title's record is read as the detail opens,
     // and again for the addon row the viewer then picks. Both use the parent series' key.
     expect(addonGetPaths()).toEqual(["/api/progress/series%3Att7000%3A1%3A2", "/api/progress/series%3Att7000%3A1%3A2"]);
+  });
+
+  it("stores the parent show's poster for a native episode", async () => {
+    const show: RemoteItem = {
+      id: "show", name: "Show", type: "series", providerIds: { imdb: "tt7000" },
+      poster: "/show-poster.jpg",
+    };
+    const episode: RemoteItem = {
+      id: "e1", name: "Pilot", type: "episode", season: 1, episode: 2, seriesId: "show",
+      providerIds: { imdb: "tt9999" }, poster: "/episode-still.jpg",
+    };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/show") ? show : episode, capabilities });
+    sources = () => json({ streams: [{
+      sourceId: "episode-source", kind: "remote", playable: true, name: "1080p", provider: "jellyfin",
+      remoteItem: { libraryId: "rlib_a", itemId: "e1", mediaSourceId: "ms1", progressKey: "episode" },
+    }] });
+    await render({ initialTarget: { libraryId: "rlib_a", itemId: "e1", nonce: 1 } });
+    await flush();
+    await flush();
+    await click(playButton());
+    await flush();
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+    await click(host.querySelector(".player-head button.icon-button")!);
+    await flush();
+
+    const write = addonCalls.progress.filter((call) => call.method === "POST").at(-1);
+    expect(write?.body).toMatchObject({
+      key: "series:tt7000:1:2",
+      poster: "/show-poster.jpg",
+      remote: { libraryId: "rlib_a", itemId: "e1", mediaSourceId: "ms1" },
+    });
   });
 
   it("queues the exact addon row into the addon's own rule and keeps a refusal in the dialog", async () => {

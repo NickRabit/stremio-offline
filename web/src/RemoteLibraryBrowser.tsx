@@ -104,6 +104,8 @@ type AddonPlayback = {
 type Playing = {
   stream: Stream; libraryId: string; item: RemoteItem; title: string; favorite: boolean; fromBeginning?: boolean;
   addon?: AddonPlayback; foreign?: boolean;
+  /** The catalogue/show poster captured for progress, never an episode still when a title has one. */
+  poster?: string;
   /** The position a switch handed over; a playback started here resumes from the store instead. */
   at?: number;
   /** Where this row's saved position lives; the same owner the detail reads and clears. */
@@ -1150,7 +1152,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       // remote context: the next episode reports its position under its own identity.
       const owner = sourceProgressOwner(pick, addonIdentity);
       if (!owner) return false;
-      setPlaying({ stream: pick, libraryId: library.id, item: episode, title: episodeTitle(episode), favorite: false, owner, scope: titleScope });
+      const poster = playbackPoster(episode);
+      setPlaying({ stream: pick, libraryId: library.id, item: episode, title: episodeTitle(episode), favorite: false, owner, scope: titleScope, ...(poster ? { poster } : {}) });
       needsDetailMeta.current = true;
       setDetail(episode);
       return true;
@@ -1169,6 +1172,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     ? catalogueRef(detail.type, detail.providerIds)
     : detail?.type === "episode" ? catalogueRef("series", series?.providerIds) : null;
   const enrichment = useTitleEnrichment(catalogue ? { kind: "catalogue", ref: catalogue } : null, catalogue, uiLanguage);
+  const playbackPoster = (item: RemoteItem): string | undefined =>
+    enrichment.meta?.poster ?? (item.type === "episode" ? series?.poster ?? item.poster : item.poster);
   const titleExtras = useTitleExtras(catalogue?.type, catalogue?.id);
   const heroItem = detail?.type === "episode" && series ? series : detail;
   const detailDescription = detail?.overview || (detail?.type === "episode" ? series?.overview : undefined);
@@ -1389,15 +1394,16 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     // A switch hands over the position the row on screen reached; a play from the detail resumes
     // from the store instead.
     const position = at !== undefined ? { at } : {};
+    const poster = playbackPoster(detail);
     if (isRemoteStream(stream)) {
       // A copy that reports its own remote identity and belongs elsewhere is another library's
       // item: it plays under that identity, never under the item this detail was opened on.
       const foreign = stream.remoteItem && stream.remoteItem.libraryId !== selected.id ? stream.remoteItem : null;
       if (foreign) {
-        setPlaying({ stream, libraryId: foreign.libraryId, item: detail, title: detailTitle(detail), favorite: false, fromBeginning, foreign: true, owner, scope: titleScope, ...position });
+        setPlaying({ stream, libraryId: foreign.libraryId, item: detail, title: detailTitle(detail), favorite: false, fromBeginning, foreign: true, owner, scope: titleScope, ...(poster ? { poster } : {}), ...position });
         return true;
       }
-      setPlaying({ stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: state?.favorite ?? false, fromBeginning, owner, scope: titleScope, ...position });
+      setPlaying({ stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: state?.favorite ?? false, fromBeginning, owner, scope: titleScope, ...(poster ? { poster } : {}), ...position });
       return true;
     }
     // The viewer's own copy of the title is a file on this server's disk: it plays and reports
@@ -1405,18 +1411,18 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     // the catalogue is asked for no subtitles for it. Like a copy from another library it is not
     // this item's own version, so it borrows neither its favorite nor its hand-off.
     if (owner.kind === "file") {
-      setPlaying({ stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: false, fromBeginning, owner, scope: titleScope, foreign: true, ...position });
+      setPlaying({ stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: false, fromBeginning, owner, scope: titleScope, foreign: true, ...(poster ? { poster } : {}), ...position });
       return true;
     }
     const ref = addonIdentity;
     if (!ref) return false;
-    const poster = enrichment.meta?.poster;
+    const addonPoster = enrichment.meta?.poster;
     setPlaying({
       stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: false, fromBeginning,
-      owner, scope: titleScope, ...position,
+      owner, scope: titleScope, ...(poster ? { poster } : {}), ...position,
       addon: {
         identity: ref, progressKey: genericProgressKey(ref), scope: titleScope, media: addonMediaSubject(detail, series, addonArtwork()),
-        subtitles: [], ...(poster ? { poster } : {}),
+        subtitles: [], ...(addonPoster ? { poster: addonPoster } : {}),
       },
     });
     loadAddonSubtitles(ref, stream);
@@ -1805,7 +1811,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         fromBeginning={playing.fromBeginning}
         onToggleFavorite={away ? undefined : () => void togglePlayingFavorite()}
         progressKey={playing.owner.kind === "remote" ? undefined : playing.owner.progressKey}
-        progressPoster={addon?.poster ?? playing.item.poster}
+        progressPoster={addon?.poster ?? playing.poster ?? playing.item.poster}
         // The row that is playing is the row that is saved, whichever way it was started: an addon
         // answer through its own captured subject, a copy of another media server through the
         // destination that copy projects, a version of this detail's own library through the

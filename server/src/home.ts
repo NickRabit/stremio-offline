@@ -353,7 +353,7 @@ function resumeGroups(sources: ResumeSources): ResumeGroup[] {
 }
 
 /** Merge the two Continue watching sources into one card per title, cut to the row. */
-export function mergeResume(sources: ResumeSources, limit: number = HOME_ROW_LIMIT): { items: HomeCard[]; hasMore: boolean } {
+export function mergeResume(sources: ResumeSources, limit: number = HOME_ROW_LIMIT): { items: ResumeCard[]; hasMore: boolean } {
   return boundCards(resumeGroups(sources).map((group) => group.card), limit);
 }
 

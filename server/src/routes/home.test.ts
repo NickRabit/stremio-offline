@@ -23,7 +23,11 @@ import { registerPersonalRoutes, type PersonalDeps } from "./personal.js";
 import { registerHomeRoutes, type CompletedJobView, type HomeDeps } from "./home.js";
 
 type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
-type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; updatedAt: string };
+type StoredProgress = {
+  position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string;
+  series?: { id: string; name: string; season: number; episode: number }; stableKey?: string;
+  remote?: { libraryId: string; itemId: string; mediaSourceId: string }; updatedAt: string;
+};
 type WatchedMarker = { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string };
 type MetaRecord = { type: string; id: string; name?: string; year?: string; season?: number; episode?: number; unmatched?: boolean };
 /** `addonKey` stands for the follow the episode came from, which `include` reads. */
@@ -33,6 +37,7 @@ type SuggestionRow = { key: string; label: string; libraryId: string; library: s
 const ALICE = "usr_00000001";
 const BOB = "usr_00000002";
 const ADMIN = "usr_00000003";
+const SOURCE_KEY = "t:0123456789abcdef01234567";
 
 const instancePrefs: UserPrefs = {
   uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui",
@@ -78,8 +83,16 @@ interface Harness {
   /** How long the fake metadata lookup waits before answering. */
   metaDelayMs: number;
   metaAnswer: MetaItem | null;
+  /** A metadata provider that fails instead of answering. */
+  metaThrows: boolean;
+  /** Every metadata request, including the artwork flag and the viewer it was scoped to. */
+  metaCalls: Array<{ id: string; viewer: string | undefined; artwork: boolean }>;
+  /** The cancellation signal each metadata request received. */
+  metaSignals: Array<AbortSignal | undefined>;
   /** What `locateFileArtwork` answers; a thumbnail URL exists only when there is one. */
   artwork?: string;
+  /** What a bound title folder answers; this is preferred over the file's episode frame. */
+  folderArtwork?: string;
   /** Whether `attachBrowseMeta` reports that it found metadata beyond the scan. */
   backfill?: boolean;
   /** Every series id the catalogue side was asked about, in order. */
@@ -131,7 +144,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     base: "", addons, records, missing, folders, units: [], broken, completed: [], completedThrows: false, seen,
     episodes: [], episodesThrows: false, newEpisodesCalls: [], suggestions: [], suggestionsThrow: false, suggestionCalls: 0,
     now: options.now ?? Date.parse("2026-01-15T12:00:00.000Z"),
-    metaDelayMs: 0, metaAnswer: null, lookups: [], catalogCalls: [], catalogDelayMs: 0,
+    metaDelayMs: 0, metaAnswer: null, metaThrows: false, metaCalls: [], metaSignals: [], lookups: [], catalogCalls: [], catalogDelayMs: 0,
     remoteCards: [], remoteCalls: [], remoteThrows: false, remotePartial: false,
     data: () => { throw new Error("not mounted"); }, close: async () => undefined,
   };
@@ -155,9 +168,12 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
     attachBrowseMeta: async (item) => ({ item, backfill: state.backfill ?? false }),
-    cachedMeta: async (_type, id) => {
+    cachedMeta: async (_type, id, _language, viewer, opts) => {
       state.lookups.push(id);
+      state.metaCalls.push({ id, viewer: viewer?.id, artwork: opts?.artwork === true });
+      state.metaSignals.push(opts?.signal);
       if (state.metaDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.metaDelayMs));
+      if (state.metaThrows) throw new Error("metadata is unavailable");
       return state.metaAnswer;
     },
     dataOf: (req) => {
@@ -185,7 +201,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     },
     libraryUnits: async () => state.units,
     locateFileArtwork: async () => state.artwork,
-    locateFolderArtworkPair: async () => ({ poster: undefined, wide: undefined }),
+    locateFolderArtworkPair: async () => ({ poster: state.folderArtwork, wide: undefined }),
     markersOf: (data) => data.watchedSeries as Record<string, WatchedMarker>,
     metaStore: { qualifiedMeta: () => records } as unknown as LibraryMetaStore,
     posterOf: (value) => (value ? String(value) : undefined),
@@ -425,7 +441,7 @@ test("a completed job whose library is switched off or whose file is gone yields
   assert.deepEqual(rows.completed!.items.map((item) => item.title), ["On"]);
 });
 
-test("a stored catalogue row of a revoked addon is dropped and its marker is not asked about", async (t) => {
+test("a stored catalogue row of a revoked addon is dropped while its own title poster is still repaired", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media" })] });
   t.after(harness.close);
   harness.addons.push(
@@ -442,7 +458,7 @@ test("a stored catalogue row of a revoked addon is dropped and its marker is not
 
   const rows = await allRows(harness, ALICE);
   assert.deepEqual(rows.resume!.items.map((item) => item.key), ["series:tt1:1:2"]);
-  assert.deepEqual(harness.lookups, [], "neither show is owed a lookup while each has a stored row");
+  assert.deepEqual(harness.lookups, ["tt1"], "only the visible title is looked up for its poster");
 });
 
 test("a marker whose addon the caller may not use is never looked up", async (t) => {
@@ -458,7 +474,7 @@ test("a marker whose addon the caller may not use is never looked up", async (t)
   };
 
   const rows = await allRows(harness, ALICE);
-  assert.deepEqual(harness.lookups, ["tt1"], "the addon the account may not use was contacted");
+  assert.deepEqual(new Set(harness.lookups), new Set(["tt1"]), "the addon the account may not use was contacted");
   assert.deepEqual(rows.resume!.items.map((item) => item.key), ["series:tt1:1:2"]);
 });
 
@@ -782,7 +798,14 @@ test("a library switched off for Home hides only its half of a merged show", asy
   assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["series:tt1:1:2"]);
 });
 
-interface ResumePageView { items: Array<{ key: string; kind: string; forgetKeys?: string[] }>; total: number; pending: boolean }
+interface ResumePageView {
+  items: Array<{
+    key: string; kind: string; forgetKeys?: string[]; poster?: string; wide?: string; path?: string;
+    progress?: { position: number; duration: number }; stableKey?: string; season?: number; episode?: number;
+  }>;
+  total: number;
+  pending: boolean;
+}
 
 const resumePageOf = async (harness: Harness, query = "", user = ALICE): Promise<ResumePageView> =>
   (await (await api(harness.base, `/api/resume${query}`, user)).json()) as ResumePageView;
@@ -803,6 +826,140 @@ test("GET /api/resume is the first page of Home's resume row", async (t) => {
   assert.equal(page.total, rows.resume!.items.length);
   assert.equal(rows.resume!.items[0]!.kind, "resume-file");
   assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["file:Shows/01.mkv", "series:tt1:1:2"]);
+});
+
+test("old saved episode art is replaced by the title poster on Home and the full resume screen", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const path = "lib_00000001/Shows/Show/Show.S01E02.mkv";
+  harness.records["lib_00000001/Shows/Show"] = { type: "series", id: "tt1", name: "Show" };
+  harness.metaAnswer = { id: "tt1", type: "series", name: "Show", poster: "https://images.example/show.jpg" } as MetaItem;
+  harness.data(ALICE).progress = {
+    "series:tt1:1:2": {
+      position: 123, duration: 900, title: "Show · Second", path,
+      poster: "/api/remote-libraries/rlib_a/items/episode-2/artwork/Primary?tag=old",
+      stableKey: SOURCE_KEY,
+      series: { id: "tt1", name: "Show", season: 1, episode: 2 },
+      updatedAt: "2024-01-02T00:00:00.000Z",
+    },
+  };
+
+  const home = (await allRows(harness, ALICE)).resume!.items[0]!;
+  assert.equal(home.poster, images.proxied("https://images.example/show.jpg"));
+  assert.equal(home.path, "Shows/Show/Show.S01E02.mkv", "the playable source is unchanged");
+  assert.deepEqual(home.progress, { position: 123, duration: 900 });
+  assert.equal(home.season, 1);
+  assert.equal(home.episode, 2);
+  assert.deepEqual(harness.metaCalls, [{ id: "tt1", viewer: ALICE, artwork: true }], "one title lookup serves both merged sources");
+  assert.equal((harness.data(ALICE).progress["series:tt1:1:2"] as StoredProgress).poster?.includes("artwork/Primary"), true,
+    "the stored progress is not migrated or cleared");
+
+  harness.metaCalls.length = 0;
+  const page = await resumePageOf(harness, "?limit=20");
+  assert.equal(page.items[0]!.poster, images.proxied("https://images.example/show.jpg"));
+  assert.equal(page.items[0]!.path, "Shows/Show/Show.S01E02.mkv");
+  assert.deepEqual(page.items[0]!.progress, { position: 123, duration: 900 });
+  assert.deepEqual(harness.metaCalls, [{ id: "tt1", viewer: ALICE, artwork: true }]);
+});
+
+test("failed or late title metadata keeps the saved episode art without failing resume", async (t) => {
+  const fallback = "/api/remote-libraries/rlib_a/items/episode-2/artwork/Primary?tag=old";
+  for (const mode of ["failure", "deadline"] as const) {
+    const harness = await mount({
+      libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })],
+      ...(mode === "deadline" ? { deadlineMs: 5 } : {}),
+    });
+    t.after(harness.close);
+    harness.metaThrows = mode === "failure";
+    harness.metaDelayMs = mode === "deadline" ? 60 : 0;
+    harness.data(ALICE).progress = {
+      "series:tt1:1:2": {
+        position: 123, duration: 900, title: "Show · Second",
+        path: "lib_00000001/Shows/Show/Show.S01E02.mkv", poster: fallback,
+        series: { id: "tt1", name: "Show", season: 1, episode: 2 }, updatedAt: "2024-01-02T00:00:00.000Z",
+      },
+    };
+
+    const row = (await allRows(harness, ALICE)).resume!;
+    assert.equal(row.status, "ok", `${mode} metadata leaves the shelf available`);
+    assert.equal(row.items[0]!.poster, fallback);
+    assert.equal((harness.data(ALICE).progress["series:tt1:1:2"] as StoredProgress).position, 123);
+  }
+});
+
+test("a stalled resume page spends one metadata deadline instead of starting a new wave", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })], deadlineMs: 5 });
+  t.after(harness.close);
+  harness.metaDelayMs = 60;
+  harness.metaAnswer = { id: "tt1", type: "movie", name: "Film", poster: "https://images.example/film.jpg" } as MetaItem;
+  harness.records["lib_00000001/Shows/Show"] = { type: "series", id: "tt99", name: "Show" };
+  harness.artwork = "episode-frame.jpg";
+  harness.folderArtwork = "show-poster.jpg";
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Shows/Show/Show.S01E02.mkv": {
+      position: 30, duration: 600, title: "Second",
+      path: "lib_00000001/Shows/Show/Show.S01E02.mkv",
+      updatedAt: "2023-01-01T00:00:00.000Z",
+    },
+  };
+  harness.remoteCards = Array.from({ length: 10 }, (_, index) => ({
+    kind: "remote" as const, key: `remote:${index}`, title: `Film ${index}`, provider: "jellyfin" as const,
+    libraryId: "rlib_a", libraryName: "Films", itemId: `item-${index}`, itemType: "movie" as const,
+    poster: `/api/remote-libraries/rlib_a/items/item-${index}/artwork/Primary`,
+    progress: { position: 30, duration: 600 }, identity: { type: "movie" as const, id: `tt${index}` },
+    updatedAt: new Date(Date.UTC(2024, 0, 1, 0, 10 - index)).toISOString(),
+  }));
+
+  const page = await resumePageOf(harness, "?limit=20");
+
+  assert.equal(page.items.length, 11);
+  assert.equal(harness.metaCalls.length, 4, "only the first four workers may start during the shared budget");
+  assert.equal(harness.metaSignals.every((signal) => signal?.aborted), true);
+  assert.equal(page.items.filter((item) => item.kind === "remote").every((item) => item.poster?.includes("artwork/Primary")), true);
+  assert.equal(page.items.find((item) => item.kind === "resume-file")?.poster, "thumb:Shows/Show",
+    "local title artwork remains available after the metadata budget is spent");
+});
+
+test("a native remote card prefers catalogue metadata and keeps its landscape art and progress", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const remotePoster = "/api/remote-libraries/rlib_a/items/episode-2/artwork/Primary?tag=old";
+  const remoteWide = "/api/remote-libraries/rlib_a/items/episode-2/artwork/Thumb?tag=frame";
+  harness.metaAnswer = { id: "tt1", type: "series", name: "Show", poster: "https://images.example/show.jpg" } as MetaItem;
+  harness.remoteCards = [{
+    kind: "remote", key: "remote:one", title: "Second", provider: "jellyfin",
+    libraryId: "rlib_a", libraryName: "Shows", itemId: "episode-2", itemType: "episode", mediaSourceId: "ms-2",
+    season: 1, episode: 2, poster: remotePoster, wide: remoteWide,
+    progress: { position: 40, duration: 800 }, identity: { type: "series", id: "tt1" },
+    updatedAt: "2024-01-02T00:00:00.000Z",
+  }];
+
+  const card = (await allRows(harness, ALICE)).resume!.items[0]!;
+  assert.equal(card.poster, images.proxied("https://images.example/show.jpg"));
+  assert.equal(card.wide, remoteWide);
+  assert.deepEqual(card.progress, { position: 40, duration: 800 });
+  assert.equal(card.mediaSourceId, "ms-2");
+  assert.deepEqual(harness.metaCalls, [{ id: "tt1", viewer: ALICE, artwork: true }]);
+});
+
+test("a resume page bounds title poster lookups to its API page ceiling", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.metaAnswer = { id: "tt1", type: "movie", name: "Film", poster: "https://images.example/film.jpg" } as MetaItem;
+  harness.remoteCards = Array.from({ length: 125 }, (_, index) => ({
+    kind: "remote" as const, key: `remote:${index}`, title: `Film ${index}`, provider: "jellyfin" as const,
+    libraryId: "rlib_a", libraryName: "Films", itemId: `item-${index}`, itemType: "movie" as const,
+    poster: `/api/remote-libraries/rlib_a/items/item-${index}/artwork/Primary`,
+    progress: { position: 30, duration: 600 }, identity: { type: "movie" as const, id: `tt${index}` },
+    updatedAt: new Date(Date.UTC(2024, 0, 1, 0, 125 - index)).toISOString(),
+  }));
+
+  const page = await resumePageOf(harness, "?limit=120");
+
+  assert.equal(page.total, 125);
+  assert.equal(page.items.length, 120);
+  assert.equal(harness.metaCalls.length, 120);
+  assert.equal(page.items.every((item) => item.poster?.startsWith("/api/image/")), true);
 });
 
 test("GET /api/resume filters by card kind and pages one stable order", async (t) => {
@@ -1475,6 +1632,22 @@ test("film and unbound file cards carry no series folder", async (t) => {
     ...rows.recent!.items,
   ];
   for (const card of cards) assert.equal(card.seriesPath, undefined);
+});
+
+test("a recent series card uses the bound show poster and keeps the episode's wide art", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Shows/Show"] = { type: "series", id: "tt1", name: "Show" };
+  harness.artwork = "episode-frame.jpg";
+  harness.folderArtwork = "show-poster.jpg";
+  harness.seen.observe("lib_00000001", [], new Date("2024-01-01T00:00:00.000Z"));
+  harness.seen.observe("lib_00000001", [walk("Shows/Show/Show.S01E02.mkv", 11, "2024-01-03T00:00:00.000Z")], new Date("2024-02-02T00:00:00.000Z"));
+
+  const card = (await allRows(harness, ALICE)).recent!.items[0]!;
+
+  assert.equal(card.poster, "thumb:Shows/Show");
+  assert.equal(card.wide, "thumb:Shows/Show/Show.S01E02.mkv:wide");
+  assert.deepEqual(harness.metaCalls, [], "the bound folder already supplied the title picture");
 });
 
 test("the recent row draws nothing from a library off Home, disabled, away or not granted", async (t) => {
