@@ -168,7 +168,6 @@ internal fun SeriesRows(
     }
   }
 }
-
 private val SeasonTabPadding = 14.dp
 
 /** One season in the picker: plain text, the current season underlined, the focused one filled. */
@@ -207,4 +206,3 @@ private fun SeasonTab(text: String, current: Boolean, onClick: () -> Unit, modif
     }
   }
 }
-

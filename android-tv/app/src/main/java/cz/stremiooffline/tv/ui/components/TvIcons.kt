@@ -26,4 +26,3 @@ fun outlineIcon(name: String, builder: PathBuilder.() -> Unit): ImageVector =
       pathBuilder = builder,
     )
   }.build()
-
