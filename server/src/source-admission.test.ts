@@ -573,6 +573,44 @@ test("rules downloads admit visible remote libraries before addons", () => {
   );
 });
 
+test("provider restrictions are a strict intersection that preserves the materialized order", () => {
+  const input = context(account(), {
+    profiles: [storedRules()],
+    addons: [addon("a", { allowedUsers: [MEMBER] }), addon("b", { allowedUsers: [MEMBER] })],
+    remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER]), remoteLibrary(REMOTE_TWO, [MEMBER])],
+    operation: "downloadToLibrary",
+  });
+  const unrestricted = materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.balanced), input);
+  const restricted = materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.balanced), {
+    ...input,
+    onlyProviderKeys: ["addon:b", `remote:${REMOTE_TWO}`, "addon:missing"],
+  });
+
+  assert.deepEqual(unrestricted.providerKeys, [
+    `remote:${REMOTE_ONE}`,
+    `remote:${REMOTE_TWO}`,
+    "addon:a",
+    "addon:b",
+  ]);
+  assert.deepEqual(restricted.providerKeys, [`remote:${REMOTE_TWO}`, "addon:b"]);
+  assert.deepEqual(
+    restricted.policy.criteria.find((criterion) => criterion.kind === "providerOrder"),
+    { kind: "providerOrder", keys: restricted.providerKeys },
+  );
+  assert.deepEqual(
+    materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.balanced), input),
+    unrestricted,
+    "an absent restriction leaves the snapshot unchanged",
+  );
+  assert.throws(
+    () => materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.balanced), {
+      ...input,
+      onlyProviderKeys: ["addon:missing"],
+    }),
+    rejectionCode("providerScopeUnavailable"),
+  );
+});
+
 test("other download templates keep their addon-only provider snapshots", () => {
   for (const profileId of [SOURCE_PROFILE_IDS.travel, SOURCE_PROFILE_IDS.providerPriority]) {
     const snapshot = materializeSourceAdmission(

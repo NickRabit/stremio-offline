@@ -273,11 +273,13 @@ export const publicRemoteItem = (item: ProviderItem, libraryId: string): PublicR
 /** Internal provider-only facts never reach a client projection. A captured tag proves the exact
  *  image version the manager must ask for; the resolved tag role is carried on the public URL, so
  *  the raw tags never leave the server. */
-const scrubInternalItemFields = (item: ProviderItem): Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "hasThumbImage" | "primaryImageTag" | "backdropImageTag" | "thumbImageTag"> => {
+const scrubInternalItemFields = (item: ProviderItem): Omit<ProviderItem, "premiereDate" | "hasPrimaryImage" | "hasBackdropImage" | "hasThumbImage" | "primaryImageTag" | "backdropImageTag" | "thumbImageTag"> => {
   if (item.hasPrimaryImage === undefined && item.hasBackdropImage === undefined
     && item.hasThumbImage === undefined && item.primaryImageTag === undefined
-    && item.backdropImageTag === undefined && item.thumbImageTag === undefined) return item;
+    && item.backdropImageTag === undefined && item.thumbImageTag === undefined
+    && item.premiereDate === undefined) return item;
   const clone: ProviderItem = { ...item };
+  delete clone.premiereDate;
   delete clone.hasPrimaryImage;
   delete clone.hasBackdropImage;
   delete clone.hasThumbImage;

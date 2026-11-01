@@ -7,7 +7,7 @@ import type { MediaServerAuthority, MediaServerItemVersions, MediaServerManager 
 import { remoteMatchTarget } from "./media-server-match.js";
 import type { ProviderVersion } from "./media-server-provider.js";
 import { isRemoteMediaStream, openRemoteContent, remoteSecretStamp, sealRemoteContent } from "./media-server-reference.js";
-import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
+import { isMediaServerError, READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
 import { ResourceError, type MediaResources, type ResourceOwner } from "./media-resources.js";
 import { containerExtension, nameExtension } from "./naming.js";
 import { remoteAudioLanguages, remoteSourceEvidence, remoteSubtitleLanguages } from "./source-remote-evidence.js";
@@ -27,6 +27,13 @@ type SealedStreams = {
   libraryId: string;
   kind: "movie" | "series";
   candidate: SourceEvidenceCandidateV1;
+};
+
+type MediaServerDownloadCandidate = {
+  reference: RemoteDownloadReference;
+  version: ProviderVersion;
+  libraryName: string;
+  stream: StreamItem;
 };
 
 /** The file name a copy of one version should carry: the display label with the version's own
@@ -259,27 +266,15 @@ export class MediaServerSources {
     return this.listedWithRules(results, owner, type === "series" ? "episode" : "movie", secretStamp);
   }
 
-  async downloadCandidates(input: {
-    ownerUserId: string;
-    libraryId: string;
-    type: "movie" | "series";
-    catalogId: string;
-    nameHint?: string;
-    signal?: AbortSignal;
-  }): Promise<Array<{
-    reference: RemoteDownloadReference;
-    version: ProviderVersion;
-    libraryName: string;
-    stream: StreamItem;
-  }>> {
-    const initial = this.currentUser(input.ownerUserId);
-    const library = this.store.remoteLibraries().find((candidate) => candidate.id === input.libraryId);
+  private downloadAuthority(ownerUserId: string, libraryId: string): MediaServerAuthority | undefined {
+    const initial = this.currentUser(ownerUserId);
+    const library = this.store.remoteLibraries().find((candidate) => candidate.id === libraryId);
     if (!initial || initial.disabled || initial.mustChangePassword || !mayDownloadToLibrary(initial)
       || !library || !remoteLibraryVisibleTo(this.store.mediaConnections(), library, {
         id: initial.id,
         role: initial.role,
       })) {
-      return [];
+      return undefined;
     }
 
     const actor = { id: initial.id, secret: initial.secret };
@@ -296,29 +291,24 @@ export class MediaServerSources {
     try {
       authority.assertCurrent();
     } catch {
-      return [];
+      return undefined;
     }
+    return authority;
+  }
 
-    let results: MediaServerItemVersions[];
-    try {
-      results = await this.manager.matchedVersions(
-        authority,
-        input.libraryId,
-        input.type,
-        input.catalogId,
-        input.signal,
-        input.nameHint,
-      );
-    } catch (error) {
-      if (error instanceof ResourceError && error.status === 404) return [];
-      throw error;
-    }
+  private authorityStillCurrent(authority: MediaServerAuthority): boolean {
     try {
       authority.assertCurrent();
+      return true;
     } catch {
-      return [];
+      return false;
     }
+  }
 
+  private downloadCandidatesFromResults(
+    ownerUserId: string,
+    results: readonly MediaServerItemVersions[],
+  ): MediaServerDownloadCandidate[] {
     return results.flatMap((result) => {
       if (result.downloadAllowed !== true) return [];
       return result.versions.map((version) => {
@@ -326,7 +316,7 @@ export class MediaServerSources {
         return {
           reference: canonicalRemoteDownloadReference({
             schemaVersion: 1,
-            ownerUserId: input.ownerUserId,
+            ownerUserId,
             connectionId: result.connectionId,
             libraryId: result.libraryId,
             generation: result.generation,
@@ -351,6 +341,60 @@ export class MediaServerSources {
         };
       });
     });
+  }
+
+  async downloadCandidates(input: {
+    ownerUserId: string;
+    libraryId: string;
+    type: "movie" | "series";
+    catalogId: string;
+    nameHint?: string;
+    signal?: AbortSignal;
+  }): Promise<MediaServerDownloadCandidate[]> {
+    const authority = this.downloadAuthority(input.ownerUserId, input.libraryId);
+    if (!authority) return [];
+
+    let results: MediaServerItemVersions[];
+    try {
+      results = await this.manager.matchedVersions(
+        authority,
+        input.libraryId,
+        input.type,
+        input.catalogId,
+        input.signal,
+        input.nameHint,
+      );
+    } catch (error) {
+      if (error instanceof ResourceError && error.status === 404) return [];
+      throw error;
+    }
+    if (!this.authorityStillCurrent(authority)) return [];
+    return this.downloadCandidatesFromResults(input.ownerUserId, results);
+  }
+
+  async itemDownloadCandidates(input: {
+    ownerUserId: string;
+    libraryId: string;
+    itemId: string;
+    signal?: AbortSignal;
+  }): Promise<MediaServerDownloadCandidate[] | null> {
+    const authority = this.downloadAuthority(input.ownerUserId, input.libraryId);
+    if (!authority) return null;
+
+    let result: MediaServerItemVersions;
+    try {
+      result = await this.manager.itemVersions(authority, input.libraryId, input.itemId, input.signal);
+    } catch (error) {
+      // A gone item is nothing to copy; a provider refusal or a lost session is a temporary
+      // failure the queue retries, never a verdict that the episode has no source.
+      if ((error instanceof ResourceError && error.status === 404)
+        || (isMediaServerError(error) && error.code === "not-found")) {
+        return this.authorityStillCurrent(authority) ? [] : null;
+      }
+      throw error;
+    }
+    if (!this.authorityStillCurrent(authority)) return null;
+    return this.downloadCandidatesFromResults(input.ownerUserId, [result]);
   }
 
   /** Refuses any remote source that is not the exact one the owner session was granted, as

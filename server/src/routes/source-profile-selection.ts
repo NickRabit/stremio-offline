@@ -49,6 +49,7 @@ export function materializeOwnerSourceAdmission(
   owner: Pick<UserRecord, "id" | "role" | "permissions" | "disabled">,
   referenceInput: unknown,
   mediaKind: "episode" | "movie",
+  options: { onlyProviderKeys?: readonly string[] } = {},
 ): SourceAdmissionSnapshotV1 {
   const reference = parseSourceProfileReference(referenceInput);
   const preferences = deps.store.prefs(owner.id);
@@ -60,6 +61,7 @@ export function materializeOwnerSourceAdmission(
     remoteLibraries: deps.store.remoteLibraries(),
     mediaConnections: deps.store.mediaConnections(),
     addonOrder: deps.store.userData(owner.id).addonOrder,
+    ...(options.onlyProviderKeys === undefined ? {} : { onlyProviderKeys: options.onlyProviderKeys }),
     preferences: {
       audioLanguage: preferences.audioLanguage,
       subtitleLanguage: preferences.subtitleLanguage,
@@ -113,10 +115,11 @@ export function materializeSourceProfileAdmission(
   owner: Pick<UserRecord, "id" | "role" | "permissions" | "disabled"> | undefined,
   referenceInput: unknown,
   mediaKind: "episode" | "movie",
+  options: { onlyProviderKeys?: readonly string[] } = {},
 ): SourceAdmissionSnapshotV1 {
   if (!owner) throw new AppError("This account may not download to the library.", "err.downloadLibraryNotAllowed", 403);
   try {
-    return materializeOwnerSourceAdmission(deps, owner, referenceInput, mediaKind);
+    return materializeOwnerSourceAdmission(deps, owner, referenceInput, mediaKind, options);
   } catch (error) {
     if (error instanceof SourceAdmissionValidationError) throw invalidSourceProfileReference();
     if (error instanceof SourceAdmissionRejected) throw sourceAdmissionError(error.code);

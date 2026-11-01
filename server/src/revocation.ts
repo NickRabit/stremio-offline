@@ -298,6 +298,7 @@ export class Revocations {
     await this.pauseJobs((job) => this.deps.queue.ownerOf(job) === user.id && (
       lost({ libraryId: jobLibraryId(job), addonKey: job.stream?.addonKey })
       || lost({ addonKey: job.subtitle?.addonKey })
+      || (job.source?.remoteItem !== undefined && lost({ libraryId: job.source.remoteItem.libraryId }))
       || this.remoteDownloadLost(job, user.id)
     ), user.id);
   }
@@ -342,6 +343,9 @@ export class Revocations {
   /** A job whose source or target is the withdrawn content. */
   private jobTouches(job: DownloadJob, opts: StopContentOptions): boolean {
     if (opts.userId !== undefined && this.deps.queue.ownerOf(job) !== opts.userId) return false;
+    const remoteItem = job.source?.remoteItem;
+    if (remoteItem !== undefined
+      && (opts.connectionId === remoteItem.connectionId || opts.libraryId === remoteItem.libraryId)) return true;
     // A remote copy names its own connection, which a local library id never does.
     if (opts.connectionId !== undefined && job.remoteDownload?.connectionId === opts.connectionId) return true;
     if (opts.libraryId !== undefined) {

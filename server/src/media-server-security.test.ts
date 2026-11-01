@@ -197,7 +197,7 @@ test("items carries only the fixed allow-listed query and drops raw path fields"
     const query = new URLSearchParams(fixture.requests[0].url.split("?")[1]);
     assert.equal(query.get("Recursive"), "true");
     assert.equal(query.get("IncludeItemTypes"), "Movie,Series,Season,Episode,MusicVideo");
-    assert.equal(query.get("Fields"), "ProviderIds,ParentId,SeriesInfo");
+    assert.equal(query.get("Fields"), "ProviderIds,ParentId,SeriesInfo,PremiereDate");
     assert.equal(query.get("EnableUserData"), "false");
     assert.equal(query.get("ParentId"), "lib-1");
     assert.equal(query.get("StartIndex"), "0");
@@ -1900,7 +1900,7 @@ test("directory sends ParentIndexNumber and EnableTotalRecordCount only when ask
     assert.equal(query.get("ImageTypeLimit"), "1");
     assert.equal(query.get("EnableImageTypes"), "Primary,Backdrop,Thumb");
     assert.equal(query.get("EnableUserData"), "false");
-    assert.deepEqual(String(query.get("Fields")).split(","), ["ProviderIds", "ParentId", "SeriesInfo", "ImageTags", "ChildCount"]);
+    assert.deepEqual(String(query.get("Fields")).split(","), ["ProviderIds", "ParentId", "SeriesInfo", "ImageTags", "ChildCount", "PremiereDate"]);
     await transport.requestJson("directory", { userId: "u", parentId: "lib-1", includeItemTypes: "Movie", recursive: false, sortBy: "SortName", sortOrder: "Ascending" }, "tok");
     const plain = new URL(captured[1]).searchParams;
     assert.equal(plain.get("ParentIndexNumber"), null);

@@ -870,7 +870,7 @@ function buildRequest(baseUrl: string, operation: MediaServerOperationName, args
       query.set("IncludeItemTypes", itemTypes(args.includeItemTypes));
       // SeriesInfo is what makes SeriesId come back on episode rows in the measured
       // Jellyfin 12.2.0 / Emby 4.9.3.0 responses; a row without it is never guessed.
-      query.set("Fields", "ProviderIds,ParentId,SeriesInfo");
+      query.set("Fields", "ProviderIds,ParentId,SeriesInfo,PremiereDate");
       query.set("EnableUserData", "false");
       query.set("ParentId", pathSegment(args.parentId, "parentId"));
       query.set("StartIndex", String(boundedIndex(args.startIndex, "startIndex", 1_000_000_000) ?? 0));
@@ -886,7 +886,7 @@ function buildRequest(baseUrl: string, operation: MediaServerOperationName, args
       query.set("IncludeItemTypes", directoryItemTypes(args.includeItemTypes));
       // A grid row carries only the facts the listing needs: identity, ancestry, image membership
       // and a child count. Overview and genres are the detail read's job, so the grid stays small.
-      query.set("Fields", "ProviderIds,ParentId,SeriesInfo,ImageTags,ChildCount");
+      query.set("Fields", "ProviderIds,ParentId,SeriesInfo,ImageTags,ChildCount,PremiereDate");
       query.set("EnableUserData", "false");
       query.set("ImageTypeLimit", "1");
       query.set("EnableImageTypes", "Primary,Backdrop,Thumb");

@@ -593,8 +593,8 @@ test("matched mints only the verified versions behind an exact id", async () => 
 const downloadRefOf = async (harness: Harness, sourceId: string) =>
   harness.sources.downloadReference(streamOf(harness, sourceId), harness.owner);
 
-const downloadReferenceOf = (harness: Harness): RemoteDownloadReference => ({
-  schemaVersion: 1, ownerUserId: ADA, connectionId: harness.connectionId, libraryId: harness.libraryId,
+const downloadReferenceOf = (harness: Harness, ownerUserId = ADA): RemoteDownloadReference => ({
+  schemaVersion: 1, ownerUserId, connectionId: harness.connectionId, libraryId: harness.libraryId,
   generation: harness.store.mediaConnections()[0]!.generation, provider: "jellyfin", serverId: "server-1",
   accountId: "account-1", itemId: "item-1", mediaSourceId: "v1",
 });
@@ -632,6 +632,74 @@ test("downloadCandidates returns canonical owner references and sanitized stream
     assert.ok(candidates.every((candidate) => !("url" in candidate.stream)));
     assert.doesNotMatch(JSON.stringify(candidates), /https?:|token|secret|expiresAt|sid|media-server:/i);
     assert.equal(harness.server.originalCalls, 0, "discovery never opens original bytes");
+  }, { contentDownloading: true });
+});
+
+test("itemDownloadCandidates returns the exact item's versions when the owner may copy", async () => {
+  await withHarness(async (harness) => {
+    const candidates = await harness.sources.itemDownloadCandidates({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      itemId: "item-1",
+    });
+
+    assert.ok(candidates);
+    assert.deepEqual(candidates.map((candidate) => candidate.reference), [
+      downloadReferenceOf(harness, BOB),
+      { ...downloadReferenceOf(harness, BOB), mediaSourceId: "v2" },
+    ]);
+    assert.deepEqual(candidates.map((candidate) => candidate.stream), [
+      {
+        name: "1080p",
+        behaviorHints: { filename: "1080p.mkv", videoSize: 200_000 },
+      },
+      {
+        name: "720p",
+        behaviorHints: { filename: "720p" },
+      },
+    ]);
+    assert.equal(JSON.stringify(candidates).includes("https://"), false);
+  }, { contentDownloading: true });
+});
+
+test("itemDownloadCandidates distinguishes lost access from a provider that forbids copies", async () => {
+  await withHarness(async (harness) => {
+    const input = { ownerUserId: BOB, libraryId: harness.libraryId, itemId: "item-1" };
+    await harness.store.update((state) => {
+      state.users = state.users?.map((user) => user.id === BOB ? { ...user, disabled: true } : user);
+    });
+    assert.equal(await harness.sources.itemDownloadCandidates(input), null);
+
+    await harness.store.update((state) => {
+      state.users = state.users?.map((user) => user.id === BOB ? { ...user, disabled: false } : user);
+      state.remoteLibraries = state.remoteLibraries?.map((library) =>
+        library.id === harness.libraryId ? { ...library, allowedUsers: [] } : library);
+    });
+    assert.equal(await harness.sources.itemDownloadCandidates(input), null);
+  }, { contentDownloading: true });
+
+  await withHarness(async (harness) => {
+    assert.deepEqual(await harness.sources.itemDownloadCandidates({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      itemId: "item-1",
+    }), []);
+  }, { contentDownloading: false });
+});
+
+test("itemDownloadCandidates returns null when access is withdrawn while the item is read", async () => {
+  await withHarness(async (harness) => {
+    harness.server.onVersions = async () => {
+      harness.server.onVersions = undefined;
+      await harness.store.update((state) => {
+        state.users = state.users?.map((user) => user.id === BOB ? { ...user, disabled: true } : user);
+      });
+    };
+    assert.equal(await harness.sources.itemDownloadCandidates({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      itemId: "item-1",
+    }), null);
   }, { contentDownloading: true });
 });
 
