@@ -410,6 +410,8 @@ export const it: Catalog = {
   "detail.action.trailer": "Trailer",
   "detail.action.fromStart": "Dall'inizio",
   "detail.action.watched": "Visto",
+  "detail.action.unwatched": "Non visto",
+  "detail.action.wholeSeries": "Serie completa",
   "detail.action.device": "Sul dispositivo",
   "detail.action.favorite": "Preferito",
   "detail.action.folder": "Cartella",

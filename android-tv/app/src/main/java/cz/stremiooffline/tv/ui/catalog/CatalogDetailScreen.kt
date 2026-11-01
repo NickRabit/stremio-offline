@@ -985,8 +985,10 @@ fun CatalogDetailScreen(
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
           !pick.sourcesOpen && !ui.series.open && !ui.titleDownload && focus.actionRowFocused
         ) {
+          // A series goes to its seasons first, the way a media-server series does; an episode
+          // card off screen could not take the focus at all.
           if (isSeries && meta.videos.orEmpty().isNotEmpty()) {
-            runCatching { focus.row.requestFocus() }.isSuccess
+            runCatching { focus.season.requestFocus() }.isSuccess || runCatching { focus.row.requestFocus() }.isSuccess
           } else {
             ui.extras.focusFirst()
           }

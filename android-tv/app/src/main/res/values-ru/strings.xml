@@ -424,5 +424,8 @@
   <string name="detail_action_from_start">С начала</string>
   <string name="detail_action_watched">Просмотрено</string>
   <string name="detail_action_favorite">Избранное</string>
+  <string name="detail_action_unwatched">Не просмотрено</string>
+  <string name="detail_action_whole_series">Весь сериал</string>
+  <string name="detail_action_folder">Папка</string>
   <string name="home_open_detail">Открыть описание</string>
 </resources>

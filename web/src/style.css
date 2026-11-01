@@ -2190,6 +2190,9 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
    draws, so choosing an episode reads the same on both. */
 .catalogue-episodes{margin-top:2px}
 .catalogue-episodes .episode-list{max-height:clamp(220px,40vh,420px)}
+/* Over the hero's picture the chosen episode keeps a solid ground: the plain tint of the other
+   lists let the artwork shine through it alone, a pink stripe across the list. */
+.catalogue-episodes .episode-list button.selected{background:linear-gradient(#ff5b381c,#ff5b381c),var(--panel2)}
 .catalogue-episodes .episode-current{grid-template-columns:auto auto minmax(0,1fr) auto;gap:9px;padding:8px 10px}
 .catalogue-episodes .episode-current small{color:var(--muted);font-size:9px}
 .catalogue-episodes .episode-current button{padding:5px 9px;color:var(--accent2);background:transparent;font-size:9px}

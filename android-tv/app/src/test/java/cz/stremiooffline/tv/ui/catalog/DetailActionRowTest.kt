@@ -114,14 +114,16 @@ class DetailActionRowTest {
   }
 
   @Test
-  fun `every action is the same height and icon actions show no label`() {
+  fun `every action is the same height and every icon carries its short name under it, as on the web`() {
     mount()
 
     val heights = (listOf(primaryTag, "row_sources") + everything)
       .associateWith { compose.onNodeWithTag(it).fetchSemanticsNode().size.height }
     assertEquals(1, heights.values.distinct().size)
 
-    everything.forEach { compose.onNodeWithText(it).assertDoesNotExist() }
+    // The row's own slots take the web's short names; an extra keeps the name it was given.
+    listOf("From start", "To library", "Favourite", "Unwatched", "Watched", "row_extra_a", "row_extra_b")
+      .forEach { compose.onNodeWithText(it).assertExists() }
   }
 
   @Test
@@ -130,7 +132,7 @@ class DetailActionRowTest {
 
     compose.onNodeWithTag("row_watched").performSemanticsAction(SemanticsActions.RequestFocus)
     compose.waitForIdle()
-    compose.onNodeWithTag(TagActionCaption).assertTextEquals("row_watched")
+    compose.onNodeWithTag(TagActionCaption).assertTextEquals("Watched")
 
     compose.onNodeWithTag(primaryTag).performSemanticsAction(SemanticsActions.RequestFocus)
     compose.waitForIdle()

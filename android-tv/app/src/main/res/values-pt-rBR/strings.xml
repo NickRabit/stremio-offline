@@ -408,5 +408,8 @@
   <string name="detail_action_from_start">Do início</string>
   <string name="detail_action_watched">Visto</string>
   <string name="detail_action_favorite">Favorito</string>
+  <string name="detail_action_unwatched">Não visto</string>
+  <string name="detail_action_whole_series">Série completa</string>
+  <string name="detail_action_folder">Pasta</string>
   <string name="home_open_detail">Abrir detalhes</string>
 </resources>

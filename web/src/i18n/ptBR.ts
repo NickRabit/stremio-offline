@@ -410,6 +410,8 @@ export const ptBR: Catalog = {
   "detail.action.trailer": "Trailer",
   "detail.action.fromStart": "Do início",
   "detail.action.watched": "Visto",
+  "detail.action.unwatched": "Não visto",
+  "detail.action.wholeSeries": "Série completa",
   "detail.action.device": "No dispositivo",
   "detail.action.favorite": "Favorito",
   "detail.action.folder": "Pasta",

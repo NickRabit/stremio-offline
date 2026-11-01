@@ -431,6 +431,8 @@ export const cs: Catalog = {
   "detail.action.trailer": "Trailer",
   "detail.action.fromStart": "Od začátku",
   "detail.action.watched": "Zhlédnuto",
+  "detail.action.unwatched": "Nezhlédnuto",
+  "detail.action.wholeSeries": "Celý seriál",
   "detail.action.device": "Do zařízení",
   "detail.action.favorite": "Oblíbené",
   "detail.action.folder": "Složka",

@@ -410,6 +410,8 @@ export const sk: Catalog = {
   "detail.action.trailer": "Trailer",
   "detail.action.fromStart": "Od začiatku",
   "detail.action.watched": "Pozreté",
+  "detail.action.unwatched": "Nepozreté",
+  "detail.action.wholeSeries": "Celý seriál",
   "detail.action.device": "Do zariadenia",
   "detail.action.favorite": "Obľúbené",
   "detail.action.folder": "Priečinok",

@@ -410,6 +410,8 @@ export const de: Catalog = {
   "detail.action.trailer": "Trailer",
   "detail.action.fromStart": "Von vorn",
   "detail.action.watched": "Gesehen",
+  "detail.action.unwatched": "Ungesehen",
+  "detail.action.wholeSeries": "Ganze Serie",
   "detail.action.device": "Aufs Gerät",
   "detail.action.favorite": "Favorit",
   "detail.action.folder": "Ordner",

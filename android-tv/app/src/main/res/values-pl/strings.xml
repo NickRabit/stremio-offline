@@ -424,5 +424,8 @@
   <string name="detail_action_from_start">Od początku</string>
   <string name="detail_action_watched">Obejrzane</string>
   <string name="detail_action_favorite">Ulubione</string>
+  <string name="detail_action_unwatched">Nieobejrzane</string>
+  <string name="detail_action_whole_series">Cały serial</string>
+  <string name="detail_action_folder">Folder</string>
   <string name="home_open_detail">Otwórz szczegóły</string>
 </resources>

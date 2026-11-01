@@ -389,4 +389,7 @@ detail.video.behindTheScenes
 detail.action.fromStart
 detail.action.watched
 detail.action.favorite
+detail.action.unwatched
+detail.action.wholeSeries
+detail.action.folder
 home.openDetail

@@ -436,6 +436,8 @@ export const en = {
   "detail.action.trailer": "Trailer",
   "detail.action.fromStart": "From start",
   "detail.action.watched": "Watched",
+  "detail.action.unwatched": "Unwatched",
+  "detail.action.wholeSeries": "Whole series",
   "detail.action.device": "To device",
   "detail.action.favorite": "Favourite",
   "detail.action.folder": "Folder",

@@ -420,6 +420,7 @@ class CatalogDetailTest {
     compose.onNodeWithTag(episodeCardTag(v3)).assertExists()
     compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Episode 2", substring = true)
 
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(v2)).assertIsFocused()
 
@@ -458,6 +459,7 @@ class CatalogDetailTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(v1())).assertIsFocused()
   }
@@ -579,6 +581,7 @@ class CatalogDetailTest {
 
     compose.onNodeWithTag(TagCatalogEpisode).assertTextContains("S1 · E1 · One")
 
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(v1())).assertIsFocused()
     press(Key.DirectionRight)
@@ -597,6 +600,7 @@ class CatalogDetailTest {
     mount(api, seriesArgs())
     compose.waitForIdle()
 
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     press(Key.DirectionRight)
     compose.onNodeWithTag(episodeCardTag(v2())).assertIsFocused()
@@ -615,6 +619,7 @@ class CatalogDetailTest {
     mount(api, seriesArgs())
     compose.waitForIdle()
 
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(v1())).assertIsFocused()
     press(Key.DirectionCenter)
@@ -680,6 +685,7 @@ class CatalogDetailTest {
     mount(api, seriesArgs())
     compose.waitForIdle()
 
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(second)).assertIsFocused()
     press(Key.DirectionCenter)
@@ -707,6 +713,7 @@ class CatalogDetailTest {
     mount(api, seriesArgs())
     compose.waitForIdle()
 
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(second)).assertIsFocused()
     press(Key.DirectionCenter)
@@ -763,6 +770,7 @@ class CatalogDetailTest {
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains("No active source addon has a stream for this title.")
 
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(first)).assertIsFocused()
     press(Key.DirectionRight)
@@ -908,6 +916,7 @@ class CatalogDetailTest {
     compose.waitForIdle()
 
     // DOWN lands on the episode row, UP climbs back to the season chips.
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     press(Key.DirectionUp)
     compose.onNodeWithTag(seasonChipTag(1)).assertIsFocused()
@@ -957,6 +966,7 @@ class CatalogDetailTest {
 
     meta.complete(Unit)
     compose.waitForIdle()
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(v1())).assertIsFocused()
   }
@@ -1051,7 +1061,7 @@ class CatalogDetailTest {
   }
 
   @Test
-  fun `the focused icon action is named under the whole row`() {
+  fun `the focused icon action's short name is the one marked under it`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
     api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
@@ -1061,7 +1071,7 @@ class CatalogDetailTest {
 
     compose.onNodeWithTag(TagActionCaption).assertDoesNotExist()
     focusOn(TagCatalogForget)
-    compose.onNodeWithTag(TagActionCaption).assertTextContains("Mark as unwatched")
+    compose.onNodeWithTag(TagActionCaption).assertTextContains("Unwatched")
   }
 
   // --- The one action row ------------------------------------------------------------------------
@@ -1273,6 +1283,7 @@ class CatalogDetailTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(v1())).assertIsFocused()
     press(Key.DirectionDown)

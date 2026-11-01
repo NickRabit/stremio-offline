@@ -410,6 +410,8 @@ export const ru: Catalog = {
   "detail.action.trailer": "Трейлер",
   "detail.action.fromStart": "С начала",
   "detail.action.watched": "Просмотрено",
+  "detail.action.unwatched": "Не просмотрено",
+  "detail.action.wholeSeries": "Весь сериал",
   "detail.action.device": "На устройство",
   "detail.action.favorite": "Избранное",
   "detail.action.folder": "Папка",

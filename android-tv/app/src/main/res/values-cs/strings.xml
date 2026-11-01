@@ -424,5 +424,8 @@
   <string name="detail_action_from_start">Od začátku</string>
   <string name="detail_action_watched">Zhlédnuto</string>
   <string name="detail_action_favorite">Oblíbené</string>
+  <string name="detail_action_unwatched">Nezhlédnuto</string>
+  <string name="detail_action_whole_series">Celý seriál</string>
+  <string name="detail_action_folder">Složka</string>
   <string name="home_open_detail">Otevřít detail</string>
 </resources>

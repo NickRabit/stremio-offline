@@ -410,6 +410,8 @@ export const fr: Catalog = {
   "detail.action.trailer": "Bande-annonce",
   "detail.action.fromStart": "Depuis le début",
   "detail.action.watched": "Vu",
+  "detail.action.unwatched": "Non vu",
+  "detail.action.wholeSeries": "Toute la série",
   "detail.action.device": "Sur l'appareil",
   "detail.action.favorite": "Favori",
   "detail.action.folder": "Dossier",

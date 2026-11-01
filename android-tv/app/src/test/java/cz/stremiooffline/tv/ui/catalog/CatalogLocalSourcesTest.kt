@@ -313,6 +313,7 @@ class CatalogLocalSourcesTest {
 
     focusFromLeft(TagCatalogPrimary)
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(v1)).assertIsFocused()
     press(Key.DirectionRight)
