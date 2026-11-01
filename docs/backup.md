@@ -32,6 +32,8 @@ hashes. Store them like passwords. The settings export is described in
 | `stats.json`, `activity.json` | Traffic statistics and the activity history | Optional — lost history only |
 | `provider-stats.json` | Hourly counts of the calls made to Jellyfin and Emby | Optional — lost history only |
 | `external-ids.json` | Cached links between catalogue identifiers | Optional — rebuilt on demand |
+| `tmdb-ids.json` | Learned pairs of IMDb and TMDB identifiers | Optional — rebuilt on demand |
+| `title-extras/` | Cached cast, similar titles and ratings of opened titles | **No** — refetched on demand |
 | `artwork/` | Thumbnails the server generated from the media | Optional — regenerated, which takes ffmpeg time |
 | `images/` | Cached posters and backgrounds from the catalogues | **No** — refetched on demand; often the largest folder |
 | `remote-images/` | Cached Jellyfin and Emby posters | **No** — refetched on demand |

@@ -3,6 +3,7 @@ import { guardedBody, guardedFetch, OutboundError } from "./outbound.js";
 import { log } from "./logger.js";
 import { normalizeLanguage } from "./language.js";
 import { readLimitedBody } from "./response-body.js";
+import { tmdbIds, type TmdbKind } from "./tmdb-ids.js";
 import type { FetchLike } from "./debrid.js";
 import type { MetaItem } from "./types.js";
 
@@ -21,7 +22,6 @@ const MAX_JSON_BYTES = 16 * 1024 * 1024;
 /** A title search sits between the user and the result list, so it gets a shorter deadline
  *  than a detail lookup whose answer nobody is waiting on. */
 const SEARCH_TIMEOUT_MS = 5_000;
-const ID_CACHE_LIMIT = 500;
 const SEASON_CACHE_LIMIT = 500;
 /** One season's per-episode air dates, read once per catalogue check. */
 const SEASON_CACHE_TTL_MS = 6 * 60 * 60_000;
@@ -42,9 +42,6 @@ export function tmdbImage(path: string | null | undefined, size: TmdbImageSize):
   return path ? `https://image.tmdb.org/t/p/${size}${path}` : undefined;
 }
 
-/** IMDb id against the TMDB id it resolves to, so a title is looked up through /find once. */
-const idCache = new Map<string, number | null>();
-
 interface SeasonCacheEntry { at: number; episodes: Map<string, string | null> }
 
 /** `${tmdbId}:${season}` against the per-episode `air_date`s it answered, so a check that
@@ -52,7 +49,7 @@ interface SeasonCacheEntry { at: number; episodes: Map<string, string | null> }
 const seasonCache = new Map<string, SeasonCacheEntry>();
 
 /** Test seam only: forgets the imdb -> tmdb id map and the cached season air dates. */
-export function clearTmdbCache(): void { movieReleaseCache.clear(); idCache.clear(); seasonCache.clear(); }
+export function clearTmdbCache(): void { movieReleaseCache.clear(); tmdbIds.clear(); seasonCache.clear(); }
 
 /** A refused title search turns into a wait rather than a retry per title: the scan
  *  asks about hundreds of them, and a 429 answered hundreds of times is what got it
@@ -233,6 +230,61 @@ export async function tmdbSearch(
   });
 }
 
+export type TmdbExternalIdResult =
+  | { status: "found"; imdb: string }
+  | { status: "none" }
+  | { status: "failed" };
+
+/** The IMDb id behind a TMDB id, including whether TMDB answered no id or failed to answer. */
+export async function tmdbExternalIdResult(
+  type: "movie" | "series",
+  tmdbId: number,
+  config: TmdbConfig,
+  fetchImpl?: FetchLike,
+  signal?: AbortSignal,
+): Promise<TmdbExternalIdResult> {
+  if ((type !== "movie" && type !== "series") || !Number.isInteger(tmdbId) || tmdbId <= 0) return { status: "failed" };
+  const cached = tmdbIds.imdbOf(type, tmdbId);
+  if (cached !== undefined) return cached === null ? { status: "none" } : { status: "found", imdb: cached };
+
+  let reply: TmdbReply<TmdbExternalIds>;
+  try {
+    reply = await tmdbReply<TmdbExternalIds>(
+      `/${mediaType(type)}/${tmdbId}/external_ids`,
+      { api_key: config.apiKey },
+      fetchImpl,
+      signal,
+    );
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    log("WARN", "TMDB external id lookup failed", { operation: "external_ids", type, reason: reasonOf(error, config.apiKey) });
+    return { status: "failed" };
+  }
+  const { response } = reply;
+  throwIfCancelled(signal);
+  if (!response.ok) {
+    log("WARN", "TMDB external id lookup failed", { operation: "external_ids", type, status: response.status, retryAfterMs: tmdbRetryAfterMs(response) });
+    return { status: "failed" };
+  }
+  let body: TmdbExternalIds;
+  try {
+    if (reply.parseError) throw reply.parseError;
+    body = reply.body ?? await readTmdbJson<TmdbExternalIds>(response, signal);
+    throwIfCancelled(signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    log("WARN", "TMDB answered with malformed JSON", { operation: "external_ids", type, reason: reasonOf(error, config.apiKey) });
+    return { status: "failed" };
+  }
+  const imdb = typeof body?.imdb_id === "string" && IMDB_ID.test(body.imdb_id) ? body.imdb_id : undefined;
+  if (!imdb) {
+    tmdbIds.rememberNoImdb(type, tmdbId);
+    return { status: "none" };
+  }
+  tmdbIds.rememberPair(type, imdb, tmdbId);
+  return { status: "found", imdb };
+}
+
 /** The IMDb id behind a TMDB id, when TMDB has one. A refusal, a timeout or an id that is
  *  not an IMDb id answers null rather than a guess. */
 export async function tmdbExternalId(
@@ -241,26 +293,8 @@ export async function tmdbExternalId(
   config: TmdbConfig,
   fetchImpl: FetchLike = guardedFetch,
 ): Promise<string | null> {
-  if (type !== "movie" && type !== "series") return null;
-  if (!Number.isInteger(tmdbId) || tmdbId <= 0) return null;
-  let response: Response;
-  try {
-    response = await request(`/${mediaType(type)}/${tmdbId}/external_ids`, { api_key: config.apiKey, language: config.language }, fetchImpl);
-  } catch (error) {
-    log("WARN", "TMDB external id lookup failed", { operation: "external_ids", type, reason: reasonOf(error, config.apiKey) });
-    return null;
-  }
-  if (!response.ok) {
-    log("WARN", "TMDB external id lookup failed", { operation: "external_ids", type, status: response.status, retryAfterMs: tmdbRetryAfterMs(response) });
-    return null;
-  }
-  let body: TmdbExternalIds;
-  try { body = await readTmdbJson<TmdbExternalIds>(response); }
-  catch (error) {
-    log("WARN", "TMDB answered with malformed JSON", { operation: "external_ids", type, reason: reasonOf(error, config.apiKey) });
-    return null;
-  }
-  return typeof body.imdb_id === "string" && IMDB_ID.test(body.imdb_id) ? body.imdb_id : null;
+  const result = await tmdbExternalIdResult(type, tmdbId, config, fetchImpl);
+  return result.status === "found" ? result.imdb : null;
 }
 
 /** Alternate artwork of one chosen title, deduplicated and bounded. Only called once a
@@ -474,8 +508,9 @@ async function resolveId(
   const imdb = /(?:^|:)(tt\d+)$/.exec(id)?.[1];
   if (!imdb) return null;
 
-  const key = `${type}:${imdb}`;
-  if (idCache.has(key)) return idCache.get(key) ?? null;
+  const kind: TmdbKind | undefined = type === "movie" ? "movie" : type === "series" ? "series" : undefined;
+  const cached = kind ? tmdbIds.tmdbOf(kind, imdb) : undefined;
+  if (cached !== undefined) return cached;
 
   let reply: TmdbReply<TmdbFind>;
   try {
@@ -510,10 +545,12 @@ async function resolveId(
 
   const results = type === "movie" ? body.movie_results : body.tv_results;
   const found = results?.[0]?.id;
-  const resolved = typeof found === "number" ? found : null;
+  const resolved = typeof found === "number" && Number.isInteger(found) && found > 0 ? found : null;
   throwIfCancelled(signal);
-  if (idCache.size > ID_CACHE_LIMIT) idCache.clear();
-  idCache.set(key, resolved);
+  if (kind) {
+    if (resolved === null) tmdbIds.rememberNoTmdb(kind, imdb);
+    else tmdbIds.rememberPair(kind, imdb, resolved);
+  }
   return resolved;
 }
 

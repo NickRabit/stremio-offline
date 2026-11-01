@@ -6,7 +6,7 @@ import test from "node:test";
 import { AppError } from "./errors.js";
 import { flushLog, initLogger } from "./logger.js";
 import { outbound, OutboundError } from "./outbound.js";
-import { clearTmdbCache, clearTmdbSearchPause, tmdbExternalId, tmdbGallery, tmdbIdOf, tmdbImage, tmdbMeta, tmdbMovieReleases, tmdbSearch, tmdbSeasonAirDates, tmdbTitleExtras, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
+import { clearTmdbCache, clearTmdbSearchPause, tmdbExternalId, tmdbExternalIdResult, tmdbGallery, tmdbIdOf, tmdbImage, tmdbMeta, tmdbMovieReleases, tmdbSearch, tmdbSeasonAirDates, tmdbTitleExtras, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
 import type { FetchLike } from "./debrid.js";
 
 const json = (body: unknown, status = 200) =>
@@ -669,17 +669,78 @@ test("a 429 with Retry-After stops asking for the next title instead of retrying
 test("an external id lookup answers the IMDb id, or nothing when there is none", async () => {
   clearTmdbCache();
   const calls: string[] = [];
-  const withId = await tmdbExternalId("movie", 31410, config, async (url) => {
+  const withId = await tmdbExternalIdResult("movie", 31410, config, async (url) => {
     calls.push(url);
     return json({ id: 31410, imdb_id: "tt0090257" });
   });
   assert.match(calls[0]!, /\/movie\/31410\/external_ids\?/);
-  assert.equal(withId, "tt0090257");
+  assert.equal(new URL(calls[0]!).searchParams.has("language"), false);
+  assert.deepEqual(withId, { status: "found", imdb: "tt0090257" });
 
-  assert.equal(await tmdbExternalId("series", 1396, config, async () => json({ id: 1396, imdb_id: null })), null);
-  assert.equal(await tmdbExternalId("series", 1396, config, async () => json({ id: 1396, imdb_id: "nm0001" })), null, "a non-IMDb id is not used");
+  let noneRequests = 0;
+  const none = async () => {
+    noneRequests += 1;
+    return json({ id: 1396, imdb_id: null });
+  };
+  assert.deepEqual(await tmdbExternalIdResult("series", 1396, config, none), { status: "none" });
+  assert.deepEqual(await tmdbExternalIdResult("series", 1396, config, none), { status: "none" });
+  assert.equal(noneRequests, 1);
+  assert.equal(await tmdbExternalId("series", 1397, config, async () => json({ id: 1397, imdb_id: "nm0001" })), null, "a non-IMDb id is not used");
   assert.equal(await tmdbExternalId("movie", 0, config, async () => json({ imdb_id: "tt1" })), null);
-  assert.equal(await tmdbExternalId("movie", 31410, config, async () => json({}, 500)), null);
+  assert.equal(await tmdbExternalId("movie", 31411, config, async () => json({}, 500)), null);
+});
+
+test("a find pair answers an external id lookup without a request", async () => {
+  clearTmdbCache();
+  let externalRequests = 0;
+  const fetchImpl: FetchLike = async (url) => {
+    if (url.includes("/find/")) return json(findMovie);
+    externalRequests += 1;
+    return json({ imdb_id: "tt0090257" });
+  };
+
+  assert.equal(await tmdbIdOf("movie", "tt0090257", config, fetchImpl), 31410);
+  assert.deepEqual(await tmdbExternalIdResult("movie", 31410, config, fetchImpl), { status: "found", imdb: "tt0090257" });
+  assert.equal(externalRequests, 0);
+});
+
+test("an external id pair answers a find lookup without a request", async () => {
+  clearTmdbCache();
+  let findRequests = 0;
+  const fetchImpl: FetchLike = async (url) => {
+    if (url.includes("/find/")) {
+      findRequests += 1;
+      return json(findMovie);
+    }
+    return json({ imdb_id: "tt0090257" });
+  };
+
+  assert.deepEqual(await tmdbExternalIdResult("movie", 31410, config, fetchImpl), { status: "found", imdb: "tt0090257" });
+  assert.equal(await tmdbIdOf("movie", "tt0090257", config, fetchImpl), 31410);
+  assert.equal(findRequests, 0);
+});
+
+test("failed external id lookups are not remembered", async () => {
+  clearTmdbCache();
+  let httpRequests = 0;
+  const refused: FetchLike = async () => {
+    httpRequests += 1;
+    return httpRequests === 1 ? json({}, 500) : json({ imdb_id: "tt0090257" });
+  };
+  assert.deepEqual(await tmdbExternalIdResult("movie", 31410, config, refused), { status: "failed" });
+  assert.deepEqual(await tmdbExternalIdResult("movie", 31410, config, refused), { status: "found", imdb: "tt0090257" });
+  assert.equal(httpRequests, 2);
+
+  clearTmdbCache();
+  let timeoutRequests = 0;
+  const timeout: FetchLike = async () => {
+    timeoutRequests += 1;
+    if (timeoutRequests === 1) throw new Error("TMDB timed out");
+    return json({ imdb_id: "tt0090257" });
+  };
+  assert.deepEqual(await tmdbExternalIdResult("movie", 31410, config, timeout), { status: "failed" });
+  assert.deepEqual(await tmdbExternalIdResult("movie", 31410, config, timeout), { status: "found", imdb: "tt0090257" });
+  assert.equal(timeoutRequests, 2);
 });
 
 test("a gallery request is bounded, deduplicated and prefers the interface language", async () => {

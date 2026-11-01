@@ -1,13 +1,25 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type { TestContext } from "node:test";
 import type { FetchLike } from "./debrid.js";
-import { clearTitleExtrasCache, titleExtras, type TitleExtrasDeps } from "./title-extras.js";
+import {
+  attachTitleExtrasDisk,
+  clearTitleExtrasCache,
+  detachTitleExtrasDisk,
+  setTitleExtrasCacheLimitForTests,
+  titleExtras,
+  type TitleExtrasDeps,
+} from "./title-extras.js";
 import { clearTmdbCache, type TmdbConfig } from "./tmdb.js";
 import type { MetaItem } from "./types.js";
 
 const config: TmdbConfig = { apiKey: "test-key", language: "cs" };
 const SUCCESS_TTL_MS = 24 * 60 * 60_000;
+const PARTIAL_TTL_MS = 30 * 60_000;
 const FAILURE_TTL_MS = 10 * 60_000;
 
 const json = (body: unknown, status = 200) =>
@@ -27,9 +39,11 @@ const deps = (
 });
 
 const fresh = (t: TestContext) => {
+  detachTitleExtrasDisk();
   clearTitleExtrasCache();
   clearTmdbCache();
   t.after(() => {
+    detachTitleExtrasDisk();
     clearTitleExtrasCache();
     clearTmdbCache();
   });
@@ -312,6 +326,228 @@ test("related lookups are bounded, tolerate one failure, and preserve successful
   assert.deepEqual(result.people, [{ name: "Actor", role: "cast" }]);
   assert.equal(result.ageRating, "12");
   assert.equal(result.ageRatingRegion, "CZ");
+});
+
+test("a related film resolved by one title is reused when another title recommends it", async (t) => {
+  fresh(t);
+  let externalRequests = 0;
+  const fetchImpl: FetchLike = async (raw) => {
+    const url = new URL(raw);
+    if (url.pathname === "/3/movie/100" || url.pathname === "/3/movie/101") {
+      return json({
+        credits: { cast: [], crew: [] },
+        recommendations: { results: [{ id: 501, title: "Shared related film" }] },
+        release_dates: { results: [] },
+      });
+    }
+    externalRequests += 1;
+    return externalId(501);
+  };
+
+  const first = await titleExtras("movie", "tmdb:100", "cs", deps(fetchImpl));
+  const second = await titleExtras("movie", "tmdb:101", "cs", deps(fetchImpl));
+
+  assert.equal(first.related[0]?.id, "tt0000501");
+  assert.equal(second.related[0]?.id, "tt0000501");
+  assert.equal(externalRequests, 1);
+});
+
+test("a partial build is retried after thirty minutes while a full success lasts a day", async (t) => {
+  fresh(t);
+  let now = 1_000;
+  let details = 0;
+  let failingLookups = 0;
+  const fetchImpl: FetchLike = async (raw) => {
+    const url = new URL(raw);
+    if (url.pathname === "/3/movie/30" || url.pathname === "/3/movie/31") {
+      details += 1;
+      return url.pathname === "/3/movie/30"
+        ? json({
+          credits: { cast: [], crew: [] },
+          recommendations: { results: [
+            { id: 2_000, title: "Retried related film" },
+            { id: 2_001, title: "Resolved related film" },
+          ] },
+          release_dates: { results: [] },
+        })
+        : json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+    }
+    const id = Number(/\/movie\/(\d+)\/external_ids$/.exec(url.pathname)?.[1]);
+    if (id === 2_000 && failingLookups++ === 0) return json({}, 500);
+    return externalId(id);
+  };
+  const input = deps(fetchImpl, { now: () => now });
+
+  const partial = await titleExtras("movie", "tmdb:30", "cs", input);
+  assert.deepEqual(partial.related.map((item) => item.name), ["Resolved related film"]);
+  now += PARTIAL_TTL_MS - 1;
+  assert.deepEqual((await titleExtras("movie", "tmdb:30", "cs", input)).related.map((item) => item.name), ["Resolved related film"]);
+  assert.equal(details, 1);
+
+  now += 1;
+  const retried = await titleExtras("movie", "tmdb:30", "cs", input);
+  assert.deepEqual(retried.related.map((item) => item.name), ["Retried related film", "Resolved related film"]);
+  assert.equal(details, 2);
+
+  clearTitleExtrasCache();
+  now = 10_000;
+  await titleExtras("movie", "tmdb:31", "cs", deps(fetchImpl, { now: () => now }));
+  now += SUCCESS_TTL_MS - 1;
+  await titleExtras("movie", "tmdb:31", "cs", deps(fetchImpl, { now: () => now }));
+  assert.equal(details, 3, "a complete build is reused through the day");
+  now += 1;
+  await titleExtras("movie", "tmdb:31", "cs", deps(fetchImpl, { now: () => now }));
+  assert.equal(details, 4, "a complete build is rebuilt at the day boundary");
+});
+
+test("a complete disk build survives an empty memory cache", async (t) => {
+  fresh(t);
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-title-extras-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await attachTitleExtrasDisk(dir);
+  let now = 1_000;
+  let details = 0;
+  let externalRequests = 0;
+  const fetchImpl: FetchLike = async (raw) => {
+    const url = new URL(raw);
+    if (url.pathname === "/3/movie/40") {
+      details += 1;
+      return json({
+        original_title: "Disk Film",
+        credits: { cast: [{ name: "Disk Actor", order: 0 }], crew: [] },
+        recommendations: { results: [{ id: 401, title: "Disk Related" }] },
+        release_dates: { results: [] },
+      });
+    }
+    externalRequests += 1;
+    return externalId(401);
+  };
+  const input = () => deps(fetchImpl, {
+    now: () => now,
+    meta: async () => ({ id: "tt0111161", type: "movie", name: "Disk Film" }),
+  });
+
+  const built = await titleExtras("movie", "tmdb:40", "cs", input());
+  clearTitleExtrasCache();
+  clearTmdbCache();
+  now += SUCCESS_TTL_MS - 1;
+  const fromDisk = await titleExtras("movie", "tmdb:40", "cs", input());
+
+  assert.deepEqual(fromDisk, built);
+  assert.equal(details, 1);
+  assert.equal(externalRequests, 1);
+
+  now += 1;
+  await titleExtras("movie", "tmdb:40", "cs", input());
+  assert.equal(details, 2, "an expired file is ignored");
+  clearTitleExtrasCache();
+  await titleExtras("movie", "tmdb:40", "cs", input());
+  assert.equal(details, 2);
+});
+
+test("concurrent empty-memory requests share one disk read", async (t) => {
+  fresh(t);
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-title-extras-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await attachTitleExtrasDisk(dir);
+  let details = 0;
+  const fetchImpl: FetchLike = async (raw) => {
+    if (new URL(raw).pathname !== "/3/movie/41") throw new Error(`Unexpected URL ${raw}`);
+    details += 1;
+    return json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+  };
+
+  await titleExtras("movie", "tmdb:41", "cs", deps(fetchImpl));
+  clearTitleExtrasCache();
+  const [first, second] = await Promise.all([
+    titleExtras("movie", "tmdb:41", "cs", deps(fetchImpl)),
+    titleExtras("movie", "tmdb:41", "cs", deps(fetchImpl)),
+  ]);
+
+  assert.deepEqual(first, second);
+  assert.equal(details, 1);
+});
+
+test("a partial build writes no disk file", async (t) => {
+  fresh(t);
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-title-extras-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await attachTitleExtrasDisk(dir);
+  const fetchImpl: FetchLike = async (raw) => {
+    const url = new URL(raw);
+    if (url.pathname === "/3/movie/42") {
+      return json({
+        credits: { cast: [], crew: [] },
+        recommendations: { results: [{ id: 4_201, title: "Failed Related" }] },
+        release_dates: { results: [] },
+      });
+    }
+    return json({}, 500);
+  };
+
+  await titleExtras("movie", "tmdb:42", "cs", deps(fetchImpl));
+  assert.deepEqual(await readdir(dir), []);
+});
+
+test("the extras cache evicts its least recently used key", async (t) => {
+  fresh(t);
+  setTitleExtrasCacheLimitForTests(2);
+  t.after(() => setTitleExtrasCacheLimitForTests(500));
+  let now = 100;
+  const calls: string[] = [];
+  const fetchImpl: FetchLike = async (raw) => {
+    const url = new URL(raw);
+    calls.push(url.pathname);
+    return json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+  };
+  const input = () => deps(fetchImpl, { now: () => now });
+
+  await titleExtras("movie", "tmdb:50", "cs", input());
+  now = 200;
+  await titleExtras("movie", "tmdb:51", "cs", input());
+  now = 250;
+  await titleExtras("movie", "tmdb:50", "cs", input());
+  now = 300;
+  await titleExtras("movie", "tmdb:52", "cs", input());
+  await titleExtras("movie", "tmdb:50", "cs", input());
+  await titleExtras("movie", "tmdb:51", "cs", input());
+
+  assert.equal(calls.filter((pathname) => pathname === "/3/movie/50").length, 1);
+  assert.equal(calls.filter((pathname) => pathname === "/3/movie/51").length, 2);
+});
+
+test("a direct IMDb id starts TMDB work before metadata resolves", async (t) => {
+  fresh(t);
+  let releaseMeta!: (meta: MetaItem) => void;
+  const meta = new Promise<MetaItem>((resolve) => { releaseMeta = resolve; });
+  let fetchStarted!: () => void;
+  const started = new Promise<void>((resolve) => { fetchStarted = resolve; });
+  const fetchImpl: FetchLike = async (raw) => {
+    const url = new URL(raw);
+    if (url.pathname === "/3/find/tt0111161") {
+      fetchStarted();
+      return json({ movie_results: [{ id: 278 }], tv_results: [] });
+    }
+    if (url.pathname === "/3/movie/278") {
+      return json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+    }
+    throw new Error(`Unexpected URL ${raw}`);
+  };
+
+  const result = titleExtras("movie", "tt0111161", "cs", deps(fetchImpl, { meta: () => meta }));
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      started,
+      new Promise<void>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("TMDB did not start before metadata")), 5_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  releaseMeta({ id: "tt0111161", type: "movie", name: "Film" });
+  assert.equal((await result).source, "tmdb");
 });
 
 test("without a TMDB key the addon names answer and no related titles are invented", async (t) => {
@@ -617,4 +853,36 @@ test("an addon id without IMDb finds TMDB through the meta's imdb_id", async (t)
   assert.equal(extras.source, "tmdb");
   assert.equal(extras.people[0]?.name, "Daniel Radcliffe");
   assert.ok(calls.includes("/3/find/tt0241527"));
+});
+
+test("a disk file with malformed entries is a miss, not a failure", async (t) => {
+  fresh(t);
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-title-extras-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await attachTitleExtrasDisk(dir);
+  const key = `movie:tmdb:41:cs:${createHash("sha256").update(config.apiKey).digest("hex").slice(0, 12)}`;
+  const name = `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`;
+  await writeFile(path.join(dir, name), JSON.stringify({
+    version: 1, key, at: 1_000, value: { people: [], related: [null], videos: [] },
+  }));
+  let details = 0;
+  const result = await titleExtras("movie", "tmdb:41", "cs", deps(async () => {
+    details += 1;
+    return json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+  }, { now: () => 1_000 }));
+  assert.equal(details, 1, "the broken file is rebuilt from TMDB");
+  assert.deepEqual(result.related, []);
+});
+
+test("a request cancelled before it joins leaves no unobserved rejection", async (t) => {
+  fresh(t);
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  t.after(() => process.off("unhandledRejection", onUnhandled));
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(titleExtras("movie", "tt0111161", "cs", deps(async () => json({}), { signal: controller.signal })));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(unhandled, []);
 });
