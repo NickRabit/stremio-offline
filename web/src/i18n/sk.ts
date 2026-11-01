@@ -865,6 +865,7 @@ export const sk: Catalog = {
   "library.moved": "Presunuté.",
   "library.copied": "Skopírované.",
   "library.selectMode": "Vyberte položky",
+  "library.titleDetail": "Detail titulu",
   "library.selectItem": "Vyberte {name}",
   "library.selectedCount": "{count} vybratých",
   "library.bulkItems": "{count} položiek",

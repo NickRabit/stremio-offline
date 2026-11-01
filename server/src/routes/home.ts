@@ -251,6 +251,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       path: item.path, progress: item.progress,
       ...(typeof item.season === "number" ? { season: item.season } : {}),
       ...(typeof item.episode === "number" ? { episode: item.episode } : {}),
+      ...(item.seriesPath ? { seriesPath: item.seriesPath } : {}),
       ...(item.identity ? { identity: item.identity } : {}),
     }));
     return {
@@ -313,17 +314,22 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       const item = await describeLibraryPath(key);
       if (!item || item.kind !== "file") return undefined;
       const { poster, wide } = await fileArtwork(key, wirePath(key));
-      return { job, item, key, poster, wide };
+      const bound = knownTitleEntry(key, metaStore.qualifiedMeta());
+      const seriesPath = bound?.record.type === "series" && bound.key !== key && parseLibraryPath(bound.key)?.relative
+        ? wirePath(bound.key)
+        : undefined;
+      return { job, item, key, poster, wide, seriesPath };
     }));
     const cards: HomeCard[] = resolved
       .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
-      .map(({ job, item, key, poster, wide }) => ({
+      .map(({ job, item, key, poster, wide, seriesPath }) => ({
         kind: "completed", key, title: job.title || item.label, path: wirePath(key),
         completedAt: job.completedAt ?? item.modified,
         ...(poster ? { poster } : {}),
         ...(wide ? { wide } : {}),
         ...(typeof item.season === "number" ? { season: item.season } : {}),
         ...(typeof item.episode === "number" ? { episode: item.episode } : {}),
+        ...(seriesPath ? { seriesPath } : {}),
       }));
     const bounded = boundCards(cards);
     return { status: "ok", items: bounded.items, hasMore: bounded.hasMore };
@@ -396,6 +402,9 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const cards: HomeCard[] = await Promise.all(bounded.items.map(async ({ entry, key, item }) => {
       const bound = knownTitleEntry(key, records);
       const series = bound?.record.type === "series" ? bound.record : undefined;
+      const seriesPath = bound?.record.type === "series" && bound.key !== key && parseLibraryPath(bound.key)?.relative
+        ? wirePath(bound.key)
+        : undefined;
       const relative = wirePath(key);
       const { poster, wide } = await fileArtwork(key, relative);
       const identity: ResumeIdentity | undefined = bound && (bound.record.type === "movie" || bound.record.type === "series")
@@ -415,6 +424,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         addedAt: entry.at, libraryId: entry.libraryId,
         ...(season != null ? { season } : {}),
         ...(episode != null ? { episode } : {}),
+        ...(seriesPath ? { seriesPath } : {}),
         ...(titlePicture ?? poster ? { poster: titlePicture ?? poster } : {}),
         ...(wide ? { wide } : {}),
       };

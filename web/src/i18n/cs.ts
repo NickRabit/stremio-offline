@@ -901,6 +901,7 @@ export const cs: Catalog = {
   "library.moved": "Přesunuto.",
   "library.copied": "Zkopírováno.",
   "library.selectMode": "Vybrat položky",
+  "library.titleDetail": "Detail titulu",
   "library.selectItem": "Vybrat {name}",
   "library.selectedCount": "Vybráno: {count}",
   "library.bulkItems": "{count} položek",

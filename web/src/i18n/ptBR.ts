@@ -865,6 +865,7 @@ export const ptBR: Catalog = {
   "library.moved": "Movido.",
   "library.copied": "Copiado.",
   "library.selectMode": "Selecione itens",
+  "library.titleDetail": "Detalhes do título",
   "library.selectItem": "Selecione {name}",
   "library.selectedCount": "{count} selecionados",
   "library.bulkItems": "{count} itens",

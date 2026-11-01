@@ -125,6 +125,23 @@ test("the episode number and the title split out of the file name", () => {
   assert.deepEqual(parseEpisode("Bonus.mkv"), { episode: null, title: "Bonus" });
 });
 
+test("describePath recognizes an episode tag behind the show title", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-episode-numbers-"));
+  const directory = path.join(root, "Show", "04 serie");
+  try {
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "Show - S04E08 - Cut.mp4"), "x");
+
+    const item = await describePath(root, "Show/04 serie/Show - S04E08 - Cut.mp4");
+
+    assert.equal(item?.kind, "file");
+    assert.equal(item?.season, 4);
+    assert.equal(item?.episode, 8);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("several files in one folder are one item, not several", () => {
   // Exactly the case where the folder showed up twice: once per file.
   const library = buildLibrary([

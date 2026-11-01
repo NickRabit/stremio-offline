@@ -538,10 +538,11 @@ export async function describePath(root: string, relative: string, exclude?: Rea
     };
   }
   if (!isVideo(name)) return undefined;
-  const { episode, title } = parseEpisode(name);
+  const { title } = parseEpisode(name);
+  const numbers = numberedEpisode(relative);
   return {
     kind: "file", path: relative, label: title || name.replace(/\.[^.]+$/, ""),
-    season: parseSeason(posixBase(posixDir(relative))), episode,
+    season: numbers?.season ?? null, episode: numbers?.episode ?? null,
     size: info.size, modified: info.mtime.toISOString(),
   };
 }

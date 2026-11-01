@@ -13,7 +13,7 @@ import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { LocalLibraryDetail, type AlternativePlay } from "./LocalLibraryDetail";
 import { EpisodePicker } from "./EpisodePicker";
-import { episodeName, nextEpisode, useLocalSeries } from "./LocalSeriesDetail";
+import { chosenEpisode as chosenLocalEpisode, episodeName, useLocalSeries } from "./LocalSeriesDetail";
 import { DetailDescription, DetailHero } from "./DetailHero";
 import { folderTitle, LibraryItem, LibraryItemMenu, rowDescription } from "./library-item";
 import { LibraryTile } from "./library-tile";
@@ -283,9 +283,11 @@ export function App() {
    *  sat, so Back returns to the exact spot. */
   const [localDetail, setLocalDetail] = useState<{ item: TreeItem } | null>(null);
   const [localSeries, setLocalSeries] = useState<Extract<TreeItem, { kind: "folder" }> | null>(null);
-  const [localSeriesEpisode, setLocalSeriesEpisode] = useState<string | null>(null);
+  const [localSeriesEpisode, setLocalSeriesEpisode] = useState<{ path?: string; season?: number; episode?: number } | null>(null);
   const [localSeriesPickerOpen, setLocalSeriesPickerOpen] = useState(false);
   const [localSeriesSeason, setLocalSeriesSeason] = useState<number | null>(null);
+  const [localFolderView, setLocalFolderView] = useState<string | null>(null);
+  const [localSeriesRefresh, setLocalSeriesRefresh] = useState(0);
   const localCrumbsRef = useCrumbsAtEnd<HTMLElement>(`${browsePath}|${localDetail?.item.path ?? ""}`);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
   const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series"; paths?: string[]; copy?: boolean } | null>(null);
@@ -535,24 +537,48 @@ export function App() {
     } catch (error) { fail(error); }
     finally { setResumeBusy(false); setResumeLoadingMore(false); }
   };
+  const openLocalSeriesAt = (
+    seriesPath: string,
+    name: string,
+    options: { episodePath?: string; episode?: { season: number; episode: number }; fromFavorites?: boolean; row?: Extract<TreeItem, { kind: "folder" }> } = {},
+  ) => {
+    navigated.current = true;
+    const slash = seriesPath.lastIndexOf("/");
+    const stub: Extract<TreeItem, { kind: "folder" }> = options.row ?? {
+      kind: "folder", path: seriesPath, name, fileCount: 0, size: 0,
+      match: "matched", titleType: "series",
+    };
+    setBrowseQuery("");
+    setFromFavorites(options.fromFavorites ?? false);
+    setMenuFor(null);
+    setLocalDetail(null);
+    setLocalFolderView(null);
+    setLocalSeries(stub);
+    setLocalSeriesEpisode(options.episodePath || options.episode ? {
+      ...(options.episodePath ? { path: options.episodePath } : {}),
+      ...(options.episode ? options.episode : {}),
+    } : null);
+    setLocalSeriesPickerOpen(false);
+    setLocalSeriesSeason(options.episode?.season ?? null);
+    setBrowsePath(seriesPath);
+    setRemoteOpen(false);
+    setView("library");
+    if (options.row) return;
+    void api.browse({ path: slash > 0 ? seriesPath.slice(0, slash) : "", query: name, limit: 120 }).then((page) => {
+      const row = page.items.find((entry) => entry.kind === "folder" && entry.path === seriesPath);
+      if (row?.kind === "folder") setLocalSeries((current) => current?.path === row.path ? row : current);
+    }).catch(() => undefined);
+  };
   /** A library star opens the folder or plays the file the way the library does; a catalogue
    *  star opens its detail. */
   const openFavorite = (item: FavoriteLibraryItem) => {
     if (item.itemKind === "folder") {
-      const series: Extract<TreeItem, { kind: "folder" }> | null = item.title?.type === "series" ? {
-        kind: "folder", path: item.path, name: item.label, fileCount: 0, size: 0,
-        ...(item.poster ? { poster: item.poster } : {}), ...(item.wide ? { wide: item.wide } : {}),
-        ...(item.year ? { year: item.year } : {}), match: "matched", titleType: "series", favorite: true,
-      } : null;
-      navigated.current = true; setBrowseQuery(""); setFromFavorites(false); setMenuFor(null);
-      setLocalSeries(series); setBrowsePath(item.path); setView("library");
-      if (series) {
-        const slash = item.path.lastIndexOf("/");
-        void api.browse({ path: slash > 0 ? item.path.slice(0, slash) : "", query: item.label, limit: 120 }).then((page) => {
-          const row = page.items.find((entry) => entry.kind === "folder" && entry.path === item.path);
-          if (row?.kind === "folder") setLocalSeries((current) => current?.path === row.path ? row : current);
-        }).catch(() => undefined);
+      if (item.title?.type === "series") {
+        openLocalSeriesAt(item.path, item.label);
+        return;
       }
+      navigated.current = true; setBrowseQuery(""); setFromFavorites(false); setMenuFor(null);
+      setLocalSeries(null); setLocalFolderView(null); setBrowsePath(item.path); setView("library");
       return;
     }
     void playLocal(item.label, item.path, item.poster);
@@ -1831,6 +1857,17 @@ export function App() {
   // A remote library or another view owns the page: the local detail must not linger behind it.
   useEffect(() => { if (remoteOpen && localDetail) { pendingLocalFocus.current = null; setLocalDetail(null); } }, [remoteOpen]);
   useEffect(() => { if (view !== "library" && localDetail) { pendingLocalFocus.current = null; setLocalDetail(null); } }, [view]);
+  useEffect(() => {
+    const path = localSeries?.path;
+    if (!path) {
+      if (localFolderView) setLocalFolderView(null);
+      return;
+    }
+    if (view !== "library" || remoteOpen || (browsePath !== path && !browsePath.startsWith(`${path}/`))) {
+      setLocalFolderView(null);
+      setLocalSeries(null);
+    }
+  }, [browsePath, view, remoteOpen, localSeries?.path, localFolderView]);
   // The sidebar's Library entry returns to the root, and the root has to sit at the top once its
   // remote and local blocks have reflowed: reinserting the remote block under the scroll anchor
   // used to leave the page partway down. Applied once, after the root DOM is there, so a normal
@@ -1850,17 +1887,14 @@ export function App() {
   }, [localDetail, remoteOpen, view, browsePath, remoteRootsPresent, browse?.path, browseBusy]);
   /** The listing's live row for the open detail, so its favorite and position never go stale. */
   const liveLocalItem = localDetail ? browseItemAt(localDetail.item.path) : null;
-  const openLocalSeries = !localDetail && localSeries?.path === browsePath ? localSeries : null;
+  const localFolderActive = localFolderView !== null && (browsePath === localFolderView || browsePath.startsWith(`${localFolderView}/`));
+  const openLocalSeries = !localDetail && localSeries?.path === browsePath && localFolderView !== localSeries.path ? localSeries : null;
   const liveLocalSeries = openLocalSeries ? browseItemAt(openLocalSeries.path) : null;
-  const localSeriesState = useLocalSeries(openLocalSeries?.path ?? "", localProgressRevision);
-  useEffect(() => {
-    setLocalSeriesEpisode(null);
-    setLocalSeriesPickerOpen(false);
-    setLocalSeriesSeason(null);
-  }, [openLocalSeries?.path]);
-  const seriesEpisode = localSeriesEpisode == null
-    ? nextEpisode(localSeriesState.episodes, localSeriesState.resume)
-    : localSeriesState.episodes.find((file) => file.path === localSeriesEpisode) ?? nextEpisode(localSeriesState.episodes, localSeriesState.resume);
+  const localSeriesWithin = localSeries && (browsePath === localSeries.path || browsePath.startsWith(`${localSeries.path}/`))
+    ? localSeries.path
+    : "";
+  const localSeriesState = useLocalSeries(localSeriesWithin, localProgressRevision + localSeriesRefresh);
+  const seriesEpisode = chosenLocalEpisode(localSeriesState.episodes, localSeriesEpisode, localSeriesState.resume);
   /** A library file carries no watched flag of its own, and the store keeps resume positions only:
    *  a finished film is already dropped by the server. So "seen" for a file is that there is nothing
    *  left to resume, and marking one seen drops the position it kept. */
@@ -2847,6 +2881,14 @@ export function App() {
    *  card on its own only shows the detail. */
   const homeOpen = (card: HomeCard, autoplay = false) => {
     if (card.kind === "remote") { openRemoteCard(card); return; }
+    if ((card.kind === "resume-file" || card.kind === "completed" || card.kind === "recent") && card.seriesPath) {
+      const name = card.seriesPath.slice(card.seriesPath.lastIndexOf("/") + 1);
+      openLocalSeriesAt(card.seriesPath, name, {
+        episodePath: card.path,
+        ...(card.season != null && card.episode != null ? { episode: { season: card.season, episode: card.episode } } : {}),
+      });
+      return;
+    }
     // A catalogue card opens the shared detail: the same body the libraries use, over this page.
     if (card.kind === "resume-file" && card.identity) {
       openCatalogueDetail({ type: card.identity.type, id: card.identity.id, name: card.title,
@@ -3421,7 +3463,7 @@ export function App() {
 
   const localLibraryDetailProps = (
     item: TreeItem,
-    options: { live?: TreeItem | null; episodes?: ReactNode; favorite?: boolean; favoritePath?: string } = {},
+    options: { live?: TreeItem | null; episodes?: ReactNode; favorite?: boolean; favoritePath?: string; onOpenFolder?: () => void } = {},
   ) => {
     const progress = options.live?.kind === "file" ? options.live.progress : item.kind === "file" ? item.progress : undefined;
     const favoritePath = options.favoritePath ?? item.path;
@@ -3434,7 +3476,10 @@ export function App() {
       onToggleFavorite: (favorite: boolean) => void toggleFavorite(favoritePath, favorite),
       onResetProgress: (path: string) => forgetWatched(path),
       onToggleWatched: (path: string) => void markLocalWatched(path),
-      onOpenFolder: () => { if (item.kind === "folder") goLocalFolder(item.path); },
+      onOpenFolder: options.onOpenFolder ?? (() => {
+        if (item.kind === "folder") goLocalFolder(item.path);
+        else revealInLibrary(item.path);
+      }),
       uiLanguage: settings.uiLanguage,
       secureMode: settings.secureMode,
       onTrailer: setTrailerOpen,
@@ -3762,7 +3807,11 @@ export function App() {
             {!browsePath.startsWith(":") && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
               <ChevronRight/>
               {/* Segment zero is a library id; the id is never shown. */}
-              <button disabled={index === all.length - 1 && !localDetail} onClick={() => goLocalFolder(all.slice(0, index + 1).join("/"))}>{index === 0 ? libraries.find((library) => library.id === part)?.name ?? part : part}</button>
+              <button
+                aria-current={index === all.length - 1 && openLocalSeries ? "page" : undefined}
+                disabled={index === all.length - 1 && !localDetail}
+                onClick={() => goLocalFolder(all.slice(0, index + 1).join("/"))}
+              >{index === 0 ? libraries.find((library) => library.id === part)?.name ?? part : part}</button>
             </span>)}
             {localDetail && <span>
               <ChevronRight/>
@@ -3798,6 +3847,12 @@ export function App() {
             </div></div>
             {/* What a folded header keeps: where the tiles stand, the tools, and the way back. */}
             <div className="browse-keep">
+            {localFolderActive && localSeries && !localDetail && <button className="title-detail-toggle" aria-label={t("library.titleDetail")} title={t("library.titleDetail")} onClick={() => {
+              setMenuFor(null);
+              setLocalFolderView(null);
+              setBrowsePath(localSeries.path);
+              setLocalSeriesRefresh((value) => value + 1);
+            }}><Info/><span>{t("library.titleDetail")}</span></button>}
             {!libraryList && !localDetail && !openLocalSeries && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
             <div className="library-maintenance" onKeyDown={(event) => {
               if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
@@ -3884,7 +3939,7 @@ export function App() {
                   title: episodeName(file),
                 }))}
                 selectedKey={seriesEpisode.path}
-                onPick={setLocalSeriesEpisode}
+                onPick={(path) => setLocalSeriesEpisode({ path })}
                 open={localSeriesPickerOpen}
                 onOpenChange={setLocalSeriesPickerOpen}
                 loading={false}
@@ -3892,6 +3947,10 @@ export function App() {
                 onSeason={setLocalSeriesSeason}/>,
               favorite: liveLocalSeries?.favorite ?? openLocalSeries.favorite ?? false,
               favoritePath: openLocalSeries.path,
+              onOpenFolder: () => {
+                setMenuFor(null);
+                setLocalFolderView(openLocalSeries.path);
+              },
             })}/> : null : <>
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
@@ -3918,9 +3977,9 @@ export function App() {
                       // A folder matched to one movie holds that title's versions, so it opens the
                       // detail; any other folder keeps browsing its own contents.
                       if (item.match === "matched" && item.titleType === "movie") { openLocalDetail(item); return; }
-                      if (item.match === "matched" && item.titleType === "series") {
-                        setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites);
-                        setLocalSeries(item); setBrowsePath(item.path); return;
+                      if (item.match === "matched" && item.titleType === "series" && !localFolderActive) {
+                        openLocalSeriesAt(item.path, item.name, { fromFavorites: browsePath === ":favorites" || fromFavorites, row: item });
+                        return;
                       }
                       setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path);
                     }}
@@ -3933,7 +3992,7 @@ export function App() {
                       <i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}
                     </>}
                     title={folderTitle(item)} meta={folderMeta(item)} description={rowDescription(item)}
-                    action={item.match === "matched" && (item.titleType === "movie" || item.titleType === "series")
+                    action={item.match === "matched" && (item.titleType === "movie" || (item.titleType === "series" && !localFolderActive))
                       ? <>{t("home.openTitle")}<ChevronRight/></> : <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}

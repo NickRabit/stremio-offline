@@ -58,7 +58,7 @@ import { createMaintenance } from "./maintenance.js";
 import { createShutdown, installSignalHandlers } from "./server-shutdown.js";
 import { switchRerootedRoot } from "./library-admin.js";
 import { starredPath, titleOfPath } from "./favorite-identity.js";
-import { browseMeta, cacheFieldsFromMeta, dropAutomaticInside, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleScanRecordKeys, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, dropAutomaticInside, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleScanRecordKeys, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { probe } from "./probe.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
@@ -1689,7 +1689,12 @@ const describeLibraryPath = async (key: string, read?: WalkRead) => {
       return inside !== undefined && inside !== relative && isPathWithin(inside, relative) ? [{ ...file, relative: inside }] : [];
     })
     : undefined;
-  return describePath(library.root, relative, carveOutsOf(library), videosInside);
+  const item = await describePath(library.root, relative, carveOutsOf(library), videosInside);
+  if (item?.kind !== "file") return item;
+  const records = metaStore.qualifiedMeta();
+  const known = knownTitleEntry(key, records);
+  const numbers = episodeNumberOf(key, ownRecord(key, records), { loose: known?.record.type === "series" });
+  return { ...item, season: numbers?.season ?? null, episode: numbers?.episode ?? null };
 };
 
 /** Thumbnail of one video. Next to the video it is looked up by Jellyfin's naming convention.

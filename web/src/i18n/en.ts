@@ -906,6 +906,7 @@ export const en = {
   "library.moved": "Moved.",
   "library.copied": "Copied.",
   "library.selectMode": "Select items",
+  "library.titleDetail": "Title detail",
   "library.selectItem": "Select {name}",
   "library.selectedCount": "{count} selected",
   "library.bulkItems": "{count} items",
