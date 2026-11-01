@@ -211,13 +211,13 @@ object Streams {
       streams.firstOrNull { it.stableKey == key }
     }?.let { return it }
     val playable = streams.filter { it.playable }
-    // A copy already in a library is played before anything the rules would pick.
-    playable.firstOrNull { isLocalStream(it) }?.let { return it }
     if (ruleId.isNullOrEmpty() || playable.none { it.rules[ruleId] != null }) {
       return playable.firstOrNull() ?: streams.firstOrNull()
     }
+    // A copy already in a library is the last resort when the rule leaves nothing else to start.
     return playable.firstOrNull { it.rules[ruleId]?.status == "meets" }
       ?: playable.firstOrNull { it.rules[ruleId]?.status == "unverified" }
+      ?: playable.firstOrNull { isLocalStream(it) }
   }
 
   /** The row Play acts on. An explicit pick wins. A remembered automatic row that breaks [ruleId]

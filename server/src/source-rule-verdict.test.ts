@@ -395,7 +395,7 @@ test("a read local copy breaks a language rule only by the language its tracks n
   assert.equal(ruleVerdicts(czechOnly, [english]).get(english.sourceId)!.status, "breaks");
 });
 
-test("a local copy that breaks the rules still ranks ahead of sources that meet them", () => {
+test("a read local copy outside the rule's resolution says so", () => {
   const local = listedLocalCopyEvidence({ key: "lib_00000001/movie.webm", size: 10 }, 0, "movie.webm", {
     info: { container: "webm", video: { codec: "vp9", width: 160, height: 120 }, audioTracks: [], subtitleTracks: [] },
     subtitleSidecars: [],
@@ -405,5 +405,4 @@ test("a local copy that breaks the rules still ranks ahead of sources that meet 
   const localVerdict = verdicts.get(local.sourceId)!;
   assert.equal(localVerdict.status, "breaks");
   assert.deepEqual(localVerdict.reasons, ["resolutionLow"]);
-  assert.equal(localVerdict.rank[1], 0, "ranked as if it met the rules");
 });

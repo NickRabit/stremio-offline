@@ -920,6 +920,26 @@ describe("LibraryTitleDetail stored source", () => {
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
   });
 
+  it("opens a library file's detail on the file even when a row beside it passes the rule", () => {
+    const file = { ...local("Films/Heat.mkv", "Heat.mkv", 183_000_000),
+      rules: { balanced: { profileId: "balanced", status: "breaks" as const, reasons: ["resolutionLow" as const], rank: [0, 2] } } };
+    const other = { ...addon("other", "OTHER", 950_000_000),
+      rules: { balanced: { profileId: "balanced", status: "meets" as const, reasons: [], rank: [1, 0] } } };
+    const { onPlay } = render({ sources: [file, other], preferLocalCopy: true, sourceProfiles: qualityProfiles, defaultSort: "rule:balanced" });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "lib:Films/Heat.mkv" }));
+  });
+
+  it("lets the rule pick past a breaking library copy anywhere else", () => {
+    const file = { ...local("Films/Heat.mkv", "Heat.mkv", 183_000_000),
+      rules: { balanced: { profileId: "balanced", status: "breaks" as const, reasons: ["resolutionLow" as const], rank: [0, 2] } } };
+    const other = { ...addon("other", "OTHER", 950_000_000),
+      rules: { balanced: { profileId: "balanced", status: "meets" as const, reasons: [], rank: [1, 0] } } };
+    const { onPlay } = render({ sources: [file, other], sourceProfiles: qualityProfiles, defaultSort: "rule:balanced" });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "other" }));
+  });
+
   it("keeps a media server item on its own version when a row beside it passes the rule", () => {
     const own = { ...remote("own", "OWN", 183_000_000),
       rules: { balanced: { profileId: "balanced", status: "breaks" as const, reasons: ["resolutionLow" as const], rank: [1] } } };
