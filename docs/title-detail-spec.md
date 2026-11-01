@@ -120,6 +120,9 @@ query, already submitted (Search everywhere, or the older catalogue search
 where the instance runs that one). Selecting a similar title opens its
 catalogue full detail; Back returns to the title the viewer came from: the
 app keeps a stack of up to ten previous catalogue titles.
+Opened from a Jellyfin/Emby title, that catalogue detail asks the
+media-server libraries for their copies at once and lets one lead Play (the
+last version played and the active source rule still come first).
 
 On the web every series reads like the catalogue's series detail: a show
 folder in a local library and a Jellyfin/Emby series open on the episode in

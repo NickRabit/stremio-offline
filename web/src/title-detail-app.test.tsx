@@ -87,6 +87,7 @@ let libraryItems: Array<typeof heatFile>;
 let remoteLibraries: Array<typeof jellyLibrary>;
 let downloadMode: "idle" | "downloading" | "completed" | "unauthorized";
 let extrasCalls: string[];
+let remoteStreamCalls: string[];
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -102,6 +103,7 @@ beforeEach(() => {
   remoteLibraries = [];
   downloadMode = "idle";
   extrasCalls = [];
+  remoteStreamCalls = [];
   vi.stubGlobal("matchMedia", () => ({
     matches: false, media: "", onchange: null,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -138,6 +140,14 @@ beforeEach(() => {
       return json({ items: [jelly], total: 1, asOf: "2026-01-01T00:00:00Z", stale: false, capabilities: remoteCapabilities });
     }
     if (/^\/api\/remote-libraries\/[^/]+\/preview$/.test(path)) return json({ posters: [] });
+    if (/^\/api\/remote-libraries\/[^/]+\/streams\/[^/]+\/[^/]+$/.test(path)) {
+      remoteStreamCalls.push(path);
+      return json({ streams: [{
+        sourceId: "remote:ms6", kind: "remote", playable: true, name: "Jellyfin copy", provider: "jellyfin",
+        libraryId: "rlib_a", libraryName: "Films", behaviorHints: { filename: "Other.Film.Jellyfin.mkv" },
+        remoteItem: { libraryId: "rlib_a", itemId: "other-film", mediaSourceId: "ms6", progressKey: "jellyfin:ms6" },
+      }] });
+    }
     if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+\/sources$/.test(path)) return json({ streams: [] });
     if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/.test(path)) {
       return json({ key: "k", position: 0, duration: 0, favorite: false, watched: false });
@@ -356,6 +366,36 @@ describe("title detail from the catalogue", () => {
     await act(async () => { catalogueSection()!.querySelector<HTMLButtonElement>(".library-back")!.click(); });
     await until(() => catalogueSection() === null && host.querySelector(".remote-detail h2")?.textContent === "Jelly Movie");
     expect(host.querySelector(".library-page")?.hasAttribute("hidden")).toBe(false);
+  });
+
+  it("lets the media server's copy lead Play for a similar title opened from a remote movie", async () => {
+    remoteLibraries = [jellyLibrary];
+    await openCatalog();
+    await clickNav("Library");
+    await until(() => host.querySelector(".remote-libraries .library-open") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>(".remote-libraries .library-open")!.click(); });
+    await until(() => host.querySelector("[data-remote-id='mov1'] .library-open") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>("[data-remote-id='mov1'] .library-open")!.click(); });
+    await until(() => host.querySelector(".remote-detail .related") !== null);
+    expect(remoteStreamCalls).toEqual([]);
+    await act(async () => { host.querySelector<HTMLButtonElement>(".remote-detail .related")!.click(); });
+    await until(() => detailTitle() === "Other Film");
+    await until(() => catalogueSection()?.querySelector(".detail-tech")?.textContent?.includes("Other.Film.Jellyfin.mkv") === true);
+    expect(remoteStreamCalls).toEqual(["/api/remote-libraries/rlib_a/streams/movie/tt6"]);
+  });
+
+  it("leaves the media server unasked for a similar title opened from a local file", async () => {
+    libraryItems = [heatFile];
+    remoteLibraries = [jellyLibrary];
+    await openCatalog();
+    await clickNav("Library");
+    await until(() => host.querySelector("[data-path='Films/Heat.mkv'] .library-open") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>("[data-path='Films/Heat.mkv'] .library-open")!.click(); });
+    await until(() => host.querySelector(".library-local-detail .related") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>(".library-local-detail .related")!.click(); });
+    await until(() => detailTitle() === "The Town");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(remoteStreamCalls).toEqual([]);
   });
 
   it("asks for extras again after a download lands in a library", async () => {

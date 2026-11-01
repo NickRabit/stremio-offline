@@ -14,7 +14,8 @@ export interface TitleExtrasTarget {
 
 export interface TitleExtrasActionsValue {
   searchPerson: (name: string) => void;
-  openTitle: (title: TitleExtrasTarget) => void;
+  /** `remoteFirst`: opened from a Jellyfin/Emby title, so that server's copy leads Play. */
+  openTitle: (title: TitleExtrasTarget, options?: { remoteFirst?: boolean }) => void;
 }
 
 export const TitleExtrasActions = createContext<TitleExtrasActionsValue>({
@@ -178,11 +179,13 @@ export function peopleInStripOrder(people: TitlePerson[]): TitlePerson[] {
 
 /** Cast, crew and similar titles under the actions. Nothing while there is nothing to show,
  *  and never an error: a failed read looks the same as an empty one. */
-export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer }: {
+export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer, remoteFirst = false }: {
   extras: TitleExtras | null;
   loading: boolean;
   secureMode?: boolean;
   onTrailer?: (trailer: Trailer) => void;
+  /** A similar title opens with the media server's own copy leading Play. */
+  remoteFirst?: boolean;
 }) {
   const { t: translate } = useI18n();
   const actions = useContext(TitleExtrasActions);
@@ -231,7 +234,7 @@ export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer
     </div>}
     {related.length > 0 && <div className="extras-row">
       <h3>{translate("detail.related")}</h3>
-      <div className="extras-strip">{related.map((title) => <RelatedTile key={`${title.type}:${title.id}`} title={title} onOpen={actions.openTitle}/>)}</div>
+      <div className="extras-strip">{related.map((title) => <RelatedTile key={`${title.type}:${title.id}`} title={title} onOpen={(target) => remoteFirst ? actions.openTitle(target, { remoteFirst }) : actions.openTitle(target)}/>)}</div>
     </div>}
   </section>;
 }

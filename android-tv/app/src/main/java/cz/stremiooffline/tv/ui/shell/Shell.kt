@@ -275,7 +275,7 @@ fun Shell(
   fun openRelatedFromUnderlying(related: RelatedTitleDto, origin: CatalogReturnOrigin) {
     catalogStack.clear()
     catalogReturnOrigin = origin
-    catalogDetail = catalogStack.detailFor(related)
+    catalogDetail = catalogStack.detailFor(related).copy(preferRemote = origin == CatalogReturnOrigin.Remote)
   }
   LaunchedEffect(Unit) {
     searchEverywhereEnabled = runCatching { api.searchEverywhereEnabled() }.getOrDefault(false)

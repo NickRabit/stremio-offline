@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
+import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
@@ -26,6 +27,7 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -204,5 +206,37 @@ class CatalogRemoteSourcesTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("jellyfin", substring = true)
+  }
+
+  private fun playFromSizeSort(preferRemote: Boolean): PlayTarget {
+    val api = FakeTvApi()
+    api.settingsValue = settings().copy(streamSort = "size-desc")
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Filmy", provider = "jellyfin"))
+    api.remoteMatchValues["rlibA|movie|tt1"] = listOf(
+      remoteStream("a1", "rlibA").copy(behaviorHints = BehaviorHintsDto(videoSize = 2e9)),
+    )
+    api.streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("alpha", "Alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(addonStream("s1").copy(behaviorHints = BehaviorHintsDto(videoSize = 8e9)))
+    val played = mutableListOf<PlayTarget>()
+    compose.setContent {
+      CatalogDetailScreen(api = api, args = movieArgs().copy(preferRemote = preferRemote), imageUrl = { null }, onPlay = { played += it }, onBack = {})
+    }
+    compose.waitUntil(5_000) { api.remoteMatchRequests.contains("rlibA|movie|tt1") }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagCatalogPrimary).performSemanticsAction(SemanticsActions.RequestFocus) { it() }
+    press(Key.DirectionCenter)
+    return played.single()
+  }
+
+  @Test
+  fun `a title opened from a media-server detail plays that server's copy before a larger addon row`() {
+    assertEquals("a1", playFromSizeSort(preferRemote = true).remoteItem?.mediaSourceId)
+  }
+
+  @Test
+  fun `a title opened anywhere else keeps the sort's own first row`() {
+    val target = playFromSizeSort(preferRemote = false)
+    assertEquals(null, target.remoteItem)
+    assertEquals("s1", target.sourceId)
   }
 }

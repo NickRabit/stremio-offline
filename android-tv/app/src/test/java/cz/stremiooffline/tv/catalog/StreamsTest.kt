@@ -246,6 +246,15 @@ class StreamsTest {
   }
 
   @Test
+  fun `remoteFirst lets a media-server version lead Play only when asked`() {
+    val jelly = remote("ms1", "rlib_a", "film", "Jellyfin copy")
+    val rows = listOf(http, jelly, torrent)
+    assertEquals("http", Streams.pickDefaultStream(Streams.remoteFirst(rows, false))?.name)
+    assertEquals("Jellyfin copy", Streams.pickDefaultStream(Streams.remoteFirst(rows, true))?.name)
+    assertEquals(listOf("Jellyfin copy", "http", "torrent"), Streams.remoteFirst(rows, true).map { it.name })
+  }
+
+  @Test
   fun `pickDefaultStream prefers a playable HTTP source over a torrent`() {
     assertEquals("http", Streams.pickDefaultStream(listOf(torrent, http))?.name)
     assertEquals("torrent", Streams.pickDefaultStream(listOf(torrent))?.name)
