@@ -58,7 +58,6 @@ import cz.stremiooffline.tv.ui.library.RemoteErrorKind
 import cz.stremiooffline.tv.ui.library.TagRemoteLoadMore
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesOverview
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesPrimary
-import cz.stremiooffline.tv.ui.library.TagRemoteSeriesBulk
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesToLibrary
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesProgress
 import cz.stremiooffline.tv.ui.library.TagRemoteSeriesSources
@@ -249,13 +248,15 @@ internal fun RemoteSeriesContent(
             )
           }
         },
+        // With bulk available the action opens the panel that also offers this one episode.
         toLibrary = selectedItem?.takeIf { canCopy }?.let {
           DetailAction(
             label = stringResource(R.string.save_to_library),
             icon = DownloadIcon,
             tag = TagRemoteSeriesToLibrary,
             enabled = !copyBusy,
-            onClick = { onCopy(it) },
+            onClick = { if (canBulk) onBulk() else onCopy(it) },
+            modifier = Modifier.focusRequester(bulkFocus),
           )
         },
         favourite = null,
@@ -276,11 +277,7 @@ internal fun RemoteSeriesContent(
           .onPreviewKeyEvent { event ->
             if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
               runCatching {
-                when {
-                  canBulk -> bulkFocus.requestFocus()
-                  videos.any { it.season != null } -> ui.seasons.requestFocus()
-                  else -> ui.episode.requestFocus()
-                }
+                (if (videos.any { it.season != null }) ui.seasons else ui.episode).requestFocus()
               }.isSuccess
             } else {
               false
@@ -289,16 +286,6 @@ internal fun RemoteSeriesContent(
       )
       ui.versionPick?.takeIf { ui.versionsFor == selectedItem?.id }?.let { row ->
         TitleTechBlock(row, Modifier.testTag(TagRemoteSeriesTech), versionCount = ui.versions?.size ?: 0)
-      }
-      if (canBulk) {
-        FocusButton(
-          text = stringResource(R.string.series_bulk_remote_button),
-          onClick = onBulk,
-          modifier = Modifier
-            .fillMaxWidth(0.36f)
-            .focusRequester(bulkFocus)
-            .testTag(TagRemoteSeriesBulk),
-        )
       }
       when {
         loading -> Box(Modifier.fillMaxWidth().height(260.dp)) { ShimmerCards() }
@@ -333,12 +320,7 @@ internal fun RemoteSeriesContent(
           focusRequester = ui.episode,
           seasonFocus = ui.seasons,
           extras = ui.extras,
-          onUpFromSeasons = {
-            runCatching { (if (canBulk) bulkFocus else ui.primary).requestFocus() }.isSuccess
-          },
-          onUpFromEpisodes = {
-            runCatching { (if (canBulk) bulkFocus else ui.seasons).requestFocus() }.isSuccess
-          },
+          onUpFromSeasons = { runCatching { ui.primary.requestFocus() }.isSuccess },
           onEpisodeFocused = { video -> ui.selectedEpisodeId = video.id },
           onNearEnd = onLoadMore,
           onMenu = if (canCopy) { video -> items.firstOrNull { it.id == video.id }?.let(onCopy) } else null,

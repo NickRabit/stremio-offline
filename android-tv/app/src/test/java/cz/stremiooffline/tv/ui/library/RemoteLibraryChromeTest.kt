@@ -16,6 +16,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performKeyInput
@@ -331,11 +332,11 @@ class RemoteLibraryChromeTest {
     compose.onNodeWithTag(remoteItemTag("e1")).assertExists()
     // No section heading beside it: this screen is not the Library section's own page.
     compose.onNodeWithTag(TagLibraryHeaderTitle).assertDoesNotExist()
-    compose.onNodeWithTag(TagRemoteSeriesBulk).assertDoesNotExist()
+    compose.onNodeWithText("Copy to library…").assertDoesNotExist()
   }
 
   @Test
-  fun `a standalone series opens the prepared panel with its remote origin`() {
+  fun `to library on a standalone series opens the prepared panel with its remote origin`() {
     val api = FakeTvApi().apply {
       remoteEpisodesPages["s1|"] = RemoteItemsPageDto(items = listOf(folder("e1", "Pilot")), total = 1)
       librariesValue = listOf(cz.stremiooffline.tv.data.LibraryDto("shows", "Shows", "series", writable = true))
@@ -369,11 +370,14 @@ class RemoteLibraryChromeTest {
     compose.waitUntil(5_000) { api.remoteEpisodesRequests.isNotEmpty() }
     compose.waitForIdle()
 
-    compose.onNodeWithTag(TagRemoteSeriesBulk)
+    // One entry point: no separate copy button beside the actions.
+    compose.onNodeWithText("Copy to library…").assertDoesNotExist()
+    compose.onNodeWithTag(TagRemoteSeriesToLibrary)
       .assertExists()
       .performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(cz.stremiooffline.tv.ui.catalog.TagSeriesDownloadPanel).assertExists()
+    compose.onNodeWithTag(cz.stremiooffline.tv.ui.catalog.TagSeriesDownloadThisEpisode).assertExists()
     compose.waitUntil(5_000) { api.bulkPrepareRequests.isNotEmpty() }
 
     val origin = api.bulkPrepareRequests.single().origin
@@ -384,13 +388,24 @@ class RemoteLibraryChromeTest {
     host!!.onBackPressedDispatcher.onBackPressed()
     compose.waitUntil(5_000) {
       compose.onAllNodes(isFocused()).fetchSemanticsNodes()
-        .any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == TagRemoteSeriesBulk }
+        .any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == TagRemoteSeriesToLibrary }
     }
-    compose.onNodeWithTag(TagRemoteSeriesBulk).assertIsFocused()
+    compose.onNodeWithTag(TagRemoteSeriesToLibrary).assertIsFocused()
 
-    focusOn(remoteItemTag("e1"))
-    press(Key.DirectionUp)
-    compose.onNodeWithTag(TagRemoteSeriesBulk).assertIsFocused()
+    // This episode leaves the panel for the exact single-episode copy.
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) {
+      compose.onAllNodesWithTag(cz.stremiooffline.tv.ui.catalog.TagSeriesDownloadThisEpisode)
+        .fetchSemanticsNodes().isNotEmpty()
+    }
+    compose.onNodeWithTag(cz.stremiooffline.tv.ui.catalog.TagSeriesDownloadThisEpisode)
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    val sourcesBefore = api.remoteSourcesRequests.size
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+    compose.onNodeWithTag(cz.stremiooffline.tv.ui.catalog.TagSeriesDownloadPanel).assertDoesNotExist()
+    compose.waitUntil(5_000) { api.remoteSourcesRequests.size > sourcesBefore }
+    assertEquals("rlibA" to "e1", api.remoteSourcesRequests.last())
   }
 
   @Test

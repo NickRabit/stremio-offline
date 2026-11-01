@@ -88,6 +88,7 @@ import cz.stremiooffline.tv.ui.catalog.nativeAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
+import cz.stremiooffline.tv.ui.catalog.episodeLine
 import cz.stremiooffline.tv.ui.catalog.BulkOrigin
 import cz.stremiooffline.tv.ui.catalog.SeriesDownloadPanel
 import cz.stremiooffline.tv.ui.catalog.SidePanel
@@ -126,7 +127,6 @@ const val TagRemoteSeriesToLibrary = "remote_series_to_library"
 const val TagRemoteSeriesStartOver = "remote_series_start_over"
 const val TagRemoteSeriesSources = "remote_series_sources"
 const val TagRemoteSeriesWatched = "remote_series_watched"
-const val TagRemoteSeriesBulk = "remote_series_bulk"
 const val TagRemoteBrowserSeriesBulk = "remote_browser_series_bulk"
 const val TagRemoteSeriesProgress = "remote_series_progress"
 const val TagRemoteSeriesTech = "remote_series_tech"
@@ -979,6 +979,15 @@ internal fun RemoteSeriesScreen(
         onClose = {
           bulkOpen = false
         },
+        onThisEpisode = selectedItem?.let { item ->
+          {
+            // The single-episode copy owns focus from here, so closing the panel must not pull it back.
+            bulkWasOpen = false
+            bulkOpen = false
+            openCardCopy(item)
+          }
+        },
+        thisEpisodeLabel = selectedVideo?.let(::episodeLine),
       )
     }
   }
@@ -998,6 +1007,8 @@ private fun RemoteSeriesBulkHost(
   loadDestinations: suspend () -> List<LibraryDto>,
   onQueued: (added: Int, skipped: Int) -> Unit,
   onClose: () -> Unit,
+  onThisEpisode: (() -> Unit)? = null,
+  thisEpisodeLabel: String? = null,
 ) {
   var data by remember(origin) { mutableStateOf<RemoteBulkPanelData?>(null) }
   var failure by remember(origin) { mutableStateOf<ApiError?>(null) }
@@ -1040,6 +1051,8 @@ private fun RemoteSeriesBulkHost(
       libraries = loaded.libraries,
       onQueued = onQueued,
       onClose = onClose,
+      onThisEpisode = onThisEpisode,
+      thisEpisodeLabel = thisEpisodeLabel,
     )
   } else {
     SidePanel(

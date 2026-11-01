@@ -73,6 +73,7 @@ const val TagSeriesDownloadSourceLibrary = "series_download_source_library"
 const val TagSeriesDownloadSourceCatalogue = "series_download_source_catalogue"
 const val TagSeriesDownloadSourceError = "series_download_source_error"
 const val TagSeriesDownloadSpecials = "series_download_specials"
+const val TagSeriesDownloadThisEpisode = "series_download_this_episode"
 const val TagSeriesDownloadSkipped = "series_download_skipped"
 const val TagSeriesDownloadSkippedBack = "series_download_skipped_back"
 const val TagSeriesDownloadRetry = "series_download_retry"
@@ -104,6 +105,10 @@ internal fun SeriesDownloadPanel(
   onQueued: (added: Int, skipped: Int) -> Unit,
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
+  /** A media-server series offers its selected episode first; that row hands off to the exact
+   *  single-episode copy instead of a rules job. [thisEpisodeLabel] names the episode under it. */
+  onThisEpisode: (() -> Unit)? = null,
+  thisEpisodeLabel: String? = null,
 ) {
   val scope = rememberCoroutineScope()
   val remoteOrigin = origin as? BulkOrigin.Remote
@@ -530,6 +535,8 @@ internal fun SeriesDownloadPanel(
         onSpecials = { includeSpecials = !includeSpecials },
         openingFocus = openingFocus,
         rowFocuses = rowFocuses,
+        onThisEpisode = onThisEpisode,
+        thisEpisodeLabel = thisEpisodeLabel,
       )
       DownloadPanelScreen.Seasons -> SeasonRows(
         seasons = seasons,
@@ -652,6 +659,8 @@ private fun ColumnScope.ScopeRows(
   onSpecials: () -> Unit,
   openingFocus: FocusRequester,
   rowFocuses: MutableMap<String, FocusRequester>,
+  onThisEpisode: (() -> Unit)? = null,
+  thisEpisodeLabel: String? = null,
 ) {
   val selectedPrepared = selected?.let {
     BulkPreparedEpisodeDto(
@@ -683,6 +692,15 @@ private fun ColumnScope.ScopeRows(
       first = false
     }
   } else {
+    if (onThisEpisode != null) {
+      PanelOption(
+        text = stringResource(R.string.tv_download_this_episode),
+        supportingText = thisEpisodeLabel,
+        onClick = onThisEpisode,
+        modifier = Modifier.panelRow(rowFocuses, TagSeriesDownloadThisEpisode, first = true, opening = openingFocus),
+      )
+      first = false
+    }
     val seasonsText = if (prepared) {
       stringResource(R.string.tv_series_bulk_season_picker) + " · " +
         ready(DownloadScope.All, null, null)
