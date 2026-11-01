@@ -32,6 +32,7 @@ const deferred = <T,>() => {
 type Handler = (url: URL, init?: RequestInit) => Response | Promise<Response>;
 let libraries: RemoteLibrary[];
 let browse: Handler;
+let personal: Handler;
 let preview: Handler;
 let sources: Handler;
 let item: Handler;
@@ -46,7 +47,7 @@ let localCopies: Handler;
 let remoteLibraryStreams: Handler;
 let forgetReply: Handler | undefined;
 let playback: Handler;
-const calls = { browse: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[], title: [] as string[] };
+const calls = { browse: [] as URL[], personal: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[], title: [] as string[] };
 const downloadCalls: Array<Record<string, unknown>> = [];
 const deviceCalls: Array<Record<string, unknown>> = [];
 const librarySourceCalls: Array<Record<string, unknown>> = [];
@@ -87,7 +88,7 @@ beforeEach(() => {
   clearTitleExtras();
   clearRemoteMosaicCache();
   FakeIntersectionObserver.live = [];
-  calls.browse = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = []; calls.title = [];
+  calls.browse = []; calls.personal = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = []; calls.title = [];
   downloadCalls.length = 0;
   deviceCalls.length = 0;
   librarySourceCalls.length = 0;
@@ -95,6 +96,7 @@ beforeEach(() => {
   addonCalls.sources = []; addonCalls.streams = []; addonCalls.subtitles = []; addonCalls.local = []; addonCalls.remote = []; addonCalls.progress = []; addonCalls.subtitleSignals = [];
   libraries = [library()];
   browse = () => json(page([]));
+  personal = () => json({ items: [], total: 0 });
   preview = () => json({ posters: [] });
   sources = () => json({ streams: [] });
   item = () => json({ item: movie("m1", "One"), capabilities });
@@ -119,6 +121,7 @@ beforeEach(() => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
     if (path === "/api/remote-libraries") return Promise.resolve(json({ libraries }));
+    if (path === "/api/remote-libraries/personal") { calls.personal.push(url); return Promise.resolve(personal(url, init)); }
     if (path === "/api/downloads" && init?.method === "POST") {
       downloadCalls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       return Promise.resolve(downloadReply ? downloadReply(url, init) : json({ id: "job1", status: "queued" }, 201));
@@ -314,22 +317,113 @@ describe("RemoteLibraryBrowser listing", () => {
     expect(host.querySelector<HTMLDivElement>(".browse-scroll")!.scrollTop).toBe(760);
   });
 
-  it("keeps series and episode offsets separate when returning through breadcrumbs", async () => {
+  it("opens a series on its resumed episode with the picker and split Play", async () => {
     const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
-    const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", providerIds: {} };
-    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
-    item = (url) => json({ item: url.pathname.endsWith("/e1") ? episode : show, capabilities });
+    const pilot: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} };
+    const second: RemoteItem = { id: "e2", name: "Second", type: "episode", season: 1, episode: 2, seriesId: "ser1", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [pilot, second] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/e2") ? second : pilot, capabilities });
+    personal = () => json({ items: [{
+      kind: "remote", key: "remote:e2", title: "Second", provider: "jellyfin", libraryId: "rlib_a",
+      libraryName: "Music videos", itemId: "e2", itemType: "episode", season: 1, episode: 2,
+      progress: { position: 60, duration: 600 }, updatedAt: "2026-01-01T00:00:00.000Z",
+    }], total: 1 });
+    sources = (url) => json({ streams: url.pathname.endsWith("/e2/sources") ? [
+      { sourceId: "e2-hd", kind: "remote", playable: true, name: "1080p", provider: "jellyfin" },
+      { sourceId: "e2-sd", kind: "remote", playable: true, name: "720p", provider: "jellyfin" },
+    ] : [] });
     await openRootLibrary();
-    const pane = host.querySelector<HTMLDivElement>(".browse-scroll")!;
-    pane.scrollTop = 760;
+
     await click(tileButtons()[0]!);
-    pane.scrollTop = 340;
+    await flush();
+
+    expect(calls.personal).toHaveLength(1);
+    expect(calls.personal[0]!.searchParams.get("filter")).toBe("resume");
+    expect(calls.personal[0]!.searchParams.get("limit")).toBe("60");
+    expect(host.querySelector(".library-title-detail .hero h2")!.textContent).toBe("Show");
+    expect(host.querySelector(".library-title-detail .hero .meta-line")!.textContent).toBe("S1 E2");
+    expect(host.querySelector(".episode-current")!.textContent).toContain("Second");
+    expect(host.querySelector(".library-detail-play .split-button .primary")!.textContent).toContain("Play");
+    expect(calls.sources.at(-1)!.pathname).toBe("/api/remote-libraries/rlib_a/items/e2/sources");
+  });
+
+  it("loads the remaining episode pages when the picker opens and picking another episode loads its versions", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const pilot: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} };
+    const second: RemoteItem = { id: "e2", name: "Second", type: "episode", season: 1, episode: 2, seriesId: "ser1", providerIds: {} };
+    browse = (url) => {
+      if (url.searchParams.get("type") !== "episode") return json(page([show]));
+      return url.searchParams.get("cursor") === "next"
+        ? json(page([pilot, second]))
+        : json(page([pilot], { cursor: "next", total: 2 }));
+    };
+    item = (url) => json({ item: url.pathname.endsWith("/e2") ? second : pilot, capabilities });
+    sources = () => json({ streams: [] });
+    await openRootLibrary();
     await click(tileButtons()[0]!);
-    pane.scrollTop = 0;
-    await click(byText(".crumbs button", "Show")!);
-    expect(pane.scrollTop).toBe(340);
-    await click(byText(".crumbs button", "Music videos")!);
-    expect(pane.scrollTop).toBe(760);
+    await flush();
+    const reads = calls.browse.length;
+
+    await click(host.querySelector(".episode-current button")!);
+    await flush();
+
+    expect(calls.browse).toHaveLength(reads + 1);
+    expect(calls.browse.at(-1)!.searchParams.get("cursor")).toBe("next");
+    await click(byText(".episode-list button", "Second")!);
+    await flush();
+    expect(host.querySelector(".library-title-detail .hero .meta-line")!.textContent).toBe("S1 E2");
+    expect(calls.sources.at(-1)!.pathname).toBe("/api/remote-libraries/rlib_a/items/e2/sources");
+  });
+
+  it("skips the first episode when itemStates marks it watched", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const pilot: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} };
+    const second: RemoteItem = { id: "e2", name: "Second", type: "episode", season: 1, episode: 2, seriesId: "ser1", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [pilot, second] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/e2") ? second : url.pathname.endsWith("/e1") ? pilot : show, capabilities });
+    state = (url) => json({
+      key: "k", position: 0, duration: 0, favorite: false,
+      watched: url.pathname.endsWith("/e1/state"),
+    });
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+    await flush();
+    expect(host.querySelector('.library-detail-actions button[aria-label="Mark unwatched"]')).not.toBeNull();
+    await click(host.querySelector(".library-back")!);
+    await click(tileButtons()[0]!);
+    await flush();
+
+    expect(host.querySelector(".library-title-detail .hero .meta-line")!.textContent).toBe("S1 E2");
+    expect(host.querySelector(".episode-current")!.textContent).toContain("Second");
+  });
+
+  it("backs out of an episode to the listing the series was opened from", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const pilot: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [pilot] : [show]));
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+
+    await click(host.querySelector(".library-back")!);
+
+    expect(host.querySelector(".library-title-detail")).toBeNull();
+    expect(host.querySelector('.browse-item[data-remote-id="ser1"]')).not.toBeNull();
+  });
+
+  it("opens a Continue watching episode with its series picker", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const pilot: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} };
+    const second: RemoteItem = { id: "e2", name: "Second", type: "episode", season: 1, episode: 2, seriesId: "ser1", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [pilot, second] : []));
+    item = (url) => json({ item: url.pathname.endsWith("/ser1") ? show : pilot, capabilities });
+    await render({ initialTarget: { libraryId: "rlib_a", itemId: "e1", nonce: 1 } });
+    await flush();
+
+    expect(host.querySelector(".library-title-detail .hero h2")!.textContent).toBe("Show");
+    expect(host.querySelector(".library-title-detail .hero .meta-line")!.textContent).toBe("S1 E1");
+    expect(host.querySelector(".episode-current")!.textContent).toContain("Pilot");
   });
 
   it("restores every loaded root row, cursor, offset and folder focus after a nested return", async () => {
@@ -610,31 +704,25 @@ describe("RemoteLibraryBrowser automatic pagination and navigation", () => {
     expect(calls.browse.at(-1)!.searchParams.get("parentId")).toBe("f1");
   });
 
-  it.each([false, true])("retries a canceled page after returning from detail (episodes=%s)", async (episodeList) => {
+  it("retries a canceled listing page after returning from detail", async () => {
     vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
     const held = deferred<Response>();
-    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
-    const first = episodeList
-      ? { id: "e1", name: "Pilot", type: "episode" as const, season: 1, episode: 1, providerIds: {} }
-      : movie("m1", "One");
     let nextRequests = 0;
     let canceledSignal: AbortSignal | null | undefined;
     browse = (url, init) => {
-      if (episodeList && url.searchParams.get("type") !== "episode") return json(page([show]));
       if (url.searchParams.get("cursor") === "c1") {
         nextRequests += 1;
         if (nextRequests === 1) { canceledSignal = init?.signal; return held.promise; }
         return json(page([movie("m2", "Two")], { total: 2 }));
       }
-      return json(page([first], { total: 2, cursor: "c1" }));
+      return json(page([movie("m1", "One")], { total: 2, cursor: "c1" }));
     };
     await openRootLibrary();
-    if (episodeList) await click(tileButtons()[0]!);
     await act(async () => { sentinels().at(-1)!.fire(); });
     expect(nextRequests).toBe(1);
     await click(tileButtons()[0]!);
     expect(canceledSignal?.aborted).toBe(true);
-    await click(byText(".crumbs button", episodeList ? "Show" : "Music videos")!);
+    await click(byText(".crumbs button", "Music videos")!);
     expect(host.querySelector<HTMLButtonElement>(".load-more button")!.disabled).toBe(false);
     await act(async () => { sentinels().at(-1)!.fire(); });
     await flush();
@@ -657,20 +745,20 @@ describe("RemoteLibraryBrowser automatic pagination and navigation", () => {
     expect(calls.browse[1]!.searchParams.get("cursor")).toBe("c1");
   });
 
-  it("shows the item and its series in the crumbs and walks back through them", async () => {
+  it("shows the item and its series in the crumbs and keeps the series crumb on the chosen episode", async () => {
     const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} };
     browse = (url) => url.searchParams.get("type") === "episode"
-      ? json(page([{ id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, providerIds: {} }]))
+      ? json(page([episode]))
       : json(page([show]));
     await openRootLibrary();
-    await click(tileButtons()[0]!);
-    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Library", "Music videos", "Show"]);
     await click(tileButtons()[0]!);
     expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Library", "Music videos", "Show", "S1 E1 · Pilot"]);
     const current = host.querySelector<HTMLButtonElement>('.crumbs button[aria-current="page"]')!;
     expect(current.disabled).toBe(true);
     await click(byText(".crumbs button", "Show")!);
-    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Library", "Music videos", "Show"]);
+    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Library", "Music videos", "Show", "S1 E1 · Pilot"]);
+    expect(host.querySelector(".library-title-detail .hero h2")!.textContent).toBe("Show");
   });
 
   it("hides the root block and reports no roots while a local folder owns the page", async () => {
@@ -778,7 +866,6 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     browse = (url) => url.searchParams.get("type") === "episode" ? json(page([episode])) : json(page([show]));
     await openRootLibrary();
     await click(tileButtons()[0]!);
-    await click(tileButtons()[0]!);
     await flush();
     expect(calls.title).toContain("/api/meta/series/tt7000");
     expect(calls.title.some((path) => path.includes("tt9999"))).toBe(false);
@@ -796,25 +883,27 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     expect(host.querySelector(".remote-libraries")).not.toBeNull();
   });
 
-  it("reads a series' episodes as one more lazy page and groups them by season", async () => {
+  it("reads a series' episodes as one lazy page and shows them in the picker", async () => {
     const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
     browse = (url) => url.searchParams.get("type") === "episode"
       ? json(page([
-        { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, providerIds: {} },
-        { id: "e2", name: "Second", type: "episode", season: 1, episode: 2, providerIds: {} },
+        { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} },
+        { id: "e2", name: "Second", type: "episode", season: 1, episode: 2, seriesId: "ser1", providerIds: {} },
       ]))
       : json(page([show]));
     await openRootLibrary();
     await click(tileButtons()[0]!);
+    await flush();
     const episodes = calls.browse.find((url) => url.searchParams.get("type") === "episode")!;
     expect(episodes.searchParams.get("parentId")).toBe("ser1");
     expect(episodes.searchParams.get("mode")).toBe("titles");
     expect(episodes.searchParams.get("limit")).toBe("60");
-    expect(host.querySelector(".remote-season")!.textContent).toBe("Season 1");
-    expect(host.querySelectorAll(".browse-panel .browse-item")).toHaveLength(2);
+    expect(host.querySelector(".episode-current")!.textContent).toContain("Pilot");
+    await click(host.querySelector(".episode-current button")!);
+    expect(host.querySelectorAll(".episode-list button")).toHaveLength(2);
   });
 
-  it("wraps a series in the full-detail surface and opens its gallery", async () => {
+  it("draws a series without episodes in the shared detail surface and opens its gallery", async () => {
     const onGallery = vi.fn();
     const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {}, poster: "/series-poster.jpg", wide: "/series-wide.jpg" };
     browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [] : [show]));
@@ -822,12 +911,12 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     await click(host.querySelectorAll<HTMLButtonElement>(".remote-libraries button.library-open")[0]!);
     expect(onOpenChange).toHaveBeenCalledWith(true);
     await click(tileButtons()[0]!);
-    const surface = host.querySelector<HTMLElement>(".remote-detail.library-title-detail.remote-series-detail")!;
+    await flush();
+    const surface = host.querySelector<HTMLElement>(".remote-detail .library-title-detail")!;
     expect(surface).not.toBeNull();
-    // The episodes and the hero share the one surface, and the hero carries no band of its own.
     expect(surface.querySelector(".hero.library-detail-hero")).not.toBeNull();
     expect(surface.querySelector<HTMLElement>(".hero.library-detail-hero")!.style.backgroundImage).toBe("");
-    expect(surface.querySelector(".remote-episodes-head")).not.toBeNull();
+    expect(surface.textContent).toContain("reported no episodes");
     const corner = surface.querySelector<HTMLButtonElement>(".gallery-open")!;
     await click(corner);
     expect(onGallery).toHaveBeenCalled();
@@ -844,18 +933,13 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     expect(host.querySelector(".remote-detail .hero h2")!.textContent).toBe("Target");
   });
 
-  it("keeps full series metadata after returning from an episode without reloading its list", async () => {
+  it("uses the full series overview when the selected episode has none", async () => {
     const show: RemoteItem = { id: "show", name: "Show", type: "series", providerIds: {} };
     const episode: RemoteItem = { id: "episode", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "show", providerIds: {} };
     browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
     item = (url) => json({ item: url.pathname.endsWith("/show") ? { ...show, overview: "A complete series description." } : episode, capabilities });
     await openRootLibrary();
-    await act(async () => tileButtons()[0]!.click());
-    await flush();
-    expect(host.querySelector(".library-detail-synopsis")!.textContent).toContain("complete series");
-    await act(async () => tileButtons()[0]!.click());
-    await flush();
-    await act(async () => host.querySelector<HTMLButtonElement>(".library-back")!.click());
+    await click(tileButtons()[0]!);
     await flush();
     expect(host.querySelector(".library-detail-synopsis")!.textContent).toContain("complete series");
     expect(calls.browse.filter(url => url.searchParams.get("type") === "episode")).toHaveLength(1);
@@ -1483,8 +1567,6 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(host.querySelector(".remote-libraries button.library-open")!);
     await click(tileButtons()[0]!);
     await flush();
-    await click(tileButtons()[0]!);
-    await flush();
     await openPicker();
     expect(addonCalls.sources[0]!.pathname).toBe("/api/stream-sources/series/tt7000%3A1%3A2");
     expect(addonCalls.streams[0]!.pathname).toBe("/api/streams/series/tt7000%3A1%3A2");
@@ -1539,8 +1621,6 @@ describe("RemoteLibraryBrowser addon sources", () => {
     addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
     await render({ addons: [addonWithRule()], onCatalogueDownload });
     await click(host.querySelector(".remote-libraries button.library-open")!);
-    await click(tileButtons()[0]!);
-    await flush();
     await click(tileButtons()[0]!);
     await flush();
     await openPicker();
@@ -1609,8 +1689,6 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(host.querySelector(".remote-libraries button.library-open")!);
     await click(tileButtons()[0]!);
     await flush();
-    await click(tileButtons()[0]!);
-    await flush();
     await click(playButton());
     await flush();
     const overlay = host.querySelector(".player-overlay")!;
@@ -1672,8 +1750,6 @@ describe("RemoteLibraryBrowser addon sources", () => {
     addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
     await render({ addons: [addonWithRule()], downloadLibraries: [saveView()] });
     await click(host.querySelector(".remote-libraries button.library-open")!);
-    await click(tileButtons()[0]!);
-    await flush();
     await click(tileButtons()[0]!);
     await flush();
     await openPicker();
@@ -2303,7 +2379,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(playbackCalls[0]!.time).toBe(600);
   });
 
-  it("shows the cast and similar titles under a series' episode grid", async () => {
+  it("shows the cast and similar titles under a series episode's picker", async () => {
     const show: RemoteItem = { id: "ser1", name: "Show", type: "series", year: 2011, providerIds: { imdb: "tt7000" }, overview: "A long show." };
     const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, providerIds: {} };
     browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
@@ -2319,8 +2395,8 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await openRootLibrary();
     await click(tileButtons()[0]!);
     await flush();
-    const surface = host.querySelector(".remote-series-detail")!;
-    const facts = surface.querySelector(".meta-line")!;
+    const surface = host.querySelector(".remote-detail .library-title-detail")!;
+    const facts = [...surface.querySelectorAll(".meta-line")].find((node) => node.textContent?.includes("2011"))!;
     expect(facts.textContent).toContain("2011");
     expect(facts.querySelector(".age-badge")).toBeNull();
     const ratings = surface.querySelector(".detail-ratings")!;
@@ -2328,9 +2404,9 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(ratings.textContent).toContain("8.6");
     expect(ratings.querySelector(".tmdb")!.textContent).toBe("TMDB");
     expect(surface.querySelector(".original-line")!.textContent).toContain("Šou");
-    const grid = surface.querySelector(".remote-season-group")!;
+    const picker = surface.querySelector(".catalogue-episodes")!;
     const rows = surface.querySelector(".title-extras")!;
-    expect(grid.compareDocumentPosition(rows) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(picker.compareDocumentPosition(rows) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect([...rows.querySelectorAll(".person strong")].map((name) => name.textContent)).toEqual(["The Creator", "Lead"]);
     expect(rows.querySelector(".related strong")!.textContent).toBe("Other Show");
     expect(calls.title).toContain("/api/meta/series/tt7000");
