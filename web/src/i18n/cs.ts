@@ -626,7 +626,6 @@ export const cs: Catalog = {
   "seriesBulk.menuSeries": "Stáhnout celý seriál…",
   "seriesBulk.menuElsewhere": "Uložit jinam…",
   "seriesBulk.menuLabel": "Další možnosti uložení",
-  "seriesBulk.remoteButton": "Kopírovat do knihovny…",
   "seriesBulk.title": "Stáhnout seriál",
   "seriesBulk.what": "Co stáhnout",
   "seriesBulk.season": "Série",

@@ -149,6 +149,20 @@ class TitleDownloadPanelTest {
   }
 
   @Test
+  fun `the selected source is named the way the will-play row names it`() {
+    val api = movieApi()
+    api.streamsValues["movie:tt1"] = listOf(
+      StreamDto(sourceId = "srcA", kind = "remote", playable = true, name = "Webshare", addonName = "Cineshare - Tisnov"),
+    )
+    mountMovie(api)
+    openPanel()
+
+    compose.onNodeWithTag(TagTitleDownloadSource)
+      .assertTextContains("Cineshare - Tisnov", substring = true)
+    compose.onNodeWithText("Webshare", substring = true).assertDoesNotExist()
+  }
+
+  @Test
   fun `the download button opens the panel and does not queue`() {
     val api = movieApi()
     mountMovie(api)

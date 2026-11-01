@@ -596,7 +596,6 @@ export const ptBR: Catalog = {
   "seriesBulk.menuSeries": "Baixar a série inteira…",
   "seriesBulk.menuElsewhere": "Salvar em outro lugar…",
   "seriesBulk.menuLabel": "Mais formas de salvar",
-  "seriesBulk.remoteButton": "Copiar para a biblioteca…",
   "seriesBulk.title": "Baixar série",
   "seriesBulk.what": "O que baixar",
   "seriesBulk.season": "Temporada",

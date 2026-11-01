@@ -127,7 +127,6 @@ const val TagRemoteSeriesToLibrary = "remote_series_to_library"
 const val TagRemoteSeriesStartOver = "remote_series_start_over"
 const val TagRemoteSeriesSources = "remote_series_sources"
 const val TagRemoteSeriesWatched = "remote_series_watched"
-const val TagRemoteBrowserSeriesBulk = "remote_browser_series_bulk"
 const val TagRemoteSeriesProgress = "remote_series_progress"
 const val TagRemoteSeriesTech = "remote_series_tech"
 const val TagRemoteSeriesOverview = "remote_series_overview"
@@ -188,13 +187,6 @@ fun RemoteLibraryRoute(
   val loadMoreFocus = remember { FocusRequester() }
   val errorFocus = remember { FocusRequester() }
   val requesters = remember(levelKey) { mutableMapOf<String, FocusRequester>() }
-  val bulkFocus = remember(levelKey) { FocusRequester() }
-  var bulkOpen by remember(levelKey) { mutableStateOf(false) }
-  var bulkWasOpen by remember(levelKey) { mutableStateOf(false) }
-  val bulkLevel = level as? RemoteLevel.Episodes
-  val bulkSeriesId = bulkLevel?.seriesItemId
-  val bulkAvailable = loadDestinations != null && bulkSeriesId != null
-  val context = LocalContext.current
 
   var query by remember { mutableStateOf("") }
   var committed by remember { mutableStateOf("") }
@@ -343,17 +335,6 @@ fun RemoteLibraryRoute(
     copyResolving = false
     copyBusy = false
   }
-  LaunchedEffect(bulkOpen) {
-    if (bulkOpen) {
-      bulkWasOpen = true
-    } else if (bulkWasOpen) {
-      bulkWasOpen = false
-      awaitFrame()
-      awaitFrame()
-      runCatching { bulkFocus.requestFocus() }
-    }
-  }
-
   // A page change focuses the card last used on this level, else the first card; Back restores the
   // card that opened the level because the selection is kept per level rather than cleared.
   var consumedSearchReturn by rememberSaveable { mutableIntStateOf(0) }
@@ -432,15 +413,6 @@ fun RemoteLibraryRoute(
           onOpenType = { typePanel = true },
         )
       }
-      if (level != null && bulkAvailable) {
-        FocusButton(
-          text = stringResource(R.string.series_bulk_remote_button),
-          onClick = { bulkOpen = true },
-          modifier = Modifier
-            .focusRequester(bulkFocus)
-            .testTag(TagRemoteBrowserSeriesBulk),
-        )
-      }
       Box(Modifier.weight(1f).fillMaxWidth()) {
         if (level == null) {
           LibraryPicker(state, viewModel, imageUrl, requesters, gridFocus, errorFocus)
@@ -455,7 +427,7 @@ fun RemoteLibraryRoute(
             gridFocus = gridFocus,
             loadMoreFocus = loadMoreFocus,
             errorFocus = errorFocus,
-            firstRowUp = bulkFocus.takeIf { bulkAvailable } ?: searchAction.takeIf { searchAvailable },
+            firstRowUp = searchAction.takeIf { searchAvailable },
             onMenu = if (loadDestinations != null) { item -> openCardCopy(level.libraryId, item) } else null,
             onOpenItem = onOpenItem,
           )
@@ -479,27 +451,6 @@ fun RemoteLibraryRoute(
         notice = copyNotice,
         onQueue = { stream, libraryId -> queueCardCopy(stream, libraryId) },
         onClose = { closeCardCopy() },
-      )
-    }
-
-    if (bulkOpen && bulkAvailable) {
-      RemoteSeriesBulkHost(
-        api = api,
-        origin = BulkOrigin.Remote(
-          libraryId = bulkLevel.libraryId,
-          libraryName = bulkLevel.libraryName,
-          provider = bulkLevel.provider,
-          seriesItemId = bulkSeriesId,
-        ),
-        title = bulkLevel.seriesName ?: bulkLevel.title,
-        loadDestinations = loadDestinations,
-        onQueued = { added, skipped ->
-          bulkOpen = false
-          copyNotice = bulkAddedText(context, added, skipped)
-        },
-        onClose = {
-          bulkOpen = false
-        },
       )
     }
   }

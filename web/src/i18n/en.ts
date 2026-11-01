@@ -631,7 +631,6 @@ export const en = {
   "seriesBulk.menuSeries": "Download the whole series…",
   "seriesBulk.menuElsewhere": "Save elsewhere…",
   "seriesBulk.menuLabel": "More ways to save",
-  "seriesBulk.remoteButton": "Copy to library…",
   "seriesBulk.title": "Download series",
   "seriesBulk.what": "What to download",
   "seriesBulk.season": "Season",

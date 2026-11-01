@@ -245,7 +245,6 @@ bulk.titleMovie
 bulk.titleEpisode
 bulk.add
 bulk.episodeCount
-seriesBulk.remoteButton
 seriesBulk.title
 seriesBulk.wholeSeries
 seriesBulk.thisSource

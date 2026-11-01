@@ -596,7 +596,6 @@ export const de: Catalog = {
   "seriesBulk.menuSeries": "Ganze Serie herunterladen…",
   "seriesBulk.menuElsewhere": "Anderswo speichern…",
   "seriesBulk.menuLabel": "Weitere Speicheroptionen",
-  "seriesBulk.remoteButton": "In Bibliothek kopieren…",
   "seriesBulk.title": "Serie herunterladen",
   "seriesBulk.what": "Was heruntergeladen wird",
   "seriesBulk.season": "Staffel",

@@ -255,7 +255,6 @@
     <item quantity="one">1 Folge</item>
     <item quantity="other">%1$s Episoden</item>
   </plurals>
-  <string name="series_bulk_remote_button">In Bibliothek kopieren…</string>
   <string name="series_bulk_title">Serie herunterladen</string>
   <string name="series_bulk_whole_series">Ganze Serie</string>
   <string name="series_bulk_this_source">Diese Folge · gewählte Quelle</string>

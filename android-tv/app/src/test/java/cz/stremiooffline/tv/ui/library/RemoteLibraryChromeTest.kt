@@ -174,26 +174,6 @@ class RemoteLibraryChromeTest {
   }
 
   @Test
-  fun `a series level in the servers browser offers the bulk action`() {
-    val api = api()
-    api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(
-      items = listOf(RemoteItemDto(id = "e1", name = "Pilot", type = "episode")),
-      total = 1,
-    )
-    api.librariesValue = listOf(cz.stremiooffline.tv.data.LibraryDto("shows", "Shows", "series", writable = true))
-    mountEmbedded(api, loadDestinations = { api.librariesValue })
-    openLibrary(api)
-    scenario.onActivity {
-      ViewModelProvider(it, RemoteLibraryViewModel.factory(api))[RemoteLibraryViewModel::class.java]
-        .openItem(RemoteItemDto(id = "s1", name = "Show", type = "series"))
-    }
-    compose.waitUntil(5_000) { api.remoteEpisodesRequests.any { it.second == "s1" } }
-    compose.waitForIdle()
-
-    compose.onNodeWithTag(TagRemoteBrowserSeriesBulk).assertExists()
-  }
-
-  @Test
   fun `the picker keeps the section's one heading and the first card starts high`() {
     val api = api()
     mountEmbedded(api)

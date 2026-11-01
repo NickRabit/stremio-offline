@@ -596,7 +596,6 @@ export const ru: Catalog = {
   "seriesBulk.menuSeries": "Скачать весь сериал…",
   "seriesBulk.menuElsewhere": "Сохранить в другом месте…",
   "seriesBulk.menuLabel": "Другие способы сохранения",
-  "seriesBulk.remoteButton": "Скопировать в библиотеку…",
   "seriesBulk.title": "Скачать сериал",
   "seriesBulk.what": "Что скачать",
   "seriesBulk.season": "Сезон",

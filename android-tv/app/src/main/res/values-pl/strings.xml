@@ -261,7 +261,6 @@
     <item quantity="many">%1$s odcinków</item>
     <item quantity="other">Liczba odcinków: %1$s</item>
   </plurals>
-  <string name="series_bulk_remote_button">Kopiuj do biblioteki…</string>
   <string name="series_bulk_title">Pobierz serię</string>
   <string name="series_bulk_whole_series">Cała seria</string>
   <string name="series_bulk_this_source">Ten odcinek · wybrane źródło</string>

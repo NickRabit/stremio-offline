@@ -666,6 +666,15 @@ fun Modifier.scrollToTopOnFocus(state: TitleExtrasState, scope: CoroutineScope):
   if (it.hasFocus) scope.launch { state.scroll.animateScrollTo(0) }
 }
 
+/** The source's name on the "Will play" row: its group, else a local file's name, else its own name. */
+internal fun willPlayName(stream: StreamDto): String? = sourceGroupName(stream)
+  ?: stream.behaviorHints?.filename?.takeIf { Streams.isLocalStream(stream) && it.isNotBlank() }
+  ?: stream.name?.takeIf { it.isNotBlank() }
+
+/** The "Will play" text without the version count: the same words wherever a chosen source is named. */
+internal fun willPlayText(stream: StreamDto): String =
+  listOfNotNull(willPlayName(stream), formatSize(Streams.streamSize(stream))).joinToString(" · ")
+
 @Composable
 fun TitleTechBlock(
   stream: StreamDto,
@@ -675,11 +684,8 @@ fun TitleTechBlock(
   versionCount: Int = 0,
 ) {
   val locale = uiLanguage?.takeIf { it.isNotBlank() }?.let(::Locale) ?: LocalConfiguration.current.locales[0]
-  val sourceName = sourceGroupName(stream)
-    ?: stream.behaviorHints?.filename?.takeIf { Streams.isLocalStream(stream) && it.isNotBlank() }
-    ?: stream.name?.takeIf { it.isNotBlank() }
   val source = listOfNotNull(
-    sourceName,
+    willPlayName(stream),
     formatSize(Streams.streamSize(stream)),
     versionCount.takeIf { it > 0 }?.let {
       stringResource(R.string.media_server_versions_available, it.toString())

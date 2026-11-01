@@ -1059,9 +1059,12 @@ internal fun eyebrow(data: RemoteDetailData): String =
     else -> stringResource(R.string.media_server_eyebrow)
   }.uppercase()
 
-private fun titleOf(data: RemoteDetailData): String =
+/** The progress row's title. An episode leads with its series: the server reads the series name
+ *  from the part before the first " · ", and Continue watching names the show by it. */
+internal fun titleOf(data: RemoteDetailData): String =
   if (data.isEpisode && (data.item.season != null || data.item.episode != null)) {
-    "${data.item.name} · S${data.item.season ?: 0} · E${data.item.episode ?: 0}"
+    val series = (data.seriesName ?: data.item.seriesName)?.takeIf { it.isNotBlank() } ?: data.item.name
+    "$series · S${data.item.season ?: 0} · E${data.item.episode ?: 0}"
   } else {
     data.item.name
   }
