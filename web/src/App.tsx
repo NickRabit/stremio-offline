@@ -3977,7 +3977,7 @@ export function App() {
                       // A folder matched to one movie holds that title's versions, so it opens the
                       // detail; any other folder keeps browsing its own contents.
                       if (item.match === "matched" && item.titleType === "movie") { openLocalDetail(item); return; }
-                      if (item.match === "matched" && item.titleType === "series") {
+                      if (item.match === "matched" && item.titleType === "series" && !localFolderActive) {
                         openLocalSeriesAt(item.path, item.name, { fromFavorites: browsePath === ":favorites" || fromFavorites, row: item });
                         return;
                       }
@@ -3992,7 +3992,7 @@ export function App() {
                       <i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}
                     </>}
                     title={folderTitle(item)} meta={folderMeta(item)} description={rowDescription(item)}
-                    action={item.match === "matched" && (item.titleType === "movie" || item.titleType === "series")
+                    action={item.match === "matched" && (item.titleType === "movie" || (item.titleType === "series" && !localFolderActive))
                       ? <>{t("home.openTitle")}<ChevronRight/></> : <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
