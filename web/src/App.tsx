@@ -183,6 +183,11 @@ export function App() {
     if (playerOpenRef.current || restoringScroll.current) return;
     const element = event.currentTarget;
     const top = Math.max(0, element.scrollTop);
+    // A source list that scrolled itself to the chosen row was not pushed by the viewer.
+    if (element.dataset.autoScroll) {
+      scrollDirection.current.set(element, { top, travel: 0, until: 0 });
+      return;
+    }
     const previous = scrollDirection.current.get(element) ?? { top: 0, travel: 0, until: 0 };
     const delta = top - previous.top;
     const travel = Math.sign(delta) === Math.sign(previous.travel) ? previous.travel + delta : delta;
