@@ -2,15 +2,16 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, describeError } from "./api";
 import { catalogueGalleryImages, type GalleryImage } from "./gallery-images";
 import { DetailRatings, ratingsFrom } from "./detail-copy";
-import { EpisodePicker } from "./EpisodePicker";
+import { EpisodePicker, episodePickerSeason } from "./EpisodePicker";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
+import { galleryPayload, gridArt } from "./meta";
 import { synopsisOf, TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
 import { useLibrarySources } from "./library-sources";
 import { titleLanguage } from "./languages";
 import { arrangeStreams, catalogSourceRows, isLocalStream, pickDefaultStream, resolveStreamSort, sortRuleId } from "./streams";
-import type { Meta, SourceProfile, Stream, Trailer, Video } from "./types";
+import type { CatalogueBulkRequest, Meta, SourceProfile, Stream, Trailer, Video } from "./types";
 
 /** One catalogue title's detail: the same body the libraries draw, hosted for a title that only
  *  the catalogue knows. Its own rows are the streams the catalogue panel loads for that title;
@@ -89,6 +90,7 @@ export interface CatalogueTitleDetailProps {
   onPlay: (stream: Stream, target: CatalogueDetailTarget, fromBeginning: boolean) => void;
   onSaveToLibrary: (stream: Stream, target: CatalogueDetailTarget) => void;
   onSaveElsewhere: (stream: Stream, target: CatalogueDetailTarget) => void;
+  onBulkDownload?: (request: CatalogueBulkRequest) => void;
   saveSupported: (stream: Stream) => boolean;
   onDownloadToDevice: (stream: Stream, target: CatalogueDetailTarget) => void;
   /** The viewer's addon order, which the catalogue ranks rows of one language by. */
@@ -110,7 +112,7 @@ const dedupe = (streams: Stream[]): Stream[] => {
 };
 
 export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
-  const { target, initialSources, libraryFirst = false, remoteFirst = false, onGallery, chips, trailer, onTrailer, secureMode, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended" } = props;
+  const { target, initialSources, libraryFirst = false, remoteFirst = false, onGallery, chips, trailer, onTrailer, secureMode, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, onBulkDownload, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended" } = props;
   const { locale } = useI18n();
   const { type, id, name } = target;
   const titleExtras = useTitleExtras(type, id);
@@ -320,6 +322,23 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const selectedKey = selectedEpisode?.key ?? (episode
     ? episode.id != null ? String(episode.id) : `catalogue:${episode.season ?? ""}:${episode.episode ?? ""}`
     : null);
+  const activeSeason = episodePickerSeason(catalogueEpisodes, selectedKey, pickerSeason);
+  const bulkRequest = (scope: "season" | "series"): CatalogueBulkRequest => ({
+    scope,
+    ...(scope === "season" ? { season: activeSeason } : {}),
+    title: name,
+    media: { id, metaType: type, ...gridArt(snapshot, snapshot), gallery: galleryPayload(gallery) },
+    episodes: videos.flatMap((video) => {
+      const videoId = video.id == null ? "" : String(video.id).trim();
+      return videoId ? [{
+        id: videoId,
+        ...(video.season != null ? { season: video.season } : {}),
+        ...(video.episode != null ? { episode: video.episode } : {}),
+        ...(video.title || video.name ? { title: video.title || video.name } : {}),
+        ...(video.released ? { released: String(video.released) } : {}),
+      }] : [];
+    }),
+  });
   const pickerEpisodes = episode && !selectedEpisode && !pickerOpen ? [{
     key: selectedKey!,
     ...(episode.season != null ? { season: episode.season } : {}),
@@ -376,6 +395,13 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       episodes={episodePicker}
       {...(waitingEpisode ? { placeholder: null } : {})}
       {...(waitingEpisode ? {} : { sourceGroups: { groups: showTorrents ? extra.groups : extra.groups.map((group) => ({ ...group, streams: group.streams.filter(offered) })), retry: extra.retry }, onOpenSources: () => setChooserOpen(true) })}
+      {...(type === "series" && snapshot !== null && videos.length > 0 && onBulkDownload ? {
+        bulkActions: {
+          season: activeSeason,
+          onSeason: () => onBulkDownload(bulkRequest("season")),
+          onSeries: () => onBulkDownload(bulkRequest("series")),
+        },
+      } : {})}
       nativeSourceLabel={t("sources.heading")}
       {...(preferredLanguage ? { preferredLanguage } : {})}
       sourceProfiles={sourceProfiles}

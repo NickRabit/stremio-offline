@@ -24,7 +24,8 @@ import { MoveDialog } from "./MoveDialog";
 import { SaveTargetDialog } from "./SaveTargetDialog";
 import { sourceTargetRule, type SaveTarget } from "./save-target";
 import { SuggestionsDialog } from "./SuggestionsDialog";
-import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
+import { SeriesDownloadDialog, usableProfile } from "./SeriesDownloadDialog";
+import { SeriesBulkDialog } from "./SeriesBulkDialog";
 import { FollowDialog, toEpisodes } from "./FollowDialog";
 import { FollowingPage } from "./FollowingPage";
 import { ResumeView } from "./ResumeView";
@@ -73,7 +74,7 @@ import { resolveStartView } from "./start-view";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
-import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The library choices this browser kept before they moved onto the account. Read once and
  *  handed to the visible libraries; private mode may forbid storage, hence the try/catch. */
@@ -248,6 +249,7 @@ export function App() {
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: Record<string, unknown>; exactSource?: { stream: Stream; label: string; preferred: boolean }; detail?: CatalogueDetailTarget } | null>(null);
+  const [seriesBulk, setSeriesBulk] = useState<SeriesBulkRequest | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
@@ -372,7 +374,7 @@ export function App() {
   // A dialog that saves into a library reads the list again as it opens: the one read at sign-in
   // fails quietly on a slow or resumed connection, and a stale empty list offered no library at
   // all until the page was reloaded.
-  const savesToLibrary = Boolean(bulkDownload) || Boolean(followStart) || followDialogOpen || Boolean(movePath);
+  const savesToLibrary = Boolean(bulkDownload) || Boolean(seriesBulk) || Boolean(followStart) || followDialogOpen || Boolean(movePath);
   useEffect(() => { if (savesToLibrary) void refreshLibraries(); }, [savesToLibrary]);
   const [libraryFavorites, setLibraryFavorites] = useState<string[]>([]);
   const [localPoster, setLocalPoster] = useState<string | undefined>(undefined);
@@ -2847,6 +2849,12 @@ export function App() {
     notify(t("episodes.bulkAdded", { count: result.added }) + (result.skipped ? ` ${t("episodes.bulkSkipped", { count: result.skipped })}` : ""));
     await loadDownloads();
   };
+  const bulkDownloadAllowed = sourceProfiles?.some(usableProfile) ?? false;
+  const seriesBulkQueued = (added: number, skipped: number) => {
+    setScanEpoch((value) => value + 1);
+    notify(t("episodes.bulkAdded", { count: added }) + (skipped ? ` ${t("episodes.bulkSkipped", { count: skipped })}` : ""));
+    void loadDownloads();
+  };
 
   /** A Home media card's action, by kind: a file plays, a catalogue entry opens the remembered
    *  episode the way a catalogue Continue-watching tile does, a favourite or Tonight folder opens
@@ -3594,6 +3602,7 @@ export function App() {
             onPlay={playCatalogueDetail}
             onSaveToLibrary={(stream, effective) => void queueCatalogueStream(effective, stream)}
             onSaveElsewhere={(stream, effective) => openCatalogueDownload(effective, stream, detailSourcePicked)}
+            {...(bulkDownloadAllowed ? { onBulkDownload: setSeriesBulk } : {})}
             saveSupported={(stream) => canQueue(stream, settings.realDebridConfigured)}
             onDownloadToDevice={(stream, effective) => void downloadCatalogueStream(effective, stream)}/>
         </div>
@@ -3794,6 +3803,7 @@ export function App() {
           onGallery={presentGallery} resetSignal={libraryReset}
           downloadLibraries={libraries} onDownloadQueued={() => { notify(t("downloads.queued")); void loadDownloads(); }}
           onCatalogueDownload={(stream, detail) => openCatalogueDownload(detail, stream, false)}
+          {...(bulkDownloadAllowed ? { onSeriesBulk: setSeriesBulk } : {})}
           onNotify={notify}
           accountScope={session!.username} addons={addons} realDebridConfigured={settings.realDebridConfigured}
          />
@@ -4186,6 +4196,8 @@ export function App() {
     {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} title={bulkDownload.title} episodes={bulkDownload.episodes} libraries={libraries} canRetain={session!.role === "admin"} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} {...(bulkDownload.exactSource ? { exactSource: bulkDownload.exactSource } : {})} onExactSave={async (target) => {
       if (bulkDownload.exactSource && bulkDownload.detail) await queueCatalogueStream(bulkDownload.detail, bulkDownload.exactSource.stream, target);
     }} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
+    {seriesBulk && <SeriesBulkDialog request={seriesBulk} libraries={libraries} {...(settings.downloadSourceProfile ? { downloadSourceProfileId: settings.downloadSourceProfile } : {})}
+      onQueued={seriesBulkQueued} onClose={() => setSeriesBulk(null)}/>}
     {followDialogOpen && detailFollow && <FollowDialog follow={detailFollow} videos={selected?.videos} libraries={libraries} canRetain={session!.role === "admin"} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={(updated) => applyFollowChange(detailFollow.id, updated)} onClose={() => setFollowDialogOpen(false)} onNotify={notify}/>}
     {followStart && <SeriesDownloadDialog type={followStart.type || "series"} label={followStart.name} title={followStart.name} episodes={followStart.type === "movie" ? [{ id: followStart.id }] : toEpisodes(followStart.videos)} libraries={libraries}
       canRetain={session!.role === "admin"}

@@ -1,5 +1,5 @@
 import { ChevronRight } from "lucide-react";
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 import { t } from "./i18n";
 
 export interface PickerEpisode {
@@ -18,15 +18,24 @@ interface Props {
   loading: boolean;
   season: number | null;
   onSeason: (season: number) => void;
+  headClassName?: string;
+  action?: ReactNode;
 }
 
 const pad = (value: number) => String(value).padStart(2, "0");
 
-export function EpisodePicker({ episodes, selectedKey, onPick, open, onOpenChange, loading, season, onSeason }: Props): JSX.Element {
+export function episodePickerSeason(episodes: PickerEpisode[], selectedKey: string | null, season: number | null): number {
   const seasons = [...new Set(episodes.map((episode) => episode.season).filter((value): value is number => typeof value === "number"))]
     .sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
   const selected = selectedKey === null ? undefined : episodes.find((episode) => episode.key === selectedKey);
-  const activeSeason = season ?? selected?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? 0;
+  return season ?? selected?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? 0;
+}
+
+export function EpisodePicker({ episodes, selectedKey, onPick, open, onOpenChange, loading, season, onSeason, headClassName, action }: Props): JSX.Element {
+  const seasons = [...new Set(episodes.map((episode) => episode.season).filter((value): value is number => typeof value === "number"))]
+    .sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
+  const selected = selectedKey === null ? undefined : episodes.find((episode) => episode.key === selectedKey);
+  const activeSeason = episodePickerSeason(episodes, selectedKey, season);
   const visibleEpisodes = episodes.filter((episode) => seasons.length <= 1 || episode.season === activeSeason);
   // Another season makes its first episode the chosen one, so Play and the source row below never
   // keep standing for an episode of the season the viewer just left. The list stays open on it.
@@ -42,7 +51,7 @@ export function EpisodePicker({ episodes, selectedKey, onPick, open, onOpenChang
 
   return <div className="catalogue-episodes">
     {selectedKey === null || open ? <>
-      <div className="subhead episode-head"><h3>{t("episodes.heading")}</h3>
+      <div className={`subhead episode-head${headClassName ? ` ${headClassName}` : ""}`}><h3>{t("episodes.heading")}</h3>
         <div className="episode-tools">
           {seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason}
             onChange={(event) => chooseSeason(Number(event.target.value))}>
@@ -50,6 +59,7 @@ export function EpisodePicker({ episodes, selectedKey, onPick, open, onOpenChang
           </select>}
           <span>{visibleEpisodes.length}</span>
         </div>
+        {action}
       </div>
       {loading ? <div className="loading" role="status">{t("common.loading")}</div>
         : !episodes.length ? <p className="identify-hint">{t("mediaServer.noEpisodes")}</p>

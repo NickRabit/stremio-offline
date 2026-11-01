@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, CatalogSearchPollResult, CatalogSearchRequest, CatalogSearchSnapshot, Download, DownloadRules, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, SourceProfile, AdminSourceProfile, Stream, Subtitle, TitleExtras, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, BulkDownloadOrigin, BulkPrepareResponse, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, CatalogSearchPollResult, CatalogSearchRequest, CatalogSearchSnapshot, Download, DownloadRules, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, SourceProfile, AdminSourceProfile, Stream, Subtitle, TitleExtras, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
@@ -159,7 +159,30 @@ export const api = {
   download: (title: string, stream: Stream, media?: Record<string, unknown>, target?: SaveTarget) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, sourceId: stream.sourceId, media, ...(target ? { target } : {}) }) }),
   prepareDeviceDownload: (payload: { title?: string; stream?: Stream; media?: Record<string, unknown>; path?: string }) =>
     request<{ url: string; filename: string }>("/api/device-download", { method: "POST", body: JSON.stringify({ title: payload.title, sourceId: payload.stream?.sourceId, media: payload.media }) }),
-  downloadBulk: (title: string, type: string, episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>, selection: DownloadSelection | ProfileSelection, media?: Record<string, unknown>, target?: SaveTarget) => request<{ added: number; skipped: number }>("/api/downloads/bulk", { method: "POST", body: JSON.stringify({ title, type, episodes, selection, media, ...(target ? { target } : {}) }) }),
+  prepareBulk: (body: {
+    scope: "season" | "series";
+    season?: number;
+    specials: boolean;
+    title: string;
+    selection: ProfileSelection;
+    target?: SaveTarget;
+    origin:
+      | { kind: "catalogue"; media: Record<string, unknown>; episodes: Array<{ id: string; season?: number; episode?: number; title?: string; released?: string }> }
+      | { kind: "remote"; libraryId: string; seriesItemId: string };
+  }, signal?: AbortSignal) =>
+    request<BulkPrepareResponse>("/api/downloads/bulk/prepare", { method: "POST", body: JSON.stringify(body), signal }),
+  downloadBulk: (
+    title: string,
+    type: string,
+    episodes: Array<{ id: string; season?: number; episode?: number; title?: string; remoteItemId?: string }>,
+    selection: DownloadSelection | ProfileSelection,
+    media?: Record<string, unknown>,
+    target?: SaveTarget,
+    origin?: BulkDownloadOrigin,
+  ) => request<{ added: number; skipped: number; results?: Array<{ id: string; outcome: string }> }>("/api/downloads/bulk", {
+    method: "POST",
+    body: JSON.stringify({ title, type, episodes, selection, media, ...(target ? { target } : {}), ...(origin ? { origin } : {}) }),
+  }),
   downloadAction: (id: string, action: "pause" | "resume" | "retry") => request<void>(`/api/downloads/${id}/${action}`, { method: "POST" }),
   moveDownload: (id: string, direction: -1 | 1) => request<void>(`/api/downloads/${id}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
   removeDownload: (id: string) => request<void>(`/api/downloads/${id}`, { method: "DELETE" }),

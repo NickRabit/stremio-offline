@@ -441,6 +441,64 @@ describe("CatalogueTitleDetail series", () => {
     await click(pickerArrow());
     expect(pickerRows().some((row) => row.textContent?.includes("Show S01E02.mkv"))).toBe(false);
   });
+
+  it("offers bulk download for the picker's active season and follows a season change", async () => {
+    const onBulkDownload = vi.fn();
+    const allVideos = [
+      episode("tt-series:1:1", 1, 1, "The first one"),
+      episode("tt-series:2:1", 2, 1, "The next season"),
+    ];
+    await render({
+      target: { type: "series", id: "tt-series", name: "A show", initialMeta: series(allVideos) },
+      onBulkDownload,
+    });
+    const bulkArrow = () => host.querySelector<HTMLButtonElement>(".library-detail-save button[aria-haspopup='menu']")!;
+    await click(bulkArrow());
+    expect([...document.querySelectorAll(".action-menu [role='menuitem']")].map((item) => item.textContent))
+      .toContain("Download season 1…");
+    await act(async () => document.body.click());
+    const picker = host.querySelector<HTMLSelectElement>(".catalogue-episodes .season-select")!;
+    await act(async () => {
+      picker.value = "2";
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    await click(bulkArrow());
+    expect([...document.querySelectorAll(".action-menu [role='menuitem']")].map((item) => item.textContent))
+      .toContain("Download season 2…");
+  });
+
+  it("sends the full video list for a whole-series bulk request", async () => {
+    const onBulkDownload = vi.fn();
+    const allVideos = [
+      episode("tt-series:1:1", 1, 1, "The first one"),
+      episode("tt-series:2:1", 2, 1, "The next season"),
+    ];
+    await render({
+      target: { type: "series", id: "tt-series", name: "A show", initialMeta: series(allVideos) },
+      onBulkDownload,
+    });
+    await click(host.querySelector(".library-detail-save button[aria-haspopup='menu']"));
+    await click([...document.querySelectorAll<HTMLButtonElement>(".action-menu [role='menuitem']")]
+      .find((item) => item.textContent === "Download the whole series…")!);
+    expect(onBulkDownload).toHaveBeenCalledWith({
+      scope: "series",
+      title: "A show",
+      media: expect.objectContaining({ id: "tt-series", metaType: "series" }),
+      episodes: [
+        expect.objectContaining({ id: "tt-series:1:1", season: 1, episode: 1 }),
+        expect.objectContaining({ id: "tt-series:2:1", season: 2, episode: 1 }),
+      ],
+    });
+  });
+
+  it("offers no bulk action for a film", async () => {
+    await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() },
+      onBulkDownload: vi.fn(),
+    });
+    expect(host.querySelector(".library-detail-save button[aria-haspopup='menu']")).toBeNull();
+  });
 });
 
 describe("CatalogueTitleDetail extras", () => {
