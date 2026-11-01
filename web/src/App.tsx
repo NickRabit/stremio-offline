@@ -530,6 +530,23 @@ export function App() {
     } catch (error) { fail(error); }
     finally { setFavoritesBusy(false); setFavoritesLoadingMore(false); }
   };
+  /** Takes one card off Favourites. A library card that folds in a catalogue star clears that
+   *  star too, or the title would keep the card on the page. */
+  const removeFavorite = async (item: FavoriteItem) => {
+    try {
+      if (item.kind === "library") {
+        await api.setFavorite(item.path, false);
+        if (item.catalogId) await api.setWatchlist({ type: item.title?.type ?? "movie", id: item.catalogId, favorite: false });
+      } else if (item.kind === "catalog") {
+        await api.setWatchlist({ type: item.type, id: item.id, favorite: false });
+      } else {
+        await api.saveRemoteState(item.libraryId, item.itemId, { favorite: false });
+      }
+      setWatchlist(await api.watchlist());
+      await loadFavorites(favoritesFilter);
+      notify(t("favorite.removed"));
+    } catch (error) { fail(error); }
+  };
   /** The one Continue watching list, the same first page Home draws, carried past its bound. */
   const loadResume = async (filter = resumeFilter, skip = 0) => {
     if (skip) setResumeLoadingMore(true); else setResumeBusy(true);
@@ -4069,6 +4086,7 @@ export function App() {
         onPlay={openFavorite} onOpenFolder={openFavorite} onOpenTitle={openFavoriteTitle}
         onOpenCatalog={(item: FavoriteCatalogItem) => openCatalogueDetail({ type: item.type, id: item.id, name: item.name, ...(item.poster ? { poster: item.poster } : {}) })}
         onOpenRemote={(item: FavoriteRemoteItem) => openRemoteCard(item)}
+        onRemove={(item) => void removeFavorite(item)}
         hasMore={favorites.length < favoritesTotal} loadingMore={favoritesLoadingMore}
         onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>}
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
