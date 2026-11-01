@@ -162,6 +162,7 @@ export function listedLocalCopyEvidence(
   inspected?: { info: MediaInfo; subtitleSidecars: readonly (string | undefined)[] },
 ): SourceEvidenceCandidateV1 {
   const stream = { behaviorHints: { filename } };
+  const named = { listed: listedAudioLanguages(stream, undefined), tracks: unknownFact<readonly (string | undefined)[]>() };
   return {
     sourceId: copy.key,
     providerKey: "local",
@@ -170,12 +171,14 @@ export function listedLocalCopyEvidence(
     capabilities: ["play"],
     providerResponseIndex,
     available: true,
-    facts: inspected ? inspectedFacts(copy.size, inspected.info, inspectedFact(inspected.subtitleSidecars)) : {
+    facts: inspected ? {
+      ...inspectedFacts(copy.size, inspected.info, inspectedFact(inspected.subtitleSidecars)),
+      // Tracks with no language tag say nothing about the language; the rules would read them
+      // as a file proven to be in none, so the name keeps speaking for it.
+      ...(inspected.info.audioTracks.some((track) => track.language) ? {} : { audio: named }),
+    } : {
       ...unknownFacts(copy.size),
-      audio: {
-        listed: listedAudioLanguages(stream, undefined),
-        tracks: unknownFact(),
-      },
+      audio: named,
       bytes: { evidence: "listed", value: copy.size },
       videoCodec: videoCodecFromListing(stream),
       videoRange: videoRangeFromListing(stream),

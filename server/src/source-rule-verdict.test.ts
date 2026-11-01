@@ -379,3 +379,18 @@ test("a local file name is listed language evidence", () => {
   })), [local]).get(local.sourceId)!;
   assert.equal(verdict.status, "meets");
 });
+
+test("a read local copy breaks a language rule only by the language its tracks name", () => {
+  const read = (language?: string) => listedLocalCopyEvidence({ key: "lib_00000001/movie.webm", size: 10 }, 0, "movie.webm", {
+    info: { container: "webm", audioTracks: [{ index: 0, codec: "opus", ...(language ? { language } : {}) }], subtitleTracks: [] },
+    subtitleSidecars: [],
+  });
+  const czechOnly = snapshot(rule({ audio: { mode: "only", language: "cs", fallback: null } }));
+  const untagged = read();
+  const english = read("en");
+  const verdicts = ruleVerdicts(czechOnly, [untagged]);
+  const unnamed = listedLocalCopyEvidence({ key: "lib_00000001/movie.webm", size: 10 }, 0);
+  assert.equal(verdicts.get(untagged.sourceId)!.status, ruleVerdicts(czechOnly, [unnamed]).get(unnamed.sourceId)!.status,
+    "an untagged track is judged as if the file were not read");
+  assert.equal(ruleVerdicts(czechOnly, [english]).get(english.sourceId)!.status, "breaks");
+});
