@@ -84,6 +84,8 @@ export interface ProviderItem {
   providerIds: { imdb?: string; tmdb?: string; tvdb?: string };
   durationTicks?: number;
   overview?: string; year?: number; genres?: string[]; size?: number; addedAt?: string;
+  /** The provider's premiere date, when it reported a parseable one. */
+  premiereDate?: string;
   /** Internal only: whether the provider row carries an actual Primary image tag. Never part of
    *  a client projection; the mosaic preview uses it to prefer tiles that have real artwork. */
   hasPrimaryImage?: boolean;
@@ -363,6 +365,8 @@ function providerItem(raw: unknown): ProviderItem {
   if (size !== undefined) result.size = size;
   const addedAt = optionalString(item.DateCreated, 64);
   if (addedAt !== undefined && Number.isFinite(Date.parse(addedAt))) result.addedAt = new Date(addedAt).toISOString();
+  const premiereDate = optionalString(item.PremiereDate, 64);
+  if (premiereDate !== undefined && Number.isFinite(Date.parse(premiereDate))) result.premiereDate = new Date(premiereDate).toISOString();
   if (item.ImageTags !== undefined) {
     const tag = readPrimaryTag(item.ImageTags);
     result.hasPrimaryImage = tag !== undefined;

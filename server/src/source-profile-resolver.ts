@@ -439,6 +439,17 @@ export function createRulesProfileResolver(
   deps: SourceResolverDeps,
 ): (input: RulesProfileResolverInput) => Promise<RulesProfileResolution> {
   return async ({ source, snapshot, ownerUserId, signal, cursor, finalTemporaryAttempt }) => {
+    const remoteItem = source.remoteItem;
+    const remoteItemKey = remoteItem === undefined ? undefined : `remote:${remoteItem.libraryId}`;
+    if (remoteItem !== undefined
+      && (snapshot.providerKeys.length !== 1 || snapshot.providerKeys[0] !== remoteItemKey)) {
+      return rulesAccessDenied();
+    }
+    const remoteItemDownloadCandidates = deps.remoteItemDownloadCandidates;
+    if (remoteItem !== undefined && remoteItemDownloadCandidates === undefined) {
+      return rulesAccessDenied();
+    }
+
     const acquired = await acquireProfileAddons(deps, {
       source,
       snapshot,
@@ -447,43 +458,69 @@ export function createRulesProfileResolver(
     }, true);
     if (acquired.status !== "ready") return rulesUnavailable(acquired);
 
-    const remoteKeys = snapshot.providerKeys.filter((key) => key.startsWith("remote:"));
     const remoteCandidates: RemoteRulesCandidate[] = [];
     let remoteTemporaryFailures = 0;
-    if (ownerUserId && remoteKeys.length > 0 && (source.type === "movie" || source.type === "series")) {
-      const listing = new Array<RemoteRulesCandidate[] | undefined>(remoteKeys.length);
-      let next = 0;
-      const worker = async () => {
-        while (!signal.aborted) {
-          const index = next++;
-          const providerKey = remoteKeys[index];
-          if (providerKey === undefined) return;
-          const libraryId = providerKey.slice("remote:".length);
-          try {
-            const remoteSignal = AbortSignal.any([signal, AbortSignal.timeout(8_000)]);
-            const candidates = await abortable(deps.remoteDownloadCandidates({
-              ownerUserId,
-              libraryId,
-              type: source.type as "movie" | "series",
-              catalogId: source.videoId,
-              signal: remoteSignal,
-            }), remoteSignal);
-            listing[index] = candidates.map((candidate, candidateIndex) => ({
-              providerKey,
-              reference: candidate.reference,
-              version: candidate.version,
-              stream: candidate.stream,
-              providerResponseIndex: index * 10_000 + candidateIndex,
-            }));
-          } catch {
-            if (signal.aborted) return;
-            remoteTemporaryFailures += 1;
+    if (remoteItem !== undefined) {
+      if (ownerUserId === undefined || remoteItemDownloadCandidates === undefined || remoteItemKey === undefined) {
+        return rulesAccessDenied();
+      }
+      try {
+        const remoteSignal = AbortSignal.any([signal, AbortSignal.timeout(8_000)]);
+        const candidates = await abortable(remoteItemDownloadCandidates({
+          ownerUserId,
+          libraryId: remoteItem.libraryId,
+          itemId: remoteItem.itemId,
+          signal: remoteSignal,
+        }), remoteSignal);
+        if (candidates === null) return rulesAccessDenied();
+        remoteCandidates.push(...candidates.map((candidate, candidateIndex) => ({
+          providerKey: remoteItemKey,
+          reference: candidate.reference,
+          version: candidate.version,
+          stream: candidate.stream,
+          providerResponseIndex: candidateIndex,
+        })));
+      } catch {
+        if (signal.aborted) return rulesCancelled();
+        remoteTemporaryFailures = 1;
+      }
+    } else {
+      const remoteKeys = snapshot.providerKeys.filter((key) => key.startsWith("remote:"));
+      if (ownerUserId && remoteKeys.length > 0 && (source.type === "movie" || source.type === "series")) {
+        const listing = new Array<RemoteRulesCandidate[] | undefined>(remoteKeys.length);
+        let next = 0;
+        const worker = async () => {
+          while (!signal.aborted) {
+            const index = next++;
+            const providerKey = remoteKeys[index];
+            if (providerKey === undefined) return;
+            const libraryId = providerKey.slice("remote:".length);
+            try {
+              const remoteSignal = AbortSignal.any([signal, AbortSignal.timeout(8_000)]);
+              const candidates = await abortable(deps.remoteDownloadCandidates({
+                ownerUserId,
+                libraryId,
+                type: source.type as "movie" | "series",
+                catalogId: source.videoId,
+                signal: remoteSignal,
+              }), remoteSignal);
+              listing[index] = candidates.map((candidate, candidateIndex) => ({
+                providerKey,
+                reference: candidate.reference,
+                version: candidate.version,
+                stream: candidate.stream,
+                providerResponseIndex: index * 10_000 + candidateIndex,
+              }));
+            } catch {
+              if (signal.aborted) return;
+              remoteTemporaryFailures += 1;
+            }
           }
-        }
-      };
-      await Promise.all([worker(), worker()]);
-      if (signal.aborted) return rulesCancelled();
-      for (const candidates of listing) if (candidates !== undefined) remoteCandidates.push(...candidates);
+        };
+        await Promise.all([worker(), worker()]);
+        if (signal.aborted) return rulesCancelled();
+        for (const candidates of listing) if (candidates !== undefined) remoteCandidates.push(...candidates);
+      }
     }
 
     const outcome = await verifyRulesAddonStreams({

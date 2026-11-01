@@ -455,6 +455,34 @@ test("a connection sweep pauses the queued remote copy that names it", async () 
   assert.deepEqual(h.paused, ["remote"], "only the copy bound to the swept connection pauses");
 });
 
+test("a remote library or connection sweep pauses its pending remote-item jobs", async () => {
+  const remoteItem = { libraryId: REMOTE_LIBRARY, connectionId: CONNECTION_A, itemId: "item-1" };
+  const remoteJob = () => job("pending-remote", "usr_a", {
+    source: { type: "series", videoId: `remote-item:${REMOTE_LIBRARY}:item-1`, tried: [], remoteItem },
+  });
+
+  const byLibrary = harness([remoteJob(), job("local", "usr_a")]);
+  await byLibrary.revocations.stopContent({ libraryId: REMOTE_LIBRARY });
+  assert.deepEqual(byLibrary.paused, ["pending-remote"]);
+
+  const byConnection = harness([remoteJob()]);
+  await byConnection.revocations.stopContent({ connectionId: CONNECTION_A });
+  assert.deepEqual(byConnection.paused, ["pending-remote"]);
+});
+
+test("stopUnreachable pauses a pending remote-item job whose library is no longer visible", async () => {
+  const remoteItem = { libraryId: REMOTE_LIBRARY, connectionId: CONNECTION_A, itemId: "item-1" };
+  const h = harness([job("pending-remote", "usr_a", {
+    source: { type: "series", videoId: `remote-item:${REMOTE_LIBRARY}:item-1`, tried: [], remoteItem },
+  })]);
+  const user = remoteUser();
+  h.deps.source = remoteSource({ user, library: remoteLibrary({ allowedUsers: [] }) });
+
+  await h.revocations.stopUnreachable(user);
+
+  assert.deepEqual(h.paused, ["pending-remote"]);
+});
+
 test("stopUnreachable pauses a remote copy whose grant was withdrawn", async () => {
   const h = harness([job("remote", "usr_a", { remoteDownload: remoteDownload() }), job("other", "usr_a")]);
   const user = remoteUser();

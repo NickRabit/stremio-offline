@@ -1,40 +1,65 @@
 package cz.stremiooffline.tv.ui.catalog
 
+import cz.stremiooffline.tv.data.BulkMediaDto
+import cz.stremiooffline.tv.data.BulkPreparedEpisodeDto
 import cz.stremiooffline.tv.data.VideoDto
+
+sealed interface BulkOrigin {
+  data class Catalogue(val videos: List<VideoDto>, val media: BulkMediaDto) : BulkOrigin
+  data class Remote(
+    val libraryId: String,
+    val libraryName: String,
+    val provider: String,
+    val seriesItemId: String,
+  ) : BulkOrigin
+}
 
 /** Which episodes a bulk download queues, in the order the panel offers them. */
 enum class DownloadScope { Episode, Season, FromEpisode, All }
 
-/** The videos the web counts as episodes of a show at all: `toEpisodes` drops anything without
- *  a season and a number, and specials (season 0) are not episodes of a series. */
-internal fun isRegularEpisode(video: VideoDto): Boolean =
-  video.id != null && video.season != null && video.episode != null && video.season >= 1
+private fun preparedEpisodeOrder(
+  left: BulkPreparedEpisodeDto,
+  right: BulkPreparedEpisodeDto,
+): Int =
+  (left.season ?: Int.MAX_VALUE).compareTo(right.season ?: Int.MAX_VALUE)
+    .takeIf { it != 0 }
+    ?: (left.episode ?: Int.MAX_VALUE).compareTo(right.episode ?: Int.MAX_VALUE)
 
-internal fun regularEpisodes(videos: List<VideoDto>): List<VideoDto> = videos.filter(::isRegularEpisode)
-
-/** An episode may be queued once its release day has come; one that names no day counts. */
-internal fun releasedEpisode(video: VideoDto, today: String): Boolean =
-  (releasedDate(video) ?: "0000-01-01") <= today
-
-/** The released, regular episodes a scope would queue, oldest season first. */
-fun scopeEpisodes(
-  videos: List<VideoDto>,
+/** The prepared answer filtered client-side. Specials only join the whole series when picked. */
+fun preparedScopeEpisodes(
+  episodes: List<BulkPreparedEpisodeDto>,
   scope: DownloadScope,
-  selected: VideoDto?,
-  today: String = utcToday(),
-): List<VideoDto> {
-  val released = orderedEpisodes(videos).filter { isRegularEpisode(it) && releasedEpisode(it, today) }
-  val season = selected?.season
-  val episode = selected?.episode
+  selected: BulkPreparedEpisodeDto? = null,
+  season: Int? = selected?.season,
+  includeSpecials: Boolean = false,
+): List<BulkPreparedEpisodeDto> {
+  val ordered = episodes.sortedWith(::preparedEpisodeOrder)
+  fun numbered(episode: BulkPreparedEpisodeDto) = episode.season != null && episode.episode != null
+  fun regular(episode: BulkPreparedEpisodeDto) = numbered(episode) && episode.season!! >= 1
   return when (scope) {
-    DownloadScope.Episode -> released.filter { it.id == selected?.id }
-    DownloadScope.Season -> if (season == null) emptyList() else released.filter { it.season == season }
-    DownloadScope.FromEpisode ->
-      if (season == null || episode == null) {
+    DownloadScope.Episode -> ordered.filter { it.id == selected?.id }
+    DownloadScope.Season -> if (season == null) emptyList() else ordered.filter { it.season == season }
+    DownloadScope.FromEpisode -> {
+      val selectedSeason = selected?.season
+      val selectedEpisode = selected?.episode
+      if (selectedSeason == null || selectedEpisode == null) {
         emptyList()
       } else {
-        released.filter { (it.season ?: 0) > season || (it.season == season && (it.episode ?: 0) >= episode) }
+        ordered.filter { episode ->
+          regular(episode) &&
+            ((episode.season ?: 0) > selectedSeason ||
+              (episode.season == selectedSeason && (episode.episode ?: 0) >= selectedEpisode))
+        }
       }
-    DownloadScope.All -> released
+    }
+    DownloadScope.All -> ordered.filter { episode ->
+      regular(episode) || (includeSpecials && numbered(episode) && episode.season == 0)
+    }
   }
 }
+
+fun preparedReadyEpisodes(episodes: List<BulkPreparedEpisodeDto>): List<BulkPreparedEpisodeDto> =
+  episodes.filter { it.status == "ready" }
+
+fun <T> batches(items: List<T>, size: Int = 500): List<List<T>> =
+  if (items.isEmpty()) emptyList() else items.chunked(size.coerceAtLeast(1))

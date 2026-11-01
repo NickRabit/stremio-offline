@@ -514,6 +514,7 @@ fun Shell(
       backEnabled = player == null,
       restoreToken = detailReturnToken,
       loadDestinations = nativeDestinations,
+      bulkApi = api,
       onQueue = nativeQueue,
       // The screen's own RemoteLibraryApi stays exactly that; the addon discovery needs the
       // catalogue surface, which the shell's real api already implements.

@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.catalog
 
+import cz.stremiooffline.tv.ui.detail.willPlayText
 import android.content.res.Resources
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -253,7 +254,7 @@ internal fun TitleDownloadPanel(
       TitleDownloadScreen.Main -> {
         PanelOption(
           text = stringResource(R.string.rules_selected_source),
-          supportingText = streamLabel(stream).ifBlank { null },
+          supportingText = willPlayText(stream).ifBlank { null },
           onClick = {
             restoreOpener.value = false
             onUseSelected()

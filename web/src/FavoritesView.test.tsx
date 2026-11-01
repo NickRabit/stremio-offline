@@ -37,7 +37,7 @@ type Overrides = Partial<Parameters<typeof FavoritesView>[0]>;
 const render = async (over: Overrides = {}) => {
   const props: Parameters<typeof FavoritesView>[0] = {
     filter: "all", onFilter: vi.fn(), items: [], busy: false, shape: "poster",
-    onToggleShape: vi.fn(), onPlay: vi.fn(), onOpenFolder: vi.fn(), onOpenTitle: vi.fn(), onOpenCatalog: vi.fn(), onOpenRemote: vi.fn(),
+    onToggleShape: vi.fn(), onPlay: vi.fn(), onOpenFolder: vi.fn(), onOpenTitle: vi.fn(), onOpenCatalog: vi.fn(), onOpenRemote: vi.fn(), onRemove: vi.fn(),
     hasMore: false, loadingMore: false, onLoadMore: vi.fn(), ...over,
   };
   await act(async () => { root.render(<FavoritesView {...props}/>); });
@@ -45,7 +45,8 @@ const render = async (over: Overrides = {}) => {
 };
 
 const chips = () => [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"] button')];
-const cards = () => [...host.querySelectorAll<HTMLButtonElement>(".favorites-grid .browse-item")];
+const cards = () => [...host.querySelectorAll<HTMLButtonElement>(".favorites-grid .browse-open")];
+const menus = () => [...host.querySelectorAll<HTMLButtonElement>(".favorites-grid .browse-menu")];
 const click = async (element: HTMLElement) => { await act(async () => { element.click(); await Promise.resolve(); }); };
 
 describe("FavoritesView", () => {
@@ -98,6 +99,24 @@ describe("FavoritesView", () => {
 
     expect(onOpenTitle).toHaveBeenCalledWith(boundShow());
     expect(onOpenFolder).not.toHaveBeenCalled();
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it("takes a star off from the card's own menu, whatever kind of star it is", async () => {
+    const items = [film(), catalog(), remoteStar()] as FavoriteItem[];
+    const { onRemove, onPlay } = await render({ items });
+
+    expect(menus()).toHaveLength(3);
+    expect(host.querySelector(".browse-actions")).toBeNull();
+    for (const [index, item] of items.entries()) {
+      await click(menus()[index]!);
+      const remove = [...host.querySelectorAll<HTMLButtonElement>(".browse-actions button")];
+      expect(remove.map((button) => button.textContent)).toEqual([" Remove from favorites"]);
+      await click(remove[0]!);
+      expect(onRemove).toHaveBeenLastCalledWith(item);
+      expect(host.querySelector(".browse-actions")).toBeNull();
+    }
+    // The menu is its own button: opening it never opens or plays the card.
     expect(onPlay).not.toHaveBeenCalled();
   });
 

@@ -25,7 +25,7 @@ const localPreview = (episodes: Episode[], startMode: FollowStartMode, startSeas
   return { count: due.length, episodes: [] };
 };
 const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
-const usableProfile = (profile: SourceProfile) => profile.template === "rules"
+export const usableProfile = (profile: SourceProfile) => profile.template === "rules"
   && profile.operations.includes("downloadToLibrary")
   && Boolean(sourceProfileName(profile.nameKey, profile.name));
 

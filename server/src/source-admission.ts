@@ -54,6 +54,7 @@ export interface SourceAdmissionContext {
   remoteLibraries: readonly RemoteLibraryRecord[];
   mediaConnections: readonly MediaConnectionRecord[];
   addonOrder?: readonly string[];
+  onlyProviderKeys?: readonly string[];
   preferences: SourceAdmissionPreferences;
   operation: SourceOperation;
   mediaKind: "episode" | "movie";
@@ -497,7 +498,9 @@ const materializeAdmission = (
   const operation = supportsOperation(profile.template, context);
   const available = availableProviderKeys(storedPolicy, context, operation, profile.template);
   const scoped = sourceAdmissionProviderScope(storedPolicy.scope, available);
-  const selected = explicitProviderOrder(scoped, storedPolicy);
+  const ordered = explicitProviderOrder(scoped, storedPolicy);
+  const allowed = context.onlyProviderKeys === undefined ? undefined : new Set(context.onlyProviderKeys);
+  const selected = allowed === undefined ? ordered : ordered.filter((key) => allowed.has(key));
   if (selected.length === 0) throw new SourceAdmissionRejected("providerScopeUnavailable");
 
   const policy = materializeSourceAdmissionPolicy(storedPolicy, selected, context.preferences);

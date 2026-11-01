@@ -250,6 +250,7 @@
   <string name="tv_download_this_season">Этот сезон (%1$s)</string>
   <string name="tv_download_from_episode">С этой серии</string>
   <string name="tv_download_all_episodes">Все серии</string>
+  <string name="episodes_specials">Специальные эпизоды</string>
   <string name="bulk_title">Скачать серию</string>
   <string name="bulk_title_movie">Загрузка фильма</string>
   <string name="bulk_title_episode">Загрузка эпизода</string>
@@ -260,6 +261,49 @@
     <item quantity="many">%1$s серий</item>
     <item quantity="other">%1$s серий</item>
   </plurals>
+  <string name="series_bulk_title">Скачать сериал</string>
+  <string name="series_bulk_whole_series">Весь сериал</string>
+  <string name="series_bulk_this_source">Эта серия · выбранный источник</string>
+  <string name="series_bulk_source">Источник</string>
+  <string name="series_bulk_from_library">Из этой библиотеки — %1$s / %2$s</string>
+  <string name="series_bulk_from_library_hint">Копируются только эпизоды, которые есть в этой библиотеке. Ничего не дополняется из других мест.</string>
+  <string name="series_bulk_from_catalogue">Из каталога по правилам</string>
+  <string name="series_bulk_from_catalogue_hint">Каждый эпизод ищется в ваших дополнениях; из этой библиотеки ничего не копируется.</string>
+  <string name="series_bulk_preparing">Подготовка списка эпизодов…</string>
+  <plurals name="series_bulk_ready">
+    <item quantity="one">%1$s серия готова</item>
+    <item quantity="few">%1$s серии готовы</item>
+    <item quantity="many">%1$s серий готово</item>
+    <item quantity="other">%1$s серий готово</item>
+  </plurals>
+  <string name="series_bulk_in_target">%1$s уже в библиотеке</string>
+  <string name="series_bulk_queued">%1$s уже в очереди</string>
+  <string name="series_bulk_unreleased">%1$s ещё не вышли</string>
+  <string name="series_bulk_unnumbered">%1$s без нумерации</string>
+  <string name="series_bulk_nothing">Нечего скачивать.</string>
+  <string name="series_bulk_sources_later">Источники выбираются при скачивании каждого эпизода.</string>
+  <string name="series_bulk_reason_in_target">уже в библиотеке</string>
+  <string name="series_bulk_reason_queued">уже в очереди</string>
+  <string name="series_bulk_reason_unreleased">ещё не вышел</string>
+  <string name="series_bulk_reason_unnumbered">нет номера сезона или эпизода</string>
+  <string name="series_bulk_incomplete">Не удалось полностью прочитать список эпизодов.</string>
+  <plurals name="series_bulk_add">
+    <item quantity="one">Добавить %1$s серию в очередь</item>
+    <item quantity="few">Добавить %1$s серии в очередь</item>
+    <item quantity="many">Добавить %1$s серий в очередь</item>
+    <item quantity="other">Добавить %1$s серий в очередь</item>
+  </plurals>
+  <string name="series_bulk_adding">Добавление %1$s из %2$s…</string>
+  <plurals name="series_bulk_partly_added">
+    <item quantity="one">%1$s серия уже была добавлена.</item>
+    <item quantity="few">%1$s серии уже были добавлены.</item>
+    <item quantity="many">%1$s серий уже было добавлено.</item>
+    <item quantity="other">%1$s серий уже было добавлено.</item>
+  </plurals>
+  <string name="err_bulk_remote_not_in_rules">Ваши правила загрузки не разрешают копирование из этой библиотеки.</string>
+  <string name="tv_series_bulk_season_picker">Сезон…</string>
+  <string name="tv_series_bulk_seasons_title">Сезоны</string>
+  <string name="tv_series_bulk_skipped_row">Пропущенные (%1$s)</string>
   <string name="rules_title">Правила скачивания</string>
   <string name="rules_selected_source">Выбранный источник</string>
   <string name="rules_unavailable">Правила скачивания недоступны. Обратитесь к администратору.</string>

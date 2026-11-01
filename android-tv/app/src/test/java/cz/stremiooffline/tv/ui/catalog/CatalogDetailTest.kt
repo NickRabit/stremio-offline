@@ -52,14 +52,11 @@ import cz.stremiooffline.tv.ui.detail.relatedTitleTag
 import cz.stremiooffline.tv.ui.detail.titlePersonTag
 import cz.stremiooffline.tv.ui.detail.videoCardTag
 import cz.stremiooffline.tv.ui.detail.videoIntent
-import cz.stremiooffline.tv.ui.catalog.DownloadIcon
-import cz.stremiooffline.tv.ui.components.SeriesDownloadIcon
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -931,6 +928,8 @@ class CatalogDetailTest {
     compose.waitForIdle()
     compose.onNodeWithTag(episodeCardTag(videos[29])).assertExists()
     compose.onNodeWithTag(episodeCardTag(videos[0])).assertDoesNotExist()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(episodeCardTag(videos[29])).assertIsFocused()
   }
 
   // --- Review round 2 -------------------------------------------------------------------------
@@ -1169,15 +1168,43 @@ class CatalogDetailTest {
     compose.waitForIdle()
 
     assertEquals(
-      listOf(TagCatalogSeriesDownload, TagCatalogShowInLibrary),
-      compose.actionRowOrder(TagCatalogSeriesDownload, TagCatalogShowInLibrary),
+      listOf(TagCatalogToLibrary, TagCatalogShowInLibrary),
+      compose.actionRowOrder(TagCatalogToLibrary, TagCatalogShowInLibrary),
     )
   }
 
   @Test
-  fun `the series download uses its own list icon`() {
-    assertNotEquals(DownloadIcon, SeriesDownloadIcon)
-    assertEquals("SeriesDownloadList", SeriesDownloadIcon.name)
+  fun `a series offers its bulk action without requiring an episode choice`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.metaValues["series:tt1"] = MetaDto(
+      id = "tt1",
+      type = "series",
+      name = "Show",
+      videos = listOf(
+        VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+        VideoDto(id = "tt1:1:2", title = "Two", season = 1, episode = 2),
+      ),
+    )
+    mount(api, CatalogDetailArgs(MetaDto(id = "tt1", type = "series", name = "Show"), "Cinemeta", "series"))
+    compose.waitForIdle()
+
+    // One To library action opens the season and whole-series choices; no separate bulk button.
+    compose.onNodeWithTag(TagCatalogToLibrary).performSemanticsAction(SemanticsActions.OnClick)
+    compose.onNodeWithTag(TagSeriesDownloadPanel).assertExists()
+    compose.onNodeWithText("Whole series").assertDoesNotExist()
+  }
+
+  @Test
+  fun `a film has no series bulk action`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogToLibrary).performSemanticsAction(SemanticsActions.OnClick)
+    compose.onNodeWithTag(TagSeriesDownloadPanel).assertDoesNotExist()
   }
 
   @Test

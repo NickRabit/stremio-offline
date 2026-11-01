@@ -43,6 +43,7 @@ class ApiError(
   /** The HTTP status the refusal carried, when it came from a response; a caller that must tell
    *  one refusal from another (a stale paging cursor, say) reads it rather than the mapped failure. */
   val status: Int? = null,
+  val messageKey: String? = null,
 ) : Exception(serverMessage ?: failure.name)
 
 data class ServerStatus(val version: String, val searchEverywhere: Boolean = false)
@@ -566,11 +567,19 @@ class ApiClient(
     selection: DownloadSelectionDto,
     media: BulkMediaDto,
     target: DownloadTargetDto?,
+    origin: BulkRemoteOriginDto?,
   ): BulkDownloadResult {
-    val body = bulkDownloadBody(title, type, episodes, selection, media, target)
+    val body = bulkDownloadBody(title, type, episodes, selection, media, target, origin)
     val payload = downloadJson.encodeToString(BulkDownloadRequest.serializer(), body)
     return request(Request.Builder().url(address.resolve("/api/downloads/bulk")).post(payload.toRequestBody(mediaType)).build())
       .decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun prepareBulk(body: BulkPrepareRequest): BulkPrepareResponse {
+    val payload = downloadJson.encodeToString(BulkPrepareRequest.serializer(), body)
+    return requestCancellable(
+      Request.Builder().url(address.resolve("/api/downloads/bulk/prepare")).post(payload.toRequestBody(mediaType)).build(),
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
   }
 
   /** One Home answer for the named rows; an empty list only asks for `order`. */
@@ -778,10 +787,10 @@ class ApiClient(
     // the interface shows the message when it can explain a failure better than a generic line.
     val error = readBody(response).decodeOrNull<ErrorBody>()
     return when (response.code) {
-      401 -> throw ApiError(ApiFailure.SessionExpired, serverMessage = error?.error, status = response.code)
-      403 -> throw ApiError(ApiFailure.Forbidden, serverMessage = error?.error, status = response.code)
-      404, 410 -> throw ApiError(ApiFailure.NotFound, serverMessage = error?.error, status = response.code)
-      else -> throw ApiError(ApiFailure.Generic, serverMessage = error?.error, status = response.code)
+      401 -> throw ApiError(ApiFailure.SessionExpired, serverMessage = error?.error, status = response.code, messageKey = error?.messageKey)
+      403 -> throw ApiError(ApiFailure.Forbidden, serverMessage = error?.error, status = response.code, messageKey = error?.messageKey)
+      404, 410 -> throw ApiError(ApiFailure.NotFound, serverMessage = error?.error, status = response.code, messageKey = error?.messageKey)
+      else -> throw ApiError(ApiFailure.Generic, serverMessage = error?.error, status = response.code, messageKey = error?.messageKey)
     }
   }
 

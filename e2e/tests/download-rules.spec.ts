@@ -53,7 +53,7 @@ const queueEpisode = async (request: APIRequestContext, profile: Profile, title:
     },
   });
   expect(response.status(), await response.text()).toBe(201);
-  expect(await response.json()).toEqual({ added: 1, skipped: 0 });
+  expect(await response.json()).toMatchObject({ added: 1, skipped: 0 });
 };
 
 const openSeries = async (page: Page): Promise<Locator> => {

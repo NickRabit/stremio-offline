@@ -250,6 +250,7 @@
   <string name="tv_download_this_season">Táto séria (%1$s)</string>
   <string name="tv_download_from_episode">Od tejto časti ďalej</string>
   <string name="tv_download_all_episodes">Všetky časti</string>
+  <string name="episodes_specials">Špeciálne epizódy</string>
   <string name="bulk_title">Stiahnite si sériu</string>
   <string name="bulk_title_movie">Stiahnutie filmu</string>
   <string name="bulk_title_episode">Stiahnutie epizódy</string>
@@ -260,6 +261,49 @@
     <item quantity="many">%1$s epizódy</item>
     <item quantity="other">%1$s epizód</item>
   </plurals>
+  <string name="series_bulk_title">Stiahnuť sériu</string>
+  <string name="series_bulk_whole_series">Celá séria</string>
+  <string name="series_bulk_this_source">Tento diel · vybraný zdroj</string>
+  <string name="series_bulk_source">Zdroj</string>
+  <string name="series_bulk_from_library">Z tejto knižnice — %1$s / %2$s</string>
+  <string name="series_bulk_from_library_hint">Skopíruje iba epizódy, ktoré má táto knižnica. Nič sa nedopĺňa odinakiaľ.</string>
+  <string name="series_bulk_from_catalogue">Z katalógu podľa pravidiel</string>
+  <string name="series_bulk_from_catalogue_hint">Každú epizódu hľadá vo vašich doplnkoch; z tejto knižnice nič nekopíruje.</string>
+  <string name="series_bulk_preparing">Pripravujem zoznam epizód…</string>
+  <plurals name="series_bulk_ready">
+    <item quantity="one">%1$s epizóda pripravená</item>
+    <item quantity="few">%1$s epizódy pripravené</item>
+    <item quantity="many">%1$s epizód pripravených</item>
+    <item quantity="other">%1$s epizód pripravených</item>
+  </plurals>
+  <string name="series_bulk_in_target">%1$s už v knižnici</string>
+  <string name="series_bulk_queued">%1$s už v poradí</string>
+  <string name="series_bulk_unreleased">%1$s zatiaľ nevydané</string>
+  <string name="series_bulk_unnumbered">%1$s bez čísla epizódy</string>
+  <string name="series_bulk_nothing">Nie je čo stiahnuť.</string>
+  <string name="series_bulk_sources_later">Zdroje sa vyberú pri sťahovaní každej epizódy.</string>
+  <string name="series_bulk_reason_in_target">už v knižnici</string>
+  <string name="series_bulk_reason_queued">už v poradí</string>
+  <string name="series_bulk_reason_unreleased">zatiaľ nevydané</string>
+  <string name="series_bulk_reason_unnumbered">bez čísla sezóny alebo epizódy</string>
+  <string name="series_bulk_incomplete">Zoznam epizód sa nepodarilo načítať celý.</string>
+  <plurals name="series_bulk_add">
+    <item quantity="one">Pridať %1$s epizódu do poradia</item>
+    <item quantity="few">Pridať %1$s epizódy do poradia</item>
+    <item quantity="many">Pridať %1$s epizód do poradia</item>
+    <item quantity="other">Pridať %1$s epizód do poradia</item>
+  </plurals>
+  <string name="series_bulk_adding">Pridávam %1$s z %2$s…</string>
+  <plurals name="series_bulk_partly_added">
+    <item quantity="one">%1$s epizóda už bola pridaná.</item>
+    <item quantity="few">%1$s epizódy už boli pridané.</item>
+    <item quantity="many">%1$s epizód už bolo pridaných.</item>
+    <item quantity="other">%1$s epizód už bolo pridaných.</item>
+  </plurals>
+  <string name="err_bulk_remote_not_in_rules">Vaše pravidlá sťahovania nepovoľujú kopírovanie z tejto knižnice.</string>
+  <string name="tv_series_bulk_season_picker">Séria…</string>
+  <string name="tv_series_bulk_seasons_title">Série</string>
+  <string name="tv_series_bulk_skipped_row">Preskočené (%1$s)</string>
   <string name="rules_title">Pravidlá sťahovania</string>
   <string name="rules_selected_source">Vybraný zdroj</string>
   <string name="rules_unavailable">Pravidlá sťahovania nie sú k dispozícii. Požiadajte správcu.</string>

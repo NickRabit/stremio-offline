@@ -125,11 +125,14 @@ internal fun RemoteSeriesContent(
   copyNotice: String?,
   copyBusy: Boolean,
   canCopy: Boolean,
+  canBulk: Boolean,
+  bulkFocus: FocusRequester,
   onOpenEpisode: (RemoteItemDto) -> Unit,
   /** Plays one episode, resuming it unless the flag asks for the beginning. */
   onPlayEpisode: (RemoteItemDto, Boolean) -> Unit,
   onWatched: (RemoteItemDto) -> Unit,
   onCopy: (RemoteItemDto) -> Unit,
+  onBulk: () -> Unit,
   onRetry: () -> Unit,
   onRetryAppend: () -> Unit,
   onLoadMore: () -> Unit,
@@ -245,13 +248,15 @@ internal fun RemoteSeriesContent(
             )
           }
         },
+        // With bulk available the action opens the panel that also offers this one episode.
         toLibrary = selectedItem?.takeIf { canCopy }?.let {
           DetailAction(
             label = stringResource(R.string.save_to_library),
             icon = DownloadIcon,
             tag = TagRemoteSeriesToLibrary,
             enabled = !copyBusy,
-            onClick = { onCopy(it) },
+            onClick = { if (canBulk) onBulk() else onCopy(it) },
+            modifier = Modifier.focusRequester(bulkFocus),
           )
         },
         favourite = null,

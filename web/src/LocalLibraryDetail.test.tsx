@@ -207,6 +207,14 @@ describe("LocalLibraryDetail discovery", () => {
 });
 
 describe("LocalLibraryDetail actions", () => {
+  it("offers no bulk download menu for a local series", async () => {
+    identityHandler = () => json(identity({ kind: "series", bound: { type: "series", id: "tt9", name: "Show" } }));
+    copies = () => json([copy("Show/S01E02.mkv", "S01E02.mkv", 1_000_000_000, "Shows")]);
+    await render(file({ path: "Show/S01E02.mkv", label: "S01E02.mkv", season: 1, episode: 2, catalogName: "The Second Episode" }));
+    expect(document.querySelector(".episode-bulk")).toBeNull();
+    expect(host.textContent).not.toContain("Download the whole series");
+  });
+
   it("keeps file management reachable from a movie folder detail", async () => {
     const onOpenFolder = vi.fn();
     await render({ kind: "folder", path: "Movie", name: "Movie", fileCount: 2, size: 100 }, { onOpenFolder });

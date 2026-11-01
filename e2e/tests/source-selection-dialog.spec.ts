@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { cleanupJourney, profileByNameKey, resetFixture, type Job } from "./source-selection-journey";
+import { rm } from "node:fs/promises";
+import path from "node:path";
+import { cleanupJourney, E2E_LIBRARY, profileByNameKey, resetFixture, type Job } from "./source-selection-journey";
 
 const SERIES_ID = "tt-e2e-series";
 const SERIES_NAME = "Zkušební seriál";
@@ -54,6 +56,7 @@ test.afterEach(async ({ request }) => {
 
 test("bulk download queues season one with the Smaller preset", async ({ page, request }) => {
   expect((await resetFixture(request)).ok()).toBe(true);
+  await rm(path.join(E2E_LIBRARY, SERIES_NAME), { recursive: true, force: true });
   const smaller = await profileByNameKey(request, "rules.preset.smaller");
 
   const detail = await openSeries(page);

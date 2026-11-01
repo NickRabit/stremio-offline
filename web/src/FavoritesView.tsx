@@ -1,4 +1,5 @@
-import { Film, FolderOpen, HardDrive, Star } from "lucide-react";
+import { Film, FolderOpen, HardDrive, MoreVertical, Star, StarOff } from "lucide-react";
+import { useState, type JSX } from "react";
 import { Empty, ShapeToggle } from "./app-chrome";
 import { t } from "./i18n";
 import { TileArt } from "./TileArt";
@@ -26,7 +27,13 @@ const percent = (item: FavoriteLibraryItem): number | null =>
  *  a title opens that title's detail, whatever kind of copy it is; an unbound one opens the folder
  *  or plays the file the way the library does; a catalogue entry opens the shared detail, and a
  *  media-server entry opens that server's own detail. */
-export function FavoritesView({ filter, onFilter, items, busy, shape, onToggleShape, onPlay, onOpenFolder, onOpenTitle, onOpenCatalog, onOpenRemote, hasMore, loadingMore, onLoadMore }: {
+const itemKey = (item: FavoriteItem): string =>
+  item.kind === "library" ? `library:${item.path}` : item.kind === "catalog" ? `catalog:${item.type}:${item.id}` : `remote:${item.libraryId}:${item.itemId}`;
+
+const itemTitle = (item: FavoriteItem): string =>
+  item.kind === "library" ? item.label : item.kind === "catalog" ? item.name : item.title;
+
+export function FavoritesView({ filter, onFilter, items, busy, shape, onToggleShape, onPlay, onOpenFolder, onOpenTitle, onOpenCatalog, onOpenRemote, onRemove, hasMore, loadingMore, onLoadMore }: {
   filter: FavoriteFilter;
   onFilter: (filter: FavoriteFilter) => void;
   items: FavoriteItem[];
@@ -38,11 +45,29 @@ export function FavoritesView({ filter, onFilter, items, busy, shape, onToggleSh
   onOpenTitle: (item: FavoriteLibraryItem) => void;
   onOpenCatalog: (item: FavoriteCatalogItem) => void;
   onOpenRemote: (item: FavoriteRemoteItem) => void;
+  /** Takes the star off from the card's own menu, the way Continue watching forgets a position. */
+  onRemove: (item: FavoriteItem) => void;
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
 }) {
   const empty = EMPTY[filter];
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  /** The card's open button plus the menu the Continue watching cards draw on the artwork. */
+  const card = (item: FavoriteItem, open: JSX.Element) => {
+    const key = itemKey(item);
+    const menuOpen = menuFor === key;
+    return <article key={key} className="browse-item favorite-card">
+      <div className="browse-frame">
+        {open}
+        <button className="browse-menu" aria-label={t("home.menu", { title: itemTitle(item) })} aria-expanded={menuOpen}
+          onClick={() => setMenuFor(menuOpen ? null : key)}><MoreVertical/></button>
+      </div>
+      {menuOpen && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+        <button onClick={() => { setMenuFor(null); onRemove(item); }}><StarOff/> {t("favorite.remove")}</button>
+      </span>}
+    </article>;
+  };
   return <div className="favorites-view">
     <div className="heading"><small>{t("home.eyebrow")}</small><h2>{t("favorites.title")}</h2></div>
     <div className="filterbar section-filter">
@@ -57,8 +82,8 @@ export function FavoritesView({ filter, onFilter, items, busy, shape, onToggleSh
         ? <Empty icon={<Star/>} title={t(empty.title)} text={t(empty.text)}/>
         : <>
           <div className={`browse-grid favorites-grid tile-shape-${shape}`}>
-            {items.map((item) => item.kind === "library"
-              ? <button key={`library:${item.path}`} className="browse-item" data-path={item.path} data-kind="favorite-library"
+            {items.map((item) => card(item, item.kind === "library"
+              ? <button className="browse-open" data-path={item.path} data-kind="favorite-library"
                   onClick={() => item.title ? onOpenTitle(item) : item.itemKind === "folder" ? onOpenFolder(item) : onPlay(item)}>
                   <span className="browse-art">
                     <TileArt shape={shape} poster={item.poster} wide={item.wide} fallback={item.itemKind === "folder" ? <FolderOpen/> : <Film/>}/>
@@ -69,20 +94,20 @@ export function FavoritesView({ filter, onFilter, items, busy, shape, onToggleSh
                   <small>{item.year ?? (item.itemKind === "folder" ? t("library.openFolder") : "")}</small>
                 </button>
               : item.kind === "catalog"
-                ? <button key={`catalog:${item.type}:${item.id}`} className="browse-item" data-catalog-key={`${item.type}:${item.id}`} data-kind="favorite-catalog"
+                ? <button className="browse-open" data-catalog-key={`${item.type}:${item.id}`} data-kind="favorite-catalog"
                     onClick={() => onOpenCatalog(item)}>
                     <span className="browse-art"><TileArt shape={shape} poster={item.poster} wide={item.wide} fallback={<Film/>}/><i className="fav-mark"><Star/></i></span>
                     <strong>{item.name}</strong>
                     <small>{item.year ?? ""}</small>
                   </button>
-                : <button key={`remote:${item.libraryId}:${item.itemId}`} className="browse-item" data-remote-id={item.itemId} data-kind="favorite-remote"
+                : <button className="browse-open" data-remote-id={item.itemId} data-kind="favorite-remote"
                     onClick={() => onOpenRemote(item)}>
                     <span className="browse-art"><TileArt shape={shape} poster={item.poster} wide={item.wide} fallback={<HardDrive/>}/><i className="fav-mark"><Star/></i></span>
                     <strong>{item.title}</strong>
                     {/* A list never names its source, and the card projection carries no year of
                         its own: the caption line stays empty rather than naming the server. */}
                     <small>{""}</small>
-                  </button>)}
+                  </button>))}
           </div>
           {hasMore && <div className="load-more">{loadingMore ? <span>{t("common.loadingMore")}</span> : <button onClick={onLoadMore}>{t("common.loadMore")}</button>}</div>}
         </>}

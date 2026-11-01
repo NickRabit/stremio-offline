@@ -293,6 +293,8 @@ fun WideCard(
   cardTag: String? = null,
   caption: String? = null,
   fallbackImageUrl: String? = null,
+  /** The episode the detail stands for: outlined even while focus is elsewhere. */
+  selected: Boolean = false,
 ) {
   var focused by remember { mutableStateOf(false) }
   val candidates = remember(imageUrl, fallbackImageUrl) { listOfNotNull(imageUrl, fallbackImageUrl).distinct() }
@@ -310,7 +312,7 @@ fun WideCard(
       scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f),
       glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Tokens.Accent2.copy(alpha = 0.35f), 18.dp)),
       border = ClickableSurfaceDefaults.border(
-        border = Border.None,
+        border = if (selected) Border(BorderStroke(2.dp, Tokens.Text.copy(alpha = 0.75f)), shape = shape) else Border.None,
         focusedBorder = Border(BorderStroke(2.dp, Tokens.Accent2), shape = shape),
       ),
       colors = ClickableSurfaceDefaults.colors(
@@ -374,7 +376,7 @@ fun WideCard(
       fontWeight = FontWeight.SemiBold,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
-      modifier = Modifier.width(190.dp).alpha(if (focused) 1f else 0.75f),
+      modifier = Modifier.width(190.dp).alpha(if (focused || selected) 1f else 0.75f),
     )
     if (caption != null) {
       Text(
@@ -383,7 +385,7 @@ fun WideCard(
         fontSize = 9.5.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.width(190.dp).alpha(if (focused) 1f else 0.75f),
+        modifier = Modifier.width(190.dp).alpha(if (focused || selected) 1f else 0.9f),
       )
     }
   }

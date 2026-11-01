@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Download } from "lucide-react";
 import type { JSX } from "react";
 import { t } from "./i18n";
 
@@ -18,15 +18,26 @@ interface Props {
   loading: boolean;
   season: number | null;
   onSeason: (season: number) => void;
+  headClassName?: string;
+  /** Season and whole-series downloads, drawn beside the season choice the way the catalogue
+   *  panel draws them. Absent where a detail offers no bulk download (a local library). */
+  bulk?: { onSeason: (season: number) => void; onSeries: () => void };
 }
 
 const pad = (value: number) => String(value).padStart(2, "0");
 
-export function EpisodePicker({ episodes, selectedKey, onPick, open, onOpenChange, loading, season, onSeason }: Props): JSX.Element {
+export function episodePickerSeason(episodes: PickerEpisode[], selectedKey: string | null, season: number | null): number {
   const seasons = [...new Set(episodes.map((episode) => episode.season).filter((value): value is number => typeof value === "number"))]
     .sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
   const selected = selectedKey === null ? undefined : episodes.find((episode) => episode.key === selectedKey);
-  const activeSeason = season ?? selected?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? 0;
+  return season ?? selected?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? 0;
+}
+
+export function EpisodePicker({ episodes, selectedKey, onPick, open, onOpenChange, loading, season, onSeason, headClassName, bulk }: Props): JSX.Element {
+  const seasons = [...new Set(episodes.map((episode) => episode.season).filter((value): value is number => typeof value === "number"))]
+    .sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
+  const selected = selectedKey === null ? undefined : episodes.find((episode) => episode.key === selectedKey);
+  const activeSeason = episodePickerSeason(episodes, selectedKey, season);
   const visibleEpisodes = episodes.filter((episode) => seasons.length <= 1 || episode.season === activeSeason);
   // Another season makes its first episode the chosen one, so Play and the source row below never
   // keep standing for an episode of the season the viewer just left. The list stays open on it.
@@ -42,12 +53,20 @@ export function EpisodePicker({ episodes, selectedKey, onPick, open, onOpenChang
 
   return <div className="catalogue-episodes">
     {selectedKey === null || open ? <>
-      <div className="subhead episode-head"><h3>{t("episodes.heading")}</h3>
+      <div className={`subhead episode-head${headClassName ? ` ${headClassName}` : ""}`}><h3>{t("episodes.heading")}</h3>
         <div className="episode-tools">
           {seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason}
             onChange={(event) => chooseSeason(Number(event.target.value))}>
             {seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}
           </select>}
+          {bulk && episodes.length > 0 && <button type="button" className="episode-bulk"
+            title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })}
+            onClick={() => bulk.onSeason(activeSeason)}>
+            <Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}
+          </button>}
+          {bulk && episodes.length > 0 && <button type="button" className="episode-bulk" title={t("episodes.downloadShow")} onClick={bulk.onSeries}>
+            <Download/> {t("episodes.wholeShow")}
+          </button>}
           <span>{visibleEpisodes.length}</span>
         </div>
       </div>

@@ -76,7 +76,7 @@ const queueEpisode = async (
     },
   });
   expect(response.status()).toBe(201);
-  expect(await response.json()).toEqual({ added: 1, skipped: 0 });
+  expect(await response.json()).toMatchObject({ added: 1, skipped: 0 });
   return `${title} · Provider request`;
 };
 

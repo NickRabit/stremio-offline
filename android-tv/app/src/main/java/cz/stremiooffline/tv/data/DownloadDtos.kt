@@ -30,6 +30,8 @@ data class BulkEpisodeDto(
   val season: Int? = null,
   val episode: Int? = null,
   val title: String? = null,
+  val remoteItemId: String? = null,
+  val released: String? = null,
 )
 
 /** The lazy rules `POST /api/downloads/bulk` reads off the selection the web sends. */
@@ -170,9 +172,94 @@ data class BulkMediaDto(
   val background: String? = null,
 )
 
+/** The prepared catalogue or media-server origin one bulk call sends. */
+@Serializable
+data class BulkOriginDto(
+  val kind: String,
+  val media: BulkMediaDto? = null,
+  val episodes: List<BulkEpisodeDto>? = null,
+  val libraryId: String? = null,
+  val seriesItemId: String? = null,
+) {
+  companion object {
+    fun catalogue(media: BulkMediaDto, episodes: List<BulkEpisodeDto>) =
+      BulkOriginDto(kind = "catalogue", media = media, episodes = episodes)
+
+    fun remote(libraryId: String, seriesItemId: String) =
+      BulkOriginDto(kind = "remote", libraryId = libraryId, seriesItemId = seriesItemId)
+  }
+}
+
+@Serializable
+data class BulkPrepareRequest(
+  val scope: String,
+  val season: Int? = null,
+  val specials: Boolean,
+  val title: String,
+  val selection: DownloadSelectionDto,
+  val target: DownloadTargetDto? = null,
+  val origin: BulkOriginDto,
+)
+
+@Serializable
+data class BulkPreparedEpisodeDto(
+  val id: String,
+  val season: Int? = null,
+  val episode: Int? = null,
+  val title: String? = null,
+  val remoteItemId: String? = null,
+  val status: String,
+)
+
+@Serializable
+data class BulkPreparedSeriesDto(
+  val title: String,
+  val catalogueId: String? = null,
+)
+
+@Serializable
+data class BulkPreparedTargetDto(
+  val libraryId: String,
+  val libraryName: String,
+)
+
+@Serializable
+data class BulkPrepareListingDto(
+  val complete: Boolean,
+  val errorKey: String? = null,
+)
+
+@Serializable
+data class BulkPrepareResponse(
+  val origin: String = "",
+  val series: BulkPreparedSeriesDto,
+  val target: BulkPreparedTargetDto,
+  val episodes: List<BulkPreparedEpisodeDto> = emptyList(),
+  val listing: BulkPrepareListingDto,
+)
+
 /** What `POST /api/downloads/bulk` answers: how many jobs it added, and how many it skipped. */
 @Serializable
-data class BulkDownloadResult(val added: Int = 0, val skipped: Int = 0)
+data class BulkDownloadResult(
+  val added: Int = 0,
+  val skipped: Int = 0,
+  val results: List<BulkEpisodeResultDto> = emptyList(),
+)
+
+@Serializable
+data class BulkEpisodeResultDto(val id: String, val outcome: String)
+
+@Serializable
+data class BulkRemoteOriginDto(
+  val kind: String,
+  val libraryId: String,
+  val seriesItemId: String,
+) {
+  companion object {
+    fun remote(libraryId: String, seriesItemId: String) =
+      BulkRemoteOriginDto(kind = "remote", libraryId = libraryId, seriesItemId = seriesItemId)
+  }
+}
 
 /** The whole bulk body, in the order the web builds it. */
 @Serializable
@@ -183,6 +270,7 @@ data class BulkDownloadRequest(
   val selection: DownloadSelectionDto,
   val media: BulkMediaDto,
   val target: DownloadTargetDto? = null,
+  val origin: BulkRemoteOriginDto? = null,
 )
 
 /** The body the web posts for a bulk download; a null target leaves the key out. */
@@ -193,7 +281,8 @@ fun bulkDownloadBody(
   selection: DownloadSelectionDto,
   media: BulkMediaDto,
   target: DownloadTargetDto?,
-): BulkDownloadRequest = BulkDownloadRequest(title, type, episodes, selection, media, target)
+  origin: BulkRemoteOriginDto? = null,
+): BulkDownloadRequest = BulkDownloadRequest(title, type, episodes, selection, media, target, origin)
 
 /** The episodes a scope sends, as the route reads them: the id and the numbers it has. */
 fun bulkEpisodes(videos: List<VideoDto>): List<BulkEpisodeDto> = videos.mapNotNull { video ->
