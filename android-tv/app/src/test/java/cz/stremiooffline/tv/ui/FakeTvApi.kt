@@ -50,6 +50,7 @@ import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.RemotePersonalPage
 import cz.stremiooffline.tv.data.RemotePlaybackReport
 import cz.stremiooffline.tv.data.RemotePreviewDto
 import cz.stremiooffline.tv.data.SearchStateDto
@@ -287,6 +288,8 @@ open class FakeTvApi : TvApi {
   var remoteSourcesValue: List<StreamDto> = emptyList()
   var remoteSourcesFailure: ApiError? = null
   val remoteSourcesRequests: MutableList<Pair<String, String>> = mutableListOf()
+  var remotePersonalValue: RemotePersonalPage = RemotePersonalPage(emptyList(), 0, false)
+  val remotePersonalRequests: MutableList<Triple<String, Int, Int>> = mutableListOf()
   var remoteStateValue: RemoteItemStateDto = RemoteItemStateDto()
   var remoteStateFailure: ApiError? = null
   var remoteItemValues: MutableMap<String, RemoteItemDetailDto> = mutableMapOf()
@@ -739,6 +742,11 @@ open class FakeTvApi : TvApi {
     remoteSourcesRequests += libraryId to itemId
     remoteSourcesFailure?.let { throw it }
     return remoteSourcesValue
+  }
+
+  override suspend fun remotePersonal(filter: String, skip: Int, limit: Int): RemotePersonalPage {
+    remotePersonalRequests += Triple(filter, skip, limit)
+    return remotePersonalValue
   }
 
   var remoteStateReadGate: CompletableDeferred<Unit>? = null

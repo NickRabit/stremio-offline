@@ -275,7 +275,8 @@ class NativeLocalSourcesTest {
     compose.onAllNodes(
       hasText("Show.S01E01.mkv") and hasAnyAncestor(hasTestTag(TagSourcesPanel)),
     ).assertCountEquals(0)
-    assertEquals(listOf(episodes.first().path, secondEpisode), api.libraryTitleRequests)
+    // The series picker reads the first file for its resume marker before the panel reads its card.
+    assertEquals(listOf(episodes.first().path, episodes.first().path, secondEpisode), api.libraryTitleRequests)
     assertEquals(listOf("series:tt5:1:2"), api.streamSourcesRequests)
     assertTrue(played.isEmpty())
   }

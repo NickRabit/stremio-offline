@@ -58,6 +58,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
+import cz.stremiooffline.tv.catalog.ProgressKey
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.CatalogApi
@@ -78,6 +79,7 @@ import cz.stremiooffline.tv.ui.catalog.defaultSeason
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
+import cz.stremiooffline.tv.ui.catalog.nativeAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
@@ -96,6 +98,7 @@ import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
 import cz.stremiooffline.tv.ui.detail.asVideo
 import cz.stremiooffline.tv.ui.detail.initialRemoteMetadata
+import cz.stremiooffline.tv.ui.detail.remotePrimary
 import cz.stremiooffline.tv.ui.detail.resolveRemoteMetadata
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
@@ -500,14 +503,17 @@ internal fun RemoteSeriesScreen(
   val items = level?.state?.items ?: emptyList()
   val videos = remember(items) { items.map(RemoteItemDto::asVideo) }
   // The episode the viewer is in the middle of, as this account's own Continue watching row has it.
-  val resumeCard = ui.resume.firstOrNull { card -> items.any { it.id == card.itemId } }
-  val resumeVideo = videos.firstOrNull { it.id == resumeCard?.itemId }
+  val loadedResumeCard = ui.resume.firstOrNull { card -> items.any { it.id == card.itemId } }
+  val resumeItem = loadedResumeCard?.let { card -> items.firstOrNull { it.id == card.itemId } } ?: ui.resumeItem
+  val resumeCard = ui.resume.firstOrNull { card -> card.itemId == resumeItem?.id }
+  val resumeVideo = resumeItem?.asVideo()
   val currentSeason = ui.season ?: resumeVideo?.season ?: defaultSeason(videos)
   val visibleEpisodes = videos.filter { it.season == currentSeason }.ifEmpty { videos }
   val selectedVideo = visibleEpisodes.firstOrNull { it.id == ui.selectedEpisodeId }
-    ?: visibleEpisodes.firstOrNull { it.id == resumeVideo?.id }
+    ?: resumeVideo
     ?: visibleEpisodes.firstOrNull()
   val selectedItem = items.firstOrNull { it.id == selectedVideo?.id }
+    ?: resumeItem?.takeIf { it.id == selectedVideo?.id }
 
   // Back from the player the row and Play follow what was just watched.
   LaunchedEffect(parentIdentity, restoreToken, returnToken) {
@@ -519,19 +525,91 @@ internal fun RemoteSeriesScreen(
       ui.resume
     }
   }
+  LaunchedEffect(parentIdentity, ui.resume, items) {
+    val loaded = items.mapTo(HashSet()) { it.id }
+    if (ui.resume.any { it.itemId in loaded }) {
+      if (ui.resumeItem?.id in loaded) ui.resumeItem = null
+      return@LaunchedEffect
+    }
+    var found: RemoteItemDto? = null
+    val remaining = ui.resume
+      .filter { it.itemType == "episode" && it.itemId !in loaded }
+      .take(6)
+    for (card in remaining) {
+      val item = try {
+        api.remoteItem(data.libraryId, card.itemId).item
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        continue
+      }
+      if (item.seriesId == data.item.id) {
+        found = item
+        break
+      }
+    }
+    ui.resumeItem = found
+  }
+  LaunchedEffect(
+    level?.key,
+    currentSeason,
+    resumeVideo?.id,
+    items.size,
+    level?.state?.nextCursor,
+    level?.state?.loadingMore,
+    level?.state?.appendError,
+    level?.state?.staleCursor,
+  ) {
+    val wanted = resumeVideo ?: return@LaunchedEffect
+    val current = state.current?.state ?: return@LaunchedEffect
+    if (wanted.season != currentSeason || current.items.any { it.id == wanted.id }) {
+      return@LaunchedEffect
+    }
+    if (
+      current.loading || current.loadingMore || current.appendError != null ||
+      current.staleCursor || current.nextCursor == null
+    ) {
+      return@LaunchedEffect
+    }
+    viewModel.loadMore()
+  }
   // The selected episode's versions, for the tech block under the actions; a card the remote only
   // passes over asks nothing.
-  LaunchedEffect(parentIdentity, selectedItem?.id) {
+  LaunchedEffect(parentIdentity, selectedItem?.id, metadataResolved, metadata.seriesIds) {
     val wanted = selectedItem?.id ?: return@LaunchedEffect
-    if (ui.versionsFor != wanted) ui.versions = null
+    if (ui.versionsFor != wanted) {
+      ui.versions = null
+      ui.versionPick = null
+    }
     delay(350)
-    ui.versions = try {
+    val versions = try {
       api.remoteSources(data.libraryId, wanted).filter { Streams.isRemoteStream(it) }
     } catch (cancelled: CancellationException) {
       throw cancelled
     } catch (_: ApiError) {
       null
     }
+    val savedMediaSourceId = try {
+      api.remoteItemState(data.libraryId, wanted).mediaSourceId
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      null
+    }
+    val identity = nativeAddonIdentity(selectedItem, metadata.seriesIds)
+    val titleStableKey = if (identity != null && titleProgress != null) {
+      try {
+        titleProgress(ProgressKey.of(identity.first, identity.second))?.stableKey
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        null
+      }
+    } else {
+      null
+    }
+    ui.versions = versions
+    ui.versionPick = versions?.let { remotePrimary(it, titleStableKey, savedMediaSourceId) }
     ui.versionsFor = wanted
   }
 
@@ -637,8 +715,10 @@ internal fun RemoteSeriesScreen(
       try {
         api.patchRemoteItemState(data.libraryId, item.id, RemoteItemStatePatch(watched = true))
         ui.resume = ui.resume.filter { it.itemId != item.id }
-        val index = videos.indexOfFirst { it.id == item.id }
-        videos.getOrNull(index + 1)?.let { next ->
+        ui.resumeItem = null
+        val known = (items + listOfNotNull(resumeItem)).distinctBy { it.id }
+        val index = known.indexOfFirst { it.id == item.id }
+        known.getOrNull(index + 1)?.let { next ->
           ui.season = next.season
           ui.selectedEpisodeId = next.id
         }

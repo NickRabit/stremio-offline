@@ -122,6 +122,17 @@ data class RemoteDetailData(
   val isEpisode: Boolean get() = item.type == "episode"
 }
 
+internal fun remotePrimary(
+  sources: List<StreamDto>,
+  titleStableKey: String?,
+  savedMediaSourceId: String?,
+): StreamDto? =
+  sources.firstOrNull { titleStableKey != null && it.stableKey == titleStableKey }
+    ?: sources.firstOrNull {
+      it.remoteItem?.mediaSourceId != null && it.remoteItem.mediaSourceId == savedMediaSourceId
+    }
+    ?: sources.firstOrNull()
+
 /** A native item, its local state and copies, with every supplementary source group behind the
  *  Versions panel: the viewer's own copies, the other media libraries and the addon rows. */
 @Composable
@@ -364,9 +375,7 @@ fun RemoteDetailScreen(
   val title = titleRow
   // The version the viewer last watched leads, so its Resume is the one offered: the source the
   // title's own stored row names when that row names one, and otherwise the stored media source.
-  val primary = title?.stableKey?.let { key -> sources.firstOrNull { it.stableKey == key } }
-    ?: sources.firstOrNull { it.remoteItem?.mediaSourceId != null && it.remoteItem.mediaSourceId == savedSourceId }
-    ?: sources.firstOrNull()
+  val primary = remotePrimary(sources, title?.stableKey, savedSourceId)
   // The saved position belongs to the exact version that stored it; another version shows none.
   val sameVersion = title != null || primary?.remoteItem?.mediaSourceId == savedSourceId
   // Resume is offered only for the same version that stored the position and never for an item

@@ -24,7 +24,10 @@ import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.RemoteItemDetailDto
+import cz.stremiooffline.tv.data.RemotePersonalPage
 import cz.stremiooffline.tv.data.ProgressDto
+import cz.stremiooffline.tv.data.HomeCard
+import cz.stremiooffline.tv.data.HomeProgress
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
@@ -36,6 +39,7 @@ import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.data.TitleRatingsDto
 import cz.stremiooffline.tv.data.TitleVideoDto
+import cz.stremiooffline.tv.data.VideoFactsDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.seasonChipTag
 import cz.stremiooffline.tv.ui.library.remoteItemTag
@@ -105,6 +109,20 @@ class RemoteSeriesRoutingTest {
     playable = true,
     name = "FullHD",
     remoteItem = RemoteItemContext(libraryId = "rlibA", itemId = "e1", mediaSourceId = "ms1", progressKey = "remote:rlibA:e1"),
+  )
+
+  private fun version(sourceId: String, height: Int) = StreamDto(
+    sourceId = sourceId,
+    kind = "remote",
+    playable = true,
+    name = "Version $sourceId",
+    remoteItem = RemoteItemContext(
+      libraryId = "rlibA",
+      itemId = "e1",
+      mediaSourceId = sourceId,
+      progressKey = "remote:rlibA:e1",
+    ),
+    videoFacts = VideoFactsDto(heightPixels = height),
   )
 
   private fun press(key: Key) {
@@ -187,6 +205,76 @@ class RemoteSeriesRoutingTest {
     assertTrue(played.single().resume)
     compose.onNodeWithTag(TagRemoteDetailPlay).assertDoesNotExist()
     compose.onNodeWithTag(TagRemoteSeriesRoot).assertExists()
+  }
+
+  @Test
+  fun `a resume card on a later page selects its episode when the series opens`() {
+    val api = FakeTvApi()
+    val first = episode("e1")
+    val second = episode("e2")
+    val resume = episode("e3")
+    api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(items = listOf(first, second), total = 3, cursor = "next")
+    api.remoteEpisodesPages["s1|next"] = RemoteItemsPageDto(items = listOf(resume), total = 3)
+    api.remoteItemValues["rlibA:e3"] = RemoteItemDetailDto(item = resume.copy(seriesId = "s1"))
+    api.remotePersonalValue = RemotePersonalPage(
+      items = listOf(
+        HomeCard.Remote(
+          key = "remote:e3",
+          title = "Show",
+          provider = "jellyfin",
+          libraryId = "rlibA",
+          libraryName = "Filmy",
+          itemId = "e3",
+          itemType = "episode",
+          season = 1,
+          episode = 3,
+          progress = HomeProgress(position = 900.0, duration = 1800.0),
+        ),
+      ),
+      total = 1,
+      partial = false,
+    )
+    api.remoteSourcesValue = listOf(
+      version("v1", 1080).copy(remoteItem = version("v1", 1080).remoteItem?.copy(itemId = "e3")),
+    )
+    api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, mediaSourceId = "v1")
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(api = api, data = series(), onPlay = { played += it }, onBack = {})
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteEpisodesRequests.any { it.third == "next" } }
+    compose.waitUntil(5_000) { api.remoteItemRequests.contains("rlibA" to "e3") }
+    compose.waitUntil(5_000) {
+      compose.onAllNodes(hasTestTag(remoteItemTag("e3"))).fetchSemanticsNodes().isNotEmpty()
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagRemoteSeriesPrimary).assertTextContains("Resume")
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+
+    assertEquals("e3", played.single().remoteItem?.itemId)
+    assertTrue(played.single().resume)
+  }
+
+  @Test
+  fun `the series tech block names the version the saved source id selects`() {
+    val api = FakeTvApi()
+    api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(items = listOf(episode("e1")), total = 1)
+    api.remoteSourcesValue = listOf(version("v720", 720), version("v1080", 1080))
+    api.remoteStateValue = RemoteItemStateDto(mediaSourceId = "v1080")
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(api = api, data = series(), onPlay = {}, onBack = {})
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteSourcesRequests.contains("rlibA" to "e1") }
+    compose.waitUntil(5_000) { api.remotePersonalRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithText("1080p").assertExists()
+    compose.onNodeWithText("720p").assertDoesNotExist()
   }
 
   private fun openSources() {

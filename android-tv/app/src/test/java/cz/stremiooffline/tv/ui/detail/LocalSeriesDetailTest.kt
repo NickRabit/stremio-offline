@@ -15,9 +15,12 @@ import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.LibraryApi
+import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.ProgressDto
+import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.seasonChipTag
+import cz.stremiooffline.tv.ui.FakeTvApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -49,6 +52,7 @@ class LocalSeriesDetailTest {
   private val s1e1 = episode(1, 1)
   private val s1e2 = episode(1, 2, size = 2e9)
   private val s1e2Copy = episode(1, 2, " (2)", size = 1e9)
+  private val s1e3 = episode(1, 3)
   private val s2e1 = episode(2, 1)
 
   private fun mount() {
@@ -141,6 +145,44 @@ class LocalSeriesDetailTest {
 
     compose.onNodeWithTag(TagDetailPickCaption).assertTextContains(s2e1.label, substring = true)
     compose.onNodeWithTag(TagDetailPrimary).assertTextContains("Resume")
+  }
+
+  @Test
+  fun `a finished episode uses the server's next episode marker when the file has no progress`() {
+    val api = FakeTvApi().apply {
+      libraryTitleValues[s1e1.path] = LibraryTitleDto(type = "series", id = "tt-show")
+      progressEntries = listOf(
+        ProgressEntryDto(series = ProgressEntryDto.Series(id = "tt-show", season = 1, episode = 3)),
+      )
+    }
+    compose.setContent {
+      DetailScreen(
+        detail = DetailData(
+          gridPath = "Shows/Show",
+          title = "Show",
+          year = null,
+          description = null,
+          poster = null,
+          wide = null,
+          size = 0.0,
+          fileCount = 4,
+          files = listOf(s1e1, s1e2, s1e3, s2e1),
+        ),
+        imageUrl = { null },
+        onPlay = { played += it },
+        onBack = {},
+        progress = { null },
+        forgetProgress = {},
+        sourcesApi = api,
+      )
+    }
+    compose.waitUntil(5_000) { api.progressListCalls > 0 }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains(s1e3.label, substring = true)
+    compose.onNodeWithTag(TagDetailPrimary).performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    assertEquals(s1e3.path, played.single().path)
   }
 
   private fun androidx.compose.ui.test.junit4.ComposeContentTestRule.onAllNodesWithTagCount(tag: String): Int =

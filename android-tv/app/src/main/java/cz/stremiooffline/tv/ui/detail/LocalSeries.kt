@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.ui.detail
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -12,6 +13,7 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.LibraryApi
+import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.episodeLine
@@ -26,11 +28,13 @@ import kotlinx.coroutines.CancellationException
 internal class LocalSeriesPick {
   var season by mutableStateOf<Int?>(null)
   var selectedPath by mutableStateOf<String?>(null)
+  var resume by mutableStateOf<Pair<Int, Int>?>(null)
   val seasons = FocusRequester()
 
   fun reset() {
     season = null
     selectedPath = null
+    resume = null
   }
 
   /** The file Play acts on in a series detail; null for a film, which keeps its own choice. */
@@ -38,6 +42,7 @@ internal class LocalSeriesPick {
     if (!isEpisodeDetail(detail)) return null
     val episodes = episodeFiles(detail.files)
     episodes.firstOrNull { it.path == selectedPath }?.let { return it }
+    episodes.firstOrNull { it.season == resume?.first && it.episode == resume?.second }?.let { return it }
     val touched = episodes.indexOfLast { positionOf(it) > 0 }
     if (touched < 0) return episodes.firstOrNull()
     val last = episodes[touched]
@@ -115,6 +120,7 @@ internal fun LocalEpisodeLine(detail: DetailData, file: BrowseItem.File?) {
 @Composable
 internal fun LocalSeriesRows(
   detail: DetailData,
+  sourcesApi: TvApi?,
   pick: LocalSeriesPick,
   playing: BrowseItem.File?,
   imageUrl: (String?) -> String?,
@@ -124,6 +130,28 @@ internal fun LocalSeriesRows(
   extras: TitleExtrasState,
   onUpFromSeasons: () -> Boolean,
 ) {
+  LaunchedEffect(detail.files) {
+    val api = sourcesApi
+    val first = detail.files.firstOrNull()
+    if (api == null || first == null) {
+      pick.resume = null
+      return@LaunchedEffect
+    }
+    pick.resume = try {
+      val binding = api.libraryTitle(first.path)
+      if (binding?.type == "series") {
+        api.progressList().firstNotNullOfOrNull { entry ->
+          entry.series?.takeIf { it.id == binding.id }?.let { it.season to it.episode }
+        }
+      } else {
+        null
+      }
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      null
+    }
+  }
   val episodes = remember(detail.files) { episodeFiles(detail.files) }
   val videos = remember(episodes) { episodes.map(::episodeVideo) }
   val byPath = remember(episodes) { episodes.associateBy { it.path } }

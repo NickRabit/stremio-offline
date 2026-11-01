@@ -82,8 +82,11 @@ internal class RemoteSeriesUiState {
   var restorePrimary by mutableStateOf(false)
   /** This library's own Continue watching rows, the episode in progress among them. */
   var resume by mutableStateOf<List<HomeCard.Remote>>(emptyList())
+  /** The resume episode found beyond the loaded pages. */
+  var resumeItem by mutableStateOf<RemoteItemDto?>(null)
   /** The selected episode's versions once read, and the episode they belong to. */
   var versions by mutableStateOf<List<StreamDto>?>(null)
+  var versionPick by mutableStateOf<StreamDto?>(null)
   var versionsFor by mutableStateOf<String?>(null)
   var watchedBusy by mutableStateOf(false)
 }
@@ -272,7 +275,7 @@ internal fun RemoteSeriesContent(
             }
           },
       )
-      ui.versions?.takeIf { ui.versionsFor == selectedItem?.id }?.firstOrNull()?.let { row ->
+      ui.versionPick?.takeIf { ui.versionsFor == selectedItem?.id }?.let { row ->
         TitleTechBlock(row, Modifier.testTag(TagRemoteSeriesTech), versionCount = ui.versions?.size ?: 0)
       }
       when {

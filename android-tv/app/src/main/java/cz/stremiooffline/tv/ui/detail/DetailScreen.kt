@@ -810,6 +810,7 @@ fun DetailScreen(
       if (isEpisodeDetail(current)) {
         LocalSeriesRows(
           detail = current,
+          sourcesApi = sourcesApi,
           pick = seriesPick,
           playing = playFile,
           imageUrl = imageUrl,
