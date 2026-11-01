@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { setLocale } from "./i18n";
-import { TitleExtraFacts, TitleExtrasActions, TitleExtrasRows, type TitleExtrasActionsValue } from "./TitleExtras";
+import { isTagLine, synopsisOf, TitleExtraFacts, TitleExtrasActions, TitleExtrasRows, trailerFromExtras, type TitleExtrasActionsValue } from "./TitleExtras";
 import type { TitleExtras } from "./types";
 
 const cast = {
@@ -253,5 +253,29 @@ describe("TitleExtraFacts", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("an addon that sends tags instead of a synopsis", () => {
+  const extras: TitleExtras = {
+    people: [], related: [], source: "tmdb", overview: "Manny a jeho stádo se ocitnou na kře.",
+    videos: [
+      { key: "en1", name: "Official Trailer", kind: "trailer", thumbnail: "/t1", language: "en" },
+      { key: "cs1", name: "Český trailer", kind: "trailer", thumbnail: "/t2", language: "cs" },
+    ],
+  };
+
+  it("shows TMDB's synopsis in place of a line of tags, and keeps a real one", () => {
+    expect(isTagLine("(Ice Age: Continental Drift) · 📺 HD · 🔊 CS")).toBe(true);
+    expect(synopsisOf("(Ice Age: Continental Drift) · 📺 HD · 🔊 CS", extras)).toBe(extras.overview);
+    expect(synopsisOf(undefined, extras)).toBe(extras.overview);
+    expect(synopsisOf("Mamut Manny se vydává na cestu. Potká piráty.", extras)).toBe("Mamut Manny se vydává na cestu. Potká piráty.");
+    expect(synopsisOf("(Ice Age) · HD", null)).toBe("(Ice Age) · HD");
+  });
+
+  it("offers TMDB's trailer in the interface language first", () => {
+    expect(trailerFromExtras(extras, "cs")).toEqual({ youtubeId: "cs1", title: "Český trailer", provider: "tmdb" });
+    expect(trailerFromExtras(extras, "de")?.youtubeId).toBe("en1");
+    expect(trailerFromExtras({ ...extras, videos: [] }, "cs")).toBeNull();
   });
 });

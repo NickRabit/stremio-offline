@@ -5,7 +5,7 @@ import { catalogueGalleryImages, type GalleryImage } from "./gallery-images";
 import { DetailRatings, ratingsFrom } from "./detail-copy";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
-import { TitleExtraFacts, TitleExtrasRows } from "./TitleExtras";
+import { synopsisOf, TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
 import { useLibrarySources } from "./library-sources";
 import { titleLanguage } from "./languages";
@@ -363,11 +363,11 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       ratings={<DetailRatings age={pieces.ageBadge} imdb={scores.imdb} tmdb={scores.tmdb} tmdbVotes={scores.tmdbVotes}/>}
       heroExtra={pieces.nextLine}
       people={titleExtras.extras?.people}
-      trailer={trailer}
+      trailer={trailer ?? trailerFromExtras(titleExtras.extras, locale)}
       onTrailer={onTrailer}
       secureMode={secureMode}
       extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
-      {...(snapshot?.description ? { description: snapshot.description } : {})}
+      {...(synopsisOf(snapshot?.description, titleExtras.extras) ? { description: synopsisOf(snapshot?.description, titleExtras.extras) } : {})}
       descriptionLoading={snapshot === null && !metaError}
       {...(chips ? { chips } : {})}
       {...(onToggleFavorite ? { favorite: favorite ?? false, onToggleFavorite, favoriteDisabled, ...(favoriteAriaLabel ? { favoriteAriaLabel } : {}), ...(favoriteTitle ? { favoriteTitle } : {}) } : {})}

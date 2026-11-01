@@ -153,6 +153,25 @@ const STRIP_ORDER: TitlePerson["role"][] = ["creator", "director", "cast", "writ
 
 /** One strip for everybody: who made it first, then the cast, then the writers. A crew member
  *  carries the role where a cast member carries the character. */
+/** Whether an addon's description is only a line of tags, such as `(Original) · 📺 HD · 🔊 CS`,
+ *  rather than a synopsis: it holds no sentence. */
+export function isTagLine(text?: string): boolean {
+  const value = text?.trim() ?? "";
+  return !value || !/[.!?…](\s|$)/.test(value);
+}
+
+/** The synopsis a detail shows: the addon's own, unless it is only tags and TMDB has one. */
+export function synopsisOf(description: string | undefined, extras: TitleExtras | null): string | undefined {
+  return isTagLine(description) && extras?.overview ? extras.overview : description;
+}
+
+/** The trailer TMDB lists for a title whose addon names none: one in the interface language first. */
+export function trailerFromExtras(extras: TitleExtras | null, language: string): Trailer | null {
+  const trailers = (extras?.videos ?? []).filter((video) => video.kind === "trailer" || video.kind === "teaser");
+  const pick = trailers.find((video) => video.language === language) ?? trailers[0];
+  return pick ? { youtubeId: pick.key, title: pick.name, provider: "tmdb" } : null;
+}
+
 export function peopleInStripOrder(people: TitlePerson[]): TitlePerson[] {
   return STRIP_ORDER.flatMap((role) => people.filter((person) => person.role === role));
 }

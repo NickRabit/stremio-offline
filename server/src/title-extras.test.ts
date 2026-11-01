@@ -71,6 +71,7 @@ test("movie extras map ordered cast, bounded crew, IMDb recommendations and the 
       return json({
         original_title: "Original Film",
         original_language: "en",
+        overview: "Popis filmu v češtině.",
         credits: { cast, crew },
         recommendations: { results: recommendations },
         release_dates: {
@@ -124,6 +125,7 @@ test("movie extras map ordered cast, bounded crew, IMDb recommendations and the 
   assert.equal(result.ageRatingRegion, "CZ");
   assert.equal(result.originalTitle, "Original Film");
   assert.equal(result.originalLanguage, "en");
+  assert.equal(result.overview, "Popis filmu v češtině.");
   assert.equal(result.source, "tmdb");
 });
 

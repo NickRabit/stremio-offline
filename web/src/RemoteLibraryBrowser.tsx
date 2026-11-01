@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, Images, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, SlidersHorizontal, Star } from "lucide-react";
 import { ApiError, api, describeError, saveToDevice } from "./api";
 import { relativeAge } from "./home-cards";
@@ -28,7 +29,7 @@ import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage 
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes, hideBroken } from "./settings-ui";
 import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
-import { TitleExtraFacts, TitleExtrasRows } from "./TitleExtras";
+import { TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
 import type { SaveTarget } from "./save-target";
 import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, SourceProfile, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
@@ -254,6 +255,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [nonce, setNonce] = useState(0);
   const [detail, setDetail] = useState<RemoteItem | null>(null);
   const [series, setSeries] = useState<RemoteItem | null>(null);
+  const crumbsRef = useCrumbsAtEnd<HTMLElement>([selected?.id, ...stack.map((folder) => folder.id), series?.id, detail?.id].join("/"));
   const [episodes, setEpisodes] = useState<Status>(emptyStatus);
   const [episodeNonce, setEpisodeNonce] = useState(0);
   const [sources, setSources] = useState<Stream[] | null>(null);
@@ -1259,7 +1261,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       <CrewLine people={titleExtras.extras?.people}/>
       <div className="library-detail-actions">
         <div className="detail-secondary">
-          <DetailTrailerButton trailer={enrichment.trailer} secureMode={secureMode} onTrailer={onTrailer}/>
+          <DetailTrailerButton trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)} secureMode={secureMode} onTrailer={onTrailer}/>
           <DetailFavoriteButton favorite={state?.favorite ?? false} disabled={!state}
             onToggle={(next) => void toggleState({ favorite: next })}/>
         </div>
@@ -1575,7 +1577,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       onKeyDown={(event) => { if (event.key === "Escape" && menuFor) { const id = menuFor; closeMenu(); focusMenuTrigger(id); } }}>
       <div className="browse-head">
         <div className="browse-bar">
-          <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
+          <nav className="crumbs" ref={crumbsRef} aria-label={t("library.breadcrumbs")}>
             <button className="library-back" aria-label={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")}
               title={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")} onClick={stepBack}><ChevronLeft/></button>
             {/* The same first step the library's own listing keeps: whichever library is open, the
@@ -1673,7 +1675,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             ratings={<DetailRatings age={detailPieces.ageBadge} imdb={detailScores.imdb} tmdb={detailScores.tmdb} tmdbVotes={detailScores.tmdbVotes}/>}
             heroExtra={detailPieces.nextLine}
             people={titleExtras.extras?.people}
-            trailer={enrichment.trailer}
+            trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)}
             onTrailer={onTrailer}
             secureMode={secureMode}
             extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}

@@ -72,6 +72,8 @@ export interface TitleExtras {
   ageRatingRegion?: string;
   originalTitle?: string;
   originalLanguage?: string;
+  /** TMDB's synopsis in the interface language, when the instance has a TMDB key. */
+  overview?: string;
   nextEpisode?: { season: number; episode: number; name?: string; released: string };
   /** Absent on an answer from a server that predates the ratings row. */
   ratings?: TitleRatings;

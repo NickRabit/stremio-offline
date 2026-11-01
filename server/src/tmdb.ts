@@ -530,6 +530,8 @@ export function tmdbIdOf(
 
 export interface TmdbTitleExtras {
   originalTitle?: string;
+  /** The synopsis in the requested language; TMDB answers an empty one when it has none there. */
+  overview?: string;
   originalLanguage?: string;
   voteAverage?: number;
   voteCount?: number;
@@ -553,6 +555,7 @@ interface TmdbExtraCredit {
 }
 
 interface TmdbExtraResponse {
+  overview?: string;
   original_title?: string;
   original_name?: string;
   original_language?: string;
@@ -747,6 +750,7 @@ export async function tmdbTitleExtras(
       originalTitle: text(type === "movie" ? body.original_title : body.original_name),
     } : {}),
     ...(text(body.original_language) ? { originalLanguage: text(body.original_language) } : {}),
+    ...(text(body.overview) ? { overview: text(body.overview) } : {}),
     ...(finiteNumber(body.vote_average) != null ? { voteAverage: finiteNumber(body.vote_average) } : {}),
     ...(finiteNumber(body.vote_count) != null ? { voteCount: finiteNumber(body.vote_count) } : {}),
     createdBy,

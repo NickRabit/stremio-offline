@@ -1,4 +1,5 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, describeError, saveToDevice } from "./api";
@@ -274,6 +275,7 @@ export function App() {
   /** The local file or matched-movie folder open in the library's detail, and where its listing
    *  sat, so Back returns to the exact spot. */
   const [localDetail, setLocalDetail] = useState<{ item: TreeItem } | null>(null);
+  const localCrumbsRef = useCrumbsAtEnd<HTMLElement>(`${browsePath}|${localDetail?.item.path ?? ""}`);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
   const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series"; paths?: string[]; copy?: boolean } | null>(null);
   const [saveTargetOpen, setSaveTargetOpen] = useState(false);
@@ -3652,7 +3654,7 @@ export function App() {
         {!remoteOpen && <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
-          <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
+          <nav className="crumbs" ref={localCrumbsRef} aria-label={t("library.breadcrumbs")}>
             {(browsePath || localDetail) && <button className="library-back" aria-label={localDetail ? t("mediaServer.back") : t("library.folderUp")} onClick={libraryBack}><ChevronLeft/></button>}
             <button onClick={() => { setFromFavorites(false); goLocalFolder(""); }} disabled={!browsePath && !localDetail}><HardDrive/> {t("nav.library")}</button>
             {(fromFavorites || browsePath === ":favorites") && <span>

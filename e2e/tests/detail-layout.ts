@@ -19,6 +19,18 @@ export async function checkDetailActions(page: Page, detail: Locator) {
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
   }
+  // A split that spans the screen reads as one button, so its label sits in the middle of the
+  // whole of it rather than of the part left of the arrow.
+  const offsets = await actions.locator(".split-button").evaluateAll(nodes => nodes.map(split => {
+    const whole = split.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(split.firstElementChild!);
+    const label = [...range.getClientRects()].filter(rect => rect.width > 0);
+    const left = Math.min(...label.map(rect => rect.left));
+    const right = Math.max(...label.map(rect => rect.right));
+    return { wide: whole.width > innerWidth * 0.7, offset: Math.abs((left + right) / 2 - (whole.left + whole.right) / 2) };
+  }));
+  for (const split of offsets.filter(entry => entry.wide)) expect(split.offset).toBeLessThanOrEqual(4);
   const progress = detail.locator(".library-detail-progress");
   if (await progress.count()) {
     const reset = await progress.getByRole("button").boundingBox();

@@ -52,6 +52,8 @@ export interface TitleExtras {
   ageRatingRegion?: string;
   originalTitle?: string;
   originalLanguage?: string;
+  /** TMDB's synopsis, for an addon whose own description is only a line of tags. */
+  overview?: string;
   nextEpisode?: { season: number; episode: number; name?: string; released: string };
   source: "tmdb" | "addon";
 }
@@ -76,6 +78,7 @@ interface CachedTmdbExtras {
   ageRatingRegion?: string;
   originalTitle?: string;
   originalLanguage?: string;
+  overview?: string;
 }
 
 interface CacheEntry {
@@ -296,6 +299,7 @@ async function buildTmdbPart(
     ...(ageRatingRegion ? { ageRatingRegion } : {}),
     ...(data.originalTitle ? { originalTitle: data.originalTitle } : {}),
     ...(data.originalLanguage ? { originalLanguage: data.originalLanguage } : {}),
+    ...(data.overview ? { overview: data.overview } : {}),
   };
   if (extrasCache.size > CACHE_LIMIT) extrasCache.clear();
   extrasCache.set(key, { at: now, value });
@@ -418,6 +422,7 @@ export async function titleExtras(
     ...(part?.ageRatingRegion ? { ageRatingRegion: part.ageRatingRegion } : {}),
     ...(part?.originalTitle ? { originalTitle: part.originalTitle } : {}),
     ...(part?.originalLanguage ? { originalLanguage: part.originalLanguage } : {}),
+    ...(part?.overview ? { overview: part.overview } : {}),
     ...(nextEpisode ? { nextEpisode } : {}),
     source: part ? "tmdb" : "addon",
   };

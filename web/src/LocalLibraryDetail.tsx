@@ -11,7 +11,7 @@ import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { canQueue, isLocalStream } from "./streams";
 import { useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
-import { TitleExtraFacts, TitleExtrasRows } from "./TitleExtras";
+import { synopsisOf, TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
 import { genericProgressKey } from "./native-addon-sources";
 import { playbackIdentity } from "./playback-identity";
@@ -325,11 +325,11 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     ratings={<DetailRatings age={pieces.ageBadge} imdb={scores.imdb} tmdb={scores.tmdb} tmdbVotes={scores.tmdbVotes}/>}
     heroExtra={pieces.nextLine}
     people={titleExtras.extras?.people}
-    trailer={enrichment.trailer}
+    trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)}
     onTrailer={onTrailer}
     secureMode={secureMode}
     extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
-    {...(item.description ? { description: item.description } : {})}
+    {...(synopsisOf(item.description, titleExtras.extras) ? { description: synopsisOf(item.description, titleExtras.extras) } : {})}
     chips={chips}
     favorite={favorite}
     onToggleFavorite={onToggleFavorite}

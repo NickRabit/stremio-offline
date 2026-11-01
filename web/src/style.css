@@ -56,6 +56,14 @@
   .library-page.library-compact .crumbs{flex-wrap:nowrap;min-width:0}
   .library-page.library-compact .crumbs>*{min-width:0}
   .library-page.library-compact .crumbs button{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  /* Every trail -- a library, a media server, a catalogue title -- is one line on a small screen:
+     wrapped, a series episode took four rows above its own detail. Every step stays; the line
+     scrolls sideways and opens at its end, where the current item is. */
+  .browse-bar nav.crumbs{flex:1 1 0;flex-wrap:nowrap;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior-x:contain}
+  .browse-bar nav.crumbs::-webkit-scrollbar{display:none}
+  .browse-bar nav.crumbs>*{flex:0 0 auto;min-width:auto}
+  .browse-bar nav.crumbs span{max-width:none}
+  .browse-bar nav.crumbs button{white-space:nowrap;overflow-wrap:normal;max-width:72vw;overflow:hidden;text-overflow:ellipsis}
 }
 .header-expand{display:none;align-self:end;min-height:42px}
 .title-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
@@ -2186,7 +2194,14 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
   .catalogue-episodes .episode-current button{grid-column:3;grid-row:2}
 }
 @media(max-width:980px) and (max-height:500px) and (orientation:landscape){
-  main.view-title-detail{height:100dvh;padding-bottom:max(8px, env(safe-area-inset-bottom, 0px))}
+  /* A phone on its side leaves the detail a window two hundred pixels tall, and Safari's bars
+     change that height as they come and go: a panel sized to the viewport ended short of the
+     screen and cut the detail off. Here the page itself scrolls, and only the way back stays
+     pinned under the 54px top bar. */
+  main.view-title-detail{height:auto;overflow:visible;display:block;padding-bottom:max(8px, env(safe-area-inset-bottom, 0px))}
+  main.view-title-detail>.browse-panel{overflow:visible}
+  main.view-title-detail .browse-head{position:sticky;top:54px;z-index:6;background:var(--panel)}
+  main.view-title-detail .browse-scroll{overflow:visible}
   main.view-catalog .detail-panel.mobile-open{grid-template-rows:50px minmax(0,1fr)}
   .detail-panel .catalog-detail-head{grid-row:1}
   .detail-panel .detail-primary,.detail-panel .detail-workflow{grid-row:2}
@@ -2340,6 +2355,10 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
   .library-title-detail .library-detail-actions .split-button{width:100%}
   .library-title-detail .library-detail-actions .split-button>button:first-child{flex:1}
   .library-title-detail .library-detail-actions .split-button>button{min-height:46px;padding:0 16px}
+  /* The label sits in the middle of the whole button, not of the part left of the arrow: the
+     first half gives up on its left exactly what the arrow takes on the right. */
+  .library-title-detail .library-detail-actions .split-button>.split-button-toggle{flex:0 0 52px;padding:0}
+  .library-title-detail .library-detail-actions .split-button>button:first-child{padding-left:68px}
   .library-title-detail .detail-secondary{margin:0;justify-content:space-between}
   /* The centred title block has no free corner on a phone: the gallery becomes a small pill
      under the copy instead of a poster over the chips and the title. */
