@@ -1854,8 +1854,8 @@ export function App() {
     setLocalSeriesSeason(null);
   }, [openLocalSeries?.path]);
   const seriesEpisode = localSeriesEpisode == null
-    ? nextEpisode(localSeriesState.episodes)
-    : localSeriesState.episodes.find((file) => file.path === localSeriesEpisode) ?? nextEpisode(localSeriesState.episodes);
+    ? nextEpisode(localSeriesState.episodes, localSeriesState.resume)
+    : localSeriesState.episodes.find((file) => file.path === localSeriesEpisode) ?? nextEpisode(localSeriesState.episodes, localSeriesState.resume);
   /** A library file carries no watched flag of its own, and the store keeps resume positions only:
    *  a finished film is already dropped by the server. So "seen" for a file is that there is nothing
    *  left to resume, and marking one seen drops the position it kept. */

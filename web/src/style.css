@@ -2357,6 +2357,10 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
   /* The follow chip keeps only its bell on a phone, so the kind and the three links stay on one
      line with it instead of wrapping the last link onto a row of its own. */
   .library-title-detail .detail-chips .follow-chip-label,.detail-panel .follow-chip-label{display:none}
+  /* Play has to come up on a phone: the synopsis keeps two lines here (the rest is behind More)
+     and the copy sits a little tighter under the chips. */
+  .library-title-detail .library-detail-synopsis.is-clamped{-webkit-line-clamp:2}
+  .library-title-detail .library-detail-hero .detail-copy h2{margin-top:4px}
   .library-title-detail .detail-chips .follow-chip,.detail-panel .follow-chip{padding:0 8px}
   .library-title-detail .hero.has-chips{display:block}
   .library-title-detail .hero.has-chips>.detail-copy{max-width:none}

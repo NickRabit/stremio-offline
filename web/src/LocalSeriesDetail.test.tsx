@@ -32,7 +32,7 @@ const flush = () => act(async () => { await new Promise((done) => setTimeout(don
 
 function SeriesProbe({ path, revision = 0 }: { path: string; revision?: number }) {
   const series = useLocalSeries(path, revision);
-  return <div data-loading={String(series.loading)} data-error={series.error}>
+  return <div data-loading={String(series.loading)} data-error={series.error} data-next={nextEpisode(series.episodes, series.resume)?.path ?? ""}>
     {series.episodes.map((file) => <i key={file.path} data-path={file.path}/>)}
   </div>;
 }
@@ -104,6 +104,33 @@ describe("useLocalSeries", () => {
       "Shows/Show/Season 1/Show - S01E02 - Second.mkv",
       "Shows/Show/Season 2/Show - S02E01 - Third.mkv",
     ]);
+  });
+
+  it("opens on the episode the server names after a finished one that kept no position", async () => {
+    // The server drops a file's position past 94 % and keeps a per-series marker instead: the
+    // finished first episode looks untouched, and only the progress row names the second.
+    const first = episode("Shows/Show/Show - S01E01 - First.mkv", 1, 1);
+    const second = episode("Shows/Show/Show - S01E02 - Second.mkv", 1, 2);
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/library/browse") {
+        const items = [{ kind: "file", ...first }, { kind: "file", ...second }];
+        return Promise.resolve(json({ path: "Shows/Show", items, total: items.length, pending: false }));
+      }
+      if (url.pathname === "/api/library/identity") {
+        return Promise.resolve(json({ path: "Shows/Show", key: "k", kind: "series", file: false, label: "Show", parsed: { title: "Show", query: "Show" }, match: "matched", bound: { type: "series", id: "tt123" } }));
+      }
+      if (url.pathname === "/api/progress") {
+        return Promise.resolve(json([{ key: "series:tt123:1:2", position: 0, duration: 0, title: "Show", series: { id: "tt123", name: "Show", season: 1, episode: 2 }, pending: true, updatedAt: "2026-01-01T00:00:00Z" }]));
+      }
+      return Promise.resolve(json({}, 404));
+    }));
+
+    await act(async () => { root.render(<SeriesProbe path="Shows/Show"/>); });
+    await flush();
+    await flush();
+
+    expect(host.firstElementChild?.getAttribute("data-next")).toBe(second.path);
   });
 
   it("does not read a series when no path is open", async () => {

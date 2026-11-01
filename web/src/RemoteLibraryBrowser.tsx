@@ -543,13 +543,21 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       api.remoteBrowse(library.id, { parentId: series.id, mode: "titles", type: "episode", limit: PAGE_SIZE, signal: controller.signal }),
       resume,
     ])
-      .then(([page, resumeItems]) => {
+      .then(async ([page, resumeItems]) => {
         if (epoch !== episodeEpoch.current) return;
         setEpisodes({ items: page.items, cursor: page.cursor, total: page.total, loading: false, error: "" });
         if (!page.items.length || detailRef.current?.type !== "series" || detailRef.current.id !== series.id) return;
-        const resumedId = resumeItems.find((card) => card.libraryId === library.id
-          && page.items.some((episode) => episode.id === card.itemId))?.itemId;
-        const resumed = page.items.find((episode) => episode.id === resumedId);
+        const mine = resumeItems.filter((card) => card.libraryId === library.id);
+        const resumedId = mine.find((card) => page.items.some((episode) => episode.id === card.itemId))?.itemId;
+        let resumed = page.items.find((episode) => episode.id === resumedId);
+        // The episode in progress may sit past the first page. A card names no series, so each
+        // remaining episode card is read by its id and kept only when it belongs to this one.
+        for (const card of resumed ? [] : mine.filter((entry) => entry.itemType === "episode").slice(0, 6)) {
+          const found = await api.remoteItem(library.id, card.itemId, controller.signal).then(({ item }) => item, () => null);
+          if (epoch !== episodeEpoch.current || controller.signal.aborted) return;
+          if (found?.type === "episode" && found.seriesId === series.id) { resumed = found; break; }
+        }
+        if (detailRef.current?.type !== "series" || detailRef.current.id !== series.id) return;
         const firstUnwatched = page.items.find((episode) => !itemStatesRef.current[stateKey(library.id, episode.id)]?.watched);
         const first = resumed ?? firstUnwatched ?? page.items[0]!;
         needsDetailMeta.current = true;

@@ -120,7 +120,11 @@ const TMDB_RATING_MIN_VOTES = 20;
 const VIDEO_LIMIT = 8;
 
 const extrasCache = new Map<string, CacheEntry>();
-const extrasInFlight = new Map<string, Promise<CachedTmdbExtras | null>>();
+/** One TMDB build per title, shared by every request that asks while it runs. It has its own
+ *  signal: one viewer leaving must not cancel the answer another one is still waiting for, so it is
+ *  cancelled only once every request waiting on it has gone. */
+interface InFlight { promise: Promise<CachedTmdbExtras | null>; controller: AbortController; waiting: number }
+const extrasInFlight = new Map<string, InFlight>();
 
 export function clearTitleExtrasCache(): void {
   extrasCache.clear();
@@ -271,6 +275,8 @@ async function buildTmdbPart(
   now: number,
 ): Promise<CachedTmdbExtras | null> {
   const fail = () => {
+    // A build everybody walked away from answers nothing, and that is no failure to remember.
+    throwIfCancelled(deps.signal);
     if (extrasCache.size > CACHE_LIMIT) extrasCache.clear();
     extrasCache.set(key, { at: now, value: null });
     return null;
@@ -319,13 +325,47 @@ async function cachedTmdbPart(
     const ttl = cached.value ? SUCCESS_TTL_MS : FAILURE_TTL_MS;
     if (now - cached.at < ttl) return cached.value;
   }
-  const pending = extrasInFlight.get(key);
-  if (pending) return pending;
-  const building = buildTmdbPart(type, id, language, deps, key, now).finally(() => {
-    if (extrasInFlight.get(key) === building) extrasInFlight.delete(key);
+  let entry = extrasInFlight.get(key);
+  if (!entry) {
+    const controller = new AbortController();
+    const started: InFlight = {
+      controller,
+      waiting: 0,
+      promise: buildTmdbPart(type, id, language, { ...deps, signal: controller.signal }, key, now).finally(() => {
+        if (extrasInFlight.get(key) === started) extrasInFlight.delete(key);
+      }),
+    };
+    extrasInFlight.set(key, started);
+    entry = started;
+  }
+  return joinInFlight(entry, deps.signal);
+}
+
+/** Waits on a shared build for one request. That request leaving rejects only its own wait; the
+ *  build is cancelled when the last request waiting on it has left. */
+function joinInFlight(entry: InFlight, signal?: AbortSignal): Promise<CachedTmdbExtras | null> {
+  entry.waiting += 1;
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = () => {
+      if (done) return false;
+      done = true;
+      signal?.removeEventListener("abort", leave);
+      entry.waiting -= 1;
+      return true;
+    };
+    function leave() {
+      if (!finish()) return;
+      if (entry.waiting === 0) entry.controller.abort();
+      reject(new OutboundError("cancelled"));
+    }
+    if (signal?.aborted) { leave(); return; }
+    signal?.addEventListener("abort", leave, { once: true });
+    entry.promise.then(
+      (value) => { if (finish()) resolve(value); },
+      (error: unknown) => { if (finish()) reject(error); },
+    );
   });
-  extrasInFlight.set(key, building);
-  return building;
 }
 
 function addonNames(value: unknown): string[] {

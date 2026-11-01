@@ -1,5 +1,8 @@
 package cz.stremiooffline.tv.ui.detail
 
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.drawBehind
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -493,7 +496,26 @@ fun TitleExtrasRows(
     state.restoreRelatedId = null
   }
 
-  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+  // The rows sit on a dark band that fades in above them and runs past the safe margins, so names
+  // and the grey roles stay legible over a bright backdrop photo.
+  Column(
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+    modifier = Modifier.drawBehind {
+      val fade = 48.dp.toPx()
+      val bleed = 120.dp.toPx()
+      drawRect(
+        brush = Brush.verticalGradient(
+          0f to Tokens.Bg.copy(alpha = 0f),
+          fade / (size.height + fade + bleed) to Tokens.Bg.copy(alpha = 0.92f),
+          1f to Tokens.Bg.copy(alpha = 0.92f),
+          startY = -fade,
+          endY = size.height + bleed,
+        ),
+        topLeft = Offset(-bleed, -fade),
+        size = Size(size.width + 2 * bleed, size.height + fade + bleed),
+      )
+    },
+  ) {
     if (cast.isNotEmpty()) {
       Text(
         stringResource(R.string.detail_people),

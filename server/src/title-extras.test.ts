@@ -439,6 +439,66 @@ test("concurrent extras requests share one pending TMDB build", async (t) => {
   assert.equal(detailRequests, 1);
 });
 
+test("one viewer leaving does not cancel the shared build another viewer still waits for", async (t) => {
+  fresh(t);
+  let detailRequests = 0;
+  let started!: () => void;
+  const startedSignal = new Promise<void>((resolve) => { started = resolve; });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  const fetchImpl: FetchLike = async (raw) => {
+    if (new URL(raw).pathname === "/3/movie/23") {
+      detailRequests += 1;
+      started();
+      await released;
+      return json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+    }
+    throw new Error(`Unexpected URL ${raw}`);
+  };
+  const leaving = new AbortController();
+  const first = titleExtras("movie", "tmdb:23", "cs", deps(fetchImpl, {
+    meta: async () => ({ id: "tt1", type: "movie", name: "First" }),
+    signal: leaving.signal,
+  }));
+  await startedSignal;
+  const second = titleExtras("movie", "tmdb:23", "cs", deps(fetchImpl, {
+    meta: async () => ({ id: "tt1", type: "movie", name: "Second" }),
+  }));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  leaving.abort();
+  await assert.rejects(first);
+  release();
+  assert.equal((await second).source, "tmdb");
+  assert.equal(detailRequests, 1);
+});
+
+test("a build its only viewer left caches no failure", async (t) => {
+  fresh(t);
+  let detailRequests = 0;
+  let started!: () => void;
+  const startedSignal = new Promise<void>((resolve) => { started = resolve; });
+  const fetchImpl: FetchLike = async (raw, init) => {
+    if (new URL(raw).pathname === "/3/movie/24") {
+      detailRequests += 1;
+      started();
+      if (detailRequests === 1) {
+        await new Promise<void>((resolve) => init?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+        throw new Error("aborted");
+      }
+      return json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+    }
+    throw new Error(`Unexpected URL ${raw}`);
+  };
+  const leaving = new AbortController();
+  const first = titleExtras("movie", "tmdb:24", "cs", deps(fetchImpl, { signal: leaving.signal }));
+  await startedSignal;
+  leaving.abort();
+  await assert.rejects(first);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal((await titleExtras("movie", "tmdb:24", "cs", deps(fetchImpl))).source, "tmdb");
+  assert.equal(detailRequests, 2);
+});
+
 test("a successful TMDB part is shared across viewers while library membership is per viewer", async (t) => {
   fresh(t);
   let detailRequests = 0;

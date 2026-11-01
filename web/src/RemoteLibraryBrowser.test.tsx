@@ -347,6 +347,29 @@ describe("RemoteLibraryBrowser listing", () => {
     expect(calls.sources.at(-1)!.pathname).toBe("/api/remote-libraries/rlib_a/items/e2/sources");
   });
 
+  it("opens a series on the episode in progress even when it is past the first page", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const pilot: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} };
+    const later: RemoteItem = { id: "e61", name: "Sixty-one", type: "episode", season: 3, episode: 5, seriesId: "ser1", providerIds: {} };
+    const elsewhere: RemoteItem = { id: "x9", name: "Other show", type: "episode", season: 1, episode: 1, seriesId: "ser2", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [pilot] : [show], url.searchParams.get("type") === "episode" ? { cursor: "next", total: 61 } : {}));
+    item = (url) => json({ item: url.pathname.endsWith("/e61") ? later : url.pathname.endsWith("/x9") ? elsewhere : pilot, capabilities });
+    personal = () => json({ items: [
+      { kind: "remote", key: "remote:x9", title: "Other show", provider: "jellyfin", libraryId: "rlib_a", libraryName: "Music videos", itemId: "x9", itemType: "episode", updatedAt: "2026-01-02T00:00:00.000Z" },
+      { kind: "remote", key: "remote:e61", title: "Sixty-one", provider: "jellyfin", libraryId: "rlib_a", libraryName: "Music videos", itemId: "e61", itemType: "episode", updatedAt: "2026-01-01T00:00:00.000Z" },
+    ], total: 2 });
+    sources = () => json({ streams: [] });
+    await openRootLibrary();
+
+    await click(tileButtons()[0]!);
+    await flush();
+    await flush();
+
+    // Another show's card in the same library is read and passed over; this show's one wins.
+    expect(host.querySelector(".library-title-detail .hero .meta-line")!.textContent).toBe("S3 E5");
+    expect(calls.sources.at(-1)!.pathname).toBe("/api/remote-libraries/rlib_a/items/e61/sources");
+  });
+
   it("loads the remaining episode pages when the picker opens and picking another episode loads its versions", async () => {
     const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
     const pilot: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} };

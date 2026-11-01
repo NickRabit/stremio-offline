@@ -26,8 +26,15 @@ export function episodeFiles(files: BrowseFile[]): BrowseFile[] {
   });
 }
 
-/** Where the viewer left off: the last episode they started, or the one after it once finished. */
-export function nextEpisode(episodes: BrowseFile[]): BrowseFile | undefined {
+/** The episode the server says the viewer is at: the one in progress, or the next one after the
+ *  last finished. A finished file keeps no position of its own, so only this row remembers it. */
+export interface SeriesResume { season: number; episode: number }
+
+/** Where the viewer left off: the episode the server's resume row names when the show has it on
+ *  disk, else the last episode started here, or the one after it once finished. */
+export function nextEpisode(episodes: BrowseFile[], resume?: SeriesResume | null): BrowseFile | undefined {
+  const resumed = resume ? episodes.find((file) => file.season === resume.season && file.episode === resume.episode) : undefined;
+  if (resumed) return resumed;
   let touched = -1;
   episodes.forEach((file, index) => { if ((file.progress?.position ?? 0) > 0) touched = index; });
   if (touched < 0) return episodes[0];
@@ -56,18 +63,30 @@ async function seriesFiles(path: string, depth = 0): Promise<BrowseFile[]> {
   }
 }
 
-export function useLocalSeries(path: string, revision: number): { episodes: BrowseFile[]; loading: boolean; error: string } {
-  const [state, setState] = useState<{ path: string; revision: number; episodes: BrowseFile[]; loading: boolean; error: string }>({
+/** The show's own resume row: the binding of its folder names the series, and `/api/progress`
+ *  holds one row per series. Nothing bound or nothing stored answers null. */
+async function seriesResume(path: string): Promise<SeriesResume | null> {
+  const identity = await api.libraryIdentity(path).catch(() => null);
+  const bound = identity?.bound;
+  if (bound?.type !== "series") return null;
+  const rows = await api.progressList().catch(() => []);
+  const row = rows.find((entry) => entry.series?.id === bound.id);
+  return row?.series ? { season: row.series.season, episode: row.series.episode } : null;
+}
+
+export function useLocalSeries(path: string, revision: number): { episodes: BrowseFile[]; resume: SeriesResume | null; loading: boolean; error: string } {
+  const [state, setState] = useState<{ path: string; revision: number; episodes: BrowseFile[]; resume: SeriesResume | null; loading: boolean; error: string }>({
     path,
     revision,
     episodes: [],
+    resume: null,
     loading: Boolean(path),
     error: "",
   });
 
   useEffect(() => {
     if (!path) {
-      setState({ path, revision, episodes: [], loading: false, error: "" });
+      setState({ path, revision, episodes: [], resume: null, loading: false, error: "" });
       return;
     }
     let live = true;
@@ -75,14 +94,14 @@ export function useLocalSeries(path: string, revision: number): { episodes: Brow
     // detail the viewer returns to is not replaced by a loading line for a moment.
     setState((previous) => previous.path === path && previous.episodes.length
       ? { ...previous, revision }
-      : { path, revision, episodes: [], loading: true, error: "" });
-    void seriesFiles(path)
-      .then((files) => { if (live) setState({ path, revision, episodes: episodeFiles(files), loading: false, error: "" }); })
-      .catch((reason) => { if (live) setState({ path, revision, episodes: [], loading: false, error: describeError(reason) }); });
+      : { path, revision, episodes: [], resume: null, loading: true, error: "" });
+    void Promise.all([seriesFiles(path), seriesResume(path)])
+      .then(([files, resume]) => { if (live) setState({ path, revision, episodes: episodeFiles(files), resume, loading: false, error: "" }); })
+      .catch((reason) => { if (live) setState({ path, revision, episodes: [], resume: null, loading: false, error: describeError(reason) }); });
     return () => { live = false; };
   }, [path, revision]);
 
   return state.path === path
     ? state
-    : { episodes: [], loading: Boolean(path), error: "" };
+    : { episodes: [], resume: null, loading: Boolean(path), error: "" };
 }
