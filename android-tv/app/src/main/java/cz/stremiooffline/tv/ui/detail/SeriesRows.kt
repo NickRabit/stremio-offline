@@ -111,6 +111,7 @@ internal fun SeriesRows(
   val episodeState = remember(current) { LazyListState() }
   var episodesFocused by remember { mutableStateOf(false) }
   val focusIndex = episodes.indexOfFirst { focusVideo?.id != null && it.id == focusVideo.id }
+  val focusAnchor = focusIndex.takeIf { it >= 0 } ?: episodes.indices.firstOrNull()
   LaunchedEffect(current, focusIndex) {
     // One earlier card stays fully in view, so the row still reads as a sequence.
     if (focusIndex > 1 && !episodesFocused) episodeState.scrollToItem(focusIndex - 1)
@@ -149,7 +150,7 @@ internal fun SeriesRows(
         selected = index == focusIndex,
         onClick = { onSelect(video) },
         modifier = Modifier
-          .then(if (video.id != null && video.id == focusVideo?.id) Modifier.focusRequester(focusRequester) else Modifier)
+          .then(if (index == focusAnchor) Modifier.focusRequester(focusRequester) else Modifier)
           .onFocusChanged {
             if (it.isFocused) {
               onEpisodeFocused(video)

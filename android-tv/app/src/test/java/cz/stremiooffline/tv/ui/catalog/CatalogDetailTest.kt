@@ -928,6 +928,8 @@ class CatalogDetailTest {
     compose.waitForIdle()
     compose.onNodeWithTag(episodeCardTag(videos[29])).assertExists()
     compose.onNodeWithTag(episodeCardTag(videos[0])).assertDoesNotExist()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(episodeCardTag(videos[29])).assertIsFocused()
   }
 
   // --- Review round 2 -------------------------------------------------------------------------
