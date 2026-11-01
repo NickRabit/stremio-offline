@@ -88,9 +88,11 @@ export interface LibraryTitleDetailProps {
   /** The item itself is what the viewer opened -- a media server's own item -- so its own versions
    *  are the default: the rule ranks them, groups loaded beside them never replace them, and when
    *  the rule passes none, its own version is still the one Play plays. Left off, a
-   *  refusal asks the viewer to choose: the catalogue, and a local file, whose detail opens on a
-   *  resumed copy elsewhere instead. */
+   *  refusal asks the viewer to choose. */
   ownFallback?: boolean;
+  /** A library file's own detail: a copy already in a library is the default even when the rule
+   *  breaks it, ahead of anything the rule would pick. */
+  preferLocalCopy?: boolean;
   /** The groups beside the title's own versions: addon answers, the viewer's other copies and the
    *  other libraries. Its presence alone makes the arrow appear, and opening it reads them all. */
   sourceGroups?: LibrarySourcePanel;
@@ -159,7 +161,7 @@ const videoLine = (facts: VideoFacts | undefined): { height: string; tags: Array
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, originalLine, ratings, heroExtra, people, trailer, onTrailer, secureMode, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, ownFallback = false, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, originalLine, ratings, heroExtra, people, trailer, onTrailer, secureMode, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, ownFallback = false, preferLocalCopy = false, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -196,8 +198,11 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     librarySourceEntries(own, nativeSourceLabel ?? t("sources.localFilter"), groups, () => ""), "", "", resolvedSort, preferredLanguage ?? ""), [own, groups, nativeSourceLabel, preferredLanguage, resolvedSort]);
   const activeRuleId = sortRuleId(resolvedSort);
   const ruleAware = Boolean(activeRuleId && pickable.some((stream) => stream.rules?.[activeRuleId]));
+  const localCopy = preferLocalCopy ? pickable.find((stream) => stream.playable && isLocalStream(stream)) : undefined;
   const defaultPick = defaultSources === null
     ? null
+    : localCopy
+      ? localCopy
     : ruleAware
       // A media server's own item stays on its own versions: the rule ranks those, and the groups
       // the chooser loads beside them never take the default away from what the viewer opened.

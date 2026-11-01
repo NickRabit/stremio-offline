@@ -221,11 +221,9 @@ const rankFor = (
   const viewerOrder = snapshot.policy.criteria.some((criterion) =>
     criterion.kind === "providerOrder" && "from" in criterion);
   const localFirst = viewerOrder && candidate.providerKey !== "local" ? 1 : 0;
-  // A copy already in a library is played first even when the rules would not pick it, so it
-  // ranks as if it met them; its verdict still names what it breaks.
   const rank = [
     localFirst,
-    status === "meets" || candidate.providerKey === "local" ? 0 : status === "unverified" ? 1 : 2,
+    status === "meets" ? 0 : status === "unverified" ? 1 : 2,
   ];
   for (const criterion of snapshot.policy.criteria) {
     switch (criterion.kind) {
