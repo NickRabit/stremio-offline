@@ -221,10 +221,10 @@ test("a series opens on its resumed episode with the picker, source row and spli
   await expect.poll(() => remote.sources()).toBe(2);
 
   await expect(panel.locator('.crumbs button[aria-current="page"]')).toBeDisabled();
-  // The series has no page of its own: its crumb keeps the chosen episode on screen.
+  // The series has no page of its own: its crumb opens the episode list, the chosen one marked.
   await panel.locator(".crumbs button").filter({ hasText: "Show" }).click();
   await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show", "S1 E1 · Pilot"]);
-  await expect(panel.locator(".episode-current")).toContainText("Pilot");
+  await expect(panel.locator(".episode-list button.selected")).toContainText("Pilot");
   // Back returns to the listing the series was opened from.
   await panel.locator(".library-back").click();
   await expect(panel.locator(".library-title-detail")).toHaveCount(0);
