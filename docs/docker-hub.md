@@ -61,11 +61,9 @@ right to use.
 | --- | --- |
 | ![The Android TV app's Home with the Tonight row](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/tv-home.jpg) | ![A film's detail on Android TV with ratings, actions, what will play and the cast](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/tv-detail.jpg) |
 
-<p>
-  <img src="https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/mobile-home.jpg" alt="Home on a phone" width="260">
-  <img src="https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/mobile-library.jpg" alt="The library on a phone" width="260">
-  <img src="https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/mobile-detail.jpg" alt="A film's detail on a phone" width="260">
-</p>
+| Phone: Home | Phone: Library | Phone: title detail |
+| --- | --- | --- |
+| ![Home on a phone](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/mobile-home.jpg) | ![The library on a phone](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/mobile-library.jpg) | ![A film's detail on a phone](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/mobile-detail.jpg) |
 
 The films and the series shown are Blender Foundation open movies (CC BY),
 *Pioneer One* (CC BY-SA) and public-domain classics, served by a small local
