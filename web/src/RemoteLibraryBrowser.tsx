@@ -955,9 +955,12 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     returnToAncestor(0);
   };
   /** The series crumb names the series without carrying a page of its own. */
+  /** The series crumb opens the series' episode list on the detail, the one place a series is. */
   const goToSeries = () => {
     if (!series || detail?.type !== "episode") return;
     closeMenu();
+    setEpisodePickerOpen(true);
+    requestAnimationFrame(() => scrollRef.current?.querySelector(".catalogue-episodes")?.scrollIntoView({ block: "start", behavior: "smooth" }));
   };
   const retryListing = () => setNonce((value) => value + 1);
   const retryEpisodes = () => setEpisodeNonce((value) => value + 1);

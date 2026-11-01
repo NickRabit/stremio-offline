@@ -85,8 +85,9 @@ export interface LibraryTitleDetailProps {
   /** The native rows alone, when `sources` merges them with loaded addon rows: the default
    *  version is then drawn from these, so a larger addon answer never replaces it. */
   defaultSources?: Stream[] | null;
-  /** The item itself is what the viewer opened -- a media server's own item -- so when the source
-   *  rule passes none of the rows, its own version is still the one Play plays. Left off, a
+  /** The item itself is what the viewer opened -- a media server's own item -- so its own versions
+   *  are the default: the rule ranks them, groups loaded beside them never replace them, and when
+   *  the rule passes none, its own version is still the one Play plays. Left off, a
    *  refusal asks the viewer to choose: the catalogue, and a local file, whose detail opens on a
    *  resumed copy elsewhere instead. */
   ownFallback?: boolean;
@@ -198,7 +199,12 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const defaultPick = defaultSources === null
     ? null
     : ruleAware
-      ? pickDefaultStream(pickable, activeRuleId) ?? (ownFallback ? defaultSource(defaultSources ?? own) : null)
+      // A media server's own item stays on its own versions: the rule ranks those, and the groups
+      // the chooser loads beside them never take the default away from what the viewer opened.
+      ? ownFallback
+        ? pickDefaultStream(pickable.filter((row) => (defaultSources ?? own).some((mine) => sourceRowKey(mine) === sourceRowKey(row))), activeRuleId)
+          ?? defaultSource(defaultSources ?? own)
+        : pickDefaultStream(pickable, activeRuleId) ?? null
       : defaultSource(defaultSources === undefined ? own : defaultSources);
   const picked = chosen?.identity === identityKey ? pickable.find((stream) => sourceRowKey(stream) === chosen.key) : undefined;
   // The row this detail was opened on is the selection until the viewer picks another one: later

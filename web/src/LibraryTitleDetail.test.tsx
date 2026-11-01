@@ -920,6 +920,15 @@ describe("LibraryTitleDetail stored source", () => {
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
   });
 
+  it("keeps a media server item on its own version when a row beside it passes the rule", () => {
+    const own = { ...remote("own", "OWN", 183_000_000),
+      rules: { balanced: { profileId: "balanced", status: "breaks" as const, reasons: ["resolutionLow" as const], rank: [1] } } };
+    const other = { ...remote("other", "OTHER", 950_000_000),
+      rules: { balanced: { profileId: "balanced", status: "meets" as const, reasons: [], rank: [0] } } };
+    render({ sources: [own, other], defaultSources: [own], ownFallback: true, sourceProfiles: qualityProfiles, defaultSort: "rule:balanced" });
+    expect(host.querySelector(".detail-tech")!.textContent).toContain("OWN");
+  });
+
   it("asks for a choice when the rule passes no addon row of a catalogue title", () => {
     const refused = { ...remote("only", "ONLY", 2_600_000_000),
       rules: { balanced: { profileId: "balanced", status: "breaks" as const, reasons: ["language" as const], rank: [1] } } };
