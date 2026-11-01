@@ -62,6 +62,8 @@
   .browse-bar nav.crumbs{flex:1 1 0;flex-wrap:nowrap;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior-x:contain}
   .browse-bar nav.crumbs::-webkit-scrollbar{display:none}
   .browse-bar nav.crumbs>*{flex:0 0 auto;min-width:auto}
+  /* The way back stays at the start of the line however far the trail has scrolled. */
+  .browse-bar nav.crumbs>.library-back{position:sticky;left:0;z-index:1;background:var(--panel)}
   .browse-bar nav.crumbs span{max-width:none}
   .browse-bar nav.crumbs button{white-space:nowrap;overflow-wrap:normal;max-width:72vw;overflow:hidden;text-overflow:ellipsis}
 }
@@ -2096,6 +2098,12 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-title-detail>.library-detail-actions{margin-top:4px}
 @media(max-width:700px){.library-title-detail{min-height:max(300px,calc(100dvh - 310px));padding:16px}.library-detail-hero .detail-copy h2{font-size:21px}.library-detail-synopsis{font-size:12px}}
 @media(max-height:500px) and (orientation:landscape){.library-title-detail{min-height:max(190px,calc(100dvh - 150px));padding:14px}}
+/* A phone on its side stretches Play across the row: its label sits in the middle of the whole
+   button, the first half giving up on its left what the arrow takes on the right. */
+@media(max-height:500px) and (orientation:landscape){
+  .library-detail-play>.split-button>.split-button-toggle{flex:0 0 44px}
+  .library-detail-play>.split-button>button:first-child{padding-left:44px}
+}
 .remote-episodes-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .remote-season{margin:8px 0 2px;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
 .remote-error{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 12px;font-size:11px;color:var(--red);background:#2a171a;border-radius:8px}

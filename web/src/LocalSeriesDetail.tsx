@@ -143,20 +143,20 @@ export function LocalSeriesDetail({ folder, favorite, onToggleFavorite, onOpenEp
         {pieces.nextLine}
         <ClampedDescription text={synopsisOf(folder.description, titleExtras.extras) || t("catalog.noDescription")}/>
         <CrewLine people={titleExtras.extras?.people}/>
-        <div className="library-detail-actions">
-          {next && <div className="actions library-detail-play">
-            <button type="button" className="primary" onClick={() => onPlayEpisode(next, false, bound)}>
-              <CirclePlay/> {t(resuming ? "library.continue" : "player.play")} · {t("mediaServer.episodeLabel", { season: next.season ?? 0, episode: next.episode ?? 0 })}
-            </button>
-          </div>}
-          <div className="detail-secondary">
-            {resuming && next && <DetailIcon icon={<ListRestart/>} label={t("detail.action.fromStart")} aria-label={t("player.playFromStart")} title={t("player.playFromStart")}
-              onClick={() => onPlayEpisode(next, true, bound)}/>}
-            <DetailTrailerButton trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)} secureMode={secureMode} onTrailer={onTrailer}/>
-            <DetailFavoriteButton favorite={favorite} onToggle={onToggleFavorite}/>
-          </div>
-        </div>
       </>}/>
+    <div className="library-detail-actions">
+      {next && <div className="actions library-detail-play">
+        <button type="button" className="primary" onClick={() => onPlayEpisode(next, false, bound)}>
+          <CirclePlay/> {t(resuming ? "library.continue" : "player.play")} · {t("mediaServer.episodeLabel", { season: next.season ?? 0, episode: next.episode ?? 0 })}
+        </button>
+      </div>}
+      <div className="detail-secondary">
+        {resuming && next && <DetailIcon icon={<ListRestart/>} label={t("detail.action.fromStart")} aria-label={t("player.playFromStart")} title={t("player.playFromStart")}
+          onClick={() => onPlayEpisode(next, true, bound)}/>}
+        <DetailTrailerButton trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)} secureMode={secureMode} onTrailer={onTrailer}/>
+        <DetailFavoriteButton favorite={favorite} onToggle={onToggleFavorite}/>
+      </div>
+    </div>
     <div className="subhead remote-episodes-head"><h3>{t("mediaServer.episodes")}</h3><span>{folder.catalogName || folder.name}</span></div>
     {error && <div className="remote-error" role="alert"><span>{error}</span></div>}
     {files === null && <div className="loading" role="status">{t("common.loading")}</div>}

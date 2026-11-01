@@ -1262,15 +1262,17 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       <DetailRatings age={detailPieces.ageBadge} imdb={detailScores.imdb} tmdb={detailScores.tmdb} tmdbVotes={detailScores.tmdbVotes}/>
       <ClampedDescription text={item.overview || t("catalog.noDescription")}/>
       <CrewLine people={titleExtras.extras?.people}/>
-      <div className="library-detail-actions">
-        <div className="detail-secondary">
-          <DetailTrailerButton trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)} secureMode={secureMode} onTrailer={onTrailer}/>
-          <DetailFavoriteButton favorite={state?.favorite ?? false} disabled={!state}
-            onToggle={(next) => void toggleState({ favorite: next })}/>
-        </div>
-      </div>
     </>;
   };
+  /** The series' own actions sit under the hero, the way a film's do, so the gallery pill a phone
+   *  draws under the copy never lands between the title and its buttons. */
+  const seriesActions = (): ReactNode => <div className="library-detail-actions">
+    <div className="detail-secondary">
+      <DetailTrailerButton trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)} secureMode={secureMode} onTrailer={onTrailer}/>
+      <DetailFavoriteButton favorite={state?.favorite ?? false} disabled={!state}
+        onToggle={(next) => void toggleState({ favorite: next })}/>
+    </div>
+  </div>;
   const detailCrumb = (item: RemoteItem) =>
     item.type === "episode" ? `${t("mediaServer.episodeLabel", { season: item.season ?? 0, episode: item.episode ?? 0 })} · ${item.name}` : item.name;
 
@@ -1647,6 +1649,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
               <img key={seriesGallery[0]!.url} src={seriesGallery[0]!.url} alt="" onError={hideBroken}/><span><Images/> {seriesGallery.length > 1 ? t("gallery.stillCount", { count: seriesGallery.length }) : t("gallery.enlarge")}</span>
             </button> : undefined}
             copy={seriesHeroCopy(detail)}/>
+          {seriesActions()}
           <div className="subhead remote-episodes-head"><h3>{t("mediaServer.episodes")}</h3><span>{detail.name}</span></div>
           {episodes.error && <div className="remote-error" role="alert">
             <span>{episodes.error}</span>
