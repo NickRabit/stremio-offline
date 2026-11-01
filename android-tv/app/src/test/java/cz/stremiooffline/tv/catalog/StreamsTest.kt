@@ -7,6 +7,7 @@ import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.SourceRuleVerdictDto
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.ui.detail.remotePrimary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -617,6 +618,46 @@ class StreamsTest {
   }
 
   @Test
+  fun `repickStream restores a stored row but never overrides an explicit or playing pick`() {
+    assertEquals(
+      Streams.Repick(true, second),
+      Streams.repickStream(
+        playing = false,
+        picked = false,
+        pending = 0,
+        visible = listOf(first, second),
+        selected = first,
+        preferred = second,
+        restore = true,
+      ),
+    )
+    assertEquals(
+      Streams.Repick<String>(false),
+      Streams.repickStream(
+        playing = false,
+        picked = true,
+        pending = 0,
+        visible = listOf(first, second),
+        selected = first,
+        preferred = second,
+        restore = true,
+      ),
+    )
+    assertEquals(
+      Streams.Repick<String>(false),
+      Streams.repickStream(
+        playing = true,
+        picked = false,
+        pending = 0,
+        visible = listOf(first, second),
+        selected = first,
+        preferred = second,
+        restore = true,
+      ),
+    )
+  }
+
+  @Test
   fun `recommended with ranks prefers a better-ranked Czech source over a larger English one`() {
     val czech = stream(name = "cz-ranked", title = "Czech 1 GB", addonName = "alpha", rule = verdict("meets", listOf(0.0, 1.0, -1080.0, 3.0)))
     val english = stream(name = "en-big", title = "English 20 GB", addonName = "alpha", rule = verdict("meets", listOf(1.0, 0.0, -1080.0, 3.0)))
@@ -634,6 +675,14 @@ class StreamsTest {
       listOf("meets", "breaks"),
       names(Streams.arrangeStreams(listOf(breaks, meets), filters(sort = StreamSort.of("rule:p1")), "cs")),
     )
+  }
+
+  @Test
+  fun `remotePrimary picks the own version that meets the rule and falls back to the first`() {
+    val first = remote("first", "rlibA", "iA", "First", verdict("breaks", listOf(1.0)))
+    val meets = remote("meets", "rlibA", "iA", "Meets", verdict("meets", listOf(0.0)))
+    assertEquals(meets, remotePrimary(listOf(first, meets), null, null, "p1"))
+    assertEquals(first, remotePrimary(listOf(first), null, null, "p1"))
   }
 
   @Test

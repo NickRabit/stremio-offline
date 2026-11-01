@@ -16,13 +16,17 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SourceProfileDto
+import cz.stremiooffline.tv.data.SourceRuleVerdictDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -165,5 +169,40 @@ class CatalogRemoteSourcesTest {
 
     // Only the remote groups were asked again; the addon list (and any chosen source) is untouched.
     assertEquals(1, api.streamSourcesRequests.size)
+  }
+
+  @Test
+  fun `a stored remote version replaces the addon rule winner when its group answers last`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings().copy(streamSort = "rule:p1")
+    api.sourceProfilesValue = listOf(SourceProfileDto(id = "p1"))
+    api.progressValues["movie:tt1"] = ProgressDto(position = 30.0, duration = 3_600.0, stableKey = "remote-key")
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Filmy", provider = "jellyfin"))
+    val remoteGate = CompletableDeferred<Unit>()
+    api.remoteMatchGates["rlibA|movie|tt1"] = remoteGate
+    api.remoteMatchValues["rlibA|movie|tt1"] = listOf(remoteStream("a1", "rlibA").copy(stableKey = "remote-key"))
+    api.streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("alpha", "Alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(
+      StreamDto(
+        sourceId = "addon",
+        kind = "remote",
+        playable = true,
+        name = "Addon winner",
+        addonName = "Alpha",
+        rules = mapOf("p1" to SourceRuleVerdictDto(profileId = "p1", status = "meets", rank = listOf(0.0))),
+      ),
+    )
+    compose.setContent {
+      CatalogDetailScreen(api = api, args = movieArgs(), imageUrl = { null }, onPlay = {}, onBack = {})
+    }
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Alpha", substring = true)
+
+    remoteGate.complete(Unit)
+    compose.waitUntil(5_000) { api.remoteMatchRequests.contains("rlibA|movie|tt1") }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("jellyfin", substring = true)
   }
 }

@@ -244,11 +244,12 @@ class NativeSourcesDetailTest {
   }
 
   @Test
-  fun `nothing is asked of any group until the panel is opened`() {
+  fun `the panel's source groups stay unasked before it opens`() {
     val api = seeded()
     mount(api)
 
-    assertEquals(0, api.settingsCalls)
+    // The account sort is read for the item's default version before the panel exists.
+    assertEquals(1, api.settingsCalls)
     assertEquals(0, api.addonsCalls)
     assertTrue(api.streamSourcesRequests.isEmpty())
     assertTrue(api.streamsRequests.isEmpty())
@@ -566,7 +567,7 @@ class NativeSourcesDetailTest {
   }
 
   @Test
-  fun `an item no request can be derived for offers only its own versions and asks nothing`() {
+  fun `an item no request can be derived for offers only its own versions and asks no other source group`() {
     val api = seeded()
     mount(api, data(movie(RemoteProviderIdsDto(imdb = "heat-1995"))))
 
@@ -574,7 +575,7 @@ class NativeSourcesDetailTest {
 
     // The item's own version is a choice on its own; nothing was asked of any addon or media server.
     compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Version ms1"))
-    assertEquals(0, api.settingsCalls)
+    assertEquals(1, api.settingsCalls)
     assertTrue(api.streamSourcesRequests.isEmpty())
     assertTrue(api.localStreamsRequests.isEmpty())
     assertEquals(0, api.remoteLibrariesCalls)

@@ -500,7 +500,9 @@ fun CatalogDetailScreen(
   val totalSources = offered.size + pick.localStreams.size + remoteStreams.size
 
   // A later addon may outrank the one already picked, but only while the viewer has not chosen.
-  LaunchedEffect(rows, anyAsking) {
+  LaunchedEffect(rows, anyAsking, preferredStream?.stableKey) {
+    val storedKey =
+      if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey
     val next = Streams.repickStream(
       playing = false,
       picked = pick.pickedStream,
@@ -509,6 +511,7 @@ fun CatalogDetailScreen(
       selected = pick.selectedStream,
       preferred = preferredStream,
       upgrade = preferredStream?.let(Streams::isLocalStream) == true && pick.selectedStream?.let(Streams::isLocalStream) != true,
+      restore = preferredStream?.stableKey != null && preferredStream.stableKey == storedKey,
     )
     if (next.move) pick.selectedStream = next.to
   }

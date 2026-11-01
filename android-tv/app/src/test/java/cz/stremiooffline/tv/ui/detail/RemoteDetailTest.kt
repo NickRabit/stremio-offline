@@ -43,6 +43,9 @@ import cz.stremiooffline.tv.data.RemoteItemDetailDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
+import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SourceProfileDto
+import cz.stremiooffline.tv.data.SourceRuleVerdictDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
@@ -158,6 +161,38 @@ class RemoteDetailTest {
     mount(api)
 
     assertTrue(played.isEmpty())
+  }
+
+  @Test
+  fun `a film with no stored state opens on its version that meets the active rule`() {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(streamSort = "rule:p1")
+    api.sourceProfilesValue = listOf(SourceProfileDto(id = "p1"))
+    api.remoteSourcesValue = listOf(
+      version("a1").copy(
+        rules = mapOf("p1" to SourceRuleVerdictDto(profileId = "p1", status = "breaks", rank = listOf(1.0))),
+      ),
+      version("a2").copy(
+        rules = mapOf("p1" to SourceRuleVerdictDto(profileId = "p1", status = "meets", rank = listOf(0.0))),
+      ),
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = data(),
+          onPlay = { played += it },
+          onBack = {},
+          catalogueApi = api,
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.settingsCalls > 0 && api.sourceProfilesCalls > 0 }
+    compose.waitForIdle()
+
+    activate(TagRemoteDetailPlay)
+
+    assertEquals("a2", played.single().remoteItem?.mediaSourceId)
   }
 
   private fun mountNamed(api: FakeTvApi) {

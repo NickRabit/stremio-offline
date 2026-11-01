@@ -405,10 +405,12 @@ object Streams {
     selected: T?,
     preferred: T?,
     upgrade: Boolean = false,
+    restore: Boolean = false,
   ): Repick<T> {
     if (visible.isEmpty()) return if (selected != null && !playing) Repick(true, null) else Repick(false)
     if (playing) return Repick(false)
     if (selected == null || !visible.contains(selected)) return Repick(true, preferred)
+    if (!picked && restore && preferred != null && selected != preferred) return Repick(true, preferred)
     // A local copy may land after every addon finished, when the pending counter is already
     // zero: it replaces an automatic pick, but never the viewer's own one or a playing source.
     if (!picked && upgrade && preferred != null && selected != preferred) return Repick(true, preferred)
