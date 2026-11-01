@@ -971,7 +971,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (!series || detail?.type !== "episode") return;
     closeMenu();
     setEpisodePickerOpen(true);
-    requestAnimationFrame(() => scrollRef.current?.querySelector(".catalogue-episodes")?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    requestAnimationFrame(() => scrollRef.current?.querySelector(".catalogue-episodes")?.scrollIntoView?.({ block: "start", behavior: "smooth" }));
   };
   const retryListing = () => setNonce((value) => value + 1);
   const retryEpisodes = () => setEpisodeNonce((value) => value + 1);

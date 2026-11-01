@@ -16,7 +16,10 @@ import { SourceChooser } from "./SourceChooser";
 import type { LibrarySourceGroup, LibrarySourcePanel } from "./library-sources";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
-import type { Capabilities, PlaybackMode, PlaybackSession, SourceProfile, Stream, Subtitle, Track } from "./types";
+import { CHANNELS, playingBadges } from "./player-badges";
+import { chapterAt, chapterLabel } from "./player-chapters";
+import { activeSegment, introQueryOf, upNextPoint, type SegmentKind } from "./player-segments";
+import type { Capabilities, IntroSegments, PlaybackChapter, PlaybackMode, PlaybackSession, SourceProfile, Stream, Subtitle, Track, UpNextAt } from "./types";
 
 /** The title's sources as the place that plays it holds them: the rows it leads with, every other
  *  group of the title, and the two actions over them. The host reads the groups through
@@ -35,7 +38,7 @@ export interface PlayerSources {
   onSwitch: (stream: Stream, positionSeconds: number) => Promise<void> | void;
 }
 
-interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void;
+interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void; upNextAt?: UpNextAt; skipSegmentsAuto?: boolean;
   /** The playing title's sources; absent for a place that offers none at all. */
   sources?: PlayerSources;
   /** Where a freshly handed source starts; a switch carries the position it was chosen at. */
@@ -100,8 +103,8 @@ function PreviewFrame({ sessionId, time }: { sessionId: string; time: number }) 
   return image ? <img src={image} alt="" /> : null;
 }
 
-function TimelineBar({ value, max, sessionId, onScrub, onSeek, onReveal }: {
-  value: number; max: number; sessionId?: string; onScrub: (value: number | null) => void; onSeek: (value: number) => void; onReveal: () => void;
+function TimelineBar({ value, max, sessionId, chapters, onScrub, onSeek, onReveal }: {
+  value: number; max: number; sessionId?: string; chapters?: PlaybackChapter[]; onScrub: (value: number | null) => void; onSeek: (value: number) => void; onReveal: () => void;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startValue: number; moved: boolean } | null>(null);
@@ -152,6 +155,8 @@ function TimelineBar({ value, max, sessionId, onScrub, onSeek, onReveal }: {
   }, []);
 
   const percent = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
+  const previewTime = dragging ? value : hover ?? 0;
+  const previewChapter = chapterAt(chapters, previewTime);
   return <div
     ref={trackRef}
     className={`timeline-bar${dragging ? " scrubbing" : ""}`}
@@ -175,12 +180,16 @@ function TimelineBar({ value, max, sessionId, onScrub, onSeek, onReveal }: {
       onScrub(valueRef.current);
     }}>
     <div className="timeline-rail" aria-hidden="true">
+      {chapters?.map((chapter) => chapter.start > 0 && chapter.start < max
+        ? <i key={chapter.start} className="timeline-chapter" style={{ left: `${chapter.start / max * 100}%` }} aria-hidden="true" />
+        : null)}
       <i className="timeline-fill" style={{ width: `${percent}%` }} />
       <b className="timeline-thumb" style={{ left: `${percent}%` }} />
     </div>
     {(dragging || hover !== null) && <span className="timeline-preview" style={{ left: `clamp(80px, ${max > 0 ? (dragging ? value : hover ?? 0) / max * 100 : 0}%, calc(100% - 80px))` }}>
-      {sessionId && <PreviewFrame sessionId={sessionId} time={dragging ? value : hover ?? 0} />}
-      <span>{fmt(dragging ? value : hover ?? 0)}</span>
+      {sessionId && <PreviewFrame sessionId={sessionId} time={previewTime} />}
+      <span>{fmt(previewTime)}</span>
+      {previewChapter >= 0 && <small>{chapterLabel(chapters!, previewChapter)}</small>}
     </span>}
   </div>;
 }
@@ -217,7 +226,6 @@ const CONVERSION_SETTLE_S = 4;
 const EARLY_STALL_GRACE_MS = 2_000;
 const lowerQuality = (current: number | null) => current === null || current === 1080 ? 720 : current === 720 ? 480 : null;
 
-const CHANNELS: Record<number, string> = { 1: "mono", 2: "stereo", 6: "5.1", 8: "7.1" };
 /** Files routinely tag several tracks with the same language, so a track has to be
  *  recognisable by something else as well. */
 const trackLabel = (track: Track) => {
@@ -230,8 +238,13 @@ const trackLabel = (track: Track) => {
 
 const SUBTITLE_DELAY_STEP_S = 0.25;
 const SUBTITLE_DELAY_LIMIT_S = 30;
+const SKIP_KEY: Record<SegmentKind, Key> = {
+  intro: "player.skipIntro",
+  recap: "player.skipRecap",
+  outro: "player.skipOutro",
+};
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -255,6 +268,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   streamRef.current = stream;
   const [upNext, setUpNext] = useState(false);
   const [upNextSeconds, setUpNextSeconds] = useState(5);
+  const [segments, setSegments] = useState<IntroSegments | null>(null);
+  const autoSkippedRef = useRef<Set<SegmentKind>>(new Set());
+  const previousPositionRef = useRef(0);
+  const thresholdDismissedRef = useRef(false);
   const advancingRef = useRef(false);
   const onNextRef = useRef(onNext);
   onNextRef.current = onNext;
@@ -263,6 +280,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   preferenceDefaultsRef.current = { audioLanguage, subtitleLanguage };
 
   const cancelNext = () => { setUpNext(false); setUpNextSeconds(5); };
+  const dismissNext = () => {
+    thresholdDismissedRef.current = true;
+    cancelNext();
+  };
   const startNext = async () => {
     const advance = onNextRef.current;
     if (advancingRef.current || !advance) return;
@@ -286,7 +307,24 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     return () => clearInterval(timer);
   }, [upNext]);
 
-  useEffect(() => { cancelNext(); }, [stream]);
+  useEffect(() => {
+    cancelNext();
+    autoSkippedRef.current.clear();
+    previousPositionRef.current = 0;
+    thresholdDismissedRef.current = false;
+  }, [stream, progressKey]);
+
+  useEffect(() => {
+    setSegments(null);
+    const query = introQueryOf(progressKey);
+    if (!query) return;
+    const controller = new AbortController();
+    void api.introSegments(query, controller.signal).then(
+      (next) => { if (!controller.signal.aborted) setSegments(next); },
+      () => undefined,
+    );
+    return () => controller.abort();
+  }, [stream, progressKey]);
 
   // Track choices and a running countdown belong to the film on screen. The player outlives
   // its overlay, so both are dropped when it closes instead of following the viewer to the
@@ -1320,13 +1358,18 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   if (!open) return null;
   const position = scrub ?? time;
   const seekable = duration || Math.max(time, 1);
+  const badges = playingBadges(session?.playing);
+  const chapters = (session?.chapters?.length ?? 0) >= 2 ? session?.chapters : undefined;
+  const chapterIndex = chapterAt(chapters, position);
+  const segment = activeSegment(segments, position);
+  const nextPoint = upNextPoint(upNextAt, duration, segments?.outro);
   const subtitleValue = session?.subtitleTrack !== null && session?.subtitleTrack !== undefined
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
 
   return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { keyboardControlsRef.current = false; if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="player-head">
-      <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.mode === "transcode" ? ` · ${t(session.hardware ? "player.hardware" : "player.software")}` : ""}</small><strong>{title}</strong></div>
+      <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.mode === "transcode" ? ` · ${t(session.hardware ? "player.hardware" : "player.software")}` : ""}</small><strong>{title}</strong>{badges.length > 0 && <span className="player-badges">{badges.map((badge) => <i key={badge}>{badge}</i>)}</span>}</div>
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} aria-label={favorite ? t("favorite.remove") : t("favorite.add")} aria-pressed={Boolean(favorite)} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>
         <Star/> <span>{favorite ? t("favorite.on") : t("favorite.off")}</span>
       </button>}
@@ -1359,6 +1402,22 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         }}
         onTimeUpdate={(event) => {
           const absolute = offsetRef.current + event.currentTarget.currentTime;
+          const previousPosition = previousPositionRef.current;
+          const currentSegment = activeSegment(segments, absolute);
+          if (skipSegmentsAuto && !pausedRef.current && currentSegment
+            && (currentSegment.kind === "intro" || currentSegment.kind === "recap")
+            && !autoSkippedRef.current.has(currentSegment.kind)
+            && previousPosition < currentSegment.range.start + 1) {
+            autoSkippedRef.current.add(currentSegment.kind);
+            void seekTo(currentSegment.range.end);
+          }
+          if (nextPoint !== undefined && onNext && autoNext
+            && previousPosition < nextPoint && absolute >= nextPoint
+            && !pausedRef.current && !upNext && !thresholdDismissedRef.current) {
+            setSettingsOpen(false); setUpNextSeconds(5); setUpNext(true); revealControls();
+          }
+          if (nextPoint !== undefined && absolute < nextPoint) thresholdDismissedRef.current = false;
+          previousPositionRef.current = absolute;
           reportRef.current = { position: absolute, duration: duration || probeDurationRef.current };
           if (scrub === null && !seekingRef.current) showTime(absolute);
         }}
@@ -1410,13 +1469,18 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         <small>{t("player.upNext")}</small>
         <strong>{nextTitle}</strong>
         <span>{t("player.upNextCountdown", { seconds: upNextSeconds })}</span>
-        <div><button className="primary" disabled={nextBusy} onClick={() => void startNext()}>{t("player.playNow")}</button><button disabled={nextBusy} onClick={cancelNext}>{t("common.cancel")}</button></div>
+        <div><button className="primary" disabled={nextBusy} onClick={() => void startNext()}>{t("player.playNow")}</button><button disabled={nextBusy} onClick={dismissNext}>{t("common.cancel")}</button></div>
       </div>}
+      {segment && !upNext && <button className="player-skip" onClick={() => {
+        if (segment.kind === "outro" && onNext) void startNext();
+        else void seekTo(segment.range.end);
+      }}>{t(SKIP_KEY[segment.kind])}</button>}
     </div>
     <div ref={bottomRef} className="player-bottom">
+      {chapterIndex >= 0 && chapters && <div className="player-chapter" aria-live="off">{chapterLabel(chapters, chapterIndex)}</div>}
       <div className="timeline">
         <span>{fmt(position)}</span>
-        <TimelineBar sessionId={session?.id} value={Math.min(position, seekable)} max={seekable}
+        <TimelineBar sessionId={session?.id} chapters={chapters} value={Math.min(position, seekable)} max={seekable}
           onScrub={(next) => { revealControls(); setScrub(next); }}
           onSeek={(next) => void seekTo(next)}
           onReveal={revealControls} />
@@ -1495,6 +1559,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         <button className="subtitle-delay-reset" disabled={!subtitleDelay} aria-label={t("player.subtitleDelayReset")} onClick={() => setSubtitleDelay(0)}><RotateCcw /></button>
       </div>}
 
+      {chapters && chapters.length >= 2 && <div className="player-chapters" role="group" aria-label={t("player.chapters")}>
+        <strong>{t("player.chapters")}</strong>
+        {chapters.map((chapter, index) => <button key={chapter.start} aria-current={index === chapterIndex ? "true" : undefined}
+          onClick={() => { void seekTo(chapter.start); }}>
+          <span>{chapterLabel(chapters, index)}</span><small>{fmt(chapter.start)}</small>
+        </button>)}
+      </div>}
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}
       {!isLocal && canSaveToLibrary && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title={t("save.toLibraryHint")} aria-label={t("save.toLibraryHint")}>
         {downloadState === "done" ? <><Check /> <span>{t("save.queued")}</span></> : <><HardDrive /> <span>{downloadState === "busy" ? t("save.adding") : t("save.toLibrary")}</span></>}

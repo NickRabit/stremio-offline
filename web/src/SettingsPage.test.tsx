@@ -300,3 +300,26 @@ describe("SettingsPage Sources tab", () => {
     expect(selects.every((select) => select.disabled)).toBe(true);
   });
 });
+
+describe("SettingsPage playback options", () => {
+  it("shows and saves the next-episode and skip controls", async () => {
+    const { onSave } = await render({ upNextAt: "sec120", skipSegmentsAuto: true });
+    await selectTab("Playback");
+    const next = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.upNextAtLabel"]}"]`)!;
+    const skip = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.skipSegmentsLabel"]}"]`)!;
+    expect(next.value).toBe("sec120");
+    expect(next.options).toHaveLength(8);
+    expect(skip.value).toBe("1");
+
+    await act(async () => {
+      next.value = "pct98";
+      next.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onSave).toHaveBeenCalledWith({ upNextAt: "pct98" });
+    await act(async () => {
+      skip.value = "0";
+      skip.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onSave).toHaveBeenCalledWith({ skipSegmentsAuto: false });
+  });
+});
