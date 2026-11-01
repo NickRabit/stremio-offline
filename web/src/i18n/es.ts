@@ -1928,6 +1928,8 @@ export const es: Catalog = {
   "tv.preferConversionNote": "Cada reproducción empieza como en un navegador, así que el servidor convierte lo que la TV no puede reproducir. Inicio más lento y más carga en el servidor.",
   "tv.on": "Activado",
   "tv.off": "Desactivado",
+  "tv.chaptersButton": "Capítulos",
+  "tv.skipSegmentsAuto": "Saltar automáticamente la introducción y el resumen",
   "tv.backToSource": "Volver a la fuente anterior",
   "tv.homeLayout": "Inicio",
   "tv.homeLayoutUnavailable": "La disposición de Inicio no está disponible en este servidor.",

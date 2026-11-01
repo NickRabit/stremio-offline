@@ -176,6 +176,11 @@
   <string name="player_subtitle_delay">Tempo de legenda</string>
   <string name="player_subtitle_in_step">no passo</string>
   <string name="player_from_addon">Complemento</string>
+  <string name="player_chapters">Capítulos</string>
+  <string name="player_chapter_number">Capítulo %1$s</string>
+  <string name="player_skip_intro">Pular introdução</string>
+  <string name="player_skip_recap">Pular resumo</string>
+  <string name="player_skip_outro">Pular créditos</string>
   <string name="player_up_next">PRÓXIMO</string>
   <string name="player_up_next_countdown">Começa em %1$ss</string>
   <string name="player_play_now">Jogue agora</string>
@@ -209,6 +214,11 @@
   <string name="settings_stream_sort">Ordem de origem padrão</string>
   <string name="settings_default_rules_hint">“Recomendado” ordena as fontes por estas regras, e Reproduzir escolhe a primeira que as cumpre.</string>
   <string name="settings_start_view">Página inicial</string>
+  <string name="settings_up_next_at">Oferecer o próximo episódio</string>
+  <string name="settings_up_next_end">Quando o episódio terminar</string>
+  <string name="settings_up_next_percent">Aos %1$s %%</string>
+  <string name="settings_up_next_seconds">%1$s s antes do fim</string>
+  <string name="settings_up_next_minutes">%1$s min antes do fim</string>
   <string name="tv_settings_title">Esta TV</string>
   <string name="tv_account">Conta</string>
   <string name="tv_device">Dispositivo</string>
@@ -226,6 +236,8 @@
   <string name="tv_prefer_conversion_note">Cada reprodução começa como num navegador, então o servidor converte o que a TV não consegue reproduzir. Início mais lento e mais carga no servidor.</string>
   <string name="tv_on">Ativado</string>
   <string name="tv_off">Desativado</string>
+  <string name="tv_chapters_button">Capítulos</string>
+  <string name="tv_skip_segments_auto">Pular introdução e resumo automaticamente</string>
   <string name="tv_back_to_source">Voltar à fonte anterior</string>
   <string name="library_mosaic_alt">Mosaico de pôsteres de %1$s filmes</string>
   <string name="library_show_in_library">Mostrar na biblioteca</string>

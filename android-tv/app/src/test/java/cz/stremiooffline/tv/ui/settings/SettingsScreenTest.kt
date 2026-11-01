@@ -107,7 +107,9 @@ class SettingsScreenTest {
     press(Key.DirectionDown); focusRow(TagSettingsRowSubtitle)
     press(Key.DirectionDown); focusRow(TagSettingsRowStreamSort)
     press(Key.DirectionDown); focusRow(TagSettingsRowStartView)
-    press(Key.DirectionUp); focusRow(TagSettingsRowStreamSort)
+    press(Key.DirectionDown); focusRow(TagSettingsRowUpNext)
+    press(Key.DirectionDown); focusRow(TagSettingsRowSkipSegments)
+    press(Key.DirectionUp); focusRow(TagSettingsRowUpNext)
   }
 
   @Test
@@ -119,8 +121,12 @@ class SettingsScreenTest {
 
     repeat(6) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
-    // The Home row, then the switch, then Send diagnostics: the device facts between and under
-    // them are not focusable.
+    // The two playback rows, Home, then the switch, then Send diagnostics: the device facts
+    // between and under them are not focusable.
+    press(Key.DirectionDown)
+    focusRow(TagSettingsRowUpNext)
+    press(Key.DirectionDown)
+    focusRow(TagSettingsRowSkipSegments)
     press(Key.DirectionDown)
     focusRow(TagSettingsRowHomeLayout)
     press(Key.DirectionDown)
@@ -137,8 +143,9 @@ class SettingsScreenTest {
     val root = compose.onRoot().fetchSemanticsNode()
     val rows = listOf(
       TagSettingsRowServer, TagSettingsRowAccount, TagSettingsRowUiLanguage, TagSettingsRowAudio,
-      TagSettingsRowSubtitle, TagSettingsRowStreamSort, TagSettingsRowStartView, TagSettingsRowHomeLayout,
-      TagSettingsRowPreferConversion, TagSettingsRowDiagnostics,
+      TagSettingsRowSubtitle, TagSettingsRowStreamSort, TagSettingsRowStartView, TagSettingsRowUpNext,
+      TagSettingsRowSkipSegments, TagSettingsRowHomeLayout, TagSettingsRowPreferConversion,
+      TagSettingsRowDiagnostics,
     )
     rows.forEachIndexed { index, tag ->
       if (index > 0) press(Key.DirectionDown)
@@ -164,6 +171,10 @@ class SettingsScreenTest {
     repeat(6) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
     press(Key.DirectionDown)
+    focusRow(TagSettingsRowUpNext)
+    press(Key.DirectionDown)
+    focusRow(TagSettingsRowSkipSegments)
+    press(Key.DirectionDown)
     focusRow(TagSettingsRowHomeLayout)
     press(Key.DirectionDown)
     focusRow(TagSettingsRowPreferConversion)
@@ -174,6 +185,10 @@ class SettingsScreenTest {
     press(Key.DirectionUp)
     focusRow(TagSettingsRowHomeLayout)
     press(Key.DirectionUp)
+    focusRow(TagSettingsRowSkipSegments)
+    press(Key.DirectionUp)
+    focusRow(TagSettingsRowUpNext)
+    press(Key.DirectionUp)
     focusRow(TagSettingsRowStartView)
   }
 
@@ -181,7 +196,7 @@ class SettingsScreenTest {
   fun `OK on the prefer conversion row flips it and stores it on the device`() {
     preferences().preferConversion = false
     mount(fake())
-    repeat(8) { press(Key.DirectionDown) }
+    repeat(10) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowPreferConversion)
     compose.onNodeWithTag(TagSettingsRowPreferConversion).assertTextContains("Off", substring = true)
 
@@ -195,7 +210,7 @@ class SettingsScreenTest {
   fun `toggling the prefer conversion row writes nothing to the server`() {
     val api = fake()
     mount(api)
-    repeat(8) { press(Key.DirectionDown) }
+    repeat(10) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowPreferConversion)
 
     press(Key.DirectionCenter)
@@ -285,7 +300,7 @@ class SettingsScreenTest {
     val api = fake()
     api.searchStateValue = SearchStateDto(recent = listOf(RecentSearchDto("Heat", "now")))
     mount(api)
-    repeat(8) { press(Key.DirectionDown) }
+    repeat(10) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowClearHistory)
 
     press(Key.DirectionCenter)
@@ -379,7 +394,7 @@ class SettingsScreenTest {
     cz.stremiooffline.tv.diagnostics.AppLog.clear()
     cz.stremiooffline.tv.diagnostics.AppLog.record("WARN", "API GET /api/home", mapOf("status" to "403"))
     mount(api)
-    repeat(9) { press(Key.DirectionDown) }
+    repeat(11) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -398,7 +413,7 @@ class SettingsScreenTest {
     api.bundleFailure = ApiFailure.Forbidden
     api.bundleFailureMessage = "Client logs are turned off on this server."
     mount(api)
-    repeat(9) { press(Key.DirectionDown) }
+    repeat(11) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -413,7 +428,7 @@ class SettingsScreenTest {
     val api = fake()
     api.bundleFailure = ApiFailure.Unreachable
     mount(api)
-    repeat(9) { press(Key.DirectionDown) }
+    repeat(11) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)

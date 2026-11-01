@@ -1928,6 +1928,8 @@ export const ptBR: Catalog = {
   "tv.preferConversionNote": "Cada reprodução começa como num navegador, então o servidor converte o que a TV não consegue reproduzir. Início mais lento e mais carga no servidor.",
   "tv.on": "Ativado",
   "tv.off": "Desativado",
+  "tv.chaptersButton": "Capítulos",
+  "tv.skipSegmentsAuto": "Pular introdução e resumo automaticamente",
   "tv.backToSource": "Voltar à fonte anterior",
   "tv.homeLayout": "Início",
   "tv.homeLayoutUnavailable": "O layout do Início não está disponível neste servidor.",

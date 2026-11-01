@@ -1928,6 +1928,8 @@ export const de: Catalog = {
   "tv.preferConversionNote": "Jede Wiedergabe startet wie im Browser, daher konvertiert der Server, was der Fernseher nicht abspielt. Langsamerer Start und höhere Serverlast.",
   "tv.on": "Ein",
   "tv.off": "Aus",
+  "tv.chaptersButton": "Kapitel",
+  "tv.skipSegmentsAuto": "Intro und Rückblick automatisch überspringen",
   "tv.backToSource": "Zurück zur vorherigen Quelle",
   "tv.homeLayout": "Startseite",
   "tv.homeLayoutUnavailable": "Die Startseiten-Anordnung ist auf diesem Server nicht verfügbar.",

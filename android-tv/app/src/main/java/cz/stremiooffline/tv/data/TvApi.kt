@@ -76,6 +76,8 @@ interface CatalogApi : SearchHistoryApi {
   suspend fun languages(): List<LanguageDto>
   /** Writes exactly one personal preference; the server refuses an instance key in the body. */
   suspend fun updateSettings(field: String, value: String): SettingsResponse
+  /** Writes one personal Boolean, preserving its JSON type. */
+  suspend fun updateSettingFlag(field: String, value: Boolean): SettingsResponse
   /** Writes the whole personal Home arrangement, or clears it with a `null`. */
   suspend fun updateHomeLayout(layout: HomeLayoutDto?): SettingsResponse
   suspend fun progressList(): List<ProgressEntryDto>
@@ -232,6 +234,9 @@ interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, C
 
   /** The next library file after this source, or null when there is none. */
   suspend fun libraryNext(sourceId: String): NextFileDto?
+
+  /** IntroDB segments for a movie or one series episode. */
+  suspend fun introSegments(imdb: String, season: Int?, episode: Int?): IntroSegmentsDto
 
   /** One poll of the sidecar URL the descriptor named, at the current position and delay. */
   suspend fun sidecar(url: String, position: Double, delay: Double): SidecarFetch?

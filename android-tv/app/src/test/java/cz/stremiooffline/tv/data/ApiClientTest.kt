@@ -201,6 +201,27 @@ class ApiClientTest {
   }
 
   @Test
+  fun `a settings flag stays a JSON boolean`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"skipSegmentsAuto":true}"""))
+    val answer = client(start()).updateSettingFlag("skipSegmentsAuto", true)
+
+    val request = server.takeRequest()
+    assertEquals("PATCH", request.method)
+    assertEquals("""{"skipSegmentsAuto":true}""", request.body.readUtf8())
+    assertTrue(answer.skipSegmentsAuto)
+  }
+
+  @Test
+  fun `intro segments carry the episode query and decode the answer`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"intro":{"start":5,"end":60},"outro":{"start":500,"end":600}}"""))
+    val segments = client(start()).introSegments("tt0903747", 1, 2)
+
+    assertEquals("/api/intro-segments?imdb=tt0903747&season=1&episode=2", server.takeRequest().path)
+    assertEquals(5.0, segments.intro?.start)
+    assertEquals(600.0, segments.outro?.end)
+  }
+
+  @Test
   fun `languages reads the codes the server offers`() = runTest {
     server.enqueue(MockResponse().setBody("""[{"code":"cs","name":"Čeština"},{"code":"en","name":"Angličtina"}]"""))
     val languages = client(start()).languages()

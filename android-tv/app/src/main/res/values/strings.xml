@@ -176,6 +176,11 @@
   <string name="player_subtitle_delay">Subtitle timing</string>
   <string name="player_subtitle_in_step">in step</string>
   <string name="player_from_addon">Addon</string>
+  <string name="player_chapters">Chapters</string>
+  <string name="player_chapter_number">Chapter %1$s</string>
+  <string name="player_skip_intro">Skip intro</string>
+  <string name="player_skip_recap">Skip recap</string>
+  <string name="player_skip_outro">Skip credits</string>
   <string name="player_up_next">UP NEXT</string>
   <string name="player_up_next_countdown">Starts in %1$ss</string>
   <string name="player_play_now">Play now</string>
@@ -209,6 +214,11 @@
   <string name="settings_stream_sort">Default source order</string>
   <string name="settings_default_rules_hint">“Recommended” sorts sources by these rules, and Play picks the first one that meets them.</string>
   <string name="settings_start_view">Start page</string>
+  <string name="settings_up_next_at">Offer the next episode</string>
+  <string name="settings_up_next_end">When the episode ends</string>
+  <string name="settings_up_next_percent">At %1$s %%</string>
+  <string name="settings_up_next_seconds">%1$s s before the end</string>
+  <string name="settings_up_next_minutes">%1$s min before the end</string>
   <string name="tv_settings_title">This television</string>
   <string name="tv_account">Account</string>
   <string name="tv_device">Device</string>
@@ -226,6 +236,8 @@
   <string name="tv_prefer_conversion_note">Every playback starts like a browser, so the server converts what the TV cannot play. Slower to start and heavier on the server.</string>
   <string name="tv_on">On</string>
   <string name="tv_off">Off</string>
+  <string name="tv_chapters_button">Chapters</string>
+  <string name="tv_skip_segments_auto">Skip intro and recap automatically</string>
   <string name="tv_back_to_source">Back to the previous source</string>
   <string name="library_mosaic_alt">Poster mosaic of %1$s films</string>
   <string name="library_show_in_library">Show in library</string>

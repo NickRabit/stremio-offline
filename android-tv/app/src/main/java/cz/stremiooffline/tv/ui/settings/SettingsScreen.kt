@@ -95,6 +95,8 @@ const val TagSettingsRowAudio = "settings_row_audio"
 const val TagSettingsRowSubtitle = "settings_row_subtitle"
 const val TagSettingsRowStreamSort = "settings_row_stream_sort"
 const val TagSettingsRowStartView = "settings_row_start_view"
+const val TagSettingsRowUpNext = "settings_row_up_next"
+const val TagSettingsRowSkipSegments = "settings_row_skip_segments"
 const val TagSettingsRowHomeLayout = "settings_row_home_layout"
 const val TagSettingsRowPreferConversion = "settings_row_prefer_conversion"
 const val TagSettingsRowClearHistory = "settings_row_clear_history"
@@ -114,7 +116,9 @@ fun settingsOptionTag(kind: String, code: String): String = "settings_${kind}_op
  *  else -- the same value drives the row's label, the panel's tint and the panel's focus. */
 private val START_VIEWS = listOf("home", "catalog", "library")
 
-private enum class SettingsPanel { SignOut, UiLanguage, AudioLanguage, SubtitleLanguage, StreamSort, StartView, HomeLayout, ClearHistory }
+private enum class SettingsPanel { SignOut, UiLanguage, AudioLanguage, SubtitleLanguage, StreamSort, StartView, UpNext, HomeLayout, ClearHistory }
+
+private val UP_NEXT_VALUES = listOf("end", "pct97", "pct98", "pct99", "sec30", "sec60", "sec120", "sec180")
 
 /** The Device/Version line: the model, the Android release and what the device plays, all from
  *  the capability DTO the player already builds. */
@@ -166,6 +170,8 @@ fun SettingsRoute(
     onSubtitleLanguage = viewModel::setSubtitleLanguage,
     onStreamSort = viewModel::setStreamSort,
     onStartView = viewModel::setStartView,
+    onUpNextAt = viewModel::setUpNextAt,
+    onToggleSkipSegmentsAuto = viewModel::toggleSkipSegmentsAuto,
     homeLayout = viewModel.homeLayout,
     onToggleHomeRow = viewModel::toggleHomeRow,
     onMoveHomeRow = viewModel::moveHomeRow,
@@ -209,6 +215,8 @@ fun SettingsScreen(
   onSubtitleLanguage: (String) -> Unit,
   onStreamSort: (String) -> Unit,
   onStartView: (String) -> Unit,
+  onUpNextAt: (String) -> Unit,
+  onToggleSkipSegmentsAuto: () -> Unit,
   homeLayout: HomeLayoutState,
   onToggleHomeRow: (String) -> Unit,
   onMoveHomeRow: (String, Int) -> Unit,
@@ -237,6 +245,8 @@ fun SettingsScreen(
   val subtitleFocus = remember { FocusRequester() }
   val streamSortFocus = remember { FocusRequester() }
   val startFocus = remember { FocusRequester() }
+  val upNextFocus = remember { FocusRequester() }
+  val skipSegmentsFocus = remember { FocusRequester() }
   val homeFocus = remember { FocusRequester() }
   val clearHistoryFocus = remember { FocusRequester() }
   val panelFocus = remember { FocusRequester() }
@@ -281,6 +291,8 @@ fun SettingsScreen(
     "library" -> stringResource(R.string.nav_library)
     else -> stringResource(R.string.nav_catalog)
   }
+  val upNextAt = state.upNextAt?.takeIf { it in UP_NEXT_VALUES } ?: "end"
+  val upNextName = upNextLabel(upNextAt)
   // The row explains an old server, or a read that failed for another reason and can be retried.
   val homeLayoutValue = when (homeLayout) {
     is HomeLayoutState.Unavailable -> stringResource(R.string.tv_home_layout_unavailable)
@@ -360,6 +372,19 @@ fun SettingsScreen(
         value = startName,
         onClick = { openPanel(SettingsPanel.StartView, startFocus) },
         modifier = Modifier.testTag(TagSettingsRowStartView).focusRequester(startFocus),
+      )
+      SettingsRow(
+        label = stringResource(R.string.settings_up_next_at),
+        value = upNextName,
+        onClick = { openPanel(SettingsPanel.UpNext, upNextFocus) },
+        modifier = Modifier.testTag(TagSettingsRowUpNext).focusRequester(upNextFocus),
+      )
+      ToggleRow(
+        label = stringResource(R.string.tv_skip_segments_auto),
+        note = "",
+        value = stringResource(if (state.skipSegmentsAuto) R.string.tv_on else R.string.tv_off),
+        onToggle = onToggleSkipSegmentsAuto,
+        modifier = Modifier.testTag(TagSettingsRowSkipSegments).focusRequester(skipSegmentsFocus),
       )
       SettingsRow(
         label = stringResource(R.string.tv_home_layout),
@@ -514,6 +539,24 @@ fun SettingsScreen(
         )
       }
     }
+    SettingsPanel.UpNext -> SidePanel(
+      title = stringResource(R.string.settings_up_next_at),
+      onClose = { closePanel() },
+      modifier = Modifier.testTag(TagSettingsPanel),
+      initialFocus = panelFocus,
+    ) {
+      val selected = UP_NEXT_VALUES.indexOf(upNextAt)
+      UP_NEXT_VALUES.forEachIndexed { index, value ->
+        PanelOption(
+          text = upNextLabel(value),
+          selected = value == upNextAt,
+          onClick = { closePanel(); onUpNextAt(value) },
+          modifier = Modifier
+            .testTag(settingsOptionTag("upNext", value))
+            .then(if (index == selected) Modifier.focusRequester(panelFocus) else Modifier),
+        )
+      }
+    }
     SettingsPanel.HomeLayout -> HomeLayoutPanel(
       state = homeLayout,
       onToggle = onToggleHomeRow,
@@ -547,6 +590,18 @@ fun SettingsScreen(
       }
     }
   }
+}
+
+@Composable
+private fun upNextLabel(value: String): String = when (value) {
+  "end" -> stringResource(R.string.settings_up_next_end)
+  "pct97" -> stringResource(R.string.settings_up_next_percent, 97)
+  "pct98" -> stringResource(R.string.settings_up_next_percent, 98)
+  "pct99" -> stringResource(R.string.settings_up_next_percent, 99)
+  "sec30" -> stringResource(R.string.settings_up_next_seconds, 30)
+  "sec60" -> stringResource(R.string.settings_up_next_minutes, 1)
+  "sec120" -> stringResource(R.string.settings_up_next_minutes, 2)
+  else -> stringResource(R.string.settings_up_next_minutes, 3)
 }
 
 @Composable

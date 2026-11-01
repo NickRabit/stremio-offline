@@ -1928,6 +1928,8 @@ export const sk: Catalog = {
   "tv.preferConversionNote": "Každé prehrávanie sa spustí ako v prehliadači, takže server prevedie, čo televízor nezvládne. Pomalší štart a vyššia záťaž servera.",
   "tv.on": "Zapnuté",
   "tv.off": "Vypnuté",
+  "tv.chaptersButton": "Kapitoly",
+  "tv.skipSegmentsAuto": "Automaticky preskakovať úvod a rekapituláciu",
   "tv.backToSource": "Späť na predchádzajúci zdroj",
   "tv.homeLayout": "Domovská obrazovka",
   "tv.homeLayoutUnavailable": "Rozloženie domovskej obrazovky na tomto serveri nie je dostupné.",

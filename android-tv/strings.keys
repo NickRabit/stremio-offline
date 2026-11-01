@@ -169,6 +169,11 @@ player.subtitlesOff
 player.subtitleDelay
 player.subtitleInStep
 player.fromAddon
+player.chapters
+player.chapterNumber
+player.skipIntro
+player.skipRecap
+player.skipOutro
 player.upNext
 player.upNextCountdown
 player.playNow
@@ -202,6 +207,11 @@ settings.subtitleLanguage
 settings.streamSort
 settings.defaultRulesHint
 settings.startView
+settings.upNextAt
+settings.upNextEnd
+settings.upNextPercent
+settings.upNextSeconds
+settings.upNextMinutes
 tv.settingsTitle
 tv.account
 tv.device
@@ -219,6 +229,8 @@ tv.preferConversion
 tv.preferConversionNote
 tv.on
 tv.off
+tv.chaptersButton
+tv.skipSegmentsAuto
 tv.backToSource
 library.mosaicAlt
 library.showInLibrary

@@ -238,6 +238,12 @@ class ApiClient(
       .decode() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  override suspend fun updateSettingFlag(field: String, value: Boolean): SettingsResponse {
+    val payload = buildJsonObject { put(field, value) }.toString()
+    return request(Request.Builder().url(address.resolve("/api/settings")).patch(payload.toRequestBody(mediaType)).build())
+      .decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
   /** The whole personal Home arrangement travels as one `homeLayout` object. */
   override suspend fun updateHomeLayout(layout: HomeLayoutDto?): SettingsResponse {
     val payload = HomeLayoutJson.encodeToString(HomeLayoutPatch.serializer(), HomeLayoutPatch(layout))
@@ -394,6 +400,14 @@ class ApiClient(
     val body = request(Request.Builder().url(address.resolve("/api/library/next/" + encode(sourceId))).get().build())
     if (body.isBlank() || body == "null") return null
     return body.decode()
+  }
+
+  override suspend fun introSegments(imdb: String, season: Int?, episode: Int?): IntroSegmentsDto {
+    val query = buildString {
+      append("/api/intro-segments?imdb=").append(encode(imdb))
+      if (season != null && episode != null) append("&season=").append(season).append("&episode=").append(episode)
+    }
+    return request(Request.Builder().url(address.resolve(query)).get().build()).decode() ?: throw ApiError(ApiFailure.Generic)
   }
 
   override suspend fun deletePlayback(id: String) {

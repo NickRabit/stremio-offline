@@ -176,6 +176,11 @@
   <string name="player_subtitle_delay">Synchronisation des sous-titres</string>
   <string name="player_subtitle_in_step">au pas</string>
   <string name="player_from_addon">Module complémentaire</string>
+  <string name="player_chapters">Chapitres</string>
+  <string name="player_chapter_number">Chapitre %1$s</string>
+  <string name="player_skip_intro">Passer l’introduction</string>
+  <string name="player_skip_recap">Passer le récapitulatif</string>
+  <string name="player_skip_outro">Passer le générique</string>
   <string name="player_up_next">SUIVANT</string>
   <string name="player_up_next_countdown">Démarre dans %1$s s</string>
   <string name="player_play_now">Jouez maintenant</string>
@@ -209,6 +214,11 @@
   <string name="settings_stream_sort">Ordre source par défaut</string>
   <string name="settings_default_rules_hint">« Recommandé » trie les sources selon ces règles, et Lire choisit la première qui les respecte.</string>
   <string name="settings_start_view">Page de démarrage</string>
+  <string name="settings_up_next_at">Proposer l’épisode suivant</string>
+  <string name="settings_up_next_end">À la fin de l’épisode</string>
+  <string name="settings_up_next_percent">À %1$s %%</string>
+  <string name="settings_up_next_seconds">%1$s s avant la fin</string>
+  <string name="settings_up_next_minutes">%1$s min avant la fin</string>
   <string name="tv_settings_title">Cette télévision</string>
   <string name="tv_account">Compte</string>
   <string name="tv_device">Appareil</string>
@@ -226,6 +236,8 @@
   <string name="tv_prefer_conversion_note">Chaque lecture démarre comme dans un navigateur : le serveur convertit ce que la télévision ne peut pas lire. Démarrage plus lent et charge serveur plus élevée.</string>
   <string name="tv_on">Activé</string>
   <string name="tv_off">Désactivé</string>
+  <string name="tv_chapters_button">Chapitres</string>
+  <string name="tv_skip_segments_auto">Ignorer automatiquement l’introduction et le récapitulatif</string>
   <string name="tv_back_to_source">Revenir à la source précédente</string>
   <string name="library_mosaic_alt">Mosaïque d\'affiches de %1$s films</string>
   <string name="library_show_in_library">Afficher dans la bibliothèque</string>

@@ -1987,6 +1987,8 @@ export const en = {
   "tv.preferConversionNote": "Every playback starts like a browser, so the server converts what the TV cannot play. Slower to start and heavier on the server.",
   "tv.on": "On",
   "tv.off": "Off",
+  "tv.chaptersButton": "Chapters",
+  "tv.skipSegmentsAuto": "Skip intro and recap automatically",
   "tv.backToSource": "Back to the previous source",
   "tv.homeLayout": "Home",
   "tv.homeLayoutUnavailable": "The Home arrangement is not available on this server.",

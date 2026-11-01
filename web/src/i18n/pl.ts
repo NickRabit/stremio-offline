@@ -1928,6 +1928,8 @@ export const pl: Catalog = {
   "tv.preferConversionNote": "Każde odtwarzanie startuje jak w przeglądarce, więc serwer konwertuje to, czego telewizor nie odtworzy. Wolniejszy start i większe obciążenie serwera.",
   "tv.on": "Włączone",
   "tv.off": "Wyłączone",
+  "tv.chaptersButton": "Rozdziały",
+  "tv.skipSegmentsAuto": "Automatycznie pomijaj intro i streszczenie",
   "tv.backToSource": "Wróć do poprzedniego źródła",
   "tv.homeLayout": "Strona główna",
   "tv.homeLayoutUnavailable": "Układ strony głównej nie jest dostępny na tym serwerze.",

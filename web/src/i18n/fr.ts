@@ -1928,6 +1928,8 @@ export const fr: Catalog = {
   "tv.preferConversionNote": "Chaque lecture démarre comme dans un navigateur : le serveur convertit ce que la télévision ne peut pas lire. Démarrage plus lent et charge serveur plus élevée.",
   "tv.on": "Activé",
   "tv.off": "Désactivé",
+  "tv.chaptersButton": "Chapitres",
+  "tv.skipSegmentsAuto": "Ignorer automatiquement l’introduction et le récapitulatif",
   "tv.backToSource": "Revenir à la source précédente",
   "tv.homeLayout": "Accueil",
   "tv.homeLayoutUnavailable": "La disposition de l'accueil n'est pas disponible sur ce serveur.",

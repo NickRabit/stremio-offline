@@ -1928,6 +1928,8 @@ export const it: Catalog = {
   "tv.preferConversionNote": "Ogni riproduzione parte come in un browser, quindi il server converte ciò che il televisore non riesce a leggere. Avvio più lento e carico maggiore sul server.",
   "tv.on": "Attivo",
   "tv.off": "Disattivo",
+  "tv.chaptersButton": "Capitoli",
+  "tv.skipSegmentsAuto": "Salta automaticamente introduzione e riepilogo",
   "tv.backToSource": "Torna alla sorgente precedente",
   "tv.homeLayout": "Home",
   "tv.homeLayoutUnavailable": "La disposizione della Home non è disponibile su questo server.",

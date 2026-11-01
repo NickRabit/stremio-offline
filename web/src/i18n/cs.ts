@@ -1981,6 +1981,8 @@ export const cs: Catalog = {
   "tv.preferConversionNote": "Každé přehrávání začne jako v prohlížeči, takže server převede, co televize nezvládne. Pomalejší start a vyšší zátěž serveru.",
   "tv.on": "Zapnuto",
   "tv.off": "Vypnuto",
+  "tv.chaptersButton": "Kapitoly",
+  "tv.skipSegmentsAuto": "Přeskakovat úvod a rekapitulaci automaticky",
   "tv.backToSource": "Zpět na předchozí zdroj",
   "tv.homeLayout": "Domovská obrazovka",
   "tv.homeLayoutUnavailable": "Uspořádání domovské obrazovky na tomto serveru není dostupné.",
