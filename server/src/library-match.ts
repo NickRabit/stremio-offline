@@ -103,6 +103,17 @@ export interface LibraryMetaRecord {
   gallery?: GalleryEntry[];
 }
 
+/** The path whose title artwork belongs to an identity. Folder bindings serve either kind;
+ *  a video binding serves only a matching movie, never an episode-specific series file. */
+export function artworkBindingKey(
+  binding: { key: string; record: Pick<LibraryMetaRecord, "type" | "id"> },
+  identity: { type: string; id: string },
+): string | undefined {
+  if (!binding.record.id || binding.record.type !== identity.type || binding.record.id !== identity.id) return undefined;
+  if (isVideo(posixBase(binding.key)) && binding.record.type !== "movie") return undefined;
+  return binding.key;
+}
+
 /** One picture of a title's gallery. `kind` is named, not translated: the interface has the
  *  catalogue's wording for all four already. */
 export interface GalleryEntry {

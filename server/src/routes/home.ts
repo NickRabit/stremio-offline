@@ -17,7 +17,7 @@ import {
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, isVideo, type BrowseItem } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
-import { knownTitleEntry } from "../library-match.js";
+import { artworkBindingKey, knownTitleEntry } from "../library-match.js";
 import type { LibrarySeenStore } from "../library-seen.js";
 import type { MediaServerAuthority } from "../media-server-manager.js";
 import type { MediaServerPersonal, RemoteCards } from "../media-server-personal.js";
@@ -181,6 +181,20 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { poster: await thumbUrl("dir", relative, art), wide: await thumbUrl("dir", relative, wide, "wide") };
   };
 
+  const mapBounded = async <T, R>(items: T[], limit: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> => {
+    const results = new Array<R>(items.length);
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        const index = next++;
+        if (index >= items.length) return;
+        results[index] = await work(items[index] as T, index);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return results;
+  };
+
   /** The two Continue watching sources, permission-filtered: the catalogue's stored progress
    *  and next-episode markers, and the library files the account left part-watched. Home's
    *  `resume` row and `GET /api/resume` read this one builder. On Home a library or add-on
@@ -262,45 +276,38 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     };
   };
 
-  const enrichResumePosters = async (req: express.Request, items: ResumeCard[]): Promise<ResumeCard[]> => {
+  const enrichResumeArtwork = async (req: express.Request, items: ResumeCard[]): Promise<ResumeCard[]> => {
     const deadline = Date.now() + homeLookupDeadlineMs;
     const records = metaStore.qualifiedMeta();
-    const enriched = new Array<ResumeCard>(items.length);
-    let next = 0;
-    const worker = async () => {
-      for (;;) {
-        const index = next++;
-        const item = items[index];
-        if (!item) return;
-        const identity: ResumeIdentity | undefined = item.kind === "resume-file" || item.kind === "remote"
-          ? item.identity
-          : item.kind === "resume-catalogue" && (item.type === "movie" || item.type === "series")
-            ? { type: item.type, id: item.id }
-            : undefined;
-        if (!identity) { enriched[index] = item; continue; }
-        const bound = item.kind !== "remote" && item.path ? knownTitleEntry(libraryKey(item.path), records) : undefined;
-        const boundKey = bound?.record.type === identity.type && bound.record.id === identity.id && !isVideo(posixBase(bound.key))
-          ? bound.key
+    return mapBounded(items, 4, async (item) => {
+      const identity: ResumeIdentity | undefined = item.kind === "resume-file" || item.kind === "remote"
+        ? item.identity
+        : item.kind === "resume-catalogue" && (item.type === "movie" || item.type === "series")
+          ? { type: item.type, id: item.id }
           : undefined;
-        const poster = await personal.titlePoster(req, identity, {
-          ...(boundKey ? { boundKey } : {}),
-          deadlineMs: Math.max(0, deadline - Date.now()),
-        });
-        enriched[index] = poster ? { ...item, poster } : item;
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(4, items.length) }, worker));
-    return enriched;
+      if (!identity) return item;
+      const bound = item.kind !== "remote" && item.path ? knownTitleEntry(libraryKey(item.path), records) : undefined;
+      const boundKey = bound ? artworkBindingKey(bound, identity) : undefined;
+      const art = await personal.titleArtwork(req, identity, {
+        ...(boundKey ? { boundKey } : {}),
+        deadlineMs: Math.max(0, deadline - Date.now()),
+      });
+      return {
+        ...item,
+        ...(art.poster ? { poster: art.poster } : {}),
+        ...(art.wide ? { wide: art.wide } : {}),
+      };
+    });
   };
 
   const resumeRow = async (req: express.Request, proofs: RowProof[]): Promise<HomeRow> => {
     const { sources, partial, proof } = await resumeSources(req, true);
     if (proof) proofs.push(proof);
     const merged = mergeResume(sources);
-    return { status: "ok", items: await enrichResumePosters(req, merged.items), hasMore: merged.hasMore, ...(partial ? { partial: true } : {}) };
+    return { status: "ok", items: await enrichResumeArtwork(req, merged.items), hasMore: merged.hasMore, ...(partial ? { partial: true } : {}) };
   };
 
-  const completedRow = async (_req: express.Request, viewer: Viewer): Promise<HomeRow> => {
+  const completedRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
     const libraries = store.libraries();
     const jobs = completedJobs()
       .filter((job) => job.ownerUserId === viewer.id && job.status === "completed")
@@ -320,19 +327,40 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         : undefined;
       return { job, item, key, poster, wide, seriesPath };
     }));
-    const cards: HomeCard[] = resolved
+    const records = metaStore.qualifiedMeta();
+    const prepared = resolved
       .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
-      .map(({ job, item, key, poster, wide, seriesPath }) => ({
-        kind: "completed", key, title: job.title || item.label, path: wirePath(key),
-        completedAt: job.completedAt ?? item.modified,
-        ...(poster ? { poster } : {}),
-        ...(wide ? { wide } : {}),
-        ...(typeof item.season === "number" ? { season: item.season } : {}),
-        ...(typeof item.episode === "number" ? { episode: item.episode } : {}),
-        ...(seriesPath ? { seriesPath } : {}),
-      }));
-    const bounded = boundCards(cards);
-    return { status: "ok", items: bounded.items, hasMore: bounded.hasMore };
+      .map(({ job, item, key, poster, wide, seriesPath }) => {
+        const bound = knownTitleEntry(key, records);
+        const card: HomeCard = {
+          kind: "completed", key, title: job.title || item.label, path: wirePath(key),
+          completedAt: job.completedAt ?? item.modified,
+          ...(poster ? { poster } : {}),
+          ...(wide ? { wide } : {}),
+          ...(typeof item.season === "number" ? { season: item.season } : {}),
+          ...(typeof item.episode === "number" ? { episode: item.episode } : {}),
+          ...(seriesPath ? { seriesPath } : {}),
+        };
+        const identity: ResumeIdentity | undefined = bound?.record.type === "movie" || bound?.record.type === "series"
+          ? { type: bound.record.type, id: bound.record.id }
+          : undefined;
+        return { card, identity, boundKey: bound && identity ? artworkBindingKey(bound, identity) : undefined };
+      });
+    const bounded = boundCards(prepared);
+    const deadline = Date.now() + homeLookupDeadlineMs;
+    const items = await mapBounded(bounded.items, 4, async ({ card, identity, boundKey }) => {
+      if (!identity) return card;
+      const art = await personal.titleArtwork(req, identity, {
+        ...(boundKey ? { boundKey } : {}),
+        deadlineMs: Math.max(0, deadline - Date.now()),
+      });
+      return {
+        ...card,
+        ...(art.poster ? { poster: art.poster } : {}),
+        ...(art.wide ? { wide: art.wide } : {}),
+      } as HomeCard;
+    });
+    return { status: "ok", items, hasMore: bounded.hasMore };
   };
 
   /** Both halves are kept present: up to the share each, then whatever is left over. The local
@@ -371,7 +399,19 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       ...(starredTitles.length ? { excludeTitles: new Set(starredTitles) } : {}),
     }).catch(() => undefined);
     if (remote) proofs.push({ authority, cards: remote });
-    const cards = fairFavorites(local, remote?.items ?? []);
+    const remoteDeadline = Date.now() + homeLookupDeadlineMs;
+    const remoteCards = await mapBounded(remote?.items ?? [], 4, async (card) => {
+      if (!card.identity) return card;
+      const art = await personal.titleArtwork(req, card.identity, {
+        deadlineMs: Math.max(0, remoteDeadline - Date.now()),
+      });
+      return {
+        ...card,
+        ...(art.poster ? { poster: art.poster } : {}),
+        ...(art.wide ? { wide: art.wide } : {}),
+      };
+    });
+    const cards = fairFavorites(local, remoteCards);
     const total = page.total + (remote?.total ?? 0);
     return { status: "ok", items: cards, hasMore: total > cards.length, ...(remote === undefined ? { partial: true } : {}) };
   };
@@ -398,8 +438,8 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       kept.set(group, row);
     }
     const bounded = boundCards([...kept.values()]);
-    const titlePosterDeadline = Date.now() + homeLookupDeadlineMs;
-    const cards: HomeCard[] = await Promise.all(bounded.items.map(async ({ entry, key, item }) => {
+    const titleArtworkDeadline = Date.now() + homeLookupDeadlineMs;
+    const cards = await mapBounded(bounded.items, 4, async ({ entry, key, item }) => {
       const bound = knownTitleEntry(key, records);
       const series = bound?.record.type === "series" ? bound.record : undefined;
       const seriesPath = bound?.record.type === "series" && bound.key !== key && parseLibraryPath(bound.key)?.relative
@@ -410,13 +450,13 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       const identity: ResumeIdentity | undefined = bound && (bound.record.type === "movie" || bound.record.type === "series")
         ? { type: bound.record.type, id: bound.record.id }
         : undefined;
-      const boundKey = bound && identity && !isVideo(posixBase(bound.key)) ? bound.key : undefined;
-      const titlePicture = identity
-        ? await personal.titlePoster(req, identity, {
+      const boundKey = bound && identity ? artworkBindingKey(bound, identity) : undefined;
+      const titleArt = identity
+        ? await personal.titleArtwork(req, identity, {
           ...(boundKey ? { boundKey } : {}),
-          deadlineMs: Math.max(0, titlePosterDeadline - Date.now()),
+          deadlineMs: Math.max(0, titleArtworkDeadline - Date.now()),
         })
-        : undefined;
+        : {};
       const season = item.kind === "file" ? item.season : null;
       const episode = item.kind === "file" ? item.episode : null;
       return {
@@ -425,16 +465,16 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         ...(season != null ? { season } : {}),
         ...(episode != null ? { episode } : {}),
         ...(seriesPath ? { seriesPath } : {}),
-        ...(titlePicture ?? poster ? { poster: titlePicture ?? poster } : {}),
-        ...(wide ? { wide } : {}),
-      };
-    }));
+        ...(titleArt.poster ?? poster ? { poster: titleArt.poster ?? poster } : {}),
+        ...(titleArt.wide ?? wide ? { wide: titleArt.wide ?? wide } : {}),
+      } satisfies HomeCard;
+    });
     return { status: "ok", items: cards, hasMore: bounded.hasMore };
   };
 
   /** A show followed from an add-on switched off for Home stays off this row; a follow that
    *  never recorded its add-on stays. */
-  const episodesRow = (req: express.Request, viewer: Viewer): HomeRow => {
+  const episodesRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
     const markers = markersOf(dataOf(req));
     const addons = store.addons();
     const items = newEpisodes(viewer.id, (metaId) => {
@@ -442,7 +482,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       return marker ? { season: marker.season, episode: marker.episode } : undefined;
     }, (follow) => !follow.addonKey || addons.find((addon) => addon.key === follow.addonKey)?.showOnHome !== false)
       .sort((a, b) => b.released.localeCompare(a.released) || a.followId.localeCompare(b.followId) || a.videoId.localeCompare(b.videoId))
-      .map((item): HomeCard => ({
+      .map((item): Extract<HomeCard, { kind: "episode" }> => ({
         kind: "episode", key: `episode:${item.followId}:${item.videoId}`,
         followId: item.followId, type: item.type, metaId: item.metaId, name: item.name,
         // Stored as the provider's address; the page only ever loads our own proxy.
@@ -452,7 +492,20 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         released: item.released,
       }));
     const bounded = boundCards(items);
-    return { status: "ok", items: bounded.items, hasMore: bounded.hasMore };
+    const deadline = Date.now() + homeLookupDeadlineMs;
+    const enriched = await mapBounded(bounded.items, 4, async (item) => {
+      const identity: ResumeIdentity | undefined = item.type === "movie" || item.type === "series"
+        ? { type: item.type, id: item.metaId }
+        : undefined;
+      if (!identity || !item.metaId) return item;
+      const art = await personal.titleArtwork(req, identity, { deadlineMs: Math.max(0, deadline - Date.now()) });
+      return {
+        ...item,
+        ...(art.poster ? { poster: art.poster } : {}),
+        ...(art.wide ? { wide: art.wide } : {}),
+      };
+    });
+    return { status: "ok", items: enriched, hasMore: bounded.hasMore };
   };
 
   /** A whole title the caller has not started, drawn from the libraries Home shows, in a
@@ -509,24 +562,34 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const present = described
       .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
       .slice(0, TONIGHT_CARDS);
-    const cards: HomeCard[] = await Promise.all(present.map(async ({ key, item }) => {
+    const titleArtworkDeadline = Date.now() + homeLookupDeadlineMs;
+    const cards = await mapBounded(present, 4, async ({ key, item }) => {
       const record = records[key];
       const relative = wirePath(key);
       const { poster, wide } = item.kind === "folder" ? await folderArtwork(key, relative) : await fileArtwork(key, relative);
+      const identity: ResumeIdentity | undefined = record && record.id !== "" && (record.type === "movie" || record.type === "series")
+        ? { type: record.type, id: record.id }
+        : undefined;
+      const titleArt = identity
+        ? await personal.titleArtwork(req, identity, {
+          ...(artworkBindingKey({ key, record }, identity) ? { boundKey: key } : {}),
+          deadlineMs: Math.max(0, titleArtworkDeadline - Date.now()),
+        })
+        : {};
       return {
         kind: "tonight", key, path: relative, itemKind: item.kind,
         label: record?.name || (item.kind === "folder" ? item.name : item.label),
         ...(record?.year ? { year: record.year } : {}),
-        ...(poster ? { poster } : {}),
-        ...(wide ? { wide } : {}),
+        ...(titleArt.poster ?? poster ? { poster: titleArt.poster ?? poster } : {}),
+        ...(titleArt.wide ?? wide ? { wide: titleArt.wide ?? wide } : {}),
         // The record names the title the card stands for, so OK opens that title's detail.
         ...(record && record.id !== "" && (record.type === "movie" || record.type === "series")
           ? { title: { type: record.type, id: record.id } } : {}),
         // A favourite carried over from before libraries names no library; it still draws, and
         // only its single-library install can resolve the card.
         libraryId: parseLibraryPath(key)?.libraryId ?? "",
-      };
-    }));
+      } satisfies HomeCard;
+    });
     return { status: "ok", items: cards, hasMore: false };
   };
 
@@ -656,7 +719,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     completed: (req, viewer) => completedRow(req, viewer),
     favorites: (req, viewer, proofs) => favoritesRow(req, viewer, proofs),
     recent: (req, viewer) => recentRow(req, viewer),
-    episodes: (req, viewer) => Promise.resolve(episodesRow(req, viewer)),
+    episodes: (req, viewer) => episodesRow(req, viewer),
     tonight: (req, viewer) => tonightRow(req, viewer),
     confirm: (_req, viewer) => Promise.resolve(confirmRow(viewer)),
   };
@@ -710,7 +773,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       skip: Math.max(0, Number(req.query.skip) || 0),
       limit: Math.max(1, Math.min(120, Number(req.query.limit) || HOME_ROW_LIMIT)),
     });
-    const items = await enrichResumePosters(req, page.items);
+    const items = await enrichResumeArtwork(req, page.items);
     if (proof) remotePersonal.assertCardsCurrent(proof.authority, proof.cards);
     requireAccess(req);
     res.json({

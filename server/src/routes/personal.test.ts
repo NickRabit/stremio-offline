@@ -134,6 +134,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     scheduleFileArtwork: () => undefined,
     scheduleFolderArtwork: () => undefined,
     setLibraryFavorite: async (relative, wanted, userId) => { favoriteCalls.push({ relative, wanted, userId }); },
+    titleArtworkUrls: async () => ({}),
     thumbUrl: async () => undefined,
     updateData: async (req, mutate) => {
       const id = userOf(req);

@@ -2113,7 +2113,7 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
   });
 };
 
-const personal = registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath, remotePersonal: mediaServerPersonal, authorityOf });
+const personal = registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls: (key) => titleArtworkUrls(key), thumbUrl, updateData, watchlistOf, wirePath, remotePersonal: mediaServerPersonal, authorityOf });
 
 /** The followed series: the daily check reads the owner's addons in the owner's language,
  *  past the cache, so a new episode is seen the day it appears. */
@@ -2291,6 +2291,34 @@ const galleryOf = (key: string): GalleryEntry[] => {
  *  next to somebody's media. */
 const galleryArtwork = (key: string, index: number) =>
   storeArt(isFileKey(key) ? key : `dir:${key}`, galleryVariant(index));
+
+/** Normal title art plus the first stored background or still that can fill a wide slot. */
+async function titleArtworkUrls(key: string): Promise<{ poster?: string; wide?: string }> {
+  const normal = isVideo(posixBase(key))
+    ? { poster: await locateFileArtwork(key), wide: await locateFileArtwork(key, "wide") }
+    : await locateFolderArtworkPair(key);
+  const wire = wirePath(key);
+  const param = isVideo(posixBase(key)) ? "path" as const : "dir" as const;
+  let wide = await thumbUrl(param, wire, normal.wide, "wide");
+  if (!wide) {
+    const preferred = galleryOf(key)
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => (entry.kind === "background" || entry.kind === "still") && entry.shape === "wide")
+      .sort((left, right) => Number(right.entry.kind === "background") - Number(left.entry.kind === "background"));
+    for (const { index } of preferred) {
+      const file = galleryArtwork(key, index);
+      const info = file ? await stat(file).catch(() => undefined) : undefined;
+      if (!file || !info?.isFile()) continue;
+      const version = encodeURIComponent(`${info.size.toString(36)}-${await artStamp(file)}`);
+      wide = `/api/library/thumb?path=${encodeURIComponent(wire)}&gallery=${index}&v=${version}`;
+      break;
+    }
+  }
+  if (!normal.poster) (isVideo(posixBase(key)) ? scheduleFileArtwork : scheduleFolderArtwork)(key);
+  if (!wide) (isVideo(posixBase(key)) ? scheduleFileArtwork : scheduleFolderArtwork)(key, "wide");
+  const poster = await thumbUrl(param, wire, normal.poster);
+  return { ...(poster ? { poster } : {}), ...(wide ? { wide } : {}) };
+}
 
 /** The active job's item that covers one of `keys`, or `undefined`. Containment counts both
  *  ways: a job on a folder blocks the file inside it, and a job on a file blocks the folder
