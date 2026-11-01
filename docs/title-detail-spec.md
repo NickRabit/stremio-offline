@@ -1,9 +1,9 @@
 # Richer title detail
 
-Roadmap item 1. This document is the contract for the work: what the title
+This document is the contract for the work: what the title
 detail gains on the web, the desktop apps and Android TV, where the data comes
-from, and the order of the pull requests. It describes proposed behaviour;
-nothing here has shipped yet.
+from, and the order of the pull requests. It shipped in 0.6.24 to 0.6.28;
+the document is kept as the record of the contract.
 
 The visual study is in [title-detail-prototype](title-detail-prototype/README.md).
 

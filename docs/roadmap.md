@@ -25,7 +25,6 @@ metadata store, or scheduler for each platform.
 
 | Order | Current opportunity | What remains |
 | --- | --- | --- |
-| 1 | Richer title detail | Cast and crew, related titles, age rating and the next episode's date from one server route, in small steps on the existing detail screens (no detail rewrite). [Specification](title-detail-spec.md); see also [Richer title detail](#richer-title-detail). |
 | 2 | Player chapters and badges | Chapter marks on the timeline, the current chapter's name and a chapter list; badges for what is playing (resolution, HDR, audio). Web and Android TV. See [Player and mobile chrome](#player-and-mobile-chrome). |
 | 3 | Intro skip and next-episode threshold | Skip intro, recap and outro from IntroDB segments, with optional auto-skip; a configurable point before the end where the next episode is offered. Web and Android TV. See [Player and mobile chrome](#player-and-mobile-chrome). |
 | 4 | Queue controls | Night-only window first, then an aggregate speed limit and a completion notice; current download limits cover concurrency, not these controls. |
@@ -35,6 +34,7 @@ metadata store, or scheduler for each platform.
 | Alongside | Major dependency updates | Node 26 for the server image and CI, then Vite 8 with its React plugin, then TypeScript 7; Electron waits for a reason. See [Major dependency updates](#major-dependency-updates). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
+| Implemented | Richer title detail | Cast and crew with photos, similar titles, ratings, the age rating, trailers and what will play, from one server route on the web, desktop and Android TV (0.6.24 to 0.6.28). [Specification](title-detail-spec.md). |
 | Implemented | Personal Home layout | Each account arranges its own Home: which rows show, their order, and extra catalogue feeds from the addons it may use. The instance's Show on Home switches stay the default. |
 | Implemented | Jellyfin and Emby libraries | Native read-only libraries, per-library grants, proxy/FFmpeg and local history. [Specification](media-server-libraries-spec.md). |
 | Later | Desktop distribution and external automation | Test clean install/upgrade on real target systems; signing/notarization need credentials. The *arr bridge remains a spec/probe, not a supported integration. |
@@ -64,6 +64,12 @@ Shipped in `main`; implementation details live in the linked guides.
   schedule rather than on browsing; the sweep decides from a complete walk and
   deletes nothing under an unreadable folder. On Linux the folder watch skips
   the NAS's own system folders. [Libraries](libraries.md).
+- **Title detail**: IMDb and TMDB ratings, the age rating, cast and crew with
+  photos (a name starts a search), trailers and extras, similar titles and the
+  source, video, audio and file that will play, for catalogue, library and
+  Jellyfin/Emby titles on every client. A series shows its episodes, the next
+  one and the progress. Photos, the age rating and similar titles need a TMDB
+  key. [Specification](title-detail-spec.md).
 - **Accounts**: administrator and user roles, per-user libraries, addons,
   download permissions, preferences and session revocation. [Accounts](users.md).
 - **Playback**: direct play, remux, hardware transcode (VAAPI, NVENC,
@@ -177,25 +183,9 @@ planner's Overview tab. What is left:
 
 ### Richer title detail
 
-Stremio, Nuvio and Plex show more than the poster, the overview and the
-sources. The aggregate metadata already keeps every field an add-on answers
-with (`fillMissingMeta` in `server/src/addons.ts`), so most of it costs no new
-fetch:
-
-- **Cast and crew** from Cinemeta's `links` (categories `Cast`, `Directors`,
-  `Writers`) and the older `cast`/`director` arrays; TMDB adds photos when the
-  instance has a key. Selecting a person searches the catalogues for them.
-- **Related titles**: "More like this" from TMDB recommendations when a key is
-  set; without one, other titles that share genres and a person in the same
-  add-on catalogue.
-- **Trailers** (`trailerStreams`), the age rating, the original title and
-  language, and the release date of the next episode for a series.
-- **Library titles** get the same block once identified, from the stored
-  match.
-
-One server route (`/api/meta/:type/:id/extras` or fields on the existing meta
-answer) serves the web, the desktop apps and the Android TV client alike; no
-client calls TMDB on its own.
+Shipped in 0.6.24 to 0.6.28; see [Done](#done) and the
+[specification](title-detail-spec.md). Jellyfin/Emby `People` are still not
+read: a remote title gets its extras through its catalogue identity.
 
 ### Player and mobile chrome
 

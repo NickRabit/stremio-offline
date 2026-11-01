@@ -12,11 +12,14 @@ This is an independent project, not affiliated with Stremio or Smart Code Ltd.
 No media content is included. Connect only sources and accounts you have the
 right to use.
 
-![Stremio Offline catalog](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/catalog.jpg)
+![A film's detail in Stremio Offline](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/detail.jpg)
 
 ## Features
 
 - Standard Stremio catalog, stream and subtitle addons.
+- A rich title detail: ratings, age rating, cast and crew with photos,
+  trailers, similar titles and exactly what will play; episodes and progress
+  for a series. Photos and similar titles need a TMDB key.
 - Direct playback, remuxing and FFmpeg transcoding, with Intel QuickSync and
   VAAPI on compatible Linux hosts.
 - Audio tracks, embedded subtitles and subtitle addons.
@@ -36,28 +39,38 @@ right to use.
 
 ## Screenshots
 
-| Home | Library |
+| Home | Catalog |
 | --- | --- |
-| ![Home with continue watching, a row from the library and an addon catalog](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/home.jpg) | ![Downloaded films in the library, with posters and descriptions](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/library.jpg) |
+| ![Home with continue watching, tonight's picks and rows from an addon catalog](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/home.jpg) | ![The catalog with a film's panel: its sources, the local copy first](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/catalog.jpg) |
 
-| Following with automatic downloads | Download queue |
+### Title detail
+
+| A film | A series |
 | --- | --- |
-| ![Following a series: start a few episodes ahead and pick download rules](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/follow.jpg) | ![One film downloading, another waiting in the queue](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/downloads.jpg) |
+| ![A film's detail with ratings, the source that will play, cast and crew, and its trailer](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/detail.jpg) | ![A series' detail with the chosen episode, the progress, ratings and its cast](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/detail-series.jpg) |
 
-![The player with subtitles](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/player.jpg)
+| Library | Download queue |
+| --- | --- |
+| ![Downloaded films and a series in the library, with posters and descriptions](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/library.jpg) | ![One episode downloading, another waiting in the queue](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/downloads.jpg) |
+
+| Following with automatic downloads | Player |
+| --- | --- |
+| ![Following a series: keep a few episodes ready and pick download rules](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/follow.jpg) | ![The player with subtitles](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/player.jpg) |
 
 | Android TV: Home | Android TV: title detail |
 | --- | --- |
-| ![The Android TV app's Home with the Tonight row](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/tv-home.jpg) | ![A film's detail on Android TV with Play and Sources](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/tv-detail.jpg) |
+| ![The Android TV app's Home with the Tonight row](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/tv-home.jpg) | ![A film's detail on Android TV with ratings, actions, what will play and the cast](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/tv-detail.jpg) |
 
 <p>
-  <img src="https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/mobile-home.jpg" alt="Home on a phone" width="260">
-  <img src="https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/mobile-library.jpg" alt="The library on a phone" width="260">
+  <img src="https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/mobile-home.jpg" alt="Home on a phone" width="260">
+  <img src="https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/mobile-library.jpg" alt="The library on a phone" width="260">
+  <img src="https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/mobile-detail.jpg" alt="A film's detail on a phone" width="260">
 </p>
 
 The films and the series shown are Blender Foundation open movies (CC BY),
 *Pioneer One* (CC BY-SA) and public-domain classics, served by a small local
-test addon from the Internet Archive. The app ships with no content.
+test addon from the Internet Archive. Ratings, cast photos and trailers come
+from TMDB. The app ships with no content.
 
 ## Supported platforms and tags
 
