@@ -156,7 +156,11 @@ export function clearTitleExtrasCache(): void {
 export function detachTitleExtrasDisk(): void {
   extrasDir = undefined;
   lastPruneAt = 0;
-  diskWrites.clear();
+}
+
+/** Test seam: resolves once every disk write queued so far has finished. */
+export async function flushTitleExtrasDisk(): Promise<void> {
+  while (diskWrites.size > 0) await Promise.all(diskWrites.values());
 }
 
 export function setTitleExtrasCacheLimitForTests(limit: number): void {
@@ -241,7 +245,7 @@ async function readDisk(key: string, now: number): Promise<CacheEntry | undefine
   try {
     parsed = JSON.parse(raw);
   } catch {
-    void unlink(file).catch(() => undefined);
+    await unlink(file).catch(() => undefined);
     return undefined;
   }
   if (!isDiskEntry(parsed, key) || now - parsed.at >= SUCCESS_TTL_MS) return undefined;
