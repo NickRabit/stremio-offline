@@ -142,6 +142,26 @@ test("describePath recognizes an episode tag behind the show title", async () =>
   }
 });
 
+test("describePath keeps a film's leading number in its label", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-numbered-film-"));
+  try {
+    await mkdir(path.join(root, "12 let v řetězech"), { recursive: true });
+    await writeFile(path.join(root, "12 let v řetězech", "12 let v řetězech.avi"), "x");
+    await mkdir(path.join(root, "Show", "01 serie"), { recursive: true });
+    await writeFile(path.join(root, "Show", "01 serie", "07 - Vánoce.mkv"), "x");
+
+    const film = await describePath(root, "12 let v řetězech/12 let v řetězech.avi");
+    assert.equal(film?.kind === "file" && film.label, "12 let v řetězech");
+    assert.equal(film?.kind === "file" && film.episode, null);
+
+    const episode = await describePath(root, "Show/01 serie/07 - Vánoce.mkv");
+    assert.equal(episode?.kind === "file" && episode.label, "Vánoce");
+    assert.equal(episode?.kind === "file" && episode.episode, 7);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("several files in one folder are one item, not several", () => {
   // Exactly the case where the folder showed up twice: once per file.
   const library = buildLibrary([

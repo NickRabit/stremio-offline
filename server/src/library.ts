@@ -538,10 +538,12 @@ export async function describePath(root: string, relative: string, exclude?: Rea
     };
   }
   if (!isVideo(name)) return undefined;
-  const { title } = parseEpisode(name);
   const numbers = numberedEpisode(relative);
+  // A leading number is an episode only where the path says so: "12 let v řetězech" is a film.
+  const stem = name.replace(/\.[^.]+$/, "");
+  const label = numbers ? parseEpisode(name).title || stem : stem;
   return {
-    kind: "file", path: relative, label: title || name.replace(/\.[^.]+$/, ""),
+    kind: "file", path: relative, label,
     season: numbers?.season ?? null, episode: numbers?.episode ?? null,
     size: info.size, modified: info.mtime.toISOString(),
   };
