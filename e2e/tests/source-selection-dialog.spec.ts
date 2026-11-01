@@ -54,6 +54,7 @@ test.afterEach(async ({ request }) => {
 
 test("bulk download queues season one with the Smaller preset", async ({ page, request }) => {
   expect((await resetFixture(request)).ok()).toBe(true);
+  await cleanupJourney(request, SERIES_NAME);
   const smaller = await profileByNameKey(request, "rules.preset.smaller");
 
   const detail = await openSeries(page);
