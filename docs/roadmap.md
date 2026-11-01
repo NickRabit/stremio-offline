@@ -32,6 +32,7 @@ metadata store, or scheduler for each platform.
 | 6 | Library file fingerprint | Re-associate metadata, favourites and resume positions when a file is moved outside the app, by size and a partial hash; best built on the SQLite storage. See [Library](#library). |
 | 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
 | Alongside | Major dependency updates | Node 26 for the server image and CI, then Vite 8 with its React plugin, then TypeScript 7; Electron waits for a reason. See [Major dependency updates](#major-dependency-updates). |
+| Then | Search by cast and crew | A person in the title detail opens what that person made, not a text search for the name: TMDB filmography when a key is set, the owned copies first. See [Search by cast and crew](#search-by-cast-and-crew). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
 | Implemented | Richer title detail | Cast and crew with photos, similar titles, ratings, the age rating, trailers and what will play, from one server route on the web, desktop and Android TV (0.6.24 to 0.6.28). [Specification](title-detail-spec.md). |
@@ -186,6 +187,61 @@ planner's Overview tab. What is left:
 Shipped in 0.6.24 to 0.6.28; see [Done](#done) and the
 [specification](title-detail-spec.md). Jellyfin/Emby `People` are still not
 read: a remote title gets its extras through its catalogue identity.
+
+### Search by cast and crew
+
+Checked on `main` at `c72a4076` (0.6.30) on 2026-11-01. Selecting a person in
+the detail (`searchPerson` in `web/src/App.tsx`, `SearchPreset.query` on TV)
+only submits the name as an ordinary search. Nothing in the app knows that the
+query is a person, so the answer depends on what each source does with text:
+
+- **Addon catalogues** get the name as `search=` and decide alone. Cinemeta
+  answers a name with documentaries *about* the person first and an incomplete
+  filmography after them. Probed on 2026-11-01: `Christopher Nolan` returns all
+  his films; `Tom Hanks` returns 18 titles without Forrest Gump, Saving Private
+  Ryan or Toy Story; `Bryan Cranston` returns one obscure film and, among
+  series, nothing (no Breaking Bad). Other addons vary the same way.
+- **Libraries and Jellyfin/Emby** never answer a person. Search everywhere
+  drops every non-catalogue record whose title does not match the query
+  (`enoughMatched` in `server/src/search-session.ts`), the local index scores
+  only title, original title, parent title and path
+  (`server/src/search-relevance.ts`), and the media-server search sends a plain
+  `searchTerm`. A film the household already has is therefore missing from the
+  result even when the person starred in it.
+- **Ordering** by title match (`titleRank`, `rankByTitle`) puts the
+  documentaries named after the person above the person's own work.
+
+What exists to build on: `tmdbTitleExtras` (`server/src/tmdb.ts`) already reads
+`credits`/`aggregate_credits`, but `TmdbExtraCredit` drops TMDB's person `id`,
+so a name in `TitlePerson` cannot be followed. Related titles already resolve
+TMDB ids to IMDb through `external_ids` with a lookup budget
+(`server/src/title-extras.ts`), and `ImageProxy` already proxies person photos.
+
+Proposed behaviour:
+
+- Keep the TMDB person `id` in `TitlePerson` (optional; addon-only names have
+  none).
+- A person with an id opens a **person result** instead of a text search: a new
+  route (for example `/api/person/:tmdbId`) reads `/person/:id/combined_credits`
+  in the interface language, keeps acting roles and the directing, writing and
+  creator jobs, sorts by popularity, and resolves the first few dozen titles to
+  IMDb with the existing budgeted `external_ids` lookup, cached like the
+  extras. Titles without an IMDb id are dropped, as for related titles.
+- Titles the viewer already has (granted libraries and media servers, the same
+  `copies`/`inLibrary` check the extras use) come first and say so; then the
+  rest as ordinary catalogue tiles that open the normal detail.
+- Without a TMDB key, or for a name without an id, keep today's name search,
+  but label it as a name search so a thin result is not read as the whole
+  filmography.
+- One server route for the web, the desktop apps and Android TV; no client
+  calls TMDB, secure mode proxies every photo and poster.
+- Not in scope: a person page with biography, Jellyfin/Emby `People` as a
+  source, and typing a person's name into the search box to get a filmography
+  (a later step could add a "People" group to Search everywhere from TMDB
+  `/search/person`).
+
+TV needs a D-pad test that OK on a person opens the filmography and Back
+returns focus to the cast row; the web needs the same for a click and Back.
 
 ### Player and mobile chrome
 
