@@ -14,7 +14,8 @@ order below was set by the owner on 2026-10-30, after comparing the October
 releases of Nuvio and Stremio. The feature inventory and near-term work below
 describe that revision; the dated engineering audit later in this file is
 retained as an audit record, not a claim that every older probe or count
-describes today's checkout.
+describes today's checkout. The Done list and the media-server and
+source-selection sections were brought up to date with 0.7.3 on 2026-11-01.
 
 The core product is now broad: following and automatic episode downloads,
 Home, enhanced search, and desktop apps for macOS, Windows, and Linux have
@@ -95,6 +96,19 @@ Shipped in `main`; implementation details live in the linked guides.
   segmented transfers, device saves shown in the Downloads view, Save to library
   into another library, folder and layout, smart season/show selection and
   Real-Debrid torrent hand-off. [Addons and downloads](downloads.md).
+- **Seasons and whole shows**: a season, the rest of a show or the whole show
+  is prepared first (what is already in the target library, queued or not yet
+  released) and then queued as one lazy job per episode, from a catalogue
+  title or from a Jellyfin/Emby series, on the web and on Android TV (0.7.0).
+  A media-server series copies the episodes that library holds or looks each
+  one up in the addons; a show above 500 episodes is split into several
+  batches. On the television one **To library** action offers this episode,
+  the season or the whole show. [Seasons and whole shows](downloads.md#seasons-and-whole-shows).
+- **Download rules**: administrators keep the instance's rules (Balanced, Best
+  quality, Smaller files, My language only, and their own) in **Settings →
+  Download rules**; everyone picks from them for season and whole-show
+  downloads and follows, on the web and on the television. Queued jobs and
+  follows keep the rules they were admitted with. [Download rules](downloads.md#download-rules).
 - **Addons**: scoped search, scheduled/manual manifest refresh, storage rules
   and downloaded-title language. [Addons and downloads](downloads.md).
 - **Search**: search while typing, title-match order of loaded results,
@@ -680,10 +694,11 @@ The [request audit](media-server-request-audit.md) records measured navigation
 costs and the next optimization: scoped raw metadata reuse for concurrent detail
 reads and locally stored progress, preserving fresh access checks.
 
-Recorded follow-ups, not part of this verification block:
+Recorded follow-ups, not part of this verification block (season and
+whole-series copying shipped in 0.7.0; see [Done](#done)):
 
-- Bulk copying of selected remote items or a season into local libraries, with
-  destination/layout selection and bounded upstream transfers.
+- Copying a hand-picked selection of remote items that is not one season or
+  one show, and bounding the upstream transfers of a large batch.
 - App-local manual catalogue matching for unidentified remote items, without
   changing the provider metadata; use the match for enrichment and addon sources.
 - A playback-source chooser inside the web/desktop video player with TV parity:
@@ -693,7 +708,10 @@ Recorded follow-ups, not part of this verification block:
 
 ### Unified source selection and administrator-managed profiles
 
-Proposed, not implemented. The [architecture specification](source-selection-spec.md) separates
+Partly shipped: administrator-managed download rules and their use in season and
+whole-show downloads and follows are in place (see [Done](#done) and
+[Download rules](downloads.md#download-rules)). The specification and the delivery plan
+remain the reference for the stages still open. The [architecture specification](source-selection-spec.md) separates
 provider acquisition, ranking and selection intent (including the remembered/current stream).
 Only administrators create, edit or delete instance-wide source-selection profiles; users select
 them. Existing follows and jobs retain versioned policy snapshots. The
