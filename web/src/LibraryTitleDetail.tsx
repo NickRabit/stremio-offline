@@ -85,9 +85,10 @@ export interface LibraryTitleDetailProps {
   /** The native rows alone, when `sources` merges them with loaded addon rows: the default
    *  version is then drawn from these, so a larger addon answer never replaces it. */
   defaultSources?: Stream[] | null;
-  /** The item itself is what the viewer opened -- a file on disk, a media server's own item -- so
-   *  when the source rule passes none of the rows, its own version is still the one Play plays.
-   *  Left off (the catalogue), a refusal asks the viewer to choose. */
+  /** The item itself is what the viewer opened -- a media server's own item -- so when the source
+   *  rule passes none of the rows, its own version is still the one Play plays. Left off, a
+   *  refusal asks the viewer to choose: the catalogue, and a local file, whose detail opens on a
+   *  resumed copy elsewhere instead. */
   ownFallback?: boolean;
   /** The groups beside the title's own versions: addon answers, the viewer's other copies and the
    *  other libraries. Its presence alone makes the arrow appear, and opening it reads them all. */
