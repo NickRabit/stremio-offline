@@ -60,6 +60,8 @@ data class CatalogDetailArgs(
   val autoPlay: Boolean = false,
   /** A related card to restore after returning to this detail. */
   val focusRelatedId: String? = null,
+  /** Opened from a Jellyfin/Emby title: that server's copy leads Play. */
+  val preferRemote: Boolean = false,
 )
 
 private enum class CatalogPanel { Catalogs, Genres }

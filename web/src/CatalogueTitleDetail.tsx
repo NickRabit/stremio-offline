@@ -50,6 +50,8 @@ export interface CatalogueTitleDetailProps {
   initialSources?: Stream[];
   /** Load the title's other library copies with the title itself and let them lead Play. */
   libraryFirst?: boolean;
+  /** Load the title's Jellyfin/Emby copies with the title itself and let them lead Play. */
+  remoteFirst?: boolean;
   /** Opens the app's gallery overlay over the pictures the metadata supplied. */
   onGallery?: (images: GalleryImage[], target: CatalogueDetailTarget) => void;
   /** The title's chips, drawn by the shared row: the kind, the follow chip and the sites that know
@@ -108,7 +110,7 @@ const dedupe = (streams: Stream[]): Stream[] => {
 };
 
 export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
-  const { target, initialSources, libraryFirst = false, onGallery, chips, trailer, onTrailer, secureMode, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended" } = props;
+  const { target, initialSources, libraryFirst = false, remoteFirst = false, onGallery, chips, trailer, onTrailer, secureMode, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended" } = props;
   const { locale } = useI18n();
   const { type, id, name } = target;
   const titleExtras = useTitleExtras(type, id);
@@ -249,7 +251,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const resumeElsewhere = Boolean(resumeStableKey && ordered && !ordered.some((stream) => stream.stableKey === resumeStableKey));
   const extra = useLibrarySources({
     scope: `catalogue:${type}:${streamId}`,
-    open: chooserOpen || libraryFirst || resumeElsewhere,
+    open: chooserOpen || libraryFirst || remoteFirst || resumeElsewhere,
     catalogue: waitingEpisode ? null : { type, id: streamId },
     nameHint: name,
     libraries: null,
@@ -257,11 +259,11 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   });
 
   const libraryRows = useMemo(() => {
-    if (!libraryFirst || ordered === null) return [];
+    if ((!libraryFirst && !remoteFirst) || ordered === null) return [];
     const present = new Set(ordered.map((stream) => stream.localPath ?? stream.sourceId));
     const added = new Set<string>();
     return extra.groups
-      .filter((group) => (group.kind === "local" || group.kind === "remote") && group.status === "loaded")
+      .filter((group) => (group.kind === "remote" || (libraryFirst && group.kind === "local")) && group.status === "loaded")
       .flatMap((group) => group.streams)
       .filter((stream) => {
         const key = stream.localPath ?? stream.sourceId;
@@ -269,7 +271,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
         added.add(key);
         return true;
       });
-  }, [libraryFirst, ordered, extra.groups]);
+  }, [libraryFirst, remoteFirst, ordered, extra.groups]);
   const detailSources = useMemo(
     () => ordered === null ? null : [...libraryRows, ...ordered],
     [libraryRows, ordered],

@@ -512,6 +512,13 @@ that moved on is aborted and dropped. Browsing lists, opening a detail, changing
 the tile style and pressing the native Play send no add-on stream, discovery or
 subtitle request at all, and no per-provider load control exists.
 
+A similar title selected on a Jellyfin/Emby title's detail opens like any
+catalogue title, with one difference: the permitted media-server libraries are
+asked for their copies at once (one exact-id match per library, as the chooser
+would), and a copy they hold leads Play ahead of the add-on rows. The last
+version played and the active source rule still decide first. Opened anywhere
+else, the same title keeps the other libraries behind the chooser.
+
 Playing a row that is not the detail's own file is routed by what it really is:
 an add-on row plays under the title's catalogue key, a copy in another library
 under that copy's own remote identity, a copy of the viewer's own files under

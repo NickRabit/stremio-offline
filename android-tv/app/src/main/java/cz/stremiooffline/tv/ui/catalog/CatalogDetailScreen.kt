@@ -464,7 +464,7 @@ fun CatalogDetailScreen(
   // The row of the source last played leads, so Resume continues in it. A rule with verdicts
   // then takes a row that meets it; the call lives in Streams so this screen only passes the sort.
   val preferredStream = Streams.pickDefaultStream(
-    rows,
+    Streams.remoteFirst(rows, args.preferRemote),
     (if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey),
     Streams.ruleIdOf(filters.sort),
   )

@@ -297,6 +297,7 @@ export function App() {
   const [catalogueDetail, setCatalogueDetail] = useState<(CatalogueDetailTarget & {
     initialSources?: Stream[];
     libraryFirst?: boolean;
+    remoteFirst?: boolean;
   }) | null>(null);
   const catalogueDetailScroll = useRef<HTMLDivElement | null>(null);
   const detailStack = useRef<Array<{ target: NonNullable<typeof catalogueDetail>; scrollTop: number }>>([]);
@@ -3017,7 +3018,7 @@ export function App() {
   const openCatalogueDetail = (
     target: Omit<CatalogueDetailTarget, "type"> & { type: string },
     initialSources?: Stream[],
-    options?: { libraryFirst?: boolean; keepStack?: boolean },
+    options?: { libraryFirst?: boolean; remoteFirst?: boolean; keepStack?: boolean },
   ) => {
     if (target.type !== "movie" && target.type !== "series") return;
     navigated.current = true;
@@ -3034,6 +3035,7 @@ export function App() {
       type: target.type,
       ...(initialSources ? { initialSources } : {}),
       ...(options?.libraryFirst ? { libraryFirst: true } : {}),
+      ...(options?.remoteFirst ? { remoteFirst: true } : {}),
     });
   };
   /** Where Search stood when a card took the reader to the Library. Search's own scroll listener
@@ -3111,7 +3113,7 @@ export function App() {
     };
   };
   /** A similar title opened from the one on screen. Back returns here, with its episode and scroll. */
-  const openRelatedTitle = (title: { type: "movie" | "series"; id: string; name: string; poster?: string }) => {
+  const openRelatedTitle = (title: { type: "movie" | "series"; id: string; name: string; poster?: string }, options?: { remoteFirst?: boolean }) => {
     const current = detailOnScreen();
     if (current) {
       if (detailStack.current.length >= 10) detailStack.current.shift();
@@ -3119,7 +3121,7 @@ export function App() {
     }
     openCatalogueDetail({
       type: title.type, id: title.id, name: title.name, ...(title.poster ? { poster: title.poster } : {}),
-    }, undefined, { keepStack: true });
+    }, undefined, { keepStack: true, ...(options?.remoteFirst ? { remoteFirst: true } : {}) });
   };
   const backFromCatalogueDetail = () => {
     const previous = detailStack.current.pop();
@@ -3570,6 +3572,7 @@ export function App() {
             target={catalogueDetail}
             {...(catalogueDetail.initialSources ? { initialSources: catalogueDetail.initialSources } : {})}
             {...(catalogueDetail.libraryFirst ? { libraryFirst: true } : {})}
+            {...(catalogueDetail.remoteFirst ? { remoteFirst: true } : {})}
             onGallery={(images, effective) => presentGallery(images, { type: effective.type, id: effective.id })}
             preferredLanguage={settings.audioLanguage}
             sourceProfiles={sourceProfiles}

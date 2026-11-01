@@ -1718,7 +1718,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)}
             onTrailer={onTrailer}
             secureMode={secureMode}
-            extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
+            extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} remoteFirst/>}
             {...(detailDescription ? { description: detailDescription } : {})}
             {...(heroItem ? { chips: detailChips(heroItem) } : {})}
             favorite={state?.favorite ?? false}

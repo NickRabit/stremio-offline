@@ -109,6 +109,15 @@ describe("TitleExtrasRows", () => {
     expect(actions.openTitle).toHaveBeenCalledWith({ type: "series", id: "tt3", name: "Plain Show", poster: undefined });
   });
 
+  it("asks for the media server's copy first when the rows sit on a Jellyfin/Emby title", () => {
+    const actions = mount(<TitleExtrasRows extras={cast} loading={false} remoteFirst/>);
+    act(() => { host.querySelector<HTMLButtonElement>(".related")!.click(); });
+    expect(actions.openTitle).toHaveBeenCalledWith(
+      { type: "movie", id: "tt2", name: "When Harry Met Sally", poster: "/sally.jpg" },
+      { remoteFirst: true },
+    );
+  });
+
   it("shows both headings and seven skeletons while the read is in flight", () => {
     mount(<TitleExtrasRows extras={null} loading/>);
     const section = host.querySelector(".title-extras")!;

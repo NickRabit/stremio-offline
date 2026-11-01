@@ -202,6 +202,18 @@ describe("CatalogueTitleDetail sources", () => {
     expect(pickerRows().filter((row) => row.textContent?.includes("Emby copy"))).toHaveLength(1);
   });
 
+  it("lets the media server's copy lead Play for a title opened from a Jellyfin/Emby detail", async () => {
+    remoteReply = () => json({ streams: [remote("ms1", "Emby copy", 500)] });
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() },
+      remoteFirst: true,
+    });
+    await flush();
+    expect(calls.remoteStreams).toHaveLength(1);
+    await click(playButton());
+    expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "remote:ms1" }), expect.anything(), false);
+  });
+
   it("keeps other libraries behind the chooser without libraryFirst", async () => {
     await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() } });
     expect(calls.remoteStreams).toHaveLength(0);
