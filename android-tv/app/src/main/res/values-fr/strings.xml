@@ -246,6 +246,7 @@
   <string name="tv_download_this_season">Cette saison (%1$s)</string>
   <string name="tv_download_from_episode">À partir de cet épisode</string>
   <string name="tv_download_all_episodes">Tous les épisodes</string>
+  <string name="episodes_specials">Épisodes spéciaux</string>
   <string name="bulk_title">Télécharger la série</string>
   <string name="bulk_title_movie">Télécharger le film</string>
   <string name="bulk_title_episode">Télécharger l’épisode</string>
@@ -254,6 +255,43 @@
     <item quantity="one">%1$s épisode</item>
     <item quantity="other">%1$s épisodes</item>
   </plurals>
+  <string name="series_bulk_title">Télécharger la série</string>
+  <string name="series_bulk_whole_series">Série entière</string>
+  <string name="series_bulk_this_source">Cet épisode · source choisie</string>
+  <string name="series_bulk_source">Source</string>
+  <string name="series_bulk_from_library">Depuis cette bibliothèque — %1$s / %2$s</string>
+  <string name="series_bulk_from_library_hint">Copie uniquement les épisodes présents dans cette bibliothèque. Rien n’est complété depuis ailleurs.</string>
+  <string name="series_bulk_from_catalogue">Depuis le catalogue selon les règles</string>
+  <string name="series_bulk_from_catalogue_hint">Recherche chaque épisode dans vos extensions ; rien n’est copié depuis cette bibliothèque.</string>
+  <string name="series_bulk_preparing">Préparation de la liste des épisodes…</string>
+  <plurals name="series_bulk_ready">
+    <item quantity="one">%1$s épisode prêt</item>
+    <item quantity="other">%1$s épisodes prêts</item>
+  </plurals>
+  <string name="series_bulk_in_target">%1$s déjà dans la bibliothèque</string>
+  <string name="series_bulk_queued">%1$s déjà dans la file d’attente</string>
+  <string name="series_bulk_unreleased">%1$s pas encore diffusés</string>
+  <string name="series_bulk_unnumbered">%1$s sans numérotation</string>
+  <string name="series_bulk_nothing">Rien à télécharger.</string>
+  <string name="series_bulk_sources_later">Les sources sont choisies au téléchargement de chaque épisode.</string>
+  <string name="series_bulk_reason_in_target">déjà dans la bibliothèque</string>
+  <string name="series_bulk_reason_queued">déjà dans la file d’attente</string>
+  <string name="series_bulk_reason_unreleased">pas encore diffusé</string>
+  <string name="series_bulk_reason_unnumbered">sans numéro de saison ou d’épisode</string>
+  <string name="series_bulk_incomplete">La liste des épisodes n’a pas pu être lue en entier.</string>
+  <plurals name="series_bulk_add">
+    <item quantity="one">Ajouter %1$s épisode à la file d’attente</item>
+    <item quantity="other">Ajouter %1$s épisodes à la file d’attente</item>
+  </plurals>
+  <string name="series_bulk_adding">Ajout de %1$s sur %2$s…</string>
+  <plurals name="series_bulk_partly_added">
+    <item quantity="one">%1$s épisode a déjà été ajouté.</item>
+    <item quantity="other">%1$s épisodes ont déjà été ajoutés.</item>
+  </plurals>
+  <string name="err_bulk_remote_not_in_rules">Vos règles de téléchargement n’autorisent pas la copie depuis cette bibliothèque.</string>
+  <string name="tv_series_bulk_season_picker">Saison…</string>
+  <string name="tv_series_bulk_seasons_title">Saisons</string>
+  <string name="tv_series_bulk_skipped_row">Ignorés (%1$s)</string>
   <string name="rules_title">Règles de téléchargement</string>
   <string name="rules_selected_source">Source sélectionnée</string>
   <string name="rules_unavailable">Les règles de téléchargement ne sont pas disponibles. Demandez à un administrateur.</string>

@@ -21,7 +21,8 @@ import { mediaResources } from "./media-resources.js";
 import { relativeWithin, type LibraryRecord } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { torrentKey } from "./download-selection.js";
-import { buildTemplatePolicy, SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import { buildTemplatePolicy, RULE_PRESETS, SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import { rulesPolicy } from "./download-rules.js";
 import {
   materializeSourceAdmissionPolicy,
   parseSourceAdmissionSnapshotV1,
@@ -61,6 +62,29 @@ const deferred = () => {
 };
 
 const LIBRARY_ID = "lib_d10ad10a";
+const REMOTE_LIBRARY_ID = `rlib_${"e".repeat(32)}`;
+const REMOTE_ITEM = {
+  libraryId: REMOTE_LIBRARY_ID,
+  connectionId: `mconn_${"f".repeat(32)}`,
+  itemId: "episode-1",
+};
+const REMOTE_ITEM_VIDEO_ID = `remote-item:${REMOTE_LIBRARY_ID}:${REMOTE_ITEM.itemId}`;
+const remoteRulesAdmission = (): SourceAdmissionSnapshotV1 => {
+  const preset = RULE_PRESETS.find((candidate) => candidate.id === SOURCE_PROFILE_IDS.balanced);
+  assert.ok(preset);
+  const providerKeys = [`remote:${REMOTE_LIBRARY_ID}`];
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: preset.id, revision: 1, template: "rules" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      rulesPolicy(preset.rules, "episode"),
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "en" },
+    ),
+  });
+};
 const queueAdmission = (): SourceAdmissionSnapshotV1 => parseSourceAdmissionSnapshotV1({
   schemaVersion: 1,
   profile: { id: "queue-local-copy-test", revision: 1, template: "providerPriority" },
@@ -2903,6 +2927,175 @@ test("addPending skips the owner's own duplicate", async () => {
   }
 });
 
+test("admitPending reports every admission outcome while addPending keeps its return contract", async () => {
+  let releaseResolver!: () => void;
+  const resolverGate = new Promise<void>((resolve) => { releaseResolver = resolve; });
+  const { directory, queue } = await tempQueue({
+    existingLocalCopy: async ({ source }) => source.videoId === "tt-present"
+      ? {
+          status: "present",
+          copy: { key: `${LIBRARY_ID}/Film/Existing.mkv`, libraryId: LIBRARY_ID, actualSize: 10 },
+        }
+      : source.videoId === "tt-unresolved"
+        ? { status: "unresolved", reason: "lookupFailed" }
+        : { status: "absent" },
+  });
+  queue.setResolver(async () => {
+    await resolverGate;
+    return undefined;
+  });
+  try {
+    const queued = await queue.admitPending("Queued", { type: "movie", videoId: "tt-queued" }, undefined, "usr_00000001");
+    assert.equal(queued.outcome, "queued");
+    assert.equal(
+      (await queue.admitPending("Queued", { type: "movie", videoId: "tt-queued" }, undefined, "usr_00000001")).outcome,
+      "alreadyQueued",
+    );
+    assert.equal(
+      (await queue.admitPending(
+        "Present",
+        { type: "movie", videoId: "tt-present" },
+        undefined,
+        "usr_00000001",
+        queueAdmission(),
+      )).outcome,
+      "presentLocally",
+    );
+    assert.equal(
+      (await queue.admitPending(
+        "Unknown",
+        { type: "movie", videoId: "tt-unresolved" },
+        undefined,
+        "usr_00000001",
+        queueAdmission(),
+      )).outcome,
+      "unresolved",
+    );
+
+    const added = await queue.addPending("Added", { type: "movie", videoId: "tt-added" }, undefined, "usr_00000001");
+    assert.ok(added);
+    assert.equal("outcome" in added, false, "the existing overload still returns the public job");
+    assert.equal(
+      await queue.addPending("Added", { type: "movie", videoId: "tt-added" }, undefined, "usr_00000001"),
+      undefined,
+    );
+  } finally {
+    releaseResolver();
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("activeEpisodeIn matches an owner's video id or destination episode", async () => {
+  let releaseResolver!: () => void;
+  const resolverGate = new Promise<void>((resolve) => { releaseResolver = resolve; });
+  const { directory, queue } = await tempQueue();
+  queue.setResolver(async () => {
+    await resolverGate;
+    return undefined;
+  });
+  try {
+    await queue.addPending(
+      "Show · S01E01",
+      { type: "series", videoId: "tt-show:1:1" },
+      { kind: "episode", title: "Show", season: 1, episode: 1 },
+      "usr_00000001",
+    );
+    await queue.addPending(
+      "Other · S01E01",
+      { type: "series", videoId: "tt-other:1:1" },
+      { kind: "episode", title: "Other", season: 1, episode: 1 },
+      "usr_00000002",
+    );
+    assert.equal(queue.activeEpisodeIn("usr_00000001", {
+      type: "series", videoId: "tt-show:1:1", libraryId: LIBRARY_ID,
+      seriesFolder: "Show", season: 1, episode: 1,
+    }), true);
+    assert.equal(queue.activeEpisodeIn("usr_00000001", {
+      type: "series", videoId: "different", libraryId: LIBRARY_ID,
+      seriesFolder: "Show", season: 1, episode: 1,
+    }), true, "the same owner's target episode is a duplicate");
+    assert.equal(queue.activeEpisodeIn("usr_00000001", {
+      type: "series", videoId: "different", libraryId: LIBRARY_ID,
+      seriesFolder: "Other", season: 1, episode: 1,
+    }), false, "another owner's episode is ignored");
+  } finally {
+    releaseResolver();
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a synthetic remote-item id skips both existing-copy hooks and access denial pauses it", async () => {
+  let admissionLookups = 0;
+  let queueLookups = 0;
+  const { directory, queue } = await tempQueue({
+    existingLocalCopy: async () => {
+      admissionLookups += 1;
+      return { status: "absent" };
+    },
+    existingLocalCopyForQueue: async () => {
+      queueLookups += 1;
+      return { status: "absent" };
+    },
+  });
+  queue.setRulesResolver(async () => ({
+    status: "accessDenied",
+    retryable: false as const,
+    observations: {
+      probesUsed: 0,
+      confirmedRejections: 0,
+      temporaryFailures: 0,
+      accessDenials: 1,
+      unresolvedCandidates: 0,
+    },
+  }));
+  try {
+    const admitted = await queue.admitPending(
+      "Remote episode",
+      { type: "series", videoId: REMOTE_ITEM_VIDEO_ID, remoteItem: REMOTE_ITEM },
+      { kind: "episode", title: "Remote episode", season: 1, episode: 1 },
+      "usr_00000001",
+      remoteRulesAdmission(),
+    );
+    assert.equal(admitted.outcome, "queued");
+    if (admitted.outcome !== "queued") return;
+    await waitFor(queue, () => queue.get(admitted.job.id)?.status === "paused");
+    assert.equal(queue.get(admitted.job.id)?.pauseReason, "permission");
+    assert.equal(queue.get(admitted.job.id)?.errorKey, "download.pausedNoPermission");
+    assert.equal(admissionLookups, 0);
+    assert.equal(queueLookups, 0);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a remote-item job without an admission fails without consulting the legacy resolver", async () => {
+  let resolverCalls = 0;
+  const { directory, queue } = await tempQueue();
+  queue.setResolver(async () => {
+    resolverCalls += 1;
+    return undefined;
+  });
+  try {
+    const admitted = await queue.admitPending(
+      "Remote episode",
+      { type: "series", videoId: REMOTE_ITEM_VIDEO_ID, remoteItem: REMOTE_ITEM },
+      { kind: "episode", title: "Remote episode", season: 1, episode: 1 },
+      "usr_00000001",
+    );
+    assert.equal(admitted.outcome, "queued");
+    if (admitted.outcome !== "queued") return;
+    await waitFor(queue, () => queue.get(admitted.job.id)?.status === "failed");
+    assert.equal(queue.get(admitted.job.id)?.errorKey, "err.noMatchingSource");
+    assert.equal(resolverCalls, 0);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("adopt writes the follow and it survives a save and a load", async () => {
   const { directory, queue } = await tempQueue();
   try {
@@ -2922,6 +3115,60 @@ test("adopt writes the follow and it survives a save and a load", async () => {
       await reopened.stop();
     }
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a remoteItem source survives a queue save and load round trip", async () => {
+  const { directory, queue } = await tempQueue();
+  const accessDenied = {
+    status: "accessDenied" as const,
+    retryable: false as const,
+    observations: {
+      probesUsed: 0,
+      confirmedRejections: 0,
+      temporaryFailures: 0,
+      accessDenials: 1,
+      unresolvedCandidates: 0,
+    },
+  };
+  queue.setRulesResolver(async () => accessDenied);
+  let id: string | undefined;
+  try {
+    const admitted = await queue.admitPending(
+      "Remote episode",
+      { type: "series", videoId: REMOTE_ITEM_VIDEO_ID, remoteItem: REMOTE_ITEM },
+      { kind: "episode", title: "Remote episode", season: 1, episode: 1 },
+      "usr_00000001",
+      remoteRulesAdmission(),
+    );
+    assert.equal(admitted.outcome, "queued");
+    if (admitted.outcome !== "queued") return;
+    id = admitted.job.id;
+    await waitFor(queue, () => queue.get(id!)?.status === "paused");
+    await queue.stop();
+
+    const downloads = path.join(directory, "downloads");
+    const reopened = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+      libraries: () => [downloadLibrary(downloads)],
+      defaultLibrary: () => downloadLibrary(downloads),
+    });
+    let loadedSource: NonNullable<DownloadJob["source"]> | undefined;
+    reopened.setRulesResolver(async ({ source }) => {
+      loadedSource = source;
+      return accessDenied;
+    });
+    await reopened.load();
+    try {
+      assert.equal(reopened.get(id)?.status, "paused");
+      await reopened.resume(id);
+      await waitFor(reopened, () => loadedSource !== undefined);
+      assert.deepEqual(loadedSource?.remoteItem, REMOTE_ITEM);
+    } finally {
+      await reopened.stop();
+    }
+  } finally {
+    await queue.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });

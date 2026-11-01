@@ -4,6 +4,7 @@ package cz.stremiooffline.tv.ui.catalog
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
@@ -66,6 +67,7 @@ fun SidePanel(
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
   initialFocus: FocusRequester? = null,
+  scrollState: ScrollState? = null,
   /** True for a short list the panel scrolls itself. A long list (the sources, the tracks) passes
    *  false and draws its own `LazyColumn` in the space the panel hands it. */
   scroll: Boolean = true,
@@ -75,6 +77,7 @@ fun SidePanel(
   // A panel whose rows carry no requester of their own still has to hold the remote: the panel
   // itself takes focus and the D-pad then walks into the rows.
   val panelFocus = remember { FocusRequester() }
+  val ownScroll = rememberScrollState()
   val target = initialFocus ?: panelFocus
   LaunchedEffect(target) {
     awaitFrame()
@@ -111,7 +114,7 @@ fun SidePanel(
       Column(
         modifier = Modifier
           .fillMaxWidth()
-          .then(if (scroll) Modifier.verticalScroll(rememberScrollState()) else Modifier.weight(1f))
+          .then(if (scroll) Modifier.verticalScroll(scrollState ?: ownScroll) else Modifier.weight(1f))
           .testTag(TagSidePanelList),
         verticalArrangement = if (scroll) Arrangement.spacedBy(8.dp) else Arrangement.Top,
         content = content,

@@ -1,8 +1,9 @@
 import { stat } from "node:fs/promises";
 import type express from "express";
 import { allowedAddons } from "../addons.js";
+import { bulkEpisodeIsReleased, episodeKey, episodesInBulkScope, episodesInTarget } from "../bulk-target.js";
 import type { DeviceTransfers } from "../device-transfers.js";
-import { NoLibraryForKindError, isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, remoteDownloadStream, type DownloadQueue, type DownloadSelection } from "../downloads.js";
+import { NoLibraryForKindError, REMOTE_ITEM_VIDEO_PREFIX, isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, remoteDownloadStream, type DownloadQueue, type DownloadSelection } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
@@ -14,10 +15,11 @@ import { openRemoteContent } from "../media-server-reference.js";
 import { REMOTE_LIBRARY_ID, type RemoteLibraryRecord } from "../media-server-types.js";
 import { titleLanguage } from "../ranking.js";
 import type { ResourceOwner } from "../media-resources.js";
+import { SourceAdmissionRejected, type SourceAdmissionSnapshotV1 } from "../source-admission.js";
 import type { UserPrefs } from "../store.js";
 import type { DownloadTargetSettings, MetaItem, StreamItem } from "../types.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
-import { admitsRemoteProviders, legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference } from "./source-profile-selection.js";
+import { admitsRemoteProviders, invalidSourceProfileReference, legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference } from "./source-profile-selection.js";
 
 export interface DownloadsDeps extends RouteContext {
   queue: DownloadQueue;
@@ -40,7 +42,15 @@ export interface DownloadsDeps extends RouteContext {
   defaultDownloadLibrary(kind: "movie" | "series"): LibraryRecord | undefined;
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
   prefsOf(req?: express.Request): UserPrefs;
+  now?: () => number;
 }
+
+type BulkEpisodeOutcome = "queued" | "alreadyQueued" | "presentLocally" | "unresolved" | "inTarget" | "invalid";
+
+const bulkEpisodeNumber = (value: unknown): number | undefined => {
+  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isSafeInteger(number) && number >= 0 ? number : undefined;
+};
 
 /** The deps the body-validation of a lazy download selection needs, shared by the bulk route
  *  and the follow routes so both parse audio, subtitles and the pinned target the same way. */
@@ -180,6 +190,84 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
   const explicitTarget = explicitTargetFor(deps);
   const automaticTarget = automaticRemoteTargetFor(deps);
   const parseSelection = createSelectionParser(deps);
+  const now = () => deps.now?.() ?? Date.now();
+
+  const remoteAdmission = (
+    owner: ReturnType<typeof currentUser>,
+    reference: unknown,
+    libraryId: string,
+  ): SourceAdmissionSnapshotV1 => {
+    try {
+      const admission = materializeSourceProfileAdmission(deps, owner, reference, "episode", {
+        onlyProviderKeys: [`remote:${libraryId}`],
+      });
+      if (admission.profile.template !== "rules") {
+        throw new AppError(
+          "The selected source profile cannot be used for this operation.",
+          "err.sourceProfileOperationUnavailable",
+          400,
+        );
+      }
+      return admission;
+    } catch (error) {
+      if ((error instanceof SourceAdmissionRejected && error.code === "providerScopeUnavailable")
+        || (error instanceof AppError && error.messageKey === "err.sourceProviderScopeUnavailable")) {
+        throw new AppError(
+          "Your download rules do not allow copying from this library.",
+          "err.bulkRemoteNotInRules",
+          400,
+        );
+      }
+      throw error;
+    }
+  };
+
+  const remoteTarget = async (req: express.Request, remote: RemoteLibraryRecord): Promise<DownloadTargetSettings> => {
+    const chosen = await explicitTarget(req, req.body.target, "series");
+    const settings = chosen ?? automaticTarget(req, remote, "series");
+    const libraryId = settings.libraryId ?? defaultDownloadLibrary("series")?.id;
+    if (!libraryId) throw new NoLibraryForKindError("series");
+    assertMayQueue(req, { libraryId });
+    return settings;
+  };
+
+  const remoteSelection = (
+    admission: SourceAdmissionSnapshotV1,
+    targetSettings: DownloadTargetSettings,
+  ): DownloadSelection => ({
+    ...legacySelectionFromAdmission(admission),
+    targetSettings,
+  });
+
+  const targetLibraryForEpisodes = (settings: DownloadTargetSettings): {
+    libraryId?: string;
+    library?: LibraryRecord;
+  } => {
+    const libraryId = settings.libraryId ?? defaultDownloadLibrary("series")?.id;
+    return {
+      ...(libraryId === undefined ? {} : { libraryId }),
+      ...(libraryId === undefined
+        ? {}
+        : { library: store.libraries().find((library) => library.id === libraryId) }),
+    };
+  };
+
+  const requestAbort = (req: express.Request, res: express.Response): { signal: AbortSignal; close(): void } => {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const closeOnAbort = () => {
+      if (!res.writableEnded) abort();
+    };
+    req.on("aborted", abort);
+    res.on("close", closeOnAbort);
+    return {
+      signal: controller.signal,
+      close: () => {
+        req.off("aborted", abort);
+        res.off("close", closeOnAbort);
+      },
+    };
+  };
 
   /** A job the caller does not own is answered exactly like one that is not there: 403 would
    *  tell the caller that the id exists. */
@@ -254,16 +342,189 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     }
     res.status(201).json(await jobView(job));
   }));
+  app.post("/api/downloads/bulk/prepare", asyncRoute(async (req, res) => {
+    const owner = currentUser(req);
+    const profileReference = profileSelectionReference(req.body.selection);
+    const origin = req.body.origin && typeof req.body.origin === "object"
+      ? req.body.origin as Record<string, unknown>
+      : undefined;
+    const originKind = origin?.kind;
+    const scopeValue = req.body.scope;
+    if (scopeValue !== "season" && scopeValue !== "series") {
+      throw new AppError("Invalid download scope.", "err.invalidRequest");
+    }
+    const season = req.body.season;
+    if (scopeValue === "season" && !(typeof season === "number" && Number.isSafeInteger(season))) {
+      throw new AppError("Choose a season to download.", "err.bulkSeasonRequired");
+    }
+    const scope = {
+      scope: scopeValue,
+      ...(scopeValue === "season" ? { season: season as number } : {}),
+      specials: req.body.specials === true,
+    };
+
+    if (originKind === "catalogue") {
+      const catalogueOrigin = origin!;
+      if (!profileReference.present) assertMayQueue(req);
+      const rawEpisodes = Array.isArray(catalogueOrigin.episodes) ? catalogueOrigin.episodes as Array<Record<string, unknown>> : [];
+      if (rawEpisodes.length > 5000) throw new AppError("At most 5000 episodes at a time.", "err.tooManyEpisodes");
+      if (rawEpisodes.some((episode) => typeof episode.id !== "string" || !episode.id.trim())) {
+        throw new AppError("Every catalogue episode needs an id.", "err.invalidRequest");
+      }
+      const sourceAdmission = !profileReference.present
+        ? undefined
+        : materializeSourceProfileAdmission(deps, owner, profileReference.reference, "episode");
+      const parent = catalogueOrigin.media && typeof catalogueOrigin.media === "object"
+        ? catalogueOrigin.media as Record<string, unknown>
+        : {};
+      const parentId = String(parent.id ?? "").trim() || undefined;
+      const metaType = String(parent.metaType ?? "series").trim() || "series";
+      const validatedSelection = await parseSelection(req, {
+        selection: sourceAdmission === undefined ? req.body.selection : legacySelectionFromAdmission(sourceAdmission),
+        remoteProviders: admitsRemoteProviders(sourceAdmission),
+        target: req.body.target,
+        metaType,
+        parentId,
+        kind: "series",
+      });
+      const title = String(req.body.title ?? "").trim() || "Show";
+      const target = targetLibraryForEpisodes(validatedSelection.targetSettings);
+      if (!target.libraryId || !target.library) throw new NoLibraryForKindError("series");
+      const inTarget = await episodesInTarget({
+        root: target.library.root,
+        settings: validatedSelection.targetSettings,
+        seriesTitle: title,
+      });
+      const episodes = rawEpisodes.map((episode) => ({
+        id: String(episode.id).trim(),
+        season: bulkEpisodeNumber(episode.season),
+        episode: bulkEpisodeNumber(episode.episode),
+        ...(typeof episode.title === "string" ? { title: episode.title } : {}),
+        released: episode.released,
+      })).filter((episode) => episodesInBulkScope([episode], scope).length === 1);
+      res.json({
+        origin: "catalogue",
+        series: { title, ...(parentId === undefined ? {} : { catalogueId: parentId }) },
+        target: { libraryId: target.libraryId, libraryName: target.library.name },
+        episodes: episodes.map((episode) => {
+          const numbered = episode.season !== undefined && episode.episode !== undefined;
+          const status = !numbered ? "unnumbered"
+            : !bulkEpisodeIsReleased(episode.released, now()) ? "unreleased"
+              : inTarget.has(episodeKey(episode.season!, episode.episode!)) ? "inTarget"
+                : queue.activeEpisodeIn(owner?.id, {
+                  type: "series",
+                  videoId: episode.id,
+                  libraryId: target.libraryId!,
+                  seriesFolder: title,
+                  season: episode.season!,
+                  episode: episode.episode!,
+                }) ? "queued" : "ready";
+          return {
+            id: episode.id,
+            ...(episode.season === undefined ? {} : { season: episode.season }),
+            ...(episode.episode === undefined ? {} : { episode: episode.episode }),
+            ...(episode.title === undefined ? {} : { title: episode.title }),
+            status,
+          };
+        }),
+        listing: { complete: true },
+      });
+      return;
+    }
+
+    if (originKind !== "remote") {
+      throw new AppError("Invalid download origin.", "err.invalidRequest");
+    }
+    const remoteOriginBody = origin!;
+    if (!profileReference.present) throw invalidSourceProfileReference();
+    const libraryId = typeof remoteOriginBody.libraryId === "string" ? remoteOriginBody.libraryId.trim() : "";
+    const seriesItemId = typeof remoteOriginBody.seriesItemId === "string" ? remoteOriginBody.seriesItemId.trim() : "";
+    if (!libraryId || !seriesItemId) throw new AppError("Invalid download origin.", "err.invalidRequest");
+    const remote = store.remoteLibraries().find((library) => library.id === libraryId);
+    if (!remote) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+    remoteAdmission(owner, profileReference.reference, libraryId);
+    const targetSettings = await remoteTarget(req, remote);
+    const target = targetLibraryForEpisodes(targetSettings);
+    if (!target.libraryId || !target.library) throw new NoLibraryForKindError("series");
+    const abort = requestAbort(req, res);
+    let listed;
+    try {
+      listed = await mediaSources.seriesEpisodesForBulk({
+        ownerUserId: owner!.id,
+        libraryId,
+        seriesItemId,
+        signal: abort.signal,
+      });
+    } finally {
+      abort.close();
+    }
+    if (!listed) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+    if (!listed.complete && listed.errorKey === "err.tooManyEpisodes") {
+      throw new AppError("At most 5000 episodes at a time.", "err.tooManyEpisodes");
+    }
+    const title = String(req.body.title ?? "").trim() || listed.name || "Show";
+    const inTarget = await episodesInTarget({
+      root: target.library.root,
+      settings: targetSettings,
+      seriesTitle: title,
+    });
+    const catalogueId = listed.catalogueId;
+    const episodes = listed.episodes
+      .map((episode) => ({
+        ...episode,
+        season: bulkEpisodeNumber(episode.season),
+        episode: bulkEpisodeNumber(episode.episode),
+      }))
+      .filter((episode) => episodesInBulkScope([episode], scope).length === 1);
+    res.json({
+      origin: "remote",
+      series: { title, ...(catalogueId === undefined ? {} : { catalogueId }) },
+      target: { libraryId: target.libraryId, libraryName: target.library.name },
+      episodes: episodes.map((episode) => {
+        const numbered = episode.season !== undefined && episode.episode !== undefined;
+        const videoId = numbered && catalogueId !== undefined
+          ? `${catalogueId}:${episode.season}:${episode.episode}`
+          : `${REMOTE_ITEM_VIDEO_PREFIX}${libraryId}:${episode.itemId}`;
+        const status = !numbered ? "unnumbered"
+          : !bulkEpisodeIsReleased(episode.premiereDate, now()) ? "unreleased"
+            : inTarget.has(episodeKey(episode.season!, episode.episode!)) ? "inTarget"
+              : queue.activeEpisodeIn(owner?.id, {
+                type: "series",
+                videoId,
+                libraryId: target.libraryId!,
+                seriesFolder: title,
+                season: episode.season!,
+                episode: episode.episode!,
+              }) ? "queued" : "ready";
+        return {
+          id: videoId,
+          ...(episode.season === undefined ? {} : { season: episode.season }),
+          ...(episode.episode === undefined ? {} : { episode: episode.episode }),
+          title: episode.name,
+          remoteItemId: episode.itemId,
+          status,
+        };
+      }),
+      listing: listed.complete
+        ? { complete: true }
+        : { complete: false, errorKey: listed.errorKey ?? "err.bulkEpisodeListIncomplete" },
+    });
+  }));
+
   // Adding episodes in bulk: the jobs are lazy, streams are asked for at download time.
   app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     const owner = currentUser(req);
     const profileReference = profileSelectionReference(req.body.selection);
     const type = String(req.body.type ?? "series");
     const movie = type === "movie";
-    // A profile admission answers its own operation check, including a distinct 403.
-    if (!profileReference.present) assertMayQueue(req);
-    const explicit = await explicitTarget(req, req.body.target, movie ? "movie" : "series");
-    const title = String(req.body.title ?? "").trim() || (movie ? "Movie" : "Show");
+    const origin = req.body.origin && typeof req.body.origin === "object"
+      ? req.body.origin as Record<string, unknown>
+      : undefined;
+    const remoteOrigin = origin?.kind === "remote";
+    if (origin !== undefined && !remoteOrigin) throw new AppError("Invalid download origin.", "err.invalidRequest");
+    if (remoteOrigin && type !== "series") throw new AppError("Remote bulk downloads only support series.", "err.invalidRequest");
+    if (!remoteOrigin && !profileReference.present) assertMayQueue(req);
+    const explicit = remoteOrigin ? undefined : await explicitTarget(req, req.body.target, movie ? "movie" : "series");
     const parent = req.body.media && typeof req.body.media === "object" ? req.body.media as Record<string, unknown> : {};
     const parentId = String(parent.id ?? "").trim() || undefined;
     const poster = posterOf(parent.poster);
@@ -279,6 +540,89 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     }
     if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
     const kind = movie ? "movie" : "series";
+
+    if (remoteOrigin) {
+      if (!profileReference.present) throw invalidSourceProfileReference();
+      const libraryId = typeof origin!.libraryId === "string" ? origin!.libraryId.trim() : "";
+      const seriesItemId = typeof origin!.seriesItemId === "string" ? origin!.seriesItemId.trim() : "";
+      if (!libraryId || !seriesItemId) throw new AppError("Invalid download origin.", "err.invalidRequest");
+      const remote = store.remoteLibraries().find((library) => library.id === libraryId);
+      if (!remote) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+      remoteAdmission(owner, profileReference.reference, libraryId);
+      const targetSettings = await remoteTarget(req, remote);
+      const target = targetLibraryForEpisodes(targetSettings);
+      if (!target.libraryId || !target.library) throw new NoLibraryForKindError("series");
+      const abort = requestAbort(req, res);
+      let listed;
+      try {
+        listed = await mediaSources.seriesForBulk({
+          ownerUserId: owner!.id,
+          libraryId,
+          seriesItemId,
+          signal: abort.signal,
+        });
+      } finally {
+        abort.close();
+      }
+      if (!listed) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+      const title = String(req.body.title ?? "").trim() || listed.name || "Show";
+      const catalogueId = listed.catalogueId;
+      const inTarget = await episodesInTarget({
+        root: target.library.root,
+        settings: targetSettings,
+        seriesTitle: title,
+      });
+      const results: Array<{ id: string; outcome: BulkEpisodeOutcome }> = [];
+      let added = 0;
+      for (const episode of episodes) {
+        const season = bulkEpisodeNumber(episode.season);
+        const number = bulkEpisodeNumber(episode.episode);
+        const remoteItemId = typeof episode.remoteItemId === "string" ? episode.remoteItemId.trim() : "";
+        if (!remoteItemId || season === undefined || number === undefined) {
+          results.push({ id: remoteItemId, outcome: "invalid" });
+          continue;
+        }
+        const videoId = catalogueId === undefined
+          ? `${REMOTE_ITEM_VIDEO_PREFIX}${libraryId}:${remoteItemId}`
+          : `${catalogueId}:${season}:${number}`;
+        if (inTarget.has(episodeKey(season, number))) {
+          results.push({ id: videoId, outcome: "inTarget" });
+          continue;
+        }
+        const admission = remoteAdmission(owner, profileReference.reference, libraryId);
+        const episodeTitle = typeof episode.title === "string" && episode.title.trim() ? episode.title : undefined;
+        const media: MediaInfo = {
+          kind: "episode",
+          title,
+          season,
+          episode: number,
+          ...(episodeTitle === undefined ? {} : { episodeTitle }),
+          ...(catalogueId === undefined ? {} : { id: catalogueId }),
+          metaType: "series",
+        };
+        const jobTitle = `${title} · ${episodeTitle ?? `S${String(season).padStart(2, "0")}E${String(number).padStart(2, "0")}`}`;
+        const admitted = await queue.admitPending(
+          jobTitle,
+          {
+            type: "series",
+            videoId,
+            selection: remoteSelection(admission, targetSettings),
+            remoteItem: { libraryId, connectionId: remote.connectionId, itemId: remoteItemId },
+          },
+          media,
+          owner?.id,
+          admission,
+        );
+        const outcome = admitted.outcome;
+        results.push({ id: videoId, outcome });
+        if (outcome === "queued") added += 1;
+      }
+      const skipped = results.length - added;
+      log("INFO", "Bulk addition to the queue", { title, added, skipped, origin: "remote" });
+      res.status(201).json({ added, skipped, results });
+      return;
+    }
+
     const sourceAdmission = !profileReference.present
       ? undefined
       : materializeSourceProfileAdmission(deps, owner, profileReference.reference, movie ? "movie" : "episode");
@@ -290,6 +634,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       parentId,
       kind,
     });
+    const title = String(req.body.title ?? "").trim() || (movie ? "Movie" : "Show");
     if (movie) {
       const videoId = String(episodes[0]!.id ?? "").trim();
       if (!videoId) throw new AppError("The film entry has no id.", "err.invalidRequest");
@@ -310,19 +655,43 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
         kind: "movie", title, id: parentId, metaType, poster,
         ...(year === undefined ? {} : { year }),
       };
-      const job = await queue.addPending(title, { type, videoId, selection: jobSelection }, media, owner?.id, undefined, jobAdmission);
-      const added = job ? 1 : 0;
-      const skipped = job ? 0 : 1;
+      const admitted = await queue.admitPending(
+        title,
+        { type, videoId, selection: jobSelection },
+        media,
+        owner?.id,
+        jobAdmission,
+      );
+      const results = [{ id: videoId, outcome: admitted.outcome }];
+      const added = admitted.outcome === "queued" ? 1 : 0;
+      const skipped = 1 - added;
       log("INFO", "Bulk addition to the queue", { title, added, skipped });
-      res.status(201).json({ added, skipped });
+      res.status(201).json({ added, skipped, results });
       return;
     }
-    // Every job this route adds carries `media.kind: "episode"`, so the queue reads it as a
-    // series whatever `metaType` the body claims for the title; the door has to agree.
-    let added = 0, skipped = 0;
+
+    const target = targetLibraryForEpisodes(validatedSelection.targetSettings);
+    const inTarget = target.libraryId && target.library
+      ? await episodesInTarget({
+        root: target.library.root,
+        settings: validatedSelection.targetSettings,
+        seriesTitle: title,
+      })
+      : new Set<string>();
+    const results: Array<{ id: string; outcome: BulkEpisodeOutcome }> = [];
+    let added = 0;
     for (const episode of episodes) {
       const videoId = String(episode.id ?? "").trim();
-      if (!videoId) { skipped += 1; continue; }
+      if (!videoId) {
+        results.push({ id: "", outcome: "invalid" });
+        continue;
+      }
+      const numberedSeason = bulkEpisodeNumber(episode.season);
+      const numberedEpisode = bulkEpisodeNumber(episode.episode);
+      if (numberedSeason !== undefined && numberedEpisode !== undefined && inTarget.has(episodeKey(numberedSeason, numberedEpisode))) {
+        results.push({ id: videoId, outcome: "inTarget" });
+        continue;
+      }
       const season = episode.season == null ? undefined : Number(episode.season);
       const number = episode.episode == null ? undefined : Number(episode.episode);
       const episodeTitle = episode.title ? String(episode.title) : undefined;
@@ -339,11 +708,19 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
         };
         assertMayQueue(req, { libraryId: jobSelection.targetSettings.libraryId ?? defaultDownloadLibrary("series")?.id });
       }
-      const job = await queue.addPending(jobTitle, { type, videoId, selection: jobSelection }, media, owner?.id, undefined, jobAdmission);
-      if (job) added += 1; else skipped += 1;
+      const admitted = await queue.admitPending(
+        jobTitle,
+        { type, videoId, selection: jobSelection },
+        media,
+        owner?.id,
+        jobAdmission,
+      );
+      results.push({ id: videoId, outcome: admitted.outcome });
+      if (admitted.outcome === "queued") added += 1;
     }
+    const skipped = results.length - added;
     log("INFO", "Bulk addition to the queue", { title, added, skipped });
-    res.status(201).json({ added, skipped });
+    res.status(201).json({ added, skipped, results });
   }));
   app.post("/api/downloads/:id/pause", asyncRoute(async (req, res) => { await queue.pause(requireOwnJob(req, String(req.params.id))); res.status(204).end(); }));
   app.post("/api/downloads/:id/resume", asyncRoute(async (req, res) => { await queue.resume(requireOwnJob(req, String(req.params.id))); res.status(204).end(); }));

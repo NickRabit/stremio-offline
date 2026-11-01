@@ -95,7 +95,6 @@ fun DetailActionRow(
 /** The short name of an extra action the catalogue adds, the way the web words it. */
 @Composable
 private fun extraName(action: DetailAction): String = when (action.tag) {
-  TagCatalogSeriesDownload -> stringResource(R.string.detail_action_whole_series)
   TagCatalogShowInLibrary -> stringResource(R.string.detail_action_folder)
   else -> action.label
 }

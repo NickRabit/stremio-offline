@@ -2,6 +2,7 @@ package cz.stremiooffline.tv.ui.catalog
 
 import cz.stremiooffline.tv.data.ApiJson
 import cz.stremiooffline.tv.data.AudioMode
+import cz.stremiooffline.tv.data.BulkPreparedEpisodeDto
 import cz.stremiooffline.tv.data.RuleSummaryPart
 import cz.stremiooffline.tv.data.SourceProfileAudioDto
 import cz.stremiooffline.tv.data.SourceProfileConstraintsDto
@@ -10,7 +11,6 @@ import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.SourceProfileLanguageRefDto
 import cz.stremiooffline.tv.data.SourceProfilePolicyDto
 import cz.stremiooffline.tv.data.SourceProfileRangeDto
-import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.data.formatRuleGigabytes
 import cz.stremiooffline.tv.data.ruleSummaryParts
 import cz.stremiooffline.tv.ui.settings.inlineContentLanguageLabel
@@ -21,62 +21,67 @@ import org.junit.Test
 /** Which episodes a scope queues, worked out the way the web's `toEpisodes` and its bulk filter do. */
 class SeriesDownloadTest {
 
-  private val today = "2026-10-12"
+  private val prepared = listOf(
+    episode("s0e1", 0, 1),
+    episode("s1e1", 1, 1),
+    episode("s1e2", 1, 2),
+    episode("s1e3", 1, 3),
+    episode("s2e1", 2, 1),
+    BulkPreparedEpisodeDto(id = "part1", status = "unnumbered"),
+  )
 
-  private fun video(id: String, season: Int?, episode: Int?, released: String? = "2020-01-01") =
-    VideoDto(id = id, season = season, episode = episode, released = released)
+  private fun episode(
+    id: String,
+    season: Int?,
+    number: Int?,
+    status: String = "ready",
+  ) = BulkPreparedEpisodeDto(id = id, season = season, episode = number, status = status)
 
-  private fun ids(scope: DownloadScope, selected: VideoDto?) =
-    scopeEpisodes(
-      listOf(
-        video("s0e1", 0, 1),
-        video("s1e1", 1, 1),
-        video("s1e2", 1, 2),
-        video("s1e3", 1, 3, released = "2999-01-01"),
-        video("s2e1", 2, 1),
-      ),
-      scope,
-      selected,
-      today,
-    ).map { it.id }
+  private fun ids(scope: DownloadScope, selected: BulkPreparedEpisodeDto? = null, specials: Boolean = false) =
+    preparedScopeEpisodes(prepared, scope, selected, includeSpecials = specials).map { it.id }
 
   @Test
-  fun `a special is not an episode of the series`() {
-    assertEquals(listOf("s1e1", "s1e2", "s2e1"), ids(DownloadScope.All, video("s1e1", 1, 1)))
+  fun `a season keeps that season and returns it in episode order`() {
+    assertEquals(listOf("s1e1", "s1e2", "s1e3"), preparedScopeEpisodes(prepared, DownloadScope.Season, season = 1).map { it.id })
+    assertEquals(listOf("s2e1"), preparedScopeEpisodes(prepared, DownloadScope.Season, season = 2).map { it.id })
   }
 
   @Test
-  fun `an episode whose release day is still ahead is left out`() {
-    assertEquals(false, ids(DownloadScope.All, video("s1e1", 1, 1)).contains("s1e3"))
-    assertEquals(emptyList<String>(), ids(DownloadScope.Episode, video("s1e3", 1, 3, "2999-01-01")))
+  fun `the whole series leaves specials out until they are picked`() {
+    assertEquals(listOf("s1e1", "s1e2", "s1e3", "s2e1"), ids(DownloadScope.All))
+    assertEquals(listOf("s0e1", "s1e1", "s1e2", "s1e3", "s2e1"), ids(DownloadScope.All, specials = true))
   }
 
   @Test
-  fun `this episode is the selected one alone`() {
-    assertEquals(listOf("s1e2"), ids(DownloadScope.Episode, video("s1e2", 1, 2)))
+  fun `the specials scope is season zero`() {
+    assertEquals(listOf("s0e1"), preparedScopeEpisodes(prepared, DownloadScope.Season, season = 0).map { it.id })
   }
 
   @Test
-  fun `this season is the released episodes of the selected season`() {
-    assertEquals(listOf("s1e1", "s1e2"), ids(DownloadScope.Season, video("s1e2", 1, 2)))
-    assertEquals(listOf("s2e1"), ids(DownloadScope.Season, video("s2e1", 2, 1)))
+  fun `from this episode keeps it and every later numbered episode`() {
+    val selected = episode("s1e2", 1, 2)
+    assertEquals(listOf("s1e2", "s1e3", "s2e1"), ids(DownloadScope.FromEpisode, selected))
   }
 
   @Test
-  fun `from this episode on keeps it and everything after it`() {
-    assertEquals(listOf("s1e2", "s2e1"), ids(DownloadScope.FromEpisode, video("s1e2", 1, 2)))
-    assertEquals(listOf("s1e1", "s1e2", "s2e1"), ids(DownloadScope.FromEpisode, video("s1e1", 1, 1)))
+  fun `only ready prepared episodes are queued`() {
+    val mixed = prepared.mapIndexed { index, episode ->
+      if (index % 2 == 0) episode else episode.copy(status = "queued")
+    }
+    assertEquals(
+      listOf("s0e1", "s1e2", "s2e1"),
+      preparedReadyEpisodes(preparedScopeEpisodes(mixed, DownloadScope.All, includeSpecials = true)).map { it.id },
+    )
   }
 
   @Test
-  fun `all episodes is every released regular one`() {
-    assertEquals(listOf("s1e1", "s1e2", "s2e1"), ids(DownloadScope.All, video("s1e1", 1, 1)))
-  }
-
-  @Test
-  fun `a video without a season and number is not an episode`() {
-    val videos = listOf(VideoDto(id = "part1", released = "2020-01-01"), video("s1e1", 1, 1))
-    assertEquals(listOf("s1e1"), scopeEpisodes(videos, DownloadScope.All, null, today).map { it.id })
+  fun `1234 episodes are batched 500 500 and 234 in order`() {
+    val episodes = (1..1234).map { number ->
+      episode("e$number", 1, number)
+    }
+    val chunks = batches(episodes)
+    assertEquals(listOf(500, 500, 234), chunks.map { it.size })
+    assertEquals((1..1234).map { "e$it" }, chunks.flatten().map { it.id })
   }
 
   @Test

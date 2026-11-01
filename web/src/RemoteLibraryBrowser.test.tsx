@@ -350,6 +350,66 @@ describe("RemoteLibraryBrowser listing", () => {
     expect(calls.sources.at(-1)!.pathname).toBe("/api/remote-libraries/rlib_a/items/e2/sources");
   });
 
+  it("offers whole-series copying on a series page only when the caller authorizes it", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    item = () => json({ item: show, capabilities });
+    const onSeriesBulk = vi.fn();
+    await render({ onSeriesBulk });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    if (!host.querySelector(".catalogue-episodes .episode-bulk")) await click(host.querySelector(".catalogue-episodes .episode-current button")!);
+    const copy = byText(".catalogue-episodes .episode-bulk", "Whole series")!;
+    expect(copy).not.toBeUndefined();
+    await click(copy);
+    expect(onSeriesBulk).toHaveBeenCalledWith({
+      scope: "series",
+      title: "Show",
+      libraryId: "rlib_a",
+      libraryName: "Music videos",
+      provider: "jellyfin",
+      seriesItemId: "ser1",
+    });
+    act(() => root.unmount());
+    root = createRoot(host);
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    await render();
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    if (host.querySelector(".catalogue-episodes .episode-current button")) await click(host.querySelector(".catalogue-episodes .episode-current button")!);
+    expect(host.querySelector(".catalogue-episodes .episode-bulk")).toBeNull();
+  });
+
+  it("offers the episode's season in the bulk menu and offers none on a movie", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const episode: RemoteItem = { id: "e2", name: "Second", type: "episode", season: 2, episode: 1, seriesId: "ser1", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/ser1") ? show : episode, capabilities });
+    const onSeriesBulk = vi.fn();
+    await render({ onSeriesBulk });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    if (!host.querySelector(".catalogue-episodes .episode-bulk")) await click(host.querySelector(".catalogue-episodes .episode-current button")!);
+    const season = byText(".catalogue-episodes .episode-bulk", "Season 2")!;
+    expect(season).not.toBeUndefined();
+    await click(season);
+    expect(onSeriesBulk).toHaveBeenCalledWith(expect.objectContaining({ scope: "season", season: 2, seriesItemId: "ser1" }));
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    browse = () => json(page([movie("m1", "One")]));
+    item = () => json({ item: movie("m1", "One"), capabilities });
+    await render({ onSeriesBulk });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    expect(host.querySelector(".episode-bulk")).toBeNull();
+  });
+
   it("opens a series on the episode in progress even when it is past the first page", async () => {
     const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
     const pilot: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} };

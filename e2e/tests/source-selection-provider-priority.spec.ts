@@ -33,7 +33,7 @@ test("the Smaller preset downloads through the bulk queue journey", async ({ req
     },
   });
   expect(queued.status(), await queued.text()).toBe(201);
-  expect(await queued.json()).toEqual({ added: 1, skipped: 0 });
+  expect(await queued.json()).toMatchObject({ added: 1, skipped: 0 });
 
   const privateQueueData = new Set<string>();
   let job: Job | undefined;

@@ -8,7 +8,7 @@ import { pipeline } from "node:stream/promises";
 import { addonAllowed } from "./addons.js";
 import { addonIdentity, isAddonIdentity } from "./addon-identity.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
-import { defaultDownloadSettings, fitTargetName, joinTarget, nameExtension, streamExtension, targetPath, type MediaInfo } from "./naming.js";
+import { defaultDownloadSettings, fitTargetName, joinTarget, nameExtension, safeName, streamExtension, targetPath, type MediaInfo } from "./naming.js";
 import { torrentKey } from "./download-selection.js";
 import { episodeTag } from "./library.js";
 import type { DownloadTargetSettings } from "./types.js";
@@ -92,6 +92,13 @@ export interface DownloadSelection {
   fallbackSubtitleLanguage?: string;
   targetSettings: DownloadTargetSettings;
 }
+export interface RemoteItemSource {
+  libraryId: string;
+  connectionId: string;
+  itemId: string;
+}
+export const REMOTE_ITEM_VIDEO_PREFIX = "remote-item:";
+
 export interface DownloadResolution {
   checkedCandidates: number;
   audioLanguage?: string;
@@ -111,7 +118,13 @@ export interface DownloadJob {
   /** Who asked for this job. A job queued before ownership existed belongs to
    *  the administrator the state migrated into. */
   ownerUserId?: string;
-  source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
+  source?: {
+    type: string;
+    videoId: string;
+    tried: string[];
+    selection?: DownloadSelection;
+    remoteItem?: RemoteItemSource;
+  };
   sourceAdmission?: SourceAdmissionSnapshotV1;
   travelCursor?: TravelContinuationCursorV1;
   rulesCursor?: RulesContinuationCursorV1;
@@ -354,14 +367,14 @@ export interface RemoteDownloadBackend {
 
 export interface ExistingLocalCopyAdmission {
   ownerUserId: string | undefined;
-  source: Pick<NonNullable<DownloadJob["source"]>, "type" | "videoId" | "selection">;
+  source: Pick<NonNullable<DownloadJob["source"]>, "type" | "videoId" | "selection" | "remoteItem">;
   media: MediaInfo | undefined;
   sourceAdmission: SourceAdmissionSnapshotV1;
 }
 
 export interface QueuedExistingLocalCopyLookup {
   ownerUserId: string | undefined;
-  source: Pick<NonNullable<DownloadJob["source"]>, "type" | "videoId" | "selection">;
+  source: Pick<NonNullable<DownloadJob["source"]>, "type" | "videoId" | "selection" | "remoteItem">;
   media: MediaInfo | undefined;
   sourceAdmission: SourceAdmissionSnapshotV1;
 }
@@ -370,6 +383,23 @@ export type PendingDownloadOutcome =
   | { outcome: "queued"; job: Omit<PublicDownload, "order"> }
   | { outcome: "presentLocally"; copy: ExistingLocalCopyReference }
   | { outcome: "unresolved" };
+
+export type PendingAdmissionOutcome =
+  | { outcome: "queued"; job: Omit<PublicDownload, "order"> }
+  | { outcome: "alreadyQueued" }
+  | { outcome: "presentLocally" }
+  | { outcome: "unresolved" };
+
+type PendingAdmissionResult =
+  | PendingDownloadOutcome
+  | { outcome: "alreadyQueued" };
+
+type PendingSource = {
+  type: string;
+  videoId: string;
+  selection?: DownloadSelection;
+  remoteItem?: RemoteItemSource;
+};
 
 export interface QueueHooks {
   now?: () => number;
@@ -1388,7 +1418,7 @@ export class DownloadQueue {
   /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
   async addPending(
     title: string,
-    source: { type: string; videoId: string; selection?: DownloadSelection },
+    source: PendingSource,
     media?: MediaInfo,
     ownerUserId?: string,
     follow?: undefined,
@@ -1396,7 +1426,7 @@ export class DownloadQueue {
   ): Promise<Omit<PublicDownload, "order"> | undefined>;
   async addPending(
     title: string,
-    source: { type: string; videoId: string; selection?: DownloadSelection },
+    source: PendingSource,
     media: MediaInfo | undefined,
     ownerUserId: string | undefined,
     follow: NonNullable<DownloadJob["follow"]>,
@@ -1404,12 +1434,37 @@ export class DownloadQueue {
   ): Promise<PendingDownloadOutcome | undefined>;
   async addPending(
     title: string,
-    source: { type: string; videoId: string; selection?: DownloadSelection },
+    source: PendingSource,
     media?: MediaInfo,
     ownerUserId?: string,
     follow?: DownloadJob["follow"],
     sourceAdmissionInput?: unknown,
   ): Promise<PendingDownloadOutcome | Omit<PublicDownload, "order"> | undefined> {
+    const result = await this.admitPendingInternal(title, source, media, ownerUserId, sourceAdmissionInput, follow);
+    if (result.outcome === "queued") return follow ? result : result.job;
+    if (!follow || result.outcome === "alreadyQueued") return undefined;
+    return result;
+  }
+
+  async admitPending(
+    title: string,
+    source: PendingSource,
+    media: MediaInfo | undefined,
+    ownerUserId: string | undefined,
+    sourceAdmissionInput?: unknown,
+  ): Promise<PendingAdmissionOutcome> {
+    const result = await this.admitPendingInternal(title, source, media, ownerUserId, sourceAdmissionInput, undefined);
+    return result.outcome === "presentLocally" ? { outcome: "presentLocally" } : result;
+  }
+
+  private async admitPendingInternal(
+    title: string,
+    source: PendingSource,
+    media: MediaInfo | undefined,
+    ownerUserId: string | undefined,
+    sourceAdmissionInput: unknown,
+    follow: DownloadJob["follow"],
+  ): Promise<PendingAdmissionResult> {
     if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
     const sourceAdmission = sourceAdmissionInput === undefined
       ? undefined
@@ -1418,8 +1473,10 @@ export class DownloadQueue {
     const pinned = source.selection?.targetSettings?.libraryId;
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     return this.admit(async () => {
-      if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
-      if (sourceAdmission !== undefined) {
+      if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) {
+        return { outcome: "alreadyQueued" };
+      }
+      if (sourceAdmission !== undefined && !source.videoId.startsWith(REMOTE_ITEM_VIDEO_PREFIX)) {
         let localCopy: ExistingLocalCopyLookupResult = { status: "absent" };
         if (this.existingLocalCopy) {
           try {
@@ -1434,13 +1491,9 @@ export class DownloadQueue {
           }
         }
         if (localCopy.status === "present") {
-          return follow
-            ? { outcome: "presentLocally", copy: localCopy.copy }
-            : undefined;
+          return { outcome: "presentLocally", copy: localCopy.copy };
         }
-        if (localCopy.status === "unresolved") {
-          return follow ? { outcome: "unresolved" } : undefined;
-        }
+        if (localCopy.status === "unresolved") return { outcome: "unresolved" };
       }
       const now = new Date().toISOString();
       const job: DownloadJob = {
@@ -1460,8 +1513,7 @@ export class DownloadQueue {
       };
       await this.admitJob(job);
       this.pump();
-      const publicJob = this.publicJob(job);
-      return follow ? { outcome: "queued", job: publicJob } : publicJob;
+      return { outcome: "queued", job: this.publicJob(job) };
     });
   }
 
@@ -1471,6 +1523,24 @@ export class DownloadQueue {
     const job = this.jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId
       && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId));
     return job ? this.publicJob(job) : undefined;
+  }
+
+  activeEpisodeIn(ownerUserId: string | undefined, input: {
+    type: string;
+    videoId: string;
+    libraryId: string;
+    seriesFolder: string;
+    season: number;
+    episode: number;
+  }): boolean {
+    const folder = safeName(input.seriesFolder);
+    return this.jobs.some((job) => {
+      if (job.status === "completed" || job.status === "failed" || !this.ownedBy(job, ownerUserId)) return false;
+      if (job.source?.type === input.type && job.source.videoId === input.videoId) return true;
+      if (job.media?.kind !== "episode" || job.media.season !== input.season || job.media.episode !== input.episode) return false;
+      const libraryId = jobLibraryId(job) ?? this.defaultLibrary?.("series")?.id;
+      return libraryId === input.libraryId && safeName(job.media.title ?? "") === folder;
+    });
   }
 
   /** Ties a job the owner queued by hand to the follow that now wants the same episode. */
@@ -2615,6 +2685,9 @@ export class DownloadQueue {
 
   private async resolve(job: DownloadJob, controller: AbortController): Promise<boolean> {
     if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
+    if (job.source.remoteItem !== undefined && job.sourceAdmission === undefined) {
+      throw new SourceError("No matching source was found.", "err.noMatchingSource");
+    }
     if (job.sourceAdmission) {
       return this.resolveProfile(job, controller);
     }
@@ -3355,7 +3428,8 @@ export class DownloadQueue {
         this.pauseForPermission(job);
         return;
       }
-      if (job.sourceAdmission && job.source && !job.stream && this.existingLocalCopyForQueue) {
+      if (job.sourceAdmission && job.source && !job.source.videoId.startsWith(REMOTE_ITEM_VIDEO_PREFIX)
+        && !job.stream && this.existingLocalCopyForQueue) {
         const lookup = this.existingLocalCopyForQueue;
         const input: QueuedExistingLocalCopyLookup = {
           ownerUserId: this.ownerOf(job),

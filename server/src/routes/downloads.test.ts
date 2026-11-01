@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
 import type { AddressInfo } from "node:net";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -34,7 +34,9 @@ interface Harness {
   actions: string[];
   moves: Array<{ id: string; direction: number }>;
   viewed: Array<{ id?: string; media?: MediaInfo; target?: string }>;
-  pending: Array<{ type?: string; videoId?: string; selection?: DownloadSelection; media?: MediaInfo; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1 }>;
+  pending: Array<{ type?: string; videoId?: string; selection?: DownloadSelection; media?: MediaInfo; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1; remoteItem?: { libraryId: string; connectionId: string; itemId: string } }>;
+  seriesBulkCalls: Array<{ ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }>;
+  seriesIdentityCalls: Array<{ ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }>;
   setAddonAllowedUsers(key: string, allowedUsers: string[]): void;
   setLibraryVisibleTo(id: string, visibleTo: string[]): void;
   close(): Promise<void>;
@@ -109,6 +111,22 @@ const mount = async (
     onPending?: (count: number) => void | Promise<void>;
     skipPending?: (count: number) => boolean;
     profiles?: StoredSourceProfile[];
+    seriesBulk?: {
+      name: string;
+      catalogueId?: string;
+      episodes: Array<{ itemId: string; name: string; season?: number; episode?: number; premiereDate?: string }>;
+      complete: boolean;
+      errorKey?: string;
+    } | (() => Promise<{
+      name: string;
+      catalogueId?: string;
+      episodes: Array<{ itemId: string; name: string; season?: number; episode?: number; premiereDate?: string }>;
+      complete: boolean;
+      errorKey?: string;
+    }>);
+    activeEpisodeIn?: (input: { type: string; videoId: string; libraryId: string; seriesFolder: string; season: number; episode: number }) => boolean;
+    pendingOutcomes?: Array<"queued" | "alreadyQueued" | "presentLocally" | "unresolved">;
+    now?: () => number;
   } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
@@ -121,7 +139,9 @@ const mount = async (
   const actions: string[] = [];
   const moves: Array<{ id: string; direction: number }> = [];
   const viewed: Array<{ id?: string; media?: MediaInfo; target?: string }> = [];
-  const pending: Array<{ type?: string; videoId?: string; selection?: DownloadSelection; media?: MediaInfo; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1 }> = [];
+  const pending: Harness["pending"] = [];
+  const seriesIdentityCalls: Harness["seriesIdentityCalls"] = [];
+  const seriesBulkCalls: Harness["seriesBulkCalls"] = [];
   const profiles = options.profiles ?? (["recommended", "providerPriority", "travel"] as const).map((template) => ({
     id: SOURCE_PROFILE_IDS[template],
     revision: 1,
@@ -144,13 +164,22 @@ const mount = async (
       if (options.withdrawOnAdd) held.viewer = options.withdrawOnAdd;
       return { id: "job-1", target: "Movies/Film/Film.mkv" };
     },
-    addPending: async (_title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media: MediaInfo | undefined, ownerUserId?: string, follow?: unknown, sourceAdmission?: SourceAdmissionSnapshotV1) => {
+    addPending: async (_title: string, source: { type: string; videoId: string; selection?: DownloadSelection; remoteItem?: { libraryId: string; connectionId: string; itemId: string } }, media: MediaInfo | undefined, ownerUserId?: string, follow?: unknown, sourceAdmission?: SourceAdmissionSnapshotV1) => {
       assert.equal(follow, undefined);
       pending.push({ ...source, media, ownerUserId, sourceAdmission });
       await options.onPending?.(pending.length);
       if (options.skipPending?.(pending.length)) return undefined;
       return { id: "job-1" };
     },
+    admitPending: async (_title: string, source: { type: string; videoId: string; selection?: DownloadSelection; remoteItem?: { libraryId: string; connectionId: string; itemId: string } }, media: MediaInfo | undefined, ownerUserId?: string, sourceAdmission?: SourceAdmissionSnapshotV1) => {
+      pending.push({ ...source, media, ownerUserId, sourceAdmission });
+      await options.onPending?.(pending.length);
+      const outcome = options.pendingOutcomes?.[pending.length - 1]
+        ?? (options.skipPending?.(pending.length) ? "alreadyQueued" : "queued");
+      return outcome === "queued" ? { outcome, job: { id: "job-1" } } : { outcome };
+    },
+    activeEpisodeIn: (_ownerUserId: string | undefined, input: { type: string; videoId: string; libraryId: string; seriesFolder: string; season: number; episode: number }) =>
+      options.activeEpisodeIn?.(input) ?? false,
     pause: async (id: string) => { require("pause", id); },
     resume: async (id: string) => { require("resume", id); },
     retry: async (id: string) => { require("retry", id); },
@@ -189,6 +218,18 @@ const mount = async (
         if (configured) return configured;
         throw new AppError("This library is read-only.", "library.readOnly", 403);
       },
+      seriesEpisodesForBulk: async (input: { ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }) => {
+        seriesBulkCalls.push(input);
+        if (options.seriesBulk === undefined) return null;
+        return typeof options.seriesBulk === "function" ? options.seriesBulk() : structuredClone(options.seriesBulk);
+      },
+      seriesForBulk: async (input: { ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }) => {
+        seriesIdentityCalls.push(input);
+        if (options.seriesBulk === undefined) return null;
+        const listed = typeof options.seriesBulk === "function" ? await options.seriesBulk() : options.seriesBulk;
+        if (!listed) return null;
+        return { name: listed.name, ...(listed.catalogueId === undefined ? {} : { catalogueId: listed.catalogueId }) };
+      },
     } as unknown as DownloadsDeps["mediaSources"],
     deviceTransfers: transfers,
     jobView: async <T extends { media?: MediaInfo; target?: string }>(job: T) => {
@@ -213,6 +254,7 @@ const mount = async (
     defaultDownloadLibrary: (kind) => typeof options.defaultLibrary === "function"
       ? options.defaultLibrary(kind)
       : options.defaultLibrary ?? (options.libraries as LibraryRecord[] | undefined)?.[0],
+    ...(options.now === undefined ? {} : { now: options.now }),
   };
   const app = express();
   app.use(express.json());
@@ -236,6 +278,8 @@ const mount = async (
     moves,
     viewed,
     pending,
+    seriesBulkCalls,
+    seriesIdentityCalls,
     setAddonAllowedUsers: (key, allowedUsers) => {
       const addon = addons.find((entry) => (entry as { key?: unknown }).key === key) as { allowedUsers?: string[] } | undefined;
       if (addon) addon.allowedUsers = allowedUsers;
@@ -262,6 +306,12 @@ const keyOf = async (response: Response) => ((await response.json()) as { messag
 
 const episodes = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `ep-${index}` }));
 const profileSelection = (profileId: string, revision = 1) => ({ profile: { profileId, revision } });
+const cataloguePrepareAddon = (libraryId: string) => streamAddon("stream-addon", {
+  downloadSettings: {
+    movie: defaultDownloadSettings().movie,
+    series: { subfolder: "", layout: "structured", libraryId },
+  },
+});
 
 /** A response the registry can wrap and dispose of without a socket behind it. */
 class OpenResponse extends EventEmitter {
@@ -353,6 +403,133 @@ test("POST /api/downloads/bulk refuses more than 500 episodes", async (t) => {
   const response = await api(harness.base, "/api/downloads/bulk", { method: "POST", body: { title: "Show", episodes: episodes(501) } });
   assert.equal(response.status, 400);
   assert.equal(await keyOf(response), "err.tooManyEpisodes");
+});
+
+test("catalogue bulk prepare filters scope and classifies in episode order", async (t) => {
+  const shows = library("lib_prepare", "series", { visibleTo: [ADA] });
+  mkdirSync(path.join(shows.root, "Show", "01 serie"), { recursive: true });
+  writeFileSync(path.join(shows.root, "Show", "01 serie", "Show - S01E03.mkv"), "");
+  const now = Date.parse("2026-01-15T00:00:00.000Z");
+  const harness = await mount([cataloguePrepareAddon(shows.id)], {
+    libraries: [shows],
+    now: () => now,
+    activeEpisodeIn: (input) => input.videoId === "ep-queued",
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk/prepare", {
+    method: "POST",
+    body: {
+      title: "Show",
+      scope: "season",
+      season: 1,
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+      origin: {
+        kind: "catalogue",
+        media: { id: "tt-show", metaType: "series" },
+        episodes: [
+          { id: "ep-ready", season: 1, episode: 1, released: "2025-01-01T00:00:00.000Z" },
+          { id: "ep-future", season: 1, episode: 2, released: "2026-02-01T00:00:00.000Z" },
+          { id: "ep-in-target", season: 1, episode: 3 },
+          { id: "ep-unnumbered", season: 1 },
+          { id: "ep-queued", season: 1, episode: 4 },
+          { id: "ep-other-season", season: 2, episode: 1 },
+        ],
+      },
+    },
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    origin: "catalogue",
+    series: { title: "Show", catalogueId: "tt-show" },
+    target: { libraryId: shows.id, libraryName: shows.name },
+    episodes: [
+      { id: "ep-ready", season: 1, episode: 1, status: "ready" },
+      { id: "ep-future", season: 1, episode: 2, status: "unreleased" },
+      { id: "ep-in-target", season: 1, episode: 3, status: "inTarget" },
+      { id: "ep-unnumbered", season: 1, status: "unnumbered" },
+      { id: "ep-queued", season: 1, episode: 4, status: "queued" },
+    ],
+    listing: { complete: true },
+  });
+});
+
+test("catalogue bulk prepare includes specials only when a series request asks for them", async (t) => {
+  const shows = library("lib_specials", "series", { visibleTo: [ADA] });
+  const harness = await mount([cataloguePrepareAddon(shows.id)], { libraries: [shows] });
+  t.after(harness.close);
+  const request = (scope: "season" | "series", season?: number, specials?: boolean) => api(harness.base, "/api/downloads/bulk/prepare", {
+    method: "POST",
+    body: {
+      title: "Show",
+      scope,
+      ...(season === undefined ? {} : { season }),
+      ...(specials === undefined ? {} : { specials }),
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+      origin: {
+        kind: "catalogue",
+        media: { id: "tt-show", metaType: "series" },
+        episodes: [
+          { id: "s1", season: 1, episode: 1 },
+          { id: "s0", season: 0, episode: 1 },
+          { id: "s2", season: 2, episode: 1 },
+        ],
+      },
+    },
+  });
+
+  const withoutSpecials = await request("series");
+  assert.equal(withoutSpecials.status, 200);
+  assert.deepEqual((await withoutSpecials.json() as { episodes: Array<{ id: string }> }).episodes.map((episode) => episode.id), ["s1", "s2"]);
+
+  const withSpecials = await request("series", undefined, true);
+  assert.equal(withSpecials.status, 200);
+  assert.deepEqual((await withSpecials.json() as { episodes: Array<{ id: string }> }).episodes.map((episode) => episode.id), ["s1", "s0", "s2"]);
+
+  const seasonZero = await request("season", 0);
+  assert.equal(seasonZero.status, 200);
+  assert.deepEqual((await seasonZero.json() as { episodes: Array<{ id: string }> }).episodes.map((episode) => episode.id), ["s0"]);
+});
+
+test("catalogue bulk prepare requires a season and valid ids", async (t) => {
+  const shows = library("lib_prepare_validation", "series", { visibleTo: [ADA] });
+  const harness = await mount([cataloguePrepareAddon(shows.id)], { libraries: [shows] });
+  t.after(harness.close);
+  const missingSeason = await api(harness.base, "/api/downloads/bulk/prepare", {
+    method: "POST",
+    body: {
+      title: "Show",
+      scope: "season",
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+      origin: { kind: "catalogue", media: {}, episodes: [{ id: "ep-1", season: 1, episode: 1 }] },
+    },
+  });
+  assert.equal(missingSeason.status, 400);
+  assert.equal(await keyOf(missingSeason), "err.bulkSeasonRequired");
+
+  const missingId = await api(harness.base, "/api/downloads/bulk/prepare", {
+    method: "POST",
+    body: {
+      title: "Show",
+      scope: "series",
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+      origin: { kind: "catalogue", media: {}, episodes: [{ episode: 1 }] },
+    },
+  });
+  assert.equal(missingId.status, 400);
+  assert.equal(await keyOf(missingId), "err.invalidRequest");
+
+  const tooMany = await api(harness.base, "/api/downloads/bulk/prepare", {
+    method: "POST",
+    body: {
+      title: "Show",
+      scope: "series",
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+      origin: { kind: "catalogue", media: {}, episodes: episodes(5001) },
+    },
+  });
+  assert.equal(tooMany.status, 400);
+  assert.equal(await keyOf(tooMany), "err.tooManyEpisodes");
 });
 
 test("POST /api/downloads/bulk refuses a selection with no enabled stream addon", async (t) => {
@@ -495,7 +672,7 @@ test("profile bulk materializes Travel in the user's addon order with frozen lan
   });
   assert.equal(response.status, 201);
   const body = await response.json();
-  assert.deepEqual(body, { added: 1, skipped: 0 });
+  assert.deepEqual(body, { added: 1, skipped: 0, results: [{ id: "ep-0", outcome: "queued" }] });
 
   const queued = harness.pending[0]!;
   const snapshot = queued.sourceAdmission!;
@@ -531,7 +708,14 @@ test("profile bulk reports queue skips separately from added jobs", async (t) =>
     },
   });
   assert.equal(response.status, 201);
-  assert.deepEqual(await response.json(), { added: 1, skipped: 1 });
+  assert.deepEqual(await response.json(), {
+    added: 1,
+    skipped: 1,
+    results: [
+      { id: "ep-0", outcome: "alreadyQueued" },
+      { id: "ep-1", outcome: "queued" },
+    ],
+  });
 });
 
 test("profile bulk materializes Provider Priority and keeps the request target separate", async (t) => {
@@ -676,7 +860,7 @@ test("a film queued by a rules profile becomes one lazy movie job with the movie
   });
   const text = await response.text();
   assert.equal(response.status, 201, text);
-  assert.deepEqual(JSON.parse(text), { added: 1, skipped: 0 });
+  assert.deepEqual(JSON.parse(text), { added: 1, skipped: 0, results: [{ id: "tt-film", outcome: "queued" }] });
   assert.equal(harness.pending.length, 1);
   assert.equal(harness.pending[0]?.type, "movie");
   assert.equal(harness.pending[0]?.videoId, "tt-film");
@@ -1192,6 +1376,38 @@ test("POST /api/downloads/bulk stores an explicit target in the selection", asyn
   assert.deepEqual(harness.pending[0]?.selection?.targetSettings, { subfolder: "S", layout: "flat", libraryId: "lib_shows", explicit: true });
 });
 
+test("catalogue bulk commit skips an episode already in its target and reports ordered results", async (t) => {
+  const shows = library("lib_bulk_commit", "series", { visibleTo: [ADA] });
+  mkdirSync(path.join(shows.root, "Show", "01 serie"), { recursive: true });
+  writeFileSync(path.join(shows.root, "Show", "01 serie", "Show - S01E02.mkv"), "");
+  const harness = await mount([cataloguePrepareAddon(shows.id)], { libraries: [shows] });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+      episodes: [
+        { id: "ep-1", season: 1, episode: 1 },
+        { id: "ep-2", season: 1, episode: 2 },
+        { season: 1, episode: 3 },
+      ],
+    },
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), {
+    added: 1,
+    skipped: 2,
+    results: [
+      { id: "ep-1", outcome: "queued" },
+      { id: "ep-2", outcome: "inTarget" },
+      { id: "", outcome: "invalid" },
+    ],
+  });
+  assert.deepEqual(harness.pending.map((pending) => pending.videoId), ["ep-1"]);
+});
+
 test("POST /api/downloads/bulk refuses an unusable explicit target and queues nothing", async (t) => {
   const harness = await mount(undefined, { libraries: [] });
   t.after(harness.close);
@@ -1412,6 +1628,262 @@ const sealedNative = (libraryId = remoteLibraryRecord.id, copyKind?: "movie" | "
 /** A remote library Bob is granted, so the owner-bound queue check can pass for him. */
 const remoteLibraryOfType = (type: "movie" | "series" | "mixed", over: Record<string, unknown> = {}) =>
   ({ ...remoteLibraryRecord, type, allowedUsers: [BOB], ...over });
+
+const rulesProfile = () => {
+  const balanced = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.balanced)!;
+  return {
+    id: balanced.id,
+    revision: 1,
+    template: balanced.template,
+    nameKey: balanced.nameKey,
+    parameters: balanced.rules,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+};
+
+let remoteBulkLibrarySequence = 0;
+
+const remoteBulkMount = async (options: {
+  catalogueId?: string;
+  episodes: Array<{ itemId: string; name: string; season?: number; episode?: number; premiereDate?: string }>;
+  complete?: boolean;
+  errorKey?: string;
+  remote?: Record<string, unknown>;
+  now?: () => number;
+  activeEpisodeIn?: (input: { type: string; videoId: string; libraryId: string; seriesFolder: string; season: number; episode: number }) => boolean;
+  pendingOutcomes?: Array<"queued" | "alreadyQueued" | "presentLocally" | "unresolved">;
+}) => {
+  const shows = library(`lib_${(++remoteBulkLibrarySequence).toString(16).padStart(8, "0")}`, "series", { visibleTo: [BOB] });
+  const harness = await mount([], {
+    viewer: ordinary,
+    libraries: [shows],
+    profiles: [rulesProfile()],
+    connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("series", options.remote)],
+    seriesBulk: {
+      name: "Show",
+      ...(options.catalogueId === undefined ? {} : { catalogueId: options.catalogueId }),
+      episodes: options.episodes,
+      complete: options.complete ?? true,
+      ...(options.errorKey === undefined ? {} : { errorKey: options.errorKey }),
+    },
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.activeEpisodeIn === undefined ? {} : { activeEpisodeIn: options.activeEpisodeIn }),
+    ...(options.pendingOutcomes === undefined ? {} : { pendingOutcomes: options.pendingOutcomes }),
+  });
+  return { harness, shows };
+};
+
+test("remote bulk prepare classifies every in-scope episode and derives catalogue ids", async (t) => {
+  const { harness, shows } = await remoteBulkMount({
+    catalogueId: "tt-show",
+    episodes: [
+      { itemId: "remote-1", name: "Episode 1", season: 1, episode: 1 },
+      { itemId: "remote-2", name: "Episode 2", season: 1, episode: 2, premiereDate: "2026-02-01T00:00:00.000Z" },
+      { itemId: "remote-3", name: "Episode 3", season: 1, episode: 3 },
+      { itemId: "remote-4", name: "Unnumbered", season: 1 },
+      { itemId: "remote-5", name: "Episode 5", season: 2, episode: 1 },
+    ],
+    now: () => Date.parse("2026-01-15T00:00:00.000Z"),
+  });
+  t.after(harness.close);
+  mkdirSync(path.join(shows.root, "Show", "01 serie"), { recursive: true });
+  writeFileSync(path.join(shows.root, "Show", "01 serie", "Show - S01E03.mkv"), "");
+
+  const response = await api(harness.base, "/api/downloads/bulk/prepare", {
+    method: "POST",
+    body: {
+      title: "Show",
+      scope: "season",
+      season: 1,
+      selection: profileSelection(SOURCE_PROFILE_IDS.balanced),
+      origin: {
+        kind: "remote",
+        libraryId: remoteLibraryRecord.id,
+        seriesItemId: "series-1",
+      },
+    },
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    origin: "remote",
+    series: { title: "Show", catalogueId: "tt-show" },
+    target: { libraryId: shows.id, libraryName: shows.name },
+    episodes: [
+      { id: "tt-show:1:1", season: 1, episode: 1, title: "Episode 1", remoteItemId: "remote-1", status: "ready" },
+      { id: "tt-show:1:2", season: 1, episode: 2, title: "Episode 2", remoteItemId: "remote-2", status: "unreleased" },
+      { id: "tt-show:1:3", season: 1, episode: 3, title: "Episode 3", remoteItemId: "remote-3", status: "inTarget" },
+      { id: "remote-item:rlib_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:remote-4", season: 1, title: "Unnumbered", remoteItemId: "remote-4", status: "unnumbered" },
+    ],
+    listing: { complete: true },
+  });
+  assert.equal(harness.seriesBulkCalls.length, 1);
+  assert.equal(harness.seriesBulkCalls[0]?.seriesItemId, "series-1");
+});
+
+test("remote bulk prepare uses TMDB identity and a synthetic id without a series identity", async (t) => {
+  for (const [catalogueId, expected] of [
+    ["tmdb:42", "tmdb:42:1:1"],
+    [undefined, `remote-item:${remoteLibraryRecord.id}:remote-1`],
+  ] as const) {
+    const { harness } = await remoteBulkMount({
+      ...(catalogueId === undefined ? {} : { catalogueId }),
+      episodes: [{ itemId: "remote-1", name: "Episode 1", season: 1, episode: 1 }],
+    });
+    try {
+      const response = await api(harness.base, "/api/downloads/bulk/prepare", {
+        method: "POST",
+        body: {
+          title: "Show",
+          scope: "season",
+          season: 1,
+          selection: profileSelection(SOURCE_PROFILE_IDS.balanced),
+          origin: { kind: "remote", libraryId: remoteLibraryRecord.id, seriesItemId: "series-1" },
+        },
+      });
+      assert.equal(response.status, 200);
+      const body = await response.json() as { episodes: Array<{ id: string }> };
+      assert.equal(body.episodes[0]?.id, expected);
+    } finally {
+      await harness.close();
+    }
+  }
+});
+
+test("remote bulk prepare never presents a partial listing as complete", async (t) => {
+  const { harness } = await remoteBulkMount({
+    catalogueId: "tt-show",
+    episodes: [{ itemId: "remote-1", name: "Episode 1", season: 1, episode: 1 }],
+    complete: false,
+    errorKey: "err.bulkEpisodeListIncomplete",
+  });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk/prepare", {
+    method: "POST",
+    body: {
+      title: "Show",
+      scope: "series",
+      selection: profileSelection(SOURCE_PROFILE_IDS.balanced),
+      origin: { kind: "remote", libraryId: remoteLibraryRecord.id, seriesItemId: "series-1" },
+    },
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { listing: unknown; episodes: Array<{ id: string }> };
+  assert.deepEqual(body.listing, { complete: false, errorKey: "err.bulkEpisodeListIncomplete" });
+  assert.deepEqual(body.episodes.map((episode) => episode.id), ["tt-show:1:1"]);
+});
+
+test("remote bulk commit ignores client ids and carries the stored connection and restricted admission", async (t) => {
+  const shows = library(`lib_${(++remoteBulkLibrarySequence).toString(16).padStart(8, "0")}`, "series", { visibleTo: [BOB] });
+  mkdirSync(path.join(shows.root, "Show", "01 serie"), { recursive: true });
+  writeFileSync(path.join(shows.root, "Show", "01 serie", "Show - S01E02.mkv"), "");
+  const harness = await mount([], {
+    viewer: ordinary,
+    libraries: [shows],
+    profiles: [rulesProfile()],
+    connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("series")],
+    seriesBulk: { name: "Show", catalogueId: "tt-show", episodes: [], complete: true },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      type: "series",
+      selection: profileSelection(SOURCE_PROFILE_IDS.balanced),
+      origin: { kind: "remote", libraryId: remoteLibraryRecord.id, seriesItemId: "series-1" },
+      episodes: [
+        { id: "client-says-this", remoteItemId: "remote-1", season: 1, episode: 1 },
+        { id: "ignored", remoteItemId: "remote-2", season: 1, episode: 2 },
+        { season: 1, episode: 3 },
+        { id: "ignored-too", remoteItemId: "remote-3", season: 1, episode: 4 },
+      ],
+    },
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), {
+    added: 2,
+    skipped: 2,
+    results: [
+      { id: "tt-show:1:1", outcome: "queued" },
+      { id: "tt-show:1:2", outcome: "inTarget" },
+      { id: "", outcome: "invalid" },
+      { id: "tt-show:1:4", outcome: "queued" },
+    ],
+  });
+  assert.deepEqual(harness.pending.map((pending) => pending.videoId), ["tt-show:1:1", "tt-show:1:4"]);
+  assert.deepEqual(harness.pending.map((pending) => pending.remoteItem), [
+    { libraryId: remoteLibraryRecord.id, connectionId: remoteConnectionRecord.id, itemId: "remote-1" },
+    { libraryId: remoteLibraryRecord.id, connectionId: remoteConnectionRecord.id, itemId: "remote-3" },
+  ]);
+  assert.ok(harness.pending.every((pending) =>
+    JSON.stringify(pending.sourceAdmission?.providerKeys) === JSON.stringify([`remote:${remoteLibraryRecord.id}`])));
+  // A commit reads only the series row for its identity; it never walks the episode pages again.
+  assert.deepEqual(harness.seriesBulkCalls, []);
+  assert.equal(harness.seriesIdentityCalls.length, 1);
+  assert.ok(harness.pending.every((pending) => pending.media?.id === "tt-show"));
+});
+
+test("remote bulk commit maps every admission outcome into ordered results", async (t) => {
+  const { harness } = await remoteBulkMount({
+    catalogueId: "tt-show",
+    episodes: [],
+    pendingOutcomes: ["alreadyQueued", "presentLocally", "unresolved", "queued"],
+  });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      type: "series",
+      selection: profileSelection(SOURCE_PROFILE_IDS.balanced),
+      origin: { kind: "remote", libraryId: remoteLibraryRecord.id, seriesItemId: "series-1" },
+      episodes: Array.from({ length: 4 }, (_, index) => ({
+        remoteItemId: `remote-${index + 1}`,
+        season: 1,
+        episode: index + 1,
+      })),
+    },
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), {
+    added: 1,
+    skipped: 3,
+    results: [
+      { id: "tt-show:1:1", outcome: "alreadyQueued" },
+      { id: "tt-show:1:2", outcome: "presentLocally" },
+      { id: "tt-show:1:3", outcome: "unresolved" },
+      { id: "tt-show:1:4", outcome: "queued" },
+    ],
+  });
+});
+
+test("remote bulk refuses a library the rules profile does not allow", async (t) => {
+  const harness = await mount([], {
+    viewer: ordinary,
+    libraries: [library("lib_remote_forbidden", "series", { visibleTo: [BOB] })],
+    profiles: [rulesProfile()],
+    connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("series", { allowedUsers: [] })],
+  });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk/prepare", {
+    method: "POST",
+    body: {
+      title: "Show",
+      scope: "season",
+      season: 1,
+      selection: profileSelection(SOURCE_PROFILE_IDS.balanced),
+      origin: { kind: "remote", libraryId: remoteLibraryRecord.id, seriesItemId: "series-1" },
+    },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(await keyOf(response), "err.bulkRemoteNotInRules");
+  assert.deepEqual(harness.seriesBulkCalls, []);
+});
 
 test("a remote-only rules profile queues a film without an addon", async (t) => {
   const balanced = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.balanced)!;

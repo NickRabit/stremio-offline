@@ -49,6 +49,10 @@ class FakeServer {
   versionsOf: Record<string, ProviderVersion[]> = {};
   items: Record<string, ProviderItem[]> = {};
   directories: Record<string, ProviderItem[]> = {};
+  directoryPages: Record<string, Array<{ items: ProviderItem[]; total: number; cursor?: string }>> = {};
+  directoryRequests: Array<{ parentId: string; options: Record<string, unknown> | undefined }> = [];
+  directoryFailureAt?: number;
+  onDirectoryPage?: (index: number) => void;
   originalCalls = 0;
   originalCancels = 0;
   /** Runs inside the original request, before its response is handed back, so a test can change
@@ -70,7 +74,19 @@ const stubProvider = (server: FakeServer): MediaServerProvider => ({
   currentAccount: async () => { await server.run(); return { accountId: server.accountId, policy: clone(server.policy) }; },
   listLibraries: async () => { await server.run(); return clone(server.libraries); },
   pageItems: async (_token, _account, libraryId) => { await server.run(); return { items: clone(server.items[libraryId] ?? []), total: (server.items[libraryId] ?? []).length }; },
-  pageDirectory: async (_token, _account, parentId) => { await server.run(); return { items: clone(server.directories[parentId] ?? []), total: (server.directories[parentId] ?? []).length }; },
+  pageDirectory: async (_token, _account, parentId, options) => {
+    await server.run();
+    server.directoryRequests.push({ parentId, options: options as unknown as Record<string, unknown> | undefined });
+    const pages = server.directoryPages[parentId];
+    if (!pages) return { items: clone(server.directories[parentId] ?? []), total: (server.directories[parentId] ?? []).length };
+    const index = options?.cursor === undefined
+      ? 0
+      : pages.findIndex((_page, candidate) => candidate > 0 && pages[candidate - 1]?.cursor === options.cursor);
+    const pageIndex = index < 0 ? 0 : index;
+    server.onDirectoryPage?.(pageIndex);
+    if (server.directoryFailureAt === pageIndex) throw new MediaServerError("unavailable", "page failed");
+    return clone(pages[pageIndex] ?? { items: [], total: 0 });
+  },
   findByProviderIds: async (_token, _account, libraryId, ids, type) => {
     await server.run();
     return clone((server.items[libraryId] ?? []).filter((item) => item.type === type && remoteIdsMatch(ids, item.providerIds)));
@@ -593,8 +609,8 @@ test("matched mints only the verified versions behind an exact id", async () => 
 const downloadRefOf = async (harness: Harness, sourceId: string) =>
   harness.sources.downloadReference(streamOf(harness, sourceId), harness.owner);
 
-const downloadReferenceOf = (harness: Harness): RemoteDownloadReference => ({
-  schemaVersion: 1, ownerUserId: ADA, connectionId: harness.connectionId, libraryId: harness.libraryId,
+const downloadReferenceOf = (harness: Harness, ownerUserId = ADA): RemoteDownloadReference => ({
+  schemaVersion: 1, ownerUserId, connectionId: harness.connectionId, libraryId: harness.libraryId,
   generation: harness.store.mediaConnections()[0]!.generation, provider: "jellyfin", serverId: "server-1",
   accountId: "account-1", itemId: "item-1", mediaSourceId: "v1",
 });
@@ -633,6 +649,180 @@ test("downloadCandidates returns canonical owner references and sanitized stream
     assert.doesNotMatch(JSON.stringify(candidates), /https?:|token|secret|expiresAt|sid|media-server:/i);
     assert.equal(harness.server.originalCalls, 0, "discovery never opens original bytes");
   }, { contentDownloading: true });
+});
+
+test("itemDownloadCandidates returns the exact item's versions when the owner may copy", async () => {
+  await withHarness(async (harness) => {
+    const candidates = await harness.sources.itemDownloadCandidates({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      itemId: "item-1",
+    });
+
+    assert.ok(candidates);
+    assert.deepEqual(candidates.map((candidate) => candidate.reference), [
+      downloadReferenceOf(harness, BOB),
+      { ...downloadReferenceOf(harness, BOB), mediaSourceId: "v2" },
+    ]);
+    assert.deepEqual(candidates.map((candidate) => candidate.stream), [
+      {
+        name: "1080p",
+        behaviorHints: { filename: "1080p.mkv", videoSize: 200_000 },
+      },
+      {
+        name: "720p",
+        behaviorHints: { filename: "720p" },
+      },
+    ]);
+    assert.equal(JSON.stringify(candidates).includes("https://"), false);
+  }, { contentDownloading: true });
+});
+
+test("itemDownloadCandidates distinguishes lost access from a provider that forbids copies", async () => {
+  await withHarness(async (harness) => {
+    const input = { ownerUserId: BOB, libraryId: harness.libraryId, itemId: "item-1" };
+    await harness.store.update((state) => {
+      state.users = state.users?.map((user) => user.id === BOB ? { ...user, disabled: true } : user);
+    });
+    assert.equal(await harness.sources.itemDownloadCandidates(input), null);
+
+    await harness.store.update((state) => {
+      state.users = state.users?.map((user) => user.id === BOB ? { ...user, disabled: false } : user);
+      state.remoteLibraries = state.remoteLibraries?.map((library) =>
+        library.id === harness.libraryId ? { ...library, allowedUsers: [] } : library);
+    });
+    assert.equal(await harness.sources.itemDownloadCandidates(input), null);
+  }, { contentDownloading: true });
+
+  await withHarness(async (harness) => {
+    assert.deepEqual(await harness.sources.itemDownloadCandidates({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      itemId: "item-1",
+    }), []);
+  }, { contentDownloading: false });
+});
+
+test("itemDownloadCandidates returns null when access is withdrawn while the item is read", async () => {
+  await withHarness(async (harness) => {
+    harness.server.onVersions = async () => {
+      harness.server.onVersions = undefined;
+      await harness.store.update((state) => {
+        state.users = state.users?.map((user) => user.id === BOB ? { ...user, disabled: true } : user);
+      });
+    };
+    assert.equal(await harness.sources.itemDownloadCandidates({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      itemId: "item-1",
+    }), null);
+  }, { contentDownloading: true });
+});
+
+const seedBulkSeries = (
+  harness: Harness,
+  pages: Array<{ count: number; cursor?: string }>,
+  providerIds: ProviderItem["providerIds"] = { imdb: "tt123" },
+) => {
+  harness.server.detailOf["series-1"] = {
+    id: "series-1",
+    name: "Show",
+    type: "series",
+    providerIds,
+  };
+  harness.server.ancestorsOf["series-1"] = ["remote-1"];
+  let episodeNumber = 1;
+  harness.server.directoryPages["series-1"] = pages.map((page) => ({
+    items: Array.from({ length: page.count }, () => ({
+      id: `episode-${episodeNumber}`,
+      name: `Episode ${episodeNumber}`,
+      type: "episode" as const,
+      providerIds: {},
+      season: 1,
+      episode: episodeNumber,
+      premiereDate: `2026-01-${String(episodeNumber++).padStart(2, "0")}T00:00:00.000Z`,
+    })),
+    total: pages.reduce((sum, candidate) => sum + candidate.count, 0),
+    ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
+  }));
+};
+
+test("seriesEpisodesForBulk walks every page and carries the public premiere date", async () => {
+  await withHarness(async (harness) => {
+    seedBulkSeries(harness, [{ count: 200, cursor: "after-1" }, { count: 200, cursor: "after-2" }, { count: 50 }]);
+    const listed = await harness.sources.seriesEpisodesForBulk({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      seriesItemId: "series-1",
+    });
+    assert.ok(listed);
+    assert.equal(listed.catalogueId, "tt123");
+    assert.equal(listed.complete, true);
+    assert.equal(listed.episodes.length, 450);
+    assert.equal(listed.episodes[0]?.premiereDate, "2026-01-01T00:00:00.000Z");
+    assert.deepEqual(harness.server.directoryRequests.map((request) => request.options), [
+      { mode: "titles", limit: 200, sort: "name", order: "asc", type: "episode" },
+      { mode: "titles", limit: 200, sort: "name", order: "asc", cursor: "after-1", type: "episode" },
+      { mode: "titles", limit: 200, sort: "name", order: "asc", cursor: "after-2", type: "episode" },
+    ]);
+  });
+});
+
+test("seriesEpisodesForBulk prefers TMDB and gives no catalogue identity for TVDB alone", async () => {
+  await withHarness(async (harness) => {
+    seedBulkSeries(harness, [{ count: 1 }], { tmdb: "42", tvdb: "7" });
+    const tmdb = await harness.sources.seriesEpisodesForBulk({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      seriesItemId: "series-1",
+    });
+    assert.equal(tmdb?.catalogueId, "tmdb:42");
+  });
+  await withHarness(async (harness) => {
+    seedBulkSeries(harness, [{ count: 1 }], { tvdb: "7" });
+    const tvdb = await harness.sources.seriesEpisodesForBulk({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      seriesItemId: "series-1",
+    });
+    assert.equal(tvdb?.catalogueId, undefined);
+  });
+});
+
+test("seriesEpisodesForBulk returns the first page when a later page fails", async () => {
+  await withHarness(async (harness) => {
+    seedBulkSeries(harness, [{ count: 2, cursor: "after-1" }, { count: 2 }]);
+    harness.server.directoryFailureAt = 1;
+    const listed = await harness.sources.seriesEpisodesForBulk({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      seriesItemId: "series-1",
+    });
+    assert.ok(listed);
+    assert.equal(listed.complete, false);
+    assert.equal(listed.errorKey, "err.bulkEpisodeListIncomplete");
+    assert.deepEqual(listed.episodes.map((episode) => episode.itemId), ["episode-1", "episode-2"]);
+  });
+});
+
+test("seriesEpisodesForBulk stops asking for pages after the request aborts", async () => {
+  await withHarness(async (harness) => {
+    seedBulkSeries(harness, [{ count: 2, cursor: "after-1" }, { count: 2 }]);
+    const controller = new AbortController();
+    harness.server.onDirectoryPage = (index) => {
+      if (index === 0) controller.abort();
+    };
+    const listed = await harness.sources.seriesEpisodesForBulk({
+      ownerUserId: BOB,
+      libraryId: harness.libraryId,
+      seriesItemId: "series-1",
+      signal: controller.signal,
+    });
+    assert.ok(listed);
+    assert.equal(listed.complete, false);
+    assert.deepEqual(listed.episodes, []);
+    assert.equal(harness.server.directoryRequests.length, 1);
+  });
 });
 
 test("downloadCandidates answers nothing without a current owner or copy right", async () => {

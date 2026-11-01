@@ -139,6 +139,7 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/downloads$/ },
   { method: "POST", pattern: /^\/downloads$/ },
   { method: "POST", pattern: /^\/downloads\/bulk$/ },
+  { method: "POST", pattern: /^\/downloads\/bulk\/prepare$/ },
   { method: "POST", pattern: /^\/downloads\/[^/]+\/(pause|resume|retry)$/ },
   { method: "DELETE", pattern: /^\/downloads\/[^/]+$/ },
   // Settings: allowed at the path level, guarded per key inside the handler.

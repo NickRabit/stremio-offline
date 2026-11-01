@@ -6,6 +6,9 @@ import cz.stremiooffline.tv.data.BulkDownloadRequest
 import cz.stremiooffline.tv.data.BulkDownloadResult
 import cz.stremiooffline.tv.data.BulkEpisodeDto
 import cz.stremiooffline.tv.data.BulkMediaDto
+import cz.stremiooffline.tv.data.BulkPrepareRequest
+import cz.stremiooffline.tv.data.BulkPrepareResponse
+import cz.stremiooffline.tv.data.BulkRemoteOriginDto
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.CatalogDto
@@ -619,6 +622,23 @@ open class FakeTvApi : TvApi {
   var bulkDownloadGate: CompletableDeferred<Unit>? = null
   var bulkDownloadFailure: ApiFailure? = null
   var bulkDownloadFailureMessage: String? = null
+  val bulkPrepareRequests: MutableList<BulkPrepareRequest> = mutableListOf()
+  var bulkPrepareCalls = 0
+  var bulkPrepareCancelled = false
+  var bulkPrepareGate: CompletableDeferred<Unit>? = null
+  var bulkPrepareFailure: ApiFailure? = null
+  var bulkPrepareFailureMessage: String? = null
+  var bulkPrepareAnswer: (BulkPrepareRequest) -> BulkPrepareResponse = {
+    BulkPrepareResponse(
+      origin = it.origin.kind,
+      series = cz.stremiooffline.tv.data.BulkPreparedSeriesDto(title = it.title),
+      target = cz.stremiooffline.tv.data.BulkPreparedTargetDto(
+        libraryId = it.target?.libraryId.orEmpty(),
+        libraryName = librariesValue.firstOrNull { library -> library.id == it.target?.libraryId }?.name.orEmpty(),
+      ),
+      listing = cz.stremiooffline.tv.data.BulkPrepareListingDto(complete = true),
+    )
+  }
 
   override suspend fun downloadBulk(
     title: String,
@@ -627,12 +647,26 @@ open class FakeTvApi : TvApi {
     selection: DownloadSelectionDto,
     media: BulkMediaDto,
     target: DownloadTargetDto?,
+    origin: BulkRemoteOriginDto?,
   ): BulkDownloadResult {
     bulkDownloadCalls += 1
     bulkDownloadGate?.await()
     bulkDownloadFailure?.let { throw ApiError(it, serverMessage = bulkDownloadFailureMessage) }
-    bulkDownloads += bulkDownloadBody(title, type, episodes, selection, media, target)
+    bulkDownloads += bulkDownloadBody(title, type, episodes, selection, media, target, origin)
     return bulkDownloadResult
+  }
+
+  override suspend fun prepareBulk(body: BulkPrepareRequest): BulkPrepareResponse {
+    bulkPrepareCalls += 1
+    bulkPrepareRequests += body
+    try {
+      bulkPrepareGate?.await()
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+      bulkPrepareCancelled = true
+      throw cancelled
+    }
+    bulkPrepareFailure?.let { throw ApiError(it, serverMessage = bulkPrepareFailureMessage) }
+    return bulkPrepareAnswer(body)
   }
 
   override suspend fun home(rows: List<String>): HomeResponseDto {

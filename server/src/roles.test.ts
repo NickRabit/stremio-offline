@@ -128,6 +128,7 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/downloads"],
   ["POST", "/downloads"],
   ["POST", "/downloads/bulk"],
+  ["POST", "/downloads/bulk/prepare"],
   ["POST", "/downloads/job-1/pause"],
   ["POST", "/downloads/job-1/resume"],
   ["POST", "/downloads/job-1/retry"],

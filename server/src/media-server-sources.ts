@@ -5,9 +5,10 @@ import { remoteContentAccessible, remoteLibraryVisibleTo } from "./media-server-
 import { canonicalRemoteDownloadReference, defaultRemoteCopyTarget, takesRemoteTarget, type RemoteDownloadReference } from "./media-server-download.js";
 import type { MediaServerAuthority, MediaServerItemVersions, MediaServerManager } from "./media-server-manager.js";
 import { remoteMatchTarget } from "./media-server-match.js";
+import { remoteTitleOf } from "./media-server-personal.js";
 import type { ProviderVersion } from "./media-server-provider.js";
 import { isRemoteMediaStream, openRemoteContent, remoteSecretStamp, sealRemoteContent } from "./media-server-reference.js";
-import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
+import { isMediaServerError, READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
 import { ResourceError, type MediaResources, type ResourceOwner } from "./media-resources.js";
 import { containerExtension, nameExtension } from "./naming.js";
 import { remoteAudioLanguages, remoteSourceEvidence, remoteSubtitleLanguages } from "./source-remote-evidence.js";
@@ -27,6 +28,13 @@ type SealedStreams = {
   libraryId: string;
   kind: "movie" | "series";
   candidate: SourceEvidenceCandidateV1;
+};
+
+type MediaServerDownloadCandidate = {
+  reference: RemoteDownloadReference;
+  version: ProviderVersion;
+  libraryName: string;
+  stream: StreamItem;
 };
 
 /** The file name a copy of one version should carry: the display label with the version's own
@@ -259,27 +267,15 @@ export class MediaServerSources {
     return this.listedWithRules(results, owner, type === "series" ? "episode" : "movie", secretStamp);
   }
 
-  async downloadCandidates(input: {
-    ownerUserId: string;
-    libraryId: string;
-    type: "movie" | "series";
-    catalogId: string;
-    nameHint?: string;
-    signal?: AbortSignal;
-  }): Promise<Array<{
-    reference: RemoteDownloadReference;
-    version: ProviderVersion;
-    libraryName: string;
-    stream: StreamItem;
-  }>> {
-    const initial = this.currentUser(input.ownerUserId);
-    const library = this.store.remoteLibraries().find((candidate) => candidate.id === input.libraryId);
+  private downloadAuthority(ownerUserId: string, libraryId: string): MediaServerAuthority | undefined {
+    const initial = this.currentUser(ownerUserId);
+    const library = this.store.remoteLibraries().find((candidate) => candidate.id === libraryId);
     if (!initial || initial.disabled || initial.mustChangePassword || !mayDownloadToLibrary(initial)
       || !library || !remoteLibraryVisibleTo(this.store.mediaConnections(), library, {
         id: initial.id,
         role: initial.role,
       })) {
-      return [];
+      return undefined;
     }
 
     const actor = { id: initial.id, secret: initial.secret };
@@ -296,29 +292,24 @@ export class MediaServerSources {
     try {
       authority.assertCurrent();
     } catch {
-      return [];
+      return undefined;
     }
+    return authority;
+  }
 
-    let results: MediaServerItemVersions[];
-    try {
-      results = await this.manager.matchedVersions(
-        authority,
-        input.libraryId,
-        input.type,
-        input.catalogId,
-        input.signal,
-        input.nameHint,
-      );
-    } catch (error) {
-      if (error instanceof ResourceError && error.status === 404) return [];
-      throw error;
-    }
+  private authorityStillCurrent(authority: MediaServerAuthority): boolean {
     try {
       authority.assertCurrent();
+      return true;
     } catch {
-      return [];
+      return false;
     }
+  }
 
+  private downloadCandidatesFromResults(
+    ownerUserId: string,
+    results: readonly MediaServerItemVersions[],
+  ): MediaServerDownloadCandidate[] {
     return results.flatMap((result) => {
       if (result.downloadAllowed !== true) return [];
       return result.versions.map((version) => {
@@ -326,7 +317,7 @@ export class MediaServerSources {
         return {
           reference: canonicalRemoteDownloadReference({
             schemaVersion: 1,
-            ownerUserId: input.ownerUserId,
+            ownerUserId,
             connectionId: result.connectionId,
             libraryId: result.libraryId,
             generation: result.generation,
@@ -351,6 +342,159 @@ export class MediaServerSources {
         };
       });
     });
+  }
+
+  async downloadCandidates(input: {
+    ownerUserId: string;
+    libraryId: string;
+    type: "movie" | "series";
+    catalogId: string;
+    nameHint?: string;
+    signal?: AbortSignal;
+  }): Promise<MediaServerDownloadCandidate[]> {
+    const authority = this.downloadAuthority(input.ownerUserId, input.libraryId);
+    if (!authority) return [];
+
+    let results: MediaServerItemVersions[];
+    try {
+      results = await this.manager.matchedVersions(
+        authority,
+        input.libraryId,
+        input.type,
+        input.catalogId,
+        input.signal,
+        input.nameHint,
+      );
+    } catch (error) {
+      if (error instanceof ResourceError && error.status === 404) return [];
+      throw error;
+    }
+    if (!this.authorityStillCurrent(authority)) return [];
+    return this.downloadCandidatesFromResults(input.ownerUserId, results);
+  }
+
+  async itemDownloadCandidates(input: {
+    ownerUserId: string;
+    libraryId: string;
+    itemId: string;
+    signal?: AbortSignal;
+  }): Promise<MediaServerDownloadCandidate[] | null> {
+    const authority = this.downloadAuthority(input.ownerUserId, input.libraryId);
+    if (!authority) return null;
+
+    let result: MediaServerItemVersions;
+    try {
+      result = await this.manager.itemVersions(authority, input.libraryId, input.itemId, input.signal);
+    } catch (error) {
+      // A gone item is nothing to copy; a provider refusal or a lost session is a temporary
+      // failure the queue retries, never a verdict that the episode has no source.
+      if ((error instanceof ResourceError && error.status === 404)
+        || (isMediaServerError(error) && error.code === "not-found")) {
+        return this.authorityStillCurrent(authority) ? [] : null;
+      }
+      throw error;
+    }
+    if (!this.authorityStillCurrent(authority)) return null;
+    return this.downloadCandidatesFromResults(input.ownerUserId, [result]);
+  }
+
+  /** One read of the series row: its name and the catalogue identity the jobs are keyed by. A
+   *  commit needs only this, so it never walks the episode pages of a third-party server again. */
+  async seriesForBulk(input: { ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }): Promise<null | { name: string; catalogueId?: string }> {
+    const authority = this.downloadAuthority(input.ownerUserId, input.libraryId);
+    if (!authority) return null;
+    return this.bulkSeries(authority, input.libraryId, input.seriesItemId, input.signal);
+  }
+
+  private async bulkSeries(authority: MediaServerAuthority, libraryId: string, seriesItemId: string, signal?: AbortSignal): Promise<null | { name: string; catalogueId?: string }> {
+    let detail;
+    try {
+      detail = await this.manager.itemDetail(authority, libraryId, seriesItemId, signal);
+    } catch (error) {
+      if ((error instanceof ResourceError && error.status === 404)
+        || (isMediaServerError(error) && error.code === "not-found")) return null;
+      throw error;
+    }
+    if (!this.authorityStillCurrent(authority) || detail.item.type !== "series") return null;
+    const catalogue = remoteTitleOf("series", detail.item.providerIds);
+    return { name: detail.item.name, ...(catalogue === undefined ? {} : { catalogueId: catalogue.id }) };
+  }
+
+  async seriesEpisodesForBulk(input: {
+    ownerUserId: string;
+    libraryId: string;
+    seriesItemId: string;
+    signal?: AbortSignal;
+  }): Promise<null | {
+    name: string;
+    catalogueId?: string;
+    episodes: Array<{
+      itemId: string;
+      name: string;
+      season?: number;
+      episode?: number;
+      premiereDate?: string;
+    }>;
+    complete: boolean;
+    errorKey?: string;
+  }> {
+    const authority = this.downloadAuthority(input.ownerUserId, input.libraryId);
+    if (!authority) return null;
+    const series = await this.bulkSeries(authority, input.libraryId, input.seriesItemId, input.signal);
+    if (!series) return null;
+
+    const episodes: Array<{
+      itemId: string;
+      name: string;
+      season?: number;
+      episode?: number;
+      premiereDate?: string;
+    }> = [];
+    let cursor: string | undefined;
+    let complete = true;
+    let errorKey: string | undefined;
+    for (;;) {
+      let page;
+      try {
+        page = await this.manager.itemEpisodes(
+          authority,
+          input.libraryId,
+          input.seriesItemId,
+          { limit: "200", ...(cursor === undefined ? {} : { cursor }) },
+          input.signal,
+        );
+      } catch {
+        if (!this.authorityStillCurrent(authority)) return null;
+        complete = false;
+        errorKey = "err.bulkEpisodeListIncomplete";
+        break;
+      }
+      if (!this.authorityStillCurrent(authority)) return null;
+      for (const item of page.items) {
+        if (item.type !== "episode") continue;
+        episodes.push({
+          itemId: item.id,
+          name: item.name,
+          ...(item.season === undefined ? {} : { season: item.season }),
+          ...(item.episode === undefined ? {} : { episode: item.episode }),
+          ...(item.premiereDate === undefined ? {} : { premiereDate: item.premiereDate }),
+        });
+        if (episodes.length === 5000) break;
+      }
+      if (episodes.length === 5000) {
+        complete = page.cursor === undefined;
+        if (!complete) errorKey = "err.tooManyEpisodes";
+        break;
+      }
+      if (page.cursor === undefined) break;
+      cursor = page.cursor;
+    }
+    return {
+      ...series,
+      episodes,
+      complete,
+      ...(errorKey === undefined ? {} : { errorKey }),
+    };
   }
 
   /** Refuses any remote source that is not the exact one the owner session was granted, as

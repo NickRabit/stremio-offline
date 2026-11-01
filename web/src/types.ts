@@ -411,6 +411,44 @@ export interface DownloadSelection {
   /** The pinned destination of a stored rule. Absent on a selection the interface submits. */
   targetSettings?: DownloadTargetSettings;
 }
+export type BulkEpisodeStatus = "ready" | "inTarget" | "queued" | "unreleased" | "unnumbered" | "invalid";
+export interface PreparedBulkEpisode {
+  id: string;
+  season?: number;
+  episode?: number;
+  title?: string;
+  remoteItemId?: string;
+  status: BulkEpisodeStatus;
+}
+export interface BulkPrepareResponse {
+  origin: "catalogue" | "remote";
+  series: { title: string; catalogueId?: string };
+  target: { libraryId: string; libraryName: string };
+  episodes: PreparedBulkEpisode[];
+  listing: { complete: true } | { complete: false; errorKey?: string };
+}
+export interface CatalogueBulkRequest {
+  scope: "season" | "series";
+  season?: number;
+  title: string;
+  media: Record<string, unknown>;
+  episodes: Array<{ id: string; season?: number; episode?: number; title?: string; released?: string }>;
+}
+export interface RemoteBulkRequest {
+  scope: "season" | "series";
+  season?: number;
+  title: string;
+  libraryId: string;
+  libraryName: string;
+  provider: MediaServerProvider;
+  seriesItemId: string;
+}
+export type SeriesBulkRequest = CatalogueBulkRequest | RemoteBulkRequest;
+export interface BulkDownloadOrigin {
+  kind: "remote";
+  libraryId: string;
+  seriesItemId: string;
+}
 export interface DeviceTransfer {
   id: string; userId: string; username?: string; filename: string;
   source: "library" | "addon" | "hls"; addonName?: string;

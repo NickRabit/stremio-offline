@@ -896,6 +896,27 @@ test("provider metadata is bounded, optional, and does not project paths or raw 
   }
 });
 
+test("provider items parse a valid premiere date and ignore an invalid one", async () => {
+  const valid = fixture(() => ({
+    Id: "episode-1",
+    Name: "Pilot",
+    Type: "Episode",
+    PremiereDate: "2026-09-30T20:00:00Z",
+  }));
+  assert.equal(
+    (await valid.provider.detail("token", "user", "episode-1")).premiereDate,
+    "2026-09-30T20:00:00.000Z",
+  );
+
+  const invalid = fixture(() => ({
+    Id: "episode-2",
+    Name: "Pilot",
+    Type: "Episode",
+    PremiereDate: "not-a-date",
+  }));
+  assert.equal("premiereDate" in await invalid.provider.detail("token", "user", "episode-2"), false);
+});
+
 test("listLibraries records a view's own primary image tag and drops a foreign one", async () => {
   const { provider } = fixture(() => ({
     Items: [

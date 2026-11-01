@@ -182,6 +182,17 @@ const mount = async (options: {
         pending.push({ ownerUserId, selection: source.selection, sourceAdmission });
         return { id: "job-1" };
       },
+      admitPending: async (
+        _title: string,
+        source: { selection?: DownloadSelection },
+        _media: unknown,
+        ownerUserId?: string,
+        sourceAdmission?: unknown,
+      ) => {
+        pending.push({ ownerUserId, selection: source.selection, sourceAdmission });
+        return { outcome: "queued", job: { id: "job-1" } };
+      },
+      activeEpisodeIn: () => false,
       pause: async () => undefined,
       resume: async () => undefined,
       retry: async () => undefined,

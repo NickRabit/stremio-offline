@@ -90,6 +90,7 @@ export const ALLOWED_MUTATIONS: Rule[] = [
   { method: "DELETE", pattern: /^\/library\/item$/ },
   { method: "POST", pattern: /^\/downloads$/ },
   { method: "POST", pattern: /^\/downloads\/bulk$/ },
+  { method: "POST", pattern: /^\/downloads\/bulk\/prepare$/ },
   { method: "POST", pattern: /^\/downloads\/[^/]+\/(pause|resume|retry|move)$/ },
   { method: "DELETE", pattern: /^\/downloads\/[^/]+$/ },
   { method: "DELETE", pattern: /^\/downloads$/ },

@@ -21,6 +21,7 @@ const OWNER = "usr_00000041";
 const REMOTE_LIBRARY = `rlib_${"4".repeat(32)}`;
 const REMOTE_KEY = `remote:${REMOTE_LIBRARY}`;
 const ADDON_KEY = "addon:fixture";
+const REMOTE_ITEM = { libraryId: REMOTE_LIBRARY, connectionId: `mconn_${"5".repeat(32)}`, itemId: "episode-1" };
 
 const user = (): UserRecord => ({
   id: OWNER,
@@ -82,11 +83,15 @@ const selection = (): DownloadSelection => ({
   targetSettings: defaultDownloadSettings().series,
 });
 
-const source = (tried: string[] = []): NonNullable<DownloadJob["source"]> => ({
+const source = (
+  tried: string[] = [],
+  overrides: Partial<NonNullable<DownloadJob["source"]>> = {},
+): NonNullable<DownloadJob["source"]> => ({
   type: "series",
   videoId: "tt-continue:1:2",
   tried,
   selection: selection(),
+  ...overrides,
 });
 
 const reference = (overrides: Partial<RemoteDownloadReference> = {}): RemoteDownloadReference => ({
@@ -141,7 +146,9 @@ const media = (height: number): MediaInfo => ({
 
 const resolverFor = (options: {
   remote: SourceResolverDeps["remoteDownloadCandidates"];
+  remoteItem?: SourceResolverDeps["remoteItemDownloadCandidates"];
   addonStreams?: StreamItem[];
+  listStreams?: SourceResolverDeps["listStreams"];
   inspected?: MediaInfo;
   inspectedIds?: string[];
 }) => {
@@ -151,13 +158,14 @@ const resolverFor = (options: {
     prefs: () => ({ audioLanguage: "cs" }),
     hasRealDebrid: () => false,
     serverReady: Promise.resolve(),
-    listStreams: async () => options.addonStreams ?? [],
+    listStreams: options.listStreams ?? (async () => options.addonStreams ?? []),
     listSubtitles: async () => [],
     inspect: async (stream) => {
       options.inspectedIds?.push(stream.url ?? stream.name ?? "");
       return options.inspected ?? media(720);
     },
     remoteDownloadCandidates: options.remote,
+    ...(options.remoteItem === undefined ? {} : { remoteItemDownloadCandidates: options.remoteItem }),
   };
   return createRulesProfileResolver(deps);
 };
@@ -192,6 +200,97 @@ test("a remote 1080p Czech original beats an addon 720p under the same rules", a
   assert.equal(result.resolution.audioLanguage, "cs");
   assert.equal(result.resolution.audioEvidence, "metadata");
   assert.equal(inspected.length, 0, "the lower listed addon cannot beat the metadata-ranked remote");
+});
+
+test("a remote-item job selects only among that item's library versions without addon requests", async () => {
+  let catalogueCalls = 0;
+  let addonCalls = 0;
+  const itemCalls: Parameters<NonNullable<SourceResolverDeps["remoteItemDownloadCandidates"]>>[0][] = [];
+  const high = remoteCandidate();
+  const low = {
+    ...remoteCandidate({
+      id: "version-2",
+      name: "Show.S01E02.720p.mkv",
+      size: 2_000_000_000,
+      videoWidth: 1280,
+      videoHeight: 720,
+      audioLanguages: ["cs"],
+    }),
+    reference: { ...reference(), mediaSourceId: "version-2" },
+    stream: remoteStream("Show.S01E02.720p.mkv"),
+  };
+  const resolver = resolverFor({
+    remote: async () => {
+      catalogueCalls += 1;
+      return [];
+    },
+    listStreams: async () => {
+      addonCalls += 1;
+      return [addonStream()];
+    },
+    remoteItem: async (input) => {
+      itemCalls.push(input);
+      return [low, high];
+    },
+  });
+
+  const result = await resolver(input(snapshot([REMOTE_KEY]), {
+    source: source([], { remoteItem: REMOTE_ITEM }),
+  }));
+
+  assert.equal(result.status, "selected");
+  if (result.status !== "selected") return;
+  assert.equal("remoteDownload" in result, true);
+  if (!("remoteDownload" in result)) return;
+  assert.equal(result.remoteDownload.mediaSourceId, "version-1");
+  assert.deepEqual(itemCalls.map(({ ownerUserId, libraryId, itemId }) => ({ ownerUserId, libraryId, itemId })), [{
+    ownerUserId: OWNER,
+    libraryId: REMOTE_LIBRARY,
+    itemId: "episode-1",
+  }]);
+  assert.equal(catalogueCalls, 0);
+  assert.equal(addonCalls, 0);
+});
+
+test("a remote-item job maps null to denied access and an empty list to no match", async () => {
+  const outcomes = [
+    [null, "accessDenied"],
+    [[], "noMatch"],
+  ] as Array<[Awaited<ReturnType<NonNullable<SourceResolverDeps["remoteItemDownloadCandidates"]>>>, string]>;
+  for (const [candidates, status] of outcomes) {
+    const resolver = resolverFor({
+      remote: async () => [],
+      remoteItem: async () => candidates,
+    });
+    const result = await resolver(input(snapshot([REMOTE_KEY]), {
+      source: source([], { remoteItem: REMOTE_ITEM }),
+    }));
+    assert.equal(result.status, status);
+  }
+});
+
+test("a remote-item job rejects any provider scope beyond its exact library before any request", async () => {
+  let itemCalls = 0;
+  let addonCalls = 0;
+  const resolver = resolverFor({
+    remote: async () => [],
+    listStreams: async () => {
+      addonCalls += 1;
+      return [];
+    },
+    remoteItem: async () => {
+      itemCalls += 1;
+      return [];
+    },
+  });
+
+  const result = await resolver(input(snapshot([REMOTE_KEY, ADDON_KEY]), {
+    source: source([], { remoteItem: REMOTE_ITEM }),
+  }));
+
+  assert.equal(result.status, "accessDenied");
+  assert.equal(itemCalls, 0);
+  assert.equal(addonCalls, 0);
 });
 
 test("an addon wins when the remote original breaks a hard resolution limit", async () => {

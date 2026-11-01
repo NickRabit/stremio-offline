@@ -32,6 +32,17 @@ export interface SourceResolverDeps {
     libraryName: string;
     stream: StreamItem;
   }>>;
+  remoteItemDownloadCandidates?: (input: {
+    ownerUserId: string;
+    libraryId: string;
+    itemId: string;
+    signal?: AbortSignal;
+  }) => Promise<Array<{
+    reference: RemoteDownloadReference;
+    version: ProviderVersion;
+    libraryName: string;
+    stream: StreamItem;
+  }> | null>;
 }
 
 interface Authorization {

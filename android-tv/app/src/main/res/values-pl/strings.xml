@@ -250,6 +250,7 @@
   <string name="tv_download_this_season">Ten sezon (%1$s)</string>
   <string name="tv_download_from_episode">Od tego odcinka</string>
   <string name="tv_download_all_episodes">Wszystkie odcinki</string>
+  <string name="episodes_specials">Odcinki specjalne</string>
   <string name="bulk_title">Pobierz serię</string>
   <string name="bulk_title_movie">Pobieranie filmu</string>
   <string name="bulk_title_episode">Pobieranie odcinka</string>
@@ -260,6 +261,49 @@
     <item quantity="many">%1$s odcinków</item>
     <item quantity="other">Liczba odcinków: %1$s</item>
   </plurals>
+  <string name="series_bulk_title">Pobierz serię</string>
+  <string name="series_bulk_whole_series">Cała seria</string>
+  <string name="series_bulk_this_source">Ten odcinek · wybrane źródło</string>
+  <string name="series_bulk_source">Źródło</string>
+  <string name="series_bulk_from_library">Z tej biblioteki — %1$s / %2$s</string>
+  <string name="series_bulk_from_library_hint">Kopiuje tylko odcinki dostępne w tej bibliotece. Nic nie jest uzupełniane z innych miejsc.</string>
+  <string name="series_bulk_from_catalogue">Z katalogu według reguł</string>
+  <string name="series_bulk_from_catalogue_hint">Szuka każdego odcinka w Twoich dodatkach; nic nie jest kopiowane z tej biblioteki.</string>
+  <string name="series_bulk_preparing">Przygotowywanie listy odcinków…</string>
+  <plurals name="series_bulk_ready">
+    <item quantity="one">%1$s odcinek gotowy</item>
+    <item quantity="few">%1$s odcinki gotowe</item>
+    <item quantity="many">%1$s odcinków gotowych</item>
+    <item quantity="other">%1$s odcinków gotowych</item>
+  </plurals>
+  <string name="series_bulk_in_target">%1$s już w bibliotece</string>
+  <string name="series_bulk_queued">%1$s już w kolejce</string>
+  <string name="series_bulk_unreleased">%1$s jeszcze niewydane</string>
+  <string name="series_bulk_unnumbered">%1$s bez numeracji</string>
+  <string name="series_bulk_nothing">Nie ma czego pobierać.</string>
+  <string name="series_bulk_sources_later">Źródła są wybierane podczas pobierania każdego odcinka.</string>
+  <string name="series_bulk_reason_in_target">już w bibliotece</string>
+  <string name="series_bulk_reason_queued">już w kolejce</string>
+  <string name="series_bulk_reason_unreleased">jeszcze niewydany</string>
+  <string name="series_bulk_reason_unnumbered">brak numeru sezonu lub odcinka</string>
+  <string name="series_bulk_incomplete">Nie udało się odczytać całej listy odcinków.</string>
+  <plurals name="series_bulk_add">
+    <item quantity="one">Dodaj %1$s odcinek do kolejki</item>
+    <item quantity="few">Dodaj %1$s odcinki do kolejki</item>
+    <item quantity="many">Dodaj %1$s odcinków do kolejki</item>
+    <item quantity="other">Dodaj %1$s odcinków do kolejki</item>
+  </plurals>
+  <string name="series_bulk_adding">Dodawanie %1$s z %2$s…</string>
+  <plurals name="series_bulk_partly_added">
+    <item quantity="one">%1$s odcinek został już dodany.</item>
+    <item quantity="few">%1$s odcinki zostały już dodane.</item>
+    <item quantity="many">%1$s odcinków zostało już dodanych.</item>
+    <item quantity="other">%1$s odcinków zostało już dodanych.</item>
+  </plurals>
+  <string name="err_bulk_remote_not_in_rules">Twoje reguły pobierania nie pozwalają kopiować z tej biblioteki.</string>
+  <string name="tv_series_bulk_season_picker">Sezon…</string>
+  <string name="tv_series_bulk_seasons_title">Sezony</string>
+  <string name="tv_series_bulk_skipped_row">Pominięte (%1$s)</string>
   <string name="rules_title">Reguły pobierania</string>
   <string name="rules_selected_source">Wybrane źródło</string>
   <string name="rules_unavailable">Reguły pobierania są niedostępne. Poproś administratora.</string>

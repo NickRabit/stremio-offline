@@ -32,7 +32,7 @@ import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enr
 import { TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
 import type { SaveTarget } from "./save-target";
-import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, SourceProfile, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
+import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteBulkRequest, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, SourceProfile, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
 
 interface Props {
   onRootPresenceChange?: (visible: boolean) => void;
@@ -73,6 +73,7 @@ interface Props {
   onDownloadQueued?: () => void;
   /** Opens the shared rules dialog for a title with an exact bulk-route target. */
   onCatalogueDownload?: (stream: Stream, detail: CatalogueDetailTarget) => void;
+  onSeriesBulk?: (request: RemoteBulkRequest) => void;
   /** A short message the app shows, such as a device save that started through the server. */
   onNotify?: (text: string) => void;
   /** The signed-in account: supplementary source state never spans accounts. */
@@ -228,7 +229,7 @@ const versionKey = (stream: Stream) => stream.name?.trim() ?? "";
 const episodeOrder = (left: RemoteItem, right: RemoteItem) =>
   (left.season ?? 0) - (right.season ?? 0) || (left.episode ?? 0) - (right.episode ?? 0) || left.name.localeCompare(right.name);
 
-export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onNotify, accountScope = "", addons = [], realDebridConfigured = false, sourceProfiles = null, defaultSort }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onSeriesBulk, onNotify, accountScope = "", addons = [], realDebridConfigured = false, sourceProfiles = null, defaultSort }: Props) {
   useI18n();
   // The listing effect must not restart when the shape changes. It still warms only the
   // picture that shape draws, so the other role is fetched when a tile actually asks for it.
@@ -1312,6 +1313,18 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const pickerEpisodes = detail?.type === "episode" && !episodes.items.some((episode) => episode.id === detail.id)
     ? [detail, ...episodes.items]
     : episodes.items;
+  const seriesBulkRequest = (scope: "season" | "series", season?: number): RemoteBulkRequest | null => {
+    if (!selected || !series) return null;
+    return {
+      scope,
+      ...(scope === "season" && season !== undefined ? { season } : {}),
+      title: series.name,
+      libraryId: selected.id,
+      libraryName: selected.name,
+      provider: selected.provider,
+      seriesItemId: series.id,
+    };
+  };
   const episodePicker = series && detail && (detail.type === "series" || detail.type === "episode") ? <>
     <EpisodePicker
       episodes={pickerEpisodes.map((episode) => ({
@@ -1329,7 +1342,14 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       onOpenChange={setEpisodePickerOpen}
       loading={episodes.loading}
       season={episodeSeason}
-      onSeason={setEpisodeSeason}/>
+      onSeason={setEpisodeSeason}
+      {...(detail.type === "series" ? { headClassName: "remote-episodes-head" } : {})}
+      {...(onSeriesBulk ? {
+        bulk: {
+          onSeason: (season: number) => { const request = seriesBulkRequest("season", season); if (request) onSeriesBulk(request); },
+          onSeries: () => { const request = seriesBulkRequest("series"); if (request) onSeriesBulk(request); },
+        },
+      } : {})}/>
     {episodes.error && <div className="remote-error" role="alert">
       <span>{episodes.error}</span>
       <button type="button" onClick={retryEpisodes}>{t("mediaServer.retry")}</button>
