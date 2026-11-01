@@ -1150,6 +1150,9 @@ export const en = {
   "err.sourceProfileOperationUnavailable": "These download rules cannot be used for this operation.",
   "err.sourceProfileOperationForbidden": "This account may not use these download rules.",
   "err.sourceProviderScopeUnavailable": "No authorized source is available for these download rules.",
+  "err.bulkRemoteNotInRules": "Your download rules do not allow copying from this library.",
+  "err.bulkSeasonRequired": "Choose a season to download.",
+  "err.bulkEpisodeListIncomplete": "The episode list could not be read completely.",
   "err.sourceLanguagePreferenceUnavailable": "The source language preferences are not available.",
   "err.sourceLanguagePreferenceConflict": "The source language preferences cannot be used together.",
 

@@ -165,7 +165,7 @@ test("the item projection strips the internal image flag and still carries both 
   const projected = publicRemoteItem(item, "rlib_00000000000000000000000000000000");
   assert.equal("hasPrimaryImage" in projected, false, "the internal flag never reaches a client");
   assert.equal("hasBackdropImage" in projected, false, "no second internal flag leaks either");
-  assert.equal("premiereDate" in projected, false, "the internal premiere date never reaches a client");
+  assert.equal(projected.premiereDate, "2026-09-30T20:00:00.000Z", "the public premiere date reaches the client");
   assert.equal(projected.poster, "/api/remote-libraries/rlib_00000000000000000000000000000000/items/f1/artwork/Primary");
   assert.equal(projected.wide, "/api/remote-libraries/rlib_00000000000000000000000000000000/items/f1/artwork/Backdrop");
 });

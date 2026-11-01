@@ -8,7 +8,7 @@ import { pipeline } from "node:stream/promises";
 import { addonAllowed } from "./addons.js";
 import { addonIdentity, isAddonIdentity } from "./addon-identity.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
-import { defaultDownloadSettings, fitTargetName, joinTarget, nameExtension, streamExtension, targetPath, type MediaInfo } from "./naming.js";
+import { defaultDownloadSettings, fitTargetName, joinTarget, nameExtension, safeName, streamExtension, targetPath, type MediaInfo } from "./naming.js";
 import { torrentKey } from "./download-selection.js";
 import { episodeTag } from "./library.js";
 import type { DownloadTargetSettings } from "./types.js";
@@ -1523,6 +1523,24 @@ export class DownloadQueue {
     const job = this.jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId
       && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId));
     return job ? this.publicJob(job) : undefined;
+  }
+
+  activeEpisodeIn(ownerUserId: string | undefined, input: {
+    type: string;
+    videoId: string;
+    libraryId: string;
+    seriesFolder: string;
+    season: number;
+    episode: number;
+  }): boolean {
+    const folder = safeName(input.seriesFolder);
+    return this.jobs.some((job) => {
+      if (job.status === "completed" || job.status === "failed" || !this.ownedBy(job, ownerUserId)) return false;
+      if (job.source?.type === input.type && job.source.videoId === input.videoId) return true;
+      if (job.media?.kind !== "episode" || job.media.season !== input.season || job.media.episode !== input.episode) return false;
+      const libraryId = jobLibraryId(job) ?? this.defaultLibrary?.("series")?.id;
+      return libraryId === input.libraryId && safeName(job.media.title ?? "") === folder;
+    });
   }
 
   /** Ties a job the owner queued by hand to the follow that now wants the same episode. */

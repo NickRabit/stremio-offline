@@ -2986,6 +2986,46 @@ test("admitPending reports every admission outcome while addPending keeps its re
   }
 });
 
+test("activeEpisodeIn matches an owner's video id or destination episode", async () => {
+  let releaseResolver!: () => void;
+  const resolverGate = new Promise<void>((resolve) => { releaseResolver = resolve; });
+  const { directory, queue } = await tempQueue();
+  queue.setResolver(async () => {
+    await resolverGate;
+    return undefined;
+  });
+  try {
+    await queue.addPending(
+      "Show · S01E01",
+      { type: "series", videoId: "tt-show:1:1" },
+      { kind: "episode", title: "Show", season: 1, episode: 1 },
+      "usr_00000001",
+    );
+    await queue.addPending(
+      "Other · S01E01",
+      { type: "series", videoId: "tt-other:1:1" },
+      { kind: "episode", title: "Other", season: 1, episode: 1 },
+      "usr_00000002",
+    );
+    assert.equal(queue.activeEpisodeIn("usr_00000001", {
+      type: "series", videoId: "tt-show:1:1", libraryId: LIBRARY_ID,
+      seriesFolder: "Show", season: 1, episode: 1,
+    }), true);
+    assert.equal(queue.activeEpisodeIn("usr_00000001", {
+      type: "series", videoId: "different", libraryId: LIBRARY_ID,
+      seriesFolder: "Show", season: 1, episode: 1,
+    }), true, "the same owner's target episode is a duplicate");
+    assert.equal(queue.activeEpisodeIn("usr_00000001", {
+      type: "series", videoId: "different", libraryId: LIBRARY_ID,
+      seriesFolder: "Other", season: 1, episode: 1,
+    }), false, "another owner's episode is ignored");
+  } finally {
+    releaseResolver();
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a synthetic remote-item id skips both existing-copy hooks and access denial pauses it", async () => {
   let admissionLookups = 0;
   let queueLookups = 0;

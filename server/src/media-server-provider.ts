@@ -84,7 +84,7 @@ export interface ProviderItem {
   providerIds: { imdb?: string; tmdb?: string; tvdb?: string };
   durationTicks?: number;
   overview?: string; year?: number; genres?: string[]; size?: number; addedAt?: string;
-  /** Internal only: the provider's premiere date. Never part of a client projection. */
+  /** The provider's premiere date, when it reported a parseable one. */
   premiereDate?: string;
   /** Internal only: whether the provider row carries an actual Primary image tag. Never part of
    *  a client projection; the mosaic preview uses it to prefer tiles that have real artwork. */

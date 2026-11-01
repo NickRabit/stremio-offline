@@ -5,6 +5,7 @@ import { remoteContentAccessible, remoteLibraryVisibleTo } from "./media-server-
 import { canonicalRemoteDownloadReference, defaultRemoteCopyTarget, takesRemoteTarget, type RemoteDownloadReference } from "./media-server-download.js";
 import type { MediaServerAuthority, MediaServerItemVersions, MediaServerManager } from "./media-server-manager.js";
 import { remoteMatchTarget } from "./media-server-match.js";
+import { remoteTitleOf } from "./media-server-personal.js";
 import type { ProviderVersion } from "./media-server-provider.js";
 import { isRemoteMediaStream, openRemoteContent, remoteSecretStamp, sealRemoteContent } from "./media-server-reference.js";
 import { isMediaServerError, READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
@@ -395,6 +396,105 @@ export class MediaServerSources {
     }
     if (!this.authorityStillCurrent(authority)) return null;
     return this.downloadCandidatesFromResults(input.ownerUserId, [result]);
+  }
+
+  /** One read of the series row: its name and the catalogue identity the jobs are keyed by. A
+   *  commit needs only this, so it never walks the episode pages of a third-party server again. */
+  async seriesForBulk(input: { ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }): Promise<null | { name: string; catalogueId?: string }> {
+    const authority = this.downloadAuthority(input.ownerUserId, input.libraryId);
+    if (!authority) return null;
+    return this.bulkSeries(authority, input.libraryId, input.seriesItemId, input.signal);
+  }
+
+  private async bulkSeries(authority: MediaServerAuthority, libraryId: string, seriesItemId: string, signal?: AbortSignal): Promise<null | { name: string; catalogueId?: string }> {
+    let detail;
+    try {
+      detail = await this.manager.itemDetail(authority, libraryId, seriesItemId, signal);
+    } catch (error) {
+      if ((error instanceof ResourceError && error.status === 404)
+        || (isMediaServerError(error) && error.code === "not-found")) return null;
+      throw error;
+    }
+    if (!this.authorityStillCurrent(authority) || detail.item.type !== "series") return null;
+    const catalogue = remoteTitleOf("series", detail.item.providerIds);
+    return { name: detail.item.name, ...(catalogue === undefined ? {} : { catalogueId: catalogue.id }) };
+  }
+
+  async seriesEpisodesForBulk(input: {
+    ownerUserId: string;
+    libraryId: string;
+    seriesItemId: string;
+    signal?: AbortSignal;
+  }): Promise<null | {
+    name: string;
+    catalogueId?: string;
+    episodes: Array<{
+      itemId: string;
+      name: string;
+      season?: number;
+      episode?: number;
+      premiereDate?: string;
+    }>;
+    complete: boolean;
+    errorKey?: string;
+  }> {
+    const authority = this.downloadAuthority(input.ownerUserId, input.libraryId);
+    if (!authority) return null;
+    const series = await this.bulkSeries(authority, input.libraryId, input.seriesItemId, input.signal);
+    if (!series) return null;
+
+    const episodes: Array<{
+      itemId: string;
+      name: string;
+      season?: number;
+      episode?: number;
+      premiereDate?: string;
+    }> = [];
+    let cursor: string | undefined;
+    let complete = true;
+    let errorKey: string | undefined;
+    for (;;) {
+      let page;
+      try {
+        page = await this.manager.itemEpisodes(
+          authority,
+          input.libraryId,
+          input.seriesItemId,
+          { limit: "200", ...(cursor === undefined ? {} : { cursor }) },
+          input.signal,
+        );
+      } catch {
+        if (!this.authorityStillCurrent(authority)) return null;
+        complete = false;
+        errorKey = "err.bulkEpisodeListIncomplete";
+        break;
+      }
+      if (!this.authorityStillCurrent(authority)) return null;
+      for (const item of page.items) {
+        if (item.type !== "episode") continue;
+        episodes.push({
+          itemId: item.id,
+          name: item.name,
+          ...(item.season === undefined ? {} : { season: item.season }),
+          ...(item.episode === undefined ? {} : { episode: item.episode }),
+          ...(item.premiereDate === undefined ? {} : { premiereDate: item.premiereDate }),
+        });
+        if (episodes.length === 5000) break;
+      }
+      if (episodes.length === 5000) {
+        complete = page.cursor === undefined;
+        if (!complete) errorKey = "err.tooManyEpisodes";
+        break;
+      }
+      if (page.cursor === undefined) break;
+      cursor = page.cursor;
+    }
+    return {
+      ...series,
+      episodes,
+      complete,
+      ...(errorKey === undefined ? {} : { errorKey }),
+    };
   }
 
   /** Refuses any remote source that is not the exact one the owner session was granted, as

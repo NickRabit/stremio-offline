@@ -1145,6 +1145,9 @@ export const cs: Catalog = {
   "err.sourceProfileOperationUnavailable": "Tato pravidla stahování nelze pro tuto operaci použít.",
   "err.sourceProfileOperationForbidden": "Tento účet nesmí tato pravidla stahování použít.",
   "err.sourceProviderScopeUnavailable": "Pro tato pravidla stahování není dostupný žádný povolený zdroj.",
+  "err.bulkRemoteNotInRules": "Vaše pravidla stahování nepovolují kopírování z této knihovny.",
+  "err.bulkSeasonRequired": "Vyberte sérii ke stažení.",
+  "err.bulkEpisodeListIncomplete": "Seznam dílů se nepodařilo načíst celý.",
   "err.sourceLanguagePreferenceUnavailable": "Jazykové předvolby zdroje nejsou dostupné.",
   "err.sourceLanguagePreferenceConflict": "Jazykové předvolby zdroje nelze použít společně.",
 
