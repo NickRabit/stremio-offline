@@ -865,6 +865,7 @@ export const de: Catalog = {
   "library.moved": "Verschoben.",
   "library.copied": "Kopiert.",
   "library.selectMode": "Elemente auswählen",
+  "library.titleDetail": "Titeldetails",
   "library.selectItem": "Wählen Sie {name}",
   "library.selectedCount": "{count} ausgewählt",
   "library.bulkItems": "{count} Artikel",

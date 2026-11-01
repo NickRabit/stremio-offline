@@ -865,6 +865,7 @@ export const ru: Catalog = {
   "library.moved": "Переехал.",
   "library.copied": "Скопировано.",
   "library.selectMode": "Выберите элементы",
+  "library.titleDetail": "Сведения о названии",
   "library.selectItem": "Выберите {name}",
   "library.selectedCount": "{count} выбрано",
   "library.bulkItems": "{count} предметов",

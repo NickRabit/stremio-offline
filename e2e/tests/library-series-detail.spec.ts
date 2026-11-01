@@ -63,3 +63,88 @@ test("a matched local series opens like its catalogue detail and Back leaves the
   await expect(detail).toHaveCount(0);
   await expect(tile).toBeVisible();
 });
+
+test("the series detail keeps the chosen episode through its real folder listing", async ({ page }) => {
+  await page.goto("/");
+  await goToView(page, "Knihovna");
+  await page.locator(`[data-path="${series.folder}"] .library-open`).click();
+
+  const detail = page.locator(".library-local-detail");
+  await expect(detail).toBeVisible();
+  const episodeBlock = detail.locator(".catalogue-episodes");
+  await episodeBlock.locator(".episode-current button").click();
+  await episodeBlock.locator(".episode-list button", { hasText: "01×02" }).click();
+  await expect(episodeBlock.locator(".episode-current")).toContainText("01×02");
+
+  await detail.locator('.detail-secondary button[title="Otevřít složku"]').click();
+  await expect(detail).toHaveCount(0);
+  const first = page.locator(`[data-path="${series.folder}/${series.files[0]}"]`);
+  const second = page.locator(`[data-path="${series.folder}/${series.files[1]}"]`);
+  await expect(first).toBeVisible();
+  await expect(second).toBeVisible();
+  await expect(page.getByRole("button", { name: "Vybrat položky", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Detail titulu", exact: true })).toBeVisible();
+
+  await first.locator(".browse-menu").click();
+  await expect(first.getByRole("button", { name: "Přejmenovat", exact: true })).toBeVisible();
+  await expect(first.getByRole("button", { name: "Přesunout", exact: true })).toBeVisible();
+  await expect(first.getByRole("button", { name: "Smazat", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Detail titulu", exact: true }).click();
+  await expect(detail).toBeVisible();
+  await expect(detail.locator(".episode-current")).toContainText("01×02");
+});
+
+test("leaving the series folder ends its folder view", async ({ page }) => {
+  await page.goto("/");
+  await goToView(page, "Knihovna");
+  const tile = page.locator(`[data-path="${series.folder}"]`);
+  await tile.locator(".library-open").click();
+  await page.locator('.library-local-detail .detail-secondary button[title="Otevřít složku"]').click();
+  await expect(page.getByRole("button", { name: "Detail titulu", exact: true })).toBeVisible();
+
+  await page.locator(".crumbs").getByRole("button", { name: "Knihovna", exact: true }).click();
+  await tile.locator(".library-open").click();
+
+  await expect(page.locator(".library-local-detail")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Detail titulu", exact: true })).toHaveCount(0);
+});
+
+test("a Home episode card opens the local series on that episode", async ({ page, request }) => {
+  const file = series.files.find((name) => name.includes("S01E02"))!;
+  const relative = `${series.folder}/${file}`;
+  const key = `file:${relative}`;
+  await request.post("/api/progress", {
+    data: { key, path: relative, title: series.folder, position: 120, duration: 2400 },
+  });
+  try {
+    await page.goto("/");
+    await goToView(page, "Domů");
+    const card = page.locator('.home-row[data-row="resume"] .home-card', { hasText: series.folder });
+    await expect(card).toBeVisible();
+    await card.locator(".browse-open").click();
+
+    const detail = page.locator(".library-local-detail");
+    await expect(detail).toBeVisible();
+    await expect(detail.locator(".episode-current")).toContainText("01×02");
+    const current = page.locator('.crumbs button[aria-current="page"]');
+    await expect(current).toHaveText(series.folder);
+  } finally {
+    await request.delete(`/api/progress/${encodeURIComponent(key)}`);
+  }
+});
+
+test("a file detail's Folder action highlights that file in its parent", async ({ page }) => {
+  await page.goto("/");
+  await goToView(page, "Knihovna");
+  await page.locator(`[data-path="${series.folder}"] .library-open`).click();
+  await page.locator('.library-local-detail .detail-secondary button[title="Otevřít složku"]').click();
+
+  const file = page.locator(`[data-path="${series.folder}/${series.files[0]}"]`);
+  await file.locator(".library-open").click();
+  const detail = page.locator(".library-local-detail");
+  await expect(detail).toBeVisible();
+  await detail.locator('.detail-secondary button[title="Otevřít složku"]').click();
+
+  await expect(file.locator(".browse-focus-mark")).toBeVisible();
+});

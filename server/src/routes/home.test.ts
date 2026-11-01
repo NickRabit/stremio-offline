@@ -1427,6 +1427,56 @@ test("episodes of one bound show collapse into the show's card, kept on the newe
   assert.equal(card.addedAt, "2024-02-02T00:00:00.000Z");
 });
 
+test("file cards name the series folder and use the listing's episode numbers", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const episode = "lib_00000001/Show/04 serie/Show - S04E08 - Cut.mp4";
+  harness.records["lib_00000001/Show"] = { type: "series", id: "tt1", name: "Show" };
+  harness.data(ALICE).progress = {
+    [`file:${episode}`]: { position: 60, duration: 600, title: "Show", path: episode, updatedAt: "2024-02-01T00:00:00.000Z" },
+  };
+  harness.completed = [{ id: "done", title: "Show", ownerUserId: ALICE, status: "completed", target: episode, completedAt: "2024-02-02T00:00:00.000Z" }];
+  harness.seen.observe("lib_00000001", [], new Date("2024-01-01T00:00:00.000Z"));
+  harness.seen.observe("lib_00000001", [walk("Show/04 serie/Show - S04E08 - Cut.mp4", 10, "2024-01-02T00:00:00.000Z")], new Date("2024-02-03T00:00:00.000Z"));
+
+  const rows = await allRows(harness, ALICE);
+  const cards = [rows.resume!.items[0]!, rows.completed!.items[0]!, rows.recent!.items[0]!];
+  for (const card of cards) {
+    assert.equal(card.seriesPath, "Show");
+    assert.equal(card.season, 4);
+    assert.equal(card.episode, 8);
+  }
+});
+
+test("film and unbound file cards carry no series folder", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const film = "lib_00000001/Films/Film/Film.mkv";
+  const loose = "lib_00000001/Loose/other.mkv";
+  harness.records["lib_00000001/Films/Film"] = { type: "movie", id: "tt2", name: "Film" };
+  harness.data(ALICE).progress = {
+    [`file:${film}`]: { position: 60, duration: 600, title: "Film", path: film, updatedAt: "2024-02-01T00:00:00.000Z" },
+    [`file:${loose}`]: { position: 30, duration: 600, title: "Other", path: loose, updatedAt: "2024-02-01T00:00:00.000Z" },
+  };
+  harness.completed = [
+    { id: "film", title: "Film", ownerUserId: ALICE, status: "completed", target: film, completedAt: "2024-02-02T00:00:00.000Z" },
+    { id: "loose", title: "Other", ownerUserId: ALICE, status: "completed", target: loose, completedAt: "2024-02-01T00:00:00.000Z" },
+  ];
+  harness.seen.observe("lib_00000001", [], new Date("2024-01-01T00:00:00.000Z"));
+  harness.seen.observe("lib_00000001", [
+    walk("Films/Film/Film.mkv", 10, "2024-01-02T00:00:00.000Z"),
+    walk("Loose/other.mkv", 11, "2024-01-03T00:00:00.000Z"),
+  ], new Date("2024-02-03T00:00:00.000Z"));
+
+  const rows = await allRows(harness, ALICE);
+  const cards = [
+    ...rows.resume!.items,
+    ...rows.completed!.items,
+    ...rows.recent!.items,
+  ];
+  for (const card of cards) assert.equal(card.seriesPath, undefined);
+});
+
 test("the recent row draws nothing from a library off Home, disabled, away or not granted", async (t) => {
   const ids = ["lib_00000001", "lib_00000002", "lib_00000003", "lib_00000004", "lib_00000005"];
   const harness = await mount({

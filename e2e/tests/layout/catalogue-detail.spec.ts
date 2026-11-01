@@ -292,3 +292,28 @@ test("a series opens the full detail on the episode the catalogue had and lets a
   await expect(main).toHaveCount(0);
   await expect(page.locator(".poster-grid .poster-card.selected")).toHaveCount(1);
 });
+
+test("detail carousels keep their first item under the strip's start", async ({ page }) => {
+  await page.route(/\/api\/meta\/series\/tt-e2e-series\/extras/, (route) => route.fulfill({
+    json: {
+      people: Array.from({ length: 8 }, (_, index) => ({ name: `Person ${index + 1}`, role: "cast", character: `Role ${index + 1}` })),
+      related: Array.from({ length: 8 }, (_, index) => ({ type: "movie", id: `related-${index + 1}`, name: `Related ${index + 1}` })),
+      videos: [],
+      source: "addon",
+    },
+  }));
+  await openCatalogue(page, /Seriály/);
+  await page.getByRole("button", { name: /Zkušební seriál/ }).click();
+  await page.locator(".detail-panel").getByRole("button", { name: /První díl/ }).click();
+  await page.locator(".detail-panel .stream-list button").first().waitFor();
+  await info(page).click();
+
+  const strips = page.locator("main.view-title-detail .extras-strip");
+  await expect(strips.first()).toBeVisible();
+  await strips.evaluateAll((nodes) => {
+    for (const node of nodes) (node.firstElementChild as HTMLElement | null)?.focus();
+  });
+  await expect.poll(() => strips.evaluateAll((nodes) => nodes.map((node) => node.scrollLeft))).toEqual(
+    Array(await strips.count()).fill(0),
+  );
+});

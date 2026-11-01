@@ -42,6 +42,19 @@ export function nextEpisode(episodes: BrowseFile[], resume?: SeriesResume | null
   return finished(last) ? episodes[touched + 1] ?? last : last;
 }
 
+export function chosenEpisode(
+  episodes: BrowseFile[],
+  wanted: { path?: string; season?: number; episode?: number } | null,
+  resume: SeriesResume | null,
+): BrowseFile | undefined {
+  const byPath = wanted?.path ? episodes.find((file) => file.path === wanted.path) : undefined;
+  if (byPath) return byPath;
+  const byNumber = wanted?.season != null && wanted.episode != null
+    ? episodes.find((file) => file.season === wanted.season && file.episode === wanted.episode)
+    : undefined;
+  return byNumber ?? nextEpisode(episodes, resume);
+}
+
 /** The episode's own title read out of a file name such as `Show - S01E02 - Title`. */
 export function episodeName(file: BrowseFile): string {
   const match = /^.*?\b(?:S\d{1,3}\s*E\d{1,4}|\d{1,2}x\d{1,3})\b[\s._\-–—]*/i.exec(file.label);

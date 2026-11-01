@@ -149,6 +149,8 @@ export type HomeCard =
   | RemoteHomeCard
   | { kind: "resume-file"; key: string; title: string; subtitle?: string; poster?: string; wide?: string;
       path: string; progress: HomeProgress; season?: number; episode?: number;
+      /** The series-bound folder this file belongs to, when it is not the file itself. */
+      seriesPath?: string;
       updatedAt: string; forgetKeys: string[];
       /** The catalogue title the file is bound to, when it is: its detail is one click away.
        *  Named `identity` because the card's `title` is the label it draws. */
@@ -161,13 +163,13 @@ export type HomeCard =
       path?: string;
       updatedAt: string; forgetKeys: string[] }
   | { kind: "completed"; key: string; title: string; poster?: string; wide?: string;
-      path: string; completedAt: string; season?: number; episode?: number }
+      path: string; completedAt: string; season?: number; episode?: number; seriesPath?: string }
   | { kind: "favorite"; key: string; path: string; itemKind: "file" | "folder"; label: string;
       poster?: string; wide?: string; title?: { type: "movie" | "series"; id: string } }
   | { kind: "favorite-catalogue"; key: string; type: string; id: string; name: string;
       poster?: string; wide?: string; year?: string }
   | { kind: "recent"; key: string; path: string; label: string; poster?: string; wide?: string;
-      addedAt: string; libraryId: string; season?: number; episode?: number }
+      addedAt: string; libraryId: string; season?: number; episode?: number; seriesPath?: string }
   | { kind: "episode"; key: string; followId: string; type: string; metaId: string; name: string;
       poster?: string; wide?: string; season: number; episode: number; title?: string; released: string }
   | { kind: "discovery"; key: string; type: string; id: string; name: string; title: string;
@@ -227,6 +229,7 @@ export interface ResumeFileItem {
   progress: HomeProgress;
   season?: number;
   episode?: number;
+  seriesPath?: string;
   identity?: ResumeIdentity;
 }
 
@@ -303,6 +306,7 @@ function cardFor(candidates: ResumeCandidate[]): ResumeCard {
       path: item.path, progress: item.progress,
       ...(item.season !== undefined ? { season: item.season } : {}),
       ...(item.episode !== undefined ? { episode: item.episode } : {}),
+      ...(item.seriesPath ? { seriesPath: item.seriesPath } : {}),
       ...(item.identity ? { identity: item.identity } : {}),
       updatedAt: item.updatedAt, forgetKeys,
     };

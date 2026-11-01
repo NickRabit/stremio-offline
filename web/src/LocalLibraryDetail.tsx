@@ -338,7 +338,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     favorite={favorite}
     onToggleFavorite={onToggleFavorite}
     episodes={episodes}
-    {...(!isFile && onOpenFolder ? { onOpenFolder } : {})}
+    {...(onOpenFolder ? { onOpenFolder } : {})}
     sources={sources}
     {...(folderSource ? { preferredSource: folderSource } : {})}
     {...(resumeStableKey ? { resumeStableKey } : {})}

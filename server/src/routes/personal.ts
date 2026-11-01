@@ -114,6 +114,7 @@ export type ResumePageItem = LibraryFile & BrowseMeta & {
   poster?: string;
   wide?: string;
   seriesKey?: string;
+  seriesPath?: string;
   identity?: ResumeIdentity;
   backfill?: boolean;
 };
@@ -849,6 +850,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       // same key and the grouping below turns them into a single tile.
       const bound = knownTitleEntry(libraryKey(key), records);
       const series = bound?.record.type === "series" ? { key: bound.key, id: bound.record.id, name: bound.record.name } : undefined;
+      const seriesPath = series && series.key !== key && parseLibraryPath(series.key)?.relative
+        ? wirePath(series.key)
+        : undefined;
       // A film gets no series key: that grouping would fold two films sharing a folder into one.
       const identity: ResumeIdentity | undefined = series
         ? { type: "series", id: series.id }
@@ -856,6 +860,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       return [{ ...item, path: wirePath(key), label: entry.title || item.label, modified: entry.updatedAt,
         progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(key),
         seriesKey: series?.key,
+        ...(seriesPath ? { seriesPath } : {}),
         ...(identity ? { identity } : {}),
         ...(series?.name ? { series: { name: series.name } } : {}) }];
     }));
@@ -885,7 +890,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   };
   app.get("/api/library/resume", asyncRoute(async (req, res) => {
     const result = await libraryResumeItems(req);
-    res.json({ path: ":resume", items: result.items.map(({ backfill: _backfill, seriesKey: _seriesKey, identity: _identity, ...item }) => item), total: result.total, pending: result.pending });
+    res.json({ path: ":resume", items: result.items.map(({ backfill: _backfill, seriesKey: _seriesKey, seriesPath: _seriesPath, identity: _identity, ...item }) => item), total: result.total, pending: result.pending });
   }));
 
   app.get("/api/library/favorites", asyncRoute(async (req, res) => {

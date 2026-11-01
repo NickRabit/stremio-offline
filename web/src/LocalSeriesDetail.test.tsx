@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { episodeFiles, episodeName, nextEpisode, useLocalSeries } from "./LocalSeriesDetail";
+import { chosenEpisode, episodeFiles, episodeName, nextEpisode, useLocalSeries } from "./LocalSeriesDetail";
 import type { BrowseFile } from "./types";
 
 const json = (body: unknown, status = 200) =>
@@ -63,6 +63,27 @@ describe("local series helpers", () => {
     expect(nextEpisode([first, second, third])).toBe(first);
     expect(nextEpisode([first, resuming, third])).toBe(resuming);
     expect(nextEpisode([{ ...first, progress: { position: 95, duration: 100 } }, second, third])).toBe(second);
+  });
+
+  it("chooses the wanted episode by path", () => {
+    const first = episode("/s1e1.mkv", 1, 1);
+    const second = episode("/s1e2.mkv", 1, 2);
+
+    expect(chosenEpisode([first, second], { path: second.path }, null)).toBe(second);
+  });
+
+  it("chooses a folded copy by season and episode", () => {
+    const copy = episode("/s1e2-copy.mkv", 1, 2);
+    const representative = episode("/s1e2.mkv", 1, 2, { size: 2_000_000_000 });
+
+    expect(chosenEpisode([representative], { path: copy.path, season: 1, episode: 2 }, null)).toBe(representative);
+  });
+
+  it("falls back to the next episode when nothing was chosen", () => {
+    const first = episode("/s1e1.mkv", 1, 1);
+    const second = episode("/s1e2.mkv", 1, 2);
+
+    expect(chosenEpisode([first, second], null, { season: 1, episode: 2 })).toBe(second);
   });
 
   it("reads the episode title out of a numbered file name", () => {
