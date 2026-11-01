@@ -1100,6 +1100,65 @@ const nativeCaps = {
   subtitles: ["subrip", "hdmv_pgs_subtitle"],
 };
 
+const fourKInfo = {
+  container: "matroska,webm",
+  duration: 3600,
+  video: {
+    codec: "hevc", width: 3840, height: 2160, profile: "Main 10",
+    pixelFormat: "yuv420p10le", transfer: "smpte2084",
+  },
+  audio: { codec: "eac3", channels: 6 },
+  audioTracks: [{ index: 0, codec: "eac3", channels: 6 }],
+  subtitleTracks: [],
+  chapters: [
+    { start: 0, end: 60, title: "Opening on cdn.example" },
+    { start: 60, end: 120, title: "Part one" },
+  ],
+};
+const safeChapters = [
+  { start: 0, end: 60, title: "Opening on [redacted]" },
+  { start: 60, end: 120, title: "Part one" },
+];
+
+test("a direct HDR source reports its chapters and the streams the player receives", async () => {
+  const manager = new PlaybackManager(tmp("test-playback-facts-direct")) as any;
+  manager.inspect = async () => fourKInfo;
+  manager.spawnAt = async () => { throw new Error("direct play must not spawn a conversion"); };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps);
+
+  assert.equal(started.mode, "direct");
+  assert.deepEqual(started.playing, {
+    resolution: 2160,
+    hdr: "hdr10",
+    videoCodec: "hevc",
+    audioCodec: "eac3",
+    audioChannels: 6,
+  });
+  assert.deepEqual(started.chapters, safeChapters);
+});
+
+test("a 720p transcode reports the scaled SDR H.264 and stereo AAC output", async () => {
+  const manager = new PlaybackManager(tmp("test-playback-facts-transcode")) as any;
+  manager.inspect = async () => fourKInfo;
+  manager.spawnAt = async (session: any, time: number) => {
+    session.offset = time;
+    session.mode = manager.plan(session).copyVideo ? "remux" : "transcode";
+    return "/hls";
+  };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, playCaps, { quality: 720 });
+
+  assert.equal(started.mode, "transcode");
+  assert.deepEqual(started.playing, {
+    resolution: 720,
+    videoCodec: "h264",
+    audioCodec: "aac",
+    audioChannels: 2,
+  });
+  assert.deepEqual(started.chapters, safeChapters);
+});
+
 test("hlsCanStart waits for the segments asked for unless the playlist has ended", () => {
   const head = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n";
   const one = `${head}#EXTINF:2.000,\nseg-0-000000.m4s\n`;

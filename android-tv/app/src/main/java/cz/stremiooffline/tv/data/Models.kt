@@ -33,6 +33,8 @@ data class SettingsResponse(
   val streamSort: String? = null,
   val realDebridConfigured: Boolean = false,
   val downloadSourceProfile: String? = null,
+  val upNextAt: String? = null,
+  val skipSegmentsAuto: Boolean = false,
 )
 
 /** One content language `GET /api/languages` offers. The name is the server's Czech label

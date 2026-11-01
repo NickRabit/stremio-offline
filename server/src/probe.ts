@@ -15,6 +15,8 @@ export interface Track {
   forced?: boolean;
 }
 
+export interface MediaChapter { start: number; end: number; title?: string }
+
 export interface MediaInfo {
   container: string;
   duration?: number;
@@ -35,6 +37,7 @@ export interface MediaInfo {
   audio?: { codec: string; channels?: number };
   audioTracks: Track[];
   subtitleTracks: Track[];
+  chapters?: MediaChapter[];
   /** An HLS master offers the same film several times over; these are the absolute stream
    *  indexes of the one rendition the conversion reads. */
   variant?: { video: number; audio?: number };
@@ -103,6 +106,29 @@ export const hasDolbyVisionSideData = (
   stream?: Pick<ProbeStream, "side_data_list">,
 ): boolean => (stream?.side_data_list ?? []).some((side) =>
   /dovi|dolby vision/i.test(`${String(side.side_data_type ?? "")} ${String(side.name ?? "")}`));
+
+export function chaptersFrom(raw: unknown): MediaChapter[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const chapters: MediaChapter[] = [];
+  const starts = new Set<number>();
+  const time = (value: unknown) =>
+    typeof value === "number" || (typeof value === "string" && value.trim())
+      ? Number(value)
+      : Number.NaN;
+  for (const value of raw) {
+    if (typeof value !== "object" || value === null) continue;
+    const chapter = value as { start_time?: unknown; end_time?: unknown; tags?: { title?: unknown } };
+    const start = time(chapter.start_time);
+    const end = time(chapter.end_time);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= end || starts.has(start)) continue;
+    starts.add(start);
+    const title = typeof chapter.tags?.title === "string" ? chapter.tags.title.trim() : "";
+    chapters.push({ start, end, ...(title ? { title } : {}) });
+  }
+  chapters.sort((left, right) => left.start - right.start);
+  const kept = chapters.slice(0, 500);
+  return kept.length >= 2 ? kept : undefined;
+}
 
 // Playlists name their segments as they please, and ffmpeg refuses the unfamiliar endings by
 // default -- which reads as an unplayable source. Newer ffmpeg split the old single option into
@@ -179,9 +205,13 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
       "-v", "error", "-print_format", "json",
       ...await playlistArgs("ffprobe"),
       ...limits,
-      "-show_format", "-show_streams", input,
+      "-show_format", "-show_streams", "-show_chapters", input,
     ], { timeout, maxBuffer: 8 * 1024 * 1024, signal });
-    const data = JSON.parse(stdout) as { format?: { format_name?: string; duration?: string; bit_rate?: string }; streams?: ProbeStream[] };
+    const data = JSON.parse(stdout) as {
+      format?: { format_name?: string; duration?: string; bit_rate?: string };
+      streams?: ProbeStream[];
+      chapters?: unknown;
+    };
     const streams = data.streams ?? [];
     const variant = pickVariant(streams);
     const video = variant?.video ?? streams.find((item) => item.codec_type === "video" && !item.disposition?.attached_pic);
@@ -212,6 +242,7 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
         } : undefined,
         audio: audio?.codec_name ? { codec: audio.codec_name, channels: audio.channels } : undefined,
         audioTracks, subtitleTracks,
+        chapters: chaptersFrom(data.chapters),
         variant: variant ? { video: variant.video.index!, audio: variant.audio?.index } : undefined,
       },
     };

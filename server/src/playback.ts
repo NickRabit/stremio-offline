@@ -16,6 +16,7 @@ import { ffmpegPath, trackMedia } from "./media-tools.js";
 import { playlistArgs, probe, type MediaInfo, type Track } from "./probe.js";
 import { safeFetch } from "./security.js";
 import type { StreamItem } from "./types.js";
+import { videoResolutionClass } from "./video-resolution.js";
 
 const REACHABILITY_TIMEOUT_MS = 8_000;
 
@@ -103,6 +104,16 @@ export interface PlaybackOptions {
   quality?: number | null;
 }
 
+export interface PlaybackChapter { start: number; end: number; title?: string }
+export interface PlaybackFacts {
+  /** `videoResolutionClass` of what is played: 2160, 1440, 1080, 720, 576, 480, 360 or a rounded line count. */
+  resolution?: number;
+  hdr?: "dolbyVision" | "hdr10" | "hlg";
+  videoCodec?: string;
+  audioCodec?: string;
+  audioChannels?: number;
+}
+
 export interface PlaybackDescriptor {
   /** A failed seek restored this generation; the client should resume it. */
   seekRestored?: boolean;
@@ -115,6 +126,8 @@ export interface PlaybackDescriptor {
   quality: number | null;
   /** What the conversion copies rather than re-encodes; absent for a direct stream. */
   copy?: { video: boolean; audio: boolean };
+  chapters?: PlaybackChapter[];
+  playing?: PlaybackFacts;
   sidecarUrl?: string;
   /**
    * Whether `url` addresses a playlist rather than the media. The client cannot
@@ -859,6 +872,40 @@ export class PlaybackManager {
 
   private describe(session: Session, url: string): PlaybackDescriptor {
     const copy = session.mode === "direct" ? undefined : this.plan(session);
+    const videoCopied = session.mode === "direct" || Boolean(copy?.copyVideo);
+    const audioCopied = session.mode === "direct" || Boolean(copy?.copyAudio);
+    const video = session.info?.video;
+    const audio = session.info?.audioTracks?.[session.audioTrack] ?? session.info?.audio;
+    const quality = session.quality;
+    const sourceResolution = videoResolutionClass(video?.width, video?.height);
+    const scaledWidth = quality !== null && video?.width !== undefined && video.height !== undefined
+      ? Math.round(video.width * quality / video.height)
+      : undefined;
+    const resolution = videoCopied
+      ? sourceResolution
+      : quality !== null && video?.height !== undefined && video.height > quality
+        ? videoResolutionClass(scaledWidth, quality)
+        : sourceResolution;
+    const playing: PlaybackFacts = {
+      resolution,
+      ...(videoCopied && video?.dolbyVision
+        ? { hdr: "dolbyVision" as const }
+        : videoCopied && video?.transfer === "smpte2084"
+          ? { hdr: "hdr10" as const }
+          : videoCopied && video?.transfer === "arib-std-b67"
+            ? { hdr: "hlg" as const }
+            : {}),
+      ...((videoCopied ? video?.codec : "h264") ? { videoCodec: videoCopied ? video?.codec : "h264" } : {}),
+      ...(audio
+        ? audioCopied
+          ? { audioCodec: audio.codec, ...(audio.channels !== undefined ? { audioChannels: audio.channels } : {}) }
+          : { audioCodec: "aac", audioChannels: 2 }
+        : {}),
+    };
+    const chapters = session.info?.chapters?.map((chapter) => {
+      const title = safeSourceText(chapter.title, session.stream);
+      return { start: chapter.start, end: chapter.end, ...(title ? { title } : {}) };
+    });
     return {
       id: session.id, mode: session.mode, url, offset: session.offset,
       duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
@@ -868,6 +915,8 @@ export class PlaybackManager {
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
       sidecarUrl: session.subtitleTrack !== null && !this.clientRendersSubtitle(session) ? this.sidecarUrl(session) : undefined,
       copy: copy ? { video: copy.copyVideo, audio: copy.copyAudio } : undefined,
+      ...(chapters?.length ? { chapters } : {}),
+      ...(Object.values(playing).some((value) => value !== undefined) ? { playing } : {}),
       playlist: session.mode === "direct" ? isPlaylistSource(session.stream, session.info) : true,
     };
   }
