@@ -84,6 +84,22 @@ describe("EpisodePicker", () => {
     expect([...host.querySelectorAll(".episode-list button b")].map((node) => node.textContent)).toEqual(["00×01"]);
   });
 
+  it("another season chooses its first episode and keeps the list open", async () => {
+    const onPick = vi.fn();
+    await act(async () => { root.render(<Harness selected="/show/s01e01.mkv" onPick={onPick}/>); });
+    const select = host.querySelector<HTMLSelectElement>(".season-select")!;
+
+    await act(async () => {
+      select.value = "2";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    // Play and the source row below follow the season, not the episode of the one just left.
+    expect(onPick).toHaveBeenCalledWith("/show/s02e01.mkv");
+    expect(host.querySelector(".episode-list button.selected b")!.textContent).toBe("02×01");
+    expect(host.querySelector(".episode-current")).toBeNull();
+  });
+
   it("picks an episode and closes the list", async () => {
     const onPick = vi.fn();
     const onOpenChange = vi.fn();

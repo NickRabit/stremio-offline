@@ -28,13 +28,24 @@ export function EpisodePicker({ episodes, selectedKey, onPick, open, onOpenChang
   const selected = selectedKey === null ? undefined : episodes.find((episode) => episode.key === selectedKey);
   const activeSeason = season ?? selected?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? 0;
   const visibleEpisodes = episodes.filter((episode) => seasons.length <= 1 || episode.season === activeSeason);
+  // Another season makes its first episode the chosen one, so Play and the source row below never
+  // keep standing for an episode of the season the viewer just left. The list stays open on it.
+  const chooseSeason = (next: number) => {
+    onSeason(next);
+    const first = episodes.filter((episode) => episode.season === next)
+      .sort((a, b) => (a.episode ?? Number.MAX_SAFE_INTEGER) - (b.episode ?? Number.MAX_SAFE_INTEGER))[0];
+    if (first && first.key !== selectedKey) {
+      onPick(first.key);
+      onOpenChange(true);
+    }
+  };
 
   return <div className="catalogue-episodes">
     {selectedKey === null || open ? <>
       <div className="subhead episode-head"><h3>{t("episodes.heading")}</h3>
         <div className="episode-tools">
           {seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason}
-            onChange={(event) => onSeason(Number(event.target.value))}>
+            onChange={(event) => chooseSeason(Number(event.target.value))}>
             {seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}
           </select>}
           <span>{visibleEpisodes.length}</span>
