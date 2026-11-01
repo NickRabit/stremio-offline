@@ -1903,11 +1903,13 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .home-row .browse-item:hover .browse-art{transform:none}
 .home-row .browse-frame{position:relative}
 .home-row .browse-open{display:block;width:100%;text-align:left;border:0;background:transparent;padding:0;min-width:0;color:inherit;font:inherit}
-.home-row .browse-open strong,.home-row .browse-open small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:22px;line-height:22px;padding-right:44px}
+.home-row .browse-open strong,.home-row .browse-open small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:22px;line-height:22px}
 .home-row .browse-open strong{font-size:12px;margin-top:6px}
 .home-row .browse-open small{font-size:10px;color:var(--muted)}
-.home-row .browse-menu{position:absolute;top:auto;right:0;bottom:0;width:44px;height:44px;display:grid;place-items:center;color:var(--muted);border:0;border-radius:0;background:transparent;opacity:1;padding:0;z-index:2}
-.home-row .browse-actions{position:static;right:auto;top:auto;width:auto;min-width:0;max-width:none;margin-top:6px}
+/* The card menu sits on the artwork's corner, as on the Continue watching page; its three items
+   at most open over the card, inside the strip that clips anything below it. */
+.home-row .browse-menu{opacity:1;z-index:2}
+.home-row .browse-actions{z-index:3}
 .home-row .resume-strip .home-skeleton-line{display:block;height:22px;border-radius:4px;background:var(--panel2)}
 .home-row .resume-strip .home-skeleton-line.title{margin-top:6px}
 .home-row .resume-strip.skeleton .browse-art{background:var(--panel2);border:0;animation:home-pulse 1.4s ease-in-out infinite}
@@ -2034,7 +2036,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .section-view .browse-frame{position:relative}
 .section-view .browse-open{display:block;width:100%;text-align:left;border:0;background:transparent;padding:0;min-width:0;color:inherit;font:inherit}
 .section-view .browse-menu{opacity:1}
-@media(max-width:700px),(max-width:980px) and (max-height:500px) and (orientation:landscape){.section-view .browse-menu{width:34px;height:34px;border-radius:8px}}
+@media(max-width:700px),(max-width:980px) and (max-height:500px) and (orientation:landscape){.section-view .browse-menu,.home-row .browse-menu{width:34px;height:34px;border-radius:8px}.section-view .browse-actions,.home-row .browse-actions{top:42px}}
 /* Let the long destination wrap beside its icon; short, wide windows keep a one-line rail. */
 @media(min-width:981px) and (min-height:501px),(min-width:701px) and (max-width:980px) and (min-height:501px) and (orientation:landscape){.sidebar nav button>span{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;min-width:0;white-space:normal;overflow:hidden;text-overflow:ellipsis;line-height:1.1}}
 @media(min-width:981px) and (max-height:500px) and (orientation:landscape){.sidebar nav button>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
