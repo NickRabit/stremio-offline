@@ -32,6 +32,24 @@ const render = (rows: Stream[], badgeOf?: (stream: Stream) => string) =>
 const row = () => host.querySelector("button")!;
 
 describe("SourceRows", () => {
+  it("scrolls its own list to a chosen row that sits below the visible part, marking the scroll as its own", () => {
+    const rows = Array.from({ length: 20 }, (_, index) => addonRow({ sourceId: `s${index}`, name: `Row ${index}` }));
+    // jsdom lays nothing out: each row is 40px tall in a 100px list, stacked from the top.
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.tagName === "DIV" ? 100 : 40; });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(40);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const index = this.tagName === "BUTTON" ? [...this.parentElement!.children].indexOf(this) : 0;
+      const list = this.tagName === "BUTTON" ? this.parentElement! : this;
+      const top = this.tagName === "BUTTON" ? index * 40 - list.scrollTop : 0;
+      return { top, bottom: top + 40, left: 0, right: 0, width: 0, height: 40, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+    });
+    act(() => root.render(<SourceRows rows={rows} selected={rows[17]!} onSelect={() => {}}/>));
+    const list = host.querySelector<HTMLDivElement>(".stream-list")!;
+    expect(list.scrollTop).toBe(17 * 40 - 30);
+    expect(list.dataset.autoScroll).toBe("1");
+    vi.restoreAllMocks();
+  });
+
   it("labels an addon row exactly as the catalogue does: its transport, its own name, its addon caption", () => {
     render([addonRow()]);
     expect(row().querySelector("i")!.textContent).toBe("HTTP");

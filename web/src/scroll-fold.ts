@@ -25,6 +25,12 @@ export function createCompactOnScroll(blocked: () => boolean = () => false) {
     if (blocked()) return;
     const element = event.currentTarget;
     const top = Math.max(0, element.scrollTop);
+    // A list that scrolled itself to the chosen row was not pushed by the viewer: the position is
+    // remembered and the header stays as it is.
+    if (element.dataset.autoScroll) {
+      history.set(element, { top, travel: 0, until: 0 });
+      return;
+    }
     const previous = history.get(element) ?? { top: 0, travel: 0, until: 0 };
     const delta = top - previous.top;
     const travel = Math.sign(delta) === Math.sign(previous.travel) ? previous.travel + delta : delta;
