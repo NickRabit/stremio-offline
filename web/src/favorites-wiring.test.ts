@@ -128,7 +128,7 @@ describe("a star and a follow name the add-on the title came from", () => {
   });
 
   it("hands the add-on to the follow it creates", () => {
-    expect(app).toContain("...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })}><Bell/>");
+    expect(app).toContain("...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })} aria-label={t(\"follow.follow\")}");
     expect(app).toContain("const addonKey = panelAddonKey(selectedStream?.addonKey); setFollowStart(addonKey ? { ...selected, addonKey } : selected);");
     expect(app).toContain("...(followStart.addonKey ? { addonKey: followStart.addonKey } : {}) }, onFollowed");
   });

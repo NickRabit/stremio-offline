@@ -282,7 +282,9 @@ function CalendarTab({ onOpenSeries, onNotify }: { onOpenSeries: FollowingPagePr
   };
   const goToday = () => { setCursor(new Date()); setSelected(today); };
   useEffect(() => {
-    if (selected !== dayKey(monthStart) || byDay.has(selected)) return;
+    // Only another month's first day moves on: on the first of the current month that day is
+    // today, and the calendar keeps it.
+    if (selected === today || selected !== dayKey(monthStart) || byDay.has(selected)) return;
     const first = [...byDay.keys()].filter((key) => key.startsWith(selected.slice(0, 7))).sort()[0];
     if (first) setSelected(first);
   }, [byDay]);

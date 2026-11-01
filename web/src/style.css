@@ -2346,6 +2346,10 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
   .library-title-detail .library-detail-hero .detail-copy h2{font-size:28px;text-align:center}
   .library-title-detail .original-line,.library-title-detail .library-detail-hero .meta-line,.library-title-detail .detail-ratings{text-align:center}
   .library-title-detail .detail-ratings,.library-title-detail .library-detail-chips,.library-title-detail .detail-chips .title-chips{justify-content:center}
+  /* The follow chip keeps only its bell on a phone, so the kind and the three links stay on one
+     line with it instead of wrapping the last link onto a row of its own. */
+  .library-title-detail .detail-chips .follow-chip-label{display:none}
+  .library-title-detail .detail-chips .follow-chip{padding:0 8px}
   .library-title-detail .hero.has-chips{display:block}
   .library-title-detail .hero.has-chips>.detail-copy{max-width:none}
   .library-title-detail .hero.has-chips.has-gallery>.gallery-open{position:absolute;top:0;right:0}

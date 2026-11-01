@@ -12,6 +12,7 @@ import { AddonManager } from "./AddonManager";
 import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { LocalLibraryDetail, type AlternativePlay } from "./LocalLibraryDetail";
+import { LocalSeriesDetail } from "./LocalSeriesDetail";
 import { DetailDescription, DetailHero } from "./DetailHero";
 import { folderTitle, LibraryItem, LibraryItemMenu, rowDescription } from "./library-item";
 import { LibraryTile } from "./library-tile";
@@ -275,6 +276,7 @@ export function App() {
   /** The local file or matched-movie folder open in the library's detail, and where its listing
    *  sat, so Back returns to the exact spot. */
   const [localDetail, setLocalDetail] = useState<{ item: TreeItem } | null>(null);
+  const [localSeries, setLocalSeries] = useState<Extract<TreeItem, { kind: "folder" }> | null>(null);
   const localCrumbsRef = useCrumbsAtEnd<HTMLElement>(`${browsePath}|${localDetail?.item.path ?? ""}`);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
   const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series"; paths?: string[]; copy?: boolean } | null>(null);
@@ -453,6 +455,7 @@ export function App() {
     setMenuFor(null);
     try {
       await api.setFavorite(itemPath, favorite);
+      if (localSeries?.path === itemPath) setLocalSeries({ ...localSeries, favorite });
       // One star per title: starring a bound copy stars its title too, so the catalogue's own
       // list has to be read again for the star to read filled everywhere.
       setWatchlist(await api.watchlist());
@@ -526,11 +529,28 @@ export function App() {
   /** A library star opens the folder or plays the file the way the library does; a catalogue
    *  star opens its detail. */
   const openFavorite = (item: FavoriteLibraryItem) => {
-    if (item.itemKind === "folder") { navigated.current = true; setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(item.path); setView("library"); return; }
+    if (item.itemKind === "folder") {
+      const series: Extract<TreeItem, { kind: "folder" }> | null = item.title?.type === "series" ? {
+        kind: "folder", path: item.path, name: item.label, fileCount: 0, size: 0,
+        ...(item.poster ? { poster: item.poster } : {}), ...(item.wide ? { wide: item.wide } : {}),
+        ...(item.year ? { year: item.year } : {}), match: "matched", titleType: "series", favorite: true,
+      } : null;
+      navigated.current = true; setBrowseQuery(""); setFromFavorites(false); setMenuFor(null);
+      setLocalSeries(series); setBrowsePath(item.path); setView("library");
+      if (series) {
+        const slash = item.path.lastIndexOf("/");
+        void api.browse({ path: slash > 0 ? item.path.slice(0, slash) : "", query: item.label, limit: 120 }).then((page) => {
+          const row = page.items.find((entry) => entry.kind === "folder" && entry.path === item.path);
+          if (row?.kind === "folder") setLocalSeries((current) => current?.path === row.path ? row : current);
+        }).catch(() => undefined);
+      }
+      return;
+    }
     void playLocal(item.label, item.path, item.poster);
   };
   /** A favourite bound to a title is that title, whatever kind of copy it is: one star, one click. */
   const openFavoriteTitle = (item: FavoriteLibraryItem) => {
+    if (item.itemKind === "folder" && item.title?.type === "series") { openFavorite(item); return; }
     if (!item.title) return;
     openCatalogueDetail({ type: item.title.type, id: item.title.id, name: item.label, ...(item.poster ? { poster: item.poster } : {}) });
   };
@@ -1821,6 +1841,8 @@ export function App() {
   }, [localDetail, remoteOpen, view, browsePath, remoteRootsPresent, browse?.path, browseBusy]);
   /** The listing's live row for the open detail, so its favorite and position never go stale. */
   const liveLocalItem = localDetail ? browseItemAt(localDetail.item.path) : null;
+  const openLocalSeries = !localDetail && localSeries?.path === browsePath ? localSeries : null;
+  const liveLocalSeries = openLocalSeries ? browseItemAt(openLocalSeries.path) : null;
   /** A library file carries no watched flag of its own, and the store keeps resume positions only:
    *  a finished film is already dropped by the server. So "seen" for a file is that there is nothing
    *  left to resume, and marking one seen drops the position it kept. */
@@ -3354,8 +3376,8 @@ export function App() {
     kind={t(catalogueDetail.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}
     links={detailLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
     leading={(catalogueDetail.type === "series" || (detailRead !== null && !detailRead.pending && !detailRead.playable)) && (catalogueFollow
-      ? <button className="follow-chip on" onClick={() => setDetailFollowOpen(true)}><BellRing/>{t("follow.following")}{catalogueFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button>
-      : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}), ...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })}><Bell/>{t("follow.follow")}</button>)}/> : undefined;
+      ? <button className="follow-chip on" aria-label={t("follow.following")} title={t("follow.following")} onClick={() => setDetailFollowOpen(true)}><BellRing/><span className="follow-chip-label">{t("follow.following")}</span>{catalogueFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button>
+      : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}), ...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })} aria-label={t("follow.follow")} title={t("follow.follow")}><Bell/><span className="follow-chip-label">{t("follow.follow")}</span></button>)}/> : undefined;
   const panelExtras = useTitleExtras(selected?.type, selected?.id);
 
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
@@ -3673,8 +3695,8 @@ export function App() {
           </nav>
           <div className="browse-tools">
             <div className={`fold browse-fold${libraryCompact ? " closed" : ""}`}><div className="browse-fold-inner">
-            {!libraryList && !localDetail && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
-            {!libraryList && !localDetail && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
+            {!libraryList && !localDetail && !openLocalSeries && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
+            {!libraryList && !localDetail && !openLocalSeries && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
               setBrowseSort(next);
               // Dates and sizes start with the largest value; names start with A.
@@ -3684,23 +3706,23 @@ export function App() {
               <option value="name">{t("library.sortName")}</option><option value="added">{t("library.sortAdded")}</option>
               <option value="size">{t("library.sortSize")}</option><option value="random">{t("library.sortRandom")}</option>
             </select>}
-            {!libraryList && !localDetail && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => { setBrowseDesc((value) => !value); persistLibraryPrefs({ order: browseDesc ? "asc" : "desc" }); }} disabled={browseSort === "random"}>
+            {!libraryList && !localDetail && !openLocalSeries && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => { setBrowseDesc((value) => !value); persistLibraryPrefs({ order: browseDesc ? "asc" : "desc" }); }} disabled={browseSort === "random"}>
               {browseDesc ? <ArrowDown/> : <ArrowUp/>}
             </button>}
             {/* Only while the scan has something waiting: with nothing to confirm the filter
                 would list an empty folder and say nothing about why. */}
-            {!libraryList && !localDetail && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
+            {!libraryList && !localDetail && !openLocalSeries && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
               aria-pressed={onlyUnconfirmed} disabled={browsePath === ":favorites"}
               onClick={() => setOnlyUnconfirmed((value) => !value)}><Sparkles/></button>}
-            {!libraryList && !localDetail && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => { setBrowseView((value) => value === "grid" ? "list" : "grid"); persistLibraryPrefs({ view: browseView === "grid" ? "list" : "grid" }); }}>
+            {!libraryList && !localDetail && !openLocalSeries && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => { setBrowseView((value) => value === "grid" ? "list" : "grid"); persistLibraryPrefs({ view: browseView === "grid" ? "list" : "grid" }); }}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>}
-            {admin && !libraryList && !localDetail && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
+            {admin && !libraryList && !localDetail && !openLocalSeries && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
               onClick={() => { setMenuFor(null); if (selectionMode) leaveSelection(); else setSelectionMode(true); }}><Check/></button>}
             </div></div>
             {/* What a folded header keeps: where the tiles stand, the tools, and the way back. */}
             <div className="browse-keep">
-            {!libraryList && !localDetail && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
+            {!libraryList && !localDetail && !openLocalSeries && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
             <div className="library-maintenance" onKeyDown={(event) => {
               if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
             }}>
@@ -3718,7 +3740,7 @@ export function App() {
                 <button title={t("library.recheckAutomaticHint")} onClick={() => void recheckAutomatic()} disabled={scanning || !currentLibraryId}>
                   <ShieldQuestion/> {t("library.recheckAutomatic")}
                 </button>
-                {!libraryList && !localDetail && !browsePath.startsWith(":") && <button title={t("library.createFolder")} onClick={() => { setMenuFor(null); void createFolder(); }}>
+                {!libraryList && !localDetail && !openLocalSeries && !browsePath.startsWith(":") && <button title={t("library.createFolder")} onClick={() => { setMenuFor(null); void createFolder(); }}>
                   <Plus/> {t("library.createFolder")}
                 </button>}
                 {/* One library is one thing to manage: the settings section holds it, and the
@@ -3797,7 +3819,15 @@ export function App() {
             void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath, clicked.poster,
               clicked.kind === "file" && clicked.season != null, { kind: "library", key: clicked.path }, fromBeginning,
               catalogue ?? undefined);
-          }}/> : <>
+          }}/> : openLocalSeries ? <LocalSeriesDetail
+            folder={openLocalSeries}
+            favorite={liveLocalSeries?.favorite ?? openLocalSeries.favorite ?? false}
+            onToggleFavorite={(favorite) => void toggleFavorite(openLocalSeries.path, favorite)}
+            onOpenEpisode={(file) => openLocalDetail({ kind: "file", ...file })}
+            onPlayEpisode={(file, fromBeginning, catalogue) => void playLocal(file.label, file.path, file.poster, true, { kind: "library", key: file.path }, fromBeginning, catalogue ?? undefined)}
+            uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
+            onGallery={(images, path, ref) => { setMenuFor(null); presentGallery(images, ref, path); }}
+            tileShape={settings.libraryTileShape} revision={localProgressRevision}/> : <>
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
           <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
@@ -3823,6 +3853,10 @@ export function App() {
                       // A folder matched to one movie holds that title's versions, so it opens the
                       // detail; any other folder keeps browsing its own contents.
                       if (item.match === "matched" && item.titleType === "movie") { openLocalDetail(item); return; }
+                      if (item.match === "matched" && item.titleType === "series") {
+                        setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites);
+                        setLocalSeries(item); setBrowsePath(item.path); return;
+                      }
                       setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path);
                     }}
                     art={<>
@@ -3834,7 +3868,7 @@ export function App() {
                       <i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}
                     </>}
                     title={folderTitle(item)} meta={folderMeta(item)} description={rowDescription(item)}
-                    action={item.match === "matched" && item.titleType === "movie"
+                    action={item.match === "matched" && (item.titleType === "movie" || item.titleType === "series")
                       ? <>{t("home.openTitle")}<ChevronRight/></> : <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}

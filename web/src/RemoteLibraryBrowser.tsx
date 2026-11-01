@@ -630,6 +630,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (!scrollRef.current) return;
     if (!detail) scrollRef.current.scrollTop = savedScroll.current;
     else if (detail.type === "series") scrollRef.current.scrollTop = savedEpisodeScroll.current;
+    // A film or an episode opens at its top, the way a local file's detail does, not at the offset
+    // of the tile it was opened from.
+    else scrollRef.current.scrollTop = 0;
   }, [detail?.id, detail?.type, navKey]);
   // An ancestor return puts the offset it left back, once the restored listing itself is on screen.
   useEffect(() => {

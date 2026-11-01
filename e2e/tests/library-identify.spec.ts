@@ -106,11 +106,16 @@ test("each episode of a matched series shows its own plot", async ({ page }) => 
   await dialog.getByRole("button", { name: "Použít tento titul" }).click();
   await expect(dialog).toHaveCount(0);
 
-  await seriesTile.getByRole("button", { name: /Otevřít složku/ }).click();
-  const first = page.locator(".browse-item", { hasText: "S01E01" });
-  const second = page.locator(".browse-item", { hasText: "S01E02" });
-  await expect(first.locator(".library-desc")).toContainText("V prvním dílu");
-  await expect(second.locator(".library-desc")).toContainText("Ve druhém dílu");
+  await seriesTile.getByRole("button", { name: /Otevřít titul/ }).click();
+  const seriesDetail = page.locator(".local-series-detail");
+  await expect(seriesDetail).toBeVisible();
+  for (const [code, plot] of [["S01E01", "V prvním dílu"], ["S01E02", "Ve druhém dílu"]]) {
+    await seriesDetail.locator(".browse-item", { hasText: code }).locator(".library-open").click();
+    const episodeDetail = page.locator(".library-title-detail:not(.local-series-detail)");
+    await expect(episodeDetail.locator(".library-detail-synopsis")).toContainText(plot);
+    await page.locator(".library-back").click();
+    await expect(seriesDetail).toBeVisible();
+  }
 });
 
 test("find metadata on one item matches just that item", async ({ page }) => {
