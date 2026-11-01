@@ -1120,6 +1120,17 @@ describe("LibraryTitleDetail hero slots and the source that will play", () => {
     expect(host.querySelector(".source-file")!.textContent).toBe("Film.DTS-HD.MA.7.1.mkv");
   });
 
+  it("names the sound the server read out of the file over what its name advertises", () => {
+    render({ sources: [{
+      ...addon("a1", "Release", 6_700_000_000),
+      audioFacts: { codec: "eac3", channels: 6 },
+      behaviorHints: { filename: "Film.AAC.2.0.mkv", videoSize: 6_700_000_000 },
+    }] });
+    const tech = host.querySelector(".detail-tech")!;
+    expect(tech.textContent).toContain("DD+ 5.1");
+    expect(tech.textContent).not.toContain("AAC 2.0");
+  });
+
   it("opens the source chooser from the count of the other versions", () => {
     render({ sources: [remote("s1", "720p", 1), remote("s2", "1080p", 3_000_000_000), remote("s3", "Small", 10)] });
     const more = host.querySelector<HTMLButtonElement>(".detail-versions")!;

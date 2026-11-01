@@ -107,6 +107,30 @@ describe("SourceRows", () => {
     expect(facts?.textContent).toBe("2160p · HEVC · Dolby Vision");
   });
 
+  it("shows the sound and subtitles read out of a library file", () => {
+    render([addonRow({
+      kind: "library", localPath: "Shaun/Shaun - S06E07.mp4", libraryName: "Series", addonKey: undefined, addonName: undefined,
+      behaviorHints: { filename: "Shaun - S06E07 - Squirrelled Away.mp4" },
+      audioLanguages: ["cs", "en"], subtitleLanguages: ["cs", "en"],
+      videoFacts: { heightPixels: 1080, codec: "h264" }, audioFacts: { codec: "eac3", channels: 6 },
+    })]);
+    expect(row().querySelector(`[title="${t("sources.videoFactsHint")}"]`)?.textContent).toBe("1080p · H.264");
+    expect(row().querySelector(`[title="${t("sources.audioFactsHint")}"]`)?.textContent).toBe("DD+ 5.1");
+    const subtitles = row().querySelector(`[title="${t("sources.subtitleLanguagesHint")}"]`)!;
+    expect(subtitles.textContent).toContain(t("sources.subtitleLanguages"));
+    expect([...subtitles.querySelectorAll(".lang-badge")].map((node) => node.textContent)).toEqual(["CZ", "EN"]);
+    // The sound languages stay badges of their own, marked as read from the file.
+    const audio = [...row().querySelectorAll(".stream-meta > small > .lang-badge:not(.subtitle)")];
+    expect(audio.map((node) => node.textContent)).toEqual(["CZ", "EN"]);
+    expect(audio[0]!.getAttribute("title")).toBe(t("sources.audioInFile"));
+  });
+
+  it("says nothing of sound or subtitles the server did not read", () => {
+    render([addonRow()]);
+    expect(row().querySelector(`[title="${t("sources.audioFactsHint")}"]`)).toBeNull();
+    expect(row().querySelector(`[title="${t("sources.subtitleLanguagesHint")}"]`)).toBeNull();
+  });
+
   it("shows no video facts line when the server sent none", () => {
     render([addonRow()]);
     expect(row().querySelector(`[title="${t("sources.videoFactsHint")}"]`)).toBeNull();

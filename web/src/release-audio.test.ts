@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { audioFormat } from "./release-audio";
+import { setLocale } from "./i18n";
+import { audioFactsText, audioFormat } from "./release-audio";
 
 describe("audioFormat", () => {
   const cases: Array<[string, string | undefined]> = [
@@ -32,5 +33,21 @@ describe("audioFormat", () => {
   it("ignores a missing name", () => {
     expect(audioFormat(undefined)).toBeUndefined();
     expect(audioFormat(null)).toBeUndefined();
+  });
+});
+
+describe("audioFactsText", () => {
+  it("names a read track the way a release name would", () => {
+    expect(audioFactsText({ codec: "eac3", channels: 6 })).toBe("DD+ 5.1");
+    expect(audioFactsText({ codec: "aac", channels: 2 })).toBe("AAC 2.0");
+    expect(audioFactsText({ codec: "truehd" })).toBe("TrueHD");
+    expect(audioFactsText({ channels: 8 })).toBe("7.1");
+  });
+
+  it("counts an unusual layout in channels and says nothing without facts", () => {
+    setLocale("en");
+    expect(audioFactsText({ codec: "flac", channels: 3 })).toBe("FLAC 3 ch");
+    expect(audioFactsText({})).toBeUndefined();
+    expect(audioFactsText(undefined)).toBeUndefined();
   });
 });

@@ -30,6 +30,14 @@ export interface VideoFacts {
   range?: "hdr" | "dolbyVision";
 }
 
+export type AudioCodec = "aac" | "ac3" | "eac3" | "dts" | "truehd" | "opus" | "flac" | "mp3";
+
+/** The main sound track as ffprobe read it out of the file. */
+export interface AudioFacts {
+  codec?: AudioCodec;
+  channels?: number;
+}
+
 export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
 /** `library` is not a fault: the rule's library is switched off, read-only or away, and the job
  *  waits for it rather than landing somewhere the user did not ask for. `permission` is not a

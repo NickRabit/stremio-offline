@@ -211,6 +211,8 @@ object Streams {
       streams.firstOrNull { it.stableKey == key }
     }?.let { return it }
     val playable = streams.filter { it.playable }
+    // A copy already in a library is played before anything the rules would pick.
+    playable.firstOrNull { isLocalStream(it) }?.let { return it }
     if (ruleId.isNullOrEmpty() || playable.none { it.rules[ruleId] != null }) {
       return playable.firstOrNull() ?: streams.firstOrNull()
     }

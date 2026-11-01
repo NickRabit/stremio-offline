@@ -259,6 +259,13 @@ describe("torrent listing", () => {
     expect(pickDefaultStream([breaks], "balanced")).toBeUndefined();
   });
 
+  it("picks a library copy before an addon that meets the rule, even when the copy breaks it", () => {
+    const local = stream({ name: "local", kind: "library", localPath: "lib/film.mkv", rules: { balanced: verdict([0], "breaks") } });
+    const meets = stream({ name: "meets", rules: { balanced: verdict([0]) } });
+    expect(pickDefaultStream([meets, local], "balanced")?.name).toBe("local");
+    expect(pickDefaultStream([meets, local])?.name).toBe("local");
+  });
+
   it("reopens the source the title was last played from before the active rule default", () => {
     const stored = stream({ name: "library copy", stableKey: "m:stored", rules: { balanced: verdict([2], "breaks") } });
     const ruleWinner = stream({ name: "rule winner", stableKey: "a:winner", rules: { balanced: verdict([0]) } });
@@ -407,11 +414,11 @@ describe("pickNextEpisodeStream", () => {
     expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(local);
   });
 
-  it("prefers an addon that meets the active rule over a local copy that breaks it", () => {
+  it("takes a local copy even when it breaks the active rule", () => {
     const current = stream({ addonKey: "same", addonName: "Same" });
     const local = stream({ name: "local breaks", kind: "library", localPath: "lib/next.mkv", rules: { balanced: verdict([0], "breaks") } });
     const addon = stream({ name: "addon meets", addonKey: "same", addonName: "Same", rules: { balanced: verdict([1]) } });
-    expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(addon);
+    expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(local);
   });
 
   it("keeps the provider the viewer picked by hand even under a rule sort", () => {

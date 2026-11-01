@@ -133,7 +133,7 @@ const inspectedFacts = (
   ...inspectedVideoFacts(info.video),
 });
 
-const sidecarLanguage = (name: string): string | undefined => {
+export const sidecarLanguage = (name: string): string | undefined => {
   const match = /\.([a-zA-Z]{2,3})\.(?:srt|vtt)$/i.exec(name);
   return match?.[1] ? normalizeLanguage(match[1]) : undefined;
 };
@@ -153,12 +153,16 @@ const evidenceCandidate = (
   facts,
 });
 
+/** A listed copy is judged by what ffprobe read out of it when that is in hand, and by its
+ *  name otherwise. `subtitleSidecars` are the languages of the subtitle files beside it. */
 export function listedLocalCopyEvidence(
   copy: Pick<LocalCopy, "key" | "size">,
   providerResponseIndex: number,
   filename = path.posix.basename(copy.key),
+  inspected?: { info: MediaInfo; subtitleSidecars: readonly (string | undefined)[] },
 ): SourceEvidenceCandidateV1 {
   const stream = { behaviorHints: { filename } };
+  const named = { listed: listedAudioLanguages(stream, undefined), tracks: unknownFact<readonly (string | undefined)[]>() };
   return {
     sourceId: copy.key,
     providerKey: "local",
@@ -167,12 +171,14 @@ export function listedLocalCopyEvidence(
     capabilities: ["play"],
     providerResponseIndex,
     available: true,
-    facts: {
+    facts: inspected ? {
+      ...inspectedFacts(copy.size, inspected.info, inspectedFact(inspected.subtitleSidecars)),
+      // Tracks with no language tag say nothing about the language; the rules would read them
+      // as a file proven to be in none, so the name keeps speaking for it.
+      ...(inspected.info.audioTracks.some((track) => track.language) ? {} : { audio: named }),
+    } : {
       ...unknownFacts(copy.size),
-      audio: {
-        listed: listedAudioLanguages(stream, undefined),
-        tracks: unknownFact(),
-      },
+      audio: named,
       bytes: { evidence: "listed", value: copy.size },
       videoCodec: videoCodecFromListing(stream),
       videoRange: videoRangeFromListing(stream),

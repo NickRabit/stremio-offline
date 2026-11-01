@@ -689,49 +689,18 @@ describe("LocalLibraryDetail extra sources", () => {
     for (let attempt = 0; attempt < 12 && !ready(); attempt += 1) await flush();
   };
 
-  it("opens on the resumed remote copy when the rule refuses every own row, without opening the chooser", async () => {
-    identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
-    source = refusedFile;
-    copies = () => json([]);
-    const stableKey = `m:${"e".repeat(24)}`;
-    const emby: Stream = {
-      sourceId: "src-emby", kind: "remote", playable: true, name: "Emby 1080p", provider: "emby", libraryName: "Emby Films", stableKey,
-      remoteItem: { libraryId: "rlib_emby", itemId: "avatar", mediaSourceId: "ms1", progressKey: "k" },
-    };
-    progressOf = (url) => progressKey(url) === "movie:tt1"
-      ? json({ ...savedEntry("movie:tt1", 600, 7200), stableKey })
-      : json(null);
-    providers = () => json([]);
-    remoteLibraries = () => json({ libraries: [{ ...remoteLibrary("rlib_emby", "Emby Films"), provider: "emby" as const }] });
-    remoteMatches = () => json({ streams: [emby] });
-    const onPlayAlternative = vi.fn();
-    await render(file(), { onPlayAlternative, defaultSort: "rule:balanced" });
-    await until(() => host.querySelector(".detail-version")?.textContent === "Emby 1080p");
-    expect(host.querySelector(".detail-version")!.textContent).toBe("Emby 1080p");
-    expect(document.querySelector(".library-source-card")).toBeNull();
-    expect(calls.libraries.length).toBeGreaterThan(0);
-    expect(calls.remote.length).toBeGreaterThan(0);
-    expect(calls.progress.map(progressKey).every((key) => key === "movie:tt1")).toBe(true);
-    await click(host.querySelector(".library-detail-play button.primary"));
-    expect(onPlayAlternative).toHaveBeenCalledWith(expect.objectContaining({
-      stream: expect.objectContaining({ sourceId: "src-emby", stableKey }),
-      catalogue: { type: "movie", id: "tt1" },
-    }));
-  });
-
-  it("asks no other group when a refused title has no resume record", async () => {
+  it("opens on its own file even when the rule refuses it, and asks no other group", async () => {
     identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
     source = refusedFile;
     copies = () => json([]);
     progressOf = () => json(null);
     await render(file(), { defaultSort: "rule:balanced" });
-    await until(() => calls.progress.some((url) => progressKey(url) === "movie:tt1"));
-    expect(calls.progress.map(progressKey).every((key) => key === "movie:tt1")).toBe(true);
+    await until(() => host.querySelector(".detail-tech")?.textContent?.includes("Heat.mkv") ?? false);
+    expect(host.querySelector(".source-file")!.textContent).toBe("Heat.mkv");
+    expect(host.querySelector(".detail-tech")!.textContent).not.toContain("you choose when you press Play");
     expect(calls.providers).toHaveLength(0);
     expect(calls.addon).toHaveLength(0);
-    expect(calls.libraries).toHaveLength(0);
     expect(calls.remote).toHaveLength(0);
     expect(document.querySelector(".library-source-card")).toBeNull();
-    expect(host.querySelector(".detail-tech")!.textContent).toContain("you choose when you press Play");
   });
 });

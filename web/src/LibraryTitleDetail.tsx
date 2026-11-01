@@ -12,7 +12,7 @@ import { defaultSource, orderSources, playableSources, sourceIdentity, sourceRow
 import { librarySourceEntries, librarySourceRows, type LibrarySourceGroup, type LibrarySourcePanel } from "./library-sources";
 import { providerLabel, streamLabel } from "./source-rows";
 import { isLocalStream, isRemoteStream, pickDefaultStream, resolveStreamSort, sortRuleId, streamBadge, streamLanguages, streamSize } from "./streams";
-import { audioFormat } from "./release-audio";
+import { audioFactsText, audioFormat } from "./release-audio";
 import { bytes } from "./settings-ui";
 import { SourceChooser } from "./SourceChooser";
 import type { SourceProfile, Stream, TitlePerson, Trailer, VideoFacts } from "./types";
@@ -319,7 +319,8 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const video = shown ? videoLine(shown.videoFacts) : null;
   const audioNames = shown ? streamLanguages(shown).map((code) => languageName(code)).filter(Boolean) : [];
   const releaseText = shown?.behaviorHints?.filename ?? shown?.title ?? shown?.name;
-  const audioTag = releaseText ? audioFormat(releaseText) : undefined;
+  // What the server read out of a library file beats what its name advertises.
+  const audioTag = audioFactsText(shown?.audioFacts) ?? (releaseText ? audioFormat(releaseText) : undefined);
   // Without probed facts the release name may still say the resolution; a source badge such as a
   // library's LOCAL says nothing about the picture, so only an addon's own quality label stands in.
   const releaseHeight = releaseText ? /\b(2160|1440|1080|720|576|480)[pi]\b/i.exec(releaseText)?.[1] ?? (/\b4k\b|\buhd\b/i.test(releaseText) ? "2160" : undefined) : undefined;

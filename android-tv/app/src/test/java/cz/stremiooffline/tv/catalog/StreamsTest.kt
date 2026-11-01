@@ -261,6 +261,14 @@ class StreamsTest {
   }
 
   @Test
+  fun `pickDefaultStream takes a library copy even when it breaks the rule`() {
+    val local = stream(name = "local", kind = "library", localPath = "lib/film.mkv", rule = verdict("breaks", listOf(0.0), listOf("resolutionLow")))
+    val meets = stream(name = "meets", rule = verdict("meets", listOf(0.0)))
+    assertEquals("local", Streams.pickDefaultStream(listOf(meets, local), ruleId = "p1")?.name)
+    assertEquals("local", Streams.pickDefaultStream(listOf(meets, local))?.name)
+  }
+
+  @Test
   fun `pickDefaultStream opens on the source the viewer last played`() {
     val first = stream(name = "first", playable = true, stableKey = "a:${"1".repeat(24)}")
     val stored = stream(name = "stored", playable = true, stableKey = "a:${"2".repeat(24)}")
