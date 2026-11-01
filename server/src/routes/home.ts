@@ -12,7 +12,7 @@ import {
   arrangeHomeRows, boundCards, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, mergeResume, parseHomeLayout,
   parseResumeFilter, resumePage,
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
-  type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeIdentity, type ResumeSources,
+  type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeIdentity, type ResumeSources,
 } from "../home.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, isVideo, type BrowseItem } from "../library.js";
@@ -261,11 +261,42 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     };
   };
 
+  const enrichResumePosters = async (req: express.Request, items: ResumeCard[]): Promise<ResumeCard[]> => {
+    const deadline = Date.now() + homeLookupDeadlineMs;
+    const records = metaStore.qualifiedMeta();
+    const enriched = new Array<ResumeCard>(items.length);
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        const index = next++;
+        const item = items[index];
+        if (!item) return;
+        const identity: ResumeIdentity | undefined = item.kind === "resume-file" || item.kind === "remote"
+          ? item.identity
+          : item.kind === "resume-catalogue" && (item.type === "movie" || item.type === "series")
+            ? { type: item.type, id: item.id }
+            : undefined;
+        if (!identity) { enriched[index] = item; continue; }
+        const bound = item.kind !== "remote" && item.path ? knownTitleEntry(libraryKey(item.path), records) : undefined;
+        const boundKey = bound?.record.type === identity.type && bound.record.id === identity.id && !isVideo(posixBase(bound.key))
+          ? bound.key
+          : undefined;
+        const poster = await personal.titlePoster(req, identity, {
+          ...(boundKey ? { boundKey } : {}),
+          deadlineMs: Math.max(0, deadline - Date.now()),
+        });
+        enriched[index] = poster ? { ...item, poster } : item;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, items.length) }, worker));
+    return enriched;
+  };
+
   const resumeRow = async (req: express.Request, proofs: RowProof[]): Promise<HomeRow> => {
     const { sources, partial, proof } = await resumeSources(req, true);
     if (proof) proofs.push(proof);
     const merged = mergeResume(sources);
-    return { status: "ok", items: merged.items, hasMore: merged.hasMore, ...(partial ? { partial: true } : {}) };
+    return { status: "ok", items: await enrichResumePosters(req, merged.items), hasMore: merged.hasMore, ...(partial ? { partial: true } : {}) };
   };
 
   const completedRow = async (_req: express.Request, viewer: Viewer): Promise<HomeRow> => {
@@ -341,7 +372,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
 
   /** Files the app first met after its baseline, newest first. A file the library knows as an
    *  episode of a bound show collapses into the show's one card, kept on the newest file. */
-  const recentRow = async (viewer: Viewer): Promise<HomeRow> => {
+  const recentRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
     const libraries = store.libraries();
     const ids = libraries
       .filter((library) => library.enabled && !library.unreachable && libraryVisible(library, viewer) && showsOnHome(library.id, libraries))
@@ -361,11 +392,22 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       kept.set(group, row);
     }
     const bounded = boundCards([...kept.values()]);
+    const titlePosterDeadline = Date.now() + homeLookupDeadlineMs;
     const cards: HomeCard[] = await Promise.all(bounded.items.map(async ({ entry, key, item }) => {
       const bound = knownTitleEntry(key, records);
       const series = bound?.record.type === "series" ? bound.record : undefined;
       const relative = wirePath(key);
       const { poster, wide } = await fileArtwork(key, relative);
+      const identity: ResumeIdentity | undefined = bound && (bound.record.type === "movie" || bound.record.type === "series")
+        ? { type: bound.record.type, id: bound.record.id }
+        : undefined;
+      const boundKey = bound && identity && !isVideo(posixBase(bound.key)) ? bound.key : undefined;
+      const titlePicture = identity
+        ? await personal.titlePoster(req, identity, {
+          ...(boundKey ? { boundKey } : {}),
+          deadlineMs: Math.max(0, titlePosterDeadline - Date.now()),
+        })
+        : undefined;
       const season = item.kind === "file" ? item.season : null;
       const episode = item.kind === "file" ? item.episode : null;
       return {
@@ -373,7 +415,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         addedAt: entry.at, libraryId: entry.libraryId,
         ...(season != null ? { season } : {}),
         ...(episode != null ? { episode } : {}),
-        ...(poster ? { poster } : {}),
+        ...(titlePicture ?? poster ? { poster: titlePicture ?? poster } : {}),
         ...(wide ? { wide } : {}),
       };
     }));
@@ -603,7 +645,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     resume: (req, _viewer, proofs) => resumeRow(req, proofs),
     completed: (req, viewer) => completedRow(req, viewer),
     favorites: (req, viewer, proofs) => favoritesRow(req, viewer, proofs),
-    recent: (_req, viewer) => recentRow(viewer),
+    recent: (req, viewer) => recentRow(req, viewer),
     episodes: (req, viewer) => Promise.resolve(episodesRow(req, viewer)),
     tonight: (req, viewer) => tonightRow(req, viewer),
     confirm: (_req, viewer) => Promise.resolve(confirmRow(viewer)),
@@ -658,13 +700,14 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       skip: Math.max(0, Number(req.query.skip) || 0),
       limit: Math.max(1, Math.min(120, Number(req.query.limit) || HOME_ROW_LIMIT)),
     });
+    const items = await enrichResumePosters(req, page.items);
     if (proof) remotePersonal.assertCardsCurrent(proof.authority, proof.cards);
     requireAccess(req);
     res.json({
-      items: page.items, total: page.total,
+      items, total: page.total,
       // A page is pending when a card on it still lacks a poster, and the library source
       // reports a file still waiting for artwork or metadata.
-      pending: pending || page.items.some((item) => !item.poster),
+      pending: pending || items.some((item) => !item.poster),
       ...(partial ? { partial: true } : {}),
     });
   }));
