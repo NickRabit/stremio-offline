@@ -506,7 +506,11 @@ fun CatalogDetailScreen(
     val next = Streams.repickStream(
       playing = false,
       picked = pick.pickedStream,
-      pending = if (anyAsking) maxOf(pick.pendingSources, 1) else 0,
+      // The last answers land in the same frame that ends the loading: they still count as arriving,
+      // or the first addon to answer keeps the pick over every better row the last one brought.
+      pending = (if (anyAsking) maxOf(pick.pendingSources, 1) else 0).let { now ->
+        maxOf(now, pick.pendingBefore).also { pick.pendingBefore = now }
+      },
       visible = rows,
       selected = pick.selectedStream,
       preferred = preferredStream,
@@ -1652,6 +1656,8 @@ private class SourcePickState {
   var sourcesOpen by mutableStateOf(false)
   var sourcesWasOpen by mutableStateOf(false)
   var closeToPlay by mutableStateOf(false)
+  /** The loading count the last repick saw: answers that land as the loading ends still count. */
+  var pendingBefore = 0
 }
 
 /** The save-to-library flow a pick feeds: the libraries, the panel that chooses one, the stream a

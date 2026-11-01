@@ -33,7 +33,7 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder } from "./streams";
+import { addonNotices, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder, pendingAcrossSettle } from "./streams";
 import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
 import { panelProgressAddonKey } from "./player-progress";
@@ -2296,14 +2296,19 @@ export function App() {
     });
     return resume.find((entry) => entry.key === `${type}:${streamId}`)?.stableKey;
   }, [selected?.id, selected?.type, selectedVideo?.id, selectedVideo?.season, selectedVideo?.episode, currentCatalog?.type, resume]);
+  const pendingBeforeRef = useRef(0);
   // The chosen source decides what is still loading: the addon answers or the local probe.
   const sourcesPending = (localSelected ? localLoading : pendingSources > 0) || remoteLoading > 0;
   // When a filter removes the chosen source, the pick moves to the first one left -- unless
   // the film is already playing on it, when moving it would restart playback on another source.
   useEffect(() => {
     const preferred = pickDefaultStream(sourceRows, sortRuleId(streamSort) ?? defaultRuleId, watchedSourceKey) ?? null;
+    // The last answers land in the same render that ends the loading: they still count as
+    // arriving, or the first addon to answer kept the pick over every better row that came with
+    // the last one (Sosáč over the rule's winner, 17 rows down).
+    const pending = pendingAcrossSettle(pendingSources + (localLoading ? 1 : 0) + remoteLoading, pendingBeforeRef);
     const next = repickStream({
-      playing: playerOpen, picked: pickedRef.current, pending: pendingSources + (localLoading ? 1 : 0) + remoteLoading,
+      playing: playerOpen, picked: pickedRef.current, pending,
       // A late local copy or remote group replaces an automatic addon pick; an explicit pick
       // and a playing source stay where they are (repickStream keeps both).
       upgrade: Boolean(preferred && selectedStream && (

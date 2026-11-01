@@ -77,6 +77,27 @@ class CatalogPendingPlayTest {
   }
 
   @Test
+  fun `the last addon's better row takes over an automatic pick as the loading ends`() {
+    val api = FakeTvApi()
+    val (alpha, beta) = twoSlowAddons(api)
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsRequests.size == 2 }
+
+    // Alpha answers first and is picked while beta is still out.
+    alpha.complete(Unit)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Alpha", substring = true)
+
+    // Beta's larger row lands in the same frame that ends the loading: it still replaces the
+    // automatic pick, as it would have while anything was pending.
+    beta.complete(Unit)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|beta") }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Beta", substring = true)
+  }
+
+  @Test
   fun `OK while both addons are pending plays the merged default once they answer`() {
     val api = FakeTvApi()
     val (alpha, beta) = twoSlowAddons(api)

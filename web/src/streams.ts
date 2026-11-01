@@ -226,6 +226,14 @@ export function canQueue(stream: Stream, debridConfigured: boolean): boolean {
  *  than the one already picked. Moving the pick is right while the viewer is still looking
  *  at the list and wrong once they are watching: the player would stop the session it is
  *  playing and start the film again on the new source. */
+/** The loading count `repickStream` is asked with: answers that land in the same render that ends
+ *  the loading still arrived while it was going on. `previous` keeps the count between calls. */
+export function pendingAcrossSettle(now: number, previous: { current: number }): number {
+  const pending = Math.max(now, previous.current);
+  previous.current = now;
+  return pending;
+}
+
 export function repickStream<T>(state: {
   playing: boolean; picked: boolean; pending: number; upgrade?: boolean; restore?: boolean;
   visible: readonly T[]; selected: T | null; preferred: T | null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addonNotices, arrangeStreams, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, compareRuleRank, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import { addonNotices, arrangeStreams, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, compareRuleRank, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters, pendingAcrossSettle } from "./streams";
 import type { SourceRuleVerdict, Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -477,6 +477,17 @@ describe("repickStream", () => {
 
   it("never interrupts playback for a local copy that lands", () => {
     expect(repickStream({ ...base, playing: true, upgrade: true, preferred: second })).toEqual({ move: false });
+  });
+
+  it("lets the last answers, landing as the loading ends, still move an automatic pick to the rule's winner", () => {
+    const previous = { current: 0 };
+    expect(pendingAcrossSettle(1, previous)).toBe(1);
+    // One render later the last addon has answered and nothing is pending any more.
+    const pending = pendingAcrossSettle(0, previous);
+    expect(pending).toBe(1);
+    expect(repickStream({ ...base, pending, preferred: second })).toEqual({ move: true, to: second });
+    // After that the list is settled: nothing moves the pick under the viewer.
+    expect(pendingAcrossSettle(0, previous)).toBe(0);
   });
 
   it("leaves a non-upgrade arrival alone when nothing is pending", () => {
