@@ -9,9 +9,11 @@ import { images, type ImageProxy } from "../images.js";
 import { normalizeLanguage } from "../language.js";
 import { libraryFor, libraryVisible, parseLibraryPath, posixBase, type Viewer } from "../libraries.js";
 import { episodeNumberOf, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { localCopySummary } from "../library-file-facts.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
 import { readMediaBytes } from "../media-playlist.js";
+import type { MediaInfo } from "../probe.js";
 import { isRemoteMediaStream } from "../media-server-reference.js";
 import type { MediaServerSources } from "../media-server-sources.js";
 import { guardedBody } from "../outbound.js";
@@ -43,7 +45,10 @@ export interface CatalogDeps extends RouteContext {
   trackMedia(owner: ResourceOwner, res: express.Response, resourceId?: string): void;
   libraryKey(value: string): string;
   /** The caller's library copies of one catalogue title or episode, in answer order. */
-  localCopies(type: string, id: string, viewer: Viewer): Promise<Array<{ key: string; libraryId: string; libraryName: string; path: string; size: number }>>;
+  localCopies(type: string, id: string, viewer: Viewer): Promise<Array<{ key: string; libraryId: string; libraryName: string; path: string; size: number; modified: string }>>;
+  /** What ffprobe read out of each copy, and the languages of the subtitle files beside it. A
+   *  copy not read yet is missing, and is read behind the answer for the next one. */
+  localCopyFacts(copies: ReadonlyArray<{ key: string; size: number; modified: string }>): Promise<Map<string, { info: MediaInfo; subtitleSidecars: Array<string | undefined> }>>;
   /** The title units of the current walks, and the binding stored on one path itself. Both are
    *  what the identity route derives an episode number from. */
   libraryUnits(): Promise<TitleUnit[]>;
@@ -61,7 +66,7 @@ const SUBTITLE_DEADLINE_MS = 20_000;
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
-  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, localCopyFacts, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
   const imageProxy = deps.imageProxy ?? images;
 
   /** The addons this caller may use, read once per request. A disabled addon is left out
@@ -420,6 +425,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       const fallbackId = await subtitleTarget(inOrder(req), type, id, true);
       if (fallbackId && fallbackId !== id) copies = await localCopies(type, fallbackId, viewer);
     }
+    const facts = await localCopyFacts(copies);
     // A grant withdrawn while the walk was being read must not get a resource, the same way
     // the addon listing re-checks. Nothing is awaited between the check and the listing.
     for (const libraryId of new Set(copies.map((copy) => copy.libraryId))) requireAccess(req, { libraryId });
@@ -430,7 +436,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     // The listing redacts long path segments as if they were an addon's secrets; the name of the
     // viewer's own file is not one, and it is what the row shows.
     const snapshots = rulesFor(req, String(req.params.type));
-    const candidates = copies.map((copy, index) => listedLocalCopyEvidence(copy, index, posixBase(copy.key)));
+    const candidates = copies.map((copy, index) => listedLocalCopyEvidence(copy, index, posixBase(copy.key), facts.get(copy.key)));
     const verdicts = ruleVerdictsForProfiles(snapshots, candidates);
     const videoFacts = new Map(candidates.flatMap((candidate) => {
       const facts = sourceVideoFacts(candidate);
@@ -438,13 +444,18 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     }));
     res.setHeader("cache-control", "private, no-store").json(listed.map((stream, index) => {
       const verdict = verdicts.get(candidates[index]!.sourceId);
-      const facts = videoFacts.get(candidates[index]!.sourceId);
+      const video = videoFacts.get(candidates[index]!.sourceId);
+      const read = facts.get(copies[index]!.key);
+      const summary = read ? localCopySummary(read.info, read.subtitleSidecars) : undefined;
       return {
         ...stream, behaviorHints: { ...stream.behaviorHints, filename: posixBase(copies[index]!.key) },
+        ...(summary?.audioLanguages.length ? { audioLanguages: summary.audioLanguages } : {}),
+        ...(summary?.subtitleLanguages.length ? { subtitleLanguages: summary.subtitleLanguages } : {}),
+        ...(summary?.audioFacts ? { audioFacts: summary.audioFacts } : {}),
         localPath: copies[index]!.path, libraryId: copies[index]!.libraryId,
         libraryName: copies[index]!.libraryName,
         ...(verdict === undefined ? {} : { rules: verdict }),
-        ...(facts === undefined ? {} : { videoFacts: facts }),
+        ...(video === undefined ? {} : { videoFacts: video }),
       };
     }));
   }));

@@ -41,7 +41,7 @@ test("a movie bound on its folder answers one copy", () => {
     records: { [libraryPath(lib.id, "Heat (1995)")]: movie("tt0113277") },
     libraries: [lib],
   });
-  assert.deepEqual(copies, [{ key: libraryPath(lib.id, "Heat (1995)/Heat.1995.1080p.mkv"), libraryId: lib.id, size: 900 }]);
+  assert.deepEqual(copies, [{ key: libraryPath(lib.id, "Heat (1995)/Heat.1995.1080p.mkv"), libraryId: lib.id, size: 900, modified: "2026-01-01T00:00:00.000Z" }]);
 });
 
 test("a shared folder with two encodes of one film offers both, and not the other film", () => {

@@ -66,6 +66,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   bound?: Record<string, LibraryMetaRecord>;
   access?: CatalogDeps["requireAccess"];
   localCopies?: CatalogDeps["localCopies"];
+  localCopyFacts?: CatalogDeps["localCopyFacts"];
   units?: TitleUnit[];
   cachedMeta?: CatalogDeps["cachedMeta"];
   tmdbApiKey?: string;
@@ -113,6 +114,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     trackMedia: () => undefined,
     libraryKey: (value) => value,
     localCopies: options.localCopies ?? (async () => []),
+    localCopyFacts: options.localCopyFacts ?? (async () => new Map()),
     libraryUnits: async () => options.units ?? [],
     ownRecord: (relative, records) => (records[relative]?.id ? records[relative] : undefined),
     metaStore: { qualifiedMeta: () => options.bound ?? ({}) } as unknown as LibraryMetaStore,
@@ -266,7 +268,7 @@ test("GET extras composes TMDB data for the viewer and proxies every image in se
     imageProxy,
     localCopies: async (type, id, viewer) => {
       copyLookups.push({ type, id, viewer: viewer.id });
-      return id === "tt0000012" ? [{ key: "copy", libraryId: "lib", libraryName: "Films", path: "/copy", size: 1 }] : [];
+      return id === "tt0000012" ? [{ key: "copy", libraryId: "lib", libraryName: "Films", path: "/copy", size: 1, modified: "2026-01-01T00:00:00.000Z" }] : [];
     },
   });
   t.after(harness.close);
@@ -1786,6 +1788,7 @@ const localCopy = (overrides: Partial<Awaited<ReturnType<CatalogDeps["localCopie
   libraryName: "Films",
   path: "Heat (1995)/Heat 1995 1080p.mkv",
   size: 1234,
+  modified: "2026-01-01T00:00:00.000Z",
   ...overrides,
 });
 
@@ -1905,6 +1908,39 @@ test("a library the caller may no longer open refuses the listing", async (t) =>
   const response = await api(harness.base, "/api/local-streams/movie/tt0113277");
   assert.equal(response.status, 404, "the answer is refused, not handed over without the library");
   assert.ok(!Array.isArray(await response.json()));
+});
+
+test("GET /api/local-streams describes a copy by what is inside the file, not only its name", async (t) => {
+  const plain = "lib_00000001/Shaun/Shaun - S06E07 - Squirrelled Away.mp4";
+  const asked: string[][] = [];
+  const harness = await mount([], null, {
+    localCopies: async () => [localCopy({ key: plain, path: "Shaun/Shaun - S06E07 - Squirrelled Away.mp4" }), localCopy()],
+    localCopyFacts: async (copies) => {
+      asked.push(copies.map((copy) => copy.key));
+      return new Map([[plain, {
+        info: {
+          container: "mov,mp4",
+          video: { codec: "h264", width: 1920, height: 1080 },
+          audio: { codec: "aac", channels: 2 },
+          audioTracks: [{ index: 0, codec: "aac", language: "cs", channels: 2 }, { index: 1, codec: "aac", language: "en", channels: 2 }],
+          subtitleTracks: [{ index: 0, codec: "mov_text", language: "en" }],
+        },
+        subtitleSidecars: ["cs"],
+      }]]);
+    },
+  });
+  t.after(harness.close);
+  const body = await (await api(harness.base, "/api/local-streams/movie/tt0113277")).json() as Array<Record<string, unknown>>;
+  assert.deepEqual(asked, [[plain, localCopy().key]]);
+  assert.deepEqual(body[0]!.videoFacts, { heightPixels: 1080, codec: "h264" }, "the name says nothing of the picture");
+  assert.deepEqual(body[0]!.audioLanguages, ["cs", "en"]);
+  assert.equal(body[0]!.audioLanguagesGuessed, undefined, "read from the file, not guessed");
+  assert.deepEqual(body[0]!.subtitleLanguages, ["en", "cs"]);
+  assert.deepEqual(body[0]!.audioFacts, { codec: "aac", channels: 2 });
+  // A copy not read yet answers as it always did.
+  assert.equal(body[1]!.audioFacts, undefined);
+  assert.equal(body[1]!.audioLanguages, undefined);
+  assert.equal(body[1]!.subtitleLanguages, undefined);
 });
 
 test("GET /api/local-streams answers an empty listing when nothing is bound", async (t) => {

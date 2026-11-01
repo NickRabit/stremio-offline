@@ -61,6 +61,7 @@ import { starredPath, titleOfPath } from "./favorite-identity.js";
 import { browseMeta, cacheFieldsFromMeta, dropAutomaticInside, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleScanRecordKeys, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { probe } from "./probe.js";
+import { createLibraryFileFacts } from "./library-file-facts.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
@@ -80,8 +81,10 @@ import { LibrarySeenStore } from "./library-seen.js";
 import { localCopies } from "./local-sources.js";
 import {
   findAdequateExistingLocalCopy,
+  sidecarLanguage,
   type ExistingLocalCopyDeps,
 } from "./local-copy-admission.js";
+import { subtitleSidecars } from "./library-sidecars.js";
 import { artworks } from "./artwork-cache.js";
 import { FileSnapCache, preheatFileSnaps } from "./byte-cache.js";
 import { RemoteImageCache } from "./remote-image-cache.js";
@@ -1096,6 +1099,12 @@ const durationOfKey = async (key: string): Promise<number | undefined> => {
   }
 };
 
+/** What each library file holds, read once and remembered until the file changes. */
+const libraryFileFacts = createLibraryFileFacts({
+  file: path.join(DATA_DIR, "library", "file-facts.json"),
+  probe: (key, signal) => probe(mediaPath(key), signal),
+});
+
 const libraryProbe = createLibraryProbe();
 const libraryHealth = new Map<string, LibraryHealth>();
 /** Probes are cached for half a minute, and a library whose answer changed drops the walks. */
@@ -1295,8 +1304,15 @@ registerCatalogRoutes(app, {
     const names = new Map(visible.map((library) => [library.id, library.name]));
     return copies.map((copy) => ({
       key: copy.key, libraryId: copy.libraryId, libraryName: names.get(copy.libraryId) ?? "",
-      path: wirePath(copy.key), size: copy.size,
+      path: wirePath(copy.key), size: copy.size, modified: copy.modified,
     }));
+  },
+  localCopyFacts: async (copies) => {
+    const read = await libraryFileFacts.read(copies);
+    return new Map(await Promise.all([...read].map(async ([key, info]) => {
+      const sidecars = await Promise.resolve().then(() => subtitleSidecars(mediaPath(key))).catch(() => ({ names: [] as string[] }));
+      return [key, { info, subtitleSidecars: sidecars.names.map(sidecarLanguage) }] as const;
+    })));
   },
   // The same two reads, and for the same reason: only the last walk of a library is needed to
   // name the episode a bound file holds.
@@ -2862,7 +2878,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.flush(), () => stats.activity.flush(), () => imageStats.flush(), () => providerStats.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  flushes: [() => stats.flush(), () => stats.activity.flush(), () => imageStats.flush(), () => providerStats.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => libraryFileFacts.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,

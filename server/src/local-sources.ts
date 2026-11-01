@@ -18,7 +18,7 @@ export function parseLocalRequest(type: string, id: string): LocalRequest | unde
   return { type: "series", titleId: parts.slice(0, -2).join(":"), season: Number(season), episode: Number(episode) };
 }
 
-export interface LocalCopy { key: string; libraryId: string; size: number }
+export interface LocalCopy { key: string; libraryId: string; size: number; modified: string }
 
 /** The library files that are a copy of one catalogue title or episode, in answer order. */
 export function localCopies(input: {
@@ -61,7 +61,7 @@ export function localCopies(input: {
       const numbers = episodeNumberOf(key, own, { loose: true });
       if (!numbers || numbers.season !== request.season || numbers.episode !== request.episode) continue;
     }
-    kept.push({ copy: { key, libraryId, size: file.size }, order });
+    kept.push({ copy: { key, libraryId, size: file.size, modified: file.modified }, order });
   }
   kept.sort((left, right) => left.order - right.order
     || right.copy.size - left.copy.size

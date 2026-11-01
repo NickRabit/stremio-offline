@@ -133,7 +133,7 @@ const inspectedFacts = (
   ...inspectedVideoFacts(info.video),
 });
 
-const sidecarLanguage = (name: string): string | undefined => {
+export const sidecarLanguage = (name: string): string | undefined => {
   const match = /\.([a-zA-Z]{2,3})\.(?:srt|vtt)$/i.exec(name);
   return match?.[1] ? normalizeLanguage(match[1]) : undefined;
 };
@@ -153,10 +153,13 @@ const evidenceCandidate = (
   facts,
 });
 
+/** A listed copy is judged by what ffprobe read out of it when that is in hand, and by its
+ *  name otherwise. `subtitleSidecars` are the languages of the subtitle files beside it. */
 export function listedLocalCopyEvidence(
   copy: Pick<LocalCopy, "key" | "size">,
   providerResponseIndex: number,
   filename = path.posix.basename(copy.key),
+  inspected?: { info: MediaInfo; subtitleSidecars: readonly (string | undefined)[] },
 ): SourceEvidenceCandidateV1 {
   const stream = { behaviorHints: { filename } };
   return {
@@ -167,7 +170,7 @@ export function listedLocalCopyEvidence(
     capabilities: ["play"],
     providerResponseIndex,
     available: true,
-    facts: {
+    facts: inspected ? inspectedFacts(copy.size, inspected.info, inspectedFact(inspected.subtitleSidecars)) : {
       ...unknownFacts(copy.size),
       audio: {
         listed: listedAudioLanguages(stream, undefined),

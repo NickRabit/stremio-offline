@@ -2,6 +2,7 @@ import { Check, HardDrive } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef } from "react";
 import { t, useI18n } from "./i18n";
 import { label } from "./languages";
+import { audioFactsText } from "./release-audio";
 import { sourceRowKey } from "./library-detail-sources";
 import { sourceProfileName } from "./source-profile-copy";
 import { bytes } from "./settings-ui";
@@ -167,6 +168,8 @@ export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf,
         stream.videoFacts?.codec ? t(`sources.codec.${stream.videoFacts.codec}`) : "",
         stream.videoFacts?.range ? t(`sources.range.${stream.videoFacts.range}`) : "",
       ].filter(Boolean);
+      const audioFacts = audioFactsText(stream.audioFacts);
+      const subtitleLanguages = stream.subtitleLanguages ?? [];
       // Only reasons the app can name; a break with none of them says nothing.
       const verdict = ruleId ? stream.rules?.[ruleId] : undefined;
       const ruleReasons = verdict?.status === "breaks"
@@ -183,6 +186,10 @@ export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf,
         <span className="stream-meta">{size ? <b>{bytes(size)}</b> : null}
           <small>{languages.map((code) => <em className="lang-badge" key={code} title={audioInFile ? t("sources.audioInFile") : t("sources.languageGuess")}>{label(code)}</em>)}</small>
           {videoFacts.length > 0 && <small title={t("sources.videoFactsHint")}>{videoFacts.join(" · ")}</small>}
+          {audioFacts && <small className="audio-facts" title={t("sources.audioFactsHint")}>{audioFacts}</small>}
+          {subtitleLanguages.length > 0 && <small className="subtitle-langs" title={t("sources.subtitleLanguagesHint")}>
+            {t("sources.subtitleLanguages")}{subtitleLanguages.map((code) => <em className="lang-badge subtitle" key={code}>{label(code)}</em>)}
+          </small>}
         </span>
         {selected === stream && <Check aria-hidden="true"/>}
       </button>;

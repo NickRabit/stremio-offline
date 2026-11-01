@@ -224,6 +224,12 @@ export interface VideoFacts {
   codec?: "h264" | "hevc" | "av1";
   range?: "hdr" | "dolbyVision";
 }
+export type AudioCodec = "aac" | "ac3" | "eac3" | "dts" | "truehd" | "opus" | "flac" | "mp3";
+/** The main sound track as the server read it out of a library file. */
+export interface AudioFacts {
+  codec?: AudioCodec;
+  channels?: number;
+}
 export interface Stream {
   sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; libraryName?: string; name?: string; title?: string; description?: string;
   subtitles?: Subtitle[]; audioLanguages?: string[]; subtitleLanguages?: string[]; audioLanguagesGuessed?: boolean; addonKey?: string; addonName?: string;
@@ -247,6 +253,7 @@ export interface Stream {
   /** The remote identity a player reports position and favorites against; only a remote source carries one. */
   remoteItem?: RemoteStreamContext;
   videoFacts?: VideoFacts;
+  audioFacts?: AudioFacts;
   rules?: Record<string, SourceRuleVerdict>;
 }
 
