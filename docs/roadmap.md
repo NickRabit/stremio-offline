@@ -26,8 +26,6 @@ metadata store, or scheduler for each platform.
 
 | Order | Current opportunity | What remains |
 | --- | --- | --- |
-| 2 | Player chapters and badges | Chapter marks on the timeline, the current chapter's name and a chapter list; badges for what is playing (resolution, HDR, audio). Web and Android TV. See [Player and mobile chrome](#player-and-mobile-chrome). |
-| 3 | Intro skip and next-episode threshold | Skip intro, recap and outro from IntroDB segments, with optional auto-skip; a configurable point before the end where the next episode is offered. Web and Android TV. See [Player and mobile chrome](#player-and-mobile-chrome). |
 | 4 | Queue controls | Night-only window first, then an aggregate speed limit and a completion notice; current download limits cover concurrency, not these controls. |
 | 5 | Selective SQLite storage | Move large, often rewritten collections out of whole-file JSON rewrites, phase by phase, per [#644](https://github.com/NickRabit/stremio-offline/issues/644). |
 | 6 | Library file fingerprint | Re-associate metadata, favourites and resume positions when a file is moved outside the app, by size and a partial hash; best built on the SQLite storage. See [Library](#library). |
@@ -36,6 +34,8 @@ metadata store, or scheduler for each platform.
 | Then | Search by cast and crew | A person in the title detail opens what that person made, not a text search for the name: TMDB filmography when a key is set, the owned copies first. See [Search by cast and crew](#search-by-cast-and-crew). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
+| Implemented | Player chapters and badges | Chapter marks, the current chapter and a chapter list; badges for what is playing (resolution, HDR, audio), on the web, desktop and Android TV. [Playback](playback.md#what-is-playing-chapters-intro-and-credits). |
+| Implemented | Intro skip and next-episode threshold | Skip intro, recap and credits from IntroDB (server-side, off in secure mode) with optional auto-skip; Up next at a chosen point or where the credits start. Web, desktop and Android TV. |
 | Implemented | Richer title detail | Cast and crew with photos, similar titles, ratings, the age rating, trailers and what will play, from one server route on the web, desktop and Android TV (0.6.24 to 0.6.28). [Specification](title-detail-spec.md). |
 | Implemented | Personal Home layout | Each account arranges its own Home: which rows show, their order, and extra catalogue feeds from the addons it may use. The instance's Show on Home switches stay the default. |
 | Implemented | Jellyfin and Emby libraries | Native read-only libraries, per-library grants, proxy/FFmpeg and local history. [Specification](media-server-libraries-spec.md). |
@@ -259,26 +259,9 @@ returns focus to the cast row; the web needs the same for a click and Back.
 
 ### Player and mobile chrome
 
-- **Chapters**: when a file has two or more chapters, mark them on the
-  timeline, show the current chapter's name and offer a chapter list to jump
-  to. The server's remux drops them today (`-map_chapters -1` in
-  `server/src/playback.ts`), so the probe has to report them to the client;
-  the web player and the Android TV player both need them.
-- **Badges for what is playing**: resolution, HDR/Dolby Vision and the audio
-  format of the running stream, shown with the player controls. Nuvio added
-  both in October 2026.
-- **Skip intro, recap and outro**: read the segments of the playing episode or
-  film from [IntroDB](https://introdb.app/docs) by IMDb id, show a skip button
-  while playback is inside one, and offer an opt-in auto-skip for intro and
-  recap. Only the server asks IntroDB and keeps the answer for a while; no
-  client calls it, and secure mode may turn the lookup off, since it tells a
-  third party what is playing. No IMDb id, no data or a failing service means
-  no button and no error. Read-only: nothing is submitted back.
-- **Next-episode threshold**: the next episode is offered only once playback
-  ends (`onEnded` in `web/src/Player.tsx`). Add a Playback setting for when it
-  appears instead: a percentage (97–100 %) or minutes before the end, and the
-  start of an outro segment when that comes earlier. This is a new trigger, not
-  an existing hard-coded value made configurable.
+Chapters, badges for what is playing, intro/recap/credits skipping and the
+next-episode threshold have shipped (see [Done](#done) and [Playback](playback.md)).
+
 - Improve Safari landscape chrome behavior on a physical iPhone/iPad; WebKit
   automation cannot emulate browser chrome, so this needs a device. The same goes
   for the native iOS fullscreen with the Fill screen toggle.
