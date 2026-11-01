@@ -1175,6 +1175,36 @@ class CatalogDetailTest {
   }
 
   @Test
+  fun `a series offers its bulk action without requiring an episode choice`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.metaValues["series:tt1"] = MetaDto(
+      id = "tt1",
+      type = "series",
+      name = "Show",
+      videos = listOf(
+        VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+        VideoDto(id = "tt1:1:2", title = "Two", season = 1, episode = 2),
+      ),
+    )
+    mount(api, CatalogDetailArgs(MetaDto(id = "tt1", type = "series", name = "Show"), "Cinemeta", "series"))
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogSeriesDownload).assertExists()
+  }
+
+  @Test
+  fun `a film has no series bulk action`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogSeriesDownload).assertDoesNotExist()
+  }
+
+  @Test
   fun `the series download uses its own list icon`() {
     assertNotEquals(DownloadIcon, SeriesDownloadIcon)
     assertEquals("SeriesDownloadList", SeriesDownloadIcon.name)

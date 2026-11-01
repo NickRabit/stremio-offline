@@ -628,6 +628,9 @@ export const sk: Catalog = {
   "seriesBulk.adding": "Pridávam {done} z {total}…",
   "seriesBulk.partlyAdded": { one: "{count} epizóda už bola pridaná.", few: "{count} epizódy už boli pridané.", many: "{count} epizód už bolo pridaných.", other: "{count} epizód už bolo pridaných." },
   "seriesBulk.skipHint": "Epizódy, ktoré už sú v knižnici alebo v poradí, sa preskočia.",
+  "tv.seriesBulk.seasonPicker": "Séria…",
+  "tv.seriesBulk.seasonsTitle": "Série",
+  "tv.seriesBulk.skippedRow": "Preskočené ({count})",
 
   "rules.title": "Pravidlá sťahovania",
   "rules.hint": "Pravidlá pre ručné sťahovanie a sledovanie. Predvoľby možno upraviť a duplikovať.",

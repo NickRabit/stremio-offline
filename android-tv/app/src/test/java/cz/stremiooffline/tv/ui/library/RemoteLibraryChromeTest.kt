@@ -7,9 +7,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -82,6 +84,7 @@ class RemoteLibraryChromeTest {
     api: FakeTvApi,
     searchEverywhereEnabled: Boolean = false,
     onOpenSearch: (LibrarySearchScope) -> Unit = {},
+    loadDestinations: (suspend () -> List<cz.stremiooffline.tv.data.LibraryDto>)? = null,
   ) {
     scenario.onActivity { activity ->
       host = activity
@@ -92,6 +95,7 @@ class RemoteLibraryChromeTest {
           searchEverywhereEnabled = searchEverywhereEnabled,
           pendingDelayMs = 10L,
           onOpenSearch = onOpenSearch,
+          loadDestinations = loadDestinations,
         )
       }
     }
@@ -166,6 +170,26 @@ class RemoteLibraryChromeTest {
     assertEquals(GlobalSearchLibraryDto("rlibA", parentId = "f1"), opened.last().library)
     assertEquals(listOf("remote"), opened.last().sources)
     assertEquals("Server  ›  Shows", opened.last().title)
+  }
+
+  @Test
+  fun `a series level in the servers browser offers the bulk action`() {
+    val api = api()
+    api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(
+      items = listOf(RemoteItemDto(id = "e1", name = "Pilot", type = "episode")),
+      total = 1,
+    )
+    api.librariesValue = listOf(cz.stremiooffline.tv.data.LibraryDto("shows", "Shows", "series", writable = true))
+    mountEmbedded(api, loadDestinations = { api.librariesValue })
+    openLibrary(api)
+    scenario.onActivity {
+      ViewModelProvider(it, RemoteLibraryViewModel.factory(api))[RemoteLibraryViewModel::class.java]
+        .openItem(RemoteItemDto(id = "s1", name = "Show", type = "series"))
+    }
+    compose.waitUntil(5_000) { api.remoteEpisodesRequests.any { it.second == "s1" } }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagRemoteBrowserSeriesBulk).assertExists()
   }
 
   @Test
@@ -307,6 +331,66 @@ class RemoteLibraryChromeTest {
     compose.onNodeWithTag(remoteItemTag("e1")).assertExists()
     // No section heading beside it: this screen is not the Library section's own page.
     compose.onNodeWithTag(TagLibraryHeaderTitle).assertDoesNotExist()
+    compose.onNodeWithTag(TagRemoteSeriesBulk).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a standalone series opens the prepared panel with its remote origin`() {
+    val api = FakeTvApi().apply {
+      remoteEpisodesPages["s1|"] = RemoteItemsPageDto(items = listOf(folder("e1", "Pilot")), total = 1)
+      librariesValue = listOf(cz.stremiooffline.tv.data.LibraryDto("shows", "Shows", "series", writable = true))
+      sourceProfilesValue = listOf(
+        cz.stremiooffline.tv.data.SourceProfileDto(
+          id = "balanced",
+          nameKey = "rules.preset.balanced",
+          operations = listOf("downloadToLibrary"),
+        ),
+      )
+    }
+    scenario.onActivity { activity ->
+      host = activity
+      activity.setContent {
+        RemoteSeriesScreen(
+          api = api,
+          data = RemoteDetailData(
+            libraryId = "rlibA",
+            libraryName = "Server",
+            provider = "emby",
+            item = RemoteItemDto(id = "s1", name = "Show", type = "series"),
+          ),
+          imageUrl = { null },
+          onPlay = {},
+          onBack = {},
+          loadDestinations = { api.librariesValue },
+          bulkApi = api,
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteEpisodesRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagRemoteSeriesBulk)
+      .assertExists()
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(cz.stremiooffline.tv.ui.catalog.TagSeriesDownloadPanel).assertExists()
+    compose.waitUntil(5_000) { api.bulkPrepareRequests.isNotEmpty() }
+
+    val origin = api.bulkPrepareRequests.single().origin
+    assertEquals("remote", origin.kind)
+    assertEquals("rlibA", origin.libraryId)
+    assertEquals("s1", origin.seriesItemId)
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitUntil(5_000) {
+      compose.onAllNodes(isFocused()).fetchSemanticsNodes()
+        .any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == TagRemoteSeriesBulk }
+    }
+    compose.onNodeWithTag(TagRemoteSeriesBulk).assertIsFocused()
+
+    focusOn(remoteItemTag("e1"))
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagRemoteSeriesBulk).assertIsFocused()
   }
 
   @Test

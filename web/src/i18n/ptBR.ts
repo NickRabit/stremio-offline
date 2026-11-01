@@ -628,6 +628,9 @@ export const ptBR: Catalog = {
   "seriesBulk.adding": "Adicionando {done} de {total}…",
   "seriesBulk.partlyAdded": { one: "{count} episódio já foi adicionado.", other: "{count} episódios já foram adicionados." },
   "seriesBulk.skipHint": "Episódios que já estão na biblioteca ou na fila são ignorados.",
+  "tv.seriesBulk.seasonPicker": "Temporada…",
+  "tv.seriesBulk.seasonsTitle": "Temporadas",
+  "tv.seriesBulk.skippedRow": "Ignorados ({count})",
 
   "rules.title": "Regras de download",
   "rules.hint": "Regras para downloads manuais e itens seguidos. As predefinições podem ser ajustadas e duplicadas.",

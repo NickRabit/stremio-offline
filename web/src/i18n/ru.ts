@@ -628,6 +628,9 @@ export const ru: Catalog = {
   "seriesBulk.adding": "Добавление {done} из {total}…",
   "seriesBulk.partlyAdded": { one: "{count} серия уже была добавлена.", few: "{count} серии уже были добавлены.", many: "{count} серий уже было добавлено.", other: "{count} серий уже было добавлено." },
   "seriesBulk.skipHint": "Эпизоды, которые уже есть в библиотеке или очереди, пропускаются.",
+  "tv.seriesBulk.seasonPicker": "Сезон…",
+  "tv.seriesBulk.seasonsTitle": "Сезоны",
+  "tv.seriesBulk.skippedRow": "Пропущенные ({count})",
 
   "rules.title": "Правила скачивания",
   "rules.hint": "Правила для ручных скачиваний и отслеживания. Предустановки можно изменять и дублировать.",

@@ -628,6 +628,9 @@ export const de: Catalog = {
   "seriesBulk.adding": "{done} von {total} werden hinzugefügt…",
   "seriesBulk.partlyAdded": { one: "{count} Folge wurde bereits hinzugefügt.", other: "{count} Folgen wurden bereits hinzugefügt." },
   "seriesBulk.skipHint": "Folgen, die bereits in der Bibliothek oder Warteschlange sind, werden übersprungen.",
+  "tv.seriesBulk.seasonPicker": "Staffel…",
+  "tv.seriesBulk.seasonsTitle": "Staffeln",
+  "tv.seriesBulk.skippedRow": "Übersprungen ({count})",
 
   "rules.title": "Download-Regeln",
   "rules.hint": "Regeln für manuelle Downloads und Abonnements. Voreinstellungen können angepasst und dupliziert werden.",

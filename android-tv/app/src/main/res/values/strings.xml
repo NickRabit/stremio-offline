@@ -246,6 +246,7 @@
   <string name="tv_download_this_season">This season (%1$s)</string>
   <string name="tv_download_from_episode">From this episode on</string>
   <string name="tv_download_all_episodes">All episodes</string>
+  <string name="episodes_specials">Specials</string>
   <string name="bulk_title">Download series</string>
   <string name="bulk_title_movie">Download film</string>
   <string name="bulk_title_episode">Download episode</string>
@@ -254,6 +255,43 @@
     <item quantity="one">1 episode</item>
     <item quantity="other">%1$s episodes</item>
   </plurals>
+  <string name="series_bulk_remote_button">Copy to library…</string>
+  <string name="series_bulk_title">Download series</string>
+  <string name="series_bulk_whole_series">Whole series</string>
+  <string name="series_bulk_source">Source</string>
+  <string name="series_bulk_from_library">From this library — %1$s / %2$s</string>
+  <string name="series_bulk_from_library_hint">Copies only episodes this library has. Nothing is filled in from elsewhere.</string>
+  <string name="series_bulk_from_catalogue">From the catalogue by rules</string>
+  <string name="series_bulk_from_catalogue_hint">Looks for each episode in your addons; nothing is copied from this library.</string>
+  <string name="series_bulk_preparing">Preparing the episode list…</string>
+  <plurals name="series_bulk_ready">
+    <item quantity="one">%1$s episode ready</item>
+    <item quantity="other">%1$s episodes ready</item>
+  </plurals>
+  <string name="series_bulk_in_target">%1$s already in the library</string>
+  <string name="series_bulk_queued">%1$s already in the queue</string>
+  <string name="series_bulk_unreleased">%1$s not released yet</string>
+  <string name="series_bulk_unnumbered">%1$s without numbering</string>
+  <string name="series_bulk_nothing">Nothing to download.</string>
+  <string name="series_bulk_sources_later">Sources are chosen when each episode downloads.</string>
+  <string name="series_bulk_reason_in_target">already in the library</string>
+  <string name="series_bulk_reason_queued">already in the queue</string>
+  <string name="series_bulk_reason_unreleased">not released yet</string>
+  <string name="series_bulk_reason_unnumbered">no season or episode number</string>
+  <string name="series_bulk_incomplete">The episode list could not be read completely.</string>
+  <plurals name="series_bulk_add">
+    <item quantity="one">Add %1$s episode to queue</item>
+    <item quantity="other">Add %1$s episodes to queue</item>
+  </plurals>
+  <string name="series_bulk_adding">Adding %1$s of %2$s…</string>
+  <plurals name="series_bulk_partly_added">
+    <item quantity="one">%1$s episode was already added.</item>
+    <item quantity="other">%1$s episodes were already added.</item>
+  </plurals>
+  <string name="err_bulk_remote_not_in_rules">Your download rules do not allow copying from this library.</string>
+  <string name="tv_series_bulk_season_picker">Season…</string>
+  <string name="tv_series_bulk_seasons_title">Seasons</string>
+  <string name="tv_series_bulk_skipped_row">Skipped (%1$s)</string>
   <string name="rules_title">Download rules</string>
   <string name="rules_selected_source">Selected source</string>
   <string name="rules_unavailable">Download rules are unavailable. Ask an administrator.</string>

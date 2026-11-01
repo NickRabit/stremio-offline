@@ -93,6 +93,7 @@ interface CatalogApi : SearchHistoryApi {
     selection: DownloadSelectionDto,
     media: BulkMediaDto,
     target: DownloadTargetDto? = null,
+    origin: BulkRemoteOriginDto? = null,
   ): BulkDownloadResult
 }
 
@@ -117,6 +118,8 @@ interface HomeApi {
 /** The account's download queue, read for the Home summary. */
 interface DownloadsApi {
   suspend fun downloads(): DownloadsResponseDto
+
+  suspend fun prepareBulk(body: BulkPrepareRequest): BulkPrepareResponse
 }
 
 /**

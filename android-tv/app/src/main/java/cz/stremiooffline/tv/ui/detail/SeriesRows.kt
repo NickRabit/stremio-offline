@@ -48,6 +48,7 @@ internal fun SeriesRows(
   seasonFocus: FocusRequester,
   extras: TitleExtrasState,
   onUpFromSeasons: (() -> Boolean)? = null,
+  onUpFromEpisodes: (() -> Boolean)? = null,
   onEpisodeFocused: (VideoDto) -> Unit = {},
   onNearEnd: () -> Unit = {},
   onMenu: ((VideoDto) -> Unit)? = null,
@@ -96,7 +97,7 @@ internal fun SeriesRows(
     modifier = Modifier
       .onPreviewKeyEvent { event ->
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
-          runCatching { seasonFocus.requestFocus() }.isSuccess
+          onUpFromEpisodes?.invoke() ?: runCatching { seasonFocus.requestFocus() }.isSuccess
         } else {
           false
         }

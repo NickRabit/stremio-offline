@@ -663,6 +663,9 @@ export const en = {
   "seriesBulk.adding": "Adding {done} of {total}…",
   "seriesBulk.partlyAdded": { one: "{count} episode was already added.", other: "{count} episodes were already added." },
   "seriesBulk.skipHint": "Episodes already in the library or the queue are skipped.",
+  "tv.seriesBulk.seasonPicker": "Season…",
+  "tv.seriesBulk.seasonsTitle": "Seasons",
+  "tv.seriesBulk.skippedRow": "Skipped ({count})",
 
   "rules.title": "Download rules",
   "rules.hint": "Rules people choose for manual downloads and follows. Presets can be adjusted and duplicated.",

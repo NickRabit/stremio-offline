@@ -628,6 +628,9 @@ export const fr: Catalog = {
   "seriesBulk.adding": "Ajout de {done} sur {total}…",
   "seriesBulk.partlyAdded": { one: "{count} épisode a déjà été ajouté.", other: "{count} épisodes ont déjà été ajoutés." },
   "seriesBulk.skipHint": "Les épisodes déjà dans la bibliothèque ou la file d’attente sont ignorés.",
+  "tv.seriesBulk.seasonPicker": "Saison…",
+  "tv.seriesBulk.seasonsTitle": "Saisons",
+  "tv.seriesBulk.skippedRow": "Ignorés ({count})",
 
   "rules.title": "Règles de téléchargement",
   "rules.hint": "Règles pour les téléchargements manuels et les suivis. Les préréglages peuvent être modifiés et dupliqués.",

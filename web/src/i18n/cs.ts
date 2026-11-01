@@ -658,6 +658,9 @@ export const cs: Catalog = {
   "seriesBulk.adding": "Zařazuji {done} z {total}…",
   "seriesBulk.partlyAdded": { one: "{count} díl už byl zařazen.", few: "{count} díly už byly zařazeny.", other: "{count} dílů už bylo zařazeno.", many: "{count} díly už byly zařazeny." },
   "seriesBulk.skipHint": "Díly, které už jsou v knihovně nebo ve frontě, se přeskočí.",
+  "tv.seriesBulk.seasonPicker": "Série…",
+  "tv.seriesBulk.seasonsTitle": "Série",
+  "tv.seriesBulk.skippedRow": "Přeskočené ({count})",
 
   "rules.title": "Pravidla stahování",
   "rules.hint": "Pravidla pro ruční stahování a sledování. Předvolby lze upravit a duplikovat.",

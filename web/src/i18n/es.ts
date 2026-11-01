@@ -628,6 +628,9 @@ export const es: Catalog = {
   "seriesBulk.adding": "Añadiendo {done} de {total}…",
   "seriesBulk.partlyAdded": { one: "Ya se añadió {count} episodio.", other: "Ya se añadieron {count} episodios." },
   "seriesBulk.skipHint": "Se omiten los episodios que ya están en la biblioteca o en la cola.",
+  "tv.seriesBulk.seasonPicker": "Temporada…",
+  "tv.seriesBulk.seasonsTitle": "Temporadas",
+  "tv.seriesBulk.skippedRow": "Omitidos ({count})",
 
   "rules.title": "Reglas de descarga",
   "rules.hint": "Reglas para descargas manuales y seguimientos. Los ajustes predefinidos se pueden modificar y duplicar.",

@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.ui.library
 
 import androidx.activity.compose.BackHandler
+import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
@@ -43,6 +44,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +57,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
@@ -70,6 +73,7 @@ import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
+import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
@@ -84,6 +88,10 @@ import cz.stremiooffline.tv.ui.catalog.nativeAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
+import cz.stremiooffline.tv.ui.catalog.BulkOrigin
+import cz.stremiooffline.tv.ui.catalog.SeriesDownloadPanel
+import cz.stremiooffline.tv.ui.catalog.SidePanel
+import cz.stremiooffline.tv.ui.catalog.TagSeriesDownloadPanel
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
@@ -118,6 +126,8 @@ const val TagRemoteSeriesToLibrary = "remote_series_to_library"
 const val TagRemoteSeriesStartOver = "remote_series_start_over"
 const val TagRemoteSeriesSources = "remote_series_sources"
 const val TagRemoteSeriesWatched = "remote_series_watched"
+const val TagRemoteSeriesBulk = "remote_series_bulk"
+const val TagRemoteBrowserSeriesBulk = "remote_browser_series_bulk"
 const val TagRemoteSeriesProgress = "remote_series_progress"
 const val TagRemoteSeriesTech = "remote_series_tech"
 const val TagRemoteSeriesOverview = "remote_series_overview"
@@ -178,6 +188,13 @@ fun RemoteLibraryRoute(
   val loadMoreFocus = remember { FocusRequester() }
   val errorFocus = remember { FocusRequester() }
   val requesters = remember(levelKey) { mutableMapOf<String, FocusRequester>() }
+  val bulkFocus = remember(levelKey) { FocusRequester() }
+  var bulkOpen by remember(levelKey) { mutableStateOf(false) }
+  var bulkWasOpen by remember(levelKey) { mutableStateOf(false) }
+  val bulkLevel = level as? RemoteLevel.Episodes
+  val bulkSeriesId = bulkLevel?.seriesItemId
+  val bulkAvailable = loadDestinations != null && bulkSeriesId != null
+  val context = LocalContext.current
 
   var query by remember { mutableStateOf("") }
   var committed by remember { mutableStateOf("") }
@@ -326,6 +343,16 @@ fun RemoteLibraryRoute(
     copyResolving = false
     copyBusy = false
   }
+  LaunchedEffect(bulkOpen) {
+    if (bulkOpen) {
+      bulkWasOpen = true
+    } else if (bulkWasOpen) {
+      bulkWasOpen = false
+      awaitFrame()
+      awaitFrame()
+      runCatching { bulkFocus.requestFocus() }
+    }
+  }
 
   // A page change focuses the card last used on this level, else the first card; Back restores the
   // card that opened the level because the selection is kept per level rather than cleared.
@@ -405,6 +432,15 @@ fun RemoteLibraryRoute(
           onOpenType = { typePanel = true },
         )
       }
+      if (level != null && bulkAvailable) {
+        FocusButton(
+          text = stringResource(R.string.series_bulk_remote_button),
+          onClick = { bulkOpen = true },
+          modifier = Modifier
+            .focusRequester(bulkFocus)
+            .testTag(TagRemoteBrowserSeriesBulk),
+        )
+      }
       Box(Modifier.weight(1f).fillMaxWidth()) {
         if (level == null) {
           LibraryPicker(state, viewModel, imageUrl, requesters, gridFocus, errorFocus)
@@ -419,7 +455,7 @@ fun RemoteLibraryRoute(
             gridFocus = gridFocus,
             loadMoreFocus = loadMoreFocus,
             errorFocus = errorFocus,
-            firstRowUp = searchAction.takeIf { searchAvailable },
+            firstRowUp = bulkFocus.takeIf { bulkAvailable } ?: searchAction.takeIf { searchAvailable },
             onMenu = if (loadDestinations != null) { item -> openCardCopy(level.libraryId, item) } else null,
             onOpenItem = onOpenItem,
           )
@@ -445,6 +481,27 @@ fun RemoteLibraryRoute(
         onClose = { closeCardCopy() },
       )
     }
+
+    if (bulkOpen && bulkAvailable) {
+      RemoteSeriesBulkHost(
+        api = api,
+        origin = BulkOrigin.Remote(
+          libraryId = bulkLevel.libraryId,
+          libraryName = bulkLevel.libraryName,
+          provider = bulkLevel.provider,
+          seriesItemId = bulkSeriesId,
+        ),
+        title = bulkLevel.seriesName ?: bulkLevel.title,
+        loadDestinations = loadDestinations,
+        onQueued = { added, skipped ->
+          bulkOpen = false
+          copyNotice = bulkAddedText(context, added, skipped)
+        },
+        onClose = {
+          bulkOpen = false
+        },
+      )
+    }
   }
 }
 
@@ -463,6 +520,7 @@ internal fun RemoteSeriesScreen(
   backEnabled: Boolean = true,
   restoreToken: Int = 0,
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
+  bulkApi: TvApi? = null,
   onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
   /** The catalogue port the supplementary source groups need, forwarded to an episode's detail. */
   catalogueApi: CatalogApi? = null,
@@ -474,6 +532,13 @@ internal fun RemoteSeriesScreen(
   onSearchPerson: (String) -> Unit = {},
   onOpenRelated: (RelatedTitleDto) -> Unit = {},
 ) {
+  val fullApi = bulkApi ?: api as? TvApi ?: catalogueApi as? TvApi
+  val bulkFocus = remember { FocusRequester() }
+  var bulkOpen by remember { mutableStateOf(false) }
+  var bulkWasOpen by remember { mutableStateOf(false) }
+  var bulkNotice by remember { mutableStateOf<String?>(null) }
+  val context = LocalContext.current
+  val canBulk = loadDestinations != null && fullApi != null
   val viewModel = viewModel<RemoteLibraryViewModel>(
     key = "remote-series:${data.libraryId}:${data.item.id}",
     factory = RemoteLibraryViewModel.factory(api),
@@ -796,8 +861,20 @@ internal fun RemoteSeriesScreen(
     copyCard = null
     copyRequest = null
     copyNotice = null
+    bulkNotice = null
+    bulkOpen = false
     copyResolving = false
     copyBusy = false
+  }
+  LaunchedEffect(bulkOpen) {
+    if (bulkOpen) {
+      bulkWasOpen = true
+    } else if (bulkWasOpen) {
+      bulkWasOpen = false
+      awaitFrame()
+      awaitFrame()
+      runCatching { bulkFocus.requestFocus() }
+    }
   }
 
   Box(Modifier.fillMaxSize().appBackground().testTag(TagRemoteSeriesRoot)) {
@@ -816,9 +893,14 @@ internal fun RemoteSeriesScreen(
         error = level?.state?.error,
         appendFailed = level?.state?.appendError != null,
         staleCursor = level?.state?.staleCursor == true,
-        copyNotice = copyNotice.takeIf { copyRequest == null },
+        copyNotice = listOfNotNull(
+          copyNotice.takeIf { copyRequest == null },
+          bulkNotice,
+        ).joinToString(" ").takeIf { it.isNotEmpty() },
         copyBusy = copyBusy || copyResolving,
         canCopy = loadDestinations != null,
+        canBulk = canBulk,
+        bulkFocus = bulkFocus,
         resumeVideo = resumeVideo,
         resumePosition = resumeCard?.progress?.position ?: 0.0,
         resumeDuration = resumeCard?.progress?.duration ?: 0.0,
@@ -826,6 +908,7 @@ internal fun RemoteSeriesScreen(
         onPlayEpisode = { item, startOver -> openEpisode(item, play = true, startOver = startOver) },
         onWatched = ::markWatched,
         onCopy = ::openCardCopy,
+        onBulk = { bulkOpen = true },
         onRetry = viewModel::retry,
         onRetryAppend = viewModel::retryAppend,
         onLoadMore = viewModel::loadMore,
@@ -853,6 +936,7 @@ internal fun RemoteSeriesScreen(
         backEnabled = backEnabled,
         restoreToken = returnToken + restoreToken,
         loadDestinations = loadDestinations,
+        bulkApi = fullApi,
         onQueue = onQueue,
         catalogueApi = catalogueApi,
         titleProgress = titleProgress,
@@ -876,7 +960,112 @@ internal fun RemoteSeriesScreen(
         onClose = { closeCardCopy() },
       )
     }
+
+    if (bulkOpen && fullApi != null && loadDestinations != null) {
+      RemoteSeriesBulkHost(
+        api = fullApi,
+        origin = BulkOrigin.Remote(
+          libraryId = data.libraryId,
+          libraryName = data.libraryName,
+          provider = data.provider,
+          seriesItemId = data.item.id,
+        ),
+        title = metadata.seriesName ?: data.item.name,
+        loadDestinations = loadDestinations,
+        onQueued = { added, skipped ->
+          bulkOpen = false
+          bulkNotice = bulkAddedText(context, added, skipped)
+        },
+        onClose = {
+          bulkOpen = false
+        },
+      )
+    }
   }
+}
+
+private data class RemoteBulkPanelData(
+  val settings: SettingsResponse,
+  val addons: List<AddonDto>,
+  val libraries: List<LibraryDto>,
+)
+
+@Composable
+private fun RemoteSeriesBulkHost(
+  api: TvApi,
+  origin: BulkOrigin.Remote,
+  title: String,
+  loadDestinations: suspend () -> List<LibraryDto>,
+  onQueued: (added: Int, skipped: Int) -> Unit,
+  onClose: () -> Unit,
+) {
+  var data by remember(origin) { mutableStateOf<RemoteBulkPanelData?>(null) }
+  var failure by remember(origin) { mutableStateOf<ApiError?>(null) }
+  LaunchedEffect(origin) {
+    data = null
+    failure = null
+    try {
+      val libraries = loadDestinations()
+      val settings = try {
+        api.settings()
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        SettingsResponse()
+      }
+      val addons = try {
+        api.addons()
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        emptyList()
+      }
+      data = RemoteBulkPanelData(settings, addons, libraries)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (error: ApiError) {
+      failure = error
+    }
+  }
+  val loaded = data
+  if (loaded != null) {
+    SeriesDownloadPanel(
+      api = api,
+      type = "series",
+      title = title,
+      origin = origin,
+      selected = null,
+      settings = loaded.settings,
+      addons = loaded.addons,
+      libraries = loaded.libraries,
+      onQueued = onQueued,
+      onClose = onClose,
+    )
+  } else {
+    SidePanel(
+      title = stringResource(R.string.series_bulk_title),
+      onClose = onClose,
+      modifier = Modifier.testTag(TagSeriesDownloadPanel),
+    ) {
+      Text(
+        failure?.serverMessage ?: stringResource(
+          if (failure == null) R.string.series_bulk_preparing else R.string.media_server_error,
+        ),
+        color = if (failure == null) Tokens.Muted else Tokens.Red,
+        fontSize = 11.sp,
+      )
+    }
+  }
+}
+
+private fun bulkAddedText(context: Context, added: Int, skipped: Int): String {
+  val addedText = context.resources.getQuantityString(R.plurals.episodes_bulk_added, added, added)
+  val skippedText = if (skipped > 0) {
+    " " + context.resources.getQuantityString(R.plurals.episodes_bulk_skipped, skipped, skipped)
+  } else {
+    ""
+  }
+  return addedText + skippedText
 }
 
 /** The Files/Media servers switch at the top of the section. */

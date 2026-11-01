@@ -53,6 +53,7 @@ import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
+import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
@@ -150,6 +151,7 @@ fun RemoteDetailScreen(
   /** The destinations this account may copy into, read once when the copy action is pressed.
    *  Null keeps the action off entirely, which is what a harness with no catalogue surface passes. */
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
+  bulkApi: TvApi? = null,
   /** Queues one exact version into the exact library the viewer picked. */
   onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
   /** The catalogue surface the explicit addon discovery needs. Null keeps the whole addon block
@@ -176,6 +178,7 @@ fun RemoteDetailScreen(
       backEnabled = backEnabled,
       restoreToken = restoreToken,
       loadDestinations = loadDestinations,
+      bulkApi = bulkApi,
       onQueue = onQueue,
       catalogueApi = catalogueApi,
       titleProgress = titleProgress,

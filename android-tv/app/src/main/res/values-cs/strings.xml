@@ -250,6 +250,7 @@
   <string name="tv_download_this_season">Tato série (%1$s)</string>
   <string name="tv_download_from_episode">Od tohoto dílu dál</string>
   <string name="tv_download_all_episodes">Všechny díly</string>
+  <string name="episodes_specials">Speciály</string>
   <string name="bulk_title">Stažení seriálu</string>
   <string name="bulk_title_movie">Stažení filmu</string>
   <string name="bulk_title_episode">Stažení dílu</string>
@@ -260,6 +261,49 @@
     <item quantity="many">%1$s epizody</item>
     <item quantity="other">%1$s epizod</item>
   </plurals>
+  <string name="series_bulk_remote_button">Kopírovat do knihovny…</string>
+  <string name="series_bulk_title">Stáhnout seriál</string>
+  <string name="series_bulk_whole_series">Celý seriál</string>
+  <string name="series_bulk_source">Zdroj</string>
+  <string name="series_bulk_from_library">Z této knihovny — %1$s / %2$s</string>
+  <string name="series_bulk_from_library_hint">Zkopíruje jen díly, které tato knihovna má. Nic se nedoplňuje odjinud.</string>
+  <string name="series_bulk_from_catalogue">Z katalogu podle pravidel</string>
+  <string name="series_bulk_from_catalogue_hint">Každý díl hledá ve vašich doplňcích; z této knihovny nic nekopíruje.</string>
+  <string name="series_bulk_preparing">Připravuji seznam dílů…</string>
+  <plurals name="series_bulk_ready">
+    <item quantity="one">%1$s díl připraven</item>
+    <item quantity="few">%1$s díly připraveny</item>
+    <item quantity="many">%1$s díly připraveny</item>
+    <item quantity="other">%1$s dílů připraveno</item>
+  </plurals>
+  <string name="series_bulk_in_target">%1$s už v knihovně</string>
+  <string name="series_bulk_queued">%1$s už ve frontě</string>
+  <string name="series_bulk_unreleased">%1$s zatím nevydáno</string>
+  <string name="series_bulk_unnumbered">%1$s bez čísla dílu</string>
+  <string name="series_bulk_nothing">Není co stáhnout.</string>
+  <string name="series_bulk_sources_later">Zdroje se vyberou při stahování každého dílu.</string>
+  <string name="series_bulk_reason_in_target">už v knihovně</string>
+  <string name="series_bulk_reason_queued">už ve frontě</string>
+  <string name="series_bulk_reason_unreleased">zatím nevydáno</string>
+  <string name="series_bulk_reason_unnumbered">bez čísla série nebo dílu</string>
+  <string name="series_bulk_incomplete">Seznam dílů se nepodařilo načíst celý.</string>
+  <plurals name="series_bulk_add">
+    <item quantity="one">Zařadit %1$s díl</item>
+    <item quantity="few">Zařadit %1$s díly</item>
+    <item quantity="many">Zařadit %1$s díly</item>
+    <item quantity="other">Zařadit %1$s dílů</item>
+  </plurals>
+  <string name="series_bulk_adding">Zařazuji %1$s z %2$s…</string>
+  <plurals name="series_bulk_partly_added">
+    <item quantity="one">%1$s díl už byl zařazen.</item>
+    <item quantity="few">%1$s díly už byly zařazeny.</item>
+    <item quantity="many">%1$s díly už byly zařazeny.</item>
+    <item quantity="other">%1$s dílů už bylo zařazeno.</item>
+  </plurals>
+  <string name="err_bulk_remote_not_in_rules">Vaše pravidla stahování nepovolují kopírování z této knihovny.</string>
+  <string name="tv_series_bulk_season_picker">Série…</string>
+  <string name="tv_series_bulk_seasons_title">Série</string>
+  <string name="tv_series_bulk_skipped_row">Přeskočené (%1$s)</string>
   <string name="rules_title">Pravidla stahování</string>
   <string name="rules_selected_source">Vybraný zdroj</string>
   <string name="rules_unavailable">Pravidla stahování nejsou k dispozici. Požádejte správce.</string>

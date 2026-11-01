@@ -13,11 +13,18 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BulkDownloadResult
+import cz.stremiooffline.tv.data.BulkPreparedEpisodeDto
+import cz.stremiooffline.tv.data.BulkPreparedSeriesDto
+import cz.stremiooffline.tv.data.BulkPreparedTargetDto
+import cz.stremiooffline.tv.data.BulkPrepareListingDto
+import cz.stremiooffline.tv.data.BulkPrepareResponse
+import cz.stremiooffline.tv.data.BulkMediaDto
 import cz.stremiooffline.tv.data.DownloadSelectionDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MetaDto
@@ -50,6 +57,7 @@ class SeriesDownloadPanelTest {
   @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
   private val json = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
+  private var currentApi: FakeTvApi? = null
 
   private val videos = listOf(
     VideoDto(id = "s0e1", season = 0, episode = 1, released = "2020-01-01"),
@@ -79,10 +87,29 @@ class SeriesDownloadPanelTest {
       LibraryDto(id = "films", name = "Films", type = "movie", writable = true),
     )
     api.sourceProfilesValue = listOf(rule("balanced", nameKey = "rules.preset.balanced"))
+    api.bulkPrepareAnswer = { request ->
+      BulkPrepareResponse(
+        origin = request.origin.kind,
+        series = BulkPreparedSeriesDto("Show", catalogueId = "tt1"),
+        target = BulkPreparedTargetDto(
+          libraryId = request.target?.libraryId ?: "shows",
+          libraryName = api.librariesValue.firstOrNull { it.id == request.target?.libraryId }?.name ?: "TV shows",
+        ),
+        episodes = listOf(
+          BulkPreparedEpisodeDto("s0e1", 0, 1, "Special", status = "ready"),
+          BulkPreparedEpisodeDto("s1e1", 1, 1, "One", status = "ready"),
+          BulkPreparedEpisodeDto("s1e2", 1, 2, "Two", status = "ready"),
+          BulkPreparedEpisodeDto("s1e3", 1, 3, "Three", status = "unreleased"),
+          BulkPreparedEpisodeDto("s2e1", 2, 1, "Later", status = "ready"),
+        ),
+        listing = BulkPrepareListingDto(complete = true),
+      )
+    }
     return api
   }
 
   private fun mount(api: FakeTvApi) {
+    currentApi = api
     compose.setContent {
       CatalogDetailScreen(
         api = api,
@@ -137,16 +164,21 @@ class SeriesDownloadPanelTest {
     compose.onNodeWithTag(tag).assertIsFocused()
   }
 
+  private fun waitFocused(tag: String) {
+    compose.waitUntil(5_000) { focused(tag) }
+  }
+
   /** Opens the bulk panel from the action row, the way the remote gets there. */
-  private fun openPanel() {
+  private fun openPanel(waitForPrepare: Boolean = true) {
     focusRight(TagCatalogSeriesDownload)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagSeriesDownloadPanel).assertExists()
+    if (waitForPrepare) compose.waitUntil(5_000) { currentApi!!.bulkPrepareCalls > 0 }
   }
 
   /** Picks a scope and leaves the remote on the queue row of the settings. */
   private fun openSettings(scope: DownloadScope) {
-    openPanel()
+    openPanel(waitForPrepare = false)
     focusDown(seriesScopeTag(scope))
     press(Key.DirectionCenter)
     focusDown(TagSeriesDownloadAdd)
@@ -184,7 +216,10 @@ class SeriesDownloadPanelTest {
     mount(api)
     openSettings(DownloadScope.All)
 
-    compose.onNodeWithTag(TagSeriesDownloadSummary).assertTextContains("3 episodes → TV shows")
+    compose.onNodeWithTag(TagSeriesDownloadSummary)
+      .assertTextContains("3 episodes ready", substring = true)
+      .assertTextContains("1 not released yet", substring = true)
+    compose.onNodeWithText("Sources are chosen when each episode downloads.").assertExists()
   }
 
   @Test
@@ -298,7 +333,7 @@ class SeriesDownloadPanelTest {
     val api = ready()
     api.sourceProfilesFailure = ApiFailure.Generic
     mount(api)
-    openPanel()
+    openPanel(waitForPrepare = false)
     focusDown(seriesScopeTag(DownloadScope.Episode))
     press(Key.DirectionCenter)
 
@@ -314,7 +349,7 @@ class SeriesDownloadPanelTest {
     val api = ready()
     api.sourceProfilesValue = emptyList()
     mount(api)
-    openPanel()
+    openPanel(waitForPrepare = false)
     focusDown(seriesScopeTag(DownloadScope.Episode))
     press(Key.DirectionCenter)
 
@@ -329,7 +364,7 @@ class SeriesDownloadPanelTest {
       rule("balanced", nameKey = "rules.preset.balanced", operations = listOf("play", "downloadToDevice")),
     )
     mount(api)
-    openPanel()
+    openPanel(waitForPrepare = false)
     focusDown(seriesScopeTag(DownloadScope.Episode))
     press(Key.DirectionCenter)
 
@@ -400,6 +435,7 @@ class SeriesDownloadPanelTest {
 
     focusUp(TagSeriesDownloadLibrary)
     press(Key.DirectionCenter)
+    waitFocused(seriesLibraryTag("shows"))
     focusDown(seriesLibraryTag("mixed"))
     press(Key.DirectionCenter)
     back()
@@ -495,6 +531,250 @@ class SeriesDownloadPanelTest {
     back()
     compose.onNodeWithTag(TagSeriesDownloadPanel).assertDoesNotExist()
     compose.onNodeWithTag(TagCatalogSeriesDownload).assertIsFocused()
+  }
+
+  @Test
+  fun `the panel prepares one whole-series answer on open`() {
+    val api = ready()
+    mount(api)
+    openPanel()
+
+    compose.waitUntil(5_000) { api.bulkPrepareCalls == 1 }
+    assertEquals(1, api.bulkPrepareCalls)
+    val request = api.bulkPrepareRequests.single()
+    assertEquals("series", request.scope)
+    assertEquals(true, request.specials)
+    assertEquals("catalogue", request.origin.kind)
+  }
+
+  @Test
+  fun `picking another scope does not prepare again`() {
+    val api = ready()
+    mount(api)
+    openPanel()
+    val before = api.bulkPrepareCalls
+
+    focusDown(seriesScopeTag(DownloadScope.All))
+    press(Key.DirectionCenter)
+    back()
+    focusUp(seriesScopeTag(DownloadScope.FromEpisode))
+    press(Key.DirectionCenter)
+
+    assertEquals(before, api.bulkPrepareCalls)
+  }
+
+  @Test
+  fun `specials stay off until picked and then join the whole series`() {
+    val api = ready()
+    mount(api)
+    openPanel()
+
+    compose.onNodeWithTag(TagSeriesDownloadSpecials).assertTextContains("1", substring = true)
+    focusDown(TagSeriesDownloadSpecials)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSeriesDownloadSpecials).assertIsSelected()
+    compose.onNodeWithTag(seriesScopeTag(DownloadScope.All)).assertTextContains("4", substring = true)
+  }
+
+  @Test
+  fun `a series without a selected episode opens the season picker`() {
+    val api = ready()
+    mountPanel(
+      api,
+      BulkOrigin.Catalogue(
+        videos = videos,
+        media = BulkMediaDto(id = "tt1", metaType = "series"),
+      ),
+    )
+    compose.waitUntil(5_000) { api.bulkPrepareCalls == 1 }
+
+    focusDown(seriesScopeTag(DownloadScope.Season))
+    press(Key.DirectionCenter)
+    waitFocused(seriesSeasonTag(1))
+    compose.onNodeWithTag(seriesSeasonTag(1)).assertTextContains("· 2", substring = true)
+    compose.onNodeWithTag(seriesSeasonTag(2)).assertTextContains("· 1", substring = true)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSeriesDownloadSummary).assertTextContains("1 episode ready", substring = true)
+  }
+
+  @Test
+  fun `changing the rule prepares the same series again`() {
+    val api = ready()
+    api.sourceProfilesValue = listOf(
+      rule("balanced", nameKey = "rules.preset.balanced"),
+      rule("smaller", nameKey = "rules.preset.smaller"),
+    )
+    mount(api)
+    openSettings(DownloadScope.All)
+    focusUp(TagSeriesDownloadRules)
+    press(Key.DirectionCenter)
+    focusDown(seriesRuleTag("smaller"))
+    press(Key.DirectionCenter)
+
+    compose.waitUntil(5_000) { api.bulkPrepareCalls == 2 }
+    assertEquals("smaller", api.bulkPrepareRequests.last().selection.profile?.profileId)
+  }
+
+  @Test
+  fun `the skipped screen lists its reasons and its Back row returns to the skipped row`() {
+    val api = ready()
+    mount(api)
+    openSettings(DownloadScope.All)
+    focusUp(TagSeriesDownloadSkipped)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithText("S01E03 · Three · not released yet").assertExists()
+    waitFocused(TagSeriesDownloadSkippedBack)
+    focusDown(TagSeriesDownloadSkippedBack)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSeriesDownloadSkipped).assertIsFocused()
+  }
+
+  @Test
+  fun `an incomplete listing disables Add and Retry prepares again`() {
+    val api = ready()
+    val base = api.bulkPrepareAnswer
+    api.bulkPrepareAnswer = { request ->
+      base(request).copy(listing = BulkPrepareListingDto(complete = false))
+    }
+    mount(api)
+    openSettings(DownloadScope.All)
+
+    compose.onNodeWithTag(TagSeriesDownloadIncomplete).assertExists()
+    compose.onNodeWithTag(TagSeriesDownloadAdd).assertIsNotEnabled()
+    focusUp(TagSeriesDownloadRetry)
+    compose.onNodeWithTag(TagSeriesDownloadRetry).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.bulkPrepareCalls == 2 }
+  }
+
+  @Test
+  fun `a remote series exposes Source only with a catalogue id and choosing it calls meta once`() {
+    val api = ready()
+    api.metaValues["series:tt1"] = MetaDto(
+      id = "tt1",
+      type = "series",
+      name = "Catalogue Show",
+      videos = videos,
+    )
+    mountPanel(
+      api,
+      BulkOrigin.Remote("remote-a", "Server shows", "jellyfin", "remote-series"),
+    )
+    compose.waitUntil(5_000) { api.bulkPrepareCalls == 1 }
+
+    focusDown(seriesScopeTag(DownloadScope.All))
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSeriesDownloadSource).assertExists()
+    focusUp(TagSeriesDownloadSource)
+    press(Key.DirectionCenter)
+    waitFocused(TagSeriesDownloadSourceLibrary)
+    focusDown(TagSeriesDownloadSourceCatalogue)
+    press(Key.DirectionCenter)
+
+    compose.waitUntil(5_000) { api.metaRequests.size == 1 }
+    compose.waitForIdle()
+    assertEquals(
+      api.bulkPrepareRequests.joinToString { "${it.origin.kind}:${it.target?.libraryId}" },
+      2,
+      api.bulkPrepareCalls,
+    )
+    assertEquals("series" to "tt1", api.metaRequests.single().first to api.metaRequests.single().second)
+    assertEquals("catalogue", api.bulkPrepareRequests.last().origin.kind)
+  }
+
+  @Test
+  fun `a remote series without a catalogue id has no Source row`() {
+    val api = ready()
+    val base = api.bulkPrepareAnswer
+    api.bulkPrepareAnswer = { request ->
+      val response = base(request)
+      response.copy(series = response.series.copy(catalogueId = null))
+    }
+    mountPanel(
+      api,
+      BulkOrigin.Remote("remote-a", "Server shows", "emby", "remote-series"),
+    )
+    compose.waitUntil(5_000) { api.bulkPrepareCalls == 1 }
+
+    focusDown(seriesScopeTag(DownloadScope.All))
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSeriesDownloadSource).assertDoesNotExist()
+  }
+
+  @Test
+  fun `remote Add posts the library origin and each remote item id`() {
+    val api = ready()
+    val base = api.bulkPrepareAnswer
+    api.bulkPrepareAnswer = { request ->
+      base(request).copy(
+        origin = "remote",
+        episodes = listOf(
+          BulkPreparedEpisodeDto("remote:1", 1, 1, "One", remoteItemId = "item-1", status = "ready"),
+          BulkPreparedEpisodeDto("remote:2", 1, 2, "Two", remoteItemId = "item-2", status = "ready"),
+        ),
+      )
+    }
+    api.bulkDownloadResult = BulkDownloadResult(added = 2, skipped = 0)
+    mountPanel(
+      api,
+      BulkOrigin.Remote("remote-a", "Server shows", "emby", "remote-series"),
+    )
+    compose.waitUntil(5_000) { api.bulkPrepareCalls == 1 }
+    focusDown(seriesScopeTag(DownloadScope.All))
+    press(Key.DirectionCenter)
+    focusDown(TagSeriesDownloadAdd)
+    press(Key.DirectionCenter)
+
+    val body = api.bulkDownloads.single()
+    assertEquals("remote-a", body.origin?.libraryId)
+    assertEquals("remote-series", body.origin?.seriesItemId)
+    assertEquals(listOf("item-1", "item-2"), body.episodes.map { it.remoteItemId })
+    assertEquals(null, body.target)
+  }
+
+  @Test
+  fun `Back on the first screen cancels a running prepare and closes`() {
+    val api = ready()
+    api.bulkPrepareGate = CompletableDeferred()
+    mount(api)
+    openPanel()
+
+    back()
+    compose.waitUntil(5_000) { api.bulkPrepareCancelled }
+    compose.onNodeWithTag(TagSeriesDownloadPanel).assertDoesNotExist()
+  }
+
+  @Test
+  fun `Back from Settings returns focus to the row that opened it`() {
+    val api = ready()
+    mount(api)
+    openPanel()
+    focusDown(seriesScopeTag(DownloadScope.FromEpisode))
+    press(Key.DirectionCenter)
+
+    back()
+    compose.onNodeWithTag(seriesScopeTag(DownloadScope.FromEpisode)).assertIsFocused()
+  }
+
+  private fun mountPanel(api: FakeTvApi, origin: BulkOrigin, selected: VideoDto? = null) {
+    currentApi = api
+    compose.setContent {
+      SeriesDownloadPanel(
+        api = api,
+        type = "series",
+        title = "Show",
+        origin = origin,
+        selected = selected,
+        settings = api.settingsValue,
+        addons = api.addonsValue,
+        libraries = api.librariesValue,
+        onQueued = { _, _ -> },
+        onClose = {},
+      )
+    }
+    compose.waitForIdle()
   }
 
   private fun rule(

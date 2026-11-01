@@ -628,6 +628,9 @@ export const pl: Catalog = {
   "seriesBulk.adding": "Dodawanie {done} z {total}…",
   "seriesBulk.partlyAdded": { one: "{count} odcinek został już dodany.", few: "{count} odcinki zostały już dodane.", many: "{count} odcinków zostało już dodanych.", other: "{count} odcinków zostało już dodanych." },
   "seriesBulk.skipHint": "Odcinki już obecne w bibliotece lub kolejce są pomijane.",
+  "tv.seriesBulk.seasonPicker": "Sezon…",
+  "tv.seriesBulk.seasonsTitle": "Sezony",
+  "tv.seriesBulk.skippedRow": "Pominięte ({count})",
 
   "rules.title": "Reguły pobierania",
   "rules.hint": "Reguły dla ręcznego pobierania i obserwowanych tytułów. Ustawienia wstępne można zmieniać i duplikować.",

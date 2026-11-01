@@ -73,6 +73,7 @@ class DownloadApiTest {
     } catch (error: ApiError) {
       assertEquals(ApiFailure.Forbidden, error.failure)
       assertEquals("This account may not save to that library. Choose another one.", error.serverMessage)
+      assertEquals("err.downloadLibraryNotAllowed", error.messageKey)
     }
   }
 
@@ -133,6 +134,71 @@ class DownloadApiTest {
         """"media":{"id":"tt1","metaType":"series","poster":"p.jpg"},"target":{"libraryId":"shows"}}""",
       request.body.readUtf8(),
     )
+  }
+
+  @Test
+  fun `prepare posts one whole-series catalogue request and reads the prepared answer`() = runTest {
+    server.enqueue(
+      MockResponse().setBody(
+        """{"origin":"catalogue","series":{"title":"Show","catalogueId":"tt1"},""" +
+          """"target":{"libraryId":"shows","libraryName":"TV shows"},""" +
+          """"episodes":[{"id":"tt1:1:1","season":1,"episode":1,"title":"Pilot","status":"ready"}],""" +
+          """"listing":{"complete":false,"errorKey":"err.bulkEpisodeListIncomplete"}}""",
+      ),
+    )
+
+    val answer = client(start()).prepareBulk(
+      BulkPrepareRequest(
+        scope = "series",
+        specials = true,
+        title = "Show",
+        selection = DownloadSelectionDto(profile = DownloadProfileRefDto("travel", 3)),
+        target = DownloadTargetDto("shows"),
+        origin = BulkOriginDto.catalogue(
+          media = BulkMediaDto(id = "tt1", metaType = "series"),
+          episodes = listOf(BulkEpisodeDto("tt1:1:1", 1, 1, "Pilot", released = "2020-01-01")),
+        ),
+      ),
+    )
+
+    val request = server.takeRequest()
+    assertEquals("/api/downloads/bulk/prepare", request.path)
+    assertEquals(
+      """{"scope":"series","specials":true,"title":"Show",""" +
+        """"selection":{"profile":{"profileId":"travel","revision":3}},"target":{"libraryId":"shows"},""" +
+        """"origin":{"kind":"catalogue","media":{"id":"tt1","metaType":"series"},""" +
+        """"episodes":[{"id":"tt1:1:1","season":1,"episode":1,"title":"Pilot","released":"2020-01-01"}]}}""",
+      request.body.readUtf8(),
+    )
+    assertEquals("tt1", answer.series.catalogueId)
+    assertEquals("TV shows", answer.target.libraryName)
+    assertEquals("ready", answer.episodes.single().status)
+    assertEquals(false, answer.listing.complete)
+  }
+
+  @Test
+  fun `a remote bulk body carries its origin and remote item ids without a target`() = runTest {
+    server.enqueue(
+      MockResponse().setBody(
+        """{"added":1,"skipped":0,"results":[{"id":"show:1:1","outcome":"queued"}]}""",
+      ),
+    )
+
+    val answer = client(start()).downloadBulk(
+      title = "Show",
+      type = "series",
+      episodes = listOf(BulkEpisodeDto("show:1:1", 1, 1, "Pilot", remoteItemId = "ep-1")),
+      selection = DownloadSelectionDto(profile = DownloadProfileRefDto("travel", 3)),
+      media = BulkMediaDto(metaType = "series"),
+      target = null,
+      origin = BulkRemoteOriginDto.remote("remote-a", "series-a"),
+    )
+
+    val body = server.takeRequest().body.readUtf8()
+    assertTrue(body, body.contains(""""remoteItemId":"ep-1""""))
+    assertTrue(body, body.contains(""""origin":{"kind":"remote","libraryId":"remote-a","seriesItemId":"series-a"}"""))
+    assertTrue(body, !body.contains("target"))
+    assertEquals("queued", answer.results.single().outcome)
   }
 
   private fun start(): ServerAddress {

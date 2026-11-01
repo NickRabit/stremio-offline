@@ -96,6 +96,9 @@ sealed interface RemoteLevel {
     val itemId: String,
     override val mosaic: Boolean = false,
     override val state: RemoteItemsState = RemoteItemsState(),
+    /** The series this level belongs to when it was opened from a series or one of its seasons. */
+    val seriesItemId: String? = null,
+    val seriesName: String? = null,
   ) : RemoteLevel {
     override val key: String get() = "episodes:$libraryId:$itemId"
   }
@@ -248,8 +251,24 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
   fun openItem(item: RemoteItemDto) {
     val current = state.current ?: return
     val level = when (item.type) {
-      "series", "season" ->
-        RemoteLevel.Episodes(current.libraryId, current.libraryName, current.provider, item.name, item.id)
+      "series" -> RemoteLevel.Episodes(
+        current.libraryId,
+        current.libraryName,
+        current.provider,
+        item.name,
+        item.id,
+        seriesItemId = item.id,
+        seriesName = item.name,
+      )
+      "season" -> RemoteLevel.Episodes(
+        current.libraryId,
+        current.libraryName,
+        current.provider,
+        item.name,
+        item.id,
+        seriesItemId = item.seriesId,
+        seriesName = item.seriesName,
+      )
       else -> return
     }
     cancelPreviews()
@@ -260,7 +279,15 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
   /** Opens one series straight at its episodes, without browsing the rest of its library. */
   fun openSeries(libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) {
     cancelPreviews()
-    val level = RemoteLevel.Episodes(libraryId, libraryName, provider, item.name, item.id)
+    val level = RemoteLevel.Episodes(
+      libraryId,
+      libraryName,
+      provider,
+      item.name,
+      item.id,
+      seriesItemId = item.id,
+      seriesName = item.name,
+    )
     state = state.copy(levels = listOf(level))
     startLevel(level)
   }

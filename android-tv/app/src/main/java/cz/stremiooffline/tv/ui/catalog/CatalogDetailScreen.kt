@@ -1154,10 +1154,9 @@ fun CatalogDetailScreen(
           .scrollToTopOnFocus(ui.extras, scope)
           .onFocusChanged { focus.actionRowFocused = it.hasFocus },
         extras = listOfNotNull(
-          // The web's bulk download, for the whole batch at once: it needs no source of its own, so
-          // it sits beside To library for any series with an episode selected. A native pick has no
-          // bulk action at all: the batch would queue addons the viewer never chose.
-          if (isSeries && pick.selectedVideo != null && !meta.videos.isNullOrEmpty()
+          // The web's bulk download needs no source of its own. A native pick still has no bulk
+          // action: the batch would queue addons the viewer never chose.
+          if (isSeries && !meta.videos.isNullOrEmpty()
             && activeStream?.let(Streams::isRemoteStream) != true) {
             catalogAction(
               TagCatalogSeriesDownload, stringResource(R.string.bulk_title), SeriesDownloadIcon,
@@ -1330,14 +1329,16 @@ fun CatalogDetailScreen(
         api = api,
         type = streamType,
         title = baseTitle,
-        videos = meta.videos.orEmpty(),
-        selected = pick.selectedVideo,
-        media = BulkMediaDto(
-          id = meta.id,
-          metaType = streamType,
-          poster = args.meta.poster ?: meta.poster,
-          background = args.meta.background ?: args.meta.poster ?: meta.background,
+        origin = BulkOrigin.Catalogue(
+          videos = meta.videos.orEmpty(),
+          media = BulkMediaDto(
+            id = meta.id,
+            metaType = streamType,
+            poster = args.meta.poster ?: meta.poster,
+            background = args.meta.background ?: args.meta.poster ?: meta.background,
+          ),
         ),
+        selected = pick.selectedVideo,
         settings = settings,
         addons = addons,
         libraries = save.libraries,
