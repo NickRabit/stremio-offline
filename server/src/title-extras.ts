@@ -1,10 +1,14 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { FetchLike } from "./debrid.js";
 import type { MetaItem } from "./types.js";
 import { OutboundError } from "./outbound.js";
 import { normalizeLanguage } from "./language.js";
+import { renameWithRetry } from "./fs-retry.js";
+import { log } from "./logger.js";
 import {
-  tmdbExternalId,
+  tmdbExternalIdResult,
   tmdbIdOf,
   tmdbImage,
   tmdbTitleExtras,
@@ -83,12 +87,18 @@ interface CachedTmdbExtras {
 
 interface CacheEntry {
   at: number;
+  ttl: number;
   value: CachedTmdbExtras | null;
 }
 
 const SUCCESS_TTL_MS = 24 * 60 * 60_000;
+const PARTIAL_TTL_MS = 30 * 60_000;
 const FAILURE_TTL_MS = 10 * 60_000;
-const CACHE_LIMIT = 500;
+const DEFAULT_CACHE_LIMIT = 500;
+const DISK_VERSION = 1;
+const DISK_LIMIT = 2_000;
+const PRUNE_INTERVAL_MS = 60 * 60_000;
+let cacheLimit = DEFAULT_CACHE_LIMIT;
 const REGION: Record<string, string> = {
   en: "US",
   cs: "CZ",
@@ -125,9 +135,39 @@ const extrasCache = new Map<string, CacheEntry>();
  *  cancelled only once every request waiting on it has gone. */
 interface InFlight { promise: Promise<CachedTmdbExtras | null>; controller: AbortController; waiting: number }
 const extrasInFlight = new Map<string, InFlight>();
+let extrasDir: string | undefined;
+let lastPruneAt = 0;
+const diskWrites = new Map<string, Promise<void>>();
+
+interface DiskEntry {
+  version: 1;
+  key: string;
+  at: number;
+  value: CachedTmdbExtras;
+}
 
 export function clearTitleExtrasCache(): void {
   extrasCache.clear();
+  for (const entry of extrasInFlight.values()) entry.controller.abort();
+  extrasInFlight.clear();
+}
+
+/** Test seam: keeps the memory cache but stops reading and writing title extras on disk. */
+export function detachTitleExtrasDisk(): void {
+  extrasDir = undefined;
+  lastPruneAt = 0;
+  diskWrites.clear();
+}
+
+export function setTitleExtrasCacheLimitForTests(limit: number): void {
+  cacheLimit = Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_CACHE_LIMIT;
+}
+
+/** Enables the title extras disk cache and removes stale files before the first request. */
+export async function attachTitleExtrasDisk(dir: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  extrasDir = dir;
+  await pruneTitleExtras(dir);
 }
 
 const text = (value: unknown): string | undefined =>
@@ -147,6 +187,117 @@ const throwIfCancelled = (signal?: AbortSignal) => {
 };
 
 const keyFingerprint = (apiKey: string) => createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
+const diskName = (key: string) => `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`;
+const reasonOf = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+function rememberMemory(key: string, entry: CacheEntry): void {
+  extrasCache.delete(key);
+  extrasCache.set(key, entry);
+  if (extrasCache.size <= cacheLimit) return;
+  const oldest = extrasCache.keys().next().value;
+  if (oldest !== undefined) extrasCache.delete(oldest);
+}
+
+function cachedMemory(key: string, now: number): CacheEntry | undefined {
+  const cached = extrasCache.get(key);
+  if (!cached) return undefined;
+  if (now - cached.at < cached.ttl) {
+    rememberMemory(key, cached);
+    return cached;
+  }
+  extrasCache.delete(key);
+  return undefined;
+}
+
+function isDiskEntry(value: unknown, key: string): value is DiskEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<DiskEntry>;
+  return entry.version === DISK_VERSION
+    && entry.key === key
+    && typeof entry.at === "number"
+    && Number.isFinite(entry.at)
+    && Boolean(entry.value)
+    && typeof entry.value === "object"
+    && Array.isArray(entry.value.people)
+    && entry.value.people.every((person) => isRecord(person) && typeof person.name === "string")
+    && Array.isArray(entry.value.related)
+    && entry.value.related.every((item) => isRecord(item) && typeof item.id === "string" && typeof item.name === "string")
+    && Array.isArray(entry.value.videos)
+    && entry.value.videos.every((video) => isRecord(video) && typeof video.key === "string");
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+async function readDisk(key: string, now: number): Promise<CacheEntry | undefined> {
+  const dir = extrasDir;
+  if (!dir) return undefined;
+  await diskWrites.get(key);
+  if (extrasDir !== dir) return undefined;
+  const file = path.join(dir, diskName(key));
+  const raw = await readFile(file, "utf8").catch(() => undefined);
+  if (raw === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    void unlink(file).catch(() => undefined);
+    return undefined;
+  }
+  if (!isDiskEntry(parsed, key) || now - parsed.at >= SUCCESS_TTL_MS) return undefined;
+  return { at: parsed.at, ttl: SUCCESS_TTL_MS, value: parsed.value };
+}
+
+function writeDisk(key: string, at: number, value: CachedTmdbExtras): void {
+  const dir = extrasDir;
+  if (!dir) return;
+  const file = path.join(dir, diskName(key));
+  const previous = diskWrites.get(key) ?? Promise.resolve();
+  const pending = previous.then(async () => {
+    try {
+      await mkdir(dir, { recursive: true });
+      const temp = `${file}.${randomUUID()}.tmp`;
+      await writeFile(temp, JSON.stringify({
+        version: DISK_VERSION,
+        key,
+        at,
+        value,
+      } satisfies DiskEntry), { mode: 0o600 });
+      await renameWithRetry(temp, file);
+      await pruneTitleExtrasIfDue(dir);
+    } catch (error) {
+      log("WARN", "Title extras could not be saved", { file: path.basename(file), reason: reasonOf(error) });
+    }
+  }).finally(() => {
+    if (diskWrites.get(key) === pending) diskWrites.delete(key);
+  });
+  diskWrites.set(key, pending);
+}
+
+async function pruneTitleExtrasIfDue(dir: string): Promise<void> {
+  const now = Date.now();
+  if (now - lastPruneAt < PRUNE_INTERVAL_MS) return;
+  await pruneTitleExtras(dir);
+}
+
+async function pruneTitleExtras(dir: string): Promise<void> {
+  lastPruneAt = Date.now();
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const files = (await Promise.all(names.map(async (name) => {
+    const file = path.join(dir, name);
+    const info = await stat(file).catch(() => undefined);
+    return info?.isFile() ? { file, mtimeMs: info.mtimeMs } : undefined;
+  }))).filter((file): file is { file: string; mtimeMs: number } => file !== undefined);
+  const cutoff = Date.now() - SUCCESS_TTL_MS;
+  let kept = files.filter((file) => file.mtimeMs >= cutoff);
+  const expired = files.filter((file) => file.mtimeMs < cutoff);
+  await Promise.all(expired.map((file) => unlink(file.file).catch(() => undefined)));
+  if (kept.length > DISK_LIMIT) {
+    kept.sort((left, right) => left.mtimeMs - right.mtimeMs);
+    const excess = kept.slice(0, kept.length - DISK_LIMIT);
+    await Promise.all(excess.map((file) => unlink(file.file).catch(() => undefined)));
+  }
+}
 
 function tmdbPeople(data: TmdbTitleExtras, type: "movie" | "series"): TitlePerson[] {
   const cast = [...data.cast]
@@ -236,11 +387,12 @@ async function tmdbRelated(
   config: TmdbConfig,
   fetchImpl?: FetchLike,
   signal?: AbortSignal,
-): Promise<RelatedTitle[]> {
+): Promise<{ related: RelatedTitle[]; partial: boolean }> {
   const candidates = data.recommendations.slice(0, 16);
   const related: Array<RelatedTitle | undefined> = new Array(candidates.length);
   let next = 0;
   let resolved = 0;
+  let failed = false;
   const worker = async () => {
     while (resolved < 12) {
       const index = next;
@@ -248,13 +400,17 @@ async function tmdbRelated(
       if (index >= candidates.length) return;
       const item = candidates[index]!;
       throwIfCancelled(signal);
-      const id = await tmdbExternalId(type, item.tmdbId, config, fetchImpl);
+      const result = await tmdbExternalIdResult(type, item.tmdbId, config, fetchImpl, signal);
       throwIfCancelled(signal);
-      if (!id || resolved >= 12) continue;
+      if (result.status === "failed") {
+        failed = true;
+        continue;
+      }
+      if (result.status === "none" || resolved >= 12) continue;
       const poster = tmdbImage(item.posterPath, "w342");
       related[index] = {
         type,
-        id,
+        id: result.imdb,
         name: item.name,
         ...(item.date && /^\d{4}/.test(item.date) ? { year: item.date.slice(0, 4) } : {}),
         ...(poster ? { poster } : {}),
@@ -263,7 +419,11 @@ async function tmdbRelated(
     }
   };
   await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, worker));
-  return related.filter((item): item is RelatedTitle => item !== undefined);
+  return {
+    related: related.filter((item): item is RelatedTitle => item !== undefined),
+    // A failed lookup matters only when the list came out short because of it.
+    partial: failed && resolved < 12,
+  };
 }
 
 async function buildTmdbPart(
@@ -277,8 +437,7 @@ async function buildTmdbPart(
   const fail = () => {
     // A build everybody walked away from answers nothing, and that is no failure to remember.
     throwIfCancelled(deps.signal);
-    if (extrasCache.size > CACHE_LIMIT) extrasCache.clear();
-    extrasCache.set(key, { at: now, value: null });
+    rememberMemory(key, { at: now, ttl: FAILURE_TTL_MS, value: null });
     return null;
   };
   const tmdbId = await tmdbIdOf(type, id, deps.tmdb, deps.fetchImpl, deps.signal);
@@ -295,7 +454,7 @@ async function buildTmdbPart(
   const ageRating = ageRatingRegion ? data.certifications[ageRatingRegion] : undefined;
   const value: CachedTmdbExtras = {
     people: tmdbPeople(data, type),
-    related,
+    related: related.related,
     ...(data.voteAverage != null && data.voteCount != null && data.voteCount >= TMDB_RATING_MIN_VOTES ? {
       tmdb: Math.round(data.voteAverage * 10) / 10,
       tmdbVotes: data.voteCount,
@@ -307,8 +466,8 @@ async function buildTmdbPart(
     ...(data.originalLanguage ? { originalLanguage: data.originalLanguage } : {}),
     ...(data.overview ? { overview: data.overview } : {}),
   };
-  if (extrasCache.size > CACHE_LIMIT) extrasCache.clear();
-  extrasCache.set(key, { at: now, value });
+  rememberMemory(key, { at: now, ttl: related.partial ? PARTIAL_TTL_MS : SUCCESS_TTL_MS, value });
+  if (!related.partial) writeDisk(key, now, value);
   return value;
 }
 
@@ -320,21 +479,29 @@ async function cachedTmdbPart(
   now: number,
 ): Promise<CachedTmdbExtras | null> {
   const key = `${type}:${id}:${language}:${keyFingerprint(deps.tmdb.apiKey)}`;
-  const cached = extrasCache.get(key);
-  if (cached) {
-    const ttl = cached.value ? SUCCESS_TTL_MS : FAILURE_TTL_MS;
-    if (now - cached.at < ttl) return cached.value;
-  }
+  const cached = cachedMemory(key, now);
+  if (cached) return cached.value;
   let entry = extrasInFlight.get(key);
   if (!entry) {
     const controller = new AbortController();
+    const promise = (async () => {
+      const disk = await readDisk(key, now);
+      throwIfCancelled(controller.signal);
+      if (disk) {
+        rememberMemory(key, disk);
+        return disk.value;
+      }
+      return buildTmdbPart(type, id, language, { ...deps, signal: controller.signal }, key, now);
+    })();
     const started: InFlight = {
       controller,
       waiting: 0,
-      promise: buildTmdbPart(type, id, language, { ...deps, signal: controller.signal }, key, now).finally(() => {
+      promise: promise.finally(() => {
         if (extrasInFlight.get(key) === started) extrasInFlight.delete(key);
       }),
     };
+    // A request that left before it joined would otherwise leave the rejection unobserved.
+    started.promise.catch(() => undefined);
     extrasInFlight.set(key, started);
     entry = started;
   }
@@ -432,15 +599,26 @@ export async function titleExtras(
   if (type !== "movie" && type !== "series") {
     return { people: [], related: [], ratings: {}, videos: [], source: "addon" };
   }
-  const meta = await deps.meta();
-  throwIfCancelled(deps.signal);
   const now = deps.now?.() ?? Date.now();
-  // An addon that names titles its own way (`mpa:sosac:…`) still carries the IMDb id in the meta;
-  // without it the title would have no TMDB answer at all.
-  const lookupId = /(?:^|:)tt\d+$/.test(id) || /^tmdb:\d+$/.test(id) ? id : imdbIdOfMeta(meta) ?? id;
-  const part = deps.tmdb
-    ? await cachedTmdbPart(type, lookupId, language, { ...deps, tmdb: deps.tmdb }, now)
-    : null;
+  const direct = /(?:^|:)tt\d+$/.test(id) || /^tmdb:\d+$/.test(id);
+  let meta: MetaItem | null;
+  let part: CachedTmdbExtras | null;
+  if (direct) {
+    const tmdb = deps.tmdb
+      ? cachedTmdbPart(type, id, language, { ...deps, tmdb: deps.tmdb }, now)
+      : Promise.resolve(null);
+    [meta, part] = await Promise.all([deps.meta(), tmdb]);
+  } else {
+    meta = await deps.meta();
+    throwIfCancelled(deps.signal);
+    // An addon that names titles its own way (`mpa:sosac:…`) still carries the IMDb id in the meta;
+    // without it the title would have no TMDB answer at all.
+    const lookupId = imdbIdOfMeta(meta) ?? id;
+    part = deps.tmdb
+      ? await cachedTmdbPart(type, lookupId, language, { ...deps, tmdb: deps.tmdb }, now)
+      : null;
+  }
+  throwIfCancelled(deps.signal);
   const people = part?.people.length ? part.people : addonPeople(meta);
   const related = await Promise.all((part?.related ?? []).map(async (item) => {
     const copies = await deps.copies(type, item.id);
