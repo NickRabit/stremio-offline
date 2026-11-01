@@ -45,6 +45,7 @@ import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
+import cz.stremiooffline.tv.ui.catalog.SourceFilterState
 import cz.stremiooffline.tv.ui.catalog.DetailAction
 import cz.stremiooffline.tv.ui.catalog.DetailActionHeight
 import cz.stremiooffline.tv.ui.catalog.DetailActionRow
@@ -69,6 +70,7 @@ import cz.stremiooffline.tv.ui.theme.Tokens
 internal class RemoteSeriesUiState {
   val extras = TitleExtrasState()
   val caption = ActionCaption()
+  val sourceFilters = SourceFilterState()
   val primary = FocusRequester()
   val seasons = FocusRequester()
   val episode = FocusRequester()
@@ -87,6 +89,8 @@ internal class RemoteSeriesUiState {
   /** The selected episode's versions once read, and the episode they belong to. */
   var versions by mutableStateOf<List<StreamDto>?>(null)
   var versionPick by mutableStateOf<StreamDto?>(null)
+  var versionsSavedMediaSourceId by mutableStateOf<String?>(null)
+  var versionsTitleStableKey by mutableStateOf<String?>(null)
   var versionsFor by mutableStateOf<String?>(null)
   var watchedBusy by mutableStateOf(false)
 }

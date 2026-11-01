@@ -500,15 +500,22 @@ fun CatalogDetailScreen(
   val totalSources = offered.size + pick.localStreams.size + remoteStreams.size
 
   // A later addon may outrank the one already picked, but only while the viewer has not chosen.
-  LaunchedEffect(rows, anyAsking) {
+  LaunchedEffect(rows, anyAsking, preferredStream?.stableKey) {
+    val storedKey =
+      if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey
     val next = Streams.repickStream(
       playing = false,
       picked = pick.pickedStream,
-      pending = if (anyAsking) maxOf(pick.pendingSources, 1) else 0,
+      // The last answers land in the same frame that ends the loading: they still count as arriving,
+      // or the first addon to answer keeps the pick over every better row the last one brought.
+      pending = (if (anyAsking) maxOf(pick.pendingSources, 1) else 0).let { now ->
+        maxOf(now, pick.pendingBefore).also { pick.pendingBefore = now }
+      },
       visible = rows,
       selected = pick.selectedStream,
       preferred = preferredStream,
       upgrade = preferredStream?.let(Streams::isLocalStream) == true && pick.selectedStream?.let(Streams::isLocalStream) != true,
+      restore = preferredStream?.stableKey != null && preferredStream.stableKey == storedKey,
     )
     if (next.move) pick.selectedStream = next.to
   }
@@ -1649,6 +1656,8 @@ private class SourcePickState {
   var sourcesOpen by mutableStateOf(false)
   var sourcesWasOpen by mutableStateOf(false)
   var closeToPlay by mutableStateOf(false)
+  /** The loading count the last repick saw: answers that land as the loading ends still count. */
+  var pendingBefore = 0
 }
 
 /** The save-to-library flow a pick feeds: the libraries, the panel that chooses one, the stream a

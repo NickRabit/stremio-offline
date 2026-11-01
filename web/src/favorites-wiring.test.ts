@@ -106,6 +106,11 @@ describe("one click rule in the shell", () => {
     expect(app).toMatch(/card\.kind === "favorite"\) \{[\s\S]{0,120}?if \(!card\.title\) return;[\s\S]{0,200}?openCatalogueDetail\(\{ type: card\.title\.type, id: card\.title\.id, name: card\.label/);
   });
 
+  it("does not let the catalog panel's automatic source override resumed playback", () => {
+    expect(app).toMatch(/pickDefaultStream\(sourceRows, sortRuleId\(streamSort\) \?\? defaultRuleId, watchedSourceKey\)/);
+    expect(app).toMatch(/selectedStream && pickedRef\.current \? \{ initialSource: selectedStream \}/);
+  });
+
   it("forgets a merged media-server card on both sides of the merge", () => {
     expect(app).toMatch(/const forgetResume = \(card: HomeCard\) => \{[\s\S]{0,400}?api\.saveRemoteState\(card\.libraryId, card\.itemId, \{ position: 0, duration: 0 \}\)/);
     expect(app).toMatch(/card\.forgetKeys\?\.length \? api\.forgetManyProgress\(card\.forgetKeys\)/);

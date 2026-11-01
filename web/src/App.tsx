@@ -33,7 +33,7 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder } from "./streams";
+import { addonNotices, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder, pendingAcrossSettle } from "./streams";
 import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
 import { panelProgressAddonKey } from "./player-progress";
@@ -183,6 +183,11 @@ export function App() {
     if (playerOpenRef.current || restoringScroll.current) return;
     const element = event.currentTarget;
     const top = Math.max(0, element.scrollTop);
+    // A source list that scrolled itself to the chosen row was not pushed by the viewer.
+    if (element.dataset.autoScroll) {
+      scrollDirection.current.set(element, { top, travel: 0, until: 0 });
+      return;
+    }
     const previous = scrollDirection.current.get(element) ?? { top: 0, travel: 0, until: 0 };
     const delta = top - previous.top;
     const travel = Math.sign(delta) === Math.sign(previous.travel) ? previous.travel + delta : delta;
@@ -2278,23 +2283,42 @@ export function App() {
     : offered.length + (streamAddon ? 0 : localStreams.length + remoteFlat.length);
   const hasPlayableMovieSource = selected?.type === "movie" && sourcesLoaded && (offered.some((stream) => stream.playable) || localStreams.some((stream) => stream.playable) || remoteFlat.some((stream) => stream.playable));
   const movieHasNoSource = selected?.type === "movie" && filmHasNoSource({ loaded: sourcesLoaded, pending: pendingSources + remoteLoading + (localLoading ? 1 : 0), playable: hasPlayableMovieSource });
+  /** The source the catalog panel should reopen on, from the same title or episode position the
+   *  shared detail and media-server browsers read. */
+  const watchedSourceKey = useMemo(() => {
+    if (!selected) return undefined;
+    const type = selected.type || currentCatalog?.type || "movie";
+    const streamId = catalogueStreamId({
+      id: selected.id,
+      ...(selectedVideo?.id != null ? { videoId: String(selectedVideo.id) } : {}),
+      ...(selectedVideo?.season != null ? { season: selectedVideo.season } : {}),
+      ...(selectedVideo?.episode != null ? { episode: selectedVideo.episode } : {}),
+    });
+    return resume.find((entry) => entry.key === `${type}:${streamId}`)?.stableKey;
+  }, [selected?.id, selected?.type, selectedVideo?.id, selectedVideo?.season, selectedVideo?.episode, currentCatalog?.type, resume]);
+  const pendingBeforeRef = useRef(0);
   // The chosen source decides what is still loading: the addon answers or the local probe.
   const sourcesPending = (localSelected ? localLoading : pendingSources > 0) || remoteLoading > 0;
   // When a filter removes the chosen source, the pick moves to the first one left -- unless
   // the film is already playing on it, when moving it would restart playback on another source.
   useEffect(() => {
-    const preferred = pickDefaultStream(sourceRows, sortRuleId(streamSort) ?? defaultRuleId) ?? null;
+    const preferred = pickDefaultStream(sourceRows, sortRuleId(streamSort) ?? defaultRuleId, watchedSourceKey) ?? null;
+    // The last answers land in the same render that ends the loading: they still count as
+    // arriving, or the first addon to answer kept the pick over every better row that came with
+    // the last one (Sosáč over the rule's winner, 17 rows down).
+    const pending = pendingAcrossSettle(pendingSources + (localLoading ? 1 : 0) + remoteLoading, pendingBeforeRef);
     const next = repickStream({
-      playing: playerOpen, picked: pickedRef.current, pending: pendingSources + (localLoading ? 1 : 0) + remoteLoading,
+      playing: playerOpen, picked: pickedRef.current, pending,
       // A late local copy or remote group replaces an automatic addon pick; an explicit pick
       // and a playing source stay where they are (repickStream keeps both).
       upgrade: Boolean(preferred && selectedStream && (
         (isLocalStream(preferred) && !isLocalStream(selectedStream))
         || (isRemoteStream(preferred) && !isLocalStream(selectedStream) && !isRemoteStream(selectedStream)))),
+      restore: Boolean(preferred?.stableKey && watchedSourceKey && preferred.stableKey === watchedSourceKey),
       visible: sourceRows, selected: selectedStream, preferred,
     });
     if (next.move) setSelectedStream(next.to);
-  }, [sourceRows, localStreams, pendingSources, localLoading, remoteLoading, playerOpen]);
+  }, [sourceRows, localStreams, pendingSources, localLoading, remoteLoading, playerOpen, watchedSourceKey]);
 
   const catalogProgress = (item: Meta) => resume.find((entry) => item.type === "series"
     ? entry.series?.id === item.id
@@ -3130,7 +3154,9 @@ export function App() {
       ...(selectedVideo?.season != null ? { season: selectedVideo.season } : {}),
       ...(selectedVideo?.episode != null ? { episode: selectedVideo.episode } : {}),
       ...(selectedVideo?.id != null ? { videoId: String(selectedVideo.id) } : {}),
-      ...(selectedStream ? { initialSource: selectedStream } : {}),
+      // An automatic panel pick is not a viewer decision: the shared detail must be free to use
+      // the title's saved source. A source they chose or played explicitly keeps its precedence.
+      ...(selectedStream && pickedRef.current ? { initialSource: selectedStream } : {}),
       // The panel's own read is handed over only once it has landed: before that the shared
       // detail reads the metadata itself rather than opening half empty.
       ...(metaLoading ? {} : { initialMeta: selected }),

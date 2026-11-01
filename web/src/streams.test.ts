@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addonNotices, arrangeStreams, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, compareRuleRank, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import { addonNotices, arrangeStreams, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, compareRuleRank, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters, pendingAcrossSettle } from "./streams";
 import type { SourceRuleVerdict, Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -259,6 +259,13 @@ describe("torrent listing", () => {
     expect(pickDefaultStream([breaks], "balanced")).toBeUndefined();
   });
 
+  it("reopens the source the title was last played from before the active rule default", () => {
+    const stored = stream({ name: "library copy", stableKey: "m:stored", rules: { balanced: verdict([2], "breaks") } });
+    const ruleWinner = stream({ name: "rule winner", stableKey: "a:winner", rules: { balanced: verdict([0]) } });
+    expect(pickDefaultStream([ruleWinner, stored], "balanced", stored.stableKey)?.name).toBe("library copy");
+    expect(pickDefaultStream([ruleWinner], "balanced", stored.stableKey)?.name).toBe("rule winner");
+  });
+
   it("keeps the old fallback when the listing carries no verdicts", () => {
     const unplayable = stream({ name: "unplayable", playable: false });
     const playable = stream({ name: "playable" });
@@ -472,8 +479,32 @@ describe("repickStream", () => {
     expect(repickStream({ ...base, playing: true, upgrade: true, preferred: second })).toEqual({ move: false });
   });
 
+  it("lets the last answers, landing as the loading ends, still move an automatic pick to the rule's winner", () => {
+    const previous = { current: 0 };
+    expect(pendingAcrossSettle(1, previous)).toBe(1);
+    // One render later the last addon has answered and nothing is pending any more.
+    const pending = pendingAcrossSettle(0, previous);
+    expect(pending).toBe(1);
+    expect(repickStream({ ...base, pending, preferred: second })).toEqual({ move: true, to: second });
+    // After that the list is settled: nothing moves the pick under the viewer.
+    expect(pendingAcrossSettle(0, previous)).toBe(0);
+  });
+
   it("leaves a non-upgrade arrival alone when nothing is pending", () => {
     expect(repickStream({ ...base, upgrade: false, preferred: second })).toEqual({ move: false });
+  });
+
+  it("restores a resumed remote row after another remote library answered first", () => {
+    const firstLibrary = stream({ sourceId: "first", provider: "jellyfin", libraryId: "lib_a" });
+    const resumed = stream({ sourceId: "resumed", provider: "emby", libraryId: "lib_b", stableKey: "m:resumed" });
+    expect(repickStream({
+      playing: false, picked: false, pending: 0, upgrade: false, restore: true,
+      visible: [firstLibrary, resumed], selected: firstLibrary, preferred: resumed,
+    })).toEqual({ move: true, to: resumed });
+    expect(repickStream({
+      playing: false, picked: true, pending: 0, restore: true,
+      visible: [firstLibrary, resumed], selected: firstLibrary, preferred: resumed,
+    })).toEqual({ move: false });
   });
 });
 

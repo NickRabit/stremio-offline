@@ -126,11 +126,13 @@ internal fun remotePrimary(
   sources: List<StreamDto>,
   titleStableKey: String?,
   savedMediaSourceId: String?,
+  ruleId: String? = null,
 ): StreamDto? =
   sources.firstOrNull { titleStableKey != null && it.stableKey == titleStableKey }
     ?: sources.firstOrNull {
       it.remoteItem?.mediaSourceId != null && it.remoteItem.mediaSourceId == savedMediaSourceId
     }
+    ?: Streams.pickDefaultStream(sources, null, ruleId)
     ?: sources.firstOrNull()
 
 /** A native item, its local state and copies, with every supplementary source group behind the
@@ -266,6 +268,18 @@ fun RemoteDetailScreen(
   // The filters the panel offers, reset with the item the way the catalogue detail resets its own.
   val sourceFilters = remember(identity) { SourceFilterState() }
   BindSourceProfiles(catalogueApi, sourceFilters)
+  LaunchedEffect(catalogueApi, sourceFilters) {
+    val port = catalogueApi ?: return@LaunchedEffect
+    sourceFilters.replaceAccountSort(
+      try {
+        port.settings().streamSort
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        null
+      },
+    )
+  }
   val groups = sourceGroups?.state
   // Every row the panel holds: the item's own versions lead, and the player is handed all of them
   // so a switch never shrinks the list to the row it landed on. One row per identity, so a copy the
@@ -375,7 +389,12 @@ fun RemoteDetailScreen(
   val title = titleRow
   // The version the viewer last watched leads, so its Resume is the one offered: the source the
   // title's own stored row names when that row names one, and otherwise the stored media source.
-  val primary = remotePrimary(sources, title?.stableKey, savedSourceId)
+  val primary = remotePrimary(
+    sources,
+    title?.stableKey,
+    savedSourceId,
+    Streams.ruleIdOf(sourceFilters.filters(sourceFilters.accountSort).sort),
+  )
   // The saved position belongs to the exact version that stored it; another version shows none.
   val sameVersion = title != null || primary?.remoteItem?.mediaSourceId == savedSourceId
   // Resume is offered only for the same version that stored the position and never for an item

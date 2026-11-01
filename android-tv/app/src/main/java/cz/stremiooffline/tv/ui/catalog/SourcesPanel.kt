@@ -790,8 +790,14 @@ internal class SourceFilterState {
   private var addon by mutableStateOf("")
   private var language by mutableStateOf("")
   private var sort by mutableStateOf<Streams.StreamSort?>(null)
+  var accountSort by mutableStateOf<String?>(null)
+    private set
   var profiles by mutableStateOf<List<SourceProfileDto>>(emptyList())
     private set
+
+  fun replaceAccountSort(loaded: String?) {
+    accountSort = loaded
+  }
 
   fun replaceProfiles(loaded: List<SourceProfileDto>) {
     profiles = loaded

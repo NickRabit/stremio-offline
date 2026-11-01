@@ -1,5 +1,5 @@
 import { Check, HardDrive } from "lucide-react";
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import { t, useI18n } from "./i18n";
 import { label } from "./languages";
 import { sourceRowKey } from "./library-detail-sources";
@@ -129,7 +129,29 @@ export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf,
     const seen = new Set<string>();
     return rows.filter((stream) => !seen.has(sourceRowKey(stream)) && (seen.add(sourceRowKey(stream)), true));
   }, [rows]);
-  return <div className={className ?? "stream-list"} ref={listRef} {...(onScroll ? { onScroll } : {})}>
+  // The chosen row is brought into the list's own view when it is chosen for the viewer -- a
+  // resumed copy ranked far down by the rule was selected and nowhere to be seen. Only the list
+  // scrolls, never the page, and a row the viewer clicked is already where they are looking.
+  const ownList = useRef<HTMLDivElement | null>(null);
+  const shownKey = selected ? sourceRowKey(selected) : null;
+  useLayoutEffect(() => {
+    const list = ownList.current;
+    if (!list || shownKey === null) return;
+    const row = [...list.children].find((node) => (node as HTMLElement).dataset.rowKey === shownKey) as HTMLElement | undefined;
+    if (!row) return;
+    const top = row.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+    if (top < list.scrollTop || top + row.offsetHeight > list.scrollTop + list.clientHeight) {
+      // Marked while it lands, so a listing that folds its header on scroll leaves it alone.
+      list.dataset.autoScroll = "1";
+      list.scrollTop = Math.max(0, top - (list.clientHeight - row.offsetHeight) / 2);
+      window.setTimeout(() => { delete list.dataset.autoScroll; }, 200);
+    }
+  }, [shownKey, listed]);
+  const attach = (node: HTMLDivElement | null) => {
+    ownList.current = node;
+    if (listRef) (listRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+  };
+  return <div className={className ?? "stream-list"} ref={attach} {...(onScroll ? { onScroll } : {})}>
     {listed.map((stream) => {
       const local = isLocalStream(stream);
       const remote = isRemoteStream(stream);
@@ -151,7 +173,7 @@ export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf,
         ? verdict.reasons.filter((reason) => RULE_REASONS.has(reason)).map((reason) => t(`sources.ruleReason.${reason}`))
         : [];
       const ruleBreak = ruleReasons.length ? t("sources.ruleBreaks", { reasons: ruleReasons.join(", ") }) : "";
-      return <button type="button" key={sourceRowKey(stream)} className={selected === stream ? "selected" : ""} aria-pressed={selected === stream}
+      return <button type="button" key={sourceRowKey(stream)} data-row-key={sourceRowKey(stream)} className={selected === stream ? "selected" : ""} aria-pressed={selected === stream}
         title={local ? t("sources.localHint") : remote ? t("sources.remoteHint") : undefined}
         onClick={() => { onPicked?.(); onSelect(stream); }}>
         <i className={local ? "local" : remote ? "remote" : stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>

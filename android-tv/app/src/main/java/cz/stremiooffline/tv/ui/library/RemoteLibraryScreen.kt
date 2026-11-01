@@ -76,6 +76,7 @@ import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.ui.catalog.defaultSeason
+import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
@@ -479,6 +480,19 @@ internal fun RemoteSeriesScreen(
   )
   val parentIdentity = data.libraryId to data.item.id
   val ui = remember(parentIdentity) { RemoteSeriesUiState() }
+  BindSourceProfiles(catalogueApi, ui.sourceFilters)
+  LaunchedEffect(catalogueApi, ui.sourceFilters) {
+    val port = catalogueApi ?: return@LaunchedEffect
+    ui.sourceFilters.replaceAccountSort(
+      try {
+        port.settings().streamSort
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        null
+      },
+    )
+  }
   var metadata by remember(parentIdentity) { mutableStateOf(initialRemoteMetadata(data)) }
   var metadataResolved by remember(parentIdentity) { mutableStateOf(false) }
   LaunchedEffect(data.libraryId, data.item.id) {
@@ -609,8 +623,26 @@ internal fun RemoteSeriesScreen(
       null
     }
     ui.versions = versions
-    ui.versionPick = versions?.let { remotePrimary(it, titleStableKey, savedMediaSourceId) }
+    ui.versionsSavedMediaSourceId = savedMediaSourceId
+    ui.versionsTitleStableKey = titleStableKey
     ui.versionsFor = wanted
+  }
+  LaunchedEffect(
+    ui.versions,
+    ui.versionsFor,
+    ui.versionsSavedMediaSourceId,
+    ui.versionsTitleStableKey,
+    ui.sourceFilters.accountSort,
+    ui.sourceFilters.profiles,
+  ) {
+    ui.versionPick = ui.versions?.let {
+      remotePrimary(
+        it,
+        ui.versionsTitleStableKey,
+        ui.versionsSavedMediaSourceId,
+        Streams.ruleIdOf(ui.sourceFilters.filters(ui.sourceFilters.accountSort).sort),
+      )
+    }
   }
 
   // The selected episode's copy panel, opened by the row action or Menu/Info on its card.
