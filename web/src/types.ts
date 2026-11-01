@@ -52,6 +52,18 @@ export interface RelatedTitle {
   poster?: string;
   inLibrary?: boolean;
 }
+export interface TitleRatings {
+  imdb?: string;
+  tmdb?: number;
+  tmdbVotes?: number;
+}
+export interface TitleVideo {
+  key: string;
+  name: string;
+  kind: "trailer" | "teaser" | "clip" | "featurette" | "behindTheScenes";
+  thumbnail: string;
+  language?: string;
+}
 export interface TitleExtras {
   people: TitlePerson[];
   related: RelatedTitle[];
@@ -60,7 +72,13 @@ export interface TitleExtras {
   ageRatingRegion?: string;
   originalTitle?: string;
   originalLanguage?: string;
+  /** TMDB's synopsis in the interface language, when the instance has a TMDB key. */
+  overview?: string;
   nextEpisode?: { season: number; episode: number; name?: string; released: string };
+  /** Absent on an answer from a server that predates the ratings row. */
+  ratings?: TitleRatings;
+  /** Absent on an answer from a server that predates the trailers row. */
+  videos?: TitleVideo[];
   source: "tmdb" | "addon";
 }
 export interface SearchResult { items: Meta[]; cursor: string; hasMore: boolean; sources: number }
@@ -584,7 +602,7 @@ export interface BrowseFolder extends BrowseMeta {
 }
 export interface BrowseFile extends LibraryFile, BrowseMeta {
   poster?: string; wide?: string; progress?: { position: number; duration: number };
-  /** The show this episode belongs to, on a Continue watching row only. */
+  /** The show this episode belongs to, when the caller already knows it. */
   series?: { name: string };
 }
 export type LibraryType = "movie" | "series" | "mixed";

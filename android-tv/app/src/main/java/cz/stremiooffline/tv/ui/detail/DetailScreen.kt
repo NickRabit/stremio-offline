@@ -26,8 +26,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -64,6 +66,7 @@ import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
 import cz.stremiooffline.tv.ui.catalog.DetailAction
+import cz.stremiooffline.tv.ui.catalog.DetailActionHeight
 import cz.stremiooffline.tv.ui.catalog.DetailActionRow
 import cz.stremiooffline.tv.ui.catalog.DownloadIcon
 import cz.stremiooffline.tv.ui.catalog.EyeIcon
@@ -76,12 +79,12 @@ import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.catalog.SourceFilterState
 import cz.stremiooffline.tv.ui.catalog.SourceSaveRequest
 import cz.stremiooffline.tv.ui.catalog.SourceSaveState
-import cz.stremiooffline.tv.ui.catalog.chosenSourceCaption
 import cz.stremiooffline.tv.ui.catalog.libraryAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.libraryCopySubject
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.nativeRowTarget
+import cz.stremiooffline.tv.ui.detail.scrollToTopOnFocus
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.WideCard
@@ -265,10 +268,13 @@ fun DetailScreen(
   var forgetError by remember { mutableStateOf(false) }
   val caption = remember { ActionCaption() }
   val extras = remember(detail.gridPath) { TitleExtrasState() }
+  val seriesPick = remember(detail.gridPath) { LocalSeriesPick() }
   // The card's own keys stop counting once they have been forgotten.
   var forgotten by remember { mutableStateOf(false) }
   LaunchedEffect(detail.gridPath, restoreToken) {
     forgetError = false
+    // Back from the player the series offers the next episode again, not the one just played.
+    seriesPick.reset()
     current = if (detail.files.isEmpty()) detail else detail.refresh(progress)
   }
 
@@ -297,9 +303,10 @@ fun DetailScreen(
   val save = remember(detail.gridPath) { SourceSaveState() }
 
   val playIndex = current.files.indexOfFirst { !isCompleted(it) }.let { if (it < 0) 0 else it }
-  val playFile = current.files.getOrNull(playIndex)
-  LaunchedEffect(detail.gridPath, playFile?.path, sourcesApi) {
-    extras.loadLibrary(sourcesApi ?: return@LaunchedEffect, playFile?.path, null)
+  val playFile = seriesPick.chosen(current) ?: current.files.getOrNull(playIndex)
+  // Every episode of a show is bound to the same title, so its extras are read once, not per card.
+  LaunchedEffect(detail.gridPath, if (isEpisodeDetail(current)) current.files.firstOrNull()?.path else playFile?.path, sourcesApi) {
+    extras.loadLibrary(sourcesApi ?: return@LaunchedEffect, if (isEpisodeDetail(current)) current.files.firstOrNull()?.path else playFile?.path, null)
   }
   val resuming = playFile?.let { Progress.resumePosition(positionOf(it), durationOf(it)) != null } == true
   /** A saved position that is not offered as Resume still gets a Start over beside Play. */
@@ -328,8 +335,8 @@ fun DetailScreen(
   val sourcesFile = sourcesPath?.let { path -> current.files.firstOrNull { it.path == path } }
   val panelPath = sourcesFile?.path.orEmpty()
   // What the detail itself contributes: every version of a film, largest reported size first the
-  // way the web orders them, or exactly the one episode the panel was opened on -- a sibling
-  // episode is a different video and never joins this list.
+  // way the web orders them, or every copy of the one episode the panel was opened on -- a
+  // sibling episode is a different video and never joins this list.
   val panelRows = remember(current.files, sourcesFile) { ownFileRows(current, sourcesFile) }
   var binding by remember(detail.gridPath, panelPath) { mutableStateOf<LibraryTitleDto?>(null) }
   var probing by remember(detail.gridPath, panelPath) { mutableStateOf(false) }
@@ -645,9 +652,9 @@ fun DetailScreen(
       // not on whatever card happens to sit below the button. An open panel keeps the remote.
       .onPreviewKeyEvent { event ->
         val panelUp = forgetPanelOpen || sourcesOpen || save.request != null
-        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && !panelUp) {
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && !panelUp && extras.actionsFocused) {
           if (current.files.size > 1) {
-            runCatching { rowFocus.requestFocus() }.isSuccess
+            runCatching { (if (isEpisodeDetail(current)) seriesPick.seasons else rowFocus).requestFocus() }.isSuccess
           } else {
             extras.focusFirst()
           }
@@ -668,7 +675,8 @@ fun DetailScreen(
     Column(
       modifier = Modifier
         .fillMaxSize()
-        .then(if (sourcesApi != null) Modifier.verticalScroll(extras.scroll) else Modifier)
+        .clipToBounds()
+        .verticalScroll(extras.scroll)
         .padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
       verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
@@ -689,12 +697,13 @@ fun DetailScreen(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.width(760.dp),
       )
-      Text(
-        metaLine(current, stringResource(R.string.tv_library_files, current.fileCount.toString())),
-        color = Tokens.Muted,
-        fontSize = 11.5.sp,
-        fontWeight = FontWeight.Medium,
+      TitleExtraFacts(
+        state = extras,
+        name = current.title,
+        metaLine = metaLine(current, stringResource(R.string.tv_library_files, current.fileCount.toString())),
+        uiLanguage = null,
       )
+      LocalEpisodeLine(current, playFile)
       val description = current.description
       if (description != null) {
         Text(
@@ -719,6 +728,7 @@ fun DetailScreen(
             text = stringResource(if (resuming) R.string.tv_resume else R.string.tv_play),
             onClick = { playPressed() },
             kind = FocusButtonKind.Primary,
+            height = DetailActionHeight,
             modifier = Modifier.focusRequester(primaryFocus).testTag(TagDetailPrimary),
           )
         },
@@ -736,6 +746,7 @@ fun DetailScreen(
             FocusButton(
               text = stringResource(R.string.sources_heading),
               onClick = { openSources(playFile, sourcesFocus) },
+              height = DetailActionHeight,
               modifier = Modifier.focusRequester(sourcesFocus).testTag(TagDetailSources),
             )
           }
@@ -775,19 +786,12 @@ fun DetailScreen(
           onClick = { playFile?.let(::markWatchedNow) },
         ) else null,
         caption = caption,
+        modifier = Modifier
+          .scrollToTopOnFocus(extras, scope)
+          .onFocusChanged { extras.actionsFocused = it.hasFocus },
       )
       actionRow?.let { row ->
-        val captionParts = chosenSourceCaption(row).joinToString(" · ")
-        if (captionParts.isNotEmpty()) {
-          Text(
-            stringResource(R.string.tv_chosen_source) + " · " + captionParts,
-            color = Tokens.Muted,
-            fontSize = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag(TagDetailPickCaption),
-          )
-        }
+        TitleTechBlock(row, Modifier.testTag(TagDetailPickCaption))
       }
       if (forgetError) {
         Text(stringResource(R.string.tv_err_generic), color = Tokens.Red, fontSize = 11.5.sp)
@@ -803,7 +807,20 @@ fun DetailScreen(
           modifier = Modifier.testTag(TagDetailSourceNotice),
         )
       }
-      if (current.files.size > 1) {
+      if (isEpisodeDetail(current)) {
+        LocalSeriesRows(
+          detail = current,
+          sourcesApi = sourcesApi,
+          pick = seriesPick,
+          playing = playFile,
+          imageUrl = imageUrl,
+          onPlay = onPlay,
+          onSources = { file, card -> openSources(file, card, fromCard = true) },
+          focusRequester = rowFocus,
+          extras = extras,
+          onUpFromSeasons = { runCatching { primaryFocus.requestFocus() }.isSuccess },
+        )
+      } else if (current.files.size > 1) {
         Spacer(Modifier.height(3.dp))
         EpisodeRow(
           detail = current,
@@ -954,17 +971,17 @@ private fun EpisodeRow(
 }
 
 /** Whether the detail lists a series' episodes rather than the versions of one film. */
-private fun isEpisodeDetail(detail: DetailData): Boolean =
+internal fun isEpisodeDetail(detail: DetailData): Boolean =
   detail.files.any { it.season != null || it.episode != null }
 
 /**
  * The rows the detail itself contributes to the Sources panel: every file of a film, ordered
- * largest reported size first the way the web orders its versions, or exactly the one episode the
- * panel was opened on. A sibling episode is a different video, so it never joins an episode's list.
+ * largest reported size first the way the web orders its versions, or every copy of the one episode
+ * the panel was opened on. A sibling episode is a different video, so it never joins an episode's list.
  */
 private fun ownFileRows(detail: DetailData, file: BrowseItem.File?): List<StreamDto> {
   if (file == null) return emptyList()
-  val files = if (isEpisodeDetail(detail)) listOf(file) else detail.files.sortedByDescending { it.size }
+  val files = (if (isEpisodeDetail(detail)) copiesOf(detail.files, file) else detail.files).sortedByDescending { it.size }
   return files.map(::fileRow)
 }
 
@@ -1001,13 +1018,13 @@ private fun formatSize(size: Double): String? = when {
   else -> null
 }
 
-private fun positionOf(file: BrowseItem.File?): Double = file?.progress?.position ?: 0.0
+internal fun positionOf(file: BrowseItem.File?): Double = file?.progress?.position ?: 0.0
 
-private fun durationOf(file: BrowseItem.File?): Double = file?.progress?.duration ?: 0.0
+internal fun durationOf(file: BrowseItem.File?): Double = file?.progress?.duration ?: 0.0
 
-private fun isCompleted(file: BrowseItem.File): Boolean = Progress.isCompleted(positionOf(file), durationOf(file))
+internal fun isCompleted(file: BrowseItem.File): Boolean = Progress.isCompleted(positionOf(file), durationOf(file))
 
-private fun progressFraction(file: BrowseItem.File): Float? {
+internal fun progressFraction(file: BrowseItem.File): Float? {
   val duration = durationOf(file)
   if (duration <= 0 || positionOf(file) <= 0) return null
   return (positionOf(file) / duration).toFloat()

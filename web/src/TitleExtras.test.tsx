@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { setLocale } from "./i18n";
-import { TitleExtraFacts, TitleExtrasActions, TitleExtrasRows, type TitleExtrasActionsValue } from "./TitleExtras";
+import { isTagLine, synopsisOf, TitleExtraFacts, TitleExtrasActions, TitleExtrasRows, trailerFromExtras, type TitleExtrasActionsValue } from "./TitleExtras";
 import type { TitleExtras } from "./types";
 
 const cast = {
@@ -119,6 +121,54 @@ describe("TitleExtrasRows", () => {
     expect(host.querySelector(".person button, .related button, button.person, button.related")).toBeNull();
   });
 
+  it("draws trailers and extras after the cast and opens one in the overlay", () => {
+    const onTrailer = vi.fn();
+    mount(<TitleExtrasRows extras={{ ...cast, videos: [
+      { key: "abcdefghijk", name: "Official trailer", kind: "trailer", thumbnail: "/t.jpg" },
+      { key: "zzzzzzzzzzz", name: "A clip", kind: "clip", thumbnail: "" },
+    ] }} loading={false} onTrailer={onTrailer}/>);
+    const section = host.querySelector(".title-extras")!;
+    const people = section.querySelector(".extras-row")!;
+    const videosRow = [...section.querySelectorAll(".extras-row")].find((row) => row.textContent?.includes("Trailers and extras"))!;
+    const related = [...section.querySelectorAll(".extras-row")].find((row) => row.textContent?.includes("More like this"))!;
+    expect(people.compareDocumentPosition(videosRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(videosRow.compareDocumentPosition(related) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const videos = [...videosRow.querySelectorAll<HTMLButtonElement>(".detail-video")];
+    expect(videos[0]!.querySelector(".thumb img")?.getAttribute("src")).toBe("/t.jpg");
+    expect(videos[0]!.textContent).toContain("Official trailer");
+    expect(videos[0]!.textContent).toContain("Trailer");
+    expect(videos[1]!.textContent).toContain("Clip");
+    act(() => { videos[0]!.click(); });
+    expect(onTrailer).toHaveBeenCalledWith({ youtubeId: "abcdefghijk", title: "Official trailer", provider: "tmdb" });
+  });
+
+  it("opens a video on YouTube in secure mode and ignores an id that is not a video", () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const onTrailer = vi.fn();
+    const video = (key: string) => ({ people: [], related: [], source: "tmdb" as const, videos: [
+      { key, name: "Teaser", kind: "teaser" as const, thumbnail: "/t.jpg" },
+    ] });
+    mount(<TitleExtrasRows extras={video("abcdefghijk")} loading={false} secureMode onTrailer={onTrailer}/>);
+    act(() => { host.querySelector<HTMLButtonElement>(".detail-video")!.click(); });
+    expect(open).toHaveBeenCalledWith("https://www.youtube.com/watch?v=abcdefghijk", "_blank", "noopener");
+    expect(onTrailer).not.toHaveBeenCalled();
+    open.mockClear();
+    mount(<TitleExtrasRows extras={video("short")} loading={false} secureMode onTrailer={onTrailer}/>);
+    act(() => { host.querySelector<HTMLButtonElement>(".detail-video")!.click(); });
+    expect(open).not.toHaveBeenCalled();
+    expect(onTrailer).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
+
+  it("frames a focused poster with an outline set off the border", () => {
+    // jsdom does not apply style.css, so the rule is read from the sheet the app ships.
+    const css = readFileSync(join(process.cwd(), "src/style.css"), "utf8");
+    const rule = "outline:2px solid var(--accent);outline-offset:2px;border-color:transparent";
+    expect(css).toContain(`.person:hover .person-face,.person:focus-visible .person-face{${rule}}`);
+    expect(css).toContain(`.related:hover .related-art,.related:focus-visible .related-art{${rule}}`);
+    expect(css).toContain(`.detail-video:hover .thumb,.detail-video:focus-visible .thumb{${rule}}`);
+  });
+
   it("draws nothing for an empty answer and nothing when the request failed", () => {
     mount(<TitleExtrasRows extras={{ people: [], related: [], source: "addon" }} loading={false}/>);
     expect(host.querySelector(".title-extras")).toBeNull();
@@ -203,5 +253,29 @@ describe("TitleExtraFacts", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("an addon that sends tags instead of a synopsis", () => {
+  const extras: TitleExtras = {
+    people: [], related: [], source: "tmdb", overview: "Manny a jeho stádo se ocitnou na kře.",
+    videos: [
+      { key: "en1", name: "Official Trailer", kind: "trailer", thumbnail: "/t1", language: "en" },
+      { key: "cs1", name: "Český trailer", kind: "trailer", thumbnail: "/t2", language: "cs" },
+    ],
+  };
+
+  it("shows TMDB's synopsis in place of a line of tags, and keeps a real one", () => {
+    expect(isTagLine("(Ice Age: Continental Drift) · 📺 HD · 🔊 CS")).toBe(true);
+    expect(synopsisOf("(Ice Age: Continental Drift) · 📺 HD · 🔊 CS", extras)).toBe(extras.overview);
+    expect(synopsisOf(undefined, extras)).toBe(extras.overview);
+    expect(synopsisOf("Mamut Manny se vydává na cestu. Potká piráty.", extras)).toBe("Mamut Manny se vydává na cestu. Potká piráty.");
+    expect(synopsisOf("(Ice Age) · HD", null)).toBe("(Ice Age) · HD");
+  });
+
+  it("offers TMDB's trailer in the interface language first", () => {
+    expect(trailerFromExtras(extras, "cs")).toEqual({ youtubeId: "cs1", title: "Český trailer", provider: "tmdb" });
+    expect(trailerFromExtras(extras, "de")?.youtubeId).toBe("en1");
+    expect(trailerFromExtras({ ...extras, videos: [] }, "cs")).toBeNull();
   });
 });

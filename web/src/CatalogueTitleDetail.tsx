@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronRight } from "lucide-react";
 import { api, describeError } from "./api";
 import { catalogueGalleryImages, type GalleryImage } from "./gallery-images";
+import { DetailRatings, ratingsFrom } from "./detail-copy";
+import { EpisodePicker } from "./EpisodePicker";
 import { t, useI18n } from "./i18n";
-import { ImdbRating, imdbRating } from "./ImdbRating";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
-import { TitleExtraFacts, TitleExtrasRows } from "./TitleExtras";
+import { synopsisOf, TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
 import { useLibrarySources } from "./library-sources";
 import { titleLanguage } from "./languages";
 import { arrangeStreams, catalogSourceRows, isLocalStream, pickDefaultStream, resolveStreamSort, sortRuleId } from "./streams";
-import type { Meta, SourceProfile, Stream, Video } from "./types";
+import type { Meta, SourceProfile, Stream, Trailer, Video } from "./types";
 
 /** One catalogue title's detail: the same body the libraries draw, hosted for a title that only
  *  the catalogue knows. Its own rows are the streams the catalogue panel loads for that title;
@@ -52,10 +52,19 @@ export interface CatalogueTitleDetailProps {
   libraryFirst?: boolean;
   /** Opens the app's gallery overlay over the pictures the metadata supplied. */
   onGallery?: (images: GalleryImage[], target: CatalogueDetailTarget) => void;
-  /** The title's chips, drawn by the shared row: the catalogue's watch star, the kind, the trailer
-   *  and the sites that know the title. The catalogue grows them itself, so they survive opening
-   *  the full detail instead of being left behind in the panel. */
+  /** The title's chips, drawn by the shared row: the kind, the follow chip and the sites that know
+   *  the title. The catalogue grows them itself, so they survive opening the full detail. */
   chips?: ReactNode;
+  /** The trailer the secondary action opens. Left out of the chips, which no longer carry it. */
+  trailer?: Trailer | null;
+  onTrailer?: (trailer: Trailer) => void;
+  secureMode?: boolean;
+  /** The catalogue watchlist, drawn as the Favourite action. Its accessible name stays the watchlist's. */
+  favorite?: boolean;
+  onToggleFavorite?: (favorite: boolean) => void;
+  favoriteDisabled?: boolean;
+  favoriteAriaLabel?: string;
+  favoriteTitle?: string;
   /** The viewer's audio language, which the legacy fallback order prefers. */
   preferredLanguage?: string;
   /** Told what this detail holds whenever it changes: the metadata it drew, the episode it is on,
@@ -92,9 +101,6 @@ export interface CatalogueTitleDetailProps {
  *  never hides the rows the others answered. */
 type ProviderAnswer = { rows: Stream[] } | { error: unknown };
 
-/** The pad an episode's own numbering is written with, the way the catalogue writes it. */
-const pad = (value: number) => String(value).padStart(2, "0");
-
 /** One row per source id: an addon that repeats a source under two labels is still one thing. */
 const dedupe = (streams: Stream[]): Stream[] => {
   const seen = new Set<string>();
@@ -102,7 +108,7 @@ const dedupe = (streams: Stream[]): Stream[] => {
 };
 
 export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
-  const { target, initialSources, libraryFirst = false, onGallery, chips, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended" } = props;
+  const { target, initialSources, libraryFirst = false, onGallery, chips, trailer, onTrailer, secureMode, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended" } = props;
   const { locale } = useI18n();
   const { type, id, name } = target;
   const titleExtras = useTitleExtras(type, id);
@@ -237,9 +243,13 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       { addon: "", language: "", sort: resolvedSort }, preferredLanguage ?? "", addonPriority, metaLanguage);
     return catalogSourceRows(own, addon, "", resolvedSort);
   }, [rows, local, preferredLanguage, addonPriority, metaLanguage, showTorrents, resolvedSort]);
+  // A resumed version that is not among the rows already in hand lives in another library.
+  // Those groups load without opening the chooser. The key itself arrives from the caller,
+  // who already read the title's catalogue record, so nothing here waits on a selected row.
+  const resumeElsewhere = Boolean(resumeStableKey && ordered && !ordered.some((stream) => stream.stableKey === resumeStableKey));
   const extra = useLibrarySources({
     scope: `catalogue:${type}:${streamId}`,
-    open: chooserOpen || libraryFirst,
+    open: chooserOpen || libraryFirst || resumeElsewhere,
     catalogue: waitingEpisode ? null : { type, id: streamId },
     nameHint: name,
     libraries: null,
@@ -295,45 +305,38 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     ? [String(snapshot.releaseInfo ?? snapshot.year ?? ""), ...(snapshot.genres ?? []).slice(0, 3)]
       .map((value) => value.trim()).filter(Boolean).join(" · ")
     : "";
-  const rating = imdbRating(snapshot);
-  const facts = rating || factText ? <>
-    {rating ? <ImdbRating rating={rating}/> : null}
-    {rating && factText ? " · " : null}
-    {factText}
-  </> : undefined;
   const pieces = TitleExtraFacts({ extras: titleExtras.extras, language: locale, name });
-  const seasons = [...new Set(videos.map((video) => video.season).filter((value): value is number => typeof value === "number"))]
-    .sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
-  const activeSeason = pickerSeason ?? episode?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? 0;
-  const visibleEpisodes = videos.filter((video) => seasons.length <= 1 || video.season === activeSeason);
-  const sameEpisode = (video: Video) => episode?.id != null && video.id != null && String(video.id) === String(episode.id);
-
-  const episodes = type !== "series" ? undefined : <div className="catalogue-episodes">
-    {waitingEpisode || pickerOpen ? <>
-      <div className="subhead episode-head"><h3>{t("episodes.heading")}</h3>
-        <div className="episode-tools">
-          {seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason}
-            onChange={(event) => setPickerSeason(Number(event.target.value))}>
-            {seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}
-          </select>}
-          <span>{visibleEpisodes.length}</span>
-        </div>
-      </div>
-      {snapshot === null && !metaError ? <div className="loading" role="status">{t("common.loading")}</div>
-        : !videos.length ? <p className="identify-hint">{t("mediaServer.noEpisodes")}</p>
-          : <div className="episode-list">{visibleEpisodes.map((video, index) => <button type="button" key={String(video.id ?? index)}
-            className={sameEpisode(video) ? "selected" : ""} onClick={() => { setPickedEpisode(video); setPickerOpen(false); }}>
-            <b>{video.season != null ? `${pad(video.season)}×${pad(video.episode ?? 0)}` : index + 1}</b>
-            <span>{video.title || video.name || t("episodes.one")}</span>
-            <ChevronRight/>
-          </button>)}</div>}
-    </> : episode ? <div className="episode-current">
-      <small>{t("episodes.chosen")}</small>
-      <b>{episode.season != null ? `${pad(episode.season)}×${pad(episode.episode ?? 0)}` : t("episodes.part")}</b>
-      <span>{episode.title || episode.name || t("episodes.one")}</span>
-      <button type="button" onClick={() => setPickerOpen(true)}>{t("episodes.change")}</button>
-    </div> : null}
-  </div>;
+  const scores = ratingsFrom(titleExtras.extras, snapshot);
+  const catalogueEpisodes = videos.map((video, index) => ({
+    key: String(video.id ?? index),
+    ...(video.season != null ? { season: video.season } : {}),
+    ...(video.episode != null ? { episode: video.episode } : {}),
+    ...(video.title || video.name ? { title: video.title || video.name } : {}),
+  }));
+  const selectedEpisode = episode?.id == null ? undefined
+    : catalogueEpisodes.find((candidate, index) => String(videos[index]?.id) === String(episode.id));
+  const selectedKey = selectedEpisode?.key ?? (episode
+    ? episode.id != null ? String(episode.id) : `catalogue:${episode.season ?? ""}:${episode.episode ?? ""}`
+    : null);
+  const pickerEpisodes = episode && !selectedEpisode && !pickerOpen ? [{
+    key: selectedKey!,
+    ...(episode.season != null ? { season: episode.season } : {}),
+    ...(episode.episode != null ? { episode: episode.episode } : {}),
+    ...(episode.title || episode.name ? { title: episode.title || episode.name } : {}),
+  }, ...catalogueEpisodes] : catalogueEpisodes;
+  const episodePicker = type !== "series" ? undefined : <EpisodePicker
+    episodes={pickerEpisodes}
+    selectedKey={selectedKey}
+    onPick={(key) => {
+      const index = pickerEpisodes.findIndex((candidate) => candidate.key === key);
+      if (index >= 0) setPickedEpisode(videos[index] ?? null);
+    }}
+    open={pickerOpen}
+    onOpenChange={setPickerOpen}
+    loading={snapshot === null && !metaError}
+    season={pickerSeason}
+    onSeason={setPickerSeason}
+  />;
 
   return <div className="catalogue-title-detail">
     {metaError && <div className="remote-error" role="alert">
@@ -350,19 +353,25 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       backdrops={backdrops}
       gallery={gallery}
       {...(onGallery ? { onGallery: (images: GalleryImage[]) => onGallery(images, effective) } : {})}
-      {...(facts ? { facts } : {})}
-      factsExtra={pieces.ageBadge}
-      heroExtra={pieces.heroLines}
-      extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading}/>}
-      {...(snapshot?.description ? { description: snapshot.description } : {})}
+      {...(factText ? { facts: factText } : {})}
+      originalLine={pieces.originalLine}
+      ratings={<DetailRatings age={pieces.ageBadge} imdb={scores.imdb} tmdb={scores.tmdb} tmdbVotes={scores.tmdbVotes}/>}
+      heroExtra={pieces.nextLine}
+      people={titleExtras.extras?.people}
+      trailer={trailer ?? trailerFromExtras(titleExtras.extras, locale)}
+      onTrailer={onTrailer}
+      secureMode={secureMode}
+      extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
+      {...(synopsisOf(snapshot?.description, titleExtras.extras) ? { description: synopsisOf(snapshot?.description, titleExtras.extras) } : {})}
       descriptionLoading={snapshot === null && !metaError}
       {...(chips ? { chips } : {})}
+      {...(onToggleFavorite ? { favorite: favorite ?? false, onToggleFavorite, favoriteDisabled, ...(favoriteAriaLabel ? { favoriteAriaLabel } : {}), ...(favoriteTitle ? { favoriteTitle } : {}) } : {})}
       sources={detailSources}
       keepOrder
       {...(addonPriority ? { addonPriority } : {})}
       defaultSources={firstPlayable ? [firstPlayable] : []}
       {...(seed ? { initialSource: seed } : {})}
-      episodes={episodes}
+      episodes={episodePicker}
       {...(waitingEpisode ? { placeholder: null } : {})}
       {...(waitingEpisode ? {} : { sourceGroups: { groups: showTorrents ? extra.groups : extra.groups.map((group) => ({ ...group, streams: group.streams.filter(offered) })), retry: extra.retry }, onOpenSources: () => setChooserOpen(true) })}
       nativeSourceLabel={t("sources.heading")}

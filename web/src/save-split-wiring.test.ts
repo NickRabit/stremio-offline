@@ -31,7 +31,7 @@ describe("save split wiring", () => {
     );
     expect(compact(primary)).toContain("voidenqueue()");
 
-    const panel = between(app, "selectedLocalPath ? <button onClick={() => revealLibraryCopy", "onDownloadToDevice");
+    const panel = between(app, "selectedLocalPath ? <button onClick={() => revealLibraryCopy", "</div></div></div>");
     expect(compact(panel)).toContain("onClick={primarySave}");
     expect(compact(panel)).toContain("onClick={()=>openSingleDownload()}");
     expect(compact(panel)).not.toContain("onClick={()=>setSaveTargetOpen(true)}");

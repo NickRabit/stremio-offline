@@ -134,6 +134,31 @@ class HomeCardsTest {
   }
 
   @Test
+  fun `completed and recent cards name and open the local file detail`() {
+    val completed = HomeCard.Completed(
+      key = "file:done",
+      title = "Done",
+      path = "Films/Done.mkv",
+      season = 1,
+      episode = 2,
+      poster = "poster.jpg",
+      wide = "wide.jpg",
+    )
+    val recent = HomeCard.Recent(key = "file:new", path = "Films/New.mkv", label = "New")
+
+    assertEquals(R.string.home_open_detail, cardLabel(completed))
+    assertEquals(R.string.home_open_detail, cardLabel(recent))
+    val done = actionFor(completed) as HomeAction.OpenDetail
+    val added = actionFor(recent) as HomeAction.OpenDetail
+    assertEquals("Films/Done.mkv", done.detail.files.single().path)
+    assertEquals("Done", done.detail.title)
+    assertEquals(1, done.detail.files.single().season)
+    assertEquals(2, done.detail.files.single().episode)
+    assertEquals("Films/New.mkv", added.detail.files.single().path)
+    assertEquals("New", added.detail.title)
+  }
+
+  @Test
   fun `heroMetaRef names the catalogue title a Tonight or favourite card is bound to`() {
     assertEquals("movie" to "tt9", HomeCard.Tonight(key = "k", label = "Ton", title = TitleRefDto("movie", "tt9")).heroMetaRef())
     assertEquals("series" to "tt2", HomeCard.Favorite(key = "k", label = "Fav", title = TitleRefDto("series", "tt2")).heroMetaRef())

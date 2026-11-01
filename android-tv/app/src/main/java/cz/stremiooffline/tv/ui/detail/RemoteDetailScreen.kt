@@ -22,6 +22,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -56,6 +57,7 @@ import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
 import cz.stremiooffline.tv.ui.catalog.DetailAction
+import cz.stremiooffline.tv.ui.catalog.DetailActionHeight
 import cz.stremiooffline.tv.ui.catalog.DetailActionRow
 import cz.stremiooffline.tv.ui.catalog.DownloadIcon
 import cz.stremiooffline.tv.ui.catalog.EyeIcon
@@ -69,7 +71,6 @@ import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.catalog.SourceFilterState
 import cz.stremiooffline.tv.ui.catalog.SourceSaveRequest
 import cz.stremiooffline.tv.ui.catalog.SourceSaveState
-import cz.stremiooffline.tv.ui.catalog.chosenSourceCaption
 import cz.stremiooffline.tv.ui.catalog.nativeAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeCopySubject
@@ -115,9 +116,22 @@ data class RemoteDetailData(
   val seriesIds: RemoteProviderIdsDto? = null,
   /** Opened from Continue watching: Play is pressed once the item and a version have loaded. */
   val autoPlay: Boolean = false,
+  /** With [autoPlay]: the play starts from the beginning instead of resuming. */
+  val autoStartOver: Boolean = false,
 ) {
   val isEpisode: Boolean get() = item.type == "episode"
 }
+
+internal fun remotePrimary(
+  sources: List<StreamDto>,
+  titleStableKey: String?,
+  savedMediaSourceId: String?,
+): StreamDto? =
+  sources.firstOrNull { titleStableKey != null && it.stableKey == titleStableKey }
+    ?: sources.firstOrNull {
+      it.remoteItem?.mediaSourceId != null && it.remoteItem.mediaSourceId == savedMediaSourceId
+    }
+    ?: sources.firstOrNull()
 
 /** A native item, its local state and copies, with every supplementary source group behind the
  *  Versions panel: the viewer's own copies, the other media libraries and the addon rows. */
@@ -308,9 +322,13 @@ fun RemoteDetailScreen(
   suspend fun loadState(mine: Pair<String, String>) {
     stateLoading = true
     stateError = false
-    titleRow = null
-    val loadedTitle = loadTitleRow()
-    if (live.value == mine) titleRow = loadedTitle
+    // Until the metadata names the title, its own effect reads the row: a read made here with the
+    // identity this load started under is null, and landing after that effect it would wipe the
+    // position a Continue play is about to resume.
+    if (titleRowReady) {
+      val loadedTitle = loadTitleRow()
+      if (live.value == mine) titleRow = loadedTitle
+    }
     try {
       val loaded = api.remoteItemState(detail.libraryId, detail.item.id)
       if (live.value != mine) return
@@ -334,11 +352,9 @@ fun RemoteDetailScreen(
     loadSources(mine)
     loadState(mine)
   }
-  LaunchedEffect(metadataResolved, sourcesIdentity) {
-    if (metadataResolved) {
-      titleRow = loadTitleRow()
-      titleRowReady = true
-    }
+  TitleRowLoader(metadataResolved, sourcesIdentity, titleProgress) { row ->
+    titleRow = row
+    titleRowReady = true
   }
 
   val stateLoaded = state != null && !stateError
@@ -359,9 +375,7 @@ fun RemoteDetailScreen(
   val title = titleRow
   // The version the viewer last watched leads, so its Resume is the one offered: the source the
   // title's own stored row names when that row names one, and otherwise the stored media source.
-  val primary = title?.stableKey?.let { key -> sources.firstOrNull { it.stableKey == key } }
-    ?: sources.firstOrNull { it.remoteItem?.mediaSourceId != null && it.remoteItem.mediaSourceId == savedSourceId }
-    ?: sources.firstOrNull()
+  val primary = remotePrimary(sources, title?.stableKey, savedSourceId)
   // The saved position belongs to the exact version that stored it; another version shows none.
   val sameVersion = title != null || primary?.remoteItem?.mediaSourceId == savedSourceId
   // Resume is offered only for the same version that stored the position and never for an item
@@ -432,7 +446,8 @@ fun RemoteDetailScreen(
   var autoPlayed by remember(identity) { mutableStateOf(false) }
   LaunchedEffect(stateLoaded, primary, playbackMetadataReady) {
     if (detail.autoPlay && stateLoaded && primary != null && playbackMetadataReady && pendingStartOver == null && !autoPlayed) {
-      playPressed()
+      // A start over waits for the same readiness, so it goes through the pending press below.
+      if (detail.autoStartOver) pendingStartOver = true else playPressed()
       autoPlayed = true
     }
   }
@@ -762,7 +777,11 @@ fun RemoteDetailScreen(
     }
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Tokens.Panel2.copy(alpha = 0.4f), Tokens.Bg, Tokens.Bg))))
     Column(
-      Modifier.fillMaxSize().padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
+      Modifier
+        .fillMaxSize()
+        .clipToBounds()
+        .verticalScroll(extras.scroll)
+        .padding(start = 60.dp, top = Tokens.SafeY, end = 60.dp),
       verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
       Text(eyebrow(detail), color = Tokens.Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.8.sp)
@@ -776,12 +795,15 @@ fun RemoteDetailScreen(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.width(820.dp),
       )
-      Text(
-        listOfNotNull(detail.provider.ifBlank { null }, detail.libraryName.ifBlank { null }, stringResource(R.string.media_server_read_only))
-          .joinToString(" · "),
-        color = Tokens.Muted,
-        fontSize = 11.5.sp,
-        fontWeight = FontWeight.Medium,
+      TitleExtraFacts(
+        state = extras,
+        name = titleOf(detail),
+        metaLine = listOfNotNull(
+          detail.provider.ifBlank { null },
+          detail.libraryName.ifBlank { null },
+          stringResource(R.string.media_server_read_only),
+        ).joinToString(" · "),
+        uiLanguage = null,
       )
       // The same bar the local detail draws, from the same saved position numbers.
       if (stateLoaded && sameVersion) {
@@ -802,6 +824,7 @@ fun RemoteDetailScreen(
             onClick = { playPressed() },
             kind = FocusButtonKind.Primary,
             enabled = primary != null,
+            height = DetailActionHeight,
             modifier = Modifier.focusRequester(playFocus).testTag(TagRemoteDetailPlay),
           )
         },
@@ -821,6 +844,7 @@ fun RemoteDetailScreen(
                 save.resolving = false
                 sourceListOpen = true
               },
+              height = DetailActionHeight,
               modifier = Modifier.focusRequester(versionsFocus).testTag(TagRemoteDetailVersions),
             )
           }
@@ -863,20 +887,10 @@ fun RemoteDetailScreen(
           onClick = { toggleWatched() },
         ) else null,
         caption = caption,
-        modifier = Modifier.downIntoExtras(extras),
+        modifier = Modifier.scrollToTopOnFocus(extras, scope).downIntoExtras(extras),
       )
       actionRow?.let { row ->
-        val pickedCaption = chosenSourceCaption(row).joinToString(" · ")
-        if (pickedCaption.isNotEmpty()) {
-          Text(
-            stringResource(R.string.tv_chosen_source) + " · " + pickedCaption,
-            color = Tokens.Muted,
-            fontSize = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag(TagRemoteDetailPickCaption),
-          )
-        }
+        TitleTechBlock(row, Modifier.testTag(TagRemoteDetailPickCaption), versionCount = sources.size)
       }
 
       // A copy that never opened its panel (no readable destinations, no native right) says why
@@ -897,11 +911,7 @@ fun RemoteDetailScreen(
       }
       if (mutationError) Text(stringResource(R.string.media_server_state_error), color = Tokens.Red, fontSize = 11.5.sp)
 
-      Column(
-        Modifier
-          .weight(1f)
-          .then(if (loadExtras != null) Modifier.verticalScroll(extras.scroll) else Modifier),
-      ) {
+      Column {
         Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
           when {
             sourcesLoading -> Text(
@@ -923,7 +933,7 @@ fun RemoteDetailScreen(
             ) {
               Text(stringResource(R.string.media_server_sources_empty), color = Tokens.Muted, fontSize = 11.5.sp)
             }
-            else -> Text(stringResource(R.string.media_server_versions_available, sources.size.toString()), color = Tokens.Muted, fontSize = 11.sp)
+            else -> {}
           }
           if (stateError) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1021,7 +1031,7 @@ fun RemoteDetailScreen(
 }
 
 @Composable
-private fun eyebrow(data: RemoteDetailData): String =
+internal fun eyebrow(data: RemoteDetailData): String =
   when {
     data.isEpisode && !data.seriesName.isNullOrBlank() -> stringResource(R.string.media_server_eyebrow_episode, data.seriesName)
     else -> stringResource(R.string.media_server_eyebrow)
@@ -1033,3 +1043,34 @@ private fun titleOf(data: RemoteDetailData): String =
   } else {
     data.item.name
   }
+
+/**
+ * Reads the title's own row once the metadata has resolved, under exactly the identity that
+ * resolution named. Both arrive as parameters: an effect reading the resolved flag live while it
+ * holds the identity of an earlier composition would store "no row" just as the real identity
+ * lands, and a Continue play would start that title from the beginning.
+ */
+@Composable
+private fun TitleRowLoader(
+  resolved: Boolean,
+  identity: Pair<String, String>?,
+  read: (suspend (String) -> ProgressDto?)?,
+  onLoaded: (ProgressDto?) -> Unit,
+) {
+  LaunchedEffect(resolved, identity) {
+    if (!resolved) return@LaunchedEffect
+    val wanted = identity
+    val row = if (read == null || wanted == null) {
+      null
+    } else {
+      try {
+        read(ProgressKey.of(wanted.first, wanted.second))
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        null
+      }
+    }
+    onLoaded(row)
+  }
+}

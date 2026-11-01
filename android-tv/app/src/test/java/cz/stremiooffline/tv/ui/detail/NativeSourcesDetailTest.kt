@@ -2,6 +2,8 @@
 
 package cz.stremiooffline.tv.ui.detail
 
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesSources
+import androidx.compose.ui.test.hasTestTag
 import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -611,12 +613,14 @@ class NativeSourcesDetailTest {
       withCopy = false,
     )
     compose.waitUntil(5_000) { api.remoteEpisodesRequests.isNotEmpty() }
-    compose.onNodeWithTag(remoteItemTag("eA")).assertIsFocused()
+    // Sources on the series' action row opens the selected episode's own detail.
+    compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TagRemoteSeriesSources)).fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag(TagRemoteSeriesSources).performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
-    compose.waitUntil(5_000) { api.remoteSourcesRequests.contains("rlibA" to "eA") }
+    compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TagRemoteDetailVersions)).fetchSemanticsNodes().isNotEmpty() }
 
     // The episode's detail keeps the port and its series data, and asks everything on opening.
-    compose.onNodeWithTag(TagRemoteDetailVersions).assertExists()
+    assertTrue(api.remoteSourcesRequests.contains("rlibA" to "eA"))
     assertTrue(api.streamSourcesRequests.isEmpty())
     openPanel(rows = 2)
     assertEquals(listOf("series:tt5:1:2"), api.streamSourcesRequests)

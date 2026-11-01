@@ -1,4 +1,5 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, describeError, saveToDevice } from "./api";
@@ -11,6 +12,8 @@ import { AddonManager } from "./AddonManager";
 import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { LocalLibraryDetail, type AlternativePlay } from "./LocalLibraryDetail";
+import { EpisodePicker } from "./EpisodePicker";
+import { episodeName, nextEpisode, useLocalSeries } from "./LocalSeriesDetail";
 import { DetailDescription, DetailHero } from "./DetailHero";
 import { folderTitle, LibraryItem, LibraryItemMenu, rowDescription } from "./library-item";
 import { LibraryTile } from "./library-tile";
@@ -274,6 +277,11 @@ export function App() {
   /** The local file or matched-movie folder open in the library's detail, and where its listing
    *  sat, so Back returns to the exact spot. */
   const [localDetail, setLocalDetail] = useState<{ item: TreeItem } | null>(null);
+  const [localSeries, setLocalSeries] = useState<Extract<TreeItem, { kind: "folder" }> | null>(null);
+  const [localSeriesEpisode, setLocalSeriesEpisode] = useState<string | null>(null);
+  const [localSeriesPickerOpen, setLocalSeriesPickerOpen] = useState(false);
+  const [localSeriesSeason, setLocalSeriesSeason] = useState<number | null>(null);
+  const localCrumbsRef = useCrumbsAtEnd<HTMLElement>(`${browsePath}|${localDetail?.item.path ?? ""}`);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
   const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series"; paths?: string[]; copy?: boolean } | null>(null);
   const [saveTargetOpen, setSaveTargetOpen] = useState(false);
@@ -451,6 +459,7 @@ export function App() {
     setMenuFor(null);
     try {
       await api.setFavorite(itemPath, favorite);
+      if (localSeries?.path === itemPath) setLocalSeries({ ...localSeries, favorite });
       // One star per title: starring a bound copy stars its title too, so the catalogue's own
       // list has to be read again for the star to read filled everywhere.
       setWatchlist(await api.watchlist());
@@ -524,11 +533,28 @@ export function App() {
   /** A library star opens the folder or plays the file the way the library does; a catalogue
    *  star opens its detail. */
   const openFavorite = (item: FavoriteLibraryItem) => {
-    if (item.itemKind === "folder") { navigated.current = true; setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(item.path); setView("library"); return; }
+    if (item.itemKind === "folder") {
+      const series: Extract<TreeItem, { kind: "folder" }> | null = item.title?.type === "series" ? {
+        kind: "folder", path: item.path, name: item.label, fileCount: 0, size: 0,
+        ...(item.poster ? { poster: item.poster } : {}), ...(item.wide ? { wide: item.wide } : {}),
+        ...(item.year ? { year: item.year } : {}), match: "matched", titleType: "series", favorite: true,
+      } : null;
+      navigated.current = true; setBrowseQuery(""); setFromFavorites(false); setMenuFor(null);
+      setLocalSeries(series); setBrowsePath(item.path); setView("library");
+      if (series) {
+        const slash = item.path.lastIndexOf("/");
+        void api.browse({ path: slash > 0 ? item.path.slice(0, slash) : "", query: item.label, limit: 120 }).then((page) => {
+          const row = page.items.find((entry) => entry.kind === "folder" && entry.path === item.path);
+          if (row?.kind === "folder") setLocalSeries((current) => current?.path === row.path ? row : current);
+        }).catch(() => undefined);
+      }
+      return;
+    }
     void playLocal(item.label, item.path, item.poster);
   };
   /** A favourite bound to a title is that title, whatever kind of copy it is: one star, one click. */
   const openFavoriteTitle = (item: FavoriteLibraryItem) => {
+    if (item.itemKind === "folder" && item.title?.type === "series") { openFavorite(item); return; }
     if (!item.title) return;
     openCatalogueDetail({ type: item.title.type, id: item.title.id, name: item.label, ...(item.poster ? { poster: item.poster } : {}) });
   };
@@ -1819,6 +1845,17 @@ export function App() {
   }, [localDetail, remoteOpen, view, browsePath, remoteRootsPresent, browse?.path, browseBusy]);
   /** The listing's live row for the open detail, so its favorite and position never go stale. */
   const liveLocalItem = localDetail ? browseItemAt(localDetail.item.path) : null;
+  const openLocalSeries = !localDetail && localSeries?.path === browsePath ? localSeries : null;
+  const liveLocalSeries = openLocalSeries ? browseItemAt(openLocalSeries.path) : null;
+  const localSeriesState = useLocalSeries(openLocalSeries?.path ?? "", localProgressRevision);
+  useEffect(() => {
+    setLocalSeriesEpisode(null);
+    setLocalSeriesPickerOpen(false);
+    setLocalSeriesSeason(null);
+  }, [openLocalSeries?.path]);
+  const seriesEpisode = localSeriesEpisode == null
+    ? nextEpisode(localSeriesState.episodes, localSeriesState.resume)
+    : localSeriesState.episodes.find((file) => file.path === localSeriesEpisode) ?? nextEpisode(localSeriesState.episodes, localSeriesState.resume);
   /** A library file carries no watched flag of its own, and the store keeps resume positions only:
    *  a finished film is already dropped by the server. So "seen" for a file is that there is nothing
    *  left to resume, and marking one seen drops the position it kept. */
@@ -2772,7 +2809,7 @@ export function App() {
         openRemoteCard(entry.remote, true);
         return;
       }
-      homeOpen(card);
+      homeOpen(card, true);
       if (card.path) void playLocal(card.title, card.path, card.poster, card.season != null);
       return;
     }
@@ -2782,11 +2819,12 @@ export function App() {
   };
   /** The source a Continue watching row was last played from, as the progress list names it. */
   const resumeKeyOf = (key: string) => resume.find((candidate) => candidate.key === key)?.stableKey;
-  const homeOpen = (card: HomeCard) => {
+  /** `autoplay` is the card's Play: the detail presses Play once its rows arrive. Opening the
+   *  card on its own only shows the detail. */
+  const homeOpen = (card: HomeCard, autoplay = false) => {
     if (card.kind === "remote") { openRemoteCard(card); return; }
     // A catalogue card opens the shared detail: the same body the libraries use, over this page.
-    if (card.kind === "resume-file") {
-      if (!card.identity) return;
+    if (card.kind === "resume-file" && card.identity) {
       openCatalogueDetail({ type: card.identity.type, id: card.identity.id, name: card.title,
         ...(card.poster ? { poster: card.poster } : {}),
         ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
@@ -2806,8 +2844,30 @@ export function App() {
     if (card.kind === "discovery") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
     if (card.kind === "favorite-catalogue") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
+    if (card.kind === "completed" || card.kind === "recent" || card.kind === "resume-file") {
+      const slash = card.path.lastIndexOf("/");
+      navigated.current = true;
+      setMenuFor(null);
+      setFromFavorites(false);
+      setBrowseQuery("");
+      setRemoteOpen(false);
+      setBrowsePath(slash > 0 ? card.path.slice(0, slash) : "");
+      openLocalDetail({
+        kind: "file",
+        path: card.path,
+        label: card.kind === "recent" ? card.label : card.title,
+        season: card.season ?? null,
+        episode: card.episode ?? null,
+        size: 0,
+        modified: "",
+        ...(card.poster ? { poster: card.poster } : {}),
+        ...(card.wide ? { wide: card.wide } : {}),
+      });
+      setView("library");
+      return;
+    }
     if (card.kind !== "resume-catalogue") return;
-    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(card.path || card.pending ? {} : { resume: { ...(resumeKeyOf(card.key) ? { stableKey: resumeKeyOf(card.key)! } : {}) } }),
+    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(!autoplay || card.path || card.pending ? {} : { resume: { ...(resumeKeyOf(card.key) ? { stableKey: resumeKeyOf(card.key)! } : {}) } }),
       ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
   };
   const homeShowAll = (target: ShowAllTarget) => {
@@ -3324,17 +3384,51 @@ export function App() {
   const detailWatchlisted = inWatchlist(catalogueDetail?.type, catalogueDetail?.id);
   // The shared detail has no catalogue behind it: the source it has selected names the add-on.
   const detailAddonKey = detailSource?.addonKey || catalogueDetail?.initialSource?.addonKey || undefined;
+  const detailWatchTitle = t(detailWatchlisted ? "watchlist.remove" : "watchlist.add");
   const detailChips = catalogueDetail ? <TitleChips
     kind={t(catalogueDetail.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}
-    trailer={detailTrailer} links={detailLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
-    leading={<>
-      <button className={`watch-star ${detailWatchlisted ? "on" : ""}`} title={t(detailWatchlisted ? "watchlist.remove" : "watchlist.add")}
-        onClick={() => void toggleWatchlist({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}) }, detailAddonKey)}><Star/></button>
-      {(catalogueDetail.type === "series" || (detailRead !== null && !detailRead.pending && !detailRead.playable)) && (catalogueFollow
-        ? <button className="follow-chip on" onClick={() => setDetailFollowOpen(true)}><BellRing/>{t("follow.following")}{catalogueFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button>
-        : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}), ...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })}><Bell/>{t("follow.follow")}</button>)}
-    </>}/> : undefined;
+    links={detailLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
+    leading={(catalogueDetail.type === "series" || (detailRead !== null && !detailRead.pending && !detailRead.playable)) && (catalogueFollow
+      ? <button className="follow-chip on" aria-label={t("follow.following")} title={t("follow.following")} onClick={() => setDetailFollowOpen(true)}><BellRing/><span className="follow-chip-label">{t("follow.following")}</span>{catalogueFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button>
+      : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}), ...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })} aria-label={t("follow.follow")} title={t("follow.follow")}><Bell/><span className="follow-chip-label">{t("follow.follow")}</span></button>)}/> : undefined;
   const panelExtras = useTitleExtras(selected?.type, selected?.id);
+
+  const localLibraryDetailProps = (
+    item: TreeItem,
+    options: { live?: TreeItem | null; episodes?: ReactNode; favorite?: boolean; favoritePath?: string } = {},
+  ) => {
+    const progress = options.live?.kind === "file" ? options.live.progress : item.kind === "file" ? item.progress : undefined;
+    const favoritePath = options.favoritePath ?? item.path;
+    return {
+      item,
+      ...(options.episodes !== undefined ? { episodes: options.episodes } : {}),
+      progressRevision: localProgressRevision,
+      favorite: options.favorite ?? options.live?.favorite ?? item.favorite ?? false,
+      ...(progress ? { progress } : {}),
+      onToggleFavorite: (favorite: boolean) => void toggleFavorite(favoritePath, favorite),
+      onResetProgress: (path: string) => forgetWatched(path),
+      onToggleWatched: (path: string) => void markLocalWatched(path),
+      onOpenFolder: () => { if (item.kind === "folder") goLocalFolder(item.path); },
+      uiLanguage: settings.uiLanguage,
+      secureMode: settings.secureMode,
+      onTrailer: setTrailerOpen,
+      accountScope: session!.username,
+      preferredLanguage: settings.audioLanguage,
+      onGallery: (images: GalleryImage[], path: string, ref?: CatalogueRef | null) => { setMenuFor(null); presentGallery(images, ref, path); },
+      onPlayAlternative: playAlternative,
+      sourceProfiles,
+      defaultSort: defaultStreamSort,
+      realDebridConfigured: settings.realDebridConfigured,
+      onSaveAlternative: openAlternativeSave,
+      onDownloadToDevice: (stream: Stream) => void downloadAlternativeToDevice(stream),
+      onPlay: (stream: Stream, fromBeginning: boolean | undefined, catalogue: CatalogueRef | null) => {
+        if (!stream.localPath) return;
+        void playLocal(item.kind === "file" ? item.label : item.name, stream.localPath, item.poster,
+          item.kind === "file" && item.season != null, { kind: "library", key: item.path }, fromBeginning,
+          catalogue ?? undefined);
+      },
+    };
+  };
 
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
   if (!ready) return <LoginScreen setup={setupNeeded} onSession={(next) => { setSetupNeeded(false); setSession(next); }}/>;
@@ -3412,6 +3506,10 @@ export function App() {
             addonPriority={addonPriority} showTorrents={settings.realDebridConfigured}
             onRead={setDetailRead}
             {...(detailChips ? { chips: detailChips } : {})}
+            trailer={detailTrailer} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
+            favorite={detailWatchlisted}
+            favoriteAriaLabel={detailWatchTitle} favoriteTitle={detailWatchTitle}
+            onToggleFavorite={() => void toggleWatchlist({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}) }, detailAddonKey)}
             onSourceChange={(stream, explicitlyPicked) => { setDetailSource(stream); setDetailSourcePicked(explicitlyPicked); }}
             {...(detailProgress ? { progress: detailProgress } : {})}
             {...(detailResumeStableKey ? { resumeStableKey: detailResumeStableKey } : {})}
@@ -3560,7 +3658,7 @@ export function App() {
             <div className="detail-primary"><DetailHero className={selected.videos?.length ? "series-hero" : ""} background={selected.background}
               gallery={galleryImages.length > 0 ? <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => presentGallery(galleryImages, selected.type === "movie" || selected.type === "series" ? { type: selected.type, id: selected.id } : null)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button> : undefined}
               chips={<TitleChips leading={<><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
-                onClick={() => void toggleWatchlist(selected, panelAddonKey(selectedStream?.addonKey))}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => { const addonKey = panelAddonKey(selectedStream?.addonKey); setFollowStart(addonKey ? { ...selected, addonKey } : selected); }}><Bell/>{t("follow.follow")}</button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
+                onClick={() => void toggleWatchlist(selected, panelAddonKey(selectedStream?.addonKey))}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" aria-label={t("follow.following")} title={t("follow.following")} onClick={() => setFollowDialogOpen(true)}><BellRing/><span className="follow-chip-label">{t("follow.following")}</span>{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => { const addonKey = panelAddonKey(selectedStream?.addonKey); setFollowStart(addonKey ? { ...selected, addonKey } : selected); }} aria-label={t("follow.follow")} title={t("follow.follow")}><Bell/><span className="follow-chip-label">{t("follow.follow")}</span></button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
                 {...(selected.type === "movie" || selected.type === "series" ? { trailing: <button type="button" className="detail-info" aria-label={t("catalog.openDetail")} title={t("catalog.openDetail")} onClick={openSelectedDetail}><Info/></button> } : {})}/>}
               copy={<><h2>{selected.name}</h2><p className="meta-line">{selectedRating && <ImdbRating rating={selectedRating}/>}{selectedRating && selectedFactText ? " · " : ""}{selectedFactText}{panelAge && (selectedRating || selectedFactText) ? " " : ""}{panelAge}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/></>}/></div>
 
@@ -3628,7 +3726,7 @@ export function App() {
         {!remoteOpen && <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
-          <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
+          <nav className="crumbs" ref={localCrumbsRef} aria-label={t("library.breadcrumbs")}>
             {(browsePath || localDetail) && <button className="library-back" aria-label={localDetail ? t("mediaServer.back") : t("library.folderUp")} onClick={libraryBack}><ChevronLeft/></button>}
             <button onClick={() => { setFromFavorites(false); goLocalFolder(""); }} disabled={!browsePath && !localDetail}><HardDrive/> {t("nav.library")}</button>
             {(fromFavorites || browsePath === ":favorites") && <span>
@@ -3647,8 +3745,8 @@ export function App() {
           </nav>
           <div className="browse-tools">
             <div className={`fold browse-fold${libraryCompact ? " closed" : ""}`}><div className="browse-fold-inner">
-            {!libraryList && !localDetail && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
-            {!libraryList && !localDetail && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
+            {!libraryList && !localDetail && !openLocalSeries && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
+            {!libraryList && !localDetail && !openLocalSeries && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
               setBrowseSort(next);
               // Dates and sizes start with the largest value; names start with A.
@@ -3658,23 +3756,23 @@ export function App() {
               <option value="name">{t("library.sortName")}</option><option value="added">{t("library.sortAdded")}</option>
               <option value="size">{t("library.sortSize")}</option><option value="random">{t("library.sortRandom")}</option>
             </select>}
-            {!libraryList && !localDetail && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => { setBrowseDesc((value) => !value); persistLibraryPrefs({ order: browseDesc ? "asc" : "desc" }); }} disabled={browseSort === "random"}>
+            {!libraryList && !localDetail && !openLocalSeries && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => { setBrowseDesc((value) => !value); persistLibraryPrefs({ order: browseDesc ? "asc" : "desc" }); }} disabled={browseSort === "random"}>
               {browseDesc ? <ArrowDown/> : <ArrowUp/>}
             </button>}
             {/* Only while the scan has something waiting: with nothing to confirm the filter
                 would list an empty folder and say nothing about why. */}
-            {!libraryList && !localDetail && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
+            {!libraryList && !localDetail && !openLocalSeries && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
               aria-pressed={onlyUnconfirmed} disabled={browsePath === ":favorites"}
               onClick={() => setOnlyUnconfirmed((value) => !value)}><Sparkles/></button>}
-            {!libraryList && !localDetail && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => { setBrowseView((value) => value === "grid" ? "list" : "grid"); persistLibraryPrefs({ view: browseView === "grid" ? "list" : "grid" }); }}>
+            {!libraryList && !localDetail && !openLocalSeries && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => { setBrowseView((value) => value === "grid" ? "list" : "grid"); persistLibraryPrefs({ view: browseView === "grid" ? "list" : "grid" }); }}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>}
-            {admin && !libraryList && !localDetail && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
+            {admin && !libraryList && !localDetail && !openLocalSeries && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
               onClick={() => { setMenuFor(null); if (selectionMode) leaveSelection(); else setSelectionMode(true); }}><Check/></button>}
             </div></div>
             {/* What a folded header keeps: where the tiles stand, the tools, and the way back. */}
             <div className="browse-keep">
-            {!libraryList && !localDetail && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
+            {!libraryList && !localDetail && !openLocalSeries && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
             <div className="library-maintenance" onKeyDown={(event) => {
               if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
             }}>
@@ -3692,7 +3790,7 @@ export function App() {
                 <button title={t("library.recheckAutomaticHint")} onClick={() => void recheckAutomatic()} disabled={scanning || !currentLibraryId}>
                   <ShieldQuestion/> {t("library.recheckAutomatic")}
                 </button>
-                {!libraryList && !localDetail && !browsePath.startsWith(":") && <button title={t("library.createFolder")} onClick={() => { setMenuFor(null); void createFolder(); }}>
+                {!libraryList && !localDetail && !openLocalSeries && !browsePath.startsWith(":") && <button title={t("library.createFolder")} onClick={() => { setMenuFor(null); void createFolder(); }}>
                   <Plus/> {t("library.createFolder")}
                 </button>}
                 {/* One library is one thing to manage: the settings section holds it, and the
@@ -3746,32 +3844,29 @@ export function App() {
           scheduleViewAnchor();
         }}>
         {localDetail ? <LocalLibraryDetail key={localDetail.item.path}
-          item={localDetail.item}
-          progressRevision={localProgressRevision}
-          favorite={liveLocalItem?.favorite ?? localDetail.item.favorite ?? false}
-          {...(liveLocalItem?.kind === "file" && liveLocalItem.progress ? { progress: liveLocalItem.progress } : {})}
-          onToggleFavorite={(favorite) => void toggleFavorite(localDetail.item.path, favorite)}
-          onResetProgress={(path) => forgetWatched(path)}
-          onToggleWatched={(path) => void markLocalWatched(path)}
-          onOpenFolder={() => { if (localDetail.item.kind === "folder") goLocalFolder(localDetail.item.path); }}
-          uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
-          accountScope={session!.username} preferredLanguage={settings.audioLanguage}
-          onGallery={(images, path, ref) => { setMenuFor(null); presentGallery(images, ref, path); }}
-          onPlayAlternative={playAlternative}
-          sourceProfiles={sourceProfiles} defaultSort={defaultStreamSort}
-          realDebridConfigured={settings.realDebridConfigured}
-          onSaveAlternative={openAlternativeSave}
-          onDownloadToDevice={(stream) => void downloadAlternativeToDevice(stream)}
-          onPlay={(stream, fromBeginning, catalogue) => {
-            // Only the library's own file goes through the library player: a row that arrived from
-            // an addon or from another media server is started as the source it really is, and the
-            // clicked folder's path must never stand in for a copy that lives somewhere else.
-            if (!stream.localPath) return;
-            const clicked = localDetail.item;
-            void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath, clicked.poster,
-              clicked.kind === "file" && clicked.season != null, { kind: "library", key: clicked.path }, fromBeginning,
-              catalogue ?? undefined);
-          }}/> : <>
+          {...localLibraryDetailProps(localDetail.item, { live: liveLocalItem })}/> : openLocalSeries ? localSeriesState.loading
+          ? <div className="loading" role="status">{t("common.loading")}</div>
+          : localSeriesState.error ? <div className="remote-error" role="alert"><span>{localSeriesState.error}</span></div>
+          : !localSeriesState.episodes.length ? <p className="identify-hint">{t("mediaServer.noEpisodes")}</p>
+          : seriesEpisode ? <LocalLibraryDetail key={seriesEpisode.path}
+            {...localLibraryDetailProps({ kind: "file", ...seriesEpisode, series: { name: openLocalSeries.catalogName || openLocalSeries.name } }, {
+              episodes: <EpisodePicker
+                episodes={localSeriesState.episodes.map((file) => ({
+                  key: file.path,
+                  ...(file.season != null ? { season: file.season } : {}),
+                  ...(file.episode != null ? { episode: file.episode } : {}),
+                  title: episodeName(file),
+                }))}
+                selectedKey={seriesEpisode.path}
+                onPick={setLocalSeriesEpisode}
+                open={localSeriesPickerOpen}
+                onOpenChange={setLocalSeriesPickerOpen}
+                loading={false}
+                season={localSeriesSeason}
+                onSeason={setLocalSeriesSeason}/>,
+              favorite: liveLocalSeries?.favorite ?? openLocalSeries.favorite ?? false,
+              favoritePath: openLocalSeries.path,
+            })}/> : null : <>
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
           <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
@@ -3797,6 +3892,10 @@ export function App() {
                       // A folder matched to one movie holds that title's versions, so it opens the
                       // detail; any other folder keeps browsing its own contents.
                       if (item.match === "matched" && item.titleType === "movie") { openLocalDetail(item); return; }
+                      if (item.match === "matched" && item.titleType === "series") {
+                        setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites);
+                        setLocalSeries(item); setBrowsePath(item.path); return;
+                      }
                       setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path);
                     }}
                     art={<>
@@ -3808,7 +3907,7 @@ export function App() {
                       <i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}
                     </>}
                     title={folderTitle(item)} meta={folderMeta(item)} description={rowDescription(item)}
-                    action={item.match === "matched" && item.titleType === "movie"
+                    action={item.match === "matched" && (item.titleType === "movie" || item.titleType === "series")
                       ? <>{t("home.openTitle")}<ChevronRight/></> : <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}

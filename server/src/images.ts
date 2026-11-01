@@ -374,7 +374,11 @@ export class ImageProxy {
     };
   }
 
-  rewriteExtras<T extends { people: Array<{ photo?: string }>; related: Array<{ poster?: string }> }>(extras: T): T {
+  rewriteExtras<T extends {
+    people: Array<{ photo?: string }>;
+    related: Array<{ poster?: string }>;
+    videos?: Array<{ thumbnail?: string }>;
+  }>(extras: T): T {
     if (!secureMode()) return extras;
     const people = extras.people.map((person) => {
       const next = { ...person };
@@ -386,10 +390,16 @@ export class ImageProxy {
       if (typeof item.poster === "string") next.poster = this.proxied(item.poster);
       return next;
     });
+    const videos = extras.videos?.map((video) => {
+      const next = { ...video };
+      if (typeof video.thumbnail === "string") next.thumbnail = this.proxied(video.thumbnail);
+      return next;
+    });
     return {
       ...extras,
       people,
       related,
+      ...(videos ? { videos } : {}),
     };
   }
 

@@ -230,6 +230,7 @@ class CatalogPendingPlayTest {
     compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Starting when sources are ready…")
 
     // DOWN into the episode row (episode one is focused), RIGHT to episode two, OK selects it.
+    press(Key.DirectionDown) // the season chips first, then the episodes
     press(Key.DirectionDown)
     press(Key.DirectionRight)
     press(Key.DirectionCenter)

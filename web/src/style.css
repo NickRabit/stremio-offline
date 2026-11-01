@@ -56,6 +56,16 @@
   .library-page.library-compact .crumbs{flex-wrap:nowrap;min-width:0}
   .library-page.library-compact .crumbs>*{min-width:0}
   .library-page.library-compact .crumbs button{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  /* Every trail -- a library, a media server, a catalogue title -- is one line on a small screen:
+     wrapped, a series episode took four rows above its own detail. Every step stays; the line
+     scrolls sideways and opens at its end, where the current item is. */
+  .browse-bar nav.crumbs{flex:1 1 0;flex-wrap:nowrap;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior-x:contain}
+  .browse-bar nav.crumbs::-webkit-scrollbar{display:none}
+  .browse-bar nav.crumbs>*{flex:0 0 auto;min-width:auto}
+  /* The way back stays at the start of the line however far the trail has scrolled. */
+  .browse-bar nav.crumbs>.library-back{position:sticky;left:0;z-index:1;background:var(--panel)}
+  .browse-bar nav.crumbs span{max-width:none}
+  .browse-bar nav.crumbs button{white-space:nowrap;overflow-wrap:normal;max-width:72vw;overflow:hidden;text-overflow:ellipsis}
 }
 .header-expand{display:none;align-self:end;min-height:42px}
 .title-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
@@ -2063,7 +2073,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-detail-synopsis{margin:9px 0 0;max-width:680px;font-size:13px;line-height:1.6;color:#dce3ed}
 /* Everything drawn on that wash stands above it. The episode picker the catalogue brings is one of
    those: left out of this list it was painted under the gradient, which read as greyed out. */
-.library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-progress,.library-title-detail>.library-detail-actions,.library-title-detail>.catalogue-episodes,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
+.library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-progress,.library-title-detail>.library-detail-actions,.library-title-detail>.detail-tech,.library-title-detail>.catalogue-episodes,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
 .library-detail-progress{display:flex;flex-wrap:wrap;align-items:center;gap:10px;max-width:680px;margin-top:2px}
 .library-detail-progress .progress{flex:1 1 80px;max-width:280px;margin:0}
 .library-detail-progress>span{font-size:11px;color:var(--muted);white-space:nowrap}
@@ -2088,6 +2098,12 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-title-detail>.library-detail-actions{margin-top:4px}
 @media(max-width:700px){.library-title-detail{min-height:max(300px,calc(100dvh - 310px));padding:16px}.library-detail-hero .detail-copy h2{font-size:21px}.library-detail-synopsis{font-size:12px}}
 @media(max-height:500px) and (orientation:landscape){.library-title-detail{min-height:max(190px,calc(100dvh - 150px));padding:14px}}
+/* A phone on its side stretches Play across the row: its label sits in the middle of the whole
+   button, the first half giving up on its left what the arrow takes on the right. */
+@media(max-height:500px) and (orientation:landscape){
+  .library-detail-play>.split-button>.split-button-toggle{flex:0 0 44px}
+  .library-detail-play>.split-button>button:first-child{padding:0 0 0 44px}
+}
 .remote-episodes-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .remote-season{margin:8px 0 2px;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
 .remote-error{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 12px;font-size:11px;color:var(--red);background:#2a171a;border-radius:8px}
@@ -2174,6 +2190,9 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
    draws, so choosing an episode reads the same on both. */
 .catalogue-episodes{margin-top:2px}
 .catalogue-episodes .episode-list{max-height:clamp(220px,40vh,420px)}
+/* Over the hero's picture the chosen episode keeps a solid ground: the plain tint of the other
+   lists let the artwork shine through it alone, a pink stripe across the list. */
+.catalogue-episodes .episode-list button.selected{background:linear-gradient(#ff5b381c,#ff5b381c),var(--panel2)}
 .catalogue-episodes .episode-current{grid-template-columns:auto auto minmax(0,1fr) auto;gap:9px;padding:8px 10px}
 .catalogue-episodes .episode-current small{color:var(--muted);font-size:9px}
 .catalogue-episodes .episode-current button{padding:5px 9px;color:var(--accent2);background:transparent;font-size:9px}
@@ -2186,7 +2205,14 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
   .catalogue-episodes .episode-current button{grid-column:3;grid-row:2}
 }
 @media(max-width:980px) and (max-height:500px) and (orientation:landscape){
-  main.view-title-detail{height:100dvh;padding-bottom:max(8px, env(safe-area-inset-bottom, 0px))}
+  /* A phone on its side leaves the detail a window two hundred pixels tall, and Safari's bars
+     change that height as they come and go: a panel sized to the viewport ended short of the
+     screen and cut the detail off. Here the page itself scrolls, and only the way back stays
+     pinned under the 54px top bar. */
+  main.view-title-detail{height:auto;overflow:visible;display:block;padding-bottom:max(8px, env(safe-area-inset-bottom, 0px))}
+  main.view-title-detail>.browse-panel{overflow:visible}
+  main.view-title-detail .browse-head{position:sticky;top:54px;z-index:6;background:var(--panel)}
+  main.view-title-detail .browse-scroll{overflow:visible}
   main.view-catalog .detail-panel.mobile-open{grid-template-rows:50px minmax(0,1fr)}
   .detail-panel .catalog-detail-head{grid-row:1}
   .detail-panel .detail-primary,.detail-panel .detail-workflow{grid-row:2}
@@ -2262,9 +2288,9 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .extras-row{min-width:0;max-width:100%}
 .extras-row h3{display:flex;align-items:baseline;gap:10px;margin:0 0 10px;font-size:14px}
 .extras-row h3 small{font-size:11px;font-weight:600;color:var(--muted)}
-.extras-strip{display:flex;gap:14px;overflow-x:auto;overflow-y:hidden;padding:3px 2px 8px;scroll-snap-type:x proximity;overscroll-behavior-x:contain}
+.extras-strip{display:flex;gap:14px;overflow-x:auto;overflow-y:hidden;padding:6px 6px 10px;margin:0 -6px;scroll-snap-type:x proximity;overscroll-behavior-x:contain}
 .person{flex:0 0 96px;width:96px;min-height:0;display:grid;align-content:start;justify-items:center;gap:6px;border:0;background:none;padding:4px 0;color:inherit;text-align:center;scroll-snap-align:start;border-radius:10px}
-.person:hover .person-face,.person:focus-visible .person-face{box-shadow:0 0 0 2px var(--accent)}
+.person:hover .person-face,.person:focus-visible .person-face{outline:2px solid var(--accent);outline-offset:2px;border-color:transparent}
 .person-face{width:78px;height:78px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:22px;color:#ffffffcc;background:linear-gradient(140deg,#2b3446,#1a2029);border:1px solid var(--line);overflow:hidden}
 .person-face img{width:100%;height:100%;object-fit:cover}
 .person strong{font-size:13px;line-height:1.25;max-width:96px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -2272,7 +2298,7 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .related{flex:0 0 132px;width:132px;min-height:0;display:grid;grid-template-columns:100%;justify-items:stretch;align-content:start;gap:6px;border:0;background:none;padding:0;color:inherit;text-align:left;scroll-snap-align:start}
 .related-art{width:100%;aspect-ratio:2/3;border-radius:9px;border:1px solid var(--line);overflow:hidden;background:var(--panel2);display:flex;align-items:flex-end;padding:9px;font-weight:700;font-size:12px}
 .related-art img{width:100%;height:100%;object-fit:cover;margin:-9px;width:calc(100% + 18px);height:calc(100% + 18px)}
-.related:hover .related-art,.related:focus-visible .related-art{box-shadow:0 0 0 2px var(--accent)}
+.related:hover .related-art,.related:focus-visible .related-art{outline:2px solid var(--accent);outline-offset:2px;border-color:transparent}
 .related strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .related small{font-size:12px;color:#aab4c2}
 .related .in-library{color:var(--green)}
@@ -2283,10 +2309,82 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .library-detail-source>small{color:#c3ccd8;font-size:12px}
 .source-will-play{font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent2)}
 .source-file{flex-basis:100%;min-width:0;max-width:100%;font:500 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail-ratings{display:flex;flex-wrap:wrap;gap:8px}
+.detail-rate{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;background:#ffffff10;border:1px solid #ffffff1c;font-size:13px;font-weight:700}
+.detail-rate b{font-size:10px;font-weight:900;letter-spacing:.4px;padding:2px 4px;border-radius:3px}
+.detail-rate .imdb{background:#f5c518;color:#111}
+.detail-rate .tmdb{background:linear-gradient(90deg,#90cea1,#01b4e4);color:#0d253f}
+.detail-rate.age{border-color:#f1f4f866;background:transparent;padding:0 8px}
+.detail-rate.age .age-badge{border:0;padding:0;vertical-align:0}
+.detail-rate small{font-weight:600;color:var(--muted);font-size:11px}
+.library-detail-synopsis.is-clamped{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.detail-more{border:0;background:none;padding:0;color:var(--accent2);font-weight:700;font-size:13px;justify-self:start;min-height:0}
+.detail-crew{margin:0;font-size:13px;color:#aab4c2}
+.detail-crew b{color:var(--text);font-weight:600}
+.detail-crew button{display:inline;border:0;background:none;padding:0;min-height:0;color:inherit;font:inherit}
+.detail-secondary{display:flex;flex-wrap:wrap;gap:4px;margin-left:6px}
+.detail-icon{display:grid;justify-items:center;gap:4px;width:74px;min-height:0;border:0;background:none;padding:0;color:#c3ccd8;font-size:11px;font-weight:600;line-height:1.2;text-align:center;text-decoration:none}
+.detail-icon>span{width:44px;height:44px;display:grid;place-items:center;border-radius:50%;border:1px solid var(--line);background:#ffffff0a;color:var(--text)}
+.library-detail-actions .detail-icon>span svg,.detail-icon>span svg{width:19px;height:19px}
+.detail-icon:hover>span,.detail-icon:focus-visible>span{border-color:var(--accent)}
+.detail-icon.on>span{color:#f0d089;border-color:#f0d08966}
+.detail-icon.watch-star.on svg{fill:#f0d089}
+.detail-icon:disabled{opacity:.45}
+.detail-tech{display:grid;grid-template-columns:auto 1fr;gap:7px 22px;margin:0;padding:14px 16px;border-radius:12px;background:#0b0e13b8;border:1px solid var(--line);max-width:680px;font-size:13px}
+.detail-tech dt{color:var(--muted);font-weight:600}
+.detail-tech dd{margin:0;color:var(--text);display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.detail-versions{border:0;background:none;padding:0;min-height:0;color:var(--accent2);font-weight:700;display:inline-flex;align-items:center;gap:3px}
+.detail-versions svg{width:14px;height:14px}
+.detail-tech .tag{font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px;background:#ffffff12;color:#dfe5ee}
+.detail-tech .tag.hdr{background:#e9b56022;color:#f0d089}
+.detail-tech .source-file{flex-basis:auto;display:block}
+.detail-video{flex:0 0 260px;width:260px;display:grid;gap:7px;border:0;background:none;padding:0;min-height:0;color:inherit;text-align:left;scroll-snap-align:start}
+.detail-video .thumb{position:relative;display:block;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#1b222d;border:1px solid var(--line)}
+.detail-video .thumb img{width:100%;height:100%;object-fit:cover}
+.detail-video .thumb svg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:38px;height:38px;color:#fff;filter:drop-shadow(0 2px 6px #000a)}
+.detail-video:hover .thumb,.detail-video:focus-visible .thumb{outline:2px solid var(--accent);outline-offset:2px;border-color:transparent}
+.detail-video strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail-video small{font-size:12px;color:#aab4c2;margin-top:-4px}
 @media(max-width:700px){
   .person{flex-basis:76px;width:76px}.person-face{width:62px;height:62px;font-size:18px}
   .related{flex-basis:108px;width:108px}
+  .detail-video{flex-basis:220px;width:220px}
   .title-extras{gap:18px}
   .extras-row h3 small{display:none}
   .library-detail-source:not(.detail-skeleton){width:auto;max-width:100%}
+  .library-title-detail{overflow-x:clip;min-width:0;background-size:auto 340px;background-repeat:no-repeat;background-position:62% top}
+  .library-title-detail::before{background:linear-gradient(0deg,#121721 0%,#121721 52%,#12172100 80%)}
+  .library-title-detail .library-detail-hero .detail-copy h2{font-size:28px;text-align:center}
+  .library-title-detail .original-line,.library-title-detail .library-detail-hero .meta-line,.library-title-detail .detail-ratings{text-align:center}
+  .library-title-detail .detail-ratings,.library-title-detail .library-detail-chips,.library-title-detail .detail-chips .title-chips{justify-content:center}
+  /* The follow chip keeps only its bell on a phone, so the kind and the three links stay on one
+     line with it instead of wrapping the last link onto a row of its own. */
+  .library-title-detail .detail-chips .follow-chip-label,.detail-panel .follow-chip-label{display:none}
+  /* Play has to come up on a phone: the synopsis keeps two lines here (the rest is behind More)
+     and the copy sits a little tighter under the chips. */
+  .library-title-detail .library-detail-synopsis.is-clamped{-webkit-line-clamp:2}
+  .library-title-detail .library-detail-hero .detail-copy h2{margin-top:4px}
+  .library-title-detail .detail-chips .follow-chip,.detail-panel .follow-chip{padding:0 8px}
+  .library-title-detail .hero.has-chips{display:block}
+  .library-title-detail .hero.has-chips>.detail-copy{max-width:none}
+  .library-title-detail .hero.has-chips.has-gallery>.gallery-open{position:absolute;top:0;right:0}
+  .library-title-detail .library-detail-actions{display:grid;grid-template-columns:1fr;align-items:stretch;gap:14px}
+  .library-title-detail .library-detail-actions .library-detail-action-label{display:inline}
+  .library-title-detail .library-detail-actions>.library-detail-save>button:first-child>svg{display:none}
+  .library-title-detail .library-detail-actions .split-button{width:100%}
+  .library-title-detail .library-detail-actions .split-button>button:first-child{flex:1}
+  .library-title-detail .library-detail-actions .split-button>button{min-height:46px;padding:0 16px}
+  /* The label sits in the middle of the whole button, not of the part left of the arrow: the
+     first half gives up on its left exactly what the arrow takes on the right. */
+  .library-title-detail .library-detail-actions .split-button>.split-button-toggle{flex:0 0 52px;padding:0}
+  .library-title-detail .library-detail-actions .split-button>button:first-child{padding-left:68px}
+  .library-title-detail .detail-secondary{margin:0;justify-content:space-between}
+  /* The centred title block has no free corner on a phone: the gallery becomes a small pill
+     under the copy instead of a poster over the chips and the title. */
+  .library-title-detail .library-detail-hero.has-gallery .detail-copy{max-width:100%}
+  .library-title-detail .library-detail-hero.has-chips.has-gallery>.gallery-open{position:static;justify-self:center;margin:4px auto 0;display:inline-flex;align-items:center;gap:6px;width:auto;padding:6px 12px;border-radius:99px}
+  .library-title-detail .library-detail-hero.has-chips.has-gallery>.gallery-open img{display:none}
+  .library-title-detail .library-detail-hero.has-chips.has-gallery>.gallery-open span{font-size:12px;color:var(--text)}
+  .library-title-detail .detail-icon{width:auto;flex:1}
+  .library-title-detail .detail-tech{grid-template-columns:72px 1fr;gap:8px 12px;max-width:none}
 }

@@ -41,30 +41,28 @@ class ActionForTest {
   ) = HomeCard.Favorite(key = "browse/Heat", path = "browse/Heat", itemKind = itemKind, label = label, title = title)
 
   @Test
-  fun `a library file plays itself`() {
+  fun `a library file opens its own detail`() {
     val card = file()
     val action = actionFor(card)
 
-    assertTrue(action is HomeAction.Play)
-    val target = (action as HomeAction.Play).target
-    assertEquals(Progress.libraryKey("browse/A.mkv"), target.key)
-    assertEquals("browse/A.mkv", target.path)
-    assertEquals("A", target.title)
-    assertTrue(target.resume)
+    assertTrue(action is HomeAction.OpenDetail)
+    val detail = (action as HomeAction.OpenDetail).detail
+    assertEquals("browse/A.mkv", detail.files.single().path)
+    assertEquals("A", detail.title)
   }
 
   @Test
-  fun `a catalogue card that names its file opens its detail and plays at once`() {
+  fun `a catalogue card that names its file opens its detail without playing`() {
     val action = actionFor(catalogue(path = "browse/A.mkv"))
 
     assertTrue(action is HomeAction.OpenCatalog)
     val args = (action as HomeAction.OpenCatalog).args
     assertEquals("tt1", args.meta.id)
-    assertEquals(true, args.autoPlay)
+    assertEquals(false, args.autoPlay)
   }
 
   @Test
-  fun `a catalogue card without a file opens its detail and plays at once`() {
+  fun `a catalogue card without a file opens its detail without playing`() {
     val action = actionFor(catalogue())
 
     assertTrue(action is HomeAction.OpenCatalog)
@@ -74,7 +72,7 @@ class ActionForTest {
     assertEquals(1, args.episode?.season)
     assertEquals(2, args.episode?.number)
     assertEquals(listOf("series:tt1:1:2"), args.forgetKeys)
-    assertEquals(true, args.autoPlay)
+    assertEquals(false, args.autoPlay)
   }
 
   @Test
@@ -110,11 +108,11 @@ class ActionForTest {
   }
 
   @Test
-  fun `a remote card opens its own detail and plays at once`() {
+  fun `a remote card opens its own detail without playing`() {
     val card = HomeCard.Remote(key = "remote:1", title = "Heat", libraryId = "rlibA", itemId = "iA", itemType = "movie")
 
     val action = actionFor(card)
     assertTrue(action is HomeAction.OpenRemote)
-    assertEquals(true, (action as HomeAction.OpenRemote).data.autoPlay)
+    assertEquals(false, (action as HomeAction.OpenRemote).data.autoPlay)
   }
 }

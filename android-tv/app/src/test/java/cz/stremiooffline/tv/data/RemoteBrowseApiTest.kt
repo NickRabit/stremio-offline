@@ -28,7 +28,7 @@ class RemoteBrowseApiTest {
 
   @Test
   fun `browse asks the browse route with the encoded query`() = runTest {
-    server.enqueue(MockResponse().setBody("""{"items":[{"id":"f1","name":"Shows","type":"folder"}],"total":1}"""))
+    server.enqueue(MockResponse().setBody("""{"items":[{"id":"f1","name":"Shows","type":"folder","overview":"A folder overview"}],"total":1}"""))
 
     val page = api(start()).remoteBrowse(
       libraryId = "lib/a b",
@@ -43,6 +43,7 @@ class RemoteBrowseApiTest {
 
     assertEquals("f1", page.items.single().id)
     assertEquals("folder", page.items.single().type)
+    assertEquals("A folder overview", page.items.single().overview)
     assertEquals(
       "/api/remote-libraries/lib%2Fa%20b/browse" +
         "?limit=60&parentId=par%2Fent&mode=folders&cursor=cur%20s%2B1&search=rock%20%26%20roll&type=movie&sort=name&order=asc",

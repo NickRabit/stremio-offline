@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { FetchLike } from "./debrid.js";
 import type { MetaItem } from "./types.js";
 import { OutboundError } from "./outbound.js";
+import { normalizeLanguage } from "./language.js";
 import {
   tmdbExternalId,
   tmdbIdOf,
@@ -28,13 +29,31 @@ export interface RelatedTitle {
   inLibrary?: boolean;
 }
 
+export interface TitleRatings {
+  imdb?: string;
+  tmdb?: number;
+  tmdbVotes?: number;
+}
+
+export interface TitleVideo {
+  key: string;
+  name: string;
+  kind: "trailer" | "teaser" | "clip" | "featurette" | "behindTheScenes";
+  thumbnail: string;
+  language?: string;
+}
+
 export interface TitleExtras {
   people: TitlePerson[];
   related: RelatedTitle[];
+  ratings: TitleRatings;
+  videos: TitleVideo[];
   ageRating?: string;
   ageRatingRegion?: string;
   originalTitle?: string;
   originalLanguage?: string;
+  /** TMDB's synopsis, for an addon whose own description is only a line of tags. */
+  overview?: string;
   nextEpisode?: { season: number; episode: number; name?: string; released: string };
   source: "tmdb" | "addon";
 }
@@ -52,10 +71,14 @@ export interface TitleExtrasDeps {
 interface CachedTmdbExtras {
   people: TitlePerson[];
   related: RelatedTitle[];
+  tmdb?: number;
+  tmdbVotes?: number;
+  videos: TitleVideo[];
   ageRating?: string;
   ageRatingRegion?: string;
   originalTitle?: string;
   originalLanguage?: string;
+  overview?: string;
 }
 
 interface CacheEntry {
@@ -85,9 +108,23 @@ const CREW_ROLE: Record<string, TitlePerson["role"]> = {
   Teleplay: "writer",
   Novel: "novel",
 };
+const VIDEO_KIND: Record<string, TitleVideo["kind"]> = {
+  Trailer: "trailer",
+  Teaser: "teaser",
+  Clip: "clip",
+  Featurette: "featurette",
+  "Behind the Scenes": "behindTheScenes",
+};
+const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
+const TMDB_RATING_MIN_VOTES = 20;
+const VIDEO_LIMIT = 8;
 
 const extrasCache = new Map<string, CacheEntry>();
-const extrasInFlight = new Map<string, Promise<CachedTmdbExtras | null>>();
+/** One TMDB build per title, shared by every request that asks while it runs. It has its own
+ *  signal: one viewer leaving must not cancel the answer another one is still waiting for, so it is
+ *  cancelled only once every request waiting on it has gone. */
+interface InFlight { promise: Promise<CachedTmdbExtras | null>; controller: AbortController; waiting: number }
+const extrasInFlight = new Map<string, InFlight>();
 
 export function clearTitleExtrasCache(): void {
   extrasCache.clear();
@@ -111,7 +148,7 @@ const throwIfCancelled = (signal?: AbortSignal) => {
 
 const keyFingerprint = (apiKey: string) => createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
 
-function tmdbPeople(data: TmdbTitleExtras): TitlePerson[] {
+function tmdbPeople(data: TmdbTitleExtras, type: "movie" | "series"): TitlePerson[] {
   const cast = [...data.cast]
     .sort((left, right) => left.order - right.order)
     .slice(0, 20)
@@ -139,6 +176,8 @@ function tmdbPeople(data: TmdbTitleExtras): TitlePerson[] {
   for (const person of data.crew) {
     const role = CREW_ROLE[person.job];
     if (!role) continue;
+    // A series' directors and writers are those of single episodes; its creators stand for it.
+    if (type === "series" && role !== "novel") continue;
     const photo = tmdbImage(person.profilePath, "w185");
     addCrew({ name: person.name, role, ...(photo ? { photo } : {}) });
   }
@@ -147,6 +186,48 @@ function tmdbPeople(data: TmdbTitleExtras): TitlePerson[] {
     ...cast,
     ...crew.filter((person) => person.role !== "creator"),
   ];
+}
+
+function tmdbVideos(data: TmdbTitleExtras, language: string): TitleVideo[] {
+  const preferred = normalizeLanguage(language);
+  const candidates = data.videos.flatMap((video, index) => {
+    const kind = VIDEO_KIND[video.type];
+    if (video.site !== "YouTube" || !YOUTUBE_ID.test(video.key) || !kind) return [];
+    return [{ video, kind, index }];
+  }).sort((left, right) => {
+    const languageRank = (video: (typeof candidates)[number]["video"]) => {
+      const code = normalizeLanguage(video.language);
+      return code === preferred ? 0 : code === "en" ? 1 : 2;
+    };
+    return languageRank(left.video) - languageRank(right.video)
+      || Number(left.kind !== "trailer") - Number(right.kind !== "trailer")
+      || Number(!left.video.official) - Number(!right.video.official)
+      || left.index - right.index;
+  });
+  const seen = new Set<string>();
+  const videos: TitleVideo[] = [];
+  for (const { video, kind } of candidates) {
+    if (seen.has(video.key)) continue;
+    seen.add(video.key);
+    videos.push({
+      key: video.key,
+      name: video.name,
+      kind,
+      thumbnail: `https://i.ytimg.com/vi/${video.key}/hqdefault.jpg`,
+      ...(video.language ? { language: video.language } : {}),
+    });
+    if (videos.length === VIDEO_LIMIT) break;
+  }
+  return videos;
+}
+
+function imdbRating(value: unknown): string | undefined {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() !== ""
+      ? Number(value.trim())
+      : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 10 ? parsed.toFixed(1) : undefined;
 }
 
 async function tmdbRelated(
@@ -194,6 +275,8 @@ async function buildTmdbPart(
   now: number,
 ): Promise<CachedTmdbExtras | null> {
   const fail = () => {
+    // A build everybody walked away from answers nothing, and that is no failure to remember.
+    throwIfCancelled(deps.signal);
     if (extrasCache.size > CACHE_LIMIT) extrasCache.clear();
     extrasCache.set(key, { at: now, value: null });
     return null;
@@ -211,12 +294,18 @@ async function buildTmdbPart(
     : data.certifications.US != null ? "US" : undefined;
   const ageRating = ageRatingRegion ? data.certifications[ageRatingRegion] : undefined;
   const value: CachedTmdbExtras = {
-    people: tmdbPeople(data),
+    people: tmdbPeople(data, type),
     related,
+    ...(data.voteAverage != null && data.voteCount != null && data.voteCount >= TMDB_RATING_MIN_VOTES ? {
+      tmdb: Math.round(data.voteAverage * 10) / 10,
+      tmdbVotes: data.voteCount,
+    } : {}),
+    videos: tmdbVideos(data, language),
     ...(ageRating ? { ageRating } : {}),
     ...(ageRatingRegion ? { ageRatingRegion } : {}),
     ...(data.originalTitle ? { originalTitle: data.originalTitle } : {}),
     ...(data.originalLanguage ? { originalLanguage: data.originalLanguage } : {}),
+    ...(data.overview ? { overview: data.overview } : {}),
   };
   if (extrasCache.size > CACHE_LIMIT) extrasCache.clear();
   extrasCache.set(key, { at: now, value });
@@ -236,13 +325,47 @@ async function cachedTmdbPart(
     const ttl = cached.value ? SUCCESS_TTL_MS : FAILURE_TTL_MS;
     if (now - cached.at < ttl) return cached.value;
   }
-  const pending = extrasInFlight.get(key);
-  if (pending) return pending;
-  const building = buildTmdbPart(type, id, language, deps, key, now).finally(() => {
-    if (extrasInFlight.get(key) === building) extrasInFlight.delete(key);
+  let entry = extrasInFlight.get(key);
+  if (!entry) {
+    const controller = new AbortController();
+    const started: InFlight = {
+      controller,
+      waiting: 0,
+      promise: buildTmdbPart(type, id, language, { ...deps, signal: controller.signal }, key, now).finally(() => {
+        if (extrasInFlight.get(key) === started) extrasInFlight.delete(key);
+      }),
+    };
+    extrasInFlight.set(key, started);
+    entry = started;
+  }
+  return joinInFlight(entry, deps.signal);
+}
+
+/** Waits on a shared build for one request. That request leaving rejects only its own wait; the
+ *  build is cancelled when the last request waiting on it has left. */
+function joinInFlight(entry: InFlight, signal?: AbortSignal): Promise<CachedTmdbExtras | null> {
+  entry.waiting += 1;
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = () => {
+      if (done) return false;
+      done = true;
+      signal?.removeEventListener("abort", leave);
+      entry.waiting -= 1;
+      return true;
+    };
+    function leave() {
+      if (!finish()) return;
+      if (entry.waiting === 0) entry.controller.abort();
+      reject(new OutboundError("cancelled"));
+    }
+    if (signal?.aborted) { leave(); return; }
+    signal?.addEventListener("abort", leave, { once: true });
+    entry.promise.then(
+      (value) => { if (finish()) resolve(value); },
+      (error: unknown) => { if (finish()) reject(error); },
+    );
   });
-  extrasInFlight.set(key, building);
-  return building;
 }
 
 function addonNames(value: unknown): string[] {
@@ -293,6 +416,13 @@ function futureEpisode(meta: MetaItem | null, now: number): TitleExtras["nextEpi
   return earliest?.episode;
 }
 
+function imdbIdOfMeta(meta: MetaItem | null): string | undefined {
+  for (const value of [meta?.imdb_id, meta?.imdbId, meta?.imdb]) {
+    if (typeof value === "string" && /^tt\d{5,}$/.test(value.trim())) return value.trim();
+  }
+  return undefined;
+}
+
 export async function titleExtras(
   type: string,
   id: string,
@@ -300,13 +430,16 @@ export async function titleExtras(
   deps: TitleExtrasDeps,
 ): Promise<TitleExtras> {
   if (type !== "movie" && type !== "series") {
-    return { people: [], related: [], source: "addon" };
+    return { people: [], related: [], ratings: {}, videos: [], source: "addon" };
   }
   const meta = await deps.meta();
   throwIfCancelled(deps.signal);
   const now = deps.now?.() ?? Date.now();
+  // An addon that names titles its own way (`mpa:sosac:…`) still carries the IMDb id in the meta;
+  // without it the title would have no TMDB answer at all.
+  const lookupId = /(?:^|:)tt\d+$/.test(id) || /^tmdb:\d+$/.test(id) ? id : imdbIdOfMeta(meta) ?? id;
   const part = deps.tmdb
-    ? await cachedTmdbPart(type, id, language, { ...deps, tmdb: deps.tmdb }, now)
+    ? await cachedTmdbPart(type, lookupId, language, { ...deps, tmdb: deps.tmdb }, now)
     : null;
   const people = part?.people.length ? part.people : addonPeople(meta);
   const related = await Promise.all((part?.related ?? []).map(async (item) => {
@@ -315,13 +448,21 @@ export async function titleExtras(
   }));
   throwIfCancelled(deps.signal);
   const nextEpisode = futureEpisode(meta, now);
+  const imdb = imdbRating(meta?.imdbRating);
   return {
     people,
     related,
+    ratings: {
+      ...(imdb ? { imdb } : {}),
+      ...(part?.tmdb != null ? { tmdb: part.tmdb } : {}),
+      ...(part?.tmdbVotes != null ? { tmdbVotes: part.tmdbVotes } : {}),
+    },
+    videos: part?.videos ?? [],
     ...(part?.ageRating ? { ageRating: part.ageRating } : {}),
     ...(part?.ageRatingRegion ? { ageRatingRegion: part.ageRatingRegion } : {}),
     ...(part?.originalTitle ? { originalTitle: part.originalTitle } : {}),
     ...(part?.originalLanguage ? { originalLanguage: part.originalLanguage } : {}),
+    ...(part?.overview ? { overview: part.overview } : {}),
     ...(nextEpisode ? { nextEpisode } : {}),
     source: part ? "tmdb" : "addon",
   };

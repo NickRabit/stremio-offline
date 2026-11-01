@@ -20,12 +20,10 @@ import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.HomeProgress
 import cz.stremiooffline.tv.data.ResumeFilter
 import cz.stremiooffline.tv.data.ResumePage
-import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
+import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.PlayTarget
-import cz.stremiooffline.tv.ui.home.HomeAction
-import cz.stremiooffline.tv.ui.home.actionFor
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -101,10 +99,11 @@ class ResumeScreenTest {
     api: FakeTvApi,
     onPlay: (PlayTarget) -> Unit = {},
     onOpenCatalog: (CatalogDetailArgs) -> Unit = {},
+    onOpenDetail: (DetailData) -> Unit = {},
   ) {
     scenario.onActivity { activity ->
       activity.setContent {
-        ResumeRoute(api = api, onPlay = onPlay, onOpenCatalog = onOpenCatalog)
+        ResumeRoute(api = api, onPlay = onPlay, onOpenCatalog = onOpenCatalog, onOpenDetail = onOpenDetail)
       }
     }
     compose.waitForIdle()
@@ -156,21 +155,22 @@ class ResumeScreenTest {
   }
 
   @Test
-  fun `ok on a library file plays it, the way Home does`() {
+  fun `ok on a library file opens its detail, the way Home does`() {
     val api = FakeTvApi()
     api.resumeValue = ResumePage(listOf(fileCard()), 1, false)
     val played = mutableListOf<PlayTarget>()
-    mount(api, onPlay = { played += it })
+    val opened = mutableListOf<DetailData>()
+    mount(api, onPlay = { played += it }, onOpenDetail = { opened += it })
 
     compose.onNodeWithTag(resumeCardTag(fileCard().key)).assertIsFocused()
     press(Key.DirectionCenter)
 
-    // The very target the one rule builds, which is what Home hands the shell for the same card.
-    assertEquals(listOf((actionFor(fileCard()) as HomeAction.Play).target), played)
+    assertTrue(played.isEmpty())
+    assertEquals(fileCard().path, opened.single().files.single().path)
   }
 
   @Test
-  fun `ok on a catalogue card that names its file opens its detail and plays at once`() {
+  fun `ok on a catalogue card that names its file opens its detail without playing`() {
     val api = FakeTvApi()
     val card = catalogueCard(path = "browse/A.mkv", title = "Which file")
     api.resumeValue = ResumePage(listOf(card), 1, false)
@@ -183,11 +183,11 @@ class ResumeScreenTest {
 
     assertTrue(played.isEmpty())
     assertEquals(1, opened.size)
-    assertEquals(true, opened[0].autoPlay)
+    assertEquals(false, opened[0].autoPlay)
   }
 
   @Test
-  fun `ok on a catalogue card opens the catalogue detail at the episode and plays at once`() {
+  fun `ok on a catalogue card opens the catalogue detail at the episode without playing`() {
     val api = FakeTvApi()
     api.resumeValue = ResumePage(listOf(catalogueCard()), 1, false)
     val opened = mutableListOf<CatalogDetailArgs>()
@@ -202,7 +202,7 @@ class ResumeScreenTest {
     assertEquals(1, opened[0].episode?.season)
     assertEquals(2, opened[0].episode?.number)
     assertEquals(listOf("series:tt1:1:2"), opened[0].forgetKeys)
-    assertEquals(true, opened[0].autoPlay)
+    assertEquals(false, opened[0].autoPlay)
   }
 
   @Test

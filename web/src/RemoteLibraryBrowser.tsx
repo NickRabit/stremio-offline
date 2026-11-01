@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, Images, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, SlidersHorizontal, Star } from "lucide-react";
+import { useCrumbsAtEnd } from "./crumbs";
+import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, SlidersHorizontal, Star } from "lucide-react";
 import { ApiError, api, describeError, saveToDevice } from "./api";
 import { relativeAge } from "./home-cards";
 import { localeTag, t, useI18n } from "./i18n";
 import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
+import { EpisodePicker } from "./EpisodePicker";
 import { NativeLibrarySaveDialog, type NativeSaveLibrary } from "./NativeLibrarySaveDialog";
 import { defaultSource, sourceIdentity } from "./library-detail-sources";
 import { useLibrarySources } from "./library-sources";
@@ -17,7 +19,7 @@ import { addonMediaSubject, genericProgressKey, supplementaryIdentity } from "./
 import { sourceProgressOwner, versionSavedRow, type SourceProgressOwner } from "./source-progress";
 import { canQueue, isLocalStream, isRemoteStream } from "./streams";
 import { sourceTargetRule } from "./save-target";
-import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
+import { DetailRatings, ratingsFrom } from "./detail-copy";
 import type { CatalogueDetailTarget } from "./CatalogueTitleDetail";
 import { remoteDetailArtwork } from "./remote-artwork";
 import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
@@ -25,9 +27,9 @@ import { pickTileArt } from "./tile-shape";
 import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { createCompactOnScroll } from "./scroll-fold";
-import { bytes, hideBroken } from "./settings-ui";
+import { bytes } from "./settings-ui";
 import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
-import { TitleExtraFacts, TitleExtrasRows } from "./TitleExtras";
+import { TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
 import type { SaveTarget } from "./save-target";
 import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, SourceProfile, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
@@ -224,16 +226,6 @@ const versionKey = (stream: Stream) => stream.name?.trim() ?? "";
 const episodeOrder = (left: RemoteItem, right: RemoteItem) =>
   (left.season ?? 0) - (right.season ?? 0) || (left.episode ?? 0) - (right.episode ?? 0) || left.name.localeCompare(right.name);
 
-const groupEpisodes = (items: RemoteItem[]) => {
-  const groups = new Map<number, RemoteItem[]>();
-  for (const item of [...items].sort(episodeOrder)) {
-    const season = item.season ?? 0;
-    const list = groups.get(season);
-    if (list) list.push(item); else groups.set(season, [item]);
-  }
-  return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
-};
-
 export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onNotify, accountScope = "", addons = [], realDebridConfigured = false, sourceProfiles = null, defaultSort }: Props) {
   useI18n();
   // The listing effect must not restart when the shape changes. It still warms only the
@@ -253,7 +245,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [nonce, setNonce] = useState(0);
   const [detail, setDetail] = useState<RemoteItem | null>(null);
   const [series, setSeries] = useState<RemoteItem | null>(null);
+  const crumbsRef = useCrumbsAtEnd<HTMLElement>([selected?.id, ...stack.map((folder) => folder.id), series?.id, detail?.id].join("/"));
   const [episodes, setEpisodes] = useState<Status>(emptyStatus);
+  const [episodePickerOpen, setEpisodePickerOpen] = useState(false);
+  const [episodeSeason, setEpisodeSeason] = useState<number | null>(null);
   const [episodeNonce, setEpisodeNonce] = useState(0);
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [sourceError, setSourceError] = useState("");
@@ -261,6 +256,11 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [stateError, setStateError] = useState("");
   /** The version the detail's own selector currently holds, so its state can be matched. */
   const [detailStream, setDetailStream] = useState<Stream | null>(null);
+  /** The source list the detail has already reported a selection for. A null report only counts
+   *  once that list is the one on screen, so a list still loading is not a refusal. */
+  const [decidedSources, setDecidedSources] = useState<Stream[] | null>(null);
+  const sourcesRef = useRef(sources);
+  sourcesRef.current = sources;
   const [detailNonce, setDetailNonce] = useState(0);
   const [playing, setPlaying] = useState<Playing | null>(null);
   /** The source the title's stored position names, read for the row the detail has selected. */
@@ -278,6 +278,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [menuBusy, setMenuBusy] = useState(false);
   /** The last known state of each item, so a tile keeps its badges across a re-render. */
   const [itemStates, setItemStates] = useState<Record<string, RemoteItemState>>({});
+  const itemStatesRef = useRef(itemStates);
   /** The open native-copy dialog: the exact item, its parent series and the versions the
    *  detail already holds, or nothing so the dialog reads them once after the click. */
   const [saveRequest, setSaveRequest] = useState<SaveRequest | null>(null);
@@ -308,7 +309,6 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const pendingRootFocus = useRef<string | null>(null);
   /** The listing offset to put back when a detail closes over it. */
   const savedScroll = useRef(0);
-  const savedEpisodeScroll = useRef(0);
   /** The ancestor listings of the open library, indexed by depth; cleared with the library. */
   const snapshots = useRef<ListingSnapshot[]>([]);
   /** One-use token; the listing effect keeps the restored listing instead of reading page one. */
@@ -325,16 +325,14 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const detailRef = useRef<RemoteItem | null>(null);
   const playingRef = useRef<Playing | null>(null);
   const detailStreamRef = useRef<Stream | null>(null);
-  /** The latest listing/episode page, read by the observer and the scroll fallback, which are set
-   *  up once and never capture a stale render. */
+  /** The latest listing page, read by the observer and the scroll fallback, which are set up once
+   *  and never capture a stale render. */
   const listingRef = useRef(listing);
-  const episodesRef = useRef(episodes);
   /** One synchronous guard per loader: a second callback for the same cursor is dropped, not
    *  restarted, so a fling near the sentinel cannot abort and refetch its own page. */
   const itemsMoreBusy = useRef(false);
   const episodesMoreBusy = useRef(false);
   const loadMoreItemsRef = useRef<HTMLDivElement | null>(null);
-  const loadMoreEpisodesRef = useRef<HTMLDivElement | null>(null);
   const autoLoadRef = useRef<() => void>(() => {});
   const menuEpoch = useRef(0);
   const menuAbort = useRef<AbortController | null>(null);
@@ -343,13 +341,14 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   /** Set when a detail was opened from a listing, whose page carries no overview or genres, so its
    *  full record is read once; the direct Home card path already reads it and clears this. */
   const needsDetailMeta = useRef(false);
+  const needsSeriesMeta = useRef(false);
   const metaEpoch = useRef(0);
+  const seriesMetaEpoch = useRef(0);
   selectedRef.current = selected;
   detailRef.current = detail;
   playingRef.current = playing;
   detailStreamRef.current = detailStream;
   listingRef.current = listing;
-  episodesRef.current = episodes;
 
   const artRef = (key: string): TileRef => {
     let ref = tileRefs.current.get(key);
@@ -377,8 +376,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     handoffAbort.current = null;
     setNextBusy(false);
   };
-  const rememberState = (libraryId: string, itemId: string, value: RemoteItemState) =>
-    setItemStates((current) => ({ ...current, [stateKey(libraryId, itemId)]: value }));
+  const rememberState = (libraryId: string, itemId: string, value: RemoteItemState) => {
+    itemStatesRef.current = { ...itemStatesRef.current, [stateKey(libraryId, itemId)]: value };
+    setItemStates(itemStatesRef.current);
+  };
   /** Dismiss the menu and cancel whatever it was reading; every navigation does this too. */
   const closeMenu = () => {
     menuEpoch.current += 1;
@@ -535,10 +536,32 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     const controller = new AbortController();
     cancelEpisodesMore();
     setEpisodes({ items: [], total: 0, loading: true, error: "" });
-    api.remoteBrowse(library.id, { parentId: series.id, mode: "titles", type: "episode", limit: PAGE_SIZE, signal: controller.signal })
-      .then((page) => {
+    const resume = api.remotePersonal("resume", { limit: 60, signal: controller.signal })
+      .then((answer) => answer.items)
+      .catch(() => []);
+    Promise.all([
+      api.remoteBrowse(library.id, { parentId: series.id, mode: "titles", type: "episode", limit: PAGE_SIZE, signal: controller.signal }),
+      resume,
+    ])
+      .then(async ([page, resumeItems]) => {
         if (epoch !== episodeEpoch.current) return;
         setEpisodes({ items: page.items, cursor: page.cursor, total: page.total, loading: false, error: "" });
+        if (!page.items.length || detailRef.current?.type !== "series" || detailRef.current.id !== series.id) return;
+        const mine = resumeItems.filter((card) => card.libraryId === library.id);
+        const resumedId = mine.find((card) => page.items.some((episode) => episode.id === card.itemId))?.itemId;
+        let resumed = page.items.find((episode) => episode.id === resumedId);
+        // The episode in progress may sit past the first page. A card names no series, so each
+        // remaining episode card is read by its id and kept only when it belongs to this one.
+        for (const card of resumed ? [] : mine.filter((entry) => entry.itemType === "episode").slice(0, 6)) {
+          const found = await api.remoteItem(library.id, card.itemId, controller.signal).then(({ item }) => item, () => null);
+          if (epoch !== episodeEpoch.current || controller.signal.aborted) return;
+          if (found?.type === "episode" && found.seriesId === series.id) { resumed = found; break; }
+        }
+        if (detailRef.current?.type !== "series" || detailRef.current.id !== series.id) return;
+        const firstUnwatched = page.items.find((episode) => !itemStatesRef.current[stateKey(library.id, episode.id)]?.watched);
+        const first = resumed ?? firstUnwatched ?? page.items[0]!;
+        needsDetailMeta.current = true;
+        setDetail(first);
       })
       .catch((error) => {
         if (epoch !== episodeEpoch.current || controller.signal.aborted || aborted(error)) return;
@@ -546,6 +569,27 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       });
     return () => { controller.abort(); if (episodeEpoch.current === epoch) episodeEpoch.current += 1; cancelEpisodesMore(); };
   }, [selected, series?.id, episodeNonce]);
+
+  // A series read from a listing has only the row's summary. Its full record is needed even after
+  // the first episode replaces the temporary series detail.
+  useEffect(() => {
+    const library = selected;
+    const opened = series;
+    if (!library || !opened || !needsSeriesMeta.current) return;
+    needsSeriesMeta.current = false;
+    const epoch = ++seriesMetaEpoch.current;
+    const itemId = opened.id;
+    const controller = new AbortController();
+    void api.remoteItem(library.id, itemId, controller.signal)
+      .then(({ item: full }) => {
+        if (!full || full.id !== itemId) return;
+        if (epoch !== seriesMetaEpoch.current || controller.signal.aborted || selectedRef.current?.id !== library.id) return;
+        setSeries((current) => current?.id === itemId ? mergeDetailMeta(current, full) : current);
+        setDetail((current) => current?.type === "series" && current.id === itemId ? mergeDetailMeta(current, full) : current);
+      })
+      .catch(() => undefined);
+    return () => { controller.abort(); if (seriesMetaEpoch.current === epoch) seriesMetaEpoch.current += 1; };
+  }, [selected, series?.id]);
 
   // Read detail metadata once; merging it does not restart sources or personal state.
   useEffect(() => {
@@ -621,7 +665,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   useEffect(() => {
     if (!scrollRef.current) return;
     if (!detail) scrollRef.current.scrollTop = savedScroll.current;
-    else if (detail.type === "series") scrollRef.current.scrollTop = savedEpisodeScroll.current;
+    // A film or an episode opens at its top, the way a local file's detail does, not at the offset
+    // of the tile it was opened from.
+    else scrollRef.current.scrollTop = 0;
   }, [detail?.id, detail?.type, navKey]);
   // An ancestor return puts the offset it left back, once the restored listing itself is on screen.
   useEffect(() => {
@@ -665,7 +711,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setListing(emptyStatus());
     setDetail(null);
     needsDetailMeta.current = false;
+    needsSeriesMeta.current = false;
     setSeries(null);
+    setEpisodePickerOpen(false);
+    setEpisodeSeason(null);
     setSources(null);
     setState(null);
     setSearchInput("");
@@ -678,7 +727,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // fallback for a viewport that never crosses the threshold. It disconnects on every navigation.
   useEffect(() => {
     const root = scrollRef.current;
-    const target = detail ? (detail.type === "series" ? loadMoreEpisodesRef.current : null) : loadMoreItemsRef.current;
+    const target = detail ? null : loadMoreItemsRef.current;
     if (!root || !target || typeof IntersectionObserver === "undefined") return;
     const margin = Math.min(400, root.clientHeight || window.innerHeight || 800);
     const observer = new IntersectionObserver((entries) => {
@@ -686,7 +735,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     }, { root, rootMargin: `0px 0px ${margin}px 0px` });
     observer.observe(target);
     return () => observer.disconnect();
-  }, [selected, detail?.type, detail?.id, listing.cursor, episodes.cursor, nonce, episodeNonce]);
+  }, [selected, detail?.type, detail?.id, listing.cursor, nonce]);
 
   // A remote card from Home or Favourites opens its item in the native browser.
   useEffect(() => {
@@ -712,7 +761,12 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           setStack([item]);
           return;
         }
-        if (item.type === "series") { setSeries(item); setDetail(item); return; }
+        if (item.type === "series") {
+          needsSeriesMeta.current = false;
+          setSeries(item);
+          setDetail(item);
+          return;
+        }
         setDetail(item);
         if (item.type !== "episode" || !item.seriesId) return;
         void api.remoteItem(library.id, item.seriesId, controller.signal)
@@ -763,7 +817,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setListing(emptyStatus());
     setDetail(null);
     needsDetailMeta.current = false;
+    needsSeriesMeta.current = false;
     setSeries(null);
+    setEpisodePickerOpen(false);
+    setEpisodeSeason(null);
     setSources(null);
     setState(null);
     savedScroll.current = 0;
@@ -783,7 +840,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setListing(emptyStatus());
     setDetail(null);
     needsDetailMeta.current = false;
+    needsSeriesMeta.current = false;
     setSeries(null);
+    setEpisodePickerOpen(false);
+    setEpisodeSeason(null);
     setSources(null);
     setState(null);
     setSearchInput("");
@@ -793,15 +853,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   };
   const stepBack = () => {
     closeMenu();
-    cancelHandoff();
-    needsDetailMeta.current = false;
-    if (detail) {
-      pendingFocus.current = detail.id;
-      if (detail.type === "episode" && series) { setDetail(series); return; }
-      setDetail(null);
-      setSeries(null);
-      return;
-    }
+    if (detail) { returnToListing(); return; }
     if (stack.length) { returnToAncestor(stack.length - 1); return; }
     closeLibrary();
   };
@@ -822,16 +874,27 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
       setDetail(null);
       needsDetailMeta.current = false;
+      needsSeriesMeta.current = false;
       setSeries(null);
+      setEpisodePickerOpen(false);
+      setEpisodeSeason(null);
       setSearchInput("");
       setQuery("");
       setStack([...stack, item]);
       return;
     }
     savedScroll.current = scrollRef.current?.scrollTop ?? 0;
-    savedEpisodeScroll.current = 0;
-    needsDetailMeta.current = true;
-    if (item.type === "series") { setSeries(item); setDetail(item); setSources(null); setState(null); return; }
+    needsDetailMeta.current = item.type !== "series";
+    needsSeriesMeta.current = item.type === "series";
+    if (item.type === "series") {
+      setSeries(item);
+      setDetail(item);
+      setEpisodePickerOpen(false);
+      setEpisodeSeason(null);
+      setSources(null);
+      setState(null);
+      return;
+    }
     setSeries(null);
     setDetail(item);
   };
@@ -840,17 +903,20 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setSources(null); setSourceError(""); setState(null); setStateError("");
     cancelEpisodesMore();
     cancelHandoff();
-    savedEpisodeScroll.current = scrollRef.current?.scrollTop ?? 0;
     needsDetailMeta.current = true;
     setDetail(episode);
   };
   const returnToListing = () => {
     closeMenu();
+    cancelEpisodesMore();
     cancelHandoff();
     pendingFocus.current = series?.id ?? detail?.id ?? null;
     needsDetailMeta.current = false;
+    needsSeriesMeta.current = false;
     setDetail(null);
     setSeries(null);
+    setEpisodePickerOpen(false);
+    setEpisodeSeason(null);
   };
   /** The one return path for stepBack, an ancestor breadcrumb and the library root. */
   const returnToAncestor = (depth: number) => {
@@ -858,8 +924,11 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     cancelItemsMore();
     cancelHandoff();
     needsDetailMeta.current = false;
+    needsSeriesMeta.current = false;
     setDetail(null);
     setSeries(null);
+    setEpisodePickerOpen(false);
+    setEpisodeSeason(null);
     setSources(null);
     setState(null);
     const library = selectedRef.current;
@@ -893,13 +962,13 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (detail && !stack.length) { returnToListing(); return; }
     returnToAncestor(0);
   };
-  /** The series crumb: leave the episode's detail but keep the episode as the tile to focus once
-   *  the episode listing returns, exactly the way Back behaves from an episode. */
+  /** The series crumb names the series without carrying a page of its own. */
+  /** The series crumb opens the series' episode list on the detail, the one place a series is. */
   const goToSeries = () => {
-    if (!series) return;
+    if (!series || detail?.type !== "episode") return;
     closeMenu();
-    if (detail && detail.type !== "series") pendingFocus.current = detail.id;
-    setDetail(series);
+    setEpisodePickerOpen(true);
+    requestAnimationFrame(() => scrollRef.current?.querySelector(".catalogue-episodes")?.scrollIntoView({ block: "start", behavior: "smooth" }));
   };
   const retryListing = () => setNonce((value) => value + 1);
   const retryEpisodes = () => setEpisodeNonce((value) => value + 1);
@@ -971,17 +1040,16 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       if (episodesMoreAbort.current === controller) { episodesMoreAbort.current = null; episodesMoreBusy.current = false; }
     }
   };
+  useEffect(() => {
+    if (!episodePickerOpen || !episodes.cursor || episodes.loading || episodes.error) return;
+    void loadEpisodes();
+  }, [episodePickerOpen, episodes.cursor, episodes.loading, episodes.error, series?.id]);
 
   // The one entry point the observer and the scroll fallback share: it reads the current screen
   // and asks for its next page only while the provider still points at one and the last read was
   // clean, so an error or an exhausted cursor never turns into a retry loop.
   autoLoadRef.current = () => {
-    if (detailRef.current) {
-      if (detailRef.current.type !== "series") return;
-      const page = episodesRef.current;
-      if (page.cursor && !page.loading && !page.error) void loadEpisodes();
-      return;
-    }
+    if (detailRef.current) return;
     const page = listingRef.current;
     if (page.cursor && !page.loading && !page.error) void loadMoreItems();
   };
@@ -1102,14 +1170,13 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     : detail?.type === "episode" ? catalogueRef("series", series?.providerIds) : null;
   const enrichment = useTitleEnrichment(catalogue ? { kind: "catalogue", ref: catalogue } : null, catalogue, uiLanguage);
   const titleExtras = useTitleExtras(catalogue?.type, catalogue?.id);
-  const detailPreview = remoteDetailArtwork(detail?.poster);
+  const heroItem = detail?.type === "episode" && series ? series : detail;
+  const detailDescription = detail?.overview || (detail?.type === "episode" ? series?.overview : undefined);
+  const detailPreview = remoteDetailArtwork(heroItem?.poster);
   const detailBackdrops: Array<string | undefined> = detail
-    ? [enrichment.meta?.background, detail.fanart, detail.type === "episode" ? series?.fanart : undefined, detailPreview]
+    ? [enrichment.meta?.background, heroItem?.fanart, detail.type === "episode" ? detail.fanart : undefined, detailPreview]
     : [];
-  // The series draws its own full-detail surface, so the backdrop is probed here; the shared
-  // shell probes for a playable title through the same hook.
-  const seriesBackdrop = useBackdrop(detail?.type === "series" ? detailBackdrops : []);
-  const seriesGallery: GalleryImage[] = mergeGallery(posterAndWide(detailPreview, detail?.wide), catalogueGalleryImages(enrichment.meta));
+  const seriesGallery: GalleryImage[] = mergeGallery(posterAndWide(detailPreview, heroItem?.wide), catalogueGalleryImages(enrichment.meta));
   // The supplementary identity of the title on screen: the exact key its addons, the viewer's own
   // copies of it and the other libraries are asked by. Nothing is read until the chooser opens.
   const addonIdentity = supplementaryIdentity(detail, series);
@@ -1149,11 +1216,20 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // What this item's own versions are called, in the detail's menu and above the rows the player
   // leads with: the provider and the library they belong to.
   const ownLabel = selected ? `${t(providerKey(selected.provider))} · ${selected.name}` : "";
+  // No row selected, and the list on screen has already said so: the title's catalogue record
+  // is the one a non-file version wrote, the same key the selected-row read uses.
+  const selectionSettled = sources !== null && decidedSources === sources;
+  const noRow = selectionSettled && !detailStream && addonIdentity !== null;
+  // A resumed version that none of this item's own rows carries is loaded without opening the
+  // chooser, and only while nothing is selected. A selected row keeps the chooser as the one
+  // intent that reads groups, which is what a detail that merely opened relies on.
+  const resumeElsewhere = Boolean(resumeStableKey && sources !== null && !sources.some((stream) => stream.stableKey === resumeStableKey));
   // Opening the chooser is the one intent that reads every group: the addons that offer this
   // title, the viewer's own copies of it, and every other library the account may browse. The
-  // library the detail already came from is never asked again.
+  // library the detail already came from is never asked again. A refused list is the exception:
+  // the version the title was last played from cannot be selected until its group has answered.
   const extra = useLibrarySources({
-    scope: titleScope, open: chooserOpen || playerSourcesOpen, catalogue: addonIdentity,
+    scope: titleScope, open: chooserOpen || playerSourcesOpen || (noRow && resumeElsewhere), catalogue: addonIdentity,
     ...(series?.name ? { nameHint: series.name } : {}),
     libraries, localCopies: true, ...(selected ? { originLibraryId: selected.id } : {}),
   });
@@ -1162,6 +1238,19 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // store only while no title names it -- or as the fallback for a position kept there before the
   // title held it. A late answer can never land on another row or another title.
   useEffect(() => {
+    if (noRow && addonIdentity) {
+      const mine = ++addonProgressEpoch.current;
+      const scope = titleScope;
+      const controller = new AbortController();
+      setAlternativeProgress(null);
+      void versionSavedRow(genericProgressKey(addonIdentity), undefined, controller.signal)
+        .then((entry) => {
+          if (mine !== addonProgressEpoch.current || titleScopeRef.current !== scope || controller.signal.aborted) return;
+          setResumeStableKey(entry?.stableKey);
+        })
+        .catch(() => undefined);
+      return () => { controller.abort(); if (addonProgressEpoch.current === mine) addonProgressEpoch.current += 1; };
+    }
     if (!alternativeSelected || !detailStreamKey || !detailOwner) { setAlternativeProgress(null); setResumeStableKey(undefined); return; }
     const mine = ++addonProgressEpoch.current;
     const scope = titleScope;
@@ -1180,7 +1269,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       })
       .catch(() => undefined);
     return () => { controller.abort(); if (addonProgressEpoch.current === mine) addonProgressEpoch.current += 1; };
-  }, [alternativeSelected, detailStreamKey, detailNonce, titleScope, selected?.id, ownerKind, ownerLibrary, ownerItemId, ownerSourceId, ownerProgressKey]);
+  }, [noRow, addonKey, alternativeSelected, detailStreamKey, detailNonce, titleScope, selected?.id, ownerKind, ownerLibrary, ownerItemId, ownerSourceId, ownerProgressKey]);
 
   // A library copy or a file plays as itself, but the subtitle addons still know the catalogue
   // title it is matched to; an addon row reads its own above.
@@ -1201,37 +1290,46 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
 
   if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
 
-  const grouped = groupEpisodes(episodes.items);
   const previewKey = { libraryId: selected?.id ?? "", generation: nonce };
 
-  /** One kind pill, the trailer and the sites, in the same row the catalogue draws: no provider,
-   *  library or series-name chip, and an episode's numbering travels under the title instead. */
-  const detailChips = (item: RemoteItem, withFavorite = false): ReactNode =>
+  /** One kind pill and the sites, in the same row the catalogue draws: no provider, library or
+   *  series-name chip. The trailer and the star are secondary actions, and an episode's numbering
+   *  travels under the title. */
+  const detailChips = (item: RemoteItem): ReactNode =>
     <TitleChips
-      // A series opens on this hero alone, and it had no star of its own: the shared shell draws one
-      // for every other detail, so the row carries it here instead of the title being unreachable.
-      leading={withFavorite ? <button type="button" className={`watch-star${state?.favorite ? " on" : ""}`}
-        aria-pressed={state?.favorite ?? false} disabled={!state} aria-label={t(state?.favorite ? "favorite.remove" : "favorite.add")} title={t(state?.favorite ? "favorite.remove" : "favorite.add")}
-        onClick={() => void toggleState({ favorite: !(state?.favorite ?? false) })}><Star/></button> : undefined}
       kind={t(item.type === "movie" ? "catalog.oneMovie" : item.type === "series" ? "catalog.oneSeries" : "episodes.one")}
-      trailer={enrichment.trailer} links={enrichment.links} onTrailer={onTrailer} secureMode={secureMode}/>;
+      links={enrichment.links} onTrailer={onTrailer} secureMode={secureMode}/>;
   /** The metadata line: what the provider normalized, plus the genres it gave. */
   const detailFacts = (item: RemoteItem): string =>
     [itemFacts(item), (item.genres ?? []).join(" · ")].filter(Boolean).join(" · ");
-  /** The hero block a series shares with the catalogue: its name, the facts and the provider's
-   *  overview. Its chips are the hero's own row, drawn above this block like every other detail's,
-   *  so the corner art beside that row cannot narrow it. A playable title reads the same through
-   *  the shared shell instead. */
-  const detailPieces = TitleExtraFacts({ extras: titleExtras.extras, language: uiLanguage, name: detail?.name });
-  const seriesHeroCopy = (item: RemoteItem): ReactNode => {
-    const facts = detailFacts(item);
-    return <>
-      <h2>{item.name}</h2>
-      {(facts || detailPieces.ageBadge) && <p className="meta-line">{facts}{facts && detailPieces.ageBadge ? " " : null}{detailPieces.ageBadge}</p>}
-      {detailPieces.heroLines}
-      <p className="library-detail-synopsis">{item.overview || t("catalog.noDescription")}</p>
-    </>;
-  };
+  const detailPieces = TitleExtraFacts({ extras: titleExtras.extras, language: uiLanguage, name: heroItem?.name });
+  const detailScores = ratingsFrom(titleExtras.extras, enrichment.meta);
+  const pickerEpisodes = detail?.type === "episode" && !episodes.items.some((episode) => episode.id === detail.id)
+    ? [detail, ...episodes.items]
+    : episodes.items;
+  const episodePicker = series && detail && (detail.type === "series" || detail.type === "episode") ? <>
+    <EpisodePicker
+      episodes={pickerEpisodes.map((episode) => ({
+        key: episode.id,
+        ...(episode.season != null ? { season: episode.season } : {}),
+        ...(episode.episode != null ? { episode: episode.episode } : {}),
+        title: episode.name,
+      }))}
+      selectedKey={detail.type === "episode" ? detail.id : null}
+      onPick={(key) => {
+        const episode = pickerEpisodes.find((candidate) => candidate.id === key);
+        if (episode) openEpisode(episode);
+      }}
+      open={episodePickerOpen}
+      onOpenChange={setEpisodePickerOpen}
+      loading={episodes.loading}
+      season={episodeSeason}
+      onSeason={setEpisodeSeason}/>
+    {episodes.error && <div className="remote-error" role="alert">
+      <span>{episodes.error}</span>
+      <button type="button" onClick={retryEpisodes}>{t("mediaServer.retry")}</button>
+    </div>}
+  </> : undefined;
   const detailCrumb = (item: RemoteItem) =>
     item.type === "episode" ? `${t("mediaServer.episodeLabel", { season: item.season ?? 0, episode: item.episode ?? 0 })} · ${item.name}` : item.name;
 
@@ -1541,7 +1639,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       onKeyDown={(event) => { if (event.key === "Escape" && menuFor) { const id = menuFor; closeMenu(); focusMenuTrigger(id); } }}>
       <div className="browse-head">
         <div className="browse-bar">
-          <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
+          <nav className="crumbs" ref={crumbsRef} aria-label={t("library.breadcrumbs")}>
             <button className="library-back" aria-label={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")}
               title={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")} onClick={stepBack}><ChevronLeft/></button>
             {/* The same first step the library's own listing keeps: whichever library is open, the
@@ -1597,57 +1695,37 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           {listing.cursor && <div className="load-more" ref={loadMoreItemsRef}><button type="button" disabled={listing.loading} onClick={() => void loadMoreItems()}>{t("common.loadMore")}</button></div>}
           {listing.loading && listing.items.length > 0 && <div className="loading" role="status">{t("common.loadingMore")}</div>}
         </>}
-        {detail && detail.type === "series" && <div className="remote-detail library-title-detail remote-series-detail"
-          style={seriesBackdrop ? { backgroundImage: `${LIBRARY_HERO_GRADIENT},url(${seriesBackdrop})` } : { backgroundImage: LIBRARY_HERO_EMPTY_GRADIENT }}>
-          {/* The hero is transparent on the shared surface, so the episodes sit on the same wash and
-              the gradient's dark bottom keeps them legible. */}
-          <DetailHero className="library-detail-hero"
-            chips={detailChips(detail, true)}
-            gallery={seriesGallery.length && onGallery ? <button type="button" className={`gallery-open ${seriesGallery[0]!.shape === "wide" ? "wide" : "poster"}`}
-              title={t("gallery.openHint")} onClick={() => onGallery(seriesGallery, catalogue)}>
-              <img key={seriesGallery[0]!.url} src={seriesGallery[0]!.url} alt="" onError={hideBroken}/><span><Images/> {seriesGallery.length > 1 ? t("gallery.stillCount", { count: seriesGallery.length }) : t("gallery.enlarge")}</span>
-            </button> : undefined}
-            copy={seriesHeroCopy(detail)}/>
-          <div className="subhead remote-episodes-head"><h3>{t("mediaServer.episodes")}</h3><span>{detail.name}</span></div>
-          {episodes.error && <div className="remote-error" role="alert">
-            <span>{episodes.error}</span>
-            <button type="button" onClick={retryEpisodes}>{t("mediaServer.retry")}</button>
-          </div>}
-          {grouped.map((group) => <div className="remote-season-group" key={group.season}>
-            <div className="remote-season">{t("mediaServer.seasonLabel", { season: group.season })}</div>
-            <div className={view === "grid" ? "browse-grid" : "browse-rows"}>
-              {group.items.map((episode) => renderTile(episode, openEpisode, { enabled: false }))}
-            </div>
-          </div>)}
-          {episodes.loading && !grouped.length && <div className="loading" role="status">{t("common.loading")}</div>}
-          {!episodes.loading && !episodes.error && !grouped.length && !episodes.cursor && <p className="identify-hint">{t("mediaServer.noEpisodes")}</p>}
-          {episodes.cursor && <div className="load-more" ref={loadMoreEpisodesRef}><button type="button" disabled={episodes.loading} onClick={() => void loadEpisodes()}>{t("common.loadMore")}</button></div>}
-          {episodes.loading && grouped.length > 0 && <div className="loading" role="status">{t("common.loadingMore")}</div>}
-          <TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading}/>
-        </div>}
-        {detail && detail.type !== "series" && <div className="remote-detail">
+        {detail && <div className="remote-detail">
           <LibraryTitleDetail
             identityKey={`${selected!.id}:${detail.id}`}
-            title={detail.name}
+            title={heroItem!.name}
             {...(detail.type === "episode" ? { subtitle: t("mediaServer.episodeLabel", { season: detail.season ?? 0, episode: detail.episode ?? 0 }) } : {})}
-            {...(detail.poster ? { poster: detail.poster } : {})}
+            {...(heroItem?.poster ? { poster: heroItem.poster } : {})}
             backdrops={detailBackdrops}
             gallery={seriesGallery}
             {...(onGallery ? { onGallery: (images) => onGallery(images, catalogue) } : {})}
-            {...(detailFacts(detail) ? { facts: detailFacts(detail) } : {})}
-            factsExtra={detailPieces.ageBadge}
-            heroExtra={detailPieces.heroLines}
-            extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading}/>}
-            {...(detail.overview ? { description: detail.overview } : {})}
-            chips={detailChips(detail)}
+            {...(heroItem && detailFacts(heroItem) ? { facts: detailFacts(heroItem) } : {})}
+            originalLine={detailPieces.originalLine}
+            ratings={<DetailRatings age={detailPieces.ageBadge} imdb={detailScores.imdb} tmdb={detailScores.tmdb} tmdbVotes={detailScores.tmdbVotes}/>}
+            heroExtra={detailPieces.nextLine}
+            people={titleExtras.extras?.people}
+            trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)}
+            onTrailer={onTrailer}
+            secureMode={secureMode}
+            extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
+            {...(detailDescription ? { description: detailDescription } : {})}
+            {...(heroItem ? { chips: detailChips(heroItem) } : {})}
             favorite={state?.favorite ?? false}
             favoriteDisabled={!state}
             onToggleFavorite={(next) => void toggleState({ favorite: next })}
             watched={state?.watched ?? false}
             watchedDisabled={!state}
             onToggleWatched={() => void toggleWatched()}
-            sources={sources}
+            sources={detail.type === "series" ? [] : sources}
             defaultSources={sources}
+            ownFallback
+            episodes={episodePicker}
+            placeholder={detail.type === "series" ? <></> : undefined}
             sourceProfiles={sourceProfiles}
             {...(defaultSort ? { defaultSort } : {})}
             {...(addonIdentity ? {
@@ -1660,7 +1738,11 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             onRetry={retryDetail}
             {...(resumeStableKey ? { resumeStableKey } : {})}
             {...(detailProgress ? { progress: detailProgress } : {})}
-            onSourceChange={setDetailStream}
+            onSourceChange={(stream) => {
+              setDetailStream(stream);
+              const current = sourcesRef.current;
+              if (current) setDecidedSources(current);
+            }}
             // Only the item's own version drops the media-server item's own state; every other row
             // -- and every version of a title the catalogue can name -- clears what the row itself
             // stands for.

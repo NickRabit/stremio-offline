@@ -195,7 +195,9 @@ test.describe("the player's sources for a library file", () => {
       await page.getByRole("button", { name: "Pokračovat ve sledování", exact: true }).click();
       const card = page.locator(".browse-item", { hasText: filmFolder }).first();
       await expect(card).toBeVisible();
-      await card.locator(".browse-open").click();
+      // The card itself opens the detail; its menu's Play resumes the file.
+      await card.locator(".browse-menu").click();
+      await card.locator(".home-actions").getByRole("button", { name: "Přehrát" }).click();
       await expect(page.locator(".player-overlay")).toBeVisible();
       await expect(playerTitle(page)).toHaveText(filmFolder);
       await openSources(page);

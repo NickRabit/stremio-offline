@@ -1,8 +1,16 @@
 package cz.stremiooffline.tv.ui.catalog
 
-import androidx.compose.foundation.layout.size
+import cz.stremiooffline.tv.R
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,13 +30,18 @@ import cz.stremiooffline.tv.ui.components.outlineIcon
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 /**
- * The name of the icon button that holds the remote, shown beside the action row. An icon alone
- * says little from the sofa, so the focused one spells itself out; the state sits in an object of
- * its own because the detail screens are already near the size ART can verify.
+ * The name of the icon button that holds the remote. Every icon now carries its own short name
+ * under it, as on the web; this keeps the full name for whoever still reads it. The state sits in an
+ * object of its own because the detail screens are already near the size ART can verify.
  */
 class ActionCaption {
   var text by mutableStateOf("")
 }
+
+/** The short name under the focused icon; the others carry the same line, dimmed. */
+const val TagActionCaption = "detail_action_caption"
+
+val DetailActionHeight = 44.dp
 
 /** One secondary action of a detail's action row. */
 class DetailAction(
@@ -41,12 +54,14 @@ class DetailAction(
   val glyph: String = "",
   /** Extra modifiers the caller needs on the button (focus requesters, focus listeners). */
   val modifier: Modifier = Modifier,
+  /** The short name under the icon; empty takes the row's name for the slot, else [label]. */
+  val short: String = "",
 )
 
 /**
- * The one action row every title detail draws, in the one order the details share: Play, Start
- * over, Sources, To library, Favourite, Mark as unwatched, Mark watched, then [extras] in the order
- * given. A null action is not drawn. The focused icon's name is shown after the last button.
+ * The one action row every title detail draws: Play, Sources, Start over, To library, Favourite,
+ * Mark as unwatched, Mark watched, then [extras] in the order given. A null action is not drawn.
+ * As on the web, every icon carries its short name under it; Play and Sources say theirs in text.
  */
 @Composable
 fun DetailActionRow(
@@ -54,7 +69,7 @@ fun DetailActionRow(
   startOver: DetailAction?,
   sources: (@Composable () -> Unit)?,
   toLibrary: DetailAction?,
-  favourite: DetailAction,
+  favourite: DetailAction?,
   unwatched: DetailAction?,
   watched: DetailAction?,
   caption: ActionCaption,
@@ -63,37 +78,60 @@ fun DetailActionRow(
 ) {
   Row(
     modifier = modifier,
-    horizontalArrangement = Arrangement.spacedBy(11.dp),
-    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+    verticalAlignment = Alignment.Top,
   ) {
     primary()
-    startOver?.let { DetailActionButton(it, caption) }
     sources?.invoke()
-    toLibrary?.let { DetailActionButton(it, caption) }
-    DetailActionButton(favourite, caption)
-    unwatched?.let { DetailActionButton(it, caption) }
-    watched?.let { DetailActionButton(it, caption) }
-    extras.forEach { DetailActionButton(it, caption) }
-    if (caption.text.isNotEmpty()) {
-      Text(caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
-    }
+    startOver?.let { DetailActionButton(it, stringResource(R.string.detail_action_from_start), caption) }
+    toLibrary?.let { DetailActionButton(it, stringResource(R.string.save_to_library), caption) }
+    favourite?.let { DetailActionButton(it, stringResource(R.string.detail_action_favorite), caption) }
+    unwatched?.let { DetailActionButton(it, stringResource(R.string.detail_action_unwatched), caption) }
+    watched?.let { DetailActionButton(it, stringResource(R.string.detail_action_watched), caption) }
+    extras.forEach { DetailActionButton(it, extraName(it), caption) }
   }
 }
 
+/** The short name of an extra action the catalogue adds, the way the web words it. */
 @Composable
-private fun DetailActionButton(action: DetailAction, caption: ActionCaption) {
-  ActionIconButton(
-    label = action.label,
-    icon = action.icon,
-    onClick = action.onClick,
-    caption = caption,
-    modifier = action.modifier.testTag(action.tag),
-    enabled = action.enabled,
-    glyph = action.glyph,
-  )
+private fun extraName(action: DetailAction): String = when (action.tag) {
+  TagCatalogSeriesDownload -> stringResource(R.string.detail_action_whole_series)
+  TagCatalogShowInLibrary -> stringResource(R.string.detail_action_folder)
+  else -> action.label
 }
 
-/** A square icon button for a secondary action; [label] is its spoken name and its caption. */
+@Composable
+private fun DetailActionButton(action: DetailAction, slotName: String, caption: ActionCaption) {
+  var focused by remember { mutableStateOf(false) }
+  Column(
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(5.dp),
+    modifier = Modifier.widthIn(min = 64.dp),
+  ) {
+    ActionIconButton(
+      label = action.label,
+      icon = action.icon,
+      onClick = action.onClick,
+      caption = caption,
+      modifier = action.modifier.testTag(action.tag).onFocusChanged { focused = it.isFocused },
+      enabled = action.enabled,
+      glyph = action.glyph,
+    )
+    Text(
+      action.short.ifEmpty { slotName },
+      color = if (focused) Tokens.Text else Tokens.Muted,
+      fontSize = 11.sp,
+      // A line tall enough for the descenders, and room under it: at the font's own tight line
+      // height the bottom of "Zhlédnuto" was cut off.
+      lineHeight = 16.sp,
+      fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Normal,
+      maxLines = 1,
+      modifier = (if (focused) Modifier.testTag(TagActionCaption) else Modifier).padding(bottom = 3.dp),
+    )
+  }
+}
+
+/** A square icon button for a secondary action; [label] is its spoken name. */
 @Composable
 fun ActionIconButton(
   label: String,
@@ -110,6 +148,7 @@ fun ActionIconButton(
     onClick = onClick,
     enabled = enabled,
     kind = FocusButtonKind.Icon,
+    height = DetailActionHeight,
     leading = icon?.let { vector -> { Icon(vector, contentDescription = null, modifier = Modifier.size(18.dp)) } },
     contentDescription = label,
     modifier = modifier.onFocusChanged {
@@ -180,18 +219,6 @@ val DownloadIcon: ImageVector = outlineIcon("Download") {
   lineTo(17f, 10f)
   moveTo(4f, 20f)
   lineTo(20f, 20f)
-}
-
-val SeriesDownloadIcon: ImageVector = outlineIcon("SeriesDownload") {
-  moveTo(12f, 2.5f)
-  lineTo(12f, 12f)
-  moveTo(8f, 8.5f)
-  lineTo(12f, 12.5f)
-  lineTo(16f, 8.5f)
-  moveTo(4f, 16f)
-  lineTo(20f, 16f)
-  moveTo(6f, 20.5f)
-  lineTo(18f, 20.5f)
 }
 
 val CheckIcon: ImageVector = outlineIcon("Check") {

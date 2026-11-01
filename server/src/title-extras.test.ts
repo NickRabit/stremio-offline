@@ -71,6 +71,7 @@ test("movie extras map ordered cast, bounded crew, IMDb recommendations and the 
       return json({
         original_title: "Original Film",
         original_language: "en",
+        overview: "Popis filmu v češtině.",
         credits: { cast, crew },
         recommendations: { results: recommendations },
         release_dates: {
@@ -124,6 +125,7 @@ test("movie extras map ordered cast, bounded crew, IMDb recommendations and the 
   assert.equal(result.ageRatingRegion, "CZ");
   assert.equal(result.originalTitle, "Original Film");
   assert.equal(result.originalLanguage, "en");
+  assert.equal(result.overview, "Popis filmu v češtině.");
   assert.equal(result.source, "tmdb");
 });
 
@@ -171,13 +173,94 @@ test("series extras put creators first and use aggregate roles and TV ratings", 
     { name: "First Actor", role: "cast", character: "First" },
     { name: "Second Actor", role: "cast", character: "Second" },
   ]);
-  assert.deepEqual(result.people.slice(4), [
-    { name: "Director", role: "director", photo: "https://image.tmdb.org/t/p/w185/director.jpg" },
-    { name: "Writer", role: "writer" },
-  ]);
+  // A series' directors and writers are those of single episodes: only its creators stand for it.
+  assert.deepEqual(result.people.slice(4), []);
   assert.equal(result.ageRating, "18");
   assert.equal(result.ageRatingRegion, "CZ");
   assert.equal(result.source, "tmdb");
+});
+
+test("TMDB ratings require 20 votes and round the average to one decimal", async (t) => {
+  fresh(t);
+  const fetchImpl: FetchLike = async (raw) => {
+    const id = Number(/\/movie\/(\d+)$/.exec(new URL(raw).pathname)?.[1]);
+    return json({
+      vote_average: id === 23 ? 8.66 : 9.91,
+      vote_count: id === 23 ? 20 : 19,
+      credits: { cast: [], crew: [] },
+      recommendations: { results: [] },
+      release_dates: { results: [] },
+    });
+  };
+
+  const sufficient = await titleExtras("movie", "tmdb:23", "cs", deps(fetchImpl));
+  const insufficient = await titleExtras("movie", "tmdb:24", "cs", deps(fetchImpl));
+
+  assert.deepEqual(sufficient.ratings, { tmdb: 8.7, tmdbVotes: 20 });
+  assert.deepEqual(insufficient.ratings, {});
+});
+
+test("IMDb ratings come from the viewer meta in a one-decimal form", async (t) => {
+  fresh(t);
+  const cases: Array<[unknown, string | undefined]> = [
+    ["9.3", "9.3"],
+    [8, "8.0"],
+    ["N/A", undefined],
+  ];
+
+  for (const [rating, expected] of cases) {
+    const result = await titleExtras("movie", `tt-${String(rating)}`, "cs", {
+      meta: async () => ({ id: "tt1", type: "movie", name: "Film", imdbRating: rating }),
+      copies: async () => [],
+    });
+    assert.equal(result.ratings.imdb, expected);
+    assert.deepEqual(result.videos, []);
+  }
+});
+
+test("TMDB videos are filtered, mapped, ordered, de-duplicated and capped", async (t) => {
+  fresh(t);
+  const result = await titleExtras("movie", "tmdb:25", "cs", deps(async () => json({
+    credits: { cast: [], crew: [] },
+    recommendations: { results: [] },
+    release_dates: { results: [] },
+    videos: { results: [
+      { key: "eeeeeeeeeee", name: "English trailer", type: "Trailer", site: "YouTube", official: true, iso_639_1: "en" },
+      { key: "cccccccccc1", name: "Czech clip", type: "Clip", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "fffffffffff", name: "French featurette", type: "Featurette", site: "YouTube", official: true, iso_639_1: "fr" },
+      { key: "ddddddddddd", name: "German featurette", type: "Featurette", site: "YouTube", official: true, iso_639_1: "de" },
+      { key: "cccccccccc2", name: "Czech teaser trailer", type: "Trailer", site: "YouTube", official: false, iso_639_1: "cs" },
+      { key: "cccccccccc3", name: "Czech teaser", type: "Teaser", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "cccccccccc4", name: "Czech trailer", type: "Trailer", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "eeeeeeeeee2", name: "English teaser", type: "Teaser", site: "YouTube", official: false, iso_639_1: "en" },
+      { key: "cccccccccc6", name: "Czech extras", type: "Behind the Scenes", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "cccccccccc4", name: "Duplicate", type: "Clip", site: "YouTube", official: true, iso_639_1: "en" },
+      { key: "vvvvvvvvvvv", name: "Vimeo trailer", type: "Trailer", site: "Vimeo", official: true, iso_639_1: "cs" },
+      { key: "short", name: "Short key", type: "Trailer", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "uuuuuuuuuuu", name: "Unknown kind", type: "Other", site: "YouTube", official: true, iso_639_1: "cs" },
+      { key: "cccccccccc7", type: "Trailer", site: "YouTube", official: true, iso_639_1: "cs" },
+    ] },
+  })));
+
+  assert.equal(result.videos.length, 8);
+  assert.deepEqual(result.videos.map(({ key, kind, language }) => ({ key, kind, language })), [
+    { key: "cccccccccc4", kind: "trailer", language: "cs" },
+    { key: "cccccccccc2", kind: "trailer", language: "cs" },
+    { key: "cccccccccc1", kind: "clip", language: "cs" },
+    { key: "cccccccccc3", kind: "teaser", language: "cs" },
+    { key: "cccccccccc6", kind: "behindTheScenes", language: "cs" },
+    { key: "eeeeeeeeeee", kind: "trailer", language: "en" },
+    { key: "eeeeeeeeee2", kind: "teaser", language: "en" },
+    { key: "fffffffffff", kind: "featurette", language: "fr" },
+  ]);
+  assert.equal(result.videos.filter((video) => video.key === "cccccccccc4").length, 1);
+  assert.deepEqual(result.videos[0], {
+    key: "cccccccccc4",
+    name: "Czech trailer",
+    kind: "trailer",
+    thumbnail: "https://i.ytimg.com/vi/cccccccccc4/hqdefault.jpg",
+    language: "cs",
+  });
 });
 
 test("a successful empty TMDB people list falls back to addon names and the US rating", async (t) => {
@@ -238,6 +321,7 @@ test("without a TMDB key the addon names answer and no related titles are invent
       id: "tt1",
       type: "movie",
       name: "Film",
+      imdbRating: "8.5",
       cast: ["First", { name: "Second" }, { nope: true }, null],
       director: "Director",
       writer: ["Writer A", { name: "Writer B" }],
@@ -256,6 +340,8 @@ test("without a TMDB key the addon names answer and no related titles are invent
       { name: "Writer B", role: "writer" },
     ],
     related: [],
+    ratings: { imdb: "8.5" },
+    videos: [],
     source: "addon",
   });
 });
@@ -353,6 +439,66 @@ test("concurrent extras requests share one pending TMDB build", async (t) => {
   assert.equal(detailRequests, 1);
 });
 
+test("one viewer leaving does not cancel the shared build another viewer still waits for", async (t) => {
+  fresh(t);
+  let detailRequests = 0;
+  let started!: () => void;
+  const startedSignal = new Promise<void>((resolve) => { started = resolve; });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  const fetchImpl: FetchLike = async (raw) => {
+    if (new URL(raw).pathname === "/3/movie/23") {
+      detailRequests += 1;
+      started();
+      await released;
+      return json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+    }
+    throw new Error(`Unexpected URL ${raw}`);
+  };
+  const leaving = new AbortController();
+  const first = titleExtras("movie", "tmdb:23", "cs", deps(fetchImpl, {
+    meta: async () => ({ id: "tt1", type: "movie", name: "First" }),
+    signal: leaving.signal,
+  }));
+  await startedSignal;
+  const second = titleExtras("movie", "tmdb:23", "cs", deps(fetchImpl, {
+    meta: async () => ({ id: "tt1", type: "movie", name: "Second" }),
+  }));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  leaving.abort();
+  await assert.rejects(first);
+  release();
+  assert.equal((await second).source, "tmdb");
+  assert.equal(detailRequests, 1);
+});
+
+test("a build its only viewer left caches no failure", async (t) => {
+  fresh(t);
+  let detailRequests = 0;
+  let started!: () => void;
+  const startedSignal = new Promise<void>((resolve) => { started = resolve; });
+  const fetchImpl: FetchLike = async (raw, init) => {
+    if (new URL(raw).pathname === "/3/movie/24") {
+      detailRequests += 1;
+      started();
+      if (detailRequests === 1) {
+        await new Promise<void>((resolve) => init?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+        throw new Error("aborted");
+      }
+      return json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+    }
+    throw new Error(`Unexpected URL ${raw}`);
+  };
+  const leaving = new AbortController();
+  const first = titleExtras("movie", "tmdb:24", "cs", deps(fetchImpl, { signal: leaving.signal }));
+  await startedSignal;
+  leaving.abort();
+  await assert.rejects(first);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal((await titleExtras("movie", "tmdb:24", "cs", deps(fetchImpl))).source, "tmdb");
+  assert.equal(detailRequests, 2);
+});
+
 test("a successful TMDB part is shared across viewers while library membership is per viewer", async (t) => {
   fresh(t);
   let detailRequests = 0;
@@ -375,12 +521,12 @@ test("a successful TMDB part is shared across viewers while library membership i
   };
   const first = deps(fetchImpl, {
     now: () => now,
-    meta: async () => ({ id: "tt1", type: "movie", name: "First viewer meta" }),
+    meta: async () => ({ id: "tt1", type: "movie", name: "First viewer meta", imdbRating: "9.3" }),
     copies: async () => [{}],
   });
   const second = deps(fetchImpl, {
     now: () => now,
-    meta: async () => ({ id: "tt1", type: "movie", name: "Second viewer meta", videos: [] }),
+    meta: async () => ({ id: "tt1", type: "movie", name: "Second viewer meta", imdbRating: 8 }),
     copies: async () => [],
   });
 
@@ -394,6 +540,8 @@ test("a successful TMDB part is shared across viewers while library membership i
   assert.equal(withoutCopy.related[0]?.inLibrary, undefined);
   assert.notEqual(withoutCopy.related[0], withCopy.related[0], "viewer membership is composed into new objects");
   assert.deepEqual(withoutCopy.people, withCopy.people);
+  assert.equal(withCopy.ratings.imdb, "9.3");
+  assert.equal(withoutCopy.ratings.imdb, "8.0", "the viewer's own metadata supplies IMDb");
   assert.notEqual(withoutCopy, withCopy, "the viewer-dependent answer is composed afresh");
 });
 
@@ -448,5 +596,25 @@ test("unknown title types answer an empty addon result", async (t) => {
     meta: async () => meta,
     copies: async () => [],
   });
-  assert.deepEqual(result, { people: [], related: [], source: "addon" });
+  assert.deepEqual(result, { people: [], related: [], ratings: {}, videos: [], source: "addon" });
+});
+
+test("an addon id without IMDb finds TMDB through the meta's imdb_id", async (t) => {
+  fresh(t);
+  const calls: string[] = [];
+  const fetchImpl: FetchLike = async (raw) => {
+    const url = new URL(raw);
+    calls.push(url.pathname);
+    if (url.pathname === "/3/find/tt0241527") return json({ movie_results: [{ id: 671 }] });
+    if (url.pathname === "/3/movie/671") {
+      return json({ credits: { cast: [{ name: "Daniel Radcliffe", character: "Harry", order: 0 }], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+    }
+    return json({}, 404);
+  };
+  const extras = await titleExtras("movie", "mpa:sosac:35da1549e221b6b74237", "cs", deps(fetchImpl, {
+    meta: async () => ({ id: "mpa:sosac:35da1549e221b6b74237", type: "movie", name: "Harry Potter a Kámen mudrců", imdb_id: "tt0241527" }),
+  }));
+  assert.equal(extras.source, "tmdb");
+  assert.equal(extras.people[0]?.name, "Daniel Radcliffe");
+  assert.ok(calls.includes("/3/find/tt0241527"));
 });

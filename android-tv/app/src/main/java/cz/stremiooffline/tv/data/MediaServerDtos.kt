@@ -71,6 +71,7 @@ data class RemoteItemDto(
   val durationTicks: Long? = null,
   /** The provider's release year, when it reports one; a movie copy carries it into its media. */
   val year: Int? = null,
+  val overview: String? = null,
   /** Content-authorized same-origin artwork, loaded with the session cookie like any image. */
   val poster: String? = null,
   val wide: String? = null,

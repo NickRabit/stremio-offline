@@ -8,7 +8,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
-import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -117,7 +117,7 @@ class CatalogRemoteResumeTest {
   }
 
   private fun barTextCount(): Int =
-    compose.onAllNodes(hasText("watched", substring = true)).fetchSemanticsNodes().size
+    compose.onAllNodes(hasTestTag(TagCatalogWatched)).fetchSemanticsNodes().size
 
   @Test
   fun `the exact version that stored the position resumes from the remote row`() {

@@ -196,7 +196,7 @@ class CatalogSourcesTest {
     }
     compose.waitUntil(5_000) { api.streamsCompleted.size >= 2 }
     compose.waitForIdle()
-    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Czech 8 GB", substring = true)
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Beta", substring = true)
 
     ended.value = "srcB"
     compose.waitForIdle()

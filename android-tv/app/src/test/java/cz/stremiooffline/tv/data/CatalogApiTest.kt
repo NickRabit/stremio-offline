@@ -174,7 +174,10 @@ class CatalogApiTest {
   fun `title extras ask the extras route with the interface language`() = runTest {
     server.enqueue(
       MockResponse().setBody(
-        """{"people":[],"related":[],"source":"tmdb","nextEpisode":{"season":6,"episode":3}}""",
+        """{"people":[],"related":[],"source":"tmdb","nextEpisode":{"season":6,"episode":3},""" +
+          """"ratings":{"imdb":"9.3","tmdb":8.7,"tmdbVotes":31720},"videos":[{""" +
+          """"key":"11charsYTid","name":"Trailer","kind":"trailer",""" +
+          """"thumbnail":"https://i.ytimg.com/vi/11charsYTid/hqdefault.jpg","language":"cs"}]}""",
       ),
     )
     val extras = client(start()).titleExtras("series", "tt1", "cs")
@@ -182,6 +185,23 @@ class CatalogApiTest {
     assertEquals("/api/meta/series/tt1/extras?language=cs", server.takeRequest().path)
     assertEquals(6, extras.nextEpisode?.season)
     assertEquals(3, extras.nextEpisode?.episode)
+    assertEquals("9.3", extras.ratings.imdb)
+    assertEquals(8.7, extras.ratings.tmdb)
+    assertEquals(31_720L, extras.ratings.tmdbVotes)
+    assertEquals("11charsYTid", extras.videos.single().key)
+    assertEquals("trailer", extras.videos.single().kind)
+    assertEquals("https://i.ytimg.com/vi/11charsYTid/hqdefault.jpg", extras.videos.single().thumbnail)
+    assertEquals("cs", extras.videos.single().language)
+  }
+
+  @Test
+  fun `title extras default ratings and videos when an older server omits them`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"people":[],"related":[],"source":"tmdb"}"""))
+    val extras = client(start()).titleExtras("movie", "tt1", "en")
+
+    assertNull(extras.ratings.imdb)
+    assertNull(extras.ratings.tmdb)
+    assertTrue(extras.videos.isEmpty())
   }
 
   @Test

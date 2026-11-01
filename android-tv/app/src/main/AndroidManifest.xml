@@ -16,6 +16,13 @@
     <intent>
       <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
     </intent>
+    <intent>
+      <action android:name="android.intent.action.VIEW" />
+      <data
+          android:scheme="https"
+          android:host="www.youtube.com"
+          android:pathPrefix="/watch" />
+    </intent>
   </queries>
 
   <application

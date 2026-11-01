@@ -212,6 +212,12 @@ test("extras artwork is proxied only while secure mode is on", async () => {
       { type: "movie" as const, id: "tt2", name: "Related", poster: "https://images.example/poster.jpg" },
       { type: "movie" as const, id: "tt3", name: "No poster" },
     ],
+    videos: [{
+      key: "abcDEF12345",
+      name: "Trailer",
+      kind: "trailer" as const,
+      thumbnail: "https://i.ytimg.com/vi/abcDEF12345/hqdefault.jpg",
+    }],
     source: "tmdb" as const,
   };
 
@@ -226,8 +232,10 @@ test("extras artwork is proxied only while secure mode is on", async () => {
   assert.notEqual(rewritten, extras);
   assert.match(String(rewritten.people[0]?.photo), /^\/api\/image\//);
   assert.match(String(rewritten.related[0]?.poster), /^\/api\/image\//);
+  assert.match(String(rewritten.videos[0]?.thumbnail), /^\/api\/image\//);
   assert.equal("photo" in rewritten.people[1]!, false);
   assert.equal("poster" in rewritten.related[1]!, false);
+  assert.equal(rewritten.videos[0]?.name, "Trailer");
   assert.equal(rewritten.source, "tmdb");
 });
 

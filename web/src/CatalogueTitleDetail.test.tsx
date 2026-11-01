@@ -442,15 +442,21 @@ describe("CatalogueTitleDetail extras", () => {
       related: [{ type: "movie", id: "tt-next", name: "Sleepless", year: "1993", poster: "/sleepless.jpg" }],
       ageRating: "PG-13",
       originalTitle: "When Harry Met Sally",
+      ratings: { imdb: "9.1", tmdb: 8.7, tmdbVotes: 32000 },
       source: "tmdb",
     });
     await render();
     expect(calls.meta.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt-film"]);
     expect(calls.extras.map((url) => `${url.pathname}${url.search}`)).toEqual(["/api/meta/movie/tt-film/extras?language=en"]);
     const line = host.querySelector(".library-detail-hero .meta-line")!;
-    expect(line.querySelector(".imdb-rating")!.textContent).toContain("8.2");
+    expect(line.querySelector(".imdb-rating")).toBeNull();
+    expect(line.querySelector(".age-badge")).toBeNull();
     expect(line.textContent).toContain("1995 · Crime · Drama");
-    expect(line.querySelector(".age-badge")!.textContent).toBe("PG-13");
+    const ratings = host.querySelector(".detail-ratings")!;
+    expect(ratings.querySelector(".age-badge")!.textContent).toBe("PG-13");
+    expect(ratings.textContent).toContain("9.1");
+    expect(ratings.querySelector(".tmdb")!.textContent).toBe("TMDB");
+    expect(ratings.textContent).toContain(new Intl.NumberFormat("en-GB", { notation: "compact" }).format(32000));
     expect(host.querySelector(".original-line")!.textContent).toContain("When Harry Met Sally");
     const people = [...host.querySelectorAll(".person strong")].map((name) => name.textContent);
     expect(people).toContain("Rob Reiner");

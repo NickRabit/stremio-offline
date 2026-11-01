@@ -16,7 +16,13 @@ const localOtherRoot = path.resolve("e2e/.tmp/remote-library-local-b");
 const LOCAL_FOLDERS = 60;
 const localLibraryIds: string[] = [];
 
-async function remoteLibraries(page: Page, options: { folders?: number; items?: (url: URL) => BrowseItem[] | null; sources?: unknown[]; browse?: (url: URL) => unknown | Promise<unknown> } = {}) {
+async function remoteLibraries(page: Page, options: {
+  folders?: number;
+  items?: (url: URL) => BrowseItem[] | null;
+  resume?: unknown[];
+  sources?: unknown[];
+  browse?: (url: URL) => unknown | Promise<unknown>;
+} = {}) {
   const requests: URL[] = [];
   let sources = 0;
   await page.route("**/remote-test-art/*.svg", async (route) => {
@@ -34,6 +40,8 @@ async function remoteLibraries(page: Page, options: { folders?: number; items?: 
         type: "mixed", enabled: true, order: i, showOnHome: true, showInContinueWatching: true,
         showInFavorites: true, browseMode: "folders", mosaic: true, provider: "emby", capabilities,
       })) };
+    } else if (url.pathname === "/api/remote-libraries/personal") {
+      body = { items: options.resume ?? [], total: options.resume?.length ?? 0 };
     } else if (url.pathname.endsWith("/mosaic")) {
       // The composed fan is a picture of its own: this fixture answers one like any artwork.
       await route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="720"><rect width="480" height="720" fill="#2b3440"/></svg>' });
@@ -177,23 +185,50 @@ test("a large listing resumes its canceled page after a detail return without re
   expect(remote.requests.filter((url) => !url.searchParams.has("cursor"))).toHaveLength(1);
 });
 
-test("item and series breadcrumbs walk the remote hierarchy", async ({ page }) => {
-  await remoteLibraries(page, { items: (url) => url.searchParams.get("type") === "episode"
-    ? [{ id: "ep1", name: "Pilot", type: "episode", season: 1, episode: 1, providerIds: {} }]
-    : [{ id: "ser1", name: "Show", type: "series", providerIds: {} }] });
+test("a series opens on its resumed episode with the picker, source row and split Play", async ({ page }) => {
+  const remote = await remoteLibraries(page, {
+    items: (url) => url.searchParams.get("type") === "episode"
+      ? [
+        { id: "ep1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "ser1", providerIds: {} },
+        { id: "ep2", name: "Second", type: "episode", season: 1, episode: 2, seriesId: "ser1", providerIds: {} },
+      ]
+      : [{ id: "ser1", name: "Show", type: "series", providerIds: {} }],
+    resume: [{
+      kind: "remote", key: "remote:ep2", title: "Second", provider: "emby", libraryId,
+      libraryName: "Remote clips", itemId: "ep2", itemType: "episode", season: 1, episode: 2,
+      progress: { position: 60, duration: 600 }, updatedAt: "2026-01-01T00:00:00.000Z",
+    }],
+    sources: [
+      { sourceId: "ep-hd", kind: "remote", playable: true, name: "1080p", provider: "emby" },
+      { sourceId: "ep-sd", kind: "remote", playable: true, name: "720p", provider: "emby" },
+    ],
+  });
   await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
   const panel = page.locator(".remote-browse-panel");
   const crumbs = panel.locator(".crumbs button");
   await panel.locator(".browse-item").filter({ hasText: "Show" }).locator(".library-open").click();
-  // The trail starts with the section it is in, the way the library's own listing does.
-  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show"]);
-  await panel.locator(".browse-item").filter({ hasText: "Pilot" }).locator(".library-open").click();
-  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show", "S1 E1 · Pilot"]);
+  await expect(panel.locator(".library-title-detail .hero h2")).toHaveText("Show");
+  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show", "S1 E2 · Second"]);
+  await expect(panel.locator(".library-title-detail .hero .meta-line").first()).toHaveText("S1 E2");
+  await expect(panel.locator(".episode-current")).toContainText("Second");
+  await expect(panel.locator(".library-detail-play .split-button")).toBeVisible();
+  await expect(panel.locator(".detail-tech")).toContainText("1080p");
+  expect(remote.sources()).toBe(1);
+
+  await panel.locator(".episode-current button").click();
+  await panel.locator(".episode-list button").filter({ hasText: "Pilot" }).click();
+  await expect(panel.locator(".library-title-detail .hero .meta-line").first()).toHaveText("S1 E1");
+  await expect.poll(() => remote.sources()).toBe(2);
+
   await expect(panel.locator('.crumbs button[aria-current="page"]')).toBeDisabled();
-  // The series crumb goes back to the series and returns focus to the episode it came from.
+  // The series has no page of its own: its crumb opens the episode list, the chosen one marked.
   await panel.locator(".crumbs button").filter({ hasText: "Show" }).click();
-  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show"]);
-  await expect(panel.locator(".browse-item").filter({ hasText: "Pilot" }).locator(".library-open")).toBeFocused();
+  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show", "S1 E1 · Pilot"]);
+  await expect(panel.locator(".episode-list button.selected")).toContainText("Pilot");
+  // Back returns to the listing the series was opened from.
+  await panel.locator(".library-back").click();
+  await expect(panel.locator(".library-title-detail")).toHaveCount(0);
+  await expect(panel.locator(".browse-item").filter({ hasText: "Show" })).toBeVisible();
 });
 
 /** The section's own crumb leaves the media server entirely, from a title as from a listing: no
