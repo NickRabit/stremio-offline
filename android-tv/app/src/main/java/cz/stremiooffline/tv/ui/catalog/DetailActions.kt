@@ -121,9 +121,12 @@ private fun DetailActionButton(action: DetailAction, slotName: String, caption: 
       action.short.ifEmpty { slotName },
       color = if (focused) Tokens.Text else Tokens.Muted,
       fontSize = 11.sp,
+      // A line tall enough for the descenders, and room under it: at the font's own tight line
+      // height the bottom of "Zhlédnuto" was cut off.
+      lineHeight = 16.sp,
       fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Normal,
       maxLines = 1,
-      modifier = if (focused) Modifier.testTag(TagActionCaption) else Modifier,
+      modifier = (if (focused) Modifier.testTag(TagActionCaption) else Modifier).padding(bottom = 3.dp),
     )
   }
 }
