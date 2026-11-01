@@ -91,8 +91,13 @@ export function visibleCatalogStreams(
   return showTorrents ? arranged : arranged.filter((stream) => stream.kind !== "torrent");
 }
 
-export function pickDefaultStream(streams: Stream[], ruleId?: string): Stream | undefined {
+export function pickDefaultStream(streams: Stream[], ruleId?: string, stableKey?: string): Stream | undefined {
   const playable = streams.filter((stream) => stream.playable);
+  // Reopening a title resumes the version it was last played from, even when the active rule
+  // would now choose another row. The key is only a preference; a source that has disappeared
+  // still falls through to the ordinary default.
+  const resumed = stableKey ? playable.find((stream) => stream.stableKey === stableKey) : undefined;
+  if (resumed) return resumed;
   if (!ruleId || !playable.some((stream) => stream.rules?.[ruleId])) {
     return playable[0] ?? streams[0];
   }
@@ -222,12 +227,15 @@ export function canQueue(stream: Stream, debridConfigured: boolean): boolean {
  *  at the list and wrong once they are watching: the player would stop the session it is
  *  playing and start the film again on the new source. */
 export function repickStream<T>(state: {
-  playing: boolean; picked: boolean; pending: number; upgrade?: boolean;
+  playing: boolean; picked: boolean; pending: number; upgrade?: boolean; restore?: boolean;
   visible: readonly T[]; selected: T | null; preferred: T | null;
 }): { move: true; to: T | null } | { move: false } {
   if (!state.visible.length) return state.selected !== null && !state.playing ? { move: true, to: null } : { move: false };
   if (state.playing) return { move: false };
   if (!state.selected || !state.visible.includes(state.selected)) return { move: true, to: state.preferred };
+  // A restored resume row may arrive after another library row. It outranks that automatic pick
+  // even when the loading count has already reached zero, but never an explicit or playing one.
+  if (!state.picked && state.restore && state.preferred && state.selected !== state.preferred) return { move: true, to: state.preferred };
   // A local copy may land after every addon finished, when the pending counter is already
   // zero: it replaces an automatic pick, but never the viewer's own or a playing source.
   if (!state.picked && state.upgrade && state.preferred && state.selected !== state.preferred) return { move: true, to: state.preferred };

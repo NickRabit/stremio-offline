@@ -259,6 +259,13 @@ describe("torrent listing", () => {
     expect(pickDefaultStream([breaks], "balanced")).toBeUndefined();
   });
 
+  it("reopens the source the title was last played from before the active rule default", () => {
+    const stored = stream({ name: "library copy", stableKey: "m:stored", rules: { balanced: verdict([2], "breaks") } });
+    const ruleWinner = stream({ name: "rule winner", stableKey: "a:winner", rules: { balanced: verdict([0]) } });
+    expect(pickDefaultStream([ruleWinner, stored], "balanced", stored.stableKey)?.name).toBe("library copy");
+    expect(pickDefaultStream([ruleWinner], "balanced", stored.stableKey)?.name).toBe("rule winner");
+  });
+
   it("keeps the old fallback when the listing carries no verdicts", () => {
     const unplayable = stream({ name: "unplayable", playable: false });
     const playable = stream({ name: "playable" });
@@ -474,6 +481,19 @@ describe("repickStream", () => {
 
   it("leaves a non-upgrade arrival alone when nothing is pending", () => {
     expect(repickStream({ ...base, upgrade: false, preferred: second })).toEqual({ move: false });
+  });
+
+  it("restores a resumed remote row after another remote library answered first", () => {
+    const firstLibrary = stream({ sourceId: "first", provider: "jellyfin", libraryId: "lib_a" });
+    const resumed = stream({ sourceId: "resumed", provider: "emby", libraryId: "lib_b", stableKey: "m:resumed" });
+    expect(repickStream({
+      playing: false, picked: false, pending: 0, upgrade: false, restore: true,
+      visible: [firstLibrary, resumed], selected: firstLibrary, preferred: resumed,
+    })).toEqual({ move: true, to: resumed });
+    expect(repickStream({
+      playing: false, picked: true, pending: 0, restore: true,
+      visible: [firstLibrary, resumed], selected: firstLibrary, preferred: resumed,
+    })).toEqual({ move: false });
   });
 });
 
