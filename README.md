@@ -32,7 +32,7 @@ the Home Screen.
 > from addons and libraries the user connects. Use only sources and accounts
 > you have the right to access; what you add and download is your responsibility.
 
-![The catalog with a title's details, its source and the buttons to play or save it](docs/images/v0.5/catalog.jpg)
+![A film's detail: ratings, the source that will play, cast and crew with photos, and its trailer](docs/images/v0.6/detail.jpg)
 
 ## What it does
 
@@ -40,6 +40,13 @@ the Home Screen.
   follow, your libraries and rows from addon catalogs. Each account chooses
   which rows show and in what order.
 - **Catalogs and metadata** from any standard addon manifest, Cinemeta included.
+- **A rich title detail** for catalogue, library and Jellyfin/Emby titles alike:
+  IMDb and TMDB ratings, the age rating, the cast and crew with photos (select
+  a name to search for it), trailers and extras, similar titles, and exactly
+  which source, video, audio and file will play. A series shows its episodes,
+  the next one to watch and where you stopped. The Android TV app shows the
+  same. Photos, the age rating and similar titles need a TMDB key in
+  **Settings -> Services**; without one the detail shows the addon's names.
 - **Search everywhere**: one search across addon catalogs, local libraries and
   Jellyfin or Emby servers, narrowed to films or series, in the browser and on
   the TV.
@@ -93,28 +100,38 @@ torrent engine. See [Addons and downloads](docs/downloads.md#real-debrid-and-oth
 
 ## Screenshots
 
-| Home | Library |
+| Home | Catalog |
 | --- | --- |
-| ![Home with continue watching, a row from the library and an addon catalog](docs/images/v0.5/home.jpg) | ![Downloaded films in the library, with posters and descriptions](docs/images/v0.5/library.jpg) |
+| ![Home with continue watching, tonight's picks and rows from an addon catalog](docs/images/v0.6/home.jpg) | ![The catalog with a film's panel: its sources, the local copy first](docs/images/v0.6/catalog.jpg) |
 
-| Following with automatic downloads | Download queue |
+### Title detail
+
+| A film | A series |
 | --- | --- |
-| ![Following a series: start a few episodes ahead and pick download rules](docs/images/v0.5/follow.jpg) | ![One film downloading, another waiting in the queue](docs/images/v0.5/downloads.jpg) |
+| ![A film's detail with ratings, the source that will play, cast and crew, and its trailer](docs/images/v0.6/detail.jpg) | ![A series' detail with the chosen episode, the progress, ratings and its cast](docs/images/v0.6/detail-series.jpg) |
 
-![The player with subtitles](docs/images/v0.5/player.jpg)
+| Library | Download queue |
+| --- | --- |
+| ![Downloaded films and a series in the library, with posters and descriptions](docs/images/v0.6/library.jpg) | ![One episode downloading, another waiting in the queue](docs/images/v0.6/downloads.jpg) |
+
+| Following with automatic downloads | Player |
+| --- | --- |
+| ![Following a series: keep a few episodes ready and pick download rules](docs/images/v0.6/follow.jpg) | ![The player with subtitles](docs/images/v0.6/player.jpg) |
 
 | Android TV: Home | Android TV: title detail |
 | --- | --- |
-| ![The Android TV app's Home with the Tonight row](docs/images/v0.5/tv-home.jpg) | ![A film's detail on Android TV with Play and Sources](docs/images/v0.5/tv-detail.jpg) |
+| ![The Android TV app's Home with the Tonight row](docs/images/v0.6/tv-home.jpg) | ![A film's detail on Android TV with ratings, actions, what will play and the cast](docs/images/v0.6/tv-detail.jpg) |
 
 <p>
-  <img src="docs/images/v0.5/mobile-home.jpg" alt="Home on a phone" width="260">
-  <img src="docs/images/v0.5/mobile-library.jpg" alt="The library on a phone" width="260">
+  <img src="docs/images/v0.6/mobile-home.jpg" alt="Home on a phone" width="260">
+  <img src="docs/images/v0.6/mobile-library.jpg" alt="The library on a phone" width="260">
+  <img src="docs/images/v0.6/mobile-detail.jpg" alt="A film's detail on a phone" width="260">
 </p>
 
 The films and the series shown are Blender Foundation open movies (CC BY),
 *Pioneer One* (CC BY-SA) and public-domain classics, served by a small local
-test addon from the Internet Archive. The app ships with no content.
+test addon from the Internet Archive. Ratings, cast photos and trailers come
+from TMDB. The app ships with no content.
 
 ## Quick start
 
