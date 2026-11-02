@@ -11,6 +11,7 @@ services:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
       FIX_PERMISSIONS: "${FIX_PERMISSIONS:-0}"
+      RENDER_GID: "${RENDER_GID:-}"
       DATA_DIR: /data
       DOWNLOAD_DIR: /downloads
       LIBRARY_ROOTS: "${LIBRARY_ROOTS:-}"
@@ -23,8 +24,8 @@ services:
     # devices:
     #   - /dev/dri:/dev/dri
     #
-    # Also set RENDER_GID to the group that owns the render node. See
-    # docs/hardware-acceleration.md.
+    # Also set RENDER_GID (template field) to the group that owns the render
+    # node. See docs/hardware-acceleration.md.
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
