@@ -471,6 +471,40 @@ test("clearing a remote position is written at once, without final", async () =>
   });
 });
 
+test("two concurrent watched toggles never confirm a change the disk refused", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true });
+    // The first write is held until the second toggle is in, and then refused.
+    const writable = harness.store as unknown as { writeState: (file: string, data: string) => Promise<void> };
+    const original = writable.writeState;
+    let entered!: () => void;
+    const writing = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let failNext = true;
+    writable.writeState = async (file, data) => {
+      if (failNext) {
+        failNext = false;
+        entered();
+        await released;
+        throw new Error("disk unavailable");
+      }
+      await original(file, data);
+    };
+    try {
+      const first = harness.personal.patch(harness.admin, harness.libraryId, "m1", { watched: true }).then(() => "ok", () => "failed");
+      await writing;
+      const second = harness.personal.patch(harness.admin, harness.libraryId, "m1", { watched: true }).then(() => "ok", () => "failed");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      release();
+      const outcomes = await Promise.all([first, second]);
+      const watched = (await harness.personal.read(harness.admin, harness.libraryId, "m1")).watched;
+      assert.equal(outcomes[0], "failed");
+      if (outcomes[1] === "ok") assert.equal(watched, true, "a confirmed toggle is kept");
+    } finally { writable.writeState = original; }
+  });
+});
+
 test("the patch body is exact and bounded", async () => {
   await withHarness(async (harness) => {
     for (const body of [{}, { position: -1 }, { position: 31_536_001 }, { duration: Number.NaN }, { favorite: "yes" }, { watched: 1 }, { key: "remote:x" }, { name: "x" }, { position: "5" }]) {
