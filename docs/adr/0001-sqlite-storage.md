@@ -145,8 +145,13 @@ watched-series markers and remote-media state -- moved from `state.json` to the
 keep using the existing synchronous accessors and mutators.
 
 The one-time import writes all rows and the `domain.personal` marker in one
-transaction, after copying the original state file to
-`migration-backup/state-<importedAt>.json`. Once the marker exists, SQLite rows
+transaction, after copying the state file to
+`migration-backup/state-<importedAt>.json`. The copy is taken after the boot's
+account migration has been saved, not from the original bytes: a pre-accounts
+file mints a new account id each time it is loaded, so only the migrated copy
+puts the rows back under the id they are keyed by. While personal data still sits
+at the top level with no account (an install that has not claimed it yet), the
+import is deferred so the claim lands in `state.json` in one write. Once the marker exists, SQLite rows
 are authoritative for those collections. A marker-present load ignores any hot
 fields left in `state.json` and forces their removal on the next write.
 

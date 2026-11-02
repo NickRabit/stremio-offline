@@ -63,8 +63,11 @@ memory. Statistics collected in the last minute before the stop are not kept.
 
 The picture and provider-call statistics, traffic events, activity history,
 library file facts, TMDB id mappings and each account's hot personal collections
-live in `application.sqlite`. The first personal-data import leaves a byte copy
-of the original state file in `migration-backup/state-*.json`. The file facts
+live in `application.sqlite`. The first personal-data import leaves a copy of the
+state file, with every personal collection still in it, in
+`migration-backup/state-*.json`. For an install from before accounts it is the
+file after its account was created, so putting it back keeps the account id the
+rows belong to. The file facts
 and TMDB id mappings are caches and safe to lose. Copy `application.sqlite` and
 its `-wal` or `-shm` files whenever they are present, together with the rest of
 `DATA_PATH`, while the server is stopped. The image files under `images/` remain
