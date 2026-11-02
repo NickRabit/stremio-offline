@@ -24,7 +24,7 @@ import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.FavoriteToggleDto
 import cz.stremiooffline.tv.ui.FakeTvApi
-import cz.stremiooffline.tv.ui.detail.TagDetailFavourite
+import cz.stremiooffline.tv.ui.catalog.TagCatalogFavourite
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -34,7 +34,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** A star toggled in a library detail has to show up again when the title is reopened. */
+/** A star toggled in an own-title catalogue detail has to show up again when it is reopened. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-xhdpi")
 class LibraryFavouriteReturnTest {
@@ -114,10 +114,10 @@ class LibraryFavouriteReturnTest {
   /** RIGHT from the detail's Play button reaches the star. */
   private fun focusFavourite() {
     repeat(4) {
-      if (focused(TagDetailFavourite)) return
+      if (focused(TagCatalogFavourite)) return
       press(Key.DirectionRight)
     }
-    compose.onNodeWithTag(TagDetailFavourite).assertIsFocused()
+    compose.onNodeWithTag(TagCatalogFavourite).assertIsFocused()
   }
 
   private fun back() {
@@ -125,7 +125,7 @@ class LibraryFavouriteReturnTest {
     compose.waitForIdle()
   }
 
-  /** The root's only folder, which opens a library detail because it holds files, not folders. */
+  /** The root's only folder, which opens an own-title catalogue detail because it holds files. */
   private fun openIt() {
     compose.onNodeWithTag("It").assertIsFocused()
     press(Key.DirectionCenter)
@@ -133,7 +133,7 @@ class LibraryFavouriteReturnTest {
   }
 
   @Test
-  fun `a star toggled in the library detail is shown when the title is reopened`() {
+  fun `a star toggled in the own-title detail is shown when the title is reopened`() {
     val api = library()
     mount(api)
 
@@ -145,7 +145,7 @@ class LibraryFavouriteReturnTest {
     back()
     openIt()
 
-    compose.onNodeWithTag(TagDetailFavourite).assertTextContains("★")
+    compose.onNodeWithTag(TagCatalogFavourite).assertTextContains("★")
   }
 
 }

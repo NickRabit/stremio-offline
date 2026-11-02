@@ -26,9 +26,11 @@ import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
+import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.TagDetailPrimary
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -116,15 +118,20 @@ class LibraryCatalogueShellTest {
   }
 
   @Test
-  fun `an unbound library file opens the library detail`() {
-    mount(api())
+  fun `an unbound library file opens the catalogue detail and Back restores its card`() {
+    val api = api()
+    mount(api)
 
     openIt()
 
     compose.waitUntil(5_000) {
-      runCatching { compose.onNodeWithTag(TagDetailPrimary).assertExists() }.isSuccess
+      runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess
     }
-    compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
+    compose.onNodeWithTag(TagDetailPrimary).assertDoesNotExist()
+    assertEquals(listOf(path), api.libraryTitleRequests)
+
+    scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    compose.waitUntil(5_000) { focused("It") }
   }
 
   @Test
@@ -152,12 +159,22 @@ class LibraryCatalogueShellTest {
     compose.onNodeWithTag("Mix").assertIsFocused()
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitUntil(5_000) {
-      runCatching { compose.onNodeWithTag(TagDetailPrimary).assertExists() }.isSuccess
+      runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess
     }
 
-    // The folder as a whole decides, never its first file (the library detail then reads its own).
+    // The folder as a whole decides; its files become one own-title detail.
     assertEquals("Mix", api.libraryTitleRequests.first())
-    compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
+    compose.onNodeWithTag(TagDetailPrimary).assertDoesNotExist()
+  }
+
+  @Test
+  fun `an empty folder keeps the library detail`() {
+    val empty = DetailData.ofFolder(
+      BrowseItem.Folder(path = "Empty", name = "Empty", fileCount = 0),
+      emptyList(),
+    )
+
+    assertNull(ownCatalogueArgsOrNull(empty))
   }
 
   @Test

@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.ui.shell
 import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.LibraryTitleDto
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.ui.detail.DetailData
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -10,8 +11,20 @@ import org.junit.Test
 
 class LibraryCatalogueTest {
 
-  private fun file(path: String, season: Int? = null, episode: Int? = null) =
-    BrowseItem.File(path = path, label = path.substringAfterLast('/'), season = season, episode = episode)
+  private fun file(
+    path: String,
+    season: Int? = null,
+    episode: Int? = null,
+    size: Double = 0.0,
+    progress: ProgressDto? = null,
+  ) = BrowseItem.File(
+    path = path,
+    label = path.substringAfterLast('/'),
+    season = season,
+    episode = episode,
+    size = size,
+    progress = progress,
+  )
 
   private fun detail(vararg files: BrowseItem.File) = DetailData(
     gridPath = "folder",
@@ -99,5 +112,56 @@ class LibraryCatalogueTest {
     assertEquals("", args.meta.name)
     assertNull(args.preferredLocalPath)
     assertNull(args.episode)
+  }
+
+  @Test
+  fun `an unbound film builds its own title from the single file`() {
+    val path = "Films/Heat.mkv"
+    val args = ownCatalogueArgs(detail(file(path)))
+
+    assertEquals("local:folder", args.meta.id)
+    assertEquals("movie", args.meta.type)
+    assertEquals("Library title", args.meta.name)
+    assertEquals("poster.jpg", args.meta.poster)
+    assertEquals("poster.jpg", args.meta.background)
+    assertEquals("movie", args.type)
+    assertEquals("folder", args.ownTitle?.favouritePath)
+    assertEquals(false, args.ownTitle?.favourite)
+    assertEquals(listOf(path), args.ownTitle?.rows?.get("local:folder")?.map { it.localPath })
+  }
+
+  @Test
+  fun `an unbound film folder keeps every version largest first`() {
+    val small = "Films/Heat/Heat.1080p.mkv"
+    val large = "Films/Heat/Heat.2160p.mkv"
+    val args = ownCatalogueArgs(
+      detail(file(small, size = 4_000_000_000.0), file(large, size = 12_000_000_000.0)),
+    )
+
+    assertEquals(
+      listOf(large, small),
+      args.ownTitle?.rows?.get("local:folder")?.map { it.localPath },
+    )
+    assertNull(args.meta.videos)
+  }
+
+  @Test
+  fun `an unbound series opens on the first file not watched to the end`() {
+    val first = "Shows/Show/Show.S01E01.mkv"
+    val second = "Shows/Show/Show.S01E02.mkv"
+    val args = ownCatalogueArgs(
+      detail(
+        file(first, season = 1, episode = 1, progress = ProgressDto(120.0, 120.0)),
+        file(second, season = 1, episode = 2, progress = ProgressDto(40.0, 120.0)),
+      ),
+    )
+    val videos = args.meta.videos.orEmpty()
+
+    assertEquals("series", args.meta.type)
+    assertEquals(listOf("local:$first", "local:$second"), videos.map { it.id })
+    assertEquals(listOf(1, 2), videos.map { it.episode })
+    assertEquals(listOf("Show.S01E01.mkv", "Show.S01E02.mkv"), videos.map { it.title })
+    assertEquals(ResumeEpisode("series:local:$second", 1, 2), args.episode)
+    assertEquals(second, args.ownTitle?.rows?.get("local:$second")?.single()?.localPath)
   }
 }
