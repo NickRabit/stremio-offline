@@ -105,6 +105,7 @@ import { registerDeviceRoutes } from "./routes/device.js";
 import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
 import { calendarFeedHandler, registerFollowRoutes } from "./routes/follows.js";
+import { registerIntroSegmentRoutes } from "./routes/intro-segments.js";
 import { registerLibrariesRoutes } from "./routes/libraries.js";
 import { registerMediaServerRoutes } from "./routes/media-servers.js";
 import { registerPersonalRoutes } from "./routes/personal.js";
@@ -115,6 +116,7 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
 import { registerSearchEverywhereRoutes, searchEverywhereEnabled } from "./routes/search-everywhere.js";
 import { registerSourceProfilesRoutes } from "./routes/source-profiles.js";
+import { IntroSegmentsCache } from "./intro-segments.js";
 import { materializeOwnerSourceAdmission, materializeOwnerSourceProfileAdmission } from "./routes/source-profile-selection.js";
 import { SourceAdmissionRejected } from "./source-admission.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
@@ -2764,6 +2766,8 @@ const freeSpace = async (target: string) => {
 };
 registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache, publicAddonView });
+const introSegments = new IntroSegmentsCache();
+registerIntroSegmentRoutes(app, { ...routeContext, introSegments });
 registerMediaServerRoutes(app, { ...routeContext, mediaServers, mosaics, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, playbackReports, ownerOf });
 registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
 if (searchSessions !== undefined && catalogSearchSessions !== undefined) {

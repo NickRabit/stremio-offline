@@ -180,6 +180,11 @@
   <string name="player_subtitle_delay">Časovanie titulkov</string>
   <string name="player_subtitle_in_step">v kroku</string>
   <string name="player_from_addon">Addon</string>
+  <string name="player_chapters">Kapitoly</string>
+  <string name="player_chapter_number">Kapitola %1$s</string>
+  <string name="player_skip_intro">Preskočiť úvod</string>
+  <string name="player_skip_recap">Preskočiť rekapituláciu</string>
+  <string name="player_skip_outro">Preskočiť titulky</string>
   <string name="player_up_next">ĎALEJ HORE</string>
   <string name="player_up_next_countdown">Začína o %1$s s</string>
   <string name="player_play_now">Hrajte teraz</string>
@@ -213,6 +218,11 @@
   <string name="settings_stream_sort">Predvolené poradie zdroja</string>
   <string name="settings_default_rules_hint">Podľa nich sa radí „Odporúčané“ a Prehrať vyberie prvý zdroj, ktorý ich spĺňa.</string>
   <string name="settings_start_view">Úvodná stránka</string>
+  <string name="settings_up_next_at">Ponúknuť ďalšiu epizódu</string>
+  <string name="settings_up_next_end">Až keď epizóda skončí</string>
+  <string name="settings_up_next_percent">Pri %1$s %%</string>
+  <string name="settings_up_next_seconds">%1$s s pred koncom</string>
+  <string name="settings_up_next_minutes">%1$s min pred koncom</string>
   <string name="tv_settings_title">Táto televízia</string>
   <string name="tv_account">Účet</string>
   <string name="tv_device">Zariadenie</string>
@@ -230,6 +240,8 @@
   <string name="tv_prefer_conversion_note">Každé prehrávanie sa spustí ako v prehliadači, takže server prevedie, čo televízor nezvládne. Pomalší štart a vyššia záťaž servera.</string>
   <string name="tv_on">Zapnuté</string>
   <string name="tv_off">Vypnuté</string>
+  <string name="tv_chapters_button">Kapitoly</string>
+  <string name="tv_skip_segments_auto">Automaticky preskakovať úvod a rekapituláciu</string>
   <string name="tv_back_to_source">Späť na predchádzajúci zdroj</string>
   <string name="library_mosaic_alt">Plagátová mozaika z %1$s filmov</string>
   <string name="library_show_in_library">Zobraziť v knižnici</string>

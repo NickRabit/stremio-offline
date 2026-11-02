@@ -76,6 +76,32 @@ rule picks again, and a library copy of the next episode that meets the rule
 plays from the library. The library also offers previous/next-file navigation. Finishing
 a movie leaves the player open.
 
+**Settings → Playback → Offer the next episode** can bring that offer forward: at
+97–99 % of the episode, or 30 s to 3 min before its end. With either of those, a
+known start of the end credits brings it forward further. **When the episode ends**
+keeps the behaviour above.
+
+### What is playing, chapters, intro and credits
+
+Under the title the player names what actually plays: the resolution (`4K`,
+`1080p`, …), HDR10, HLG or Dolby Vision, and the audio format with its channels.
+A conversion is described as converted (H.264, stereo AAC, no HDR), not as the
+source was.
+
+A file with two or more chapters gets marks on the timeline, the current
+chapter's name above it, its name in the timeline preview, and a chapter list in
+the player settings (on the TV, the **Chapters** button) that jumps to a chapter.
+
+For a film or an episode with an IMDb id, the server asks
+[IntroDB](https://introdb.app), a community database, where the intro, the recap
+and the end credits are. While one of them plays, **Skip intro**, **Skip recap** or
+**Skip credits** appears (on the TV, OK skips while the controls are hidden).
+Skip credits starts the next episode when there is one. **Settings → Playback →
+Intro and recap → Skip automatically** skips intro and recap without asking,
+once each per episode. Only the server talks to IntroDB and keeps its answers for
+a day; secure mode turns the lookup off. A title IntroDB does not know, or an
+unavailable service, simply shows no button.
+
 ## Keyboard
 
 | Key | Action |

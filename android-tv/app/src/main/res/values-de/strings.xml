@@ -176,6 +176,11 @@
   <string name="player_subtitle_delay">Untertitel-Timing</string>
   <string name="player_subtitle_in_step">im Schritt</string>
   <string name="player_from_addon">Addon</string>
+  <string name="player_chapters">Kapitel</string>
+  <string name="player_chapter_number">Kapitel %1$s</string>
+  <string name="player_skip_intro">Intro überspringen</string>
+  <string name="player_skip_recap">Rückblick überspringen</string>
+  <string name="player_skip_outro">Abspann überspringen</string>
   <string name="player_up_next">NÄCHSTES</string>
   <string name="player_up_next_countdown">Beginnt in %1$ss</string>
   <string name="player_play_now">Jetzt spielen</string>
@@ -209,6 +214,11 @@
   <string name="settings_stream_sort">Standard-Quellreihenfolge</string>
   <string name="settings_default_rules_hint">„Empfohlen“ sortiert Quellen nach diesen Regeln, und Abspielen wählt die erste passende.</string>
   <string name="settings_start_view">Startseite</string>
+  <string name="settings_up_next_at">Nächste Folge anbieten</string>
+  <string name="settings_up_next_end">Wenn die Folge endet</string>
+  <string name="settings_up_next_percent">Bei %1$s %%</string>
+  <string name="settings_up_next_seconds">%1$s s vor dem Ende</string>
+  <string name="settings_up_next_minutes">%1$s Min. vor dem Ende</string>
   <string name="tv_settings_title">Dieser Fernseher</string>
   <string name="tv_account">Konto</string>
   <string name="tv_device">Gerät</string>
@@ -226,6 +236,8 @@
   <string name="tv_prefer_conversion_note">Jede Wiedergabe startet wie im Browser, daher konvertiert der Server, was der Fernseher nicht abspielt. Langsamerer Start und höhere Serverlast.</string>
   <string name="tv_on">Ein</string>
   <string name="tv_off">Aus</string>
+  <string name="tv_chapters_button">Kapitel</string>
+  <string name="tv_skip_segments_auto">Intro und Rückblick automatisch überspringen</string>
   <string name="tv_back_to_source">Zurück zur vorherigen Quelle</string>
   <string name="library_mosaic_alt">Postermosaik aus %1$s Filmen</string>
   <string name="library_show_in_library">In der Bibliothek anzeigen</string>

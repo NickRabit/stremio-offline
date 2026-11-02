@@ -29,6 +29,7 @@ import cz.stremiooffline.tv.data.FavoritesPage
 import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.HomeLayoutDto
 import cz.stremiooffline.tv.data.HomeLayoutResponseDto
+import cz.stremiooffline.tv.data.IntroSegmentsDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
 import cz.stremiooffline.tv.data.GlobalSearchPollDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
@@ -159,6 +160,7 @@ open class FakeTvApi : TvApi {
   var settingsReadGate: CompletableDeferred<Unit>? = null
   /** Each `updateSettings()` call in order, so a test can assert one personal field per body. */
   var settingsPatches: MutableList<Pair<String, String>> = mutableListOf()
+  var settingFlagPatches: MutableList<Pair<String, Boolean>> = mutableListOf()
   /** When set, every `updateSettings()` throws it instead of answering. */
   var settingsFailure: ApiFailure? = null
   var sourceProfilesValue: List<SourceProfileDto> = emptyList()
@@ -575,6 +577,16 @@ open class FakeTvApi : TvApi {
     return settingsValue
   }
 
+  override suspend fun updateSettingFlag(field: String, value: Boolean): SettingsResponse {
+    settingFlagPatches += field to value
+    settingsFailure?.let { throw ApiError(it) }
+    settingsValue = when (field) {
+      "skipSegmentsAuto" -> settingsValue.copy(skipSegmentsAuto = value)
+      else -> settingsValue
+    }
+    return settingsValue
+  }
+
   override suspend fun progressList(): List<ProgressEntryDto> {
     progressListCalls += 1
     progressListGate?.await()
@@ -905,6 +917,16 @@ open class FakeTvApi : TvApi {
   var libraryNextValue: NextFileDto? = null
   val libraryNextRequests: MutableList<String> = mutableListOf()
 
+  var introSegmentsValue: IntroSegmentsDto = IntroSegmentsDto()
+  val introSegmentRequests: MutableList<cz.stremiooffline.tv.playback.IntroQuery> = mutableListOf()
+  var introSegmentsFailure: ApiFailure? = null
+
+  override suspend fun introSegments(imdb: String, season: Int?, episode: Int?): IntroSegmentsDto {
+    introSegmentRequests += cz.stremiooffline.tv.playback.IntroQuery(imdb, season, episode)
+    introSegmentsFailure?.let { throw ApiError(it) }
+    return introSegmentsValue
+  }
+
   override suspend fun sidecar(url: String, position: Double, delay: Double): SidecarFetch? {
     sidecarRequests += Triple(url, position, delay)
     return sidecarValue
@@ -913,8 +935,13 @@ open class FakeTvApi : TvApi {
   var sidecarValue: SidecarFetch? = null
   val sidecarRequests: MutableList<Triple<String, Double, Double>> = mutableListOf()
 
-  override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto =
-    PlaybackDescriptorDto(id = id, url = "stream.m3u8", playlist = true, offset = time)
+  val seekTimes: MutableList<Double> = mutableListOf()
+  var seekAnswer: PlaybackDescriptorDto? = null
+
+  override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto {
+    seekTimes += time
+    return seekAnswer ?: PlaybackDescriptorDto(id = id, url = "stream.m3u8", playlist = true, offset = time)
+  }
 
   val escalatedTimes: MutableList<Double> = mutableListOf()
 

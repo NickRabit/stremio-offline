@@ -10,7 +10,7 @@ import { HomeLayoutSettings } from "./HomeLayoutSettings";
 import { Heading, SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES, languageName, localeTag, t, useI18n, type Key, type Locale } from "./i18n";
 import { sourceProfileName } from "./source-profile-copy";
-import type { BuildInfo, LibraryView, SearchState, Session, Settings as AppSettings, SettingsPatch, SourceProfile } from "./types";
+import type { BuildInfo, LibraryView, SearchState, Session, Settings as AppSettings, SettingsPatch, SourceProfile, UpNextAt } from "./types";
 import { resolveSourceProfile } from "./SeriesDownloadDialog";
 import { SourceProfilesSettings } from "./SourceProfilesSettings";
 import { SourceSortOptions } from "./source-rows";
@@ -92,6 +92,17 @@ const refreshIntervalLabel = (hours: number) =>
   hours === 0 ? t("settings.addonRefreshOff")
   : hours === 168 ? t("settings.addonRefreshWeekly")
   : t("settings.addonRefreshHoursOption", { count: hours });
+
+const upNextLabel = (value: UpNextAt) => {
+  if (value === "end") return t("settings.upNextEnd");
+  if (value === "pct97") return t("settings.upNextPercent", { percent: 97 });
+  if (value === "pct98") return t("settings.upNextPercent", { percent: 98 });
+  if (value === "pct99") return t("settings.upNextPercent", { percent: 99 });
+  if (value === "sec30") return t("settings.upNextSeconds", { seconds: 30 });
+  if (value === "sec60") return t("settings.upNextMinutes", { minutes: 1 });
+  if (value === "sec120") return t("settings.upNextMinutes", { minutes: 2 });
+  return t("settings.upNextMinutes", { minutes: 3 });
+};
 
 const SETTINGS_TABS = ["libraries", "home", "playback", "sources", "downloads", "services", "account"] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
@@ -252,7 +263,18 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
       </section>}
       </>}
       {tab === "playback" && <>
-      <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
+      <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div>
+        <SettingControl title={t("settings.upNextAt")} text={t("settings.upNextAtHint")}>
+          <select aria-label={t("settings.upNextAtLabel")} disabled={restricted} value={settings.upNextAt ?? "end"} onChange={(event) => void onSave({ upNextAt: event.target.value as UpNextAt })}>
+            {(["end", "pct97", "pct98", "pct99", "sec30", "sec60", "sec120", "sec180"] as const).map((value) => <option key={value} value={value}>{upNextLabel(value)}</option>)}
+          </select>
+        </SettingControl>
+        <SettingControl title={t("settings.skipSegments")} text={t("settings.skipSegmentsHint")}>
+          <select aria-label={t("settings.skipSegmentsLabel")} disabled={restricted} value={settings.skipSegmentsAuto ? "1" : "0"} onChange={(event) => void onSave({ skipSegmentsAuto: event.target.value === "1" })}>
+            <option value="0">{t("settings.skipAsk")}</option><option value="1">{t("settings.skipAuto")}</option>
+          </select>
+        </SettingControl>
+        <SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
           <select aria-label={t("settings.trackProgressLabel")} disabled={restricted} value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>
             <option value="1">{t("settings.store")}</option><option value="0">{t("settings.doNotStore")}</option>
           </select></SettingControl>{!restricted && <SettingControl title={t("settings.history")} text={t("settings.historyHint")}>

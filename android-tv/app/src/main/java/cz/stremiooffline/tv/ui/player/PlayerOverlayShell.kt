@@ -35,6 +35,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.PlaybackChapterDto
+import cz.stremiooffline.tv.data.PlaybackFactsDto
 import cz.stremiooffline.tv.playback.PlaybackController
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
@@ -54,6 +56,7 @@ const val SEEK_KEPT_MS = 3_000L
 const val TAG_OVERLAY_BUBBLE = "overlay_bubble"
 const val TAG_OVERLAY_ROOT = "overlay_root"
 const val TAG_OVERLAY_SEEK_KEPT = "overlay_seek_kept"
+const val TAG_PLAYER_SKIP = "player_skip"
 
 /**
  * The player overlay without an ExoPlayer: it owns the OSD visibility state, the 5 s auto-hide,
@@ -66,6 +69,7 @@ fun PlayerOverlayShell(
   position: Double,
   duration: Double,
   playing: Boolean,
+  facts: PlaybackFactsDto? = null,
   /** What the play button shows: Pause while the player intends to play, even while it is still
    *  buffering, so the button does not flip from Play to Pause a moment after the start. */
   pauseShown: Boolean = playing,
@@ -98,8 +102,14 @@ fun PlayerOverlayShell(
   qualityText: String = "",
   qualityLabel: String = "",
   qualityFocus: FocusRequester? = null,
+  chapters: List<PlaybackChapterDto> = emptyList(),
+  onChapters: (() -> Unit)? = null,
+  chaptersLabel: String = "",
+  chaptersFocus: FocusRequester? = null,
   onNext: (() -> Unit)? = null,
   nextLabel: String = "",
+  skipLabel: String? = null,
+  onSkip: (() -> Unit)? = null,
   onDiagnostics: () -> Unit = {},
   diagnosticsLabel: String = "",
   diagnosticsFocus: FocusRequester? = null,
@@ -256,6 +266,10 @@ fun PlayerOverlayShell(
           Key.MediaRewind -> { pressSeek(-1, event.nativeKeyEvent.eventTime); return@onPreviewKeyEvent true }
         }
         val key = playerKeyOf(event.key) ?: return@onPreviewKeyEvent false
+        if (key == PlayerKey.Center && !controls && onSkip != null) {
+          onSkip()
+          return@onPreviewKeyEvent true
+        }
         val intent = playerKeyIntent(key, controls) ?: return@onPreviewKeyEvent false
         intent.seekDirection?.let { pressSeek(it, event.nativeKeyEvent.eventTime) }
         if (intent.exit) onExit()
@@ -272,6 +286,8 @@ fun PlayerOverlayShell(
         position = shownPosition,
         duration = duration,
         playing = pauseShown,
+        facts = facts,
+        chapters = chapters,
         playFocus = playFocus,
         onBack10 = { seekBy(-SEEK_STEP_SECONDS) },
         onForward10 = { seekBy(SEEK_STEP_SECONDS) },
@@ -292,8 +308,13 @@ fun PlayerOverlayShell(
         qualityLabel = qualityLabel,
         qualityFocus = qualityFocus,
         onQualityFocus = { qualityFocused = it },
+        onChapters = onChapters,
+        chaptersLabel = chaptersLabel,
+        chaptersFocus = chaptersFocus,
         onNext = onNext,
         nextLabel = nextLabel,
+        onSkip = if (skipLabel != null) onSkip else null,
+        skipLabel = skipLabel.orEmpty(),
         onDiagnostics = onDiagnostics,
         diagnosticsLabel = diagnosticsLabel,
         diagnosticsFocus = diagnosticsFocus,
@@ -302,6 +323,21 @@ fun PlayerOverlayShell(
 
     // Above the picture and the OSD scrim, lifted clear of the controls, below the panels.
     subtitleText?.let { SubtitleOverlay(it, lifted = controls) }
+
+    if (skipLabel != null && !modal) {
+      Text(
+        skipLabel,
+        color = Tokens.Text,
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+          .align(Alignment.BottomEnd)
+          .padding(end = Tokens.SafeX, bottom = if (controls) 128.dp else Tokens.SafeY)
+          .testTag(TAG_PLAYER_SKIP)
+          .background(Tokens.Bg.copy(alpha = 0.78f), RoundedCornerShape(999.dp))
+          .padding(horizontal = 20.dp, vertical = 11.dp),
+      )
+    }
 
     val text = bubbleText
     if (text != null) {

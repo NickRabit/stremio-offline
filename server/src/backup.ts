@@ -1,7 +1,7 @@
 import type { AddonDownloadSettings, AddonRecord, AddonRole } from "./types.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import { prepareMediaServerConfiguration, projectMediaServerConfiguration, type MediaServerConfigurationExport } from "./media-server-store.js";
-import { defaultSettings, type Settings } from "./store.js";
+import { defaultSettings, UP_NEXT_AT, type Settings, type UpNextAt } from "./store.js";
 import { isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError } from "./errors.js";
 import { normalizeRefreshHours } from "./addon-refresh.js";
@@ -128,6 +128,7 @@ function parseSettings(value: unknown): Settings {
   const downloadSourceProfile = typeof source.downloadSourceProfile === "string" ? source.downloadSourceProfile : "";
   const followSourceProfile = typeof source.followSourceProfile === "string" ? source.followSourceProfile : "";
   const defaultRulesProfileId = typeof source.defaultRulesProfileId === "string" ? source.defaultRulesProfileId : "";
+  const upNextAt = String(source.upNextAt ?? "");
   // A personal Home arrangement rides in the backup like every other personal setting; a
   // shape that is not the three arrays is dropped rather than failing the whole import.
   const homeLayout = parseHomeLayout(source.homeLayout);
@@ -142,6 +143,8 @@ function parseSettings(value: unknown): Settings {
       : fallback.streamSort,
     trackProgress: boolean("trackProgress"),
     showResumeRow: boolean("showResumeRow"),
+    upNextAt: UP_NEXT_AT.includes(upNextAt as UpNextAt) ? upNextAt as UpNextAt : fallback.upNextAt,
+    skipSegmentsAuto: boolean("skipSegmentsAuto"),
     libraryAutoScan: boolean("libraryAutoScan"),
     libraryScanPauseOnDownload: boolean("libraryScanPauseOnDownload"),
     secureMode: boolean("secureMode"),

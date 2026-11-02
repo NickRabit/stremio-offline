@@ -61,6 +61,7 @@ import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.AddonSubtitleDto
+import cz.stremiooffline.tv.data.IntroSegmentsDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
@@ -79,11 +80,15 @@ import cz.stremiooffline.tv.playback.SubtitleChoice
 import cz.stremiooffline.tv.playback.SubtitleDelay
 import cz.stremiooffline.tv.playback.VersionProgress
 import cz.stremiooffline.tv.playback.VttCue
+import cz.stremiooffline.tv.playback.SegmentKind
+import cz.stremiooffline.tv.playback.UpNextTrigger
+import cz.stremiooffline.tv.playback.activeSegment
 import cz.stremiooffline.tv.playback.absoluteCues
 import cz.stremiooffline.tv.playback.activeCue
 import cz.stremiooffline.tv.playback.browserCapabilities
 import cz.stremiooffline.tv.playback.detectCapabilities
 import cz.stremiooffline.tv.playback.diagPath
+import cz.stremiooffline.tv.playback.introQueryOf
 import cz.stremiooffline.tv.playback.matchTrack
 import cz.stremiooffline.tv.playback.nextEpisodeOf
 import cz.stremiooffline.tv.playback.parseVtt
@@ -91,6 +96,7 @@ import cz.stremiooffline.tv.playback.qualityChoice
 import cz.stremiooffline.tv.playback.sidecarAdvanced
 import cz.stremiooffline.tv.playback.sidecarPollDelay
 import cz.stremiooffline.tv.playback.sidecarRefresh
+import cz.stremiooffline.tv.playback.upNextPoint
 import cz.stremiooffline.tv.ui.catalog.SourcesPanel
 import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.SourceFilterState
@@ -167,6 +173,10 @@ fun PlayerScreen(
   // The window lost its target while a screensaver or another activity covered it.
   var reclaimFocus by remember { mutableIntStateOf(0) }
   var settings by remember { mutableStateOf(SettingsResponse()) }
+  var segments by remember(target.key) { mutableStateOf<IntroSegmentsDto?>(null) }
+  val autoSkipped = remember(target.key) { mutableSetOf<SegmentKind>() }
+  var previousPosition by remember(target.key) { mutableDoubleStateOf(0.0) }
+  val upNextTrigger = remember(target.key) { UpNextTrigger() }
   var sourceAddons by remember { mutableStateOf<List<AddonDto>>(emptyList()) }
   var addonSubtitles by remember { mutableStateOf<List<AddonSubtitleDto>>(emptyList()) }
   var addonFetched by remember { mutableStateOf(false) }
@@ -179,6 +189,7 @@ fun PlayerScreen(
   var diagnosticsOpen by remember { mutableStateOf(false) }
   var sourcesOpen by remember { mutableStateOf(false) }
   var qualityOpen by remember { mutableStateOf(false) }
+  var chaptersOpen by remember { mutableStateOf(false) }
   // A source switch that has not landed yet: the target to retry, the target to go back to, and
   // the position both must resume at.
   var switchTarget by remember { mutableStateOf<PlayTarget?>(null) }
@@ -216,6 +227,8 @@ fun PlayerScreen(
   val sourcesEntry = remember { FocusRequester() }
   val qualityFocus = remember { FocusRequester() }
   val qualityEntry = remember { FocusRequester() }
+  val chaptersFocus = remember { FocusRequester() }
+  val chaptersEntry = remember { FocusRequester() }
   val diagnosticsFocus = remember { FocusRequester() }
   val playFocus = remember { FocusRequester() }
   val nextFocus = remember { FocusRequester() }
@@ -309,10 +322,21 @@ fun PlayerScreen(
     diagnosticsOpen = false
     sourcesOpen = false
     qualityOpen = false
+    chaptersOpen = false
     switchTarget = null
     previousTarget = null
     switchAt = 0.0
     cues = emptyList()
+    segments = null
+    autoSkipped.clear()
+    previousPosition = 0.0
+    upNextTrigger.reset()
+  }
+
+  LaunchedEffect(api, target.key) {
+    segments = null
+    val query = introQueryOf(target.key) ?: return@LaunchedEffect
+    segments = runCatching { api.introSegments(query.imdb, query.season, query.episode) }.getOrNull()
   }
 
   /** The catalogue title each library file played here is bound to, null for an unbound file. */
@@ -545,6 +569,33 @@ fun PlayerScreen(
     nextEpisode = runCatching { api.libraryNext(id) }.getOrNull()?.let(::nextEpisodeOf)
   }
 
+  LaunchedEffect(
+    position,
+    playing,
+    segments,
+    settings.skipSegmentsAuto,
+    settings.upNextAt,
+    state.duration,
+    currentNext?.path,
+  ) {
+    val previous = previousPosition
+    val segment = activeSegment(segments, position)
+    if (
+      settings.skipSegmentsAuto &&
+      playing &&
+      segment != null &&
+      segment.kind != SegmentKind.Outro &&
+      segment.kind !in autoSkipped &&
+      previous < segment.range.start + 1
+    ) {
+      autoSkipped += segment.kind
+      controller.seekTo(segment.range.end)
+    }
+    val nextPoint = upNextPoint(settings.upNextAt, state.duration, segments?.outro)
+    if (upNextTrigger.observe(position, nextPoint, playing && currentNext != null)) nextCard = true
+    previousPosition = position
+  }
+
   val sidecar = state.sidecarUrl
   val embeddedChoice = state.subtitle as? SubtitleChoice.Embedded
   val addonChoice = state.subtitle as? SubtitleChoice.Addon
@@ -701,6 +752,19 @@ fun PlayerScreen(
     else stringResource(R.string.media_server_group_failed, failure.labels.joinToString(", "))
   }
   val qualityText = qualityLabel(quality)
+  val segment = activeSegment(segments, position)
+  val skipLabel = when (segment?.kind) {
+    SegmentKind.Intro -> stringResource(R.string.player_skip_intro)
+    SegmentKind.Recap -> stringResource(R.string.player_skip_recap)
+    SegmentKind.Outro -> stringResource(R.string.player_skip_outro)
+    null -> null
+  }
+  val skip = segment?.let { active ->
+    {
+      if (active.kind == SegmentKind.Outro && currentNext != null) startNext()
+      else controller.seekTo(active.range.end)
+    }
+  }
   // Both panels act on the running session, so their buttons wait for it: a choice made before
   // the first descriptor lands would be dropped.
   val sourcesShown = state.started && (offeredSources.isNotEmpty() || sourcesAsking)
@@ -710,6 +774,7 @@ fun PlayerScreen(
     position = position,
     duration = state.duration,
     playing = playing,
+    facts = state.playing,
     pauseShown = wantsPlay,
     title = title,
     // Before the server answers there is no path to name; a failed start must not claim direct play.
@@ -717,7 +782,7 @@ fun PlayerScreen(
     playFocus = playFocus,
     reclaimFocus = reclaimFocus,
     seekKept = state.seekKept,
-    modal = tracksOpen || diagnosticsOpen || sourcesOpen || qualityOpen || nextCard || state.error != null,
+    modal = tracksOpen || diagnosticsOpen || sourcesOpen || qualityOpen || chaptersOpen || nextCard || state.error != null,
     onSeek = { controller.seekTo(it) },
     onTogglePause = { if (exoPlayer.playWhenReady) exoPlayer.pause() else exoPlayer.play() },
     onExit = leave,
@@ -733,8 +798,14 @@ fun PlayerScreen(
     qualityText = qualityText,
     qualityLabel = qualityText,
     qualityFocus = qualityFocus,
+    chapters = state.chapters,
+    onChapters = if (state.chapters.size >= 2) ({ chaptersOpen = true }) else null,
+    chaptersLabel = stringResource(R.string.tv_chapters_button),
+    chaptersFocus = chaptersFocus,
     onNext = if (currentNext != null) ({ startNext() }) else null,
     nextLabel = stringResource(R.string.player_next_episode),
+    skipLabel = skipLabel,
+    onSkip = skip,
     onDiagnostics = { diagnosticsOpen = true },
     diagnosticsLabel = stringResource(R.string.diag_title),
     diagnosticsFocus = diagnosticsFocus,
@@ -841,6 +912,19 @@ fun PlayerScreen(
         )
       }
 
+      if (chaptersOpen) {
+        PlayerChaptersPanel(
+          chapters = state.chapters,
+          position = position,
+          onSeek = { controller.seekTo(it) },
+          onClose = {
+            chaptersOpen = false
+            restoreFocus = chaptersFocus
+          },
+          initialFocus = chaptersEntry,
+        )
+      }
+
       if (nextCard && currentNext != null) {
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)), contentAlignment = Alignment.BottomEnd) {
           Box(Modifier.padding(48.dp)) {
@@ -849,6 +933,7 @@ fun PlayerScreen(
               onPlay = { startNext() },
               onDismiss = {
                 nextCard = false
+                upNextTrigger.dismiss()
                 restoreFocus = playFocus
               },
               focus = nextFocus,

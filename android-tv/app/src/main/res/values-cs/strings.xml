@@ -180,6 +180,11 @@
   <string name="player_subtitle_delay">Načasování titulků</string>
   <string name="player_subtitle_in_step">sedí</string>
   <string name="player_from_addon">Doplněk</string>
+  <string name="player_chapters">Kapitoly</string>
+  <string name="player_chapter_number">Kapitola %1$s</string>
+  <string name="player_skip_intro">Přeskočit úvod</string>
+  <string name="player_skip_recap">Přeskočit rekapitulaci</string>
+  <string name="player_skip_outro">Přeskočit titulky</string>
   <string name="player_up_next">NÁSLEDUJE</string>
   <string name="player_up_next_countdown">Spustí se za %1$s s</string>
   <string name="player_play_now">Přehrát hned</string>
@@ -213,6 +218,11 @@
   <string name="settings_stream_sort">Výchozí řazení zdrojů</string>
   <string name="settings_default_rules_hint">Podle nich se řadí „Doporučené“ a Přehrát vybere první zdroj, který je splňuje.</string>
   <string name="settings_start_view">Úvodní stránka</string>
+  <string name="settings_up_next_at">Nabídnout další díl</string>
+  <string name="settings_up_next_end">Až díl skončí</string>
+  <string name="settings_up_next_percent">Při %1$s %%</string>
+  <string name="settings_up_next_seconds">%1$s s před koncem</string>
+  <string name="settings_up_next_minutes">%1$s min před koncem</string>
   <string name="tv_settings_title">Tato televize</string>
   <string name="tv_account">Účet</string>
   <string name="tv_device">Zařízení</string>
@@ -230,6 +240,8 @@
   <string name="tv_prefer_conversion_note">Každé přehrávání začne jako v prohlížeči, takže server převede, co televize nezvládne. Pomalejší start a vyšší zátěž serveru.</string>
   <string name="tv_on">Zapnuto</string>
   <string name="tv_off">Vypnuto</string>
+  <string name="tv_chapters_button">Kapitoly</string>
+  <string name="tv_skip_segments_auto">Přeskakovat úvod a rekapitulaci automaticky</string>
   <string name="tv_back_to_source">Zpět na předchozí zdroj</string>
   <string name="library_mosaic_alt">Mozaika plakátů %1$s filmů</string>
   <string name="library_show_in_library">Zobrazit v knihovně</string>

@@ -38,6 +38,10 @@ let host: HTMLDivElement;
 let progressPosts: Array<Record<string, unknown>>;
 let remotePosts: Array<Record<string, unknown>>;
 let playbackReports: Array<Record<string, unknown>>;
+/** Every segment lookup sent for the playback on screen. */
+let introRequests: string[];
+/** What the next segment lookup answers. */
+let introAnswer: unknown;
 /** Every generic key the player read, and what each one holds. */
 let progressReads: string[];
 let progressAnswers: Record<string, unknown>;
@@ -73,6 +77,8 @@ beforeEach(() => {
   progressPosts = [];
   remotePosts = [];
   playbackReports = [];
+  introRequests = [];
+  introAnswer = {};
   progressReads = [];
   progressAnswers = {};
   remoteReads = [];
@@ -112,6 +118,10 @@ beforeEach(() => {
     if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+\/playing$/.test(path) && init?.method === "POST") {
       playbackReports.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       return Promise.resolve(new Response(null, { status: 204 }));
+    }
+    if (path === "/api/intro-segments") {
+      introRequests.push(`${path}${url.search}`);
+      return Promise.resolve(json(introAnswer));
     }
     if (path.startsWith("/api/progress")) return Promise.resolve(json(null));
     return Promise.resolve(json(null));
@@ -602,5 +612,127 @@ describe("Player refused direct stream", () => {
     expect(escalations).toHaveLength(1);
     expect(playbackPosts).toHaveLength(1);
     expect(host.querySelector(".player-error")?.textContent).toBe("The browser could not play this stream.");
+  });
+});
+
+describe("Player chapters, segments and next episode", () => {
+  const videoAt = async (seconds: number) => {
+    const video = host.querySelector<HTMLVideoElement>("video")!;
+    await act(async () => {
+      video.currentTime = seconds;
+      video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+    });
+    await flush();
+    return video;
+  };
+
+  const startPlaying = async () => {
+    await act(async () => { host.querySelector("video")!.dispatchEvent(new Event("play")); });
+    await flush();
+  };
+
+  it("shows the playing badges", async () => {
+    sessionShape = {
+      playing: { resolution: 2160, hdr: "dolbyVision", audioCodec: "eac3", audioChannels: 6 },
+    };
+    await render();
+    expect([...host.querySelectorAll(".player-badges i")].map((node) => node.textContent))
+      .toEqual(["4K", "Dolby Vision", "E-AC-3 5.1"]);
+  });
+
+  it("marks chapters, names the current one and seeks from the chapter list", async () => {
+    sessionShape = {
+      chapters: [
+        { start: 0, end: 600, title: "Opening" },
+        { start: 600, end: 1800 },
+        { start: 1800, end: 3600, title: "Finale" },
+      ],
+    };
+    await render();
+    expect(host.querySelectorAll(".timeline-chapter")).toHaveLength(2);
+    const video = await videoAt(700);
+    expect(host.querySelector(".player-chapter")?.textContent).toBe("Chapter 2");
+    await openSettings();
+    const chapters = [...host.querySelectorAll<HTMLButtonElement>(".player-chapters button")];
+    expect(chapters).toHaveLength(3);
+    const finale = chapters.find((button) => button.textContent?.includes("Finale"))!;
+    await click(finale);
+    expect(video.currentTime).toBe(1800);
+  });
+
+  it("hides chapter UI when the session has fewer than two chapters", async () => {
+    sessionShape = { chapters: [{ start: 0, end: 3600, title: "Only" }] };
+    await render();
+    await videoAt(700);
+    expect(host.querySelector(".timeline-chapter")).toBeNull();
+    expect(host.querySelector(".player-chapter")).toBeNull();
+    await openSettings();
+    expect(host.querySelector(".player-chapters")).toBeNull();
+  });
+
+  it("asks for segments once for an IMDb stream and never for a file key", async () => {
+    introAnswer = { intro: { start: 5, end: 60 } };
+    await render({ progressKey: "series:tt0903747:1:2" });
+    expect(introRequests).toEqual(["/api/intro-segments?imdb=tt0903747&season=1&episode=2"]);
+    await videoAt(10);
+    expect(introRequests).toHaveLength(1);
+    await rerender({ stream: addonRow(), progressKey: "file:Films/a.mkv" });
+    await videoAt(10);
+    expect(introRequests).toHaveLength(1);
+  });
+
+  it("offers a skip button that seeks past the intro", async () => {
+    introAnswer = { intro: { start: 5, end: 60 } };
+    await render({ progressKey: "movie:tt0903747" });
+    const video = await videoAt(10);
+    const skip = host.querySelector<HTMLButtonElement>(".player-skip");
+    expect(skip?.textContent).toBe("Skip intro");
+    await click(skip!);
+    expect(video.currentTime).toBe(60);
+  });
+
+  it("auto-skips an intro once when playback enters it", async () => {
+    introAnswer = { intro: { start: 5, end: 60 } };
+    await render({ progressKey: "movie:tt0903747", skipSegmentsAuto: true });
+    await startPlaying();
+    await videoAt(4);
+    const video = await videoAt(6);
+    expect(video.currentTime).toBe(60);
+    await act(async () => {
+      video.currentTime = 30;
+      video.dispatchEvent(new Event("seeking"));
+      video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+    });
+    await flush();
+    expect(video.currentTime).toBe(30);
+  });
+
+  it("offers the next episode at the configured point and respects dismissal", async () => {
+    await render({
+      onNext: vi.fn(async () => true),
+      autoNext: true,
+      upNextAt: "sec60",
+    });
+    await startPlaying();
+    await videoAt(3539);
+    expect(host.querySelector(".player-up-next")).toBeNull();
+    await videoAt(3541);
+    let card = host.querySelector<HTMLElement>(".player-up-next");
+    expect(card).not.toBeNull();
+    await click(card!.querySelectorAll("button")[1]!);
+    expect(host.querySelector(".player-up-next")).toBeNull();
+    await videoAt(3550);
+    expect(host.querySelector(".player-up-next")).toBeNull();
+    await videoAt(3500);
+    await videoAt(3545);
+    card = host.querySelector<HTMLElement>(".player-up-next");
+    expect(card).not.toBeNull();
+  });
+
+  it("keeps the end setting for onEnded only", async () => {
+    await render({ onNext: vi.fn(async () => true), autoNext: true, upNextAt: "end" });
+    await startPlaying();
+    await videoAt(3599);
+    expect(host.querySelector(".player-up-next")).toBeNull();
   });
 });
