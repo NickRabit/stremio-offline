@@ -716,7 +716,7 @@ fun TitleTechBlock(
     Streams.streamLanguages(stream, titleLanguage)
   }).map { languageName(it, locale) }.distinct()
   // What the server read out of a library file beats what its name advertises.
-  val audioTag = audioFactsText(stream.audioFacts, stringResource(R.string.detail_audio_channels))
+  val audioTag = audioFactsText(stream.audioFacts, stringResource(R.string.sources_audio_channels))
     ?: audioFormat(Streams.streamText(stream)).takeIf { it.isNotEmpty() }
   val fileName = stream.behaviorHints?.filename?.takeIf { it.isNotBlank() && it != willPlayName(stream) }
   val subtitles = stream.subtitleLanguages.map { languageName(it, locale) }.distinct()
@@ -815,7 +815,7 @@ private val READ_AUDIO_CODECS = mapOf(
 )
 private val CHANNEL_LAYOUTS = mapOf(1 to "1.0", 2 to "2.0", 6 to "5.1", 8 to "7.1")
 
-/** The web's `audioFactsText`: the read codec and channel layout; [channelsPattern] names an odd count. */
+/** The web's `audioFactsText`: the read codec and channel layout; [channelsPattern] (`%1$s ch`) names an odd count. */
 internal fun audioFactsText(facts: AudioFactsDto?, channelsPattern: String): String? {
   if (facts == null) return null
   val channels = facts.channels?.takeIf { it > 0 }?.let { CHANNEL_LAYOUTS[it] ?: channelsPattern.format(it) }

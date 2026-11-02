@@ -434,3 +434,5 @@ detail.action.unwatched
 detail.action.wholeSeries
 detail.action.folder
 home.openDetail
+detail.tech.file
+sources.audioChannels

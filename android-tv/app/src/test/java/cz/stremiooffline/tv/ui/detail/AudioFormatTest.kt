@@ -35,7 +35,7 @@ class AudioFormatTest {
 
   @Test
   fun `the sound read from a file names its codec and layout`() {
-    val ch = "%d ch"
+    val ch = "%1\$s ch"
     org.junit.Assert.assertEquals("MP3 2.0", audioFactsText(cz.stremiooffline.tv.data.AudioFactsDto("mp3", 2), ch))
     org.junit.Assert.assertEquals("DD+ 5.1", audioFactsText(cz.stremiooffline.tv.data.AudioFactsDto("eac3", 6), ch))
     org.junit.Assert.assertEquals("3 ch", audioFactsText(cz.stremiooffline.tv.data.AudioFactsDto(null, 3), ch))

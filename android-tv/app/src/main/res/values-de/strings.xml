@@ -449,8 +449,6 @@
   <string name="detail_tech_video">Video</string>
   <string name="detail_tech_audio">Audio</string>
   <string name="detail_tech_subtitles">Untertitel</string>
-  <string name="detail_tech_file">Datei</string>
-  <string name="detail_audio_channels">%d Kan.</string>
   <string name="detail_videos">Trailer und Extras</string>
   <string name="detail_video_trailer">Trailer</string>
   <string name="detail_video_teaser">Teaser</string>
@@ -464,4 +462,6 @@
   <string name="detail_action_whole_series">Ganze Serie</string>
   <string name="detail_action_folder">Ordner</string>
   <string name="home_open_detail">Details öffnen</string>
+  <string name="detail_tech_file">Datei</string>
+  <string name="sources_audio_channels">%1$s Kan.</string>
 </resources>
