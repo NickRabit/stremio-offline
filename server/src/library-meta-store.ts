@@ -3,9 +3,11 @@ import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { dropKeyed, pinInherited, remapKeyed, type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion } from "./library-match.js";
 import { isPathWithin, remapPath } from "./library.js";
-import { libraryPath, parseLibraryPath } from "./libraries.js";
+import { LIBRARY_ID, libraryPath, parseLibraryPath } from "./libraries.js";
 import { log } from "./logger.js";
 import { preserveDamaged } from "./state-file.js";
+import type { AppDatabase, Statement } from "./storage/app-database.js";
+import { moveToMigrationBackup } from "./storage/hourly-counts.js";
 
 /** One library's remembered matches. Keys are library-relative, so the file reads on its
  *  own and stays valid if a library is ever re-identified. */
@@ -27,14 +29,52 @@ export type QualifiedMutator = (
 /** A scan accepting titles arrives in bursts, and one write per library per burst is
  *  enough. The point of the split is that a match never rewrites the whole state. */
 const SAVE_DEBOUNCE_MS = 2000;
+const LIBRARY_META_MARKER = "domain.libraryMeta.";
+const EPISODES_MARKER = "domain.libraryEpisodes";
+const META_UPSERT = "INSERT INTO library_meta (library_id, kind, key, data) VALUES (?, ?, ?, ?) ON CONFLICT (library_id, kind, key) DO UPDATE SET data = excluded.data";
+const META_DELETE = "DELETE FROM library_meta WHERE library_id = ? AND kind = ? AND key = ?";
+const EPISODE_UPSERT = "INSERT INTO library_episodes (key, data) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET data = excluded.data";
+const EPISODE_DELETE = "DELETE FROM library_episodes WHERE key = ?";
+const MARKER_UPSERT = "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value";
 
 const emptyFile = (): LibraryMetaFile => ({ version: 1, meta: {}, suggestions: {} });
+type MetaKind = "meta" | "suggestion";
+type PersistedKind = MetaKind | "episode";
+
+interface PersistedRow {
+  kind: PersistedKind;
+  key: string;
+  json: string;
+}
+
+const persistedKey = (row: Pick<PersistedRow, "kind" | "key">) => `${row.kind}\0${row.key}`;
 
 const records = <T,>(value: unknown): Record<string, T> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, T> : {};
 
+function fileRows(file: LibraryMetaFile): PersistedRow[] {
+  const rows: PersistedRow[] = [];
+  for (const [key, value] of Object.entries(file.meta)) {
+    const json = JSON.stringify(value);
+    if (json !== undefined) rows.push({ kind: "meta", key, json });
+  }
+  for (const [key, value] of Object.entries(file.suggestions)) {
+    const json = JSON.stringify(value);
+    if (json !== undefined) rows.push({ kind: "suggestion", key, json });
+  }
+  return rows;
+}
+
+function episodeRows(rows: Record<string, LibraryEpisodeRecord>): PersistedRow[] {
+  return Object.entries(rows).flatMap(([key, value]) => {
+    const json = JSON.stringify(value);
+    return json === undefined ? [] : [{ kind: "episode" as const, key, json }];
+  });
+}
+
 const libraryDir = (dataDir: string) => path.join(dataDir, "library");
 const fileIn = (dataDir: string, name: string) => path.join(libraryDir(dataDir), name);
+const metadataFileName = (name: string) => name === "episodes.json" || LIBRARY_ID.test(name.slice(0, -".json".length));
 
 async function writeAtomic(file: string, data: string) {
   await mkdir(path.dirname(file), { recursive: true });
@@ -60,6 +100,10 @@ function parseFile(raw: string): LibraryMetaFile {
 export class LibraryMetaStore {
   private files = new Map<string, LibraryMetaFile>();
   private episodeRows: Record<string, LibraryEpisodeRecord> = {};
+  private database?: AppDatabase;
+  private loaded = false;
+  private persisted = new Map<string, Map<string, PersistedRow>>();
+  private markers = new Set<string>();
   private views?: { meta: Record<string, LibraryMetaRecord>; suggestions: Record<string, LibrarySuggestion> };
   private timers = new Map<string, NodeJS.Timeout>();
   private writes = new Map<string, Promise<void>>();
@@ -79,10 +123,24 @@ export class LibraryMetaStore {
     this.dataDir = dataDir;
   }
 
+  attachDatabase(database: AppDatabase): void {
+    if (this.loaded) throw new Error("The library metadata database must be attached before load.");
+    this.database = database;
+  }
+
   async load() {
     const dir = libraryDir(this.dataDir);
     await mkdir(dir, { recursive: true });
-    const names = (await readdir(dir).catch(() => [])).filter((name) => name.endsWith(".json"));
+    const names = (await readdir(dir).catch(() => []))
+      .filter((name) => name.endsWith(".json") && metadataFileName(name));
+    if (this.database) await this.loadDatabase(names);
+    else await this.loadFiles(names);
+    this.views = undefined;
+    this.loaded = true;
+  }
+
+  private async loadFiles(names: string[]) {
+    const dir = libraryDir(this.dataDir);
     for (const name of names) {
       const store = name === "episodes.json" ? "episodes" : name.slice(0, -".json".length);
       const raw = await readFile(path.join(dir, name), "utf8").catch(() => undefined);
@@ -104,7 +162,138 @@ export class LibraryMetaStore {
         }
       }
     }
-    this.views = undefined;
+  }
+
+  private async loadDatabase(names: string[]) {
+    const database = this.database!;
+    const markerRows = await database.all<{ key: string }>(
+      "SELECT key FROM meta WHERE key LIKE 'domain.libraryMeta.%'",
+    );
+    const libraryIds = markerRows
+      .map((row) => row.key.slice(LIBRARY_META_MARKER.length))
+      .filter((libraryId) => libraryId.length > 0);
+    for (const libraryId of libraryIds) {
+      const rows = await database.all<{ kind: MetaKind; key: string; data: string }>(
+        "SELECT kind, key, data FROM library_meta WHERE library_id = ? ORDER BY kind, key",
+        [libraryId],
+      );
+      const file = emptyFile();
+      const persisted = new Map<string, PersistedRow>();
+      for (const row of rows) {
+        if (row.kind !== "meta" && row.kind !== "suggestion") throw new Error("A library metadata row has an invalid kind.");
+        const value = JSON.parse(row.data) as LibraryMetaRecord | LibrarySuggestion;
+        if (row.kind === "meta") file.meta[row.key] = value as LibraryMetaRecord;
+        else file.suggestions[row.key] = value as LibrarySuggestion;
+        const stored = { kind: row.kind, key: row.key, json: row.data };
+        persisted.set(persistedKey(stored), stored);
+      }
+      this.files.set(libraryId, file);
+      this.persisted.set(libraryId, persisted);
+      this.markers.add(libraryId);
+    }
+
+    const episodeMarker = await database.get<{ key: string }>("SELECT key FROM meta WHERE key = ?", [EPISODES_MARKER]);
+    if (episodeMarker) {
+      const rows = await database.all<{ key: string; data: string }>(
+        "SELECT key, data FROM library_episodes ORDER BY key",
+      );
+      const persisted = new Map<string, PersistedRow>();
+      for (const row of rows) {
+        this.episodeRows[row.key] = JSON.parse(row.data) as LibraryEpisodeRecord;
+        const stored = { kind: "episode" as const, key: row.key, json: row.data };
+        persisted.set(persistedKey(stored), stored);
+      }
+      this.persisted.set("episodes", persisted);
+      this.markers.add("episodes");
+    }
+
+    const dir = libraryDir(this.dataDir);
+    for (const name of names) {
+      const store = name === "episodes.json" ? "episodes" : name.slice(0, -".json".length);
+      const file = path.join(dir, name);
+      if (this.markers.has(store)) {
+        try {
+          await this.moveImportedFile(file, name);
+        } catch (error) {
+          log("WARN", "A migrated library metadata file could not be moved aside", {
+            file: name,
+            reason: String(error).slice(0, 120),
+          });
+        }
+        continue;
+      }
+
+      const raw = await readFile(file, "utf8").catch(() => undefined);
+      if (raw === undefined) {
+        this.protectedNames.add(store);
+        log("WARN", "Library metadata could not be read", { file: name });
+        continue;
+      }
+      if (store === "episodes") {
+        let parsed: Record<string, LibraryEpisodeRecord>;
+        try {
+          parsed = records<LibraryEpisodeRecord>(JSON.parse(raw));
+        } catch (error) {
+          await this.preserveUnreadableMetadata(store, file, raw, error);
+          continue;
+        }
+        const persisted = new Map<string, PersistedRow>();
+        const statements = this.importStatements(store, episodeRows(parsed), persisted);
+        await database.batch(statements);
+        Object.assign(this.episodeRows, parsed);
+        this.persisted.set(store, persisted);
+      } else {
+        let parsed: LibraryMetaFile;
+        try {
+          parsed = parseFile(raw);
+        } catch (error) {
+          await this.preserveUnreadableMetadata(store, file, raw, error);
+          continue;
+        }
+        const persisted = new Map<string, PersistedRow>();
+        const statements = this.importStatements(store, fileRows(parsed), persisted);
+        await database.batch(statements);
+        this.files.set(store, parsed);
+        this.persisted.set(store, persisted);
+      }
+      this.markers.add(store);
+      await this.moveImportedFile(file, name);
+    }
+  }
+
+  private async preserveUnreadableMetadata(store: string, file: string, raw: string, error: unknown) {
+    try {
+      const preserved = await preserveDamaged(file, raw);
+      log("WARN", "Damaged library metadata was copied aside", { file: path.basename(file), preserved: path.basename(preserved), reason: String(error).slice(0, 120) });
+    } catch (preserveError) {
+      this.protectedNames.add(store);
+      log("WARN", "Library metadata could not be read or preserved", { file: path.basename(file), reason: String(preserveError).slice(0, 120) });
+    }
+  }
+
+  private importStatements(name: string, rows: PersistedRow[], persisted: Map<string, PersistedRow>): Statement[] {
+    const statements: Statement[] = name === "episodes"
+      ? [{ sql: "DELETE FROM library_episodes" }]
+      : [{ sql: "DELETE FROM library_meta WHERE library_id = ?", params: [name] }];
+    for (const row of rows) {
+      persisted.set(persistedKey(row), row);
+      statements.push(name === "episodes"
+        ? { sql: EPISODE_UPSERT, params: [row.key, row.json] }
+        : { sql: META_UPSERT, params: [name, row.kind, row.key, row.json] });
+    }
+    statements.push({
+      sql: MARKER_UPSERT,
+      params: [
+        name === "episodes" ? EPISODES_MARKER : `${LIBRARY_META_MARKER}${name}`,
+        JSON.stringify({ importedAt: Date.now(), source: path.basename(this.fileFor(name)), count: rows.length }),
+      ],
+    });
+    return statements;
+  }
+
+  private async moveImportedFile(file: string, name: string) {
+    const stem = name.slice(0, -".json".length);
+    await moveToMigrationBackup(file, this.dataDir, `library-${stem}-${Date.now()}.json`);
   }
 
   /** Match history of one library, keyed the way its file stores it. */
@@ -307,6 +496,14 @@ export class LibraryMetaStore {
     await this.writes.get(libraryId);
     this.writes.delete(libraryId);
     this.dirty.delete(libraryId);
+    if (this.database) {
+      await this.database.batch([
+        { sql: "DELETE FROM library_meta WHERE library_id = ?", params: [libraryId] },
+        { sql: "DELETE FROM meta WHERE key = ?", params: [`${LIBRARY_META_MARKER}${libraryId}`] },
+      ]);
+      this.persisted.delete(libraryId);
+      this.markers.delete(libraryId);
+    }
     await rm(this.fileFor(libraryId), { force: true });
   }
 
@@ -344,6 +541,47 @@ export class LibraryMetaStore {
       return;
     }
     const file = this.fileFor(name);
+    if (this.database) {
+      try {
+        const next = new Map<string, PersistedRow>();
+        const rows = name === "episodes"
+          ? episodeRows(this.episodeRows)
+          : fileRows(this.files.get(name) ?? emptyFile());
+        for (const row of rows) next.set(persistedKey(row), row);
+
+        const statements: Statement[] = [];
+        for (const [key, row] of next) {
+          const stored = this.persisted.get(name)?.get(key);
+          if (stored?.json === row.json) continue;
+          statements.push(name === "episodes"
+            ? { sql: EPISODE_UPSERT, params: [row.key, row.json] }
+            : { sql: META_UPSERT, params: [name, row.kind, row.key, row.json] });
+        }
+        for (const [key, row] of this.persisted.get(name) ?? []) {
+          if (next.has(key)) continue;
+          statements.push(name === "episodes"
+            ? { sql: EPISODE_DELETE, params: [row.key] }
+            : { sql: META_DELETE, params: [name, row.kind, row.key] });
+        }
+        if (!this.markers.has(name)) {
+          statements.push({
+            sql: MARKER_UPSERT,
+            params: [
+              name === "episodes" ? EPISODES_MARKER : `${LIBRARY_META_MARKER}${name}`,
+              JSON.stringify({ importedAt: Date.now(), source: path.basename(file), count: next.size }),
+            ],
+          });
+        }
+        if (statements.length) await this.database.batch(statements);
+        this.persisted.set(name, next);
+        this.markers.add(name);
+        return;
+      } catch (error) {
+        this.dirty.add(name);
+        log("WARN", "Library metadata could not be saved", { file: path.basename(file), reason: String(error).slice(0, 120) });
+        return;
+      }
+    }
     const data = JSON.stringify(name === "episodes" ? this.episodeRows : (this.files.get(name) ?? emptyFile()), null, 2);
     try {
       await writeAtomic(file, data);

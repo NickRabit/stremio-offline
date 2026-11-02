@@ -104,3 +104,22 @@ test("the oldest timestamps are dropped past the cap", async (t) => {
   assert.equal(ids.tmdbOf("movie", "tt0000003", 400), 3);
   await ids.flush();
 });
+
+test("unchanged pairs and fresh negative answers do not rewrite the JSON file", async (t) => {
+  const dir = await tempDir(t);
+  const file = path.join(dir, "tmdb-ids.json");
+  const ids = new TmdbIdMap();
+  await ids.load(file);
+  ids.rememberPair("movie", "tt0133093", 603, 1_000);
+  ids.rememberNoTmdb("series", "tt9999999", 1_000);
+  ids.rememberNoImdb("series", 604, 1_000);
+  await ids.flush();
+  await writeFile(file, "sentinel");
+
+  ids.rememberPair("movie", "tt0133093", 603, 2_000);
+  ids.rememberNoTmdb("series", "tt9999999", 2_000);
+  ids.rememberNoImdb("series", 604, 2_000);
+  await ids.flush();
+
+  assert.equal(await readFile(file, "utf8"), "sentinel");
+});

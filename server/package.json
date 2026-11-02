@@ -1,14 +1,14 @@
 {
   "name": "@stremio-offline/server",
   "private": true,
-  "version": "0.7.6",
+  "version": "0.7.7",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "test": "tsx --test src/*.test.ts src/routes/*.test.ts"
+    "test": "tsx --test src/*.test.ts src/routes/*.test.ts src/storage/*.test.ts"
   },
   "dependencies": {
     "@stremio-offline/source-selection": "*",

@@ -36,6 +36,8 @@ import { GuardRejection, outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProgress, type WatchedMarker } from "./store.js";
+import { openAppDatabase, StorageError, type AppDatabase } from "./storage/app-database.js";
+import { chooseStorageMode } from "./storage/storage-mode.js";
 import { emptyUserData, findUserById, forEachUserData, type UserData, type UserRecord } from "./users.js";
 import type { ProgressSeries } from "./progress-series.js";
 import { advanceTorrent } from "./debrid.js";
@@ -181,8 +183,24 @@ let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
 await mediaServers.initialize();
-await metaStore.load();
 await externalIds.load();
+let database: AppDatabase | undefined;
+try {
+  database = await chooseStorageMode(DATA_DIR, (dataDir) => openAppDatabase({ dataDir }));
+  if (database) {
+    tmdbIds.attachDatabase(database);
+    followStore.attachDatabase(database);
+    metaStore.attachDatabase(database);
+  }
+} catch (error) {
+  log("ERROR", "The application database could not be opened", {
+    code: error instanceof StorageError ? error.code : "sql",
+    file: path.join(DATA_DIR, "application.sqlite"),
+    reason: error instanceof Error ? error.message : String(error),
+  });
+  throw error;
+}
+await metaStore.load();
 await tmdbIds.load(path.join(DATA_DIR, "tmdb-ids.json"));
 await attachTitleExtrasDisk(path.join(DATA_DIR, "title-extras"));
 await debridReady.load();
@@ -219,6 +237,7 @@ log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
 configureSecureMode(() => store.settings().secureMode !== false);
 await initLogger(); startLogMaintenance();
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
+if (database) images.attachDatabase(database);
 await images.load();
 await artworks.load();
 await remoteImages.load();
@@ -390,7 +409,9 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   // A job paused for a library asks whether it is back; the probe is refreshed first so a
   // disk that was plugged in is seen within the queue's own retry, not the cache's.
   libraryState: async (libraryId) => { await refreshLibraryHealth(); return libraryFor(store.libraries(), libraryId); },
-}); const playback = new PlaybackManager(DATA_DIR, (id) => {
+});
+if (database) queue.attachDatabase(database);
+const playback = new PlaybackManager(DATA_DIR, (id) => {
   const owned = playbackOwners.get(id);
   if (owned) {
     // The tombstone matters: a player that has just been closed still has range requests in
@@ -409,9 +430,12 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
 }, process.env.PLAYBACK_DIR);
 const stats = new StatsLog();
 const imageStats = new ImageStats(path.join(DATA_DIR, "image-stats.json"));
+if (database) imageStats.attachDatabase(database);
+if (database) stats.attachDatabase(database);
 useImageStats(imageStats);
 const mosaics = new MosaicCache();
 const providerStats = new ProviderStats(path.join(DATA_DIR, "provider-stats.json"));
+if (database) providerStats.attachDatabase(database);
 useProviderStats(providerStats);
 let libraryOpsWriting = false;
 /** How fast each running playback is transferring right now. */
@@ -1132,6 +1156,7 @@ const durationOfKey = async (key: string): Promise<number | undefined> => {
 /** What each library file holds, read once and remembered until the file changes. */
 const libraryFileFacts = createLibraryFileFacts({
   file: path.join(DATA_DIR, "library", "file-facts.json"),
+  database,
   probe: (key, signal) => probe(mediaPath(key), signal),
 });
 
@@ -2905,13 +2930,32 @@ try {
   // A short grace period, so the failure message reaches the desktop before this process goes.
   setTimeout(() => process.exit(1), 50);
 }
+const flushDatabaseStores = async () => {
+  await Promise.allSettled([
+    queue.flush(),
+    ...(database ? [followStore.flush()] : []),
+    metaStore.flush(),
+    stats.flush(),
+    stats.activity.flush(),
+    images.flush(),
+    imageStats.flush(),
+    providerStats.flush(),
+    libraryFileFacts.flush(),
+    tmdbIds.flush(),
+  ]);
+};
 const shutdown = createShutdown({
   inFlight,
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.flush(), () => stats.activity.flush(), () => imageStats.flush(), () => providerStats.flush(), () => images.flush(), () => artworks.flush(), () => externalIds.flush(), () => metaStore.flush(), () => libraryFileFacts.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  flushes: [flushDatabaseStores, () => externalIds.flush(), () => artworks.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  lateFlushes: [flushDatabaseStores, () => externalIds.flush()],
   store,
+  closeStorage: async () => {
+    queue.freezePersistence();
+    await database?.close();
+  },
   flushLog,
   log,
   now: () => Date.now(),
