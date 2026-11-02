@@ -255,6 +255,23 @@ test("a malformed title is dropped, so it stands for nothing", async () => {
   });
 });
 
+test("an episode whose own flag is off can still remove the star it shows through its show", async () => {
+  for (const provider of providers) {
+    await withHarness(async (harness) => {
+      const libraryId = provider === "jellyfin" ? harness.libraryId : harness.embyLibraryId;
+      await harness.personal.patch(harness.admin, libraryId, "te2", { position: 10, duration: 100, final: true });
+      await harness.personal.patch(harness.admin, libraryId, "te1", { favorite: true });
+      assert.equal(recordOf(harness, "te2")?.favorite, false, "the episode's own flag stays off");
+      assert.equal((await harness.personal.read(harness.admin, libraryId, "te2")).favorite, true, "it shows the show's star");
+
+      const state = await harness.personal.patch(harness.admin, libraryId, "te2", { favorite: false });
+      assert.equal(state.favorite, false, provider);
+      assert.deepEqual(Object.keys(harness.store.userData(ADA).watchlist!), [], "the show's star is gone");
+      assert.equal((await harness.personal.read(harness.admin, libraryId, "te1")).favorite, false);
+    });
+  }
+});
+
 test("a remote star is the title's star, and the title's star reads on every record of it", async () => {
   for (const provider of providers) {
     await withHarness(async (harness) => {
@@ -422,6 +439,33 @@ test("an unchanged final media-server report flushes the deferred position befor
     };
     const row = Object.values(saved.userData?.[ADA]?.remoteMedia ?? {}).find((item) => item.itemId === "m1");
     assert.equal(row?.position, 120);
+  });
+});
+
+test("an unchanged final media-server report answers with the failure when the disk refuses it", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600 });
+    const original = harness.store.saveNow.bind(harness.store);
+    harness.store.saveNow = async () => { throw new Error("disk unavailable"); };
+    try {
+      await assert.rejects(
+        harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true }),
+        /disk unavailable/,
+      );
+    } finally { harness.store.saveNow = original; }
+  });
+});
+
+test("clearing a remote position is written at once, without final", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true });
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 0, duration: 0 });
+
+    const saved = JSON.parse(await readFile(path.join(harness.dir, "state.json"), "utf8")) as {
+      userData?: Record<string, { remoteMedia?: Record<string, { itemId?: string; position?: number }> }>;
+    };
+    const row = Object.values(saved.userData?.[ADA]?.remoteMedia ?? {}).find((item) => item.itemId === "m1");
+    assert.notEqual(row?.position, 120, "the forgotten position is not left only in memory");
   });
 });
 

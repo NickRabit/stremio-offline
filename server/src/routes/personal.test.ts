@@ -336,6 +336,31 @@ test("an unchanged final progress report flushes a deferred position before answ
   assert.equal(saved.userData?.[ALICE]?.progress?.["movie:tt1"]?.position, 120);
 });
 
+test("an unchanged final progress report answers with the failure when the disk refuses it", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "personal-progress-final-fail-"));
+  let fail = false;
+  const store = new Store(directory, path.join(directory, "downloads"), {
+    writeState: async (file, data) => {
+      if (fail) throw new Error("disk unavailable");
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
+  await store.load();
+  const harness = await mount([], store);
+  t.after(async () => {
+    await harness.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const report = { key: "movie:tt1", position: 120, duration: 3600, title: "Heat" };
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  fail = true;
+  const response = await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { ...report, final: true } });
+  assert.notEqual(response.status, 204, "a final report the disk refused is not reported as saved");
+  assert.equal(response.status >= 400, true, String(response.status));
+  fail = false;
+});
+
 test("an unchanged periodic progress report causes no write", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "personal-progress-periodic-"));
   let writes = 0;

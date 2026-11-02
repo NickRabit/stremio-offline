@@ -40,6 +40,8 @@ class PlaybackControllerTest {
     val saved = mutableListOf<Pair<String, Double>>()
     /** The stable handle every save carried, in the order the saves arrived. */
     val savedStableKeys = mutableListOf<String?>()
+    /** Whether each save was the last report of its playback, in arrival order. */
+    val savedFinals = mutableListOf<Boolean>()
     /** Every mutating call in the order it arrived, so a stop's save-then-delete is visible. */
     val calls = mutableListOf<String>()
 
@@ -126,6 +128,7 @@ class PlaybackControllerTest {
       calls += "save"
       saved += key to position
       savedStableKeys += stableKey
+      savedFinals += final
     }
   }
 
@@ -893,6 +896,7 @@ class PlaybackControllerTest {
     runCurrent()
     playing(controller, 300.0)
     api.calls.clear()
+    api.savedFinals.clear()
 
     controller.switchSource("srcB")
     runCurrent()
@@ -901,7 +905,24 @@ class PlaybackControllerTest {
     assertEquals("srcB", api.started.last().first)
     assertEquals(300.0, api.started.last().third, 0.001)
     // The same progress key and title carry over to the new source.
-    assertEquals("movie:tt1", api.saved.last().first)
+    assertEquals("movie:tt1", api.saved.last().first)    // The outgoing playback ended with the switch: the server writes it at once.
+    assertEquals(listOf(true), api.savedFinals)
+  }
+
+  @Test
+  fun `a playback that reaches its end saves as the final report`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(995.0)
+    api.savedFinals.clear()
+
+    controller.onEnded()
+    runCurrent()
+
+    assertEquals(listOf(true), api.savedFinals)
   }
 
   @Test

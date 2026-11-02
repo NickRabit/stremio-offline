@@ -485,8 +485,10 @@ export class MediaServerPersonal {
     authority.assertCurrent();
     const previous = validRecord(this.mapOf(resolved.userId)[resolved.key]);
     const record = this.build(previous, resolved, patch, this.store.prefs(resolved.userId).trackProgress, written.title);
-    if (previous && sameRemoteRecord(previous, record)) {
-      if (patch.final === true) await this.store.flush();
+    // A star request also changes the title's shared watchlist, which the record alone does not
+    // show: an episode can carry favorite: false while its show is starred through another item.
+    if (previous && patch.favorite === undefined && sameRemoteRecord(previous, record)) {
+      if (patch.final === true) await this.store.saveNow();
       return stateOf(previous, watchlistOf(this.store.userData(resolved.userId)));
     }
     let state!: RemoteItemState;
@@ -523,7 +525,10 @@ export class MediaServerPersonal {
       state = stateOf(validRecord(map[resolved.key]) ?? built, watchlist);
     };
     const progressOnly = patch.position !== undefined || patch.duration !== undefined || patch.mediaSourceId !== undefined;
-    if (patch.final !== true && patch.favorite === undefined && patch.watched === undefined && progressOnly) {
+    // Clearing a position is an explicit action, not a periodic report: it is written at once,
+    // also for clients that do not send final with it.
+    const forgetting = patch.position === 0 && patch.duration === 0;
+    if (patch.final !== true && !forgetting && patch.favorite === undefined && patch.watched === undefined && progressOnly) {
       await this.store.updateLater(apply);
     } else {
       await this.store.update(apply);

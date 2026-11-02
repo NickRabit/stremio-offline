@@ -443,7 +443,8 @@ class PlaybackController(
       if (outgoingReported != null) sendReport(ReportEvent.Stop, outgoingReported, outgoingPosition, outgoingPaused)
       // The outgoing session is closed first, in one coroutine, so the save and the delete are
       // seen before the new start rather than raced with it.
-      if (previous != null) runCatching { save(previous) }
+      // The outgoing playback has ended here, so its position is written at once, not deferred.
+      if (previous != null) runCatching { save(previous, final = true) }
       if (previousId != null) runCatching { api.deletePlayback(previousId) }
       if (mine != generation) return@launch
       // The outgoing session is closed before the new source is minted: a failure to close it must
@@ -548,7 +549,7 @@ class PlaybackController(
   }
 
   fun onEnded() {
-    saveNow()
+    saveNow(final = true)
   }
 
   /** Direct play hands the seek to the player; HLS debounces it into one `/seek`. */
@@ -798,10 +799,12 @@ class PlaybackController(
     stop()
   }
 
-  private fun saveNow() {
+  /** [final] marks the last report of a playback, which the server writes at once instead of
+   *  deferring it with the periodic ones. */
+  private fun saveNow(final: Boolean = false) {
     if (stopped || !hasPosition || sessionId == null) return
     val payload = SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey)
-    scope.launch { runCatching { save(payload) } }
+    scope.launch { runCatching { save(payload, final) } }
   }
 
   /** The remote identity of the current session, or the one an outgoing save carries. */

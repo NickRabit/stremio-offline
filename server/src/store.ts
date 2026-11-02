@@ -591,7 +591,7 @@ export class Store {
     this.deferredDueAt = undefined;
     this.deferredPending = false;
   }
-  private writeDeferred(): Promise<void> {
+  private writeDeferred(rethrow = false): Promise<void> {
     const write = this.chain.then(async () => {
       if (!this.deferredPending) return;
       const writtenRevision = this.deferredRevision;
@@ -620,10 +620,21 @@ export class Store {
           }, this.deferredDelayMs);
           this.deferredTimer.unref?.();
         }
+        if (rethrow) throw error;
       }
     });
     this.chain = write.catch(() => undefined);
     return write;
+  }
+  /** Writes every change applied so far now and rejects when it could not be saved, so a caller
+   *  that promised durability (a final playback report) can answer with the failure instead of
+   *  success. A failed write keeps its retry, exactly as a timed deferred write does. */
+  async saveNow(): Promise<void> {
+    if (this.deferredTimer) clearTimeout(this.deferredTimer);
+    this.deferredTimer = undefined;
+    this.deferredDueAt = undefined;
+    await this.chain;
+    if (this.deferredPending) await this.writeDeferred(true);
   }
   /** Settles once every write queued so far has landed or failed. */
   async flush(): Promise<void> {

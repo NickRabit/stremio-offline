@@ -697,7 +697,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const preview = structuredClone(current);
     applyReport(preview);
     if (progressMapsEqual(progressOf(current), progressOf(preview), markersOf(current), markersOf(preview))) {
-      if (req.body.final === true) await store.flush();
+      if (req.body.final === true) await store.saveNow();
       return void res.status(204).end();
     }
     if (req.body.final === true) await updateData(req, applyReport);
