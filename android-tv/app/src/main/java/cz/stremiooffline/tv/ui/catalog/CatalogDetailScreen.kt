@@ -345,9 +345,42 @@ fun CatalogDetailScreen(
     }
   }
 
+  LaunchedEffect(args.meta.id, pick.sourcesRetry) {
+    if (args.backend.catalogue || !isSeries || meta.videos.orEmpty().isNotEmpty()) return@LaunchedEffect
+    remote.episodes = null
+    pick.sourcesLoaded = false
+    pick.sourcesFailed = false
+    try {
+      remote.episodes = args.backend.loadEpisodes(api)
+      if (remote.episodes?.videos.orEmpty().isEmpty()) {
+        pick.sourcesLoaded = true
+        return@LaunchedEffect
+      }
+      meta = meta.copy(videos = remote.episodes?.videos)
+      pick.selectedVideo = remoteEpisodeChoice(remote.episodes, args.episode)
+      pick.season = pick.selectedVideo?.season ?: defaultSeason(remote.episodes?.videos.orEmpty())
+      ui.episodeProgress = args.backend.episodeProgress(api)
+      notice(null)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (error: ApiError) {
+      pick.sourcesFailed = true
+      pick.sourcesLoaded = true
+      notice(error.serverMessage ?: texts.loadError, CatalogNotice.Failure)
+    }
+  }
+
   // Each source addon is asked on its own so the first answer is usable without waiting for the
   // slowest, and a change of video clears the list at once so nothing plays a stale source.
   LaunchedEffect(streamsKey, pick.sourcesRetry) {
+    if (
+      !args.backend.catalogue &&
+      isSeries &&
+      meta.videos.orEmpty().isEmpty() &&
+      pick.selectedVideo == null
+    ) {
+      return@LaunchedEffect
+    }
     val request = ++pick.localRequest
     pick.streams = emptyList()
     pick.localStreams = emptyList()
@@ -1018,6 +1051,7 @@ fun CatalogDetailScreen(
         throw cancelled
       } catch (error: ApiError) {
         favourite = !wanted
+        notice(error.serverMessage ?: texts.actionError, CatalogNotice.Failure)
       } finally {
         favouriteBusy = false
       }
@@ -1054,7 +1088,8 @@ fun CatalogDetailScreen(
         runCatching { focus.primary.requestFocus() }
       } catch (cancelled: CancellationException) {
         throw cancelled
-      } catch (_: ApiError) {
+      } catch (error: ApiError) {
+        notice(error.serverMessage ?: texts.actionError, CatalogNotice.Failure)
       } finally {
         ui.forget.busy = false
       }
@@ -1333,16 +1368,16 @@ fun CatalogDetailScreen(
           EyeIcon,
         ) {
             scope.launch {
-              val handled = runCatching {
-                args.backend.markWatched(
-                  api,
-                  activeStream,
-                  playerTitle,
-                  args.meta.poster ?: meta.poster,
-                )
-              }.getOrDefault(false)
-              if (!handled && args.backend.catalogue) {
-                runCatching {
+              try {
+                if (
+                  !args.backend.markWatched(
+                    api,
+                    activeStream,
+                    playerTitle,
+                    args.meta.poster ?: meta.poster,
+                  ) &&
+                  args.backend.catalogue
+                ) {
                   api.saveProgress(
                     progressKey,
                     1.0,
@@ -1355,25 +1390,29 @@ fun CatalogDetailScreen(
                     final = true,
                   )
                 }
-              }
-              if (!args.backend.catalogue) {
-                ui.episodeProgress = runCatching { args.backend.episodeProgress(api) }
-                  .getOrDefault(ui.episodeProgress)
-                pick.localProgress = activeStream?.takeIf(Streams::isLocalStream)?.localPath
-                  ?.let { path -> runCatching { api.progress(Progress.libraryKey(path)) }.getOrNull() }
-                activeRemoteItem?.let { item ->
-                  remoteProgress.row = VersionProgress.savedState(
-                    null,
-                    item,
-                    { key -> api.progress(key) },
-                    { libraryId, itemId -> api.remoteItemState(libraryId, itemId) },
-                  )
-                  remoteProgress.key = remoteIdentity
+                if (!args.backend.catalogue) {
+                  ui.episodeProgress = runCatching { args.backend.episodeProgress(api) }
+                    .getOrDefault(ui.episodeProgress)
+                  pick.localProgress = activeStream?.takeIf(Streams::isLocalStream)?.localPath
+                    ?.let { path -> runCatching { api.progress(Progress.libraryKey(path)) }.getOrNull() }
+                  activeRemoteItem?.let { item ->
+                    remoteProgress.row = VersionProgress.savedState(
+                      null,
+                      item,
+                      { key -> api.progress(key) },
+                      { libraryId, itemId -> api.remoteItemState(libraryId, itemId) },
+                    )
+                    remoteProgress.key = remoteIdentity
+                  }
+                } else if (isSeries) {
+                  entries = runCatching { api.progressList() }.getOrDefault(entries)
+                } else {
+                  movieProgress = runCatching { api.progress(ProgressKey.of(streamType, meta.id)) }.getOrNull()
                 }
-              } else if (isSeries) {
-                entries = runCatching { api.progressList() }.getOrDefault(entries)
-              } else {
-                movieProgress = runCatching { api.progress(ProgressKey.of(streamType, meta.id)) }.getOrNull()
+              } catch (cancelled: CancellationException) {
+                throw cancelled
+              } catch (error: ApiError) {
+                notice(error.serverMessage ?: texts.actionError, CatalogNotice.Failure)
               }
             }
         } else null,
@@ -1836,6 +1875,16 @@ internal fun nextRelevantEpisode(videos: List<VideoDto>, lastWatched: VideoDto?,
 internal fun firstReleased(videos: List<VideoDto>, today: String = utcToday()): VideoDto? =
   orderedEpisodes(videos).firstOrNull { (releasedDate(it) ?: "0000-01-01") <= today }
 
+private fun remoteEpisodeChoice(loaded: RemoteEpisodes?, wanted: ResumeEpisode?): VideoDto? {
+  val card = loaded?.resume?.firstOrNull { resume ->
+    resume.itemType == "episode" &&
+      loaded.videos.any { it.id == remoteVideoId(resume.libraryId, resume.itemId) }
+  }
+  return Resume.resumeVideo(loaded?.videos, wanted)
+    ?: loaded?.videos?.firstOrNull { it.id == card?.let { remoteVideoId(it.libraryId, it.itemId) } }
+    ?: firstReleased(loaded?.videos.orEmpty())
+}
+
 /** The stored row of one series, from the field first and from the key second. */
 internal fun seriesEntry(entries: List<ProgressEntryDto>, metaId: String): ProgressEntryDto? =
   entries.firstOrNull { it.series?.id == metaId }
@@ -1872,6 +1921,7 @@ private data class DetailTexts(
   val torrent: String,
   val noSources: String,
   val loadError: String,
+  val actionError: String,
   val toLibrary: String,
   val findingSources: String,
   val playWhenReady: String,
@@ -1886,6 +1936,7 @@ private fun detailTexts(): DetailTexts = DetailTexts(
   torrent = stringResource(R.string.err_torrent_not_playable),
   noSources = stringResource(R.string.sources_none),
   loadError = stringResource(R.string.tv_load_error),
+  actionError = stringResource(R.string.tv_err_generic),
   toLibrary = stringResource(R.string.save_to_library),
   findingSources = stringResource(R.string.tv_finding_sources),
   playWhenReady = stringResource(R.string.tv_play_when_ready),
@@ -1950,6 +2001,7 @@ private class RemoteSourcesState {
   var request by mutableIntStateOf(0)
   /** The title or episode the groups belong to, so a retry of the same one can keep them. */
   var key: String? = null
+  var episodes by mutableStateOf<RemoteEpisodes?>(null)
 }
 
 /** The local remote-state row and the identity/generation it was read for. */

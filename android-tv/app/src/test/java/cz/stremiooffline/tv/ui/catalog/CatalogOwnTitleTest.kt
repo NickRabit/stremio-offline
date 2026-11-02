@@ -3,12 +3,15 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
 import cz.stremiooffline.tv.catalog.ResumeEpisode
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.ProgressDto
@@ -120,6 +123,101 @@ class CatalogOwnTitleTest {
   }
 
   @Test
+  fun `a failed library favourite keeps the star and shows the failure`() {
+    val path = "Films/Heat/Heat.mkv"
+    val api = FakeTvApi().apply { favoriteFailure = ApiFailure.Generic }
+    val args = CatalogDetailArgs(
+      meta = MetaDto(id = "local:Films/Heat", type = "movie", name = "Heat"),
+      addonName = "",
+      type = "movie",
+      backend = LibraryBackend(
+        rows = mapOf("local:Films/Heat" to listOf(row(path))),
+        favouritePath = "Films/Heat",
+        favourite = false,
+      ),
+    )
+    mount(api, args)
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagCatalogMarkWatched).assertExists() }.isSuccess
+    }
+
+    compose.onNodeWithTag(TagCatalogFavourite).performSemanticsAction(SemanticsActions.OnClick)
+
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagCatalogMessage).assertTextContains("Something went wrong. Try again.") }.isSuccess
+    }
+    compose.onNodeWithTag(TagCatalogFavourite).assertTextContains("☆")
+    compose.onNodeWithTag(TagCatalogMessage)
+      .assert(SemanticsMatcher.expectValue(CatalogNoticeKind, CatalogNotice.Failure))
+  }
+
+  @Test
+  fun `a failed library Mark watched keeps the position and shows the failure`() {
+    val path = "Films/Heat/Heat.mkv"
+    val api = FakeTvApi().apply {
+      progressValues["file:$path"] = ProgressDto(position = 30.0, duration = 100.0)
+      progressSaveFailure = ApiFailure.Generic
+    }
+    val args = CatalogDetailArgs(
+      meta = MetaDto(id = "local:Films/Heat", type = "movie", name = "Heat"),
+      addonName = "",
+      type = "movie",
+      backend = LibraryBackend(
+        rows = mapOf("local:Films/Heat" to listOf(row(path))),
+        favouritePath = "Films/Heat",
+        favourite = false,
+      ),
+    )
+    mount(api, args)
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagCatalogMarkWatched).assertExists() }.isSuccess
+    }
+
+    compose.onNodeWithTag(TagCatalogMarkWatched).performSemanticsAction(SemanticsActions.OnClick)
+
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagCatalogMessage).assertTextContains("Something went wrong. Try again.") }.isSuccess
+    }
+    compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Resume")
+    compose.onNodeWithTag(TagCatalogStartOver).assertExists()
+    assertTrue(api.progressSaves.isEmpty())
+  }
+
+  @Test
+  fun `a failed library forget keeps the position and favourite and shows the failure`() {
+    val path = "Films/Heat/Heat.mkv"
+    val api = FakeTvApi().apply {
+      progressValues["file:$path"] = ProgressDto(position = 30.0, duration = 100.0)
+      forgetFailure = ApiFailure.Generic
+    }
+    val args = CatalogDetailArgs(
+      meta = MetaDto(id = "local:Films/Heat", type = "movie", name = "Heat"),
+      addonName = "",
+      type = "movie",
+      backend = LibraryBackend(
+        rows = mapOf("local:Films/Heat" to listOf(row(path))),
+        favouritePath = "Films/Heat",
+        favourite = true,
+      ),
+    )
+    mount(api, args)
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagCatalogForget).assertExists() }.isSuccess
+    }
+
+    compose.onNodeWithTag(TagCatalogForget).performSemanticsAction(SemanticsActions.OnClick)
+    compose.onNodeWithTag(TagCatalogForgetRemove).performSemanticsAction(SemanticsActions.OnClick)
+
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagCatalogMessage).assertTextContains("Something went wrong. Try again.") }.isSuccess
+    }
+    compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Resume")
+    compose.onNodeWithTag(TagCatalogWatched).assertTextContains("30 % watched")
+    compose.onNodeWithTag(TagCatalogFavourite).assertTextContains("★")
+    assertEquals(listOf("file:$path"), api.forgetCalls.single())
+  }
+
+  @Test
   fun `an own-title series shows and plays the chosen episode`() {
     val first = "Shows/Show/Show.S01E01.mkv"
     val second = "Shows/Show/Show.S01E02.mkv"
@@ -160,6 +258,51 @@ class CatalogOwnTitleTest {
     compose.waitUntil(5_000) { played.isNotEmpty() }
     assertEquals(second, played.single().path)
     assertEquals("file:$second", played.single().key)
+  }
+
+  @Test
+  fun `Mark as unwatched on an own-title series clears only the selected episode`() {
+    val first = "Shows/Show/Show.S01E01.mkv"
+    val second = "Shows/Show/Show.S01E02.mkv"
+    val firstVideo = VideoDto(id = "local:$first", season = 1, episode = 1, title = "Pilot")
+    val secondVideo = VideoDto(id = "local:$second", season = 1, episode = 2, title = "Second")
+    val api = FakeTvApi().apply {
+      progressValues["file:$first"] = ProgressDto(position = 60.0, duration = 100.0)
+      progressValues["file:$second"] = ProgressDto(position = 30.0, duration = 100.0)
+    }
+    val args = CatalogDetailArgs(
+      meta = MetaDto(
+        id = "local:Shows/Show",
+        type = "series",
+        name = "Show",
+        videos = listOf(firstVideo, secondVideo),
+      ),
+      addonName = "",
+      type = "series",
+      episode = ResumeEpisode("series:local:$second", 1, 2),
+      backend = LibraryBackend(
+        rows = mapOf(
+          "local:$first" to listOf(row(first)),
+          "local:$second" to listOf(row(second)),
+        ),
+        favouritePath = "Shows/Show",
+        favourite = false,
+        progress = mapOf(
+          "local:$first" to ProgressDto(position = 60.0, duration = 100.0),
+          "local:$second" to ProgressDto(position = 30.0, duration = 100.0),
+        ),
+      ),
+    )
+    mount(api, args)
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagCatalogForget).assertExists() }.isSuccess
+    }
+
+    compose.onNodeWithTag(TagCatalogForget).performSemanticsAction(SemanticsActions.OnClick)
+    compose.onNodeWithTag(TagCatalogForgetRemove).performSemanticsAction(SemanticsActions.OnClick)
+
+    compose.waitUntil(5_000) { api.forgetCalls.isNotEmpty() }
+    assertEquals(listOf("file:$second"), api.forgetCalls.single())
   }
 
   @Test

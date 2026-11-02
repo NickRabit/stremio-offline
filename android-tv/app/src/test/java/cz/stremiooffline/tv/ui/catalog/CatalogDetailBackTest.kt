@@ -65,6 +65,31 @@ class CatalogDetailBackTest {
       .any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == tag }
 
   @Test
+  fun `Back closes a detail that has nothing to play`() {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en")
+    var backs = 0
+    scenario.onActivity { activity ->
+      host = activity
+      activity.setContent {
+        CatalogDetailScreen(
+          api = api,
+          args = CatalogDetailArgs(MetaDto(id = "tt1", type = "movie", name = "It"), "Cinemeta", "movie"),
+          imageUrl = { null },
+          onPlay = {},
+          onBack = { backs++ },
+        )
+      }
+    }
+    compose.waitForIdle()
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+
+    assertEquals(1, backs)
+  }
+
+  @Test
   fun `Back closes the sources panel and hands the remote back to the Sources button`() {
     val api = FakeTvApi()
     api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", realDebridConfigured = true)

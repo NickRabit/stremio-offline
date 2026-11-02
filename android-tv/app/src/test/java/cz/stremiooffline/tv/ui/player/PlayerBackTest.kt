@@ -10,9 +10,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import cz.stremiooffline.tv.data.ProgressDto
-import cz.stremiooffline.tv.ui.detail.DetailData
-import cz.stremiooffline.tv.ui.detail.DetailScreen
+import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
+import cz.stremiooffline.tv.ui.catalog.CatalogDetailScreen
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -41,14 +41,12 @@ class PlayerBackTest {
     var playerOpen by mutableStateOf(true)
     var detailBacks = 0
     compose.setContent {
-      DetailScreen(
-        detail = DetailData(gridPath = "Films/It", title = "It", year = null, description = null, poster = null, wide = null, size = 0.0, fileCount = 0, files = emptyList()),
+      CatalogDetailScreen(
+        api = cz.stremiooffline.tv.ui.FakeTvApi(),
+        args = CatalogDetailArgs(MetaDto(id = "tt1", type = "movie", name = "It"), "Cinemeta", "movie"),
         imageUrl = { null },
         onPlay = {},
         onBack = { detailBacks++ },
-        progress = { _: String -> null as ProgressDto? },
-        forgetProgress = {},
-        backEnabled = !playerOpen,
       )
       if (playerOpen) {
         val playFocus = remember { FocusRequester() }

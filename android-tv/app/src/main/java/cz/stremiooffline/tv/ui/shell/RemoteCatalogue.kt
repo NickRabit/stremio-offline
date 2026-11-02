@@ -188,7 +188,42 @@ internal fun remoteOwnCatalogueArgs(
   )
 }
 
-/** Resolves the media-server identity a no-id detail needs, or null when the old detail must stay. */
+/** A media-server item opened without a catalogue identity or episode lookup. */
+internal fun remoteFallbackCatalogueArgs(data: RemoteDetailData): CatalogDetailArgs {
+  val item = data.item
+  if (item.type == "movie" || item.type == "series") {
+    return remoteOwnCatalogueArgs(data, item, emptyList(), emptyList())
+  }
+  val metaId = remoteMetaId(data.libraryId, item.id)
+  return CatalogDetailArgs(
+    meta = MetaDto(
+      id = metaId,
+      type = item.type,
+      name = item.name,
+      poster = item.poster,
+      background = item.wide,
+      description = item.overview,
+      releaseInfo = item.year?.toString(),
+      year = item.year?.let(::JsonPrimitive),
+    ),
+    addonName = "",
+    type = item.type,
+    autoPlay = data.autoPlay,
+    preferRemote = true,
+    preferredRemote = RemoteItemRef(data.libraryId, item.id),
+    backend = RemoteBackend(
+      libraryId = data.libraryId,
+      libraryName = data.libraryName,
+      provider = data.provider,
+      item = item,
+      episodes = emptyList(),
+      seriesName = data.seriesName,
+      seriesIds = data.seriesIds,
+    ),
+  )
+}
+
+/** Resolves the media-server identity a no-id detail needs, or null when metadata cannot be read. */
 internal suspend fun remoteOwnCatalogueArgs(
   api: TvApi,
   data: RemoteDetailData,
