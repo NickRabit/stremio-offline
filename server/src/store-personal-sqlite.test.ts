@@ -172,7 +172,14 @@ test("hot personal data imports into rows and strips the cold state file", async
   const backups = await readdir(path.join(fixtureState.dataDir, "migration-backup"));
   assert.equal(backups.length, 1);
   assert.equal(backups[0], `state-${String(imported?.importedAt)}.json`);
-  assert.deepEqual(await readFile(path.join(fixtureState.dataDir, "migration-backup", backups[0]!)), original);
+  // The copy holds every personal collection of the original, under the same account ids.
+  const copy = JSON.parse(await readFile(path.join(fixtureState.dataDir, "migration-backup", backups[0]!), "utf8")) as State;
+  const source = JSON.parse(original.toString("utf8")) as State;
+  for (const id of [ADA, BOB]) {
+    for (const domain of ["favorites", "progress", "watchedSeries", "watchlist", "remoteMedia"] as const) {
+      assert.deepEqual(copy.userData?.[id]?.[domain], source.userData?.[id]?.[domain], `${id} ${domain}`);
+    }
+  }
 
   const saved = JSON.parse(await readFile(fixtureState.file, "utf8")) as State;
   assert.equal(saved.settings.concurrentDownloads, 7);
@@ -531,6 +538,58 @@ test("a pre-accounts state whose strip write fails keeps its account id and data
   restarted.attachDatabase(await fixtureState.reopen());
   await restarted.load();
   assert.equal(restarted.users()[0]?.id, id, "the account keeps the id its rows are keyed by");
+  assert.deepEqual(restarted.userData(id).favorites, ["lib_00000001/Film.mkv"]);
+  assert.ok(restarted.userData(id).progress["file:lib_00000001/Film.mkv"]);
+});
+
+test("restoring the migration-backup copy of a pre-accounts state reattaches its rows", async (t) => {
+  const fixtureState = await fixture(t);
+  await writeFile(fixtureState.file, JSON.stringify({
+    addons: [], settings: {}, defaultsInstalled: true,
+    auth: { username: "ada", passwordHash: "scrypt$00$00", secret: "secret-secret-secret" },
+    favorites: ["lib_00000001/Film.mkv"],
+  }, null, 2));
+  // The first boot migrates the account and saves it; the second finds it claimed and imports.
+  const first = new Store(fixtureState.dataDir);
+  first.attachDatabase(fixtureState.database);
+  await first.load();
+  const second = new Store(fixtureState.dataDir);
+  second.attachDatabase(await fixtureState.reopen());
+  await second.load();
+  const id = second.users()[0]!.id;
+  assert.ok(await marker(fixtureState.database));
+
+  const [copy] = await readdir(path.join(fixtureState.dataDir, "migration-backup"));
+  await writeFile(fixtureState.file, await readFile(path.join(fixtureState.dataDir, "migration-backup", copy!), "utf8"));
+  const restored = new Store(fixtureState.dataDir);
+  restored.attachDatabase(await fixtureState.reopen());
+  await restored.load();
+  assert.equal(restored.users()[0]?.id, id);
+  assert.deepEqual(restored.userData(id).favorites, ["lib_00000001/Film.mkv"]);
+});
+
+test("unclaimed top-level personal data keeps the store in state.json until an account owns it", async (t) => {
+  const fixtureState = await fixture(t);
+  await writeFile(fixtureState.file, JSON.stringify({
+    addons: [], settings: {}, defaultsInstalled: true,
+    favorites: ["lib_00000001/Film.mkv"],
+    progress: { "file:lib_00000001/Film.mkv": { position: 60, duration: 600, title: "Film", updatedAt: CREATED } },
+  }, null, 2));
+  const store = new Store(fixtureState.dataDir);
+  store.attachDatabase(fixtureState.database);
+  await store.load();
+  assert.equal(await marker(fixtureState.database), undefined, "nothing is imported while no account owns the data");
+
+  const created = await store.adoptEnvCredentials({ username: "ada", password: "secret-secret" });
+  assert.ok(created);
+  const id = store.users()[0]!.id;
+  const saved = JSON.parse(await readFile(fixtureState.file, "utf8")) as State;
+  assert.deepEqual(saved.userData?.[id]?.favorites, ["lib_00000001/Film.mkv"], "the claim lands in state.json in one write");
+
+  const restarted = new Store(fixtureState.dataDir);
+  restarted.attachDatabase(await fixtureState.reopen());
+  await restarted.load();
+  assert.ok(await marker(fixtureState.database));
   assert.deepEqual(restarted.userData(id).favorites, ["lib_00000001/Film.mkv"]);
   assert.ok(restarted.userData(id).progress["file:lib_00000001/Film.mkv"]);
 });

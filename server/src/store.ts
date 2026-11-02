@@ -226,8 +226,6 @@ export class Store {
   /** Whether the hot personal data is persisted as rows. Only after an import or a marker load;
    *  until then (JSON mode, or a first start that found no state.json) state.json holds it. */
   private personalActive = false;
-  /** state.json exactly as this boot read it, for the import's migration-backup copy. */
-  private loadedRaw?: string;
   /** Whether a real `state.json` has been read or written successfully in this process.
    *  Startup reconciliation that deletes files must not run off a swallowed ENOENT. */
   private persisted = false;
@@ -265,7 +263,6 @@ export class Store {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     if (raw !== undefined) {
-      this.loadedRaw = raw;
       const loaded = JSON.parse(raw) as Partial<State>;
       this.persisted = true;
       this.mediaState = Object.prototype.hasOwnProperty.call(loaded, "mediaConnections")
@@ -429,7 +426,18 @@ export class Store {
   private async loadPersonalRows(): Promise<"import" | undefined> {
     const database = this.database!;
     const marker = await database.get<{ value: string }>("SELECT value FROM meta WHERE key = ?", [PERSONAL_MARKER]);
-    if (!marker) return await this.importPersonalRows();
+    if (!marker) {
+      // Personal data still kept at the top level, from before accounts, belongs to no account
+      // yet: the first sign-in or the environment credentials claim it later. Importing now and
+      // claiming afterwards would move it out of state.json and into rows in two writes, and a
+      // failure between them would lose it. It stays in state.json until a start that finds it
+      // claimed.
+      const legacy = this.state as unknown as MigratableState;
+      if (["favorites", "watchlist", "progress", "watchedSeries"].some((key) => Object.prototype.hasOwnProperty.call(legacy, key))) {
+        return undefined;
+      }
+      return await this.importPersonalRows();
+    }
 
     const stored = await database.all<{ user_id: string; domain: string; key: string; data: string }>(
       "SELECT user_id, domain, key, data FROM personal_rows ORDER BY user_id, domain, key",
@@ -513,8 +521,10 @@ export class Store {
       const backupDir = path.join(this.dataDir, "migration-backup");
       await mkdir(backupDir, { recursive: true, mode: 0o700 });
       if (process.platform !== "win32") await chmod(backupDir, 0o700);
-      // The bytes as they were read, before any migration of this boot rewrote the file.
-      await writeFile(path.join(backupDir, `state-${importedAt}.json`), this.loadedRaw ?? await readFile(this.filename, "utf8"), { mode: 0o600 });
+      // The file as it stands after this boot's account migration was saved: it still holds
+      // every personal collection, and its account ids are the ones the rows are keyed by, so
+      // putting it back reattaches them. A pre-accounts original would mint a new id instead.
+      await writeFile(path.join(backupDir, `state-${importedAt}.json`), await readFile(this.filename, "utf8"), { mode: 0o600 });
     }
     const statements: Statement[] = [...rows].map(([storedKey, data]) => {
       const [userId, domain, key] = storedKey.split("\0");
