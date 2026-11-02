@@ -131,6 +131,28 @@ test("a file in place of the configured playback child is kept and the server fa
   assert.equal(manager.root, path.join(dataDir, "playback"));
 });
 
+test("a fallback onto the configured folder itself removes nothing in it", async (t) => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "playback-overlap-data-"));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const previous = process.env.PLAYBACK_DIR;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PLAYBACK_DIR;
+    else process.env.PLAYBACK_DIR = previous;
+  });
+  const configured = path.join(dataDir, "playback");
+  await mkdir(configured, { recursive: true });
+  await writeFile(path.join(configured, "stremio-offline-playback"), "the owner's data");
+  await writeFile(path.join(configured, "keep.txt"), "keep");
+  process.env.PLAYBACK_DIR = configured;
+
+  const manager = new PlaybackManager(dataDir) as any;
+  await loadPlaybackManager(manager);
+
+  assert.equal(manager.root, configured);
+  assert.equal(await readFile(path.join(configured, "stremio-offline-playback"), "utf8"), "the owner's data");
+  assert.equal(await readFile(path.join(configured, "keep.txt"), "utf8"), "keep");
+});
+
 test("a relative PLAYBACK_DIR is resolved to an absolute root", async (t) => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "playback-relative-data-"));
   const parent = await mkdtemp(path.join(os.tmpdir(), "playback-relative-"));
@@ -186,7 +208,8 @@ test("an unusable PLAYBACK_DIR logs an error and falls back", async (t) => {
   assert.equal(manager.root, path.join(dataDir, "playback"));
   // Other tests log the same error for their own folders; this one's names its own path.
   const line = (await readLog({ level: "ERROR", search: "Configured playback directory is unusable" }))
-    .split("\n").find((entry) => entry.includes(missing));
+    .split("\n").filter(Boolean)
+    .find((entry) => (JSON.parse(entry.slice(entry.indexOf("{"))) as { directory?: string }).directory === path.join(missing, "stremio-offline-playback"));
   assert.ok(line);
   const context = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
   assert.equal(context.directory, path.join(missing, "stremio-offline-playback"));

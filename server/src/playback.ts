@@ -363,6 +363,15 @@ interface CancelableInspection {
   source?: CancelableInspectionSubscriber;
 }
 
+/** Whether one folder is the other or lies inside it, either way round. */
+function overlaps(a: string, b: string): boolean {
+  const inside = (parent: string, child: string) => {
+    const relative = path.relative(path.resolve(parent), path.resolve(child));
+    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  };
+  return inside(a, b) || inside(b, a);
+}
+
 export class PlaybackManager {
   private previews = new PlayerPreviews();
   private sessions = new Map<string, Session>();
@@ -429,7 +438,17 @@ export class PlaybackManager {
           reason,
         });
         this.root = this.fallbackRoot;
-        await this.emptyRoot(this.root, true);
+        // The fallback is the server's own folder, emptied at every start, unless the configured
+        // folder is that folder or overlaps it: then emptying it would delete the owner's files,
+        // so it is only created and nothing in it is removed.
+        if (overlaps(path.dirname(this.configuredRoot), this.fallbackRoot)) {
+          log("ERROR", "PLAYBACK_DIR overlaps DATA_DIR/playback, so nothing in it is cleaned at start", {
+            directory: path.dirname(this.configuredRoot),
+          });
+          await mkdir(this.root, { recursive: true, mode: 0o700 });
+        } else {
+          await this.emptyRoot(this.root, true);
+        }
       }
     } else {
       await this.emptyRoot(this.root, true);
