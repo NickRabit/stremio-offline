@@ -152,19 +152,22 @@ fields left in `state.json` and forces their removal on the next write.
 
 Every write compares the hot fields with the persisted row map and the cold
 state with the last written cold JSON. Only changed rows and a changed cold file
-are written. Rows are committed first, then the cold file, so a crash cannot
-leave a cold change implying personal data that the database has not accepted.
-If the row batch fails, memory is rolled back. If the row batch succeeds and the
-JSON write fails, the update still rolls back and deferred retry debt converges
-the rows back to memory.
+are written. The cold file is written first, then the rows. `state.json` names
+the accounts, and a load deletes the rows of an account it no longer names, so
+the file is the commit point for account-level changes. If the JSON write fails,
+nothing was written and memory is rolled back. If the JSON lands and the row
+batch fails, memory is rolled back and deferred retry debt rewrites both files
+from memory.
 
 There is no cross-file atomicity between `application.sqlite` and `state.json`.
 A few operations deliberately change both: account creation and deletion,
 media-server connection or library removal, settings import, and library
-deletion. A process or disk failure between the two writes can leave those mixed
-changes temporarily split. The row-first order makes the retry converge to the
-last in-memory state rather than preserving a partially applied update as a new
-authoritative snapshot.
+deletion. A process failure between the two writes leaves the cold change in
+place and the rows behind it. For accounts this still ends consistent: a deleted
+account's rows are removed at the next load, and a new account starts empty.
+The opposite order was rejected because a failed JSON write after the rows had
+committed could leave an account whose rows were already deleted, with nothing
+able to repair it after a restart.
 
 ### Backup
 

@@ -723,24 +723,28 @@ export class Store {
       statements.push({ sql: PERSONAL_DELETE, params: [userId!, domain!, rowKey!] });
     }
 
-    let rowsWritten = false;
-    if (statements.length) {
-      await this.database.batch(statements);
-      this.persistedRows = nextRows;
-      rowsWritten = true;
-    }
-
+    // state.json first, rows second. state.json names the accounts, and load deletes the rows
+    // of an account it no longer names: so a crash after the JSON landed but before the rows
+    // did still ends consistent (a deleted account's rows are cleaned up, a new account starts
+    // empty). Rows first would let a failed JSON write leave an account whose rows were
+    // already deleted, which nothing could repair after a restart.
     const cold = this.coldJson();
-    const stripCold = forceCold || this.coldStripPending;
-    if (!stripCold && cold === this.persistedCold) return;
-    try {
+    const writeCold = forceCold || this.coldStripPending || cold !== this.persistedCold;
+    let coldWritten = false;
+    if (writeCold) {
       await this.writeJson(cold);
       this.persistedCold = cold;
       this.coldStripPending = false;
+      coldWritten = true;
+    }
+    if (!statements.length) return;
+    try {
+      await this.database.batch(statements);
+      this.persistedRows = nextRows;
     } catch (error) {
-      if (rowsWritten && deferJsonFailure) {
-        // The rows already committed but the caller will roll memory back. Retry from memory so
-        // the next successful write restores the database instead of leaving a mixed snapshot.
+      if (coldWritten && deferJsonFailure) {
+        // state.json already holds this change but the caller rolls memory back. Retry from
+        // memory so the next successful write puts both files back in step with it.
         this.deferredRetry();
       }
       throw error;

@@ -284,7 +284,7 @@ test("deleting an account deletes all of its personal rows", async (t) => {
   assert.equal(await fixtureState.database.get("SELECT COUNT(*) AS count FROM personal_rows WHERE user_id = ?", [BOB]).then((row) => row?.count), 5);
 });
 
-test("a failed row batch rejects the update and leaves memory and state.json unchanged", async (t) => {
+test("a failed row batch after state.json rejects the update and converges both files on flush", async (t) => {
   const fixtureState = await fixture(t);
   await fixtureState.seed();
   const batches: Statement[][] = [];
@@ -294,7 +294,7 @@ test("a failed row batch rejects the update and leaves memory and state.json unc
   await store.load();
   const beforeData = structuredClone(store.userData(ADA));
   const beforeSettings = structuredClone(store.settings());
-  const before = await readFile(fixtureState.file);
+  const before = await readFile(fixtureState.file, "utf8");
   controlled.control.failNext = true;
 
   await assert.rejects(store.update((state) => {
@@ -304,17 +304,24 @@ test("a failed row batch rejects the update and leaves memory and state.json unc
 
   assert.deepEqual(store.userData(ADA), beforeData);
   assert.deepEqual(store.settings(), beforeSettings);
-  assert.deepEqual(await readFile(fixtureState.file), before);
+  await store.flush();
+  assert.equal(await readFile(fixtureState.file, "utf8"), before, "state.json is back in step with memory");
+  assert.equal(await fixtureState.database.get(
+    "SELECT data FROM personal_rows WHERE user_id = ? AND domain = ? AND key = ?",
+    [ADA, "progress", "changed"],
+  ), undefined);
 });
 
-test("a JSON failure after committed rows converges the database on flush", async (t) => {
+test("a failed state.json write writes no rows at all", async (t) => {
   const fixtureState = await fixture(t);
   await fixtureState.seed();
   const writer = recordingWrites();
+  const batches: Statement[][] = [];
   const store = new Store(fixtureState.dataDir, undefined, { writeState: writer.hook });
-  store.attachDatabase(fixtureState.database);
+  store.attachDatabase(observingBatch(fixtureState.database, batches));
   await store.load();
   const beforeData = structuredClone(store.userData(ADA));
+  batches.length = 0;
   writer.fail.value = true;
 
   await assert.rejects(store.update((state) => {
@@ -323,19 +330,53 @@ test("a JSON failure after committed rows converges the database on flush", asyn
   }), /state write failed/);
 
   assert.deepEqual(store.userData(ADA), beforeData);
-  writer.fail.value = false;
-  await store.flush();
+  assert.equal(batches.length, 0, "the rows are not touched when state.json could not be written");
+});
 
-  const row = await fixtureState.database.get<{ data: string }>(
-    "SELECT data FROM personal_rows WHERE user_id = ? AND domain = ? AND key = ?",
-    [ADA, "progress", "changed"],
-  );
-  assert.equal(row, undefined);
-  const restored = await fixtureState.database.get<{ data: string }>(
-    "SELECT data FROM personal_rows WHERE user_id = ? AND domain = ? AND key = ?",
-    [ADA, "progress", "file:lib_00000001/Ada movie.mkv"],
-  );
-  assert.equal(restored?.data, JSON.stringify(beforeData.progress["file:lib_00000001/Ada movie.mkv"]));
+test("an account deletion interrupted after state.json still ends consistent after a restart", async (t) => {
+  const fixtureState = await fixture(t);
+  await fixtureState.seed();
+  const batches: Statement[][] = [];
+  const controlled = controllableBatch(fixtureState.database, batches);
+  const store = new Store(fixtureState.dataDir);
+  store.attachDatabase(controlled.database);
+  await store.load();
+  controlled.control.failNext = true;
+
+  await assert.rejects(store.update((state) => {
+    state.users = (state.users ?? []).filter((user) => user.id !== BOB);
+    delete state.userData![BOB];
+  }), /database write failed/);
+
+  // The process stops before the deferred retry: a restart reads state.json without Bob.
+  const restarted = new Store(fixtureState.dataDir);
+  restarted.attachDatabase(await fixtureState.reopen());
+  await restarted.load();
+  assert.equal(restarted.users().some((user) => user.id === BOB), false);
+  assert.equal(await fixtureState.database.get("SELECT user_id FROM personal_rows WHERE user_id = ?", [BOB]), undefined);
+  assert.ok(Object.keys(restarted.userData(ADA).progress).length > 0, "the other account keeps its rows");
+});
+
+test("an account deletion whose state.json write failed keeps the account and all of its rows after a restart", async (t) => {
+  const fixtureState = await fixture(t);
+  await fixtureState.seed();
+  const writer = recordingWrites();
+  const store = new Store(fixtureState.dataDir, undefined, { writeState: writer.hook });
+  store.attachDatabase(fixtureState.database);
+  await store.load();
+  const bob = structuredClone(store.userData(BOB));
+  writer.fail.value = true;
+
+  await assert.rejects(store.update((state) => {
+    state.users = (state.users ?? []).filter((user) => user.id !== BOB);
+    delete state.userData![BOB];
+  }), /state write failed/);
+
+  const restarted = new Store(fixtureState.dataDir);
+  restarted.attachDatabase(await fixtureState.reopen());
+  await restarted.load();
+  assert.equal(restarted.users().some((user) => user.id === BOB), true);
+  assert.deepEqual(restarted.userData(BOB), bob);
 });
 
 test("rows win over stale hot fields and the next cold write strips them", async (t) => {
