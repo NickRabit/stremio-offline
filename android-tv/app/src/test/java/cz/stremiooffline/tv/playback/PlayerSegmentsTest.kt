@@ -106,4 +106,24 @@ class PlayerSegmentsTest {
     assertFalse(trigger.observe(11.0, null, playing = false))
     assertFalse(trigger.observe(12.0, 10.0, playing = true))
   }
+
+  @Test
+  fun `drops credits timed on a shorter cut and keeps the intro`() {
+    val segments = IntroSegmentsDto(intro = SegmentRangeDto(0.0, 60.0), outro = SegmentRangeDto(8903.0, 9299.0))
+    assertEquals(segments, fitSegments(segments, 9330.0))
+    assertEquals(IntroSegmentsDto(intro = SegmentRangeDto(0.0, 60.0)), fitSegments(segments, 10258.0))
+  }
+
+  @Test
+  fun `drops an intro deep into the file and keeps a cold open`() {
+    assertEquals(IntroSegmentsDto(), fitSegments(IntroSegmentsDto(intro = SegmentRangeDto(1500.0, 1560.0)), 2600.0))
+    val coldOpen = IntroSegmentsDto(intro = SegmentRangeDto(437.0, 531.0))
+    assertEquals(coldOpen, fitSegments(coldOpen, 3700.0))
+  }
+
+  @Test
+  fun `keeps everything while the duration is unknown`() {
+    val segments = IntroSegmentsDto(outro = SegmentRangeDto(10.0, 20.0))
+    assertEquals(segments, fitSegments(segments, 0.0))
+  }
 }

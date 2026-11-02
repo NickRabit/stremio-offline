@@ -67,15 +67,15 @@ test("GET /api/intro-segments rejects a malformed IMDb id or an incomplete episo
   assert.deepEqual(route.queries, []);
 });
 
-test("secure mode answers empty without asking IntroDB", async (t) => {
+test("secure mode still asks IntroDB: the server sends it nothing but the IMDb id", async (t) => {
   const route = await mount({ secureMode: true });
   t.after(route.close);
 
   const response = await get(route.base, "imdb=tt0903747&season=1&episode=1");
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {});
-  assert.deepEqual(route.queries, []);
+  assert.deepEqual(await response.json(), { intro: { start: 10, end: 40 } });
+  assert.deepEqual(route.queries, [{ imdbId: "tt0903747", season: 1, episode: 1 }]);
 });
 
 test("GET /api/intro-segments passes a film lookup without episode fields", async (t) => {
