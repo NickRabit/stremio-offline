@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AddonRecord } from "./types.js";
 import { hashPassword, type AuthState } from "./auth.js";
@@ -23,10 +23,29 @@ import {
   type TravelParameters,
 } from "./source-profiles.js";
 import { claimLegacyData, emptyUserData, type EnvReset, envResetApplied, envResetPending, findUser, type MigratableState, migrateUsers, newUserId, type UserData, type UserRecord } from "./users.js";
+import type { AppDatabase, Statement } from "./storage/app-database.js";
 
 /** `state.json` shape version. 2 is the libraries shape, 3 the accounts one; a state
  *  without a version predates both and is migrated on the way in. */
 export const SCHEMA_VERSION = 3;
+
+const PERSONAL_MARKER = "domain.personal";
+const PERSONAL_MAP_DOMAINS = ["progress", "watchedSeries", "watchlist", "remoteMedia"] as const;
+const PERSONAL_DOMAINS = [...PERSONAL_MAP_DOMAINS, "favorites"] as const;
+type PersonalDomain = typeof PERSONAL_DOMAINS[number];
+type PersonalMapDomain = typeof PERSONAL_MAP_DOMAINS[number];
+
+/** The in-memory key of one row. JSON, not a separator: a map key may contain any character,
+ *  NUL included, and splitting on a separator would merge two different keys into one. */
+const personalKey = (userId: string, domain: PersonalDomain, key: string) =>
+  JSON.stringify([userId, domain, key]);
+const splitPersonalKey = (stored: string) => JSON.parse(stored) as [string, PersonalDomain, string];
+/** One row change, as the state file journals it for a write that changes both files. */
+type PersonalOp = [userId: string, domain: string, key: string, data: string | null];
+const PERSONAL_JOURNAL = "personalPending";
+const PERSONAL_INSERT = "INSERT INTO personal_rows (user_id, domain, key, data) VALUES (?, ?, ?, ?)";
+const PERSONAL_UPSERT = "INSERT INTO personal_rows (user_id, domain, key, data) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, domain, key) DO UPDATE SET data = excluded.data";
+const PERSONAL_DELETE = "DELETE FROM personal_rows WHERE user_id = ? AND domain = ? AND key = ?";
 
 /** The shapes inside `UserData`. It keeps its maps opaque so the user model stays clear of
  *  the progress and library modules; they are pinned here, once, because both `index.ts` and
@@ -205,12 +224,21 @@ export interface StoreHooks {
 
 export class Store {
   private state: State;
+  private loaded = false;
+  private database?: AppDatabase;
+  private persistedRows = new Map<string, string>();
+  private persistedCold?: string;
+  private coldStripPending = false;
+  /** Whether the hot personal data is persisted as rows. Only after an import or a marker load;
+   *  until then (JSON mode, or a first start that found no state.json) state.json holds it. */
+  private personalActive = false;
   /** Whether a real `state.json` has been read or written successfully in this process.
    *  Startup reconciliation that deletes files must not run off a swallowed ENOENT. */
   private persisted = false;
   /** Whether a loaded or saved state actually carried the media-server fields. A legacy
    *  state from before those existed must not authorize deleting a newer vault. */
   private mediaState = false;
+  private readonly dataDir: string;
   private readonly filename: string;
   private readonly downloadDir: string;
   private readonly writeState: (file: string, data: string) => Promise<void>;
@@ -220,19 +248,29 @@ export class Store {
   private deferredRevision = 0;
   private deferredDelayMs = 60_000;
   constructor(dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads", hooks: StoreHooks = {}) {
+    this.dataDir = dataDir;
     this.filename = path.join(dataDir, "state.json");
     this.downloadDir = downloadDir;
     this.writeState = hooks.writeState ?? ((file, data) => writeFile(file, data, { mode: 0o600 }));
     this.state = initialState(downloadDir);
   }
+  attachDatabase(database: AppDatabase): void {
+    if (this.loaded) throw new Error("The store database must be attached before load.");
+    this.database = database;
+  }
   async load() {
+    this.loaded = true;
     await mkdir(path.dirname(this.filename), { recursive: true });
-    let stateRead = false;
     let sourceProfilesChanged = false;
+    let raw: string | undefined;
     try {
-      const loaded = JSON.parse(await readFile(this.filename, "utf8")) as Partial<State>;
+      raw = await readFile(this.filename, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (raw !== undefined) {
+      const loaded = JSON.parse(raw) as Partial<State>;
       this.persisted = true;
-      stateRead = true;
       this.mediaState = Object.prototype.hasOwnProperty.call(loaded, "mediaConnections")
         || Object.prototype.hasOwnProperty.call(loaded, "mediaSecretCleanup");
       const fresh = initialState(this.downloadDir);
@@ -255,11 +293,33 @@ export class Store {
         // Written out now. The old shape stays readable for one release, and leaving it on
         // disk would mean the next boot migrating an account whose sessions are already
         // keyed by an id the file does not have.
+        // This runs before the personal rows are imported: a pre-accounts file mints a new
+        // random account id on every boot until this write lands, so rows imported first would
+        // be keyed by an id the next boot no longer knows.
         await this.update(() => {});
       }
+      const personalLoad = this.database ? await this.loadPersonalRows() : undefined;
+      if (personalLoad === "import") await this.writePersisted(true);
+    } else {
+      this.normalizeSourceProfiles();
+      // No state.json was read. With no import marker this is a first start: nothing is imported
+      // and no marker is written, so the personal data stays in state.json until a later start
+      // finds the file and imports it. With a marker, the file has gone missing while the rows
+      // still hold somebody's data: the start stops (see below) and nothing is deleted.
+      if (this.database) {
+        const marker = await this.database.get<{ value: string }>("SELECT value FROM meta WHERE key = ?", [PERSONAL_MARKER]);
+        if (marker) {
+          // Carrying on would start with no accounts at all, and an install with no accounts
+          // offers first-run setup: anybody who reached it would create a new administrator.
+          // The rows say this install had accounts, so the start stops until the file is back.
+          const held = await this.database.get<{ n: number }>("SELECT count(DISTINCT user_id) AS n FROM personal_rows");
+          log("ERROR", "state.json is missing while application.sqlite holds the data of existing accounts; restore state.json from a backup or from migration-backup/ and start again", {
+            accounts: held?.n ?? 0,
+          });
+          throw new Error("state.json is missing while application.sqlite holds existing accounts. Restore state.json from a backup or from migration-backup/ and start again.");
+        }
+      }
     }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    if (!stateRead) this.normalizeSourceProfiles();
   }
   addons() { return this.state.addons; }
   settings() { return this.state.settings; }
@@ -351,6 +411,177 @@ export class Store {
   hasMediaServerState(): boolean { return this.mediaState; }
   grants() { return this.state.grants ?? []; }
   departed() { return this.state.departed ?? []; }
+  private personalRows(): Map<string, string> {
+    const rows = new Map<string, string>();
+    for (const [userId, data] of Object.entries(this.state.userData ?? {})) {
+      for (const domain of PERSONAL_MAP_DOMAINS) {
+        const values = data[domain] as Record<string, unknown> | undefined;
+        for (const [key, value] of Object.entries(values ?? {})) {
+          rows.set(personalKey(userId, domain, key), JSON.stringify(value) ?? "null");
+        }
+      }
+      rows.set(personalKey(userId, "favorites", ""), JSON.stringify(data.favorites ?? []));
+    }
+    return rows;
+  }
+  private coldJson(): string {
+    const state = structuredClone(this.state);
+    for (const data of Object.values(state.userData ?? {})) {
+      for (const domain of PERSONAL_DOMAINS) delete data[domain];
+    }
+    delete (state as unknown as Record<string, unknown>)[PERSONAL_JOURNAL];
+    return JSON.stringify(state, null, 2);
+  }
+  private async loadPersonalRows(): Promise<"import" | undefined> {
+    const database = this.database!;
+    const marker = await database.get<{ value: string }>("SELECT value FROM meta WHERE key = ?", [PERSONAL_MARKER]);
+    if (!marker) {
+      // Personal data still kept at the top level, from before accounts, belongs to no account
+      // yet: the first sign-in or the environment credentials claim it later. Importing now and
+      // claiming afterwards would move it out of state.json and into rows in two writes, and a
+      // failure between them would lose it. It stays in state.json until a start that finds it
+      // claimed.
+      const legacy = this.state as unknown as MigratableState;
+      if (["favorites", "watchlist", "progress", "watchedSeries"].some((key) => Object.prototype.hasOwnProperty.call(legacy, key))) {
+        return undefined;
+      }
+      return await this.importPersonalRows();
+    }
+
+    // A write that changed both files journals its row changes in state.json first. Found here,
+    // the process stopped before the rows landed: they are applied now (upserts and deletes are
+    // idempotent, so a journal whose rows did land is harmless) and the next write drops it.
+    const journal = (this.state as unknown as Record<string, unknown>)[PERSONAL_JOURNAL];
+    let journalReplayed = false;
+    if (journal !== undefined) {
+      if (!Array.isArray(journal) || journal.some((op) => !Array.isArray(op) || op.length !== 4
+        || typeof op[0] !== "string" || typeof op[1] !== "string" || typeof op[2] !== "string"
+        || (op[3] !== null && typeof op[3] !== "string")
+        || !(PERSONAL_DOMAINS as readonly string[]).includes(op[1]))) {
+        throw new Error("The pending personal changes in state.json are malformed.");
+      }
+      const ops = journal as PersonalOp[];
+      if (ops.length) {
+        await database.batch(ops.map(([userId, domain, key, data]) => data === null
+          ? { sql: PERSONAL_DELETE, params: [userId, domain, key] }
+          : { sql: PERSONAL_UPSERT, params: [userId, domain, key, data] }));
+      }
+      delete (this.state as unknown as Record<string, unknown>)[PERSONAL_JOURNAL];
+      journalReplayed = true;
+    }
+    // The key is read as bytes: node:sqlite returns TEXT only up to its first NUL, and a map key
+    // may hold one, so two different keys would come back as the same string.
+    const raw = await database.all<{ user_id: string; domain: string; key: Uint8Array | string; data: string }>(
+      "SELECT user_id, domain, CAST(key AS BLOB) AS key, data FROM personal_rows ORDER BY user_id, domain, key",
+    );
+    // ignoreBOM: a leading U+FEFF is part of the key, not a byte-order mark to drop.
+    const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+    const stored = raw.map((row) => ({
+      ...row,
+      key: typeof row.key === "string" ? row.key : utf8.decode(row.key),
+    }));
+    const users = this.state.userData ?? {};
+    const known = new Set(Object.keys(users));
+    const byUser = new Map<string, Map<PersonalDomain, Map<string, unknown>>>();
+    for (const row of stored) {
+      if (typeof row.user_id !== "string" || typeof row.domain !== "string"
+        || typeof row.key !== "string" || typeof row.data !== "string") {
+        throw new Error("A personal state row is malformed.");
+      }
+      if (!known.has(row.user_id)) continue;
+      if (!(PERSONAL_DOMAINS as readonly string[]).includes(row.domain)) {
+        throw new Error(`A personal state row has an invalid domain: ${row.domain}`);
+      }
+      const domain = row.domain as PersonalDomain;
+      const domains = byUser.get(row.user_id) ?? new Map<PersonalDomain, Map<string, unknown>>();
+      const values = domains.get(domain) ?? new Map<string, unknown>();
+      values.set(row.key, JSON.parse(row.data) as unknown);
+      domains.set(domain, values);
+      byUser.set(row.user_id, domains);
+    }
+
+    const map = (domains: Map<PersonalDomain, Map<string, unknown>> | undefined, domain: PersonalMapDomain) => {
+      const value = Object.fromEntries(domains?.get(domain) ?? []);
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`A ${domain} personal state row is not a map.`);
+      }
+      return value as Record<string, unknown>;
+    };
+
+    let stripCold = false;
+    for (const [userId, data] of Object.entries(users)) {
+      const domains = byUser.get(userId);
+      stripCold ||= PERSONAL_DOMAINS.some((domain) => Object.prototype.hasOwnProperty.call(data, domain));
+      const hadRemoteMedia = Object.prototype.hasOwnProperty.call(data, "remoteMedia");
+      data.progress = map(domains, "progress");
+      data.watchedSeries = map(domains, "watchedSeries");
+      data.watchlist = map(domains, "watchlist");
+      const favorites = domains?.get("favorites");
+      if (!favorites) {
+        data.favorites = [];
+      } else {
+        const [entry] = favorites;
+        if (favorites.size !== 1 || !entry || entry[0] !== "" || !Array.isArray(entry[1])
+          || entry[1].some((value) => typeof value !== "string")) {
+          throw new Error("The favorites personal state row is malformed.");
+        }
+        data.favorites = entry[1] as string[];
+      }
+      const remoteMedia = domains?.get("remoteMedia");
+      if (remoteMedia) data.remoteMedia = map(domains, "remoteMedia");
+      else if (hadRemoteMedia) data.remoteMedia = {};
+      else delete data.remoteMedia;
+    }
+
+    this.persistedRows = new Map();
+    for (const row of stored) {
+      if (known.has(row.user_id)) {
+        this.persistedRows.set(
+          personalKey(row.user_id, row.domain as PersonalDomain, row.key),
+          row.data,
+        );
+      }
+    }
+    // Rows of an account this state.json does not name are neither loaded nor deleted. Account ids
+    // are random and never reused, so such rows cannot surface under someone else, and keeping
+    // them means a missing, replaced or older state.json can never destroy the only copy of
+    // anybody's data. A deleted account's rows go with the write that deletes it.
+    this.persistedCold = this.coldJson();
+    this.coldStripPending = stripCold || journalReplayed;
+    this.personalActive = true;
+    return undefined;
+  }
+  private async importPersonalRows(): Promise<"import"> {
+    const database = this.database!;
+    const rows = this.personalRows();
+    const importedAt = Date.now();
+    if (this.persisted) {
+      const backupDir = path.join(this.dataDir, "migration-backup");
+      await mkdir(backupDir, { recursive: true, mode: 0o700 });
+      if (process.platform !== "win32") await chmod(backupDir, 0o700);
+      // The file as it stands after this boot's account migration was saved: it still holds
+      // every personal collection, and its account ids are the ones the rows are keyed by, so
+      // putting it back reattaches them. A pre-accounts original would mint a new id instead.
+      await writeFile(path.join(backupDir, `state-${importedAt}.json`), await readFile(this.filename, "utf8"), { mode: 0o600 });
+    }
+    const statements: Statement[] = [...rows].map(([storedKey, data]) => {
+      const [userId, domain, key] = splitPersonalKey(storedKey);
+      return { sql: PERSONAL_INSERT, params: [userId!, domain!, key!, data] };
+    });
+    statements.push({
+      sql: "INSERT INTO meta (key, value) VALUES (?, ?)",
+      params: [PERSONAL_MARKER, JSON.stringify({
+        importedAt,
+        source: "state.json",
+        users: Object.keys(this.state.userData ?? {}).length,
+        rows: rows.size,
+      })],
+    });
+    await database.batch(statements);
+    this.persistedRows = rows;
+    this.personalActive = true;
+    return "import";
+  }
   private normalizeSourceProfiles(): boolean {
     const rawProfiles: unknown = this.state.sourceProfiles;
     if (rawProfiles !== undefined && !Array.isArray(rawProfiles)) {
@@ -515,6 +746,98 @@ export class Store {
     };
   }
   private chain: Promise<void> = Promise.resolve();
+  private deferredRetry(delayMs = this.deferredDelayMs): void {
+    this.deferredPending = true;
+    this.deferredRevision += 1;
+    if (this.deferredTimer) return;
+    const due = Date.now() + delayMs;
+    this.deferredDueAt = due;
+    this.deferredTimer = setTimeout(() => {
+      this.deferredTimer = undefined;
+      this.deferredDueAt = undefined;
+      void this.writeDeferred();
+    }, delayMs);
+    this.deferredTimer.unref?.();
+  }
+  private async writeJson(data: string): Promise<void> {
+    const temp = `${this.filename}.tmp`;
+    await this.writeState(temp, data);
+    await renameWithRetry(temp, this.filename);
+    this.persisted = true;
+    if (!this.mediaState) {
+      this.mediaState = Object.prototype.hasOwnProperty.call(this.state, "mediaConnections")
+        || Object.prototype.hasOwnProperty.call(this.state, "mediaSecretCleanup");
+    }
+  }
+  private async writePersisted(forceCold = false): Promise<void> {
+    if (!this.database || !this.personalActive) {
+      await this.writeJson(JSON.stringify(this.state, null, 2));
+      return;
+    }
+
+    const nextRows = this.personalRows();
+    const ops: PersonalOp[] = [];
+    for (const [key, data] of nextRows) {
+      if (this.persistedRows.get(key) !== data) ops.push([...splitPersonalKey(key), data]);
+    }
+    for (const key of this.persistedRows.keys()) {
+      if (!nextRows.has(key)) ops.push([...splitPersonalKey(key), null]);
+    }
+    const statements: Statement[] = ops.map(([userId, domain, key, data]) => data === null
+      ? { sql: PERSONAL_DELETE, params: [userId, domain, key] }
+      : { sql: PERSONAL_UPSERT, params: [userId, domain, key, data] });
+
+    // state.json first, rows second: state.json names the accounts and is the commit point.
+    const cold = this.coldJson();
+    const writeCold = forceCold || this.coldStripPending || cold !== this.persistedCold;
+
+    if (writeCold && statements.length) {
+      // A write that changes both files (an account, a library, a media server, an import)
+      // journals its row changes inside the state file it commits. If the process stops
+      // before the rows land, the next start replays them, so the change is never left half
+      // done -- a forgotten library cannot keep its favourites, with nothing left to retry.
+      const journaled = JSON.parse(cold) as Record<string, unknown>;
+      journaled[PERSONAL_JOURNAL] = ops;
+      await this.writeJson(JSON.stringify(journaled, null, 2));
+      // What is on disk now is not `cold`: the next write must replace it either way.
+      this.persistedCold = undefined;
+      try {
+        await this.database.batch(statements);
+        this.persistedRows = nextRows;
+      } catch (error) {
+        // The journaled state.json is the commit: a restart replays it, so the change has
+        // happened whatever happens next. Rolling memory back now would answer "failed" for a
+        // change the next start completes, so it stands; the rows are retried from memory,
+        // and the journal stays on disk until they land.
+        log("WARN", "Personal changes are saved in state.json and will be written to the database again", {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        this.deferredRetry();
+        return;
+      }
+      try {
+        await this.writeJson(cold);
+        this.persistedCold = cold;
+        this.coldStripPending = false;
+      } catch (error) {
+        // Both halves are durable; only the journal is left, and replaying it is harmless.
+        this.coldStripPending = true;
+        log("WARN", "The state file still carries pending personal changes that are already saved", {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (writeCold) {
+      await this.writeJson(cold);
+      this.persistedCold = cold;
+      this.coldStripPending = false;
+    }
+    if (!statements.length) return;
+    await this.database.batch(statements);
+    this.persistedRows = nextRows;
+  }
   /** Writes run one after another, or two concurrent saves would fight over the same .tmp file.
    *
    *  The change is made only when this write's turn comes and taken back if the write fails,
@@ -538,16 +861,9 @@ export class Store {
         if (!this.deferredPending) return;
       }
       try {
-        const temp = `${this.filename}.tmp`;
         const writtenRevision = this.deferredRevision;
-        await this.writeState(temp, JSON.stringify(this.state, null, 2));
-        await renameWithRetry(temp, this.filename);
-        this.persisted = true;
+        await this.writePersisted();
         if (this.deferredPending && this.deferredRevision === writtenRevision) this.clearDeferred();
-        if (!this.mediaState) {
-          this.mediaState = Object.prototype.hasOwnProperty.call(this.state, "mediaConnections")
-            || Object.prototype.hasOwnProperty.call(this.state, "mediaSecretCleanup");
-        }
       } catch (error) {
         this.state = before;
         // The state carries the account and the addon tokens, so only the reason is recorded.
@@ -603,14 +919,7 @@ export class Store {
       if (!this.deferredPending) return;
       const writtenRevision = this.deferredRevision;
       try {
-        const temp = `${this.filename}.tmp`;
-        await this.writeState(temp, JSON.stringify(this.state, null, 2));
-        await renameWithRetry(temp, this.filename);
-        this.persisted = true;
-        if (!this.mediaState) {
-          this.mediaState = Object.prototype.hasOwnProperty.call(this.state, "mediaConnections")
-            || Object.prototype.hasOwnProperty.call(this.state, "mediaSecretCleanup");
-        }
+        await this.writePersisted();
         if (this.deferredRevision === writtenRevision) this.clearDeferred();
       } catch (error) {
         log("ERROR", "The state could not be saved", {

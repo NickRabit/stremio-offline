@@ -216,6 +216,9 @@ test("freezing persistence suppresses a progress save", async (t) => {
   try {
     await queue.add("Film", { url: "http://127.0.0.1:1/film.mp4" });
     await waitFor(queue, () => queue.list()[0]?.status === "paused");
+    // A save still on its way from the pause would land on the sentinel under load; it has to
+    // finish first, so only a save after the freeze is under test.
+    await queue.flush();
     const file = path.join(directory, "data", "downloads.json");
     await writeFile(file, "sentinel");
     queue.freezePersistence();

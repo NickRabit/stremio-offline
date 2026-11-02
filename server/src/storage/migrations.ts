@@ -56,4 +56,10 @@ export const MIGRATIONS: readonly Migration[] = [
       "CREATE TABLE library_episodes (key TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT, WITHOUT ROWID",
     ],
   },
+  {
+    version: 9,
+    statements: [
+      "CREATE TABLE personal_rows (user_id TEXT NOT NULL, domain TEXT NOT NULL, key TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (user_id, domain, key)) STRICT, WITHOUT ROWID",
+    ],
+  },
 ];

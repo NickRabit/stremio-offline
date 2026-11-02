@@ -193,22 +193,32 @@ const progressAt = async (env: Env, key: string) => (await api(env, `/api/progre
 const identityOf = async (env: Env, target: string) =>
   (await (await api(env, `/api/library/identity?path=${encodeURIComponent(target)}`)).json()) as { bound?: { id?: string } };
 
-/** The favourite rows as they sit in the state file: the browse route skips a path that is
- *  not on disk, so a stored star for a gone file can only be read back here. */
+/** The favourite rows as they sit in SQLite: the browse route skips a path that is not on
+ *  disk, so a stored star for a gone file can only be read back here. */
 const storedFavorites = async (env: Env) => {
-  const state = JSON.parse(await readFile(path.join(env.dataDir, "state.json"), "utf8")) as {
-    userData?: Record<string, { favorites?: string[] }>;
-  };
-  return Object.values(state.userData ?? {}).flatMap((data) => data.favorites ?? []);
+  const database = new DatabaseSync(path.join(env.dataDir, "application.sqlite"), { readOnly: true });
+  try {
+    const rows = database.prepare(
+      "SELECT data FROM personal_rows WHERE domain = 'favorites' AND key = ''",
+    ).all() as Array<{ data: string }>;
+    return rows.flatMap((row) => JSON.parse(row.data) as string[]);
+  } finally {
+    database.close();
+  }
 };
-/** The progress rows as they sit in the state file, key and stored `path`. A read through the old
- *  file key may answer the title's row -- that is the alias -- so what the move left behind is
- *  read back here. */
+/** The progress rows as they sit in SQLite, key and stored `path`. A read through the old file
+ *  key may answer the title's row -- that is the alias -- so what the move left behind is read
+ *  back here. */
 const storedProgress = async (env: Env) => {
-  const state = JSON.parse(await readFile(path.join(env.dataDir, "state.json"), "utf8")) as {
-    userData?: Record<string, { progress?: Record<string, { path?: string }> }>;
-  };
-  return Object.values(state.userData ?? {}).flatMap((data) => Object.entries(data.progress ?? {}));
+  const database = new DatabaseSync(path.join(env.dataDir, "application.sqlite"), { readOnly: true });
+  try {
+    const rows = database.prepare(
+      "SELECT key, data FROM personal_rows WHERE domain = 'progress' ORDER BY user_id, key",
+    ).all() as Array<{ key: string; data: string }>;
+    return rows.map((row) => [row.key, JSON.parse(row.data) as { path?: string }] as const);
+  } finally {
+    database.close();
+  }
 };
 /** The state a completed cross-library move has to show: everything under the new path. */
 const assertMovedState = async (env: Env) => {
