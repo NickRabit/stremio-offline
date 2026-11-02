@@ -60,6 +60,7 @@ import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.DownloadTargetDto
+import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
@@ -78,6 +79,8 @@ import cz.stremiooffline.tv.ui.detail.DetailScreen
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
+import cz.stremiooffline.tv.ui.detail.remoteExtrasIdentity
+import cz.stremiooffline.tv.ui.detail.resolveRemoteMetadata
 import cz.stremiooffline.tv.ui.favorites.FavoritesRoute
 import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.HomeScreen
@@ -93,6 +96,7 @@ import cz.stremiooffline.tv.ui.settings.SettingsRoute
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -185,7 +189,9 @@ fun Shell(
   val sectionStates = rememberSaveableStateHolder()
 
   var detail by remember { mutableStateOf<DetailData?>(null) }
-  var libraryDetailResolving by remember { mutableStateOf(false) }
+  // The one binding lookup still out. A newer choice, another detail or another section replaces
+  // it, so a late answer never opens a detail over what the viewer moved on to.
+  val detailLookup = remember { DetailLookup() }
   var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
   val catalogStack = remember { CatalogDetailStack() }
   var catalogReturnOrigin by remember { mutableStateOf<CatalogReturnOrigin?>(null) }
@@ -262,21 +268,23 @@ fun Shell(
     catalogReturnOrigin = null
   }
   fun openCatalog(args: CatalogDetailArgs) {
+    detailLookup.cancel()
     clearCatalogHistory()
     catalogDetail = args
   }
   fun openLibraryDetail(data: DetailData) {
-    if (libraryDetailResolving) return
-    val firstPath = data.files.firstOrNull()?.path
-    if (firstPath == null) {
+    detailLookup.cancel()
+    // One file stands for itself; a folder of several only for a title bound to the folder as a
+    // whole -- a folder of different films never opens as the first one's title.
+    val lookupPath = if (data.files.size == 1) data.files.single().path else data.gridPath.takeIf { data.files.isNotEmpty() }
+    if (lookupPath.isNullOrBlank()) {
       detail = data
       return
     }
-    libraryDetailResolving = true
-    hintScope.launch {
+    detailLookup.job = hintScope.launch {
       try {
         val binding = try {
-          withTimeoutOrNull(2_000) { api.libraryTitle(firstPath) }
+          withTimeoutOrNull(2_000) { api.libraryTitle(lookupPath) }
         } catch (cancelled: CancellationException) {
           throw cancelled
         } catch (_: Exception) {
@@ -288,7 +296,47 @@ fun Shell(
           detail = data
         }
       } finally {
-        libraryDetailResolving = false
+        detailLookup.done(coroutineContext[Job])
+      }
+    }
+  }
+  fun openRemoteDetail(data: RemoteDetailData) {
+    detailLookup.cancel()
+    if (data.autoStartOver) {
+      remoteDetail = data
+      return
+    }
+    detailLookup.job = hintScope.launch {
+      try {
+        val resolved = try {
+          withTimeoutOrNull(2_500) {
+            val metadata = resolveRemoteMetadata(api, data)
+            val identity = remoteExtrasIdentity(metadata) ?: return@withTimeoutOrNull null
+            val resume = if (identity.first == "series" && metadata.item.type == "series") {
+              try {
+                api.remotePersonal("resume", 0, 60).items.filterIsInstance<HomeCard.Remote>()
+              } catch (cancelled: CancellationException) {
+                throw cancelled
+              } catch (_: Exception) {
+                emptyList()
+              }
+            } else {
+              emptyList()
+            }
+            Triple(metadata, identity, resume)
+          }
+        } catch (cancelled: CancellationException) {
+          throw cancelled
+        } catch (_: Exception) {
+          null
+        }
+        if (resolved == null) {
+          remoteDetail = data
+        } else {
+          openCatalog(remoteCatalogueArgs(data, resolved.first, resolved.second, resolved.third))
+        }
+      } finally {
+        detailLookup.done(coroutineContext[Job])
       }
     }
   }
@@ -311,6 +359,7 @@ fun Shell(
     searchEverywhereEnabled = runCatching { api.searchEverywhereEnabled() }.getOrDefault(false)
   }
   LaunchedEffect(current) {
+    detailLookup.cancel()
     if (current == Section.Library) {
       if (librarySeen) libraryRefreshToken++
       librarySeen = true
@@ -359,7 +408,7 @@ fun Shell(
           api = api,
           onOpenDetail = ::openLibraryDetail,
           onOpenRemoteItem = { libraryId, libraryName, provider, item ->
-            remoteDetail = RemoteDetailData(libraryId = libraryId, libraryName = libraryName, provider = provider, item = item)
+            openRemoteDetail(RemoteDetailData(libraryId = libraryId, libraryName = libraryName, provider = provider, item = item))
           },
           restoreToken = returnToken,
           refreshToken = libraryRefreshToken,
@@ -384,7 +433,7 @@ fun Shell(
             player = target
           },
           onOpenCatalog = ::openCatalog,
-          onOpenRemote = { remoteDetail = it },
+          onOpenRemote = ::openRemoteDetail,
           onOpenDetail = ::openLibraryDetail,
           restoreToken = returnToken,
           refreshToken = resumeRefreshToken,
@@ -393,7 +442,7 @@ fun Shell(
           api = api,
           onOpenDetail = ::openLibraryDetail,
           onOpenCatalog = ::openCatalog,
-          onOpenRemote = { remoteDetail = it },
+          onOpenRemote = ::openRemoteDetail,
           onOpenLibrary = { path ->
             libraryPush = path
             shellState.pick(Section.Library)
@@ -418,7 +467,7 @@ fun Shell(
             GlobalSearchScreen(
               api = api,
               onOpenCatalog = ::openCatalog,
-              onOpenRemote = { remoteDetail = it },
+              onOpenRemote = ::openRemoteDetail,
               onOpenLibrary = { path ->
                 libraryPush = path
                 shellState.pick(Section.Library)
@@ -478,7 +527,7 @@ fun Shell(
               }
               is HomeAction.OpenDetail -> openLibraryDetail(action.detail)
               is HomeAction.OpenCatalog -> openCatalog(action.args)
-              is HomeAction.OpenRemote -> remoteDetail = action.data
+              is HomeAction.OpenRemote -> openRemoteDetail(action.data)
             }
           },
         )
@@ -526,11 +575,11 @@ fun Shell(
     )
   }
 
-  val openRemoteDetail = remoteDetail
-  if (openRemoteDetail != null) OverlayFocusTrap(fenced = player == null) {
+  val shownRemoteDetail = remoteDetail
+  if (shownRemoteDetail != null) OverlayFocusTrap(fenced = player == null) {
     RemoteDetailScreen(
       api = api,
-      data = openRemoteDetail,
+      data = shownRemoteDetail,
       imageUrl = { path -> path?.let(api::url) },
       onPlay = {
         // The item's versions stay available while the player discovers supplementary groups.

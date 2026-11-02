@@ -205,4 +205,33 @@ class CatalogOriginRemoteTest {
     assertEquals("series:tt9:2:3", target.key)
     assertEquals("episode-9", target.remoteItem?.itemId)
   }
+
+  @Test
+  fun `the item the detail was opened from plays even when the match by catalogue id missed it`() {
+    val api = api(CompletableDeferred(Unit)).apply {
+      remoteMatchValues[gateKey] = emptyList()
+      remoteSourcesValue = listOf(remoteRow())
+    }
+    mount(api)
+    compose.waitUntil(5_000) { api.remoteSourcesRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    assertEquals(listOf("rlibA" to "item-1"), api.remoteSourcesRequests)
+    play()
+    assertEquals("item-1", played.single().remoteItem?.itemId)
+  }
+
+  @Test
+  fun `another episode never borrows the versions of the one the detail was opened from`() {
+    val args = CatalogDetailArgs(
+      meta = MetaDto(id = "tt9", type = "series"),
+      addonName = "",
+      type = "series",
+      episode = cz.stremiooffline.tv.catalog.ResumeEpisode("series:tt9:2:3", 2, 3),
+      preferredRemote = RemoteItemRef("rlibA", "episode-9"),
+    )
+    assertEquals(RemoteItemRef("rlibA", "episode-9"), originFor(args, "tt9:2:3"))
+    assertNull(originFor(args, "tt9:2:4"))
+    assertNull(originFor(args.copy(preferredRemote = RemoteItemRef("rlibA", "")), "tt9:2:3"))
+  }
 }

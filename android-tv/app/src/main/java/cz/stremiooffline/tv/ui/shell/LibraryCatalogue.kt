@@ -7,6 +7,7 @@ import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.episodeNumbers
 import cz.stremiooffline.tv.ui.detail.DetailData
+import kotlinx.coroutines.Job
 
 /**
  * The catalogue detail a bound library file or folder opens. One file is the active row; a series
@@ -36,4 +37,19 @@ internal fun libraryCatalogueArgs(data: DetailData, binding: LibraryTitleDto): C
     forgetKeys = data.forgetKeys,
     preferredLocalPath = file?.path,
   )
+}
+
+/** The binding lookup a detail is waiting for; only the newest one may open anything. */
+internal class DetailLookup {
+  var job: Job? = null
+
+  fun cancel() {
+    job?.cancel()
+    job = null
+  }
+
+  /** Forgets [finished] when it is still the newest lookup. */
+  fun done(finished: Job?) {
+    if (job === finished) job = null
+  }
 }
