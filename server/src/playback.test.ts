@@ -3,13 +3,18 @@ import test from "node:test";
 import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { DOLBY_VISION_UNITS_FILTER, PlaybackManager, fitsQuality, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
 import { mediaResources as registry, type ResourceOwner } from "./media-resources.js";
 import { setFetchTransport } from "./security.js";
+import { flushLog, initLogger, readLog, setLevel } from "./logger.js";
+
+process.env.LOG_STDOUT = "0";
+await initLogger(await mkdtemp(path.join(os.tmpdir(), "stremio-playback-log-")));
+setLevel("INFO");
 
 const runFfmpeg = promisify(execFile);
 const hasX265 = await runFfmpeg("ffmpeg", ["-hide_banner", "-encoders"]).then(({ stdout }) => stdout.includes("libx265"), () => false);
@@ -27,6 +32,96 @@ const whenAborted = (signal: AbortSignal) => new Promise<void>((resolve) => {
 /** A path under the runner's own scratch directory. Nothing here is read back except the files
  *  the fake readers write, so the name only has to be somewhere a runner may write. */
 const tmp = (name: string) => path.join(os.tmpdir(), name);
+
+const loadPlaybackManager = async (manager: any) => {
+  manager.readFfmpegVersion = async () => undefined;
+  manager.checkVaapi = async () => {};
+  manager.checkNvenc = async () => {};
+  manager.checkVideotoolbox = async () => {};
+  manager.checkMediaFoundation = async () => {};
+  await manager.load();
+};
+
+test("PLAYBACK_DIR cleans and uses only its owned child", async (t) => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "playback-data-"));
+  const playbackParent = await mkdtemp(path.join(os.tmpdir(), "playback-parent-"));
+  t.after(() => Promise.all([
+    rm(dataDir, { recursive: true, force: true }),
+    rm(playbackParent, { recursive: true, force: true }),
+  ]));
+  const previous = process.env.PLAYBACK_DIR;
+  process.env.PLAYBACK_DIR = playbackParent;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PLAYBACK_DIR;
+    else process.env.PLAYBACK_DIR = previous;
+  });
+
+  const owned = path.join(playbackParent, "stremio-offline-playback");
+  await mkdir(path.join(owned, "stale", "nested"), { recursive: true });
+  await writeFile(path.join(owned, "stale", "nested", "old.m3u8"), "old");
+  await writeFile(path.join(playbackParent, "unrelated.txt"), "keep");
+
+  const manager = new PlaybackManager(dataDir) as any;
+  await loadPlaybackManager(manager);
+
+  assert.equal(manager.root, owned);
+  assert.deepEqual(await readdir(owned), []);
+  assert.equal(await readFile(path.join(playbackParent, "unrelated.txt"), "utf8"), "keep");
+  if (process.platform !== "win32") assert.equal((await stat(owned)).mode & 0o777, 0o700);
+
+  manager.inspect = async () => ({
+    container: "matroska,webm", duration: 120,
+    video: { codec: "h264" }, audio: { codec: "aac" },
+    audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [],
+  });
+  manager.run = async () => "/hls";
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" });
+
+  assert.notEqual(started.mode, "direct");
+  assert.ok(existsSync(path.join(owned, started.id, String(manager.sessions.get(started.id).generation))));
+});
+
+test("an unset PLAYBACK_DIR keeps the DATA_DIR/playback root", async (t) => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "playback-default-data-"));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const previous = process.env.PLAYBACK_DIR;
+  delete process.env.PLAYBACK_DIR;
+  t.after(() => {
+    if (previous !== undefined) process.env.PLAYBACK_DIR = previous;
+  });
+
+  const manager = new PlaybackManager(dataDir) as any;
+  await loadPlaybackManager(manager);
+
+  assert.equal(manager.root, path.join(dataDir, "playback"));
+  assert.ok(existsSync(manager.root));
+});
+
+test("an unusable PLAYBACK_DIR logs an error and falls back", async (t) => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "playback-fallback-data-"));
+  const missing = path.join(await mkdtemp(path.join(os.tmpdir(), "playback-missing-parent-")), "missing");
+  t.after(() => Promise.all([
+    rm(dataDir, { recursive: true, force: true }),
+    rm(path.dirname(missing), { recursive: true, force: true }),
+  ]));
+  const previous = process.env.PLAYBACK_DIR;
+  process.env.PLAYBACK_DIR = missing;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PLAYBACK_DIR;
+    else process.env.PLAYBACK_DIR = previous;
+  });
+
+  const manager = new PlaybackManager(dataDir) as any;
+  await loadPlaybackManager(manager);
+  await flushLog();
+
+  assert.equal(manager.root, path.join(dataDir, "playback"));
+  const line = (await readLog({ level: "ERROR", search: "Configured playback directory is unusable" }))
+    .split("\n").find(Boolean);
+  assert.ok(line);
+  const context = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+  assert.equal(context.directory, path.join(missing, "stremio-offline-playback"));
+});
 
 test("operations of one playback session never overlap", async () => {
   const queue = new SerialOperations();
@@ -1287,6 +1382,39 @@ test("mkv with subtitles still remuxes", async () => {
   while (!extracted) await pause(5);
   assert.equal(extracted, 1);
   await manager.sidecars.stop(started.id);
+});
+
+test("a refused direct play logs its real reason when an embedded subtitle is chosen", async () => {
+  const manager = new PlaybackManager(tmp("test-playback-reason")) as any;
+  manager.inspect = async () => ({
+    container: "matroska,webm",
+    video: { codec: "h264", pixelFormat: "yuv420p" },
+    audio: { codec: "ac3" },
+    audioTracks: [{ index: 0, codec: "ac3", language: "en" }],
+    subtitleTracks: [{ index: 0, codec: "subrip", language: "en" }],
+  });
+  manager.spawnAt = async (session: any, time: number) => {
+    session.offset = time;
+    session.mode = manager.plan(session).copyVideo ? "remux" : "transcode";
+    return "/hls";
+  };
+  manager.extractSidecar = () => {};
+
+  const started = await manager.start(
+    { url: "https://cdn.example/movie.mkv" },
+    { ...nativeCaps, audioDecode: ["aac"], audioPassthrough: [] },
+    { subtitleTrack: 0 },
+  );
+  await flushLog();
+
+  assert.equal(started.audioTrack, 0);
+  assert.equal(started.subtitleTrack, 0);
+  assert.equal(started.quality, null);
+  const line = (await readLog({ search: `"id":"${started.id}"` }))
+    .split("\n").find((entry) => entry.includes("Conversion started"));
+  assert.ok(line);
+  const context = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+  assert.equal(context.reason, "client cannot play audio codec ac3");
 });
 
 test("clientCapabilities keeps only the shapes it declares", () => {
