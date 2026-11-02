@@ -467,6 +467,26 @@ class PlaybackControllerTest {
   }
 
   @Test
+  fun `the next episode starts without the previous episode's addon subtitles`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    val old = AddonSubtitleDto(subtitleId = "minted-for-a", lang = "cs", addonName = "OpenSubtitles")
+
+    controller.start("src1", "file:a", "A", "a", resume = false, subtitles = listOf(old))
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(300.0)
+
+    controller.playNext("file:b", "B", "b", resume = false) { "src2" }
+    runCurrent()
+
+    // An id minted for the first file expires 30 minutes later and names that file's text; sending
+    // it with the next start made the server refuse the whole start with 410.
+    assertEquals(emptyList<String>(), api.subtitleIds.last())
+    assertTrue(controller.state.value.addonSubtitles.isEmpty())
+  }
+
+  @Test
   fun `a next episode whose source cannot be minted reports the error instead of starting`() = runTest {
     val api = FakeApi()
     val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
