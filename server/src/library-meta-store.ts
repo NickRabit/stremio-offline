@@ -563,7 +563,7 @@ export class LibraryMetaStore {
             ? { sql: EPISODE_DELETE, params: [row.key] }
             : { sql: META_DELETE, params: [name, row.kind, row.key] });
         }
-        if (!this.markers.has(name) && (next.size > 0 || statements.length > 0)) {
+        if (!this.markers.has(name)) {
           statements.push({
             sql: MARKER_UPSERT,
             params: [

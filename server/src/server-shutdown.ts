@@ -20,7 +20,10 @@ export interface ShutdownDeps {
    *  the late requests have queued their saves. A rejection is contained so one store cannot
    *  hold back the rest. */
   flushes: ReadonlyArray<() => Promise<unknown>>;
+  /** Database-backed stores that can be changed by requests accepted after the first flush. */
+  lateFlushes: ReadonlyArray<() => Promise<unknown>>;
   store: { flush(): Promise<void> };
+  closeStorage(): Promise<void>;
   flushLog(): Promise<void>;
   log(level: LogLevel, message: string, context?: Record<string, unknown>): void;
   /** The clock the drain budget is measured on, injected so a test can hold it still. */
@@ -58,9 +61,19 @@ export function createShutdown(deps: ShutdownDeps): (signal: NodeJS.Signals) => 
     await Promise.allSettled([deps.store.flush(), ...deps.flushes.map((flush) => flush())]);
     // The listener stays open, so a request accepted while those were written queues its save
     // after the flush above.
+    const flushLate = () =>
+      Promise.allSettled([deps.store.flush(), ...deps.lateFlushes.map((flush) => flush())]);
     while (deps.inFlight.active() > 0 && deps.now() < deadline) {
       await deps.inFlight.drained(0, deadline - deps.now());
-      await deps.store.flush();
+      await flushLate();
+    }
+    await flushLate();
+    try {
+      await deps.closeStorage();
+    } catch (error) {
+      deps.log("ERROR", "Database storage could not be closed", {
+        reason: error instanceof Error ? error.message : String(error),
+      });
     }
     await deps.flushLog();
   };

@@ -2907,20 +2907,32 @@ try {
   // A short grace period, so the failure message reaches the desktop before this process goes.
   setTimeout(() => process.exit(1), 50);
 }
+const flushDatabaseStores = async () => {
+  await Promise.allSettled([
+    queue.flush(),
+    ...(database ? [followStore.flush()] : []),
+    metaStore.flush(),
+    stats.flush(),
+    stats.activity.flush(),
+    images.flush(),
+    imageStats.flush(),
+    providerStats.flush(),
+    libraryFileFacts.flush(),
+    tmdbIds.flush(),
+  ]);
+};
 const shutdown = createShutdown({
   inFlight,
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [async () => {
-    try {
-      if (database) await queue.stop();
-    } finally {
-      await Promise.allSettled([...(database ? [followStore.flush()] : []), metaStore.flush(), stats.flush(), stats.activity.flush(), images.flush(), imageStats.flush(), providerStats.flush(), libraryFileFacts.flush(), tmdbIds.flush()]);
-      await database?.close();
-    }
-  }, () => artworks.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  flushes: [flushDatabaseStores, () => artworks.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  lateFlushes: [flushDatabaseStores],
   store,
+  closeStorage: async () => {
+    queue.freezePersistence();
+    await database?.close();
+  },
   flushLog,
   log,
   now: () => Date.now(),

@@ -20,14 +20,11 @@ hashes. Store them like passwords. The settings export is described in
 
 | Path | Holds | Back it up? |
 | --- | --- | --- |
-| `application.sqlite` (with `-wal`/`-shm`) | The image link registry, hourly picture and provider-call counts, activity history, traffic events, library file facts and TMDB id mappings | **Yes** — copy it with the rest of `DATA_PATH` while the server is stopped |
+| `application.sqlite` (with `-wal`/`-shm`) | The image link registry, hourly picture and provider-call counts, activity history, traffic events, library match history and episode metadata, library file facts, followed series and automatic-download decisions, the download queue and history, and TMDB id mappings | **Yes** — copy it with the rest of `DATA_PATH` while the server is stopped |
 | `state.json` | Accounts, grants, libraries, settings, addons, each account's favourites, resume positions, watchlist and search history | **Yes** — cannot be rebuilt |
 | `media-server.key` | Key that decrypts saved Jellyfin and Emby logins. Present only when the server created it; a deployment that sets `MEDIA_SERVER_KEY_FILE` keeps the key at that path instead | **Yes** — without it those logins cannot be read |
 | `media-server-secrets/` | Encrypted provider tokens | **Yes** — together with the key and `state.json` |
-| `library/<library id>.json` | Match history of one library: manual matches, skipped lookups, suggestions | **Yes** — manual work |
-| `library/episodes.json` | Episode titles and stills shared by all libraries | Yes — refetched slowly otherwise |
-| `follows.json` | Followed series, discovered episodes, automatic-download decisions | **Yes** |
-| `downloads.json` | The download queue and its history | Yes |
+| `library/<library id>.json`, `library/episodes.json`, `follows.json`, `downloads.json` | Old locations for library match history and episode metadata, followed series and automatic-download decisions, and the download queue and history; only present until their one-time import moves them to `migration-backup/` | **No** — the current data is in `application.sqlite` |
 | `library-ops.json` | Queued and recent library operations, and the record of a move in progress | Yes |
 | `library-scan.json` | Progress of an interrupted library scan | Optional — a scan can run again |
 | `external-ids.json` | Cached links between catalogue identifiers | Optional — rebuilt on demand |
@@ -35,7 +32,7 @@ hashes. Store them like passwords. The settings export is described in
 | `title-extras/` | Cached cast, similar titles and ratings of opened titles | **No** — refetched on demand |
 | `artwork/` | Thumbnails the server generated from the media | Optional — regenerated, which takes ffmpeg time |
 | `images/*.jpg`, `images/*.png`, and other image files | Cached posters and backgrounds from the catalogues | Optional — the links are in `application.sqlite`; the bytes are refetched on demand |
-| `migration-backup/` | The pre-migration `images/index.json`, `image-stats.json`, `provider-stats.json`, `stats.json` and `activity.json` | Optional — safe to delete once the migration is satisfactory |
+| `migration-backup/` | The pre-migration `images/index.json`, `image-stats.json`, `provider-stats.json`, `stats.json`, `activity.json`, `follows.json`, `downloads.json` and library metadata files | Optional — safe to delete once the migration is satisfactory |
 | `remote-images/` | Cached Jellyfin and Emby posters | **No** — refetched on demand |
 | `app.log` | The log | No |
 | `*.damaged-*` | A state file that could not be read at start, kept aside | Keep until you have looked at it |

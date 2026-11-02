@@ -279,7 +279,8 @@ export function createLibraryFileFacts(opts: LibraryFileFactsOptions): LibraryFi
     if (stored
       && stored.size === entry.size
       && stored.modified === entry.modified
-      && JSON.stringify(stored.info) === JSON.stringify(entry.info)) return;
+      && JSON.stringify(stored.info) === JSON.stringify(entry.info)
+      && (stored.info !== null || entry.at <= stored.at)) return;
     entries.delete(key);
     entries.set(key, entry);
     // The oldest readings go first; Map keeps insertion order.

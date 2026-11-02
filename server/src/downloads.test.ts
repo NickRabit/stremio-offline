@@ -164,6 +164,75 @@ const flakyServer = () => new Promise<{ server: Server; port: number; drops: () 
   server.listen(0, "127.0.0.1", () => resolve({ server, port: (server.address() as { port: number }).port, drops: () => drops }));
 });
 
+test("flushing persists queue state without stopping an active transfer", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloads = path.join(directory, "downloads");
+  const library = downloadLibrary(downloads);
+  const finish = deferred();
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": "2", "content-type": "video/mp4" });
+    res.write(Buffer.from([1]));
+    void finish.promise.then(() => res.end(Buffer.from([2])));
+  });
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+    libraries: () => [library],
+    defaultLibrary: () => library,
+  });
+  try {
+    await queue.load();
+    const added = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await waitFor(queue, () => queue.transferring() && (queue.list()[0]?.received ?? 0) > 0);
+    const internal = queue as unknown as {
+      jobs: DownloadJob[];
+      debridPersistencePending: Set<string>;
+      flush(): Promise<void>;
+    };
+    internal.debridPersistencePending.add(added.id);
+    const retryCount = queue.list()[0]!.retryCount;
+
+    await internal.flush();
+
+    assert.equal(queue.transferring(), true, "the transfer keeps running");
+    assert.equal(queue.list()[0]!.retryCount, retryCount, "a clean flush does not spend a retry");
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<{ received: number }>;
+    assert.equal(stored[0]!.received, queue.list()[0]!.received, "the pending progress is on disk");
+    finish.release();
+    await waitFor(queue, () => queue.list()[0]?.status === "completed");
+  } finally {
+    finish.release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("freezing persistence suppresses a progress save", async (t) => {
+  const { directory, queue } = await tempQueue({ ownerAllowed: () => false });
+  try {
+    await queue.add("Film", { url: "http://127.0.0.1:1/film.mp4" });
+    await waitFor(queue, () => queue.list()[0]?.status === "paused");
+    const file = path.join(directory, "data", "downloads.json");
+    await writeFile(file, "sentinel");
+    queue.freezePersistence();
+    const internal = queue as unknown as {
+      jobs: DownloadJob[];
+      saveSoon(): void;
+    };
+    internal.jobs[0]!.received += 1024;
+    internal.jobs[0]!.updatedAt = new Date().toISOString();
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    internal.saveSoon();
+    t.mock.timers.tick(10_000);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(await readFile(file, "utf8"), "sentinel", "a progress save after shutdown is a no-op");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("after an outage and a resumed transfer the retry budget comes back", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const { server, port, drops } = await flakyServer();

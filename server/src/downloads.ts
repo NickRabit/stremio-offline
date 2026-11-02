@@ -791,6 +791,7 @@ export class DownloadQueue {
   private retryTimer?: NodeJS.Timeout;
   private saveRetryTimer?: NodeJS.Timeout;
   private saveFailing = false;
+  private persistenceFrozen = false;
   private readonly saveRetryMs: number;
   private spaceWatch?: NodeJS.Timeout;
   private saveChain: Promise<void> = Promise.resolve();
@@ -921,8 +922,21 @@ export class DownloadQueue {
     this.debridTimers.clear();
     for (const controller of this.active.values()) controller.abort();
     await Promise.all([...this.running]);
-    if (this.debridPersistencePending.size || this.saveFailing) await this.save();
+    await this.flush();
+  }
+
+  async flush(): Promise<void> {
+    if (this.persistenceFrozen) return;
+    // A progress checkpoint still waiting on its timer is written now rather than lost.
+    const checkpointDue = this.saveTimer !== undefined;
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
+    if (checkpointDue || this.debridPersistencePending.size || this.saveFailing) await this.save();
     await this.saveChain;
+  }
+
+  freezePersistence(): void {
+    this.persistenceFrozen = true;
   }
 
   attachDatabase(database: AppDatabase): void {
@@ -2306,6 +2320,7 @@ export class DownloadQueue {
    *  it keep working and a failed write never brings the server down. A failure is tried again
    *  on its own, logged once per run of failures, so the last change is not left only in memory. */
   private save(): Promise<void> {
+    if (this.persistenceFrozen) return Promise.resolve();
     return this.write().then(
       () => {
         if (this.saveFailing) log("INFO", "The queue state was saved again");

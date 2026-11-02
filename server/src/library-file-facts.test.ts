@@ -96,6 +96,7 @@ test("a file ffprobe cannot read is not asked again until a day has passed", asy
   assert.equal(reads, 1);
   clock = 25 * 60 * 60 * 1000;
   await facts.read([stamp("lib_1/broken.mkv")]);
+  await facts.read([stamp("lib_1/broken.mkv")]);
   assert.equal(reads, 2);
 });
 

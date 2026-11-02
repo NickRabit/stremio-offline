@@ -172,20 +172,38 @@ test("a touch writes exactly one changed row", async (t) => {
   assert.deepEqual(batches[0]![0]!.params?.slice(0, 2), [imageId(url), url]);
 });
 
-test("a corrupt index leaves images and the migration marker alone", async (t) => {
-  const { dataDir, imageDir, database } = await fixture(t);
+test("a corrupt index is preserved while the database image registry keeps working", async (t) => {
+  const { dataDir, imageDir, database, reopen } = await fixture(t);
   const image = path.join(imageDir, "orphan.png");
   await writeFile(image, Buffer.from([1, 2, 3]));
   await writeFile(path.join(imageDir, "index.json"), "{not json");
 
-  await proxyFor(dataDir, database).load();
+  const first = proxyFor(dataDir, database);
+  await first.load();
 
-  assert.equal(await marker(database), undefined);
-  assert.deepEqual(await readFile(image), Buffer.from([1, 2, 3]));
-  assert.deepEqual(await readFile(path.join(imageDir, "index.json"), "utf8"), "{not json");
+  const recorded = await marker(database) as { importedAt: number; source: string; count: number };
+  assert.equal(recorded.source, "unreadable");
+  assert.equal(recorded.count, 0);
+  assert.ok(Number.isInteger(recorded.importedAt));
+  await assert.rejects(stat(path.join(imageDir, "index.json")), { code: "ENOENT" });
+  await assert.rejects(stat(image), { code: "ENOENT" }, "an unregistered orphan is removed");
+  const backups = await readdir(path.join(dataDir, "migration-backup"));
+  assert.equal(backups.length, 1);
+  assert.match(backups[0]!, /^images-index-\d+\.json$/);
+  assert.equal(await readFile(path.join(dataDir, "migration-backup", backups[0]!), "utf8"), "{not json");
   await flushLog();
   const log = await readLog({ level: "ERROR" });
   assert.equal(log.match(/image cache index could not be imported/g)?.length, 1);
+
+  const url = "https://cdn.example/after-corrupt-index.png";
+  const id = imageId(url);
+  first.proxied(url);
+  await first.flush();
+
+  const restarted = proxyFor(dataDir, await reopen());
+  await restarted.load();
+  assert.equal(restarted.source(id), url);
+  assert.equal(restarted.original(`/api/image/${id}`), url);
 });
 
 test("a leftover index is moved and ignored when the marker is present", async (t) => {

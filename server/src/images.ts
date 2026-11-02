@@ -249,8 +249,13 @@ export class ImageProxy {
           JSON.stringify({ importedAt: this.now(), source: "index.json", count: 0 }),
         ]);
       } else if (imported.kind === "invalid") {
+        const importedAt = this.now();
         log("ERROR", "The image cache index could not be imported", { reason: imported.reason });
-        return;
+        await this.moveIndexToBackup(importedAt);
+        await database.run("INSERT INTO meta (key, value) VALUES (?, ?)", [
+          "domain.images",
+          JSON.stringify({ importedAt, source: "unreadable", count: 0 }),
+        ]);
       } else {
         const entries: Array<[string, Entry]> = [];
         for (const [id, value] of Object.entries(imported.value)) {

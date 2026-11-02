@@ -267,6 +267,22 @@ test("a debounced write with no changed rows executes nothing", async (t) => {
   assert.equal(batches.length, 0);
 });
 
+test("an empty first write leaves a marker for the later library rows", async (t) => {
+  const fixtureState = await fixture(t);
+  const first = fixtureState.store();
+  await first.load();
+  await first.update(libA, () => undefined);
+  await first.flush();
+
+  const match = record("tt1");
+  await first.update(libA, (file) => { file.meta["Film.mkv"] = match; });
+  await first.flush();
+
+  const restarted = fixtureState.store(await fixtureState.reopen());
+  await restarted.load();
+  assert.deepEqual(restarted.meta(libA), { "Film.mkv": match });
+});
+
 test("a removed suggestion deletes only its row", async (t) => {
   const fixtureState = await fixture(t);
   const batches: Statement[][] = [];
