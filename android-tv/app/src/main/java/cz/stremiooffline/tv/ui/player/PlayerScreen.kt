@@ -337,14 +337,21 @@ fun PlayerScreen(
     upNextTrigger.reset()
   }
 
-  LaunchedEffect(api, target.key) {
-    segments = null
-    val query = introQueryOf(target.key) ?: return@LaunchedEffect
-    segments = runCatching { api.introSegments(query.imdb, query.season, query.episode) }.getOrNull()
-  }
-
   /** The catalogue title each library file played here is bound to, null for an unbound file. */
   val fileIdentities = remember { mutableMapOf<String, Pair<String, String>?>() }
+  suspend fun fileIdentity(path: String): Pair<String, String>? =
+    if (fileIdentities.containsKey(path)) fileIdentities[path]
+    else libraryAddonIdentity(runCatching { api.libraryTitle(path) }.getOrNull()).also { fileIdentities[path] = it }
+
+  LaunchedEffect(api, target.key) {
+    segments = null
+    // A library file's key names the file; IntroDB is asked about the title it is bound to.
+    val query = introQueryOf(target.key)
+      ?: (carriedSubtitleIdentity(target) ?: target.path?.let { fileIdentity(it) })
+        ?.let { (type, id) -> introQueryOf("$type:$id") }
+      ?: return@LaunchedEffect
+    segments = runCatching { api.introSegments(query.imdb, query.season, query.episode) }.getOrNull()
+  }
   suspend fun askSubtitles(identity: Pair<String, String>): List<AddonSubtitleDto> =
     runCatching { api.subtitles(identity.first, identity.second) }.getOrDefault(emptyList())
 
@@ -381,10 +388,7 @@ fun PlayerScreen(
     addonSubtitles = own
     // The title a file is bound to is looked up beside the session, so Play never waits for it;
     // a binding read once is not asked again for a restart or a switch back to the file.
-    offerLater(from, own) {
-      if (fileIdentities.containsKey(path)) fileIdentities[path]
-      else libraryAddonIdentity(runCatching { api.libraryTitle(path) }.getOrNull()).also { fileIdentities[path] = it }
-    }
+    offerLater(from, own) { fileIdentity(path) }
   }
 
   LaunchedEffect(nextSubtitlesFor) {
@@ -808,6 +812,7 @@ fun PlayerScreen(
     qualityLabel = qualityText,
     qualityFocus = qualityFocus,
     chapters = state.chapters,
+    segments = segments,
     onChapters = if (state.chapters.size >= 2) ({ chaptersOpen = true }) else null,
     chaptersLabel = stringResource(R.string.tv_chapters_button),
     chaptersFocus = chaptersFocus,
