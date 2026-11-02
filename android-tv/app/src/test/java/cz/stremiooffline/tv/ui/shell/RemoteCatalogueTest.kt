@@ -1,118 +1,167 @@
 package cz.stremiooffline.tv.ui.shell
 
 import cz.stremiooffline.tv.data.HomeCard
-import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.HomeProgress
 import cz.stremiooffline.tv.data.RemoteItemDto
-import cz.stremiooffline.tv.data.TitleRefDto
-import cz.stremiooffline.tv.ui.catalog.RemoteItemRef
+import cz.stremiooffline.tv.data.RemoteItemsPageDto
+import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.catalog.RemoteBackend
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteMetadata
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RemoteCatalogueTest {
 
-  private fun data(item: RemoteItemDto, autoPlay: Boolean = false) = RemoteDetailData(
+  private fun data(item: RemoteItemDto) = RemoteDetailData(
     libraryId = "library",
     libraryName = "Library",
     provider = "jellyfin",
     item = item,
-    autoPlay = autoPlay,
   )
 
-  private fun resume(
-    key: String,
-    libraryId: String = "library",
-    itemType: String = "episode",
-    seriesId: String = "tt100",
-    season: Int? = 1,
-    episode: Int? = 2,
-  ) = HomeCard.Remote(
-    key = key,
-    libraryId = libraryId,
-    itemId = "resume-$key",
-    itemType = itemType,
-    mediaSourceId = "source-$key",
+  private fun episode(id: String, season: Int, number: Int) = RemoteItemDto(
+    id = id,
+    name = "Episode $number",
+    type = "episode",
+    seriesId = "show",
     season = season,
-    episode = episode,
-    identity = TitleRefDto(type = "series", id = seriesId),
+    episode = number,
   )
 
   @Test
-  fun `a movie opens the catalogue on its exact remote item`() {
-    val item = RemoteItemDto(id = "movie", name = "Movie", type = "movie", poster = "/movie.jpg")
-
-    val args = remoteCatalogueArgs(data(item, autoPlay = true), RemoteMetadata(item), "movie" to "tt100", emptyList())
-
-    assertEquals(MetaDto(id = "tt100", type = "movie", name = "Movie", poster = "/movie.jpg"), args.meta)
-    assertEquals("", args.addonName)
-    assertEquals("movie", args.type)
-    assertEquals(true, args.autoPlay)
-    assertTrue(args.preferRemote)
-    assertEquals(RemoteItemRef("library", "movie"), args.preferredRemote)
-    assertNull(args.episode)
-  }
-
-  @Test
-  fun `an episode selects itself under its catalogue series`() {
-    val item = RemoteItemDto(id = "episode", name = "Episode", type = "episode", season = 2, episode = 3)
-
-    val args = remoteCatalogueArgs(data(item), RemoteMetadata(item), "series" to "tt100", emptyList())
-
-    assertEquals(MetaDto(id = "tt100", type = "series"), args.meta)
-    assertEquals("series", args.type)
-    assertEquals("series:tt100:2:3", args.episode?.key)
-    assertEquals(2, args.episode?.season)
-    assertEquals(3, args.episode?.number)
-    assertEquals(RemoteItemRef("library", "episode"), args.preferredRemote)
-  }
-
-  @Test
-  fun `a series selects its newest matching resume episode and that exact remote card`() {
-    val item = RemoteItemDto(id = "series", name = "Show", type = "series", poster = "/show.jpg")
-    val matching = resume("matching")
-
-    val args = remoteCatalogueArgs(
+  fun `an id-less film uses the server item as its title`() {
+    val item = RemoteItemDto(
+      id = "film",
+      name = "Heat",
+      type = "movie",
+      year = 1995,
+      overview = "A film",
+      poster = "poster",
+      wide = "backdrop",
+    )
+    val args = remoteOwnCatalogueArgs(
       data(item),
-      RemoteMetadata(item),
-      "series" to "tt100",
-      listOf(matching, resume("older", season = 1, episode = 1)),
+      item,
+      episodes = emptyList(),
+      resume = emptyList(),
     )
 
-    assertEquals(MetaDto(id = "tt100", type = "series", name = "Show", poster = "/show.jpg"), args.meta)
-    assertEquals("series:tt100:1:2", args.episode?.key)
-    assertEquals(RemoteItemRef("library", "resume-matching", "source-matching"), args.preferredRemote)
+    assertEquals("remote:library:film", args.meta.id)
+    assertEquals("movie", args.meta.type)
+    assertEquals("Heat", args.meta.name)
+    assertEquals("1995", args.meta.releaseInfo)
+    assertEquals("A film", args.meta.description)
+    assertEquals("poster", args.meta.poster)
+    assertEquals("backdrop", args.meta.background)
+    assertTrue(args.backend is RemoteBackend)
+    assertFalse(args.backend.catalogue)
   }
 
   @Test
-  fun `a series ignores resume cards that do not name this show in this library`() {
-    val item = RemoteItemDto(id = "series", name = "Show", type = "series")
-    val mismatches = listOf(
-      resume("other-library", libraryId = "other"),
-      resume("other-series", seriesId = "tt999"),
-      resume("movie", itemType = "movie"),
-      resume("missing-season", season = null),
+  fun `an id-less series opens on the resume card for one of its episodes`() {
+    val show = RemoteItemDto(id = "show", name = "Show", type = "series")
+    val first = episode("e1", 1, 1)
+    val second = episode("e2", 1, 2)
+    val card = HomeCard.Remote(
+      key = "resume",
+      libraryId = "library",
+      itemId = "e2",
+      itemType = "episode",
+      season = 1,
+      episode = 2,
+      mediaSourceId = "source-two",
+      progress = HomeProgress(position = 30.0, duration = 100.0),
     )
+    val args = remoteOwnCatalogueArgs(data(show), show, listOf(first, second), listOf(card))
 
-    val args = remoteCatalogueArgs(data(item), RemoteMetadata(item), "series" to "tt100", mismatches)
-
-    assertEquals(MetaDto(id = "tt100", type = "series", name = "Show"), args.meta)
-    assertNull(args.episode)
-    // No episode in progress: the series still plays from the server it was opened from.
-    assertEquals(RemoteItemRef("library", ""), args.preferredRemote)
+    assertEquals("remote:library:show", args.meta.id)
+    assertEquals(listOf("remote:library:e1", "remote:library:e2"), args.meta.videos.orEmpty().map { it.id })
+    assertEquals(1, args.episode?.season)
+    assertEquals(2, args.episode?.number)
+    assertEquals("e2", args.preferredRemote?.itemId)
+    assertEquals("source-two", args.preferredRemote?.mediaSourceId)
   }
 
   @Test
-  fun `a season opens its catalogue series without a remote card`() {
-    val item = RemoteItemDto(id = "season", name = "Season 1", type = "season", season = 1)
+  fun `an id-less series without a resume card opens its first episode`() {
+    val show = RemoteItemDto(id = "show", name = "Show", type = "series")
+    val args = remoteOwnCatalogueArgs(
+      data(show),
+      show,
+      listOf(episode("e1", 1, 1), episode("e2", 1, 2)),
+      emptyList(),
+    )
 
-    val args = remoteCatalogueArgs(data(item), RemoteMetadata(item, seriesName = "Show"), "series" to "tt100", emptyList())
+    assertEquals(1, args.episode?.season)
+    assertEquals(1, args.episode?.number)
+    assertEquals(null, args.preferredRemote?.mediaSourceId)
+  }
 
-    assertEquals(MetaDto(id = "tt100", type = "series", name = "Show"), args.meta)
-    assertEquals("series", args.type)
-    assertNull(args.episode)
-    assertEquals(RemoteItemRef("library", ""), args.preferredRemote)
+  @Test
+  fun `an id-less episode item opens its own episode in the series`() {
+    val show = RemoteItemDto(id = "show", name = "Show", type = "series")
+    val first = episode("e1", 1, 1)
+    val opened = episode("e3", 2, 1)
+    val args = remoteOwnCatalogueArgs(
+      data(opened),
+      show,
+      listOf(first, opened),
+      emptyList(),
+    )
+
+    assertEquals(2, args.episode?.season)
+    assertEquals(1, args.episode?.number)
+    assertEquals(listOf("remote:library:e1", "remote:library:e3"), args.meta.videos.orEmpty().map { it.id })
+  }
+
+  @Test
+  fun `the shell builder follows episode cursors`() = runBlocking {
+    val show = RemoteItemDto(id = "show", name = "Show", type = "series")
+    val api = FakeTvApi().apply {
+      remoteEpisodesPages["show|"] = RemoteItemsPageDto(
+        items = listOf(episode("e1", 1, 1)),
+        total = 2,
+        cursor = "next",
+      )
+      remoteEpisodesPages["show|next"] = RemoteItemsPageDto(
+        items = listOf(episode("e2", 1, 2)),
+        total = 2,
+      )
+    }
+
+    val args = remoteOwnCatalogueArgs(
+      api,
+      data(show),
+      RemoteMetadata(show, show.name, show.providerIds),
+    )
+
+    assertEquals(listOf("remote:library:e1", "remote:library:e2"), args?.meta?.videos.orEmpty().map { it.id })
+    assertEquals(listOf("show" to null, "show" to "next"), api.remoteEpisodesRequests.map { it.second to it.third })
+  }
+
+  @Test
+  fun `the shell builder stops after twenty episode pages`() = runBlocking {
+    val show = RemoteItemDto(id = "show", name = "Show", type = "series")
+    val api = FakeTvApi().apply {
+      repeat(25) { page ->
+        remoteEpisodesPages["show|${if (page == 0) "" else "page-$page"}"] = RemoteItemsPageDto(
+          items = listOf(episode("e$page", 1, page + 1)),
+          cursor = "page-${page + 1}",
+        )
+      }
+    }
+
+    val args = remoteOwnCatalogueArgs(
+      api,
+      data(show),
+      RemoteMetadata(show, show.name, show.providerIds),
+    )
+
+    assertEquals(20, api.remoteEpisodesRequests.size)
+    assertEquals(20, args?.meta?.videos.orEmpty().size)
   }
 }

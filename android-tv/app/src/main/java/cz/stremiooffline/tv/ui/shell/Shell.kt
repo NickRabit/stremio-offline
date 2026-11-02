@@ -57,10 +57,10 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Streams
+import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.DownloadTargetDto
-import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
@@ -73,13 +73,16 @@ import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailScreen
 import cz.stremiooffline.tv.ui.catalog.CatalogScreen
 import cz.stremiooffline.tv.ui.catalog.OfferedSources
+import cz.stremiooffline.tv.ui.catalog.remoteResumeCards
 import cz.stremiooffline.tv.ui.catalog.SearchScreen
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.DetailScreen
+import cz.stremiooffline.tv.ui.detail.initialRemoteMetadata
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
 import cz.stremiooffline.tv.ui.detail.remoteExtrasIdentity
+import cz.stremiooffline.tv.ui.detail.remoteMetadataNeedsItem
 import cz.stremiooffline.tv.ui.detail.resolveRemoteMetadata
 import cz.stremiooffline.tv.ui.favorites.FavoritesRoute
 import cz.stremiooffline.tv.ui.home.HomeAction
@@ -315,20 +318,41 @@ fun Shell(
       try {
         val resolved = try {
           withTimeoutOrNull(2_500) {
-            val metadata = resolveRemoteMetadata(api, data)
-            val identity = remoteExtrasIdentity(metadata) ?: return@withTimeoutOrNull null
-            val resume = if (identity.first == "series" && metadata.item.type == "series") {
+            val resolvedItem = if (remoteMetadataNeedsItem(data.item)) {
               try {
-                api.remotePersonal("resume", 0, 60).items.filterIsInstance<HomeCard.Remote>()
+                api.remoteItem(data.libraryId, data.item.id).item
+                  .takeIf { it.type.isNotBlank() && (it.type == "episode" || it.type == "season" || it.name.isNotBlank()) }
+                  ?: return@withTimeoutOrNull null
               } catch (cancelled: CancellationException) {
                 throw cancelled
-              } catch (_: Exception) {
-                emptyList()
+              } catch (_: ApiError) {
+                return@withTimeoutOrNull null
               }
             } else {
-              emptyList()
+              data.item
             }
-            Triple(metadata, identity, resume)
+            val metadata = if (resolvedItem.type == "movie" || resolvedItem.type == "series") {
+              initialRemoteMetadata(data.copy(item = resolvedItem))
+            } else {
+              resolveRemoteMetadata(api, data.copy(item = resolvedItem))
+            }
+            val identity = remoteExtrasIdentity(metadata)
+            if (identity == null) {
+              remoteOwnCatalogueArgs(api, data, metadata)
+            } else {
+              val resume = if (identity.first == "series" && metadata.item.type == "series") {
+                try {
+                  remoteResumeCards(api, data.libraryId)
+                } catch (cancelled: CancellationException) {
+                  throw cancelled
+                } catch (_: Exception) {
+                  emptyList()
+                }
+              } else {
+                emptyList()
+              }
+              remoteCatalogueArgs(data, metadata, identity, resume)
+            }
           }
         } catch (cancelled: CancellationException) {
           throw cancelled
@@ -338,7 +362,7 @@ fun Shell(
         if (resolved == null) {
           remoteDetail = data
         } else {
-          openCatalog(remoteCatalogueArgs(data, resolved.first, resolved.second, resolved.third))
+          openCatalog(resolved)
         }
       } finally {
         detailLookup.done(coroutineContext[Job])

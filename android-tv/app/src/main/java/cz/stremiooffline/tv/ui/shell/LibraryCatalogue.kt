@@ -6,7 +6,7 @@ import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
-import cz.stremiooffline.tv.ui.catalog.OwnTitle
+import cz.stremiooffline.tv.ui.catalog.LibraryBackend
 import cz.stremiooffline.tv.ui.catalog.episodeNumbers
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.isCompleted
@@ -93,7 +93,7 @@ internal fun ownCatalogueArgs(data: DetailData): CatalogDetailArgs {
     type = type,
     episode = episode,
     forgetKeys = data.forgetKeys,
-    ownTitle = OwnTitle(
+    backend = LibraryBackend(
       rows,
       data.gridPath,
       data.favorite,

@@ -86,6 +86,7 @@ import cz.stremiooffline.tv.ui.detail.TitleExtrasState
 import cz.stremiooffline.tv.ui.detail.TitleTechBlock
 import cz.stremiooffline.tv.ui.detail.downIntoExtras
 import cz.stremiooffline.tv.ui.detail.scrollToTopOnFocus
+import cz.stremiooffline.tv.ui.library.RemoteSeriesBulkHost
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -151,13 +152,13 @@ internal suspend fun withOriginVersions(
   if (origin == null || origin.libraryId != libraryId) return matched
   if (matched.orEmpty().any { it.remoteItem?.itemId == origin.itemId }) return matched
   val read = try {
-    withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteSources(libraryId, origin.itemId) }
+    withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { remoteRows(api, libraryId, origin.itemId) }
   } catch (cancelled: CancellationException) {
     throw cancelled
   } catch (_: ApiError) {
     null
   }
-  val own = read.orEmpty().filter(Streams::isRemoteStream)
+  val own = read.orEmpty()
   return if (own.isEmpty()) matched else matched.orEmpty() + own
 }
 
@@ -237,8 +238,8 @@ fun CatalogDetailScreen(
   // The source filters are not saved: they live while a title or episode is on screen and reset
   // when either changes. A null sort follows the account's `streamSort`.
   val sourceFilters = remember { SourceFilterState() }
-  BindSourceProfiles(api.takeUnless { args.ownTitle != null }, sourceFilters)
-  var favourite by remember { mutableStateOf(args.ownTitle?.favourite ?: false) }
+  BindSourceProfiles(api.takeIf { args.backend.catalogue }, sourceFilters)
+  var favourite by remember { mutableStateOf(false) }
   var favouriteBusy by remember { mutableStateOf(false) }
   var message by remember { mutableStateOf<String?>(null) }
   var noticeKind by remember { mutableStateOf(CatalogNotice.Neutral) }
@@ -295,12 +296,15 @@ fun CatalogDetailScreen(
     save.pendingLibraryStream = null
     sourceFilters.reset()
     ui.extras.clear()
-    favourite = args.ownTitle?.favourite ?: false
-    ui.ownProgress = args.ownTitle?.progress.orEmpty()
-    if (args.ownTitle != null) {
+    remoteProgress.preferred = null
+    favourite = args.backend.favourite(api) ?: false
+    ui.episodeProgress = args.backend.initialEpisodeProgress(api)
+    if (!args.backend.catalogue) {
       val videos = meta.videos.orEmpty()
       val wanted = args.episode
-      pick.selectedVideo = Resume.resumeVideo(videos, wanted) ?: cardEpisode(meta.id, wanted)
+      pick.selectedVideo = Resume.resumeVideo(videos, wanted)
+        ?: cardEpisode(meta.id, wanted)
+        ?: firstReleased(videos)
       pick.season = wanted?.season ?: defaultSeason(videos)
       return@LaunchedEffect
     }
@@ -361,8 +365,17 @@ fun CatalogDetailScreen(
       pick.sourcesLoaded = true
       return@LaunchedEffect
     }
-    if (args.ownTitle != null) {
-      pick.localStreams = args.ownTitle.rows[id].orEmpty()
+    val ownRows = try {
+      args.backend.ownRows(api, id)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      pick.sourcesFailed = true
+      pick.sourcesLoaded = true
+      return@LaunchedEffect
+    }
+    if (ownRows != null) {
+      pick.localStreams = ownRows
       pick.sourcesLoaded = true
       return@LaunchedEffect
     }
@@ -433,7 +446,7 @@ fun CatalogDetailScreen(
     remote.discoveryFailed = false
     val id = streamVideoId
     if (id == null) return@LaunchedEffect
-    if (args.ownTitle != null) return@LaunchedEffect
+    if (!args.backend.catalogue) return@LaunchedEffect
     val foundLibraries = try {
       withTimeoutOrNull(REMOTE_DISCOVERY_TIMEOUT_MS) { api.remoteLibraries() }
     } catch (cancelled: CancellationException) {
@@ -480,8 +493,8 @@ fun CatalogDetailScreen(
   LaunchedEffect(restoreToken) {
     if (restoreToken == 0) return@LaunchedEffect
     runCatching { focus.primary.requestFocus() }
-    if (args.ownTitle != null) {
-      ui.ownProgress = refreshedOwnProgress(api, args.ownTitle, ui.ownProgress)
+    if (!args.backend.catalogue) {
+      ui.episodeProgress = args.backend.episodeProgress(api)
       return@LaunchedEffect
     }
     if (isSeries) {
@@ -529,11 +542,19 @@ fun CatalogDetailScreen(
   }
   // The row of the source last played leads, so Resume continues in it. A rule with verdicts
   // then takes a row that meets it; the call lives in Streams so this screen only passes the sort.
-  val preferredStream = originRow(args, rows) ?: Streams.pickDefaultStream(
-    Streams.remoteFirst(rows, args.preferRemote),
-    (if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey),
-    Streams.ruleIdOf(filters.sort),
-  )
+  val preferredStream = (if (!args.backend.catalogue) {
+    rows.firstOrNull { stream ->
+      val item = stream.remoteItem
+      item != null &&
+        remoteProgress.preferred == listOf(item.libraryId, item.itemId, item.mediaSourceId.orEmpty())
+    }
+  } else {
+    null
+  }) ?: originRow(args, rows) ?: Streams.pickDefaultStream(
+      Streams.remoteFirst(rows, args.preferRemote),
+      (if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey),
+      Streams.ruleIdOf(filters.sort),
+    )
   val chosenStream = pick.selectedStream?.takeIf { pick.pickedStream && rows.contains(it) }
   val activeStream = Streams.selectedPlayRow(
     chosenStream,
@@ -547,7 +568,8 @@ fun CatalogDetailScreen(
   val remoteFailed = remote.discoveryFailed || remoteFailedLabels.isNotEmpty()
   // Asking covers both "the addon list has not answered" and "some addon still owes a list".
   val sourcesAsking = !pick.sourcesFailed && (!pick.sourcesLoaded || pick.pendingSources > 0)
-  val anyAsking = sourcesAsking || pick.localLoading || remoteAsking
+  val anyAsking = sourcesAsking || pick.localLoading || remoteAsking ||
+    (!args.backend.catalogue && activeStream?.remoteItem != null && remoteProgress.loading)
   // While no playable stream has arrived the primary action is a spinner, not a promise to play.
   val findingSources = activeStream?.playable != true && anyAsking
   val canQueueActive = activeStream != null && Streams.canQueue(activeStream, settings.realDebridConfigured)
@@ -566,7 +588,7 @@ fun CatalogDetailScreen(
   val totalSources = offered.size + pick.localStreams.size + remoteStreams.size
 
   // A later addon may outrank the one already picked, but only while the viewer has not chosen.
-  LaunchedEffect(rows, anyAsking, preferredStream?.stableKey) {
+  LaunchedEffect(rows, anyAsking, preferredStream?.stableKey, remoteProgress.preferred) {
     val storedKey =
       if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey
     val origin = originRow(args, rows)
@@ -583,7 +605,13 @@ fun CatalogDetailScreen(
       preferred = preferredStream,
       upgrade = preferredStream?.let(Streams::isLocalStream) == true && pick.selectedStream?.let(Streams::isLocalStream) != true,
       restore = (preferredStream?.stableKey != null && preferredStream.stableKey == storedKey) ||
-        (origin != null && preferredStream == origin),
+        (origin != null && preferredStream == origin) ||
+        (
+          !args.backend.catalogue &&
+            preferredStream?.remoteItem?.let {
+              listOf(it.libraryId, it.itemId, it.mediaSourceId.orEmpty()) == remoteProgress.preferred
+            } == true
+          ),
     )
     if (next.move) pick.selectedStream = next.to
   }
@@ -591,7 +619,7 @@ fun CatalogDetailScreen(
   // The player applies its own filters to the complete list while the addons keep answering.
   LaunchedEffect(playbackRows, anyAsking, remoteFailed, remote.discoveryFailed, filters, settings.streamSort) {
     // A title of the viewer's own with a single file has nothing to switch to: no Sources button.
-    if (args.ownTitle != null && playbackRows.size < 2) {
+    if (!args.backend.catalogue && playbackRows.size < 2) {
       onSources(OfferedSources())
       return@LaunchedEffect
     }
@@ -652,20 +680,32 @@ fun CatalogDetailScreen(
     val request = ++remoteProgress.request
     remoteProgress.key = null
     remoteProgress.row = null
-    val item = activeRemoteItem ?: return@LaunchedEffect
-    if (item.libraryId.isBlank() || item.itemId.isBlank()) return@LaunchedEffect
+    remoteProgress.loading = true
+    val item = activeRemoteItem ?: run {
+      remoteProgress.loading = false
+      return@LaunchedEffect
+    }
+    if (item.libraryId.isBlank() || item.itemId.isBlank()) {
+      remoteProgress.loading = false
+      return@LaunchedEffect
+    }
     // Computed here rather than in a local of the body: this composable sits at the limit of the
     // registers Android's verifier allows.
-    val titleKey = ProgressKey.of(streamType, meta.id, pick.selectedVideo?.id)
+    val titleKey = if (args.backend.catalogue) ProgressKey.of(streamType, meta.id, pick.selectedVideo?.id) else null
     val loaded = VersionProgress.savedState(
       titleKey,
       item,
       { key -> api.progress(key) },
       { libraryId, itemId -> api.remoteItemState(libraryId, itemId) },
-    ) ?: return@LaunchedEffect
-    if (request != remoteProgress.request) return@LaunchedEffect
-    remoteProgress.row = loaded
-    remoteProgress.key = remoteIdentity
+    )
+    if (request == remoteProgress.request) {
+      remoteProgress.row = loaded
+      remoteProgress.key = remoteIdentity
+      remoteProgress.preferred = loaded?.mediaSourceId?.let {
+        listOf(item.libraryId, item.itemId, it)
+      }
+      remoteProgress.loading = false
+    }
   }
 
   val baseTitle = localizedTitle(args.meta, meta, settings.uiLanguage)
@@ -684,7 +724,7 @@ fun CatalogDetailScreen(
         seriesEpisodeMatches = pick.selectedVideo == null || pick.selectedVideo?.id == resumeEpisode?.id,
         cataloguePosition = storedPosition,
         catalogueDuration = storedDuration,
-        catalogueKey = progressKey,
+        catalogueKey = activeRemoteItem?.progressKey?.takeIf { !args.backend.catalogue } ?: progressKey,
       )?.key,
     )
   }
@@ -716,6 +756,24 @@ fun CatalogDetailScreen(
       save.libraryWasOpen = true
     } else if (save.libraryWasOpen) {
       save.libraryWasOpen = false
+      runCatching { focus.libraryOpener.requestFocus() }
+    }
+  }
+
+  LaunchedEffect(ui.copyRequest) {
+    if (ui.copyRequest != null) {
+      ui.copyWasOpen = true
+    } else if (ui.copyWasOpen) {
+      ui.copyWasOpen = false
+      runCatching { focus.libraryOpener.requestFocus() }
+    }
+  }
+
+  LaunchedEffect(ui.seriesCopy) {
+    if (ui.seriesCopy != null) {
+      ui.seriesCopyWasOpen = true
+    } else if (ui.seriesCopyWasOpen) {
+      ui.seriesCopyWasOpen = false
       runCatching { focus.libraryOpener.requestFocus() }
     }
   }
@@ -758,15 +816,15 @@ fun CatalogDetailScreen(
       val remoteItem = stream.remoteItem
       onPlay(
         PlayTarget(
-          key = progressKey,
+          key = activeRemoteItem?.progressKey?.takeIf { !args.backend.catalogue } ?: progressKey,
           title = playerTitle,
           resume = resuming,
           sourceId = stream.sourceId,
           stableKey = stream.stableKey,
           poster = args.meta.poster ?: meta.poster,
           addonKey = args.addonKey ?: stream.addonKey?.takeIf { it.isNotBlank() },
-          subtitleType = streamType,
-          subtitleTarget = streamVideoId,
+          subtitleType = streamType.takeIf { args.backend.catalogue },
+          subtitleTarget = streamVideoId.takeIf { args.backend.catalogue },
           catalogue = true,
           remoteItem = remoteItem,
           remoteSources = Streams.remoteVersionsOf(remoteItem, remoteStreams),
@@ -918,15 +976,15 @@ fun CatalogDetailScreen(
         val remoteItem = stream.remoteItem
         onPlay(
           PlayTarget(
-            key = progressKey,
+            key = activeRemoteItem?.progressKey?.takeIf { !args.backend.catalogue } ?: progressKey,
             title = playerTitle,
             resume = false,
             sourceId = stream.sourceId,
             stableKey = stream.stableKey,
             poster = args.meta.poster ?: meta.poster,
             addonKey = args.addonKey ?: stream.addonKey?.takeIf { it.isNotBlank() },
-            subtitleType = streamType,
-            subtitleTarget = streamVideoId,
+            subtitleType = streamType.takeIf { args.backend.catalogue },
+            subtitleTarget = streamVideoId.takeIf { args.backend.catalogue },
             catalogue = true,
             remoteItem = remoteItem,
             remoteSources = Streams.remoteVersionsOf(remoteItem, remoteStreams),
@@ -951,7 +1009,7 @@ fun CatalogDetailScreen(
     favourite = wanted
     scope.launch {
       try {
-        favourite = ownFavourite(api, args, wanted) ?: run {
+        favourite = args.backend.setFavourite(api, wanted) ?: run {
           // The addon is picked as the position's is: the catalogue's, else the source's.
           val addonKey = args.addonKey ?: activeStream?.addonKey?.takeIf { it.isNotBlank() }
           api.setWatchlist(args.type, meta.id, meta.name, meta.poster, wanted, addonKey).favorite
@@ -973,10 +1031,21 @@ fun CatalogDetailScreen(
     ui.forget.panelOpen = false
     scope.launch {
       try {
-        api.forgetProgress(forgetKeys)
+        val handled = args.backend.forget(api, activeStream)
+        if (!handled && args.backend.catalogue) api.forgetProgress(forgetKeys)
         ui.forget.done = true
-        if (args.ownTitle != null) {
+        if (!args.backend.catalogue) {
+          ui.episodeProgress = args.backend.episodeProgress(api)
           pick.localProgress = null
+          activeRemoteItem?.let { item ->
+            remoteProgress.row = VersionProgress.savedState(
+              null,
+              item,
+              { key -> api.progress(key) },
+              { libraryId, itemId -> api.remoteItemState(libraryId, itemId) },
+            )
+            remoteProgress.key = remoteIdentity
+          }
         } else if (isSeries) {
           entries = runCatching { api.progressList() }.getOrDefault(entries)
         } else {
@@ -1192,23 +1261,61 @@ fun CatalogDetailScreen(
         },
         // A series opens one panel for this episode's chosen source, a season or the whole show.
         // A native pick still has no bulk: the batch would queue addons the viewer never chose.
-        toLibrary = if (args.ownTitle == null && (canQueueActive || seriesBulkAvailable(isSeries, meta.videos, activeStream))) catalogAction(
-          TagCatalogToLibrary,
-          if (queued) texts.queued else texts.toLibrary,
-          if (queued) CheckIcon else DownloadIcon,
-          enabled = !save.queueBusy,
-          modifier = Modifier
-            .focusRequester(focus.libraryOpener)
-            .focusRequester(ui.series.focus)
-            .onFocusChanged { focus.toLibraryFocused = it.isFocused },
-        ) {
-          if (seriesBulkAvailable(isSeries, meta.videos, activeStream)) {
-            cancelPendingPlay()
-            ui.series.open = true
-          } else {
-            ui.titleDownload = true
+        toLibrary = when {
+          !args.backend.catalogue -> args.backend.toLibrary(activeStream)?.let { copy ->
+            catalogAction(
+              TagCatalogToLibrary,
+              texts.toLibrary,
+              DownloadIcon,
+              enabled = !ui.copyBusy && !ui.copyResolving,
+              modifier = Modifier
+                .focusRequester(focus.libraryOpener)
+                .onFocusChanged { focus.toLibraryFocused = it.isFocused },
+            ) {
+              when (copy) {
+                is LibraryCopy.Series -> ui.seriesCopy = copy
+                is LibraryCopy.Native -> scope.launch {
+                  ui.copyResolving = true
+                  ui.copyNotice = null
+                  try {
+                    ui.copyRequest = resolveLibraryCopy(
+                      api,
+                      if (copy.sources == null) copy else copy.copy(sources = rows),
+                    )
+                  } catch (cancelled: CancellationException) {
+                    throw cancelled
+                  } catch (error: ApiError) {
+                    notice(
+                      error.serverMessage
+                        ?: if (error.failure == ApiFailure.Forbidden) texts.notAllowed else texts.loadError,
+                      CatalogNotice.Failure,
+                    )
+                  } finally {
+                    ui.copyResolving = false
+                  }
+                }
+              }
+            }
           }
-        } else null,
+          canQueueActive || seriesBulkAvailable(isSeries, meta.videos, activeStream) -> catalogAction(
+            TagCatalogToLibrary,
+            if (queued) texts.queued else texts.toLibrary,
+            if (queued) CheckIcon else DownloadIcon,
+            enabled = !save.queueBusy,
+            modifier = Modifier
+              .focusRequester(focus.libraryOpener)
+              .focusRequester(ui.series.focus)
+              .onFocusChanged { focus.toLibraryFocused = it.isFocused },
+          ) {
+            if (seriesBulkAvailable(isSeries, meta.videos, activeStream)) {
+              cancelPendingPlay()
+              ui.series.open = true
+            } else {
+              ui.titleDownload = true
+            }
+          }
+          else -> null
+        },
         favourite = catalogAction(
           TagCatalogFavourite,
           stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
@@ -1226,15 +1333,22 @@ fun CatalogDetailScreen(
           EyeIcon,
         ) {
             scope.launch {
-              val key = watchedKey(args, activeStream, progressKey)
-              if (key != null) {
+              val handled = runCatching {
+                args.backend.markWatched(
+                  api,
+                  activeStream,
+                  playerTitle,
+                  args.meta.poster ?: meta.poster,
+                )
+              }.getOrDefault(false)
+              if (!handled && args.backend.catalogue) {
                 runCatching {
                   api.saveProgress(
-                    key,
+                    progressKey,
                     1.0,
                     1.0,
                     playerTitle,
-                    activeStream?.takeIf { args.ownTitle != null }?.localPath,
+                    null,
                     args.meta.poster ?: meta.poster,
                     null,
                     null,
@@ -1242,8 +1356,20 @@ fun CatalogDetailScreen(
                   )
                 }
               }
-              if (args.ownTitle != null) {
-                pick.localProgress = key?.let { runCatching { api.progress(it) }.getOrNull() }
+              if (!args.backend.catalogue) {
+                ui.episodeProgress = runCatching { args.backend.episodeProgress(api) }
+                  .getOrDefault(ui.episodeProgress)
+                pick.localProgress = activeStream?.takeIf(Streams::isLocalStream)?.localPath
+                  ?.let { path -> runCatching { api.progress(Progress.libraryKey(path)) }.getOrNull() }
+                activeRemoteItem?.let { item ->
+                  remoteProgress.row = VersionProgress.savedState(
+                    null,
+                    item,
+                    { key -> api.progress(key) },
+                    { libraryId, itemId -> api.remoteItemState(libraryId, itemId) },
+                  )
+                  remoteProgress.key = remoteIdentity
+                }
               } else if (isSeries) {
                 entries = runCatching { api.progressList() }.getOrDefault(entries)
               } else {
@@ -1308,8 +1434,12 @@ fun CatalogDetailScreen(
           seasonFocus = focus.season,
           extras = ui.extras,
           // A title of the viewer's own keeps every episode's position, as the library detail did.
-          cardProgress = args.ownTitle?.let { { video -> ownEpisodeProgress(ui.ownProgress, video.id) } },
-          cardCompleted = args.ownTitle?.let { { video -> ownEpisodeCompleted(ui.ownProgress, video.id) } },
+          cardProgress = if (!args.backend.catalogue) {
+            { video -> ownEpisodeProgress(ui.episodeProgress, video.id) }
+          } else null,
+          cardCompleted = if (!args.backend.catalogue) {
+            { video -> ownEpisodeCompleted(ui.episodeProgress, video.id) }
+          } else null,
         )
       }
       TitleExtrasRows(
@@ -1411,6 +1541,86 @@ fun CatalogDetailScreen(
           modifier = Modifier.testTag(TagCatalogForgetRemove),
         )
       }
+    }
+
+    ui.copyRequest?.let { request ->
+      NativeQueuePanel(
+        versions = request.versions,
+        libraries = request.destinations.filter {
+          it.canWrite && (
+            it.type == (if (request.subject.kind == "episode") "series" else "movie") ||
+              it.type == "mixed"
+            )
+        },
+        preferred = activeStream,
+        busy = ui.copyBusy,
+        notice = ui.copyNotice,
+        onQueue = { stream, libraryId ->
+          if (!ui.copyBusy) {
+            ui.copyBusy = true
+            ui.copyNotice = null
+            scope.launch {
+              try {
+                api.download(
+                  nativeCopyTitle(request.subject),
+                  stream.sourceId,
+                  request.subject.media(),
+                  nativeQueueTarget(stream, libraryId),
+                )
+                ui.copyRequest = null
+                notice(texts.queued, CatalogNotice.Success)
+              } catch (cancelled: CancellationException) {
+                throw cancelled
+              } catch (error: ApiError) {
+                ui.copyNotice = error.serverMessage
+                  ?: if (error.failure == ApiFailure.Forbidden) texts.notAllowed else texts.loadError
+              } finally {
+                ui.copyBusy = false
+              }
+            }
+          }
+        },
+        onClose = {
+          ui.copyRequest = null
+          ui.copyNotice = null
+        },
+      )
+    }
+
+    ui.seriesCopy?.let { copy ->
+      RemoteSeriesBulkHost(
+        api = api,
+        origin = copy.origin,
+        title = copy.title,
+        loadDestinations = api::libraries,
+        onQueued = { added, skipped ->
+          ui.seriesCopy = null
+          notice(bulkQueuedText(context.resources, added, skipped), CatalogNotice.Success)
+        },
+        onClose = { ui.seriesCopy = null },
+        onThisEpisode = copy.selected?.let { selected ->
+          {
+            ui.seriesCopy = null
+            scope.launch {
+              ui.copyResolving = true
+              try {
+                ui.copyRequest = resolveLibraryCopy(api, selected)
+              } catch (cancelled: CancellationException) {
+                throw cancelled
+              } catch (error: ApiError) {
+                notice(
+                  error.serverMessage
+                    ?: if (error.failure == ApiFailure.Forbidden) texts.notAllowed else texts.loadError,
+                  CatalogNotice.Failure,
+                )
+              } finally {
+                ui.copyResolving = false
+              }
+            }
+          }
+        },
+        thisEpisodeLabel = pick.selectedVideo?.let(::episodeLine),
+      )
     }
 
     if (ui.series.open) {
@@ -1700,8 +1910,15 @@ private class DetailFocus {
 /** Everything the detail screen keeps besides its data, in one object so the screen holds a single
  *  local for it: the Forget flow, the series-download panel and the focused action's caption. */
 private class DetailUiState {
-  /** A title of the viewer's own: every episode's stored position, re-read on return. */
-  var ownProgress by mutableStateOf<Map<String, ProgressDto>>(emptyMap())
+  /** Every episode's stored position, re-read on return. */
+  var episodeProgress by mutableStateOf<Map<String, ProgressDto>>(emptyMap())
+  var copyRequest by mutableStateOf<NativeCopyRequest?>(null)
+  var copyResolving by mutableStateOf(false)
+  var copyBusy by mutableStateOf(false)
+  var copyNotice by mutableStateOf<String?>(null)
+  var copyWasOpen by mutableStateOf(false)
+  var seriesCopy by mutableStateOf<LibraryCopy.Series?>(null)
+  var seriesCopyWasOpen by mutableStateOf(false)
   val forget = ForgetState()
   val series = SeriesDownloadState()
   val caption = ActionCaption()
@@ -1739,6 +1956,8 @@ private class RemoteSourcesState {
 private class RemoteProgressState {
   var key: List<String>? by mutableStateOf<List<String>?>(null)
   var row: RemoteItemStateDto? by mutableStateOf<RemoteItemStateDto?>(null)
+  var preferred: List<String>? by mutableStateOf<List<String>?>(null)
+  var loading by mutableStateOf(false)
   var request by mutableIntStateOf(0)
 }
 
@@ -1790,39 +2009,6 @@ internal fun sourceGroupName(stream: StreamDto): String? = when {
 
 /** The stored position behind what Play would play, with the one key Mark as unwatched clears. */
 internal class PlayProgress(val position: Double, val duration: Double, val key: String)
-
-internal fun ownEpisodeProgress(progress: Map<String, ProgressDto>, videoId: String?): Float? =
-  progress[videoId]?.takeIf { it.duration > 0 && it.position > 0 }?.let { (it.position / it.duration).toFloat() }
-
-internal fun ownEpisodeCompleted(progress: Map<String, ProgressDto>, videoId: String?): Boolean =
-  progress[videoId]?.let { Progress.isCompleted(it.position, it.duration) } == true
-
-/** Every episode's position read again under its file's key; a failed read keeps the old one. */
-internal suspend fun refreshedOwnProgress(api: TvApi, own: OwnTitle, before: Map<String, ProgressDto>): Map<String, ProgressDto> {
-  val next = HashMap<String, ProgressDto>()
-  for ((videoId, rows) in own.rows) {
-    val path = rows.firstOrNull()?.localPath?.takeIf { it.isNotBlank() } ?: continue
-    val read = try {
-      api.progress(Progress.libraryKey(path))
-    } catch (cancelled: CancellationException) {
-      throw cancelled
-    } catch (_: ApiError) {
-      before[videoId]
-    }
-    if (read != null) next[videoId] = read
-  }
-  return next
-}
-
-internal suspend fun ownFavourite(api: TvApi, args: CatalogDetailArgs, wanted: Boolean): Boolean? =
-  args.ownTitle?.let { api.setFavorite(it.favouritePath, wanted).favorite }
-
-internal fun watchedKey(args: CatalogDetailArgs, activeStream: StreamDto?, progressKey: String): String? =
-  if (args.ownTitle != null) {
-    activeStream?.takeIf(Streams::isLocalStream)?.localPath?.takeIf { it.isNotBlank() }?.let(Progress::libraryKey)
-  } else {
-    progressKey
-  }
 
 /**
  * One action of the catalogue's own row. Built here rather than inline in the screen's body: that

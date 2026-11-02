@@ -20,8 +20,9 @@ import cz.stremiooffline.tv.data.HomeOrderEntry
 import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.HomeRowDto
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.RemoteItemDetailDto
+import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.ui.home.homeCardTag
-import cz.stremiooffline.tv.ui.detail.TagRemoteDetailPlay
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -195,6 +196,9 @@ class PlayerReturnFocusTest {
       }
       remoteSourcesValue = listOf(StreamDto(sourceId = "remote1", kind = "remote", playable = true,
         remoteItem = RemoteItemContext(libraryId = "rlibA", itemId = "iA", mediaSourceId = "v1", progressKey = "remote:one")))
+      remoteItemValues["rlibA:iA"] = RemoteItemDetailDto(
+        RemoteItemDto(id = "iA", name = "Movie", type = "movie"),
+      )
     }
     scenario.onActivity { activity ->
       activity.setContent { Shell(start = Section.Home, api = api, username = "demo", onSignOut = {}) }
@@ -202,7 +206,7 @@ class PlayerReturnFocusTest {
     compose.waitForIdle()
     compose.onNodeWithTag(homeCardTag(card.key)).assertIsFocused()
     press(Key.DirectionCenter)
-    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagRemoteDetailPlay).assertIsFocused() }.isSuccess }
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused() }.isSuccess }
     press(Key.DirectionCenter)
     val playerHasRemote = {
       listOf(TAG_OVERLAY_ROOT, TAG_OSD_PLAY).any { tag ->
@@ -214,7 +218,7 @@ class PlayerReturnFocusTest {
     repeat(3) {
       if (playerHasRemote()) back()
     }
-    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagRemoteDetailPlay).assertIsFocused() }.isSuccess }
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused() }.isSuccess }
     assertEquals(homeRequests, api.homeRequests.size)
     back()
     compose.onNodeWithTag(homeCardTag(card.key)).assertIsFocused()

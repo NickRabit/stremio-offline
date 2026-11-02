@@ -15,6 +15,13 @@ internal data class RemoteMetadata(
   val seriesIds: RemoteProviderIdsDto? = null,
 )
 
+internal fun remoteMetadataNeedsItem(item: RemoteItemDto): Boolean = when (item.type) {
+  "movie" -> catalogueIdentity("movie", item.providerIds) == null
+  "series" -> catalogueIdentity("series", item.providerIds) == null || item.name.isBlank()
+  "episode", "season" -> item.seriesId.isNullOrBlank()
+  else -> true
+}
+
 internal fun initialRemoteMetadata(data: RemoteDetailData): RemoteMetadata = when (data.item.type) {
   "series" -> RemoteMetadata(data.item, data.item.name, data.item.providerIds)
   "episode", "season" -> RemoteMetadata(data.item, data.seriesName ?: data.item.seriesName, data.seriesIds)
@@ -36,13 +43,7 @@ internal suspend fun resolveRemoteMetadata(
   var seriesName = hintedSeriesName ?: item.seriesName?.takeIf { it.isNotBlank() }
   var seriesIds = hintedSeriesIds
 
-  val needsItem = when (item.type) {
-    "movie" -> catalogueIdentity("movie", item.providerIds) == null
-    "series" -> catalogueIdentity("series", item.providerIds) == null || item.name.isBlank()
-    "episode", "season" -> item.seriesId.isNullOrBlank()
-    else -> true
-  }
-  if (needsItem) item = readItem(api, data.libraryId, item.id) ?: item
+  if (remoteMetadataNeedsItem(item)) item = readItem(api, data.libraryId, item.id) ?: item
 
   when (item.type) {
     "series" -> {
