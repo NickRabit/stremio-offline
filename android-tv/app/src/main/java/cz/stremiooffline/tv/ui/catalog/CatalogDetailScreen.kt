@@ -50,6 +50,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.catalog.ProgressKey
 import cz.stremiooffline.tv.catalog.Resume
+import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.ApiError
@@ -123,6 +124,11 @@ internal fun originRow(args: CatalogDetailArgs, rows: List<StreamDto>): StreamDt
   args.preferredRemote?.let {
     Streams.originRemoteRow(rows, it.libraryId, it.itemId, it.mediaSourceId)
   } ?: args.preferredLocalPath?.let { Streams.originLocalRow(rows, it) }
+
+/** The episode a card named, standing in when the catalogue does not list it (or did not answer):
+ *  its own copies still load by its id, so a card never loses the episode it was opened for. */
+internal fun cardEpisode(metaId: String, episode: ResumeEpisode?): VideoDto? =
+  episode?.let { VideoDto(id = "$metaId:${it.season}:${it.number}", season = it.season, episode = it.number) }
 
 /** The media-server item this detail was opened from, while [videoId] is that item: always for a
  *  film, and for a series only on the episode the detail was opened on. */
@@ -316,7 +322,10 @@ fun CatalogDetailScreen(
         // Home names the episode it remembers; without one, the stored position decides.
         val wanted = args.episode ?: if (resuming) storedEpisode else null
         val watched = Resume.resumeVideo(videos, wanted)
-        pick.selectedVideo = watched ?: nextRelevantEpisode(videos, Resume.resumeVideo(videos, storedEpisode)) ?: firstReleased(videos)
+        pick.selectedVideo = watched
+          ?: cardEpisode(meta.id, args.episode)
+          ?: nextRelevantEpisode(videos, Resume.resumeVideo(videos, storedEpisode))
+          ?: firstReleased(videos)
         pick.season = wanted?.season ?: defaultSeason(videos)
       }
     }

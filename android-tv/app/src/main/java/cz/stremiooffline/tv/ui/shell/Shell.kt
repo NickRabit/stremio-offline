@@ -96,6 +96,7 @@ import cz.stremiooffline.tv.ui.settings.SettingsRoute
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -188,8 +189,9 @@ fun Shell(
   val sectionStates = rememberSaveableStateHolder()
 
   var detail by remember { mutableStateOf<DetailData?>(null) }
-  var libraryDetailResolving by remember { mutableStateOf(false) }
-  var remoteDetailResolving by remember { mutableStateOf(false) }
+  // The one binding lookup still out. A newer choice, another detail or another section replaces
+  // it, so a late answer never opens a detail over what the viewer moved on to.
+  val detailLookup = remember { DetailLookup() }
   var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
   val catalogStack = remember { CatalogDetailStack() }
   var catalogReturnOrigin by remember { mutableStateOf<CatalogReturnOrigin?>(null) }
@@ -266,21 +268,23 @@ fun Shell(
     catalogReturnOrigin = null
   }
   fun openCatalog(args: CatalogDetailArgs) {
+    detailLookup.cancel()
     clearCatalogHistory()
     catalogDetail = args
   }
   fun openLibraryDetail(data: DetailData) {
-    if (libraryDetailResolving) return
-    val firstPath = data.files.firstOrNull()?.path
-    if (firstPath == null) {
+    detailLookup.cancel()
+    // One file stands for itself; a folder of several only for a title bound to the folder as a
+    // whole -- a folder of different films never opens as the first one's title.
+    val lookupPath = if (data.files.size == 1) data.files.single().path else data.gridPath.takeIf { data.files.isNotEmpty() }
+    if (lookupPath.isNullOrBlank()) {
       detail = data
       return
     }
-    libraryDetailResolving = true
-    hintScope.launch {
+    detailLookup.job = hintScope.launch {
       try {
         val binding = try {
-          withTimeoutOrNull(2_000) { api.libraryTitle(firstPath) }
+          withTimeoutOrNull(2_000) { api.libraryTitle(lookupPath) }
         } catch (cancelled: CancellationException) {
           throw cancelled
         } catch (_: Exception) {
@@ -292,18 +296,17 @@ fun Shell(
           detail = data
         }
       } finally {
-        libraryDetailResolving = false
+        detailLookup.done(coroutineContext[Job])
       }
     }
   }
   fun openRemoteDetail(data: RemoteDetailData) {
-    if (remoteDetailResolving) return
+    detailLookup.cancel()
     if (data.autoStartOver) {
       remoteDetail = data
       return
     }
-    remoteDetailResolving = true
-    hintScope.launch {
+    detailLookup.job = hintScope.launch {
       try {
         val resolved = try {
           withTimeoutOrNull(2_500) {
@@ -333,7 +336,7 @@ fun Shell(
           openCatalog(remoteCatalogueArgs(data, resolved.first, resolved.second, resolved.third))
         }
       } finally {
-        remoteDetailResolving = false
+        detailLookup.done(coroutineContext[Job])
       }
     }
   }
@@ -356,6 +359,7 @@ fun Shell(
     searchEverywhereEnabled = runCatching { api.searchEverywhereEnabled() }.getOrDefault(false)
   }
   LaunchedEffect(current) {
+    detailLookup.cancel()
     if (current == Section.Library) {
       if (librarySeen) libraryRefreshToken++
       librarySeen = true
