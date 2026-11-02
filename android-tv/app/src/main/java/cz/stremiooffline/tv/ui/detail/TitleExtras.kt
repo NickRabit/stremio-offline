@@ -127,9 +127,9 @@ class TitleExtrasState {
 
   private var key: String? = null
   private var request = 0
-  private var libraryPath: String? = null
-  private var libraryReady = false
-  private var libraryValue: LibraryTitleDto? = null
+  private var libraryPath by mutableStateOf<String?>(null)
+  private var libraryReady by mutableStateOf(false)
+  private var libraryValue by mutableStateOf<LibraryTitleDto?>(null)
 
   val cast: List<TitlePersonDto> get() = extras?.people.orEmpty().let { people ->
     StripOrder.flatMap { role -> people.filter { it.role.equals(role, ignoreCase = true) } }
@@ -501,18 +501,20 @@ fun TitleExtrasRows(
   Column(
     verticalArrangement = Arrangement.spacedBy(8.dp),
     modifier = Modifier.drawBehind {
-      val fade = 48.dp.toPx()
+      // The fade stays inside the band: drawn above it, it dimmed the source facts that end
+      // just over the cast row.
+      val fade = 24.dp.toPx()
       val bleed = 120.dp.toPx()
       drawRect(
         brush = Brush.verticalGradient(
           0f to Tokens.Bg.copy(alpha = 0f),
-          fade / (size.height + fade + bleed) to Tokens.Bg.copy(alpha = 0.92f),
+          fade / (size.height + bleed) to Tokens.Bg.copy(alpha = 0.92f),
           1f to Tokens.Bg.copy(alpha = 0.92f),
-          startY = -fade,
+          startY = 0f,
           endY = size.height + bleed,
         ),
-        topLeft = Offset(-bleed, -fade),
-        size = Size(size.width + 2 * bleed, size.height + fade + bleed),
+        topLeft = Offset(-bleed, 0f),
+        size = Size(size.width + 2 * bleed, size.height + bleed),
       )
     },
   ) {

@@ -936,6 +936,21 @@ class StreamsTest {
   )
 
   @Test
+  fun `originRemoteRow prefers the exact media source and falls back to the item's first playable row`() {
+    val first = remote("ms1", "rlibA", "iA", "First")
+    val exact = remote("ms2", "rlibA", "iA", "Exact")
+    val otherItem = remote("ms2", "rlibA", "iB", "Other item")
+    val otherLibrary = remote("ms1", "rlibB", "iA", "Other library")
+    val unplayable = remote("ms3", "rlibA", "iA", "Unplayable").copy(playable = false)
+    val rows = listOf(otherItem, unplayable, otherLibrary, first, exact)
+
+    assertEquals(exact, Streams.originRemoteRow(rows, "rlibA", "iA", "ms2"))
+    assertEquals(first, Streams.originRemoteRow(rows, "rlibA", "iA", "missing"))
+    assertEquals(first, Streams.originRemoteRow(rows, "rlibA", "iA", null))
+    assertNull(Streams.originRemoteRow(rows, "rlibA", "iC", "ms1"))
+  }
+
+  @Test
   fun `of parses a rule id, the fixed sorts and recommended`() {
     assertEquals(StreamSort.Rule("balanced"), StreamSort.of("rule:balanced"))
     assertEquals("rule:balanced", StreamSort.Rule("balanced").wire)

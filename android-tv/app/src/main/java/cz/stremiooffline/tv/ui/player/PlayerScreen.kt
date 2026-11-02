@@ -180,6 +180,8 @@ fun PlayerScreen(
   var sourceAddons by remember { mutableStateOf<List<AddonDto>>(emptyList()) }
   var addonSubtitles by remember { mutableStateOf<List<AddonSubtitleDto>>(emptyList()) }
   var addonFetched by remember { mutableStateOf(false) }
+  /** The next episode whose own addon subtitles are still to be asked beside its session. */
+  var nextSubtitlesFor by remember { mutableStateOf<PlayTarget?>(null) }
   // The name the OSD and the loading overlay show; it follows the next episode too.
   var title by remember(target.key) { mutableStateOf(target.title) }
   // Subtitle polling runs only while the player is on screen: leaving the app releases the session.
@@ -301,14 +303,16 @@ fun PlayerScreen(
     delaySeconds = 0.0
     cues = emptyList()
     title = next.title
-    currentTarget = PlayTarget(key = Progress.libraryKey(next.path), title = next.title, resume = false, path = next.path)
+    val nextTarget = PlayTarget(key = Progress.libraryKey(next.path), title = next.title, resume = false, path = next.path)
+    currentTarget = nextTarget
     // The source is minted inside the controller, after the outgoing session is saved and deleted.
     controller.playNext(
-      key = Progress.libraryKey(next.path),
+      key = nextTarget.key,
       title = next.title,
       path = next.path,
       resume = false,
     ) { runCatching { api.librarySource(next.path) }.getOrNull()?.sourceId }
+    nextSubtitlesFor = nextTarget
   }
 
   // A new title left nothing behind: the cached list, the offer and the delay belong to one playback.
@@ -381,6 +385,11 @@ fun PlayerScreen(
       if (fileIdentities.containsKey(path)) fileIdentities[path]
       else libraryAddonIdentity(runCatching { api.libraryTitle(path) }.getOrNull()).also { fileIdentities[path] = it }
     }
+  }
+
+  LaunchedEffect(nextSubtitlesFor) {
+    val next = nextSubtitlesFor ?: return@LaunchedEffect
+    readAccount(next)
   }
 
   // The sources the caller offers in its own order; an addon's notice is not a source. A play the

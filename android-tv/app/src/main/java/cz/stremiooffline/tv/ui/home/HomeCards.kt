@@ -2,6 +2,7 @@ package cz.stremiooffline.tv.ui.home
 
 import androidx.annotation.StringRes
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.catalog.ProgressKey
 import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.HomeCard
@@ -13,6 +14,7 @@ import cz.stremiooffline.tv.data.episodeCodeText
 import cz.stremiooffline.tv.data.yearText
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
+import cz.stremiooffline.tv.ui.catalog.RemoteItemRef
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
@@ -178,7 +180,38 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
       type = card.type,
     ),
   )
-  is HomeCard.Remote -> HomeAction.OpenRemote(remoteDetailOf(card).copy(autoPlay = false))
+  is HomeCard.Remote -> catalogueArgsOf(card)?.let(HomeAction::OpenCatalog)
+    ?: HomeAction.OpenRemote(remoteDetailOf(card).copy(autoPlay = false))
+}
+
+private fun catalogueArgsOf(card: HomeCard.Remote): CatalogDetailArgs? {
+  val identity = card.identity?.takeIf { it.id.isNotBlank() } ?: return null
+  val type = when {
+    card.itemType == "movie" && identity.type == "movie" -> identity.type
+    card.itemType == "episode" && identity.type == "series" -> identity.type
+    else -> return null
+  }
+  return CatalogDetailArgs(
+    // An episode card names the episode and draws its still, never the series: the detail reads
+    // both from the catalogue.
+    meta = if (card.itemType == "episode") MetaDto(id = identity.id, type = type)
+    else MetaDto(id = identity.id, type = type, name = card.title, poster = card.poster),
+    addonName = "",
+    type = type,
+    episode = if (card.itemType == "episode") card.season?.let { season ->
+      card.episode?.let { episode ->
+        ResumeEpisode(
+          ProgressKey.of("series", identity.id, "${identity.id}:$season:$episode"),
+          season,
+          episode,
+        )
+      }
+    } else null,
+    forgetKeys = card.forgetKeys,
+    autoPlay = false,
+    preferRemote = true,
+    preferredRemote = RemoteItemRef(card.libraryId, card.itemId, card.mediaSourceId),
+  )
 }
 
 private fun play(path: String, title: String): HomeAction.Play =
