@@ -188,9 +188,11 @@ Every write compares the hot fields with the persisted row map and the cold
 state with the last written cold JSON. Only changed rows and a changed cold file
 are written. The cold file is written first, then the rows. `state.json` names
 the accounts, so it is the commit point for account-level changes. If the JSON
-write fails, nothing was written and memory is rolled back. If the JSON lands
-and the row batch fails, memory is rolled back and deferred retry debt rewrites
-both files from memory.
+write fails, nothing was written and memory is rolled back. Once the JSON has
+landed the change is committed: when it also carries row changes (see the
+journal below) and the row batch then fails, the change still stands in memory
+and is answered as done, and the rows are retried. Answering "failed" there
+would contradict what the next start does with the journal.
 
 A load never deletes rows. Rows of an account the loaded `state.json` does not
 name are neither loaded nor removed: account ids are random and never reused, so
@@ -206,7 +208,8 @@ A few operations change both files: account creation and deletion, media-server
 connection or library removal, settings import, and library deletion. Such a
 write journals its row changes inside the `state.json` it commits
 (`personalPending`), then writes the rows, then rewrites `state.json` without
-the journal. If the process stops before the rows land, the next start replays
+the journal. If the row batch fails, the journal stays on disk and the rows are
+retried. If the process stops before the rows land, the next start replays
 the journal (upserts and deletes are idempotent) and the change is complete, so
 nothing is left half done with no request left to retry it. A write that changes
 only rows writes no journal and no `state.json`. Rows are keyed in memory by a
