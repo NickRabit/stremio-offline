@@ -81,7 +81,7 @@ test("PLAYBACK_DIR cleans and uses only its owned child", async (t) => {
   assert.ok(existsSync(path.join(owned, started.id, String(manager.sessions.get(started.id).generation))));
 });
 
-test("a playback root that is a symbolic link is replaced, never emptied through", { skip: process.platform === "win32" }, async (t) => {
+test("a playback root that is a symbolic link is never emptied through", { skip: process.platform === "win32" }, async (t) => {
   const previous = process.env.PLAYBACK_DIR;
   t.after(() => {
     if (previous === undefined) delete process.env.PLAYBACK_DIR;
@@ -102,10 +102,33 @@ test("a playback root that is a symbolic link is replaced, never emptied through
     await loadPlaybackManager(manager);
 
     assert.equal(await readFile(path.join(elsewhere, "precious.txt"), "utf8"), "keep", `configured=${configured}`);
-    assert.equal(manager.root, root);
-    assert.equal((await lstat(root)).isDirectory(), true, "the link was replaced by a real folder");
-    assert.deepEqual(await readdir(root), []);
+    const fallback = path.join(dataDir, "playback");
+    assert.equal(manager.root, fallback, "a configured link is not used; the server's own root is");
+    assert.equal((await lstat(fallback)).isDirectory(), true);
+    assert.deepEqual(await readdir(fallback), []);
+    // The owner's link in the configured folder is left where it was.
+    if (configured) assert.equal((await lstat(root)).isSymbolicLink(), true);
   }
+});
+
+test("a file in place of the configured playback child is kept and the server falls back", async (t) => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "playback-file-data-"));
+  const playbackParent = await mkdtemp(path.join(os.tmpdir(), "playback-file-parent-"));
+  t.after(() => Promise.all([rm(dataDir, { recursive: true, force: true }), rm(playbackParent, { recursive: true, force: true })]));
+  const previous = process.env.PLAYBACK_DIR;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PLAYBACK_DIR;
+    else process.env.PLAYBACK_DIR = previous;
+  });
+  process.env.PLAYBACK_DIR = playbackParent;
+  const child = path.join(playbackParent, "stremio-offline-playback");
+  await writeFile(child, "the owner's data");
+
+  const manager = new PlaybackManager(dataDir) as any;
+  await loadPlaybackManager(manager);
+
+  assert.equal(await readFile(child, "utf8"), "the owner's data");
+  assert.equal(manager.root, path.join(dataDir, "playback"));
 });
 
 test("a relative PLAYBACK_DIR is resolved to an absolute root", async (t) => {
@@ -161,8 +184,9 @@ test("an unusable PLAYBACK_DIR logs an error and falls back", async (t) => {
   await flushLog();
 
   assert.equal(manager.root, path.join(dataDir, "playback"));
+  // Other tests log the same error for their own folders; this one's names its own path.
   const line = (await readLog({ level: "ERROR", search: "Configured playback directory is unusable" }))
-    .split("\n").find(Boolean);
+    .split("\n").find((entry) => entry.includes(missing));
   assert.ok(line);
   const context = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
   assert.equal(context.directory, path.join(missing, "stremio-offline-playback"));

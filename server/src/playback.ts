@@ -420,7 +420,7 @@ export class PlaybackManager {
     if (this.configuredRoot) {
       try {
         await access(path.dirname(this.configuredRoot), constants.W_OK);
-        await this.emptyRoot(this.configuredRoot);
+        await this.emptyRoot(this.configuredRoot, false);
         await access(this.configuredRoot, constants.R_OK | constants.W_OK);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -429,10 +429,10 @@ export class PlaybackManager {
           reason,
         });
         this.root = this.fallbackRoot;
-        await this.emptyRoot(this.root);
+        await this.emptyRoot(this.root, true);
       }
     } else {
-      await this.emptyRoot(this.root);
+      await this.emptyRoot(this.root, true);
     }
     const stdout = await this.readFfmpegVersion();
     if (stdout !== undefined) {
@@ -458,16 +458,19 @@ export class PlaybackManager {
     setInterval(() => this.reap(), 30_000).unref();
   }
 
-  /** Empties the owned root. The root itself is checked without following links: a symbolic link
-   *  or a file in its place is removed as an entry, never read through, so nothing outside the
-   *  owned folder can be deleted. */
-  private async emptyRoot(root: string) {
+  /** Empties the root. The root itself is checked without following links, so nothing is ever
+   *  read or deleted through a link. Something other than a real folder in its place is the
+   *  owner's in a configured PLAYBACK_DIR: it is left alone and the caller falls back. Only the
+   *  server's own DATA_DIR/playback has such an entry removed, as it always had. */
+  private async emptyRoot(root: string, replaceForeign: boolean) {
     const entry = await lstat(root).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return undefined;
       throw error;
     });
-    if (entry && !entry.isDirectory()) await rm(root, { force: true });
-    else if (entry) {
+    if (entry && !entry.isDirectory()) {
+      if (!replaceForeign) throw new Error(`${root} exists and is not a folder`);
+      await rm(root, { force: true });
+    } else if (entry) {
       const entries = await readdir(root);
       await Promise.all(entries.map((name) => rm(path.join(root, name), { recursive: true, force: true })));
     }
