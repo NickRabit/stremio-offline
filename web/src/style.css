@@ -2212,9 +2212,8 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
    draws, so choosing an episode reads the same on both. */
 .catalogue-episodes{margin-top:2px}
 .catalogue-episodes .episode-list{max-height:clamp(220px,40vh,420px)}
-/* Over the hero's picture the chosen episode keeps a solid ground: the plain tint of the other
-   lists let the artwork shine through it alone, a pink stripe across the list. */
-.catalogue-episodes .episode-list button.selected{background:linear-gradient(#ff5b381c,#ff5b381c),var(--panel2)}
+.catalogue-episodes .episode-list button,.catalogue-episodes .episode-current{background:#0d111788}
+.catalogue-episodes .episode-list button:hover,.catalogue-episodes .episode-list button:focus-visible,.catalogue-episodes .episode-list button.selected{border-color:var(--accent)}
 .catalogue-episodes .episode-current{grid-template-columns:auto auto minmax(0,1fr) auto;gap:9px;padding:8px 10px}
 .catalogue-episodes .episode-current small{color:var(--muted);font-size:9px}
 .catalogue-episodes .episode-current button{padding:5px 9px;color:var(--accent2);background:transparent;font-size:9px}
@@ -2352,7 +2351,7 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .detail-icon.on>span{color:#f0d089;border-color:#f0d08966}
 .detail-icon.watch-star.on svg{fill:#f0d089}
 .detail-icon:disabled{opacity:.45}
-.detail-tech{display:grid;grid-template-columns:auto 1fr;gap:7px 22px;margin:0;padding:14px 16px;border-radius:12px;background:#0b0e13b8;border:1px solid var(--line);max-width:680px;font-size:13px}
+.detail-tech{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 22px;margin:0;padding:14px 16px;border-radius:8px;background:#0d111788;border:1px solid var(--line);width:100%;min-width:0;font-size:13px}
 .detail-tech dt{color:var(--muted);font-weight:600}
 .detail-tech dd{margin:0;color:var(--text);display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
 .detail-versions{border:0;background:none;padding:0;min-height:0;color:var(--accent2);font-weight:700;display:inline-flex;align-items:center;gap:3px}
