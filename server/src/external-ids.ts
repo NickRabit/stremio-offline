@@ -388,7 +388,10 @@ export class ExternalIdStore {
         await database.batch([marker]);
         return;
       }
-      await this.markUnreadable(database, error);
+      // A file that cannot be read now (permissions, a busy disk) may well be readable later:
+      // it stays where it is and no marker is written, so the next start imports it. Lookups
+      // until then are written as rows, and the import keeps those newer rows.
+      log("WARN", "External ids could not be read, the import waits for the next start", { reason: reasonOf(error) });
       return;
     }
 
@@ -409,8 +412,16 @@ export class ExternalIdStore {
     const importedAt = Date.now();
     const statements: Statement[] = [];
     let count = 0;
+    // Rows already there were written after an earlier start could not read this file; they
+    // are newer than it, so the import never overwrites them.
+    const newer = new Map((await database.all<{ imdb: string; data: string }>("SELECT imdb, data FROM external_ids"))
+      .map((row) => [row.imdb, row.data]));
+    for (const [imdbId, data] of newer) {
+      if (!IMDB_ID.test(imdbId)) continue;
+      try { this.entries.set(imdbId, JSON.parse(data) as CachedIds); } catch { /* rebuilt by a lookup */ }
+    }
     for (const [imdbId, entry] of Object.entries(parsed.entries)) {
-      if (!IMDB_ID.test(imdbId) || !entry || typeof entry !== "object") continue;
+      if (!IMDB_ID.test(imdbId) || !entry || typeof entry !== "object" || newer.has(imdbId)) continue;
       statements.push({ sql: UPSERT, params: [imdbId, JSON.stringify(entry)] });
       this.entries.set(imdbId, entry);
       count += 1;

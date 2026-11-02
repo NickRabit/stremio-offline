@@ -215,23 +215,56 @@ export class ArtworkCache {
     if (this.dirty || this.recencyDirty || this.entries.hasDirty()) { this.dirty = false; await this.writeIndex(); }
   }
 
-  private async scanFiles(): Promise<Map<string, { size: number; mtimeMs: number }>> {
+  /** The thumbnails on disk, and which library folders were read completely. A folder whose
+   *  listing or a file's lstat failed for any reason other than the file being gone is not
+   *  complete: its rows are kept as they are, because a failed read says nothing about which
+   *  thumbnails are really missing. */
+  private async scanFiles(): Promise<{ files: Map<string, { size: number; mtimeMs: number }>; complete: Set<string> | undefined }> {
     const files = new Map<string, { size: number; mtimeMs: number }>();
-    for (const library of await readdir(this.dir, { withFileTypes: true }).catch(() => [])) {
+    let libraries;
+    try {
+      libraries = await readdir(this.dir, { withFileTypes: true });
+    } catch {
+      return { files, complete: undefined };
+    }
+    const complete = new Set<string>();
+    for (const library of libraries) {
       if (!library.isDirectory()) continue;
-      for (const file of await readdir(path.join(this.dir, library.name), { withFileTypes: true }).catch(() => [])) {
+      let entries;
+      try {
+        entries = await readdir(path.join(this.dir, library.name), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      let whole = true;
+      for (const file of entries) {
         if (!file.isFile() || !/^[0-9a-f]{40}\.jpg$/.test(file.name)) continue;
         const name = path.join(library.name, file.name);
-        const info = await lstat(path.join(this.dir, name)).catch(() => undefined);
-        if (info?.isFile()) files.set(name, { size: info.size, mtimeMs: info.mtimeMs });
+        try {
+          const info = await lstat(path.join(this.dir, name));
+          if (info.isFile()) files.set(name, { size: info.size, mtimeMs: info.mtimeMs });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") whole = false;
+        }
       }
+      if (whole) complete.add(library.name);
     }
-    return files;
+    return { files, complete };
+  }
+
+  /** Whether a stored key may be dropped for not being on disk: only inside a folder that was
+   *  read completely, or a library folder that no longer exists in a root that was listed. */
+  private static settled(key: string, complete: Set<string> | undefined, listed: Set<string>): boolean {
+    if (!complete) return false;
+    const library = key.split(/[\\/]/)[0] ?? "";
+    return complete.has(library) || !listed.has(library);
   }
 
   private async loadDatabase(database: AppDatabase): Promise<void> {
     const marker = await database.get("SELECT value FROM meta WHERE key = ?", [`domain.${DOMAIN}`]);
-    const files = await this.scanFiles();
+    const { files, complete } = await this.scanFiles();
+    const listed = new Set(complete ? (await readdir(this.dir, { withFileTypes: true }).catch(() => []))
+      .filter((entry) => entry.isDirectory()).map((entry) => entry.name) : []);
     const importedAt = Date.now();
     const statements: Statement[] = [];
 
@@ -250,10 +283,23 @@ export class ArtworkCache {
           statements.push({ sql: UPSERT, params: [name, bytes, validAt ? row.at : mtimeMs] });
         }
       }
-      for (const key of stored.keys()) {
-        if (!files.has(key)) statements.push({ sql: DELETE, params: [key] });
+      for (const [key, row] of stored) {
+        if (files.has(key)) continue;
+        if (ArtworkCache.settled(key, complete, listed)) {
+          statements.push({ sql: DELETE, params: [key] });
+        } else if (Number.isFinite(row.at) && row.at > 0) {
+          // Not read this time: keep what the row knows rather than forget its recency.
+          this.entries.set(key, { bytes: row.bytes, at: row.at });
+        }
       }
     } else {
+      if (!complete) {
+        // The thumbnail folder could not be listed at all: importing now would record no
+        // thumbnails and move the index (and its recency) aside. The import waits for a start
+        // that can read the folder.
+        log("WARN", "The artwork folder could not be read, the index import waits for the next start", { dir: this.dir });
+        return;
+      }
       let stored: Record<string, { at?: unknown }> = {};
       try {
         const parsed: unknown = JSON.parse(await readFile(this.indexFile, "utf8"));

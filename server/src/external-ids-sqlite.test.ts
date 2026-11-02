@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -205,4 +205,32 @@ test("an external id whose batch failed is written by the next flush", async (t)
   assert.deepEqual(await database.all("SELECT imdb FROM external_ids"), [], "the first attempt failed");
   await store.flush();
   assert.deepEqual(await database.all("SELECT imdb FROM external_ids"), [{ imdb: "tt0000006" }]);
+});
+
+test("an external id file that cannot be read now stays in place and is imported by a later start", async (t) => {
+  const { dataDir, file, database } = await fixture(t);
+  // A path that exists but cannot be read as a file stands in for EACCES or a busy disk.
+  await mkdir(file);
+  const store = new ExternalIdStore(dataDir, answer("707"));
+  store.attachDatabase(database);
+  await store.load();
+  assert.equal(await marker(database), undefined, "the import stays open");
+  assert.ok((await stat(file)).isDirectory(), "nothing was moved aside");
+
+  // A lookup in the meantime is written as a row.
+  assert.deepEqual(await store.ids("tt0000007"), { tmdbMovie: "707" });
+  await store.flush();
+
+  // The file becomes readable again; it holds an older answer for the same title and another one.
+  await rm(file, { recursive: true });
+  await writeFile(file, JSON.stringify({ version: 1, entries: {
+    tt0000007: { tmdbMovie: "1", at: "2020-01-01T00:00:00.000Z" },
+    tt0000008: { tmdbMovie: "808", at: "2020-01-01T00:00:00.000Z" },
+  } }));
+  const restarted = new ExternalIdStore(dataDir);
+  restarted.attachDatabase(database);
+  await restarted.load();
+  assert.ok(await marker(database));
+  assert.deepEqual(restarted.cachedIds("tt0000007"), { tmdbMovie: "707" }, "the newer row wins");
+  assert.deepEqual(restarted.cachedIds("tt0000008"), { tmdbMovie: "808" });
 });

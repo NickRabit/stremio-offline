@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -273,4 +273,26 @@ test("removing a thumbnail the index never held writes nothing", async (t) => {
   await cache.removed(path.join(artworkDir, name("lib_aaaaaaaa", "Never.mkv")));
   await cache.flush();
   assert.equal(batches.length, 0);
+});
+
+test("rows of a library folder that could not be read are kept with their recency", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
+  const { artworkDir, database } = await fixture(t);
+  await put(artworkDir, "Kept.mkv", 100);
+  const library = path.join(artworkDir, "lib_aaaaaaaa");
+  await database.batch([
+    { sql: "INSERT INTO artwork_entries (key, bytes, at) VALUES (?, ?, ?)", params: [name("lib_aaaaaaaa", "Kept.mkv"), 100, 4_000] },
+    { sql: "INSERT INTO meta (key, value) VALUES (?, ?)", params: ["domain.artwork", JSON.stringify({ importedAt: 1, source: "index.json", count: 1 })] },
+  ]);
+  await chmod(library, 0o000);
+  const cache = new ArtworkCache(artworkDir, 1024 * 1024);
+  cache.attachDatabase(database);
+  try {
+    await cache.load();
+  } finally {
+    // Back before the fixture removes the folder.
+    await chmod(library, 0o755);
+  }
+  assert.deepEqual(await database.all("SELECT key, at FROM artwork_entries"), [
+    { key: name("lib_aaaaaaaa", "Kept.mkv"), at: 4_000 },
+  ], "a failed listing deletes nothing");
 });
