@@ -461,7 +461,9 @@ fun CatalogDetailScreen(
   }
   // The row of the source last played leads, so Resume continues in it. A rule with verdicts
   // then takes a row that meets it; the call lives in Streams so this screen only passes the sort.
-  val preferredStream = Streams.pickDefaultStream(
+  val preferredStream = args.preferredRemote?.let {
+    Streams.originRemoteRow(rows, it.libraryId, it.itemId, it.mediaSourceId)
+  } ?: Streams.pickDefaultStream(
     Streams.remoteFirst(rows, args.preferRemote),
     (if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey),
     Streams.ruleIdOf(filters.sort),
@@ -501,6 +503,9 @@ fun CatalogDetailScreen(
   LaunchedEffect(rows, anyAsking, preferredStream?.stableKey) {
     val storedKey =
       if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey
+    val origin = args.preferredRemote?.let {
+      Streams.originRemoteRow(rows, it.libraryId, it.itemId, it.mediaSourceId)
+    }
     val next = Streams.repickStream(
       playing = false,
       picked = pick.pickedStream,
@@ -513,7 +518,8 @@ fun CatalogDetailScreen(
       selected = pick.selectedStream,
       preferred = preferredStream,
       upgrade = preferredStream?.let(Streams::isLocalStream) == true && pick.selectedStream?.let(Streams::isLocalStream) != true,
-      restore = preferredStream?.stableKey != null && preferredStream.stableKey == storedKey,
+      restore = (preferredStream?.stableKey != null && preferredStream.stableKey == storedKey) ||
+        (origin != null && preferredStream == origin),
     )
     if (next.move) pick.selectedStream = next.to
   }
@@ -1436,6 +1442,8 @@ internal fun metaLine(meta: MetaDto): String {
 }
 
 internal fun mergeMeta(summary: MetaDto, detail: MetaDto): MetaDto = summary.copy(
+  // A card that knows only an episode's caption opens the series without a name of its own.
+  name = summary.name.ifEmpty { detail.name },
   poster = detail.poster ?: summary.poster,
   background = detail.background ?: summary.background,
   description = detail.description ?: summary.description,
@@ -1450,7 +1458,7 @@ internal fun mergeMeta(summary: MetaDto, detail: MetaDto): MetaDto = summary.cop
 )
 
 internal fun localizedTitle(summary: MetaDto, detail: MetaDto, language: String?): String =
-  if (detail.nameLanguage != null && detail.nameLanguage == language) detail.name.ifEmpty { summary.name } else summary.name
+  if (detail.nameLanguage != null && detail.nameLanguage == language) detail.name.ifEmpty { summary.name } else summary.name.ifEmpty { detail.name }
 
 internal fun mediaFor(meta: MetaDto, args: CatalogDetailArgs, video: VideoDto?, settings: SettingsResponse): MediaDto {
   val poster = args.meta.poster ?: meta.poster

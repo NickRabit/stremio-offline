@@ -358,7 +358,11 @@ class PlaybackController(
     }
   }
 
-  /** Starts the next library file: the old session is saved and deleted before the new start. */
+  /**
+   * Starts the next library file: the old session is saved and deleted before the new start. The
+   * addon subtitles belong to the file they were found for and their ids expire with time, so none
+   * travel onto the next one; its own arrive through [offerSubtitles].
+   */
   fun playNext(
     key: String,
     title: String,
@@ -369,7 +373,7 @@ class PlaybackController(
   ) {
     if (released) return
     val current = plan ?: return
-    begin(startPlan(null, key, title, path, null, resume, poster, current.addonKey, current.subtitles, current.audioPreference, current.subtitlePreference, mint = mint))
+    begin(startPlan(null, key, title, path, null, resume, poster, current.addonKey, emptyList(), current.audioPreference, current.subtitlePreference, mint = mint))
   }
 
   /**
