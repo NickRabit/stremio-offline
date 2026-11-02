@@ -201,9 +201,12 @@ export class TmdbIdMap {
   }
 
   private writeOnce(): Promise<void> {
+    // `queued` means a write is waiting for its turn, not that one is running: a change made while
+    // a write is under way is not in that write's snapshot, so it needs a run of its own.
     if (this.queued) return this.saving;
     this.queued = true;
     const run = this.saving.catch(() => undefined).then(async () => {
+      this.queued = false;
       if (this.database) {
         await this.writeDatabase(this.database);
         return;
@@ -223,7 +226,7 @@ export class TmdbIdMap {
       this.byImdb.forget(imdbSnapshot);
       this.byTmdb.forget(tmdbSnapshot);
     });
-    this.saving = run.finally(() => { this.queued = false; });
+    this.saving = run;
     return this.saving;
   }
 

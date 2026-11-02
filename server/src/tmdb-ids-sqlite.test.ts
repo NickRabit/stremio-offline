@@ -170,3 +170,39 @@ test("trimming past the cap deletes the evicted rows", async (t) => {
     { direction: "tmdb", key: "movie:2", value: "tt0000002", at: 200 },
   ]);
 });
+
+test("a pair remembered while a write is under way is written by the next flush", async (t) => {
+  const { file, database } = await fixture(t);
+  let hold: Promise<void> | undefined;
+  let entered!: () => void;
+  const writing = new Promise<void>((resolve) => { entered = resolve; });
+  const gated = new Proxy(database, {
+    get(target, property) {
+      if (property === "batch") {
+        return async (statements: Statement[]) => {
+          if (hold) { entered(); await hold; hold = undefined; }
+          return await target.batch(statements);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const ids = new TmdbIdMap();
+  ids.attachDatabase(gated);
+  await ids.load(file);
+
+  let release!: () => void;
+  hold = new Promise<void>((resolve) => { release = resolve; });
+  ids.rememberPair("movie", "tt0133093", 603, 1_000);
+  const first = ids.flush();
+  await writing;
+  // The first batch is on its way and does not hold this pair.
+  ids.rememberPair("movie", "tt0234215", 604, 2_000);
+  const second = ids.flush();
+  release();
+  await Promise.all([first, second]);
+
+  const rows = await database.all<{ key: string }>("SELECT key FROM tmdb_ids WHERE direction = 'imdb' ORDER BY key");
+  assert.deepEqual(rows.map((row) => row.key), ["movie:tt0133093", "movie:tt0234215"]);
+});

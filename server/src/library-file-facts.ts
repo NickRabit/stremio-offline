@@ -138,11 +138,15 @@ export function createLibraryFileFacts(opts: LibraryFileFactsOptions): LibraryFi
     else await writeJson(snapshot);
   };
 
+  // `queued` means a write is waiting for its turn, not that one is running: a change made while
+  // a write is under way is not in that write's snapshot, so it needs a run of its own.
   function writeOnce(): Promise<void> {
     if (queued) return saving;
     queued = true;
-    const run = saving.catch(() => undefined).then(persist);
-    saving = run.finally(() => { queued = false; });
+    saving = saving.catch(() => undefined).then(() => {
+      queued = false;
+      return persist();
+    });
     return saving;
   }
 
