@@ -119,6 +119,11 @@ const val TagCatalogForgetRemove = "catalog_forget_remove"
 
 fun libraryOptionTag(libraryId: String): String = "catalog_library_$libraryId"
 
+internal fun originRow(args: CatalogDetailArgs, rows: List<StreamDto>): StreamDto? =
+  args.preferredRemote?.let {
+    Streams.originRemoteRow(rows, it.libraryId, it.itemId, it.mediaSourceId)
+  } ?: args.preferredLocalPath?.let { Streams.originLocalRow(rows, it) }
+
 /** What the message line under the actions tells the viewer; the kind picks its colour. */
 internal enum class CatalogNotice { Neutral, Success, Failure }
 
@@ -243,6 +248,8 @@ fun CatalogDetailScreen(
   // The title's own requests do not depend on each other, so they all leave at once; only the
   // metadata waits for the settings it takes its language from.
   LaunchedEffect(args.meta.id) {
+    // Back to an earlier title must not keep the one it left when its metadata cannot be read.
+    meta = args.meta
     save.queuedSourceId = null
     notice(null)
     save.libraryPanelOpen = false
@@ -461,9 +468,7 @@ fun CatalogDetailScreen(
   }
   // The row of the source last played leads, so Resume continues in it. A rule with verdicts
   // then takes a row that meets it; the call lives in Streams so this screen only passes the sort.
-  val preferredStream = args.preferredRemote?.let {
-    Streams.originRemoteRow(rows, it.libraryId, it.itemId, it.mediaSourceId)
-  } ?: Streams.pickDefaultStream(
+  val preferredStream = originRow(args, rows) ?: Streams.pickDefaultStream(
     Streams.remoteFirst(rows, args.preferRemote),
     (if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey),
     Streams.ruleIdOf(filters.sort),
@@ -503,9 +508,7 @@ fun CatalogDetailScreen(
   LaunchedEffect(rows, anyAsking, preferredStream?.stableKey) {
     val storedKey =
       if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey
-    val origin = args.preferredRemote?.let {
-      Streams.originRemoteRow(rows, it.libraryId, it.itemId, it.mediaSourceId)
-    }
+    val origin = originRow(args, rows)
     val next = Streams.repickStream(
       playing = false,
       picked = pick.pickedStream,

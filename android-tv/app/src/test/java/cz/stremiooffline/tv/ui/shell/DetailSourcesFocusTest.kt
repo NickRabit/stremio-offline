@@ -27,11 +27,10 @@ import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
+import cz.stremiooffline.tv.ui.catalog.TagCatalogSources
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.sourceRowTag
-import cz.stremiooffline.tv.ui.detail.TagDetailPrimary
-import cz.stremiooffline.tv.ui.detail.TagDetailPickCaption
-import cz.stremiooffline.tv.ui.detail.TagDetailSources
 import cz.stremiooffline.tv.ui.player.TAG_OSD_PLAY
 import cz.stremiooffline.tv.ui.player.TAG_OVERLAY_ROOT
 import org.junit.After
@@ -44,9 +43,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Choosing a source starts the player over the detail that offered it. The detail is covered from
- * that moment, so its own panel-closing focus work must not pull the remote out of the session; when
- * the session ends, the detail takes the remote back.
+ * Choosing a source starts the player over the catalogue detail that offered it. The detail is
+ * covered from that moment, so its own panel-closing focus work must not pull the remote out of the
+ * session; when the session ends, the detail takes the remote back.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-xhdpi")
@@ -102,14 +101,14 @@ class DetailSourcesFocusTest {
     compose.waitForIdle()
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
-    // The only folder holds one file, so opening it is the detail of that film.
+    // The only folder holds one bound file, so opening it is that film's catalogue detail.
     compose.onNodeWithTag("It").performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
-    compose.waitUntil(5_000) { focused(TagDetailPrimary) }
+    compose.waitUntil(5_000) { focused(TagCatalogPrimary) }
 
     // Its Sources action opens the panel; choosing the addon row picks it and Play starts the
     // session.
-    compose.onNodeWithTag(TagDetailSources).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(TagCatalogSources).performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TagSourcesPanel)).fetchSemanticsNodes().isNotEmpty() }
     compose.waitUntil(5_000) {
@@ -118,9 +117,9 @@ class DetailSourcesFocusTest {
     compose.onNodeWithTag(sourceRowTag(1)).performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) {
-      compose.onAllNodes(hasTestTag(TagDetailPickCaption)).fetchSemanticsNodes().isNotEmpty()
+      compose.onAllNodes(hasTestTag(TagSourcesPanel)).fetchSemanticsNodes().isEmpty()
     }
-    compose.onNodeWithTag(TagDetailPrimary).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(TagCatalogPrimary).performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.startedSources.size == 1 }
   }
@@ -156,7 +155,7 @@ class DetailSourcesFocusTest {
     compose.waitUntil(5_000) {
       listOf(TAG_OVERLAY_ROOT, TAG_OSD_PLAY).any { tag -> focused(tag) }
     }
-    compose.onNodeWithTag(TagDetailSources).assertIsNotFocused()
+    compose.onNodeWithTag(TagCatalogSources).assertIsNotFocused()
     assertTrue(fake.startedSources.last() == "srcA")
 
     // Leaving the session hands the remote back to the detail that opened it.
@@ -164,6 +163,6 @@ class DetailSourcesFocusTest {
       if (compose.onAllNodes(hasTestTag(TAG_OVERLAY_ROOT)).fetchSemanticsNodes().isEmpty()) return@repeat
       back()
     }
-    compose.waitUntil(5_000) { focused(TagDetailPrimary) }
+    compose.waitUntil(5_000) { focused(TagCatalogPrimary) }
   }
 }
