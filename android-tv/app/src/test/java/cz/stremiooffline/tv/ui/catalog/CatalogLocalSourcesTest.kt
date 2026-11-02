@@ -22,6 +22,8 @@ import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SourceProfileDto
+import cz.stremiooffline.tv.data.SourceRuleVerdictDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.VideoDto
@@ -47,14 +49,31 @@ class CatalogLocalSourcesTest {
   private val played = mutableListOf<PlayTarget>()
   private val shownInLibrary = mutableListOf<String>()
 
-  private fun settings() = SettingsResponse(uiLanguage = "en", audioLanguage = "en", streamSort = "recommended", realDebridConfigured = true)
+  private fun settings(sort: String = "recommended") =
+    SettingsResponse(uiLanguage = "en", audioLanguage = "en", streamSort = sort, realDebridConfigured = true)
 
   private fun source(key: String) = StreamSourceDto(key, key.replaceFirstChar { it.uppercase() })
 
-  private fun stream(sourceId: String, title: String, addonName: String) =
-    StreamDto(sourceId = sourceId, kind = "remote", playable = true, title = title, addonName = addonName)
+  private fun stream(
+    sourceId: String,
+    title: String,
+    addonName: String,
+    rules: Map<String, SourceRuleVerdictDto> = emptyMap(),
+  ) = StreamDto(
+    sourceId = sourceId,
+    kind = "remote",
+    playable = true,
+    title = title,
+    addonName = addonName,
+    rules = rules,
+  )
 
-  private fun local(path: String = "Filmy/Heat (1995)/Heat.mkv", name: String = "Heat.mkv", library: String = "Filmy") =
+  private fun local(
+    path: String = "Filmy/Heat (1995)/Heat.mkv",
+    name: String = "Heat.mkv",
+    library: String = "Filmy",
+    rules: Map<String, SourceRuleVerdictDto> = emptyMap(),
+  ) =
     StreamDto(
       sourceId = "lib1",
       kind = "library",
@@ -62,7 +81,11 @@ class CatalogLocalSourcesTest {
       localPath = path,
       libraryName = library,
       behaviorHints = BehaviorHintsDto(filename = name),
+      rules = rules,
     )
+
+  private fun verdict(status: String, rank: List<Double>) =
+    SourceRuleVerdictDto(profileId = "p1", status = status, rank = rank)
 
   private fun movieArgs() = CatalogDetailArgs(MetaDto(id = "tt1", type = "movie", name = "It", poster = "poster.jpg"), "Cinemeta", "movie")
 
@@ -262,6 +285,46 @@ class CatalogLocalSourcesTest {
     compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("✓ Default", substring = true))
     compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Alpha"))
     assertTrue(played.isEmpty())
+  }
+
+  @Test
+  fun `#676 guard the rule picks a meeting addon over a breaking local copy in catalogue detail`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings(sort = "rule:p1")
+    api.sourceProfilesValue = listOf(SourceProfileDto(id = "p1"))
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(
+      stream("srcA", "Czech 8 GB", "Alpha", mapOf("p1" to verdict("meets", listOf(0.0, 1.0)))),
+    )
+    api.localStreamsResult = listOf(local(rules = mapOf("p1" to verdict("breaks", listOf(2.0, 0.0)))))
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals("srcA", played.single().sourceId)
+  }
+
+  @Test
+  fun `a local library origin stays the default when the rule would pick an addon`() {
+    val path = "Filmy/Heat (1995)/Heat.mkv"
+    val api = FakeTvApi()
+    api.settingsValue = settings(sort = "rule:p1")
+    api.sourceProfilesValue = listOf(SourceProfileDto(id = "p1"))
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(
+      stream("srcA", "Czech 8 GB", "Alpha", mapOf("p1" to verdict("meets", listOf(0.0, 1.0)))),
+    )
+    api.localStreamsResult = listOf(local(rules = mapOf("p1" to verdict("breaks", listOf(2.0, 0.0)))))
+    mount(api, movieArgs().copy(preferredLocalPath = path))
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(path, played.single().path)
+    assertNull(played.single().sourceId)
   }
 
   @Test

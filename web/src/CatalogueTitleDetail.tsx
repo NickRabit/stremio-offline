@@ -10,7 +10,7 @@ import { synopsisOf, TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from 
 import { useTitleExtras } from "./title-extras";
 import { useLibrarySources } from "./library-sources";
 import { titleLanguage } from "./languages";
-import { arrangeStreams, catalogSourceRows, isLocalStream, pickDefaultStream, resolveStreamSort, sortRuleId } from "./streams";
+import { arrangeStreams, catalogSourceRows, compareRuleRank, isLocalStream, pickDefaultStream, resolveStreamSort, sortRuleId } from "./streams";
 import type { CatalogueBulkRequest, Meta, SourceProfile, Stream, Trailer, Video } from "./types";
 
 /** One catalogue title's detail: the same body the libraries draw, hosted for a title that only
@@ -49,7 +49,7 @@ export interface CatalogueTitleDetailProps {
   /** The rows the catalogue panel already read for this exact selection. Given, they answer for
    *  the title and the providers are not asked a second time; a Home or favourite entry has none. */
   initialSources?: Stream[];
-  /** Load the title's other library copies with the title itself and let them lead Play. */
+  /** Load the title's other library copies with the title itself and rank them with every source. */
   libraryFirst?: boolean;
   /** Load the title's Jellyfin/Emby copies with the title itself and let them lead Play. */
   remoteFirst?: boolean;
@@ -275,8 +275,15 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       });
   }, [libraryFirst, remoteFirst, ordered, extra.groups]);
   const detailSources = useMemo(
-    () => ordered === null ? null : [...libraryRows, ...ordered],
-    [libraryRows, ordered],
+    () => {
+      if (ordered === null) return null;
+      const ruleId = sortRuleId(resolvedSort);
+      const merged = [...libraryRows, ...ordered];
+      return ruleId && merged.some((stream) => stream.rules?.[ruleId])
+        ? merged.sort((left, right) => compareRuleRank(left, right, ruleId))
+        : merged;
+    },
+    [libraryRows, ordered, resolvedSort],
   );
   /** The first playable row the active rule accepts, then the first unverified row. */
   const firstPlayable = pickDefaultStream(detailSources ?? [], sortRuleId(resolvedSort)) ?? null;
