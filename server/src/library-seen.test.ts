@@ -26,6 +26,34 @@ test("the first complete walk is the baseline and never reaches the row", async 
   });
 });
 
+test("an unchanged walk does not write, while a changed walk does", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "seen-store-"));
+  let writes = 0;
+  const store = new LibrarySeenStore(dataDir, {
+    writeState: async (target, data) => {
+      writes += 1;
+      await writeFile(target, data, { mode: 0o600 });
+    },
+  });
+  try {
+    await store.load();
+    const walk = [file("Films/Heat.mkv", 10, "2025-12-01T00:00:00.000Z")];
+    store.observe("lib_a", walk, new Date("2026-01-01T00:00:00.000Z"));
+    await store.flush();
+    assert.equal(writes, 1, "the first baseline is stored");
+
+    store.observe("lib_a", walk, new Date("2026-02-01T00:00:00.000Z"));
+    await store.flush();
+    assert.equal(writes, 1, "nothing changed on the second walk");
+
+    store.observe("lib_a", [...walk, file("Films/New.mkv", 20, "2026-02-02T00:00:00.000Z")], new Date("2026-03-01T00:00:00.000Z"));
+    await store.flush();
+    assert.equal(writes, 2, "the new file is stored");
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("a file that arrives on a later walk is stamped", async () => {
   await withStore(async (store) => {
     store.observe("lib_a", [], new Date("2026-01-01T00:00:00.000Z"));

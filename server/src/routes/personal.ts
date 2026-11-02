@@ -1,4 +1,5 @@
 import type express from "express";
+import { isDeepStrictEqual } from "node:util";
 import { allowedAddons } from "../addons.js";
 import type { ArtShape } from "../artwork.js";
 import { AppError } from "../errors.js";
@@ -58,6 +59,8 @@ export interface PersonalDeps extends RouteContext {
   titleArtworkUrls(key: string): Promise<TitleArtwork>;
   thumbUrl(param: "path" | "dir" | "key", value: string, art: string | undefined, shape?: ArtShape): Promise<string | undefined>;
   updateData(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
+  updateDataLater(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
+  updateDataUnlessUnchanged(req: express.Request | undefined, mutate: (data: UserData) => void, unchanged: (before: UserData, after: UserData) => boolean): Promise<void>;
   watchlistOf(data: UserData): Record<string, WatchlistEntry>;
   wirePath(key: string): string;
   /** The account's own verified media-server cards, read for the one merged Favourites list. */
@@ -170,6 +173,35 @@ const LOOKUP_TIMEOUT = Symbol("home-lookup-timeout");
 /** One request repairs at most one full Resume page, however long its history is. */
 const TITLE_ARTWORK_LOOKUP_LIMIT = 120;
 
+const progressRecordsEqual = (left: StoredProgress, right: StoredProgress): boolean => {
+  if (Math.abs(left.position - right.position) >= 1) return false;
+  const { position: _leftPosition, updatedAt: _leftUpdatedAt, ...leftRest } = left;
+  const { position: _rightPosition, updatedAt: _rightUpdatedAt, ...rightRest } = right;
+  return isDeepStrictEqual(leftRest, rightRest);
+};
+
+const watchedMarkersEqual = (left: WatchedMarker, right: WatchedMarker): boolean => {
+  const { updatedAt: _leftUpdatedAt, ...leftRest } = left;
+  const { updatedAt: _rightUpdatedAt, ...rightRest } = right;
+  return isDeepStrictEqual(leftRest, rightRest);
+};
+
+const progressMapsEqual = (
+  left: Record<string, StoredProgress>,
+  right: Record<string, StoredProgress>,
+  leftMarkers: Record<string, WatchedMarker>,
+  rightMarkers: Record<string, WatchedMarker>,
+): boolean => {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (!isDeepStrictEqual(leftKeys.sort(), rightKeys.sort())) return false;
+  if (!leftKeys.every((key) => progressRecordsEqual(left[key]!, right[key]!))) return false;
+  const leftMarkerIds = Object.keys(leftMarkers);
+  const rightMarkerIds = Object.keys(rightMarkers);
+  if (!isDeepStrictEqual(leftMarkerIds.sort(), rightMarkerIds.sort())) return false;
+  return leftMarkerIds.every((id) => watchedMarkersEqual(leftMarkers[id]!, rightMarkers[id]!));
+};
+
 /** Races one promise against a deadline. `undefined` means there is no deadline. */
 async function withDeadline<T>(work: Promise<T>, ms?: number): Promise<T | typeof LOOKUP_TIMEOUT> {
   if (ms === undefined || ms <= 0) return work;
@@ -239,7 +271,7 @@ const metadataArtwork = (meta: MetaItem | null): TitleArtwork => {
 };
 
 export function registerPersonalRoutes(app: express.Application, deps: PersonalDeps): PersonalApi {
-  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls, thumbUrl, updateData, watchlistOf, wirePath, remotePersonal, authorityOf } = deps;
+  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls, thumbUrl, updateData, updateDataLater, updateDataUnlessUnchanged, watchlistOf, wirePath, remotePersonal, authorityOf } = deps;
   const titleArtworks = new WeakMap<express.Request, {
     titles: Set<string>;
     metadata: Map<string, Promise<TitleArtwork>>;
@@ -605,7 +637,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const records = metaStore.qualifiedMeta();
     const units = await libraryUnits();
     const legacy = key.startsWith("file:") ? [] : legacyKeysFor(progressOf(dataOf(req)), key, records, units);
-    await updateData(req, (data) => {
+    const applyReport = (data: UserData) => {
       const all = { ...progressOf(data) };
       for (const legacyKey of legacy) delete all[legacyKey];
       if (resolved.file && resolved.title) delete all[`file:${resolved.file}`];
@@ -661,7 +693,20 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       data.progress = Object.fromEntries(keys.slice(0, 60).map((item) => [item, all[item]!]));
       const markerIds = Object.keys(markers).sort((a, b) => markers[b]!.updatedAt.localeCompare(markers[a]!.updatedAt));
       data.watchedSeries = Object.fromEntries(markerIds.slice(0, 60).map((id) => [id, markers[id]!]));
-    });
+    };
+    const unchanged = (before: UserData, after: UserData) =>
+      progressMapsEqual(progressOf(before), progressOf(after), markersOf(before), markersOf(after));
+    // The last report of a playback is judged and written in the store's chain, so a concurrent
+    // final whose write failed and rolled back cannot make this one skip its own change.
+    if (req.body.final === true) {
+      await updateDataUnlessUnchanged(req, applyReport, unchanged);
+      return void res.status(204).end();
+    }
+    const current = dataOf(req);
+    const preview = structuredClone(current);
+    applyReport(preview);
+    if (unchanged(current, preview)) return void res.status(204).end();
+    await updateDataLater(req, applyReport);
     res.status(204).end();
   }));
   app.delete("/api/progress", asyncRoute(async (req, res) => {

@@ -1,7 +1,7 @@
 import { AppError } from "./errors.js";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import { access, mkdir, readFile, rm, stat } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { mediaResources, safeSourceText } from "./media-resources.js";
@@ -363,6 +363,15 @@ interface CancelableInspection {
   source?: CancelableInspectionSubscriber;
 }
 
+/** Whether one folder is the other or lies inside it, either way round. */
+function overlaps(a: string, b: string): boolean {
+  const inside = (parent: string, child: string) => {
+    const relative = path.relative(path.resolve(parent), path.resolve(child));
+    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  };
+  return inside(a, b) || inside(b, a);
+}
+
 export class PlaybackManager {
   private previews = new PlayerPreviews();
   private sessions = new Map<string, Session>();
@@ -376,7 +385,9 @@ export class PlaybackManager {
     const reason = error instanceof Error ? error.message : String(error);
     log("WARN", "Embedded subtitles could not be extracted as a sidecar", { id, reason: reason.slice(0, 200) });
   });
-  private readonly root: string;
+  private root: string;
+  private readonly fallbackRoot: string;
+  private readonly configuredRoot?: string;
   private vaapiDevice?: string;
   /** Some chips decode and encode but have no video processing unit, so scale_vaapi fails. */
   private vaapiScaling = true;
@@ -401,11 +412,47 @@ export class PlaybackManager {
   private softwareEncoder = true;
   private ffmpegVersion?: string;
 
-  constructor(dataDir = process.env.DATA_DIR ?? "/data", private onStop: (id: string) => void = () => {}) { this.root = path.join(dataDir, "playback"); }
+  constructor(
+    dataDir = process.env.DATA_DIR ?? "/data",
+    private onStop: (id: string) => void = () => {},
+    playbackDir = process.env.PLAYBACK_DIR,
+  ) {
+    this.fallbackRoot = path.join(dataDir, "playback");
+    const configured = playbackDir?.trim();
+    // FFmpeg runs with the session folder as its working directory and is also given that folder
+    // as the output prefix, so a relative root would nest the output inside itself.
+    this.configuredRoot = configured ? path.resolve(configured, "stremio-offline-playback") : undefined;
+    this.root = this.configuredRoot ?? this.fallbackRoot;
+  }
 
   async load() {
-    await rm(this.root, { recursive: true, force: true });
-    await mkdir(this.root, { recursive: true });
+    if (this.configuredRoot) {
+      try {
+        await access(path.dirname(this.configuredRoot), constants.W_OK);
+        await this.emptyRoot(this.configuredRoot, false);
+        await access(this.configuredRoot, constants.R_OK | constants.W_OK);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        log("ERROR", "Configured playback directory is unusable, falling back to DATA_DIR/playback", {
+          directory: this.configuredRoot,
+          reason,
+        });
+        this.root = this.fallbackRoot;
+        // The fallback is the server's own folder, emptied at every start, unless the configured
+        // folder is that folder or overlaps it: then emptying it would delete the owner's files,
+        // so it is only created and nothing in it is removed.
+        if (overlaps(path.dirname(this.configuredRoot), this.fallbackRoot)) {
+          log("ERROR", "PLAYBACK_DIR overlaps DATA_DIR/playback, so nothing in it is cleaned at start", {
+            directory: path.dirname(this.configuredRoot),
+          });
+          await mkdir(this.root, { recursive: true, mode: 0o700 });
+        } else {
+          await this.emptyRoot(this.root, true);
+        }
+      }
+    } else {
+      await this.emptyRoot(this.root, true);
+    }
     const stdout = await this.readFfmpegVersion();
     if (stdout !== undefined) {
       this.ffmpegVersion = stdout.split("\n")[0]?.replace(/^ffmpeg version\s*/i, "").split(" ")[0];
@@ -428,6 +475,26 @@ export class PlaybackManager {
     // Media Foundation is Windows-only and never shares a machine with VAAPI.
     if (process.platform === "win32" && process.env.MEDIAFOUNDATION !== "0" && !this.vaapiDevice) await this.checkMediaFoundation();
     setInterval(() => this.reap(), 30_000).unref();
+  }
+
+  /** Empties the root. The root itself is checked without following links, so nothing is ever
+   *  read or deleted through a link. Something other than a real folder in its place is the
+   *  owner's in a configured PLAYBACK_DIR: it is left alone and the caller falls back. Only the
+   *  server's own DATA_DIR/playback has such an entry removed, as it always had. */
+  private async emptyRoot(root: string, replaceForeign: boolean) {
+    const entry = await lstat(root).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (entry && !entry.isDirectory()) {
+      if (!replaceForeign) throw new Error(`${root} exists and is not a folder`);
+      await rm(root, { force: true });
+    } else if (entry) {
+      const entries = await readdir(root);
+      await Promise.all(entries.map((name) => rm(path.join(root, name), { recursive: true, force: true })));
+    }
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    await chmod(root, 0o700);
   }
 
   /** A cold container start can keep the first exec waiting on the disk past the timeout, and
@@ -620,9 +687,8 @@ export class PlaybackManager {
       // Audio and quality decide conversion. Embedded subtitles ride as a sidecar unless the
       // client renders them itself: muxing WebVTT into fMP4 HLS makes the muxer die with
       // "timescale not set".
-      const avDefault = audioTrack === 0 && quality === null;
       const direct = this.directAllowed(session);
-      reason = avDefault && subtitleTrack === null ? direct.reason : "a non-default track or quality was requested";
+      reason = direct.reason;
       if (direct.ok) {
         signal?.throwIfAborted();
         if (subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
@@ -1090,7 +1156,7 @@ export class PlaybackManager {
     if (session.quality !== null) return { ok: false, reason: "a quality was chosen" };
     if (session.copyRejected) return { ok: false, reason: "the client refused a copy" };
     if (native(session.capabilities)) return this.directPlay(session.stream, session.info, session.capabilities, session.audioTrack);
-    if (session.audioTrack !== 0) return { ok: false, reason: "a non-default track or quality was requested" };
+    if (session.audioTrack !== 0) return { ok: false, reason: "a non-default audio track was requested" };
     return this.directPlay(session.stream, session.info, session.capabilities);
   }
 

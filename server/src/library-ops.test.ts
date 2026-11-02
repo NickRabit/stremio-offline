@@ -97,6 +97,22 @@ test("load resumes a persisted in-flight job at its current item", async () => {
   } finally { await cleanup(h.dataDir, queues); }
 });
 
+test("load does not rewrite an already-normal operations file", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-load-"));
+  const file = path.join(dataDir, "library-ops.json");
+  const queue = new LibraryOps({ file, execute: async () => ({}) });
+  try {
+    await writeFile(file, JSON.stringify({ version: 1, jobs: [] }, null, 2));
+    await mkdir(`${file}.tmp`);
+    await queue.load();
+    assert.deepEqual(queue.snapshot().jobs, []);
+  } finally {
+    queue.stop();
+    await queue.settled();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("a paused job resumes when its blocker clears", async () => {
   const h = await harness();
   const queues: LibraryOps[] = [h.queue];

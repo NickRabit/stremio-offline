@@ -19,7 +19,7 @@ import { isPathWithin, type FoundFile } from "./library.js";
 import type { MediaInfo } from "./naming.js";
 import type { AddonRecord, MetaItem } from "./types.js";
 
-const PROGRESS_SAVE_MS = 2_000;
+export const PROGRESS_SAVE_MS = 30_000;
 
 export type ScanStatus = "idle" | "running" | "paused" | "completed" | "failed";
 export type ScanPauseReason = "playback" | "download" | "breaker" | "operation";
@@ -407,7 +407,7 @@ export class LibraryScan {
           this.state.finishedAt = nowIso();
           delete this.state.current;
           await this.save();
-          log("INFO", "Library scan completed", { matched: this.state.matched, skipped: this.state.skipped, failed: this.state.failed });
+          log("INFO", "Library scan completed", { matched: this.state.matched, unmatched: this.state.skipped, failed: this.state.failed });
           try { await this.opts.onCompleted?.(); }
           catch (error) { log("WARN", "The library scan could not reconcile its proposals", { reason: error instanceof Error ? error.message : String(error) }); }
           return;
@@ -515,7 +515,7 @@ export class LibraryScan {
             : [];
           if (gallery.length) this.opts.saveGallery?.(key, gallery);
         }
-        log("INFO", "Library title matched", {
+        log("DEBUG", "Library title matched", {
           key, type: item.type, id: item.id, source: "scan",
           ...(identified.accept.evidence ? { evidence: identified.accept.evidence } : {}),
         });

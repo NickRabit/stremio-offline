@@ -112,7 +112,7 @@ class PlayerInitialSourcesTest {
   fun `an addon snapshot switches among its own rows and discovers nothing`() {
     val api = object : FakeTvApi() {
       val progressOwners = mutableListOf<String?>()
-      override suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?, poster: String?, addonKey: String?, remote: RemoteItemContext?, stableKey: String?) {
+      override suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?, poster: String?, addonKey: String?, remote: RemoteItemContext?, stableKey: String?, final: Boolean) {
         progressOwners += addonKey
       }
     }
@@ -216,6 +216,7 @@ class PlayerInitialSourcesTest {
         addonKey: String?,
         remote: RemoteItemContext?,
         stableKey: String?,
+        final: Boolean,
       ) {
         progressKeys += key
       }

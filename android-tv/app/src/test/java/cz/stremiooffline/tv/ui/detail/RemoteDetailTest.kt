@@ -225,6 +225,8 @@ class RemoteDetailTest {
     // Clearing only the item's row would leave the title's position offering Resume again.
     assertEquals(listOf(listOf("movie:tt1")), api.forgetCalls)
     assertEquals(0.0, api.remoteStatePatches.single().position ?: -1.0, 0.0)
+    // An explicit forget is not a periodic report: the server must write it at once.
+    assertEquals(true, api.remoteStatePatches.single().final)
     compose.onNodeWithTag(TagRemoteDetailWatched).assertDoesNotExist()
     compose.onNodeWithContentDescription("Mark as unwatched").assertDoesNotExist()
   }

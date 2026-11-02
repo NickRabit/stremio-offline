@@ -615,7 +615,7 @@ const REMOTE_REVALIDATE_TIMEOUT_MS = 5_000;
 /** Progress is recoverable from the `.part` file and segment positions, so it does not need the
  *  same durability cadence as admission or a terminal transition. This bounds a burst of
  *  progress events to one full-history checkpoint per interval. */
-const PROGRESS_SAVE_MS = 10_000;
+export const PROGRESS_SAVE_MS = 30_000;
 /** A failed save is usually a Windows lock (antivirus, indexer, backup) that ends in a moment;
  *  without another try the state on disk would stay behind until some later change. */
 const SAVE_RETRY_MS = 2_000;
@@ -3749,7 +3749,7 @@ export class DownloadQueue {
           lastSpeedAt = now; lastBytes = received; job.updatedAt = new Date().toISOString(); this.saveSoon();
         }
         if (received - lastLog >= 50 * MiB) {
-          log("INFO", "Download progress", { id: job.id, received, total: job.total, speed: Math.round(job.speed) });
+          log("DEBUG", "Download progress", { id: job.id, received, total: job.total, speed: Math.round(job.speed) });
           lastLog = received;
         }
       };

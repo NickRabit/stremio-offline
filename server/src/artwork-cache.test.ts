@@ -232,6 +232,28 @@ test("load rebuilds the index from the files, trusting the disk over the record"
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
+test("load leaves an already-normal index untouched", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "artwork-cache-load-"));
+  const dir = path.join(dataDir, "artwork");
+  try {
+    const picture = path.join(dir, "lib_aaaaaaaa", hash("One.mkv"));
+    const index = path.join(dir, "index.json");
+    await mkdir(path.dirname(picture), { recursive: true });
+    await writeFile(picture, Buffer.alloc(1024));
+    const info = await stat(picture);
+    await writeFile(index, JSON.stringify({
+      [path.join("lib_aaaaaaaa", hash("One.mkv"))]: { bytes: info.size, at: info.mtimeMs },
+    }));
+    await utimes(index, 1_000, 1_000);
+
+    const cache = new ArtworkCache(dir, 1024 * 1024);
+    await cache.load();
+    assert.equal((await stat(index)).mtimeMs, 1_000_000);
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("load neither counts nor deletes anything that is not a hashed thumbnail", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "artwork-cache-"));
   const dir = path.join(dataDir, "artwork");
@@ -368,7 +390,7 @@ test("a thumbnail that cannot be removed stays indexed and is retried", async ()
   });
 });
 
-test("a gallery-only last-use change waits ten minutes while structural writes stay prompt", async () => {
+test("serving a gallery picture does not schedule an index write and shutdown persists its recency", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "artwork-cache-touch-"));
   const dir = path.join(dataDir, "artwork");
   const scheduled: Array<{ run: () => void; ms: number }> = [];
@@ -389,18 +411,13 @@ test("a gallery-only last-use change waits ten minutes while structural writes s
     await new Promise((resolve) => setTimeout(resolve, 3));
     await cache.served(file);
     await cache.served(file);
-    assert.deepEqual(scheduled.map((timer) => timer.ms), [600_000], "repeated gallery reads share one lazy write");
+    assert.deepEqual(scheduled, [], "repeated gallery reads schedule no write");
     const during = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { at: number }>;
     assert.equal(during[name]!.at, before[name]!.at, "ordinary reads do not rewrite the index");
 
-    scheduled.shift()!.run();
-    let persisted = false;
-    for (let attempt = 0; attempt < 100 && !persisted; attempt += 1) {
-      const stored = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { at: number }>;
-      persisted = stored[name]!.at > before[name]!.at;
-      if (!persisted) await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    assert.equal(persisted, true, "the lone last-use change is eventually written");
+    await cache.flush();
+    const persisted = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { at: number }>;
+    assert.ok(persisted[name]!.at > before[name]!.at, "shutdown writes the touched recency");
   } finally {
     await cache.flush();
     await rm(dataDir, { recursive: true, force: true });

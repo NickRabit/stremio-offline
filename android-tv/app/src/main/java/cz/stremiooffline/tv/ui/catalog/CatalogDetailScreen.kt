@@ -1148,7 +1148,7 @@ fun CatalogDetailScreen(
         ) {
             scope.launch {
               runCatching {
-                api.saveProgress(progressKey, 1.0, 1.0, playerTitle, null, args.meta.poster ?: meta.poster, null, null)
+                api.saveProgress(progressKey, 1.0, 1.0, playerTitle, null, args.meta.poster ?: meta.poster, null, null, final = true)
               }
               if (isSeries) {
                 entries = runCatching { api.progressList() }.getOrDefault(entries)

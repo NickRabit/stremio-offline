@@ -411,7 +411,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   libraryState: async (libraryId) => { await refreshLibraryHealth(); return libraryFor(store.libraries(), libraryId); },
 });
 if (database) queue.attachDatabase(database);
-const playback = new PlaybackManager(undefined, (id) => {
+const playback = new PlaybackManager(DATA_DIR, (id) => {
   const owned = playbackOwners.get(id);
   if (owned) {
     // The tombstone matters: a player that has just been closed still has range requests in
@@ -427,7 +427,7 @@ const playback = new PlaybackManager(undefined, (id) => {
   airplayAccess.remove(id);
   throughput.forget(id);
   sourcePace.forget(id);
-});
+}, process.env.PLAYBACK_DIR);
 const stats = new StatsLog();
 const imageStats = new ImageStats(path.join(DATA_DIR, "image-stats.json"));
 if (database) imageStats.attachDatabase(database);
@@ -549,6 +549,29 @@ const updateData = async (req: express.Request | undefined, mutate: (data: UserD
   const id = accountIdOf(req);
   if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
   await store.update((state) => mutateData(state, id, mutate));
+};
+/** Like updateData, but `unchanged` is judged inside the store's chain, against the state after
+ *  any write queued earlier: when it holds, nothing is changed and only a deferred change still
+ *  owed is written. A failed write rejects either way. */
+const updateDataUnlessUnchanged = async (
+  req: express.Request | undefined,
+  mutate: (data: UserData) => void,
+  unchanged: (before: UserData, after: UserData) => boolean,
+): Promise<void> => {
+  const id = accountIdOf(req);
+  if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
+  await store.update((state) => {
+    const current = state.userData?.[id] ?? emptyUserData();
+    const preview = structuredClone(current);
+    mutate(preview);
+    if (unchanged(current, preview)) return false;
+    mutateData(state, id, mutate);
+  });
+};
+const updateDataLater = async (req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void> => {
+  const id = accountIdOf(req);
+  if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
+  await store.updateLater((state) => mutateData(state, id, mutate));
 };
 /** One named account's rows, for work that outlives the request that asked for it. */
 const updateOneData = async (id: string, mutate: (data: UserData) => void): Promise<void> => {
@@ -2161,7 +2184,7 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
   });
 };
 
-const personal = registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls: (key) => titleArtworkUrls(key), thumbUrl, updateData, watchlistOf, wirePath, remotePersonal: mediaServerPersonal, authorityOf });
+const personal = registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls: (key) => titleArtworkUrls(key), thumbUrl, updateData, updateDataLater, updateDataUnlessUnchanged, watchlistOf, wirePath, remotePersonal: mediaServerPersonal, authorityOf });
 
 /** The followed series: the daily check reads the owner's addons in the owner's language,
  *  past the cache, so a new episode is seen the day it appears. */
@@ -2926,8 +2949,8 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [flushDatabaseStores, () => artworks.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
-  lateFlushes: [flushDatabaseStores],
+  flushes: [flushDatabaseStores, () => externalIds.flush(), () => artworks.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  lateFlushes: [flushDatabaseStores, () => externalIds.flush()],
   store,
   closeStorage: async () => {
     queue.freezePersistence();

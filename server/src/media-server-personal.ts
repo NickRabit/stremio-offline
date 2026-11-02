@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { remoteLibraryVisibleTo } from "./media-server-access.js";
 import type { RemoteHomeCard } from "./home.js";
 import type { MediaServerAuthority, MediaServerManager } from "./media-server-manager.js";
@@ -14,7 +15,7 @@ import {
 } from "./media-server-types.js";
 import { log } from "./logger.js";
 import { ResourceError } from "./media-resources.js";
-import type { Store } from "./store.js";
+import type { State, Store } from "./store.js";
 import { emptyUserData, findUserById, type UserData, type UserRecord } from "./users.js";
 
 /** What one account sees for one verified remote item. Never carries a URL, token, seal or
@@ -215,7 +216,7 @@ interface WriteState {
 
 const MAX_RECORDS = 1000;
 const MAX_SECONDS = 31_536_000;
-const PATCH_KEYS = ["position", "duration", "favorite", "watched", "mediaSourceId"];
+const PATCH_KEYS = ["position", "duration", "favorite", "watched", "mediaSourceId", "final"];
 const CARD_LIMIT_DEFAULT = 20;
 /** The most cards one call may ask for, so a whole shelf can be filtered in one read. */
 export const CARD_LIMIT_MAX = 1000;
@@ -238,20 +239,28 @@ const boundedId = (value: unknown): string => {
   return value;
 };
 
-interface Patch { position?: number; duration?: number; favorite?: boolean; watched?: boolean; mediaSourceId?: string }
+interface Patch { position?: number; duration?: number; favorite?: boolean; watched?: boolean; mediaSourceId?: string; final?: true }
 
 const readPatch = (body: unknown): Patch => {
   if (typeof body !== "object" || body === null || Array.isArray(body)) throw invalid("The remote item change is malformed.");
   const record = body as Record<string, unknown>;
   for (const key of Object.keys(record)) if (!PATCH_KEYS.includes(key)) throw invalid("The remote item change has an unknown field.");
-  if (Object.keys(record).length === 0) throw invalid("The remote item change names nothing to change.");
+  if (!PATCH_KEYS.some((key) => key !== "final" && record[key] !== undefined)) throw invalid("The remote item change names nothing to change.");
   const patch: Patch = {};
   if (record.position !== undefined) patch.position = seconds(record.position, "position");
   if (record.duration !== undefined) patch.duration = seconds(record.duration, "duration");
   if (record.favorite !== undefined) { if (typeof record.favorite !== "boolean") throw invalid("The remote favorite is malformed."); patch.favorite = record.favorite; }
   if (record.watched !== undefined) { if (typeof record.watched !== "boolean") throw invalid("The remote watched flag is malformed."); patch.watched = record.watched; }
   if (record.mediaSourceId !== undefined) patch.mediaSourceId = boundedId(record.mediaSourceId);
+  if (record.final !== undefined) { if (record.final !== true) throw invalid("The remote final flag is malformed."); patch.final = true; }
   return patch;
+};
+
+const sameRemoteRecord = (left: RemoteMediaRecord, right: RemoteMediaRecord): boolean => {
+  if (Math.abs(left.position - right.position) >= 1) return false;
+  const { position: _leftPosition, updatedAt: _leftUpdatedAt, ...leftRest } = left;
+  const { position: _rightPosition, updatedAt: _rightUpdatedAt, ...rightRest } = right;
+  return isDeepStrictEqual(leftRest, rightRest);
 };
 
 const safeString = (value: unknown, max: number): string | undefined =>
@@ -474,25 +483,43 @@ export class MediaServerPersonal {
     const written = await this.titleOfWrite(authority, resolved.library.id, resolved.item, signal);
     const pathTitle = patch.favorite === false ? await this.titleOfPath?.() : undefined;
     authority.assertCurrent();
+    const previous = validRecord(this.mapOf(resolved.userId)[resolved.key]);
+    const record = this.build(previous, resolved, patch, this.store.prefs(resolved.userId).trackProgress, written.title);
+    // A star request also changes the title's shared watchlist, which the record alone does not
+    // show: an episode can carry favorite: false while its show is starred through another item.
+    // An explicit change (the last report of a playback, a watched toggle) is judged inside the
+    // store's chain instead, so a concurrent write that failed and rolled back cannot make it
+    // answer success without its own write. Only a periodic position may short-cut here.
+    const explicit = patch.final === true || patch.watched !== undefined || (patch.position === 0 && patch.duration === 0);
+    if (!explicit && previous && patch.favorite === undefined && sameRemoteRecord(previous, record)) {
+      return stateOf(previous, watchlistOf(this.store.userData(resolved.userId)));
+    }
     let state!: RemoteItemState;
-    await this.store.update((next) => {
+    const apply = (next: State) => {
       this.assertWrite(next, authority, resolved);
-      const previous = validRecord(this.mapOf(resolved.userId, next)[resolved.key]);
-      const record = this.build(previous, resolved, patch, this.trackProgressOf(next, resolved.userId), written.title);
-      const map: Record<string, unknown> = { ...this.mapOf(resolved.userId, next), [resolved.key]: record };
+      const stored = validRecord(this.mapOf(resolved.userId, next)[resolved.key]);
+      const built = this.build(stored, resolved, patch, this.trackProgressOf(next, resolved.userId), written.title);
+      // An explicit change that changes nothing is judged here, in the store's chain, so a
+      // concurrent write that failed and rolled back cannot make this one skip its own change.
+      // Only a deferred change still owed is written then, and a failure still rejects.
+      if (explicit && stored && patch.favorite === undefined && sameRemoteRecord(stored, built)) {
+        state = stateOf(stored, watchlistOf(next.userData?.[resolved.userId] ?? emptyUserData()));
+        return false;
+      }
+      const map: Record<string, unknown> = { ...this.mapOf(resolved.userId, next), [resolved.key]: built };
       this.enforceBound(map, resolved.key);
       const data = next.userData?.[resolved.userId] ?? emptyUserData();
       // One star per title: starring a remote item stars its title, and clearing the star clears
       // every remote record of that title with it.
       const watchlist = { ...watchlistOf(data) };
       let favorites: string[] = Array.isArray(data.favorites) ? [...data.favorites] : [];
-      if (patch.favorite !== undefined && record.title) {
-        const titleKey = titleKeyOf(record.title);
+      if (patch.favorite !== undefined && built.title) {
+        const titleKey = titleKeyOf(built.title);
         if (patch.favorite) {
           if (watchlist[titleKey] === undefined) {
             watchlist[titleKey] = {
-              type: record.title.type, id: record.title.id,
-              name: written.name ?? record.name, addedAt: new Date().toISOString(),
+              type: built.title.type, id: built.title.id,
+              name: written.name ?? built.name, addedAt: new Date().toISOString(),
             };
           }
         } else {
@@ -505,8 +532,17 @@ export class MediaServerPersonal {
         }
       }
       next.userData = { ...(next.userData ?? {}), [resolved.userId]: { ...data, remoteMedia: map, watchlist, favorites } };
-      state = stateOf(validRecord(map[resolved.key]) ?? record, watchlist);
-    });
+      state = stateOf(validRecord(map[resolved.key]) ?? built, watchlist);
+    };
+    const progressOnly = patch.position !== undefined || patch.duration !== undefined || patch.mediaSourceId !== undefined;
+    // Clearing a position is an explicit action, not a periodic report: it is written at once,
+    // also for clients that do not send final with it.
+    const forgetting = patch.position === 0 && patch.duration === 0;
+    if (patch.final !== true && !forgetting && patch.favorite === undefined && patch.watched === undefined && progressOnly) {
+      await this.store.updateLater(apply);
+    } else {
+      await this.store.update(apply);
+    }
     authority.assertCurrent();
     return state;
   }
