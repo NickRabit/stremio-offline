@@ -235,3 +235,28 @@ test("artwork changed during an in-flight batch is written by the next flush", a
     [name("lib_aaaaaaaa", "First.mkv"), name("lib_aaaaaaaa", "Second.mkv")].sort(),
   );
 });
+
+test("a thumbnail removed while the artwork index loads does not abort the load", async (t) => {
+  const { artworkDir, database } = await fixture(t);
+  const doomed = await put(artworkDir, "Doomed.mkv", 100);
+  await put(artworkDir, "Kept.mkv", 200);
+  await database.run("INSERT INTO meta (key, value) VALUES (?, ?)", ["domain.artwork", JSON.stringify({ importedAt: 1, source: "index.json", count: 0 })]);
+  // The file goes away right after the stored rows are read, mid-reconciliation.
+  const racing = new Proxy(database, {
+    get(target, property) {
+      if (property === "all") {
+        return async (...args: Parameters<AppDatabase["all"]>) => {
+          const rows = await target.all(...args);
+          await rm(doomed, { force: true });
+          return rows;
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const cache = new ArtworkCache(artworkDir, 1024 * 1024);
+  cache.attachDatabase(racing);
+  await cache.load();
+  assert.ok(cache.size >= 1);
+});

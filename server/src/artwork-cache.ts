@@ -215,15 +215,15 @@ export class ArtworkCache {
     if (this.dirty || this.recencyDirty || this.entries.hasDirty()) { this.dirty = false; await this.writeIndex(); }
   }
 
-  private async scanFiles(): Promise<Map<string, number>> {
-    const files = new Map<string, number>();
+  private async scanFiles(): Promise<Map<string, { size: number; mtimeMs: number }>> {
+    const files = new Map<string, { size: number; mtimeMs: number }>();
     for (const library of await readdir(this.dir, { withFileTypes: true }).catch(() => [])) {
       if (!library.isDirectory()) continue;
       for (const file of await readdir(path.join(this.dir, library.name), { withFileTypes: true }).catch(() => [])) {
         if (!file.isFile() || !/^[0-9a-f]{40}\.jpg$/.test(file.name)) continue;
         const name = path.join(library.name, file.name);
         const info = await lstat(path.join(this.dir, name)).catch(() => undefined);
-        if (info?.isFile()) files.set(name, info.size);
+        if (info?.isFile()) files.set(name, { size: info.size, mtimeMs: info.mtimeMs });
       }
     }
     return files;
@@ -240,13 +240,14 @@ export class ArtworkCache {
         "SELECT key, bytes, at FROM artwork_entries",
       );
       const stored = new Map(rows.map((row) => [row.key, row]));
-      for (const [name, bytes] of files) {
+      // The one scan above is the only look at the disk: a thumbnail removed after it is simply
+      // missing later, never a second lstat that could reject and abort the start.
+      for (const [name, { size: bytes, mtimeMs }] of files) {
         const row = stored.get(name);
         const validAt = row && Number.isFinite(row.at) && row.at > 0;
-        const info = await lstat(path.join(this.dir, name));
-        this.entries.set(name, { bytes, at: validAt ? row.at : info.mtimeMs });
+        this.entries.set(name, { bytes, at: validAt ? row.at : mtimeMs });
         if (!validAt || row.bytes !== bytes) {
-          statements.push({ sql: UPSERT, params: [name, bytes, validAt ? row.at : info.mtimeMs] });
+          statements.push({ sql: UPSERT, params: [name, bytes, validAt ? row.at : mtimeMs] });
         }
       }
       for (const key of stored.keys()) {
@@ -262,11 +263,11 @@ export class ArtworkCache {
       } catch {
         stored = {};
       }
-      for (const [name, bytes] of files) {
+      for (const [name, { size: bytes, mtimeMs }] of files) {
         const prior = stored[name]?.at;
         const at = typeof prior === "number" && Number.isFinite(prior) && prior > 0
           ? prior
-          : (await lstat(path.join(this.dir, name))).mtimeMs;
+          : mtimeMs;
         this.entries.set(name, { bytes, at });
         statements.push({ sql: UPSERT, params: [name, bytes, at] });
       }

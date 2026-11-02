@@ -264,7 +264,9 @@ export class ExternalIdStore {
     for (;;) {
       if (this.timer) clearTimeout(this.timer);
       this.timer = undefined;
-      if (this.dirty) {
+      // A failed write leaves its entries dirty without setting `dirty`, so they are written here
+      // too; a new change during the write is what loops, never a write that keeps failing.
+      if (this.dirty || this.entries.hasDirty()) {
         this.dirty = false;
         await this.writeOnce();
       } else {
@@ -310,6 +312,14 @@ export class ExternalIdStore {
       })
       .catch((error: unknown) => {
         log("WARN", "External ids could not be saved", { file: path.basename(this.file), reason: reasonOf(error) });
+        // The entries stay dirty; try again on the usual interval rather than wait for a new lookup.
+        if (!this.timer) {
+          this.timer = setTimeout(() => {
+            this.timer = undefined;
+            void this.queueSave();
+          }, WRITE_INTERVAL_MS);
+          this.timer.unref?.();
+        }
       });
     this.saving = run;
     return run;

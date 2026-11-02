@@ -179,3 +179,30 @@ test("an external id change during an in-flight batch is written by the next flu
     ["tt0000004", "tt0000005"],
   );
 });
+
+test("an external id whose batch failed is written by the next flush", async (t) => {
+  const { dataDir, database } = await fixture(t);
+  let failNext = false;
+  const flaky = new Proxy(database, {
+    get(target, property) {
+      if (property === "batch") {
+        return async (statements: Statement[]) => {
+          if (failNext) { failNext = false; throw new Error("database busy"); }
+          return await target.batch(statements);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const store = new ExternalIdStore(dataDir, answer("606"));
+  store.attachDatabase(flaky);
+  await store.load();
+
+  failNext = true;
+  assert.deepEqual(await store.ids("tt0000006"), { tmdbMovie: "606" });
+  await store.flush();
+  assert.deepEqual(await database.all("SELECT imdb FROM external_ids"), [], "the first attempt failed");
+  await store.flush();
+  assert.deepEqual(await database.all("SELECT imdb FROM external_ids"), [{ imdb: "tt0000006" }]);
+});
