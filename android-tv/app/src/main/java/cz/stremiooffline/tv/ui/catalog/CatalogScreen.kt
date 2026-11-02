@@ -42,6 +42,7 @@ const val TagCatalogRetry = "catalog_retry"
 const val TagCatalogPanel = "catalog_panel"
 
 fun catalogOptionTag(index: Int): String = "catalog_option_$index"
+fun catalogHeaderTag(addonKey: String): String = "catalog_header_$addonKey"
 fun genreOptionTag(index: Int): String = "genre_option_$index"
 const val TagGenreAll = "genre_option_all"
 
@@ -203,15 +204,23 @@ fun CatalogScreen(
           modifier = Modifier.testTag(TagCatalogPanel),
           initialFocus = entry,
         ) {
-          state.catalogs.forEachIndexed { index, catalog ->
-            PanelOption(
-              text = catalogText(catalog),
-              selected = index == state.catalogIndex,
-              onClick = { viewModel.select(index); closePanel() },
-              modifier = Modifier
-                .testTag(catalogOptionTag(index))
-                .then(if (index == focusIndex) Modifier.focusRequester(entry) else Modifier),
+          state.catalogs.withIndex().groupBy { it.value.addonKey }.forEach { (addonKey, catalogs) ->
+            ScopeGroupHeader(
+              name = catalogs.first().value.addonName,
+              note = null,
+              modifier = Modifier.testTag(catalogHeaderTag(addonKey)),
             )
+            catalogs.forEach { (index, catalog) ->
+              PanelOption(
+                text = catalogOptionText(catalog),
+                selected = index == state.catalogIndex,
+                onClick = { viewModel.select(index); closePanel() },
+                modifier = Modifier
+                  .padding(start = ScopeIndent)
+                  .testTag(catalogOptionTag(index))
+                  .then(if (index == focusIndex) Modifier.focusRequester(entry) else Modifier),
+              )
+            }
           }
         }
       }
@@ -272,4 +281,15 @@ internal fun catalogText(catalog: CatalogDto): String = when (catalog.type) {
   "movie" -> "${catalog.label} (${stringResource(R.string.catalog_type_movie)})"
   "series" -> "${catalog.label} (${stringResource(R.string.catalog_type_series)})"
   else -> catalog.label
+}
+
+/** The catalogue's own name and type, without the addon heading above it. */
+@Composable
+internal fun catalogOptionText(catalog: CatalogDto): String {
+  val name = catalog.name ?: catalog.id
+  return when (catalog.type) {
+    "movie" -> "$name (${stringResource(R.string.catalog_type_movie)})"
+    "series" -> "$name (${stringResource(R.string.catalog_type_series)})"
+    else -> name
+  }
 }

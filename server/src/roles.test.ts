@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import type { Request, Response } from "express";
 import { RestrictedError, restrictedMiddleware } from "./restricted.js";
 import { AppError } from "./errors.js";
@@ -66,6 +69,9 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/library"],
   ["GET", "/library/browse"],
   ["GET", "/library/folders"],
+  ["GET", "/library/gallery"],
+  ["GET", "/library/identity"],
+  ["GET", "/library/mosaic"],
   ["GET", "/library/thumb"],
   ["GET", "/library/next/movie:tt1254207"],
   ["GET", "/library/previous/movie:tt1254207"],
@@ -80,6 +86,9 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/sources"],
   ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/state"],
   ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Primary"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Backdrop"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Thumb"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/mosaic"],
   ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/streams/movie/tt1254207"],
   ["GET", "/remote-libraries/personal"],
   ["PATCH", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/state"],
@@ -91,8 +100,11 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/search"],
   ["GET", "/searchable"],
   ["GET", "/meta/movie/tt1254207"],
+  ["GET", "/meta/movie/tt1254207/extras"],
+  ["GET", "/meta/series/tt1254207/extras"],
   ["GET", "/links/movie/tt1254207"],
   ["GET", "/trailer/movie/tt1254207"],
+  ["GET", "/intro-segments"],
   ["GET", "/library/links"],
   ["GET", "/library/trailer"],
   ["GET", "/library/title"],
@@ -160,10 +172,20 @@ const REFUSED: Array<[string, string]> = [
   ["POST", "/remote-libraries/rlib_00000000000000000000000000000001/browse"],
   ["PATCH", "/remote-libraries/rlib_00000000000000000000000000000001/browse"],
   ["POST", "/remote-libraries/rlib_00000000000000000000000000000001/preview"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Logo"],
+  ["POST", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Thumb"],
+  ["POST", "/remote-libraries/rlib_00000000000000000000000000000001/mosaic"],
   ["DELETE", "/library/item"],
   ["POST", "/library/rename"],
   ["POST", "/library/match"],
+  ["GET", "/library/search"],
+  ["GET", "/library/suggestions"],
+  ["GET", "/library/scan"],
   ["POST", "/library/scan"],
+  ["GET", "/library/ops"],
+  ["POST", "/library/mosaic"],
+  ["POST", "/library/gallery"],
+  ["POST", "/meta/movie/tt1254207/extras"],
   ["GET", "/logs"],
   ["GET", "/diagnostics"],
   ["GET", "/client-logs"],
@@ -326,4 +348,74 @@ test("the write-time role check refuses every way an actor can have gone stale",
     "a password change or a sign-out everywhere rotated the secret");
   assert.throws(() => assertStillAdmin([{ ...ada, role: "user" }], ada), ForbiddenError, "a demotion");
   assert.throws(() => assertStillAdmin([{ ...ada, disabled: true }], ada), ForbiddenError, "the account switched off");
+});
+
+/** Every route the server registers must be classified: reachable by an ordinary account
+ *  through USER_ALLOWED, or named below as administrator-only. A new route that is neither
+ *  fails here, so the decision is made in the pull request that adds it rather than by a
+ *  non-admin account meeting a 403 in production. Paths are as registered, without `/api`. */
+const ADMIN_ONLY = new Set([
+  // Answered before the role gate (OPEN_PATHS), so the allowlist never sees them.
+  "POST /auth/setup",
+  "GET /status",
+  // Addons, accounts, servers, logs and statistics.
+  "POST /addons", "PATCH /addons/:key", "DELETE /addons/:key", "POST /addons/:key/move",
+  "POST /addons/:key/refresh", "POST /addons/refresh", "GET /addons/:key/export",
+  "GET /admin/source-profiles", "POST /admin/source-profiles", "PATCH /admin/source-profiles/:id",
+  "DELETE /admin/source-profiles/:id", "POST /admin/source-profiles/:id/duplicate",
+  "GET /users", "POST /users", "PATCH /users/:id", "DELETE /users/:id", "PATCH /users/:id/password",
+  "GET /logs", "DELETE /logs", "GET /client-logs", "GET /client-logs/:id", "DELETE /client-logs/:id",
+  "GET /diagnostics", "GET /stats", "GET /stats/activity", "GET /stats/streams",
+  "GET /settings/export", "POST /settings/import",
+  // Libraries and their curation.
+  "POST /libraries", "PATCH /libraries/:id", "DELETE /libraries/:id", "POST /libraries/:id/reroot",
+  "GET /libraries/browse", "POST /libraries/preview",
+  "GET /libraries/grants", "POST /libraries/grants", "DELETE /libraries/grants",
+  "GET /library/search", "GET /library/suggestions", "DELETE /library/suggestion",
+  "POST /library/match", "POST /library/rename", "POST /library/move", "POST /library/folder",
+  "DELETE /library/item", "GET /library/scan", "POST /library/scan", "POST /library/scan/stop",
+  "GET /library/ops", "POST /library/ops", "DELETE /library/ops/:id",
+  "DELETE /downloads", "POST /downloads/:id/move",
+  // Media-server administration.
+  "GET /media-servers", "POST /media-servers", "PATCH /media-servers/:id", "DELETE /media-servers/:id",
+  "GET /media-servers/:id/libraries", "POST /media-servers/:id/libraries",
+  "POST /media-servers/:id/reauthenticate", "GET /media-servers/export", "POST /media-servers/import",
+  "GET /media-servers/libraries", "PATCH /remote-libraries/:id", "DELETE /remote-libraries/:id",
+]);
+
+/** A concrete value for a route parameter whose rule accepts only some values. */
+const SAMPLE_PARAMS: Record<string, string> = { imageType: "Primary" };
+
+const registeredRoutes = async (): Promise<string[]> => {
+  const root = path.dirname(fileURLToPath(import.meta.url));
+  const files = (await readdir(root, { recursive: true }))
+    .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
+  const routes = new Set<string>();
+  for (const file of files) {
+    const source = await readFile(path.join(root, file), "utf8");
+    for (const match of source.matchAll(/\bapp\.(get|post|put|patch|delete)\(\s*"\/api(\/[^"]*)"/g)) {
+      routes.add(`${match[1].toUpperCase()} ${match[2]}`);
+    }
+  }
+  return [...routes].sort();
+};
+
+test("every registered route is either open to ordinary accounts or named administrator-only", async () => {
+  const routes = await registeredRoutes();
+  // A broken scan would pass vacuously; the server registers well over a hundred routes.
+  assert.ok(routes.length > 150, `only ${routes.length} routes found`);
+  const unclassified = routes.filter((route) => {
+    if (ADMIN_ONLY.has(route)) return false;
+    const [method, pattern] = route.split(" ");
+    const sample = pattern.replace(/:([A-Za-z]+)/g, (_, name: string) => SAMPLE_PARAMS[name] ?? "x");
+    return !isUserAllowed(method, sample);
+  });
+  assert.deepEqual(unclassified, [],
+    "Add each route to USER_ALLOWED (with a viewer-scoped handler) or to ADMIN_ONLY in roles.test.ts");
+  // The list stays honest: no stale entry, and nothing listed that users can in fact reach.
+  for (const route of ADMIN_ONLY) {
+    assert.ok(routes.includes(route), `${route} is no longer registered`);
+    const [method, pattern] = route.split(" ");
+    assert.ok(!isUserAllowed(method, pattern.replace(/:([A-Za-z]+)/g, "x")), `${route} is listed as admin-only but users reach it`);
+  }
 });

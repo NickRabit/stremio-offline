@@ -69,10 +69,15 @@ const makeRoot = (prefix: string) => mkdtemp(path.join(tmpdir(), prefix));
 /** The scan is the module's own, held in a paused state by a busy host so the run it starts
  *  stays the run a second request meets. Everything else is a fake that records the calls. */
 const ADA = "usr_00000001";
+const BOB = "usr_00000002";
 // A real list, so the write-time role check has something to read.
-const users: UserRecord[] = [{ id: ADA, username: "ada", role: "admin", secret: "ada-secret" } as UserRecord];
+const users: UserRecord[] = [
+  { id: ADA, username: "ada", role: "admin", secret: "ada-secret" } as UserRecord,
+  { id: BOB, username: "bob", role: "user", secret: "bob-secret" } as UserRecord,
+];
 
 const mount = async (options: {
+  as?: UserRecord;
   libraries?: LibraryRecord[];
   records?: Record<string, LibraryMetaRecord>;
   suggestions?: Record<string, LibrarySuggestion>;
@@ -121,7 +126,7 @@ const mount = async (options: {
     needsSetup: () => false,
     currentSession: () => undefined,
     // A real account, so the owner an operation carries is a value the test can see.
-    currentUser: () => users[0],
+    currentUser: () => options.as ?? users[0],
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     stopUserSessions: async () => undefined,
@@ -518,6 +523,67 @@ test("GET /api/library/identity reads an exclusion from the row's own path", asy
   const excluded = await alone.json() as { match: string; bound?: unknown };
   assert.equal(excluded.match, "rejected");
   assert.equal(excluded.bound, undefined);
+});
+
+test("GET /api/library/identity scopes a visible bound file to an ordinary user", async (t) => {
+  const root = await makeRoot("stremio-curate-user-identity-");
+  await put(root, "Heat/Heat.mkv");
+  const folder = "lib_00000001/Heat";
+  const child = "lib_00000001/Heat/Heat.mkv";
+  const harness = await mount({
+    as: users[1],
+    libraries: [{ ...library("lib_00000001", root), visibleTo: [BOB] }],
+    units: [{ key: folder, kind: "movie", relative: "Heat", sampleFiles: ["Heat/Heat.mkv"] }],
+    records: {
+      [folder]: { type: "movie", id: "tt-heat", source: "user", locked: true, name: "Heat", year: "1995" },
+      [child]: { type: "movie", id: "tt-ronin", source: "user", locked: true, name: "Ronin", year: "1998" },
+    },
+    suggestions: { [folder]: { type: "movie", id: "tt-suggested-heat", name: "Heat", score: 92 } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Heat/Heat.mkv")}`);
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { match: string; bound?: { id: string }; suggestion?: unknown };
+  assert.equal(body.match, "matched");
+  assert.equal(body.bound?.id, "tt-ronin");
+  assert.equal("suggestion" in body, false);
+});
+
+test("GET /api/library/identity hides a library an ordinary user cannot see", async (t) => {
+  const root = await makeRoot("stremio-curate-hidden-identity-");
+  await put(root, "Heat/Heat.mkv");
+  const harness = await mount({
+    as: users[1],
+    libraries: [{ ...library("lib_00000001", root), visibleTo: [] }],
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Heat/Heat.mkv")}`);
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.invalidPath");
+});
+
+test("GET /api/library/identity does not expose a suggestion to an ordinary user", async (t) => {
+  const root = await makeRoot("stremio-curate-user-suggestion-");
+  await put(root, "Heat/Heat.mkv");
+  const folder = "lib_00000001/Heat";
+  const harness = await mount({
+    as: users[1],
+    libraries: [{ ...library("lib_00000001", root), visibleTo: [BOB] }],
+    units: [{ key: folder, kind: "movie", relative: "Heat", sampleFiles: ["Heat/Heat.mkv"] }],
+    suggestions: { [folder]: { type: "movie", id: "tt-suggested-heat", name: "Heat", score: 92 } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Heat/Heat.mkv")}`);
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { match: string; suggestion?: unknown };
+  assert.equal(body.match, "unmatched");
+  assert.equal("suggestion" in body, false);
 });
 
 test("POST /api/library/match refuses a correction when the current binding has changed", async (t) => {

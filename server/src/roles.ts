@@ -75,6 +75,10 @@ export const USER_ALLOWED: Rule[] = [
   // Browsing and playing.
   { method: "GET", pattern: /^\/library$/ },
   { method: "GET", pattern: /^\/library\/browse$/ },
+  { method: "GET", pattern: /^\/library\/mosaic$/ },
+  { method: "GET", pattern: /^\/library\/gallery$/ },
+  // The handler scopes the answer to the viewer.
+  { method: "GET", pattern: /^\/library\/identity$/ },
   { method: "GET", pattern: /^\/library\/folders$/ },
   { method: "GET", pattern: /^\/library\/thumb$/ },
   { method: "GET", pattern: /^\/library\/next\/[^/]+$/ },
@@ -88,10 +92,11 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/browse$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/preview$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/mosaic$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/episodes$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/sources$/ },
-  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/artwork\/(Primary|Backdrop)$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/artwork\/(Primary|Backdrop|Thumb)$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/streams\/[^/]+\/[^/]+$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/ },
   // The account's own position and favourite for a verified remote item: personal, not management.
@@ -104,8 +109,11 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/search$/ },
   { method: "GET", pattern: /^\/searchable$/ },
   { method: "GET", pattern: /^\/meta\/[^/]+\/[^/]+$/ },
+  { method: "GET", pattern: /^\/meta\/[^/]+\/[^/]+\/extras$/ },
   { method: "GET", pattern: /^\/links\/[^/]+\/[^/]+$/ },
   { method: "GET", pattern: /^\/trailer\/[^/]+\/[^/]+$/ },
+  // Public intro timings for the player, keyed by catalogue id: nothing of any account.
+  { method: "GET", pattern: /^\/intro-segments$/ },
   { method: "GET", pattern: /^\/library\/links$/ },
   { method: "GET", pattern: /^\/library\/trailer$/ },
   { method: "GET", pattern: /^\/library\/title$/ },

@@ -797,7 +797,12 @@ class ApiClient(
 
   private suspend fun mappedBody(response: Response, started: Long): String {
     if (response.isSuccessful) return readBody(response)
-    AppLog.apiFailure(response.request.method, response.request.url.encodedPath, response.code, started)
+    AppLog.apiFailure(
+      response.request.method,
+      response.request.url.encodedPath,
+      response.code,
+      System.currentTimeMillis() - started,
+    )
     // A refusal carries the server's own English message plus the catalogue key it renders as;
     // the interface shows the message when it can explain a failure better than a generic line.
     val error = readBody(response).decodeOrNull<ErrorBody>()
