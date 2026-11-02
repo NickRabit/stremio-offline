@@ -27,9 +27,12 @@ import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.ProgressDto
+import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.VideoFactsDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.data.TitleRatingsDto
@@ -459,6 +462,36 @@ class DetailScreenTest {
     assertEquals(Triple("movie", "tt1", null), api.titleExtrasRequests.single())
     compose.onNodeWithText("Cast and crew").assertIsDisplayed()
     compose.onNodeWithText("Tom Hanks").assertExists()
+  }
+
+  @Test
+  fun `a bound library file names its library and what was read from it`() {
+    val path = "Films/It/It.mkv"
+    val api = FakeTvApi().apply {
+      libraryTitleValues[path] = LibraryTitleDto(type = "movie", id = "tt1", name = "It")
+      localStreamsValues["movie:tt1"] = listOf(
+        StreamDto(sourceId = "other", kind = "library", localPath = "Films/It/Other.mkv", libraryName = "Elsewhere"),
+        StreamDto(
+          sourceId = "it",
+          kind = "library",
+          localPath = path,
+          libraryName = "Films",
+          behaviorHints = BehaviorHintsDto(filename = "It.mkv", videoSize = 16_800_000_000.0),
+          videoFacts = VideoFactsDto(heightPixels = 2160, codec = "hevc", range = "dolbyVision"),
+          audioLanguages = listOf("en"),
+          subtitleLanguages = listOf("cs"),
+        ),
+      )
+    }
+    mount(detail(listOf(file(path))), sourcesApi = api)
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("2160p", substring = true) }.isSuccess
+    }
+
+    assertEquals(listOf(path), api.libraryTitleRequests)
+    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("Films · 16.8 GB", substring = true)
+    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("Dolby Vision", substring = true)
+    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("English", substring = true)
   }
 
   @Test

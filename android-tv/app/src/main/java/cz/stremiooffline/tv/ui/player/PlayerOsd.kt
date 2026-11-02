@@ -401,15 +401,16 @@ private fun Timeline(
     ) {
       Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f)).background(Tokens.Accent))
     }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // A chapter start is a thin gap cut into the bar itself, not a tick standing above it.
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
       chapters.forEach { chapter ->
         if (chapter.start > 0 && chapter.start < duration) {
           Box(
             Modifier
               .offset(x = maxWidth * (chapter.start / duration).toFloat())
               .width(2.dp)
-              .fillMaxHeight()
-              .background(Color.White.copy(alpha = 0.45f))
+              .height(if (focused) 6.dp else 4.dp)
+              .background(Color.Black.copy(alpha = 0.55f))
               .testTag(TAG_OSD_CHAPTER_MARK),
           )
         }
