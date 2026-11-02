@@ -217,6 +217,10 @@ JSON array, never by a separator, so map keys may hold any character. The
 opposite order (rows first) was rejected because a failed JSON write after the
 rows had committed could leave an account whose rows were already deleted.
 
+### Phase 7: artwork index, first-seen dates and external ids
+
+Migration 10 moved artwork recency, first-seen library file dates and external id links to `artwork_entries`, `library_seen`/`library_seen_libraries` and `external_ids`. Each writes only the keys that changed; the artwork index is still rebuilt from the thumbnails on disk at load, and the rows supply recency only.
+
 ### Backup
 
 Backups are offline in this phase: stop the server, then copy the entire data

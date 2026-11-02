@@ -5,6 +5,9 @@ import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { guardedMetadataBody } from "./outbound.js";
 import { readLimitedBody } from "./response-body.js";
+import type { AppDatabase, Statement } from "./storage/app-database.js";
+import { moveToMigrationBackup } from "./storage/hourly-counts.js";
+import { TrackedMap } from "./storage/tracked-map.js";
 
 /** Ids of the sites a title links to. IMDb is the catalogue id, the other two come
  *  from Wikidata. */
@@ -22,6 +25,9 @@ const NEGATIVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const IMDB_ID = /^tt\d+$/;
 const TMDB_ID = /^tmdb:(\d+)$/;
 const WRITE_INTERVAL_MS = 5_000;
+const DOMAIN = "externalIds";
+const UPSERT = "INSERT INTO external_ids (imdb, data) VALUES (?, ?) ON CONFLICT (imdb) DO UPDATE SET data = excluded.data";
+const DELETE = "DELETE FROM external_ids WHERE imdb = ?";
 
 /** The IMDb id an id carries, when it carries one. A catalogue chooses its own ids and an
  *  addon that groups titles by source prefixes them (`mpa:webshare-index:tt2709692`), so the
@@ -96,11 +102,14 @@ export interface ExternalIdStoreHooks {
  * one title at a time -- never in a loop over the library.
  */
 export class ExternalIdStore {
-  private entries: Record<string, CachedIds> = {};
+  private entries = new TrackedMap<string, CachedIds>();
   private inFlight = new Map<string, IdFlight>();
   private timer?: NodeJS.Timeout;
   private dirty = false;
   private saving: Promise<void> = Promise.resolve();
+  private queued = false;
+  private database?: AppDatabase;
+  private loaded = false;
   private readonly file: string;
   private readonly writeState: (file: string, data: string) => Promise<void>;
 
@@ -109,23 +118,39 @@ export class ExternalIdStore {
     this.writeState = hooks.writeState ?? writeAtomic;
   }
 
+  attachDatabase(database: AppDatabase): void {
+    if (this.loaded) throw new Error("The external id database must be attached before load.");
+    this.database = database;
+  }
+
   /** Reads data/external-ids.json. Never throws: a missing or broken file starts empty. */
   async load(): Promise<void> {
+    this.loaded = true;
+    this.entries.clear();
+    this.entries.forget(this.entries.snapshot());
+    if (this.database) {
+      await this.loadDatabase(this.database);
+      return;
+    }
     const raw = await readFile(this.file, "utf8").catch(() => undefined);
     if (raw === undefined) return;
     try {
       const parsed = JSON.parse(raw) as Partial<CacheFile>;
       const entries = parsed.entries;
-      this.entries = entries && typeof entries === "object" && !Array.isArray(entries) ? entries : {};
+      if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+        for (const [imdbId, cached] of Object.entries(entries)) this.entries.set(imdbId, cached);
+      }
+      this.entries.forget(this.entries.snapshot());
     } catch (error) {
-      this.entries = {};
+      this.entries.clear();
+      this.entries.forget(this.entries.snapshot());
       log("WARN", "External ids could not be read", { reason: reasonOf(error) });
     }
   }
 
   /** Only what is already on disk, never a request: search may read it while it runs. */
   cachedIds(imdbId: string): ExternalIds | undefined {
-    const cached = IMDB_ID.test(imdbId) ? this.entries[imdbId] : undefined;
+    const cached = IMDB_ID.test(imdbId) ? this.entries.get(imdbId) : undefined;
     return cached ? withoutEmpty(cached) : undefined;
   }
 
@@ -133,7 +158,7 @@ export class ExternalIdStore {
    *  nothing, null when the lookup itself failed. */
   async ids(imdbId: string, signal?: AbortSignal): Promise<ExternalIds | null> {
     if (!IMDB_ID.test(imdbId)) return null;
-    const cached = this.entries[imdbId];
+    const cached = this.entries.get(imdbId);
     if (cached) {
       const ids = withoutEmpty(cached);
       if (Object.keys(ids).length > 0 || Date.now() - Date.parse(cached.at) < NEGATIVE_TTL_MS) return ids;
@@ -156,7 +181,7 @@ export class ExternalIdStore {
       try {
         const found = await this.lookup(imdbId, flight.controller.signal);
         if (!found || flight.abandoned || flight.controller.signal.aborted) return null;
-        this.entries[imdbId] = { ...found, at: new Date().toISOString() };
+        this.entries.set(imdbId, { ...found, at: new Date().toISOString() });
         this.changed();
         return found;
       } catch (error) {
@@ -239,11 +264,14 @@ export class ExternalIdStore {
     for (;;) {
       if (this.timer) clearTimeout(this.timer);
       this.timer = undefined;
-      if (this.dirty) {
+      // A failed write leaves its entries dirty without setting `dirty`, so they are written here
+      // too; a new change during the write is what loops, never a write that keeps failing.
+      if (this.dirty || this.entries.hasDirty()) {
         this.dirty = false;
-        this.queueSave();
+        await this.writeOnce();
+      } else {
+        await this.saving.catch(() => undefined);
       }
-      await this.saving;
       if (!this.dirty) return;
     }
   }
@@ -255,21 +283,167 @@ export class ExternalIdStore {
       this.timer = undefined;
       if (!this.dirty) return;
       this.dirty = false;
-      this.queueSave();
+      void this.queueSave();
     }, WRITE_INTERVAL_MS);
     this.timer.unref?.();
   }
 
+  private async queueSave(): Promise<void> {
+    await this.writeOnce();
+  }
+
   /** One write at a time: two lookups finishing together would share the temporary file. */
-  private queueSave(): void {
-    const data = JSON.stringify({ version: 1, entries: this.entries } satisfies CacheFile, null, 2);
-    this.saving = this.saving.then(async () => {
-      try {
-        await this.writeState(this.file, data);
-      } catch (error) {
+  private writeOnce(): Promise<void> {
+    if (this.queued) return this.saving;
+    this.queued = true;
+    const run = this.saving.catch(() => undefined)
+      .then(async () => {
+        this.queued = false;
+        if (this.database) {
+          await this.writeDatabase(this.database);
+          return;
+        }
+        const snapshot = this.entries.snapshot();
+        await this.writeState(this.file, JSON.stringify({
+          version: 1,
+          entries: Object.fromEntries(this.entries),
+        } satisfies CacheFile, null, 2));
+        this.entries.forget(snapshot);
+      })
+      .catch((error: unknown) => {
         log("WARN", "External ids could not be saved", { file: path.basename(this.file), reason: reasonOf(error) });
+        // The entries stay dirty; try again on the usual interval rather than wait for a new lookup.
+        if (!this.timer) {
+          this.timer = setTimeout(() => {
+            this.timer = undefined;
+            void this.queueSave();
+          }, WRITE_INTERVAL_MS);
+          this.timer.unref?.();
+        }
+      });
+    this.saving = run;
+    return run;
+  }
+
+  private async writeDatabase(database: AppDatabase): Promise<void> {
+    const snapshot = this.entries.snapshot();
+    const statements: Statement[] = [];
+    for (const imdbId of snapshot.keys()) {
+      const entry = this.entries.get(imdbId);
+      statements.push(entry
+        ? { sql: UPSERT, params: [imdbId, JSON.stringify(entry)] }
+        : { sql: DELETE, params: [imdbId] });
+    }
+    if (statements.length) {
+      await database.batch(statements);
+      this.entries.forget(snapshot);
+    }
+  }
+
+  private markerStatement(marker: Record<string, unknown>): Statement {
+    return {
+      sql: "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+      params: [`domain.${DOMAIN}`, JSON.stringify(marker)],
+    };
+  }
+
+  private async moveJsonAside(database: AppDatabase, suffix: string): Promise<void> {
+    await moveToMigrationBackup(
+      this.file,
+      path.dirname(database.info.file),
+      `external-ids-${suffix}.json`,
+    );
+  }
+
+  private async loadDatabase(database: AppDatabase): Promise<void> {
+    const marker = await database.get("SELECT value FROM meta WHERE key = ?", [`domain.${DOMAIN}`]);
+    if (marker) {
+      const rows = await database.all<{ imdb: string; data: string }>("SELECT imdb, data FROM external_ids");
+      for (const row of rows) {
+        if (!IMDB_ID.test(row.imdb)) continue;
+        try {
+          const entry = JSON.parse(row.data) as CachedIds;
+          if (entry && typeof entry === "object" && !Array.isArray(entry) && typeof entry.at === "string") {
+            this.entries.set(row.imdb, entry);
+          }
+        } catch {
+          // A malformed cache row is rebuilt by the next lookup.
+        }
       }
-    });
+      this.entries.forget(this.entries.snapshot());
+      await this.moveJsonAside(database, String(Date.now()));
+      return;
+    }
+
+    let raw: string;
+    try {
+      raw = await readFile(this.file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        const marker = this.markerStatement({
+          importedAt: Date.now(),
+          source: path.basename(this.file),
+          count: 0,
+        });
+        await database.batch([marker]);
+        return;
+      }
+      // A file that cannot be read now (permissions, a busy disk) may well be readable later:
+      // it stays where it is and no marker is written, so the next start imports it. Lookups
+      // until then are written as rows, and the import keeps those newer rows.
+      log("WARN", "External ids could not be read, the import waits for the next start", { reason: reasonOf(error) });
+      return;
+    }
+
+    let parsed: Partial<CacheFile>;
+    try {
+      parsed = JSON.parse(raw) as Partial<CacheFile>;
+      if (!parsed || typeof parsed !== "object" || !parsed.entries
+        || typeof parsed.entries !== "object" || Array.isArray(parsed.entries)) {
+        throw new SyntaxError("The external id cache is not an entries object.");
+      }
+    } catch (error) {
+      log("WARN", "External ids could not be read", { reason: reasonOf(error) });
+      await this.markUnreadable(database, error, false);
+      return;
+    }
+
+    // A number, not an ISO time: the backup file name must not carry ':' (Windows refuses it).
+    const importedAt = Date.now();
+    const statements: Statement[] = [];
+    let count = 0;
+    // Rows already there were written after an earlier start could not read this file; they
+    // are newer than it, so the import never overwrites them.
+    const newer = new Map((await database.all<{ imdb: string; data: string }>("SELECT imdb, data FROM external_ids"))
+      .map((row) => [row.imdb, row.data]));
+    for (const [imdbId, data] of newer) {
+      if (!IMDB_ID.test(imdbId)) continue;
+      try { this.entries.set(imdbId, JSON.parse(data) as CachedIds); } catch { /* rebuilt by a lookup */ }
+    }
+    for (const [imdbId, entry] of Object.entries(parsed.entries)) {
+      if (!IMDB_ID.test(imdbId) || !entry || typeof entry !== "object" || newer.has(imdbId)) continue;
+      statements.push({ sql: UPSERT, params: [imdbId, JSON.stringify(entry)] });
+      this.entries.set(imdbId, entry);
+      count += 1;
+    }
+    statements.push(this.markerStatement({
+      importedAt,
+      source: path.basename(this.file),
+      count,
+    }));
+    await database.batch(statements);
+    this.entries.forget(this.entries.snapshot());
+    await this.moveJsonAside(database, String(importedAt));
+  }
+
+  private async markUnreadable(database: AppDatabase, error: unknown, logRead = true): Promise<void> {
+    const importedAt = Date.now();
+    if (logRead) log("WARN", "External ids could not be read", { reason: reasonOf(error) });
+    await this.moveJsonAside(database, `unreadable-${importedAt}`);
+    const marker = this.markerStatement({ importedAt, source: "unreadable", count: 0 });
+    await database.batch([marker]);
+    this.entries.clear();
+    this.entries.forget(this.entries.snapshot());
   }
 }
 
