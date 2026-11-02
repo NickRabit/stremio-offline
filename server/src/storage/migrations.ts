@@ -43,4 +43,10 @@ export const MIGRATIONS: readonly Migration[] = [
       "CREATE TABLE download_jobs (id TEXT PRIMARY KEY, position INTEGER NOT NULL, data TEXT NOT NULL) STRICT",
     ],
   },
+  {
+    version: 7,
+    statements: [
+      "CREATE TABLE follows (id TEXT PRIMARY KEY, position INTEGER NOT NULL, data TEXT NOT NULL) STRICT",
+    ],
+  },
 ];

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { rulesAudioMode } from "./download-rules.js";
 import type { DownloadSelection } from "./downloads.js";
@@ -22,6 +22,9 @@ import type { StoredSourceProfile } from "./store.js";
 import type { MetaItem } from "./types.js";
 import type { FollowDefaults } from "./users.js";
 import { sourceAdmissionError } from "./routes/source-profile-selection.js";
+import { readStateFile } from "./state-file.js";
+import type { AppDatabase, Statement } from "./storage/app-database.js";
+import { moveToMigrationBackup } from "./storage/hourly-counts.js";
 
 export interface FollowEpisode {
   key: string;
@@ -151,6 +154,8 @@ const RECONCILE_HORIZON_MS = 60 * DAY_MS;
 const RECONCILE_SEASON_LIMIT = 3;
 /** Without TMDB, a shared date counts as a placeholder only while it is still ahead. */
 const PLACEHOLDER_WINDOW_MS = 14 * DAY_MS;
+const FOLLOW_STORE_DOMAIN = "follows";
+const FOLLOW_UPSERT = "INSERT INTO follows (id, position, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET position = excluded.position, data = excluded.data";
 
 const number = (value: unknown): number | undefined => {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
@@ -834,10 +839,14 @@ const sanitizeLoadedFollow = (
   }
 };
 
-/** The followed series, on disk in `<dataDir>/follows.json`. A file that cannot be read
- *  is left where it is: writing over it would throw away series nobody can follow again. */
+/** The followed series, in SQLite when attached and otherwise in `<dataDir>/follows.json`.
+ *  An unreadable source is left where it is: writing over it would throw away series nobody
+ *  can follow again. */
 export class FollowStore {
   private follows: Follow[] = [];
+  private database?: AppDatabase;
+  private loaded = false;
+  private persisted = new Map<string, { position: number; json: string }>();
   private unreadable = false;
   private chain: Promise<unknown> = Promise.resolve();
   private readonly file: string;
@@ -846,33 +855,163 @@ export class FollowStore {
 
   get unavailable(): boolean { return this.unreadable; }
 
-  async load(sourceProfiles: readonly StoredSourceProfile[] = []): Promise<void> {
-    await mkdir(path.dirname(this.file), { recursive: true });
-    let raw: string;
+  attachDatabase(database: AppDatabase): void {
+    if (this.loaded) throw new Error("The follow store database must be attached before load.");
+    this.database = database;
+  }
+
+  private markUnreadable(message: string, file: string, error: unknown): void {
+    this.unreadable = true;
+    log("ERROR", message, {
+      file,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  private markerStatement(marker: Record<string, unknown>): Statement {
+    return {
+      sql: "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+      params: [`domain.${FOLLOW_STORE_DOMAIN}`, JSON.stringify(marker)],
+    };
+  }
+
+  private async moveFileAside(database: AppDatabase, suffix: string): Promise<void> {
+    await moveToMigrationBackup(
+      this.file,
+      path.dirname(database.info.file),
+      `follows-${suffix}.json`,
+    );
+  }
+
+  private async loadDatabase(
+    database: AppDatabase,
+    sourceProfiles: readonly StoredSourceProfile[],
+  ): Promise<boolean> {
+    let marker: { value: string } | undefined;
     try {
-      raw = await readFile(this.file, "utf8");
+      marker = await database.get<{ value: string }>(
+        "SELECT value FROM meta WHERE key = ?",
+        [`domain.${FOLLOW_STORE_DOMAIN}`],
+      );
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.follows = [];
-        this.unreadable = false;
-        return;
+      this.markUnreadable("The followed series database could not be read", this.file, error);
+      return false;
+    }
+
+    if (marker) {
+      try {
+        const rows = await database.all<{ id: string; position: number; data: string }>(
+          "SELECT id, position, data FROM follows ORDER BY position",
+        );
+        const follows = rows.map((row) => {
+          if (typeof row.id !== "string" || !Number.isSafeInteger(row.position) || typeof row.data !== "string") {
+            throw new Error("A followed series row is malformed.");
+          }
+          const follow = JSON.parse(row.data) as unknown;
+          if (!follow || typeof follow !== "object" || Array.isArray(follow) || (follow as { id?: unknown }).id !== row.id) {
+            throw new Error("A followed series row does not contain its follow.");
+          }
+          sanitizeLoadedFollow(follow as Follow, sourceProfiles);
+          return follow as Follow;
+        });
+        this.follows = follows;
+        this.persisted = new Map(rows.map((row) => [row.id, { position: row.position, json: row.data }]));
+      } catch (error) {
+        this.markUnreadable("The followed series database could not be read", this.file, error);
+        return false;
+      }
+      await this.moveFileAside(database, String(Date.now()));
+      return true;
+    }
+
+    const state = await readStateFile(this.file);
+    if (state.kind === "unreadable") {
+      this.markUnreadable("The followed series file could not be read, it is left as it is", this.file, state.error);
+      return false;
+    }
+    if (state.kind === "absent") {
+      try {
+        const markerStatement = this.markerStatement({
+          importedAt: Date.now(),
+          source: path.basename(this.file),
+          count: 0,
+        });
+        await database.run(markerStatement.sql, markerStatement.params);
+      } catch (error) {
+        this.markUnreadable("The followed series could not be imported", this.file, error);
+        return false;
       }
       this.follows = [];
-      this.unreadable = true;
-      log("ERROR", "The followed series file could not be read, it is left as it is", { file: this.file, error: String(error) });
-      return;
+      this.persisted.clear();
+      return true;
+    }
+
+    let follows: Follow[];
+    try {
+      const parsed = JSON.parse(state.raw) as FollowFile;
+      if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !Array.isArray(parsed.follows)) {
+        throw new Error("not a version 1 follow file");
+      }
+      for (const follow of parsed.follows) sanitizeLoadedFollow(follow, sourceProfiles);
+      follows = parsed.follows;
+    } catch (error) {
+      this.markUnreadable("The followed series file could not be read, it is left as it is", this.file, error);
+      return false;
+    }
+
+    const importedAt = Date.now();
+    const statements: Statement[] = follows.map((follow, position) => ({
+      sql: FOLLOW_UPSERT,
+      params: [follow.id, position, JSON.stringify(follow)],
+    }));
+    statements.push(this.markerStatement({
+      importedAt,
+      source: path.basename(this.file),
+      count: follows.length,
+    }));
+    try {
+      await database.batch(statements);
+    } catch (error) {
+      this.markUnreadable("The followed series could not be imported", this.file, error);
+      return false;
+    }
+    this.follows = follows;
+    this.persisted = new Map(follows.map((follow, position) => [follow.id, { position, json: JSON.stringify(follow) }]));
+    await this.moveFileAside(database, String(importedAt));
+    return true;
+  }
+
+  private async loadFile(sourceProfiles: readonly StoredSourceProfile[]): Promise<boolean> {
+    const state = await readStateFile(this.file);
+    if (state.kind === "unreadable") {
+      this.markUnreadable("The followed series file could not be read, it is left as it is", this.file, state.error);
+      return false;
+    }
+    if (state.kind === "absent") {
+      this.follows = [];
+      this.persisted.clear();
+      return true;
     }
     try {
-      const parsed = JSON.parse(raw) as FollowFile;
+      const parsed = JSON.parse(state.raw) as FollowFile;
       if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !Array.isArray(parsed.follows)) throw new Error("not a version 1 follow file");
       for (const follow of parsed.follows) sanitizeLoadedFollow(follow, sourceProfiles);
       this.follows = parsed.follows;
-      this.unreadable = false;
+      this.persisted.clear();
+      return true;
     } catch (error) {
-      this.follows = [];
-      this.unreadable = true;
-      log("ERROR", "The followed series file could not be read, it is left as it is", { file: this.file, error: String(error) });
+      this.markUnreadable("The followed series file could not be read, it is left as it is", this.file, error);
+      return false;
     }
+  }
+
+  async load(sourceProfiles: readonly StoredSourceProfile[] = []): Promise<void> {
+    this.loaded = true;
+    await mkdir(path.dirname(this.file), { recursive: true });
+    const loaded = this.database
+      ? await this.loadDatabase(this.database, sourceProfiles)
+      : await this.loadFile(sourceProfiles);
+    if (!loaded) this.follows = [];
   }
 
   listForOwner(ownerUserId: string): Follow[] {
@@ -997,10 +1136,33 @@ export class FollowStore {
     if (this.unreadable) throw new AppError("The followed series could not be read.", "err.followsUnreadable");
   }
 
+  async flush(): Promise<void> {
+    await this.persist();
+  }
+
   /** One chain, so writes land in the order they were asked for, and the caller waits for
    *  its own write rather than for the previous one to settle. */
   private persist(): Promise<void> {
     const next = this.chain.then(async () => {
+      if (this.unreadable) return;
+      if (this.database) {
+        const statements: Statement[] = [];
+        const nextPersisted = new Map<string, { position: number; json: string }>();
+        for (const [position, follow] of this.follows.entries()) {
+          const json = JSON.stringify(follow);
+          nextPersisted.set(follow.id, { position, json });
+          const stored = this.persisted.get(follow.id);
+          if (!stored || stored.position !== position || stored.json !== json) {
+            statements.push({ sql: FOLLOW_UPSERT, params: [follow.id, position, json] });
+          }
+        }
+        for (const id of this.persisted.keys()) {
+          if (!nextPersisted.has(id)) statements.push({ sql: "DELETE FROM follows WHERE id = ?", params: [id] });
+        }
+        if (statements.length) await this.database.batch(statements);
+        this.persisted = nextPersisted;
+        return;
+      }
       await writeFile(`${this.file}.tmp`, JSON.stringify({ version: 1, follows: this.follows }), { mode: 0o600 });
       await renameWithRetry(`${this.file}.tmp`, this.file);
     });

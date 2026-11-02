@@ -187,7 +187,10 @@ await externalIds.load();
 let database: AppDatabase | undefined;
 try {
   database = await openAppDatabase({ dataDir: process.env.DATA_DIR ?? "/data" });
-  if (database) tmdbIds.attachDatabase(database);
+  if (database) {
+    tmdbIds.attachDatabase(database);
+    followStore.attachDatabase(database);
+  }
 } catch (error) {
   log("ERROR", "The application database could not be opened", {
     code: error instanceof StorageError ? error.code : "sql",
@@ -2909,7 +2912,7 @@ const shutdown = createShutdown({
     try {
       if (database) await queue.stop();
     } finally {
-      await Promise.allSettled([stats.flush(), stats.activity.flush(), images.flush(), imageStats.flush(), providerStats.flush(), libraryFileFacts.flush(), tmdbIds.flush()]);
+      await Promise.allSettled([...(database ? [followStore.flush()] : []), stats.flush(), stats.activity.flush(), images.flush(), imageStats.flush(), providerStats.flush(), libraryFileFacts.flush(), tmdbIds.flush()]);
       await database?.close();
     }
   }, () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
