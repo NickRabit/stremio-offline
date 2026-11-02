@@ -643,3 +643,30 @@ test("a change to only the rows writes no journal and no state.json", async (t) 
   await store.update((state) => { state.userData![ADA]!.favorites = ["lib_00000001/Other.mkv"]; });
   assert.equal(writer.writes.length, writesBefore);
 });
+
+test("two keys that differ only after a NUL both survive a restart", async (t) => {
+  const fixtureState = await fixture(t);
+  const state = seededState();
+  state.userData![ADA]!.watchlist = {
+    "movie:tt123": { type: "movie", id: "tt123", name: "One", addedAt: CREATED },
+    "movie:tt123\u0000alt": { type: "movie", id: "tt123\u0000alt", name: "Two", addedAt: CREATED },
+  };
+  await fixtureState.seed(state);
+  const store = new Store(fixtureState.dataDir);
+  store.attachDatabase(fixtureState.database);
+  await store.load();
+
+  const restarted = new Store(fixtureState.dataDir);
+  restarted.attachDatabase(await fixtureState.reopen());
+  await restarted.load();
+  const watchlist = restarted.userData(ADA).watchlist as Record<string, { name: string }>;
+  assert.deepEqual(Object.keys(watchlist).sort(), ["movie:tt123", "movie:tt123\u0000alt"]);
+  assert.equal(watchlist["movie:tt123\u0000alt"]?.name, "Two");
+  // And nothing is rewritten for them: both rows match what memory holds.
+  const batches: Statement[][] = [];
+  const again = new Store(fixtureState.dataDir);
+  again.attachDatabase(observingBatch(await fixtureState.reopen(), batches));
+  await again.load();
+  await again.update((next) => { next.settings.logLevel = "DEBUG"; });
+  assert.equal(batches.length, 0);
+});

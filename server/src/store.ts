@@ -469,9 +469,16 @@ export class Store {
       delete (this.state as unknown as Record<string, unknown>)[PERSONAL_JOURNAL];
       journalReplayed = true;
     }
-    const stored = await database.all<{ user_id: string; domain: string; key: string; data: string }>(
-      "SELECT user_id, domain, key, data FROM personal_rows ORDER BY user_id, domain, key",
+    // The key is read as bytes: node:sqlite returns TEXT only up to its first NUL, and a map key
+    // may hold one, so two different keys would come back as the same string.
+    const raw = await database.all<{ user_id: string; domain: string; key: Uint8Array | string; data: string }>(
+      "SELECT user_id, domain, CAST(key AS BLOB) AS key, data FROM personal_rows ORDER BY user_id, domain, key",
     );
+    const utf8 = new TextDecoder("utf-8", { fatal: true });
+    const stored = raw.map((row) => ({
+      ...row,
+      key: typeof row.key === "string" ? row.key : utf8.decode(row.key),
+    }));
     const users = this.state.userData ?? {};
     const known = new Set(Object.keys(users));
     const byUser = new Map<string, Map<PersonalDomain, Map<string, unknown>>>();
