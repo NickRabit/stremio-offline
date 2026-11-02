@@ -472,11 +472,12 @@ export class StatsLog {
       statements.push({ sql: INSERT, params: trafficParams(seq, event) });
     }
 
-    if (trim > 0) {
-      statements.push({
-        sql: "DELETE FROM traffic_events WHERE seq IN (SELECT seq FROM traffic_events ORDER BY seq LIMIT ?)",
-        params: [trim],
-      });
+    // The window is kept by time, as in memory: seed() can append older history with higher
+    // sequence numbers, so the events that fell out are deleted by their own sequence numbers.
+    for (const event of compaction.events.slice(0, trim)) {
+      const origin = compaction.origins.get(event) ?? event;
+      const seq = replacements.get(event) ?? written.get(origin) ?? this.seqs.get(origin);
+      if (seq !== undefined) statements.push({ sql: "DELETE FROM traffic_events WHERE seq = ?", params: [seq] });
     }
 
     if (statements.length) await database.batch(statements);
@@ -563,7 +564,7 @@ export class StatsLog {
 
   private async loadRows(database: AppDatabase): Promise<void> {
     const rows = await database.all<TrafficRow>(
-      "SELECT seq, at, source, provider, addon_key, addon_name, title, kind, bytes, items FROM traffic_events ORDER BY seq",
+      "SELECT seq, at, source, provider, addon_key, addon_name, title, kind, bytes, items FROM traffic_events ORDER BY at, seq",
     );
     this.events = rows.map((row) => {
       const event: TrafficEvent = {

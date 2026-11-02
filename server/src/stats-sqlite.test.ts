@@ -237,3 +237,22 @@ test("trimming with a small limit deletes only the oldest rows", async (t) => {
     { seq: 4, bytes: 40 },
   ]);
 });
+
+test("history seeded after the import does not push a newer event out of the trimmed window", async (t) => {
+  const { file, database, open } = await fixture(t, 2);
+  const now = Date.now();
+  await writeFile(file, JSON.stringify([
+    event(now - 2 * HOUR, 10, { title: "Mid" }),
+    event(now - HOUR, 20, { title: "New" }),
+  ]));
+  const stats = open();
+  stats.attachDatabase(database);
+  await stats.load();
+
+  // Older queue history arrives with the next sequence number but the oldest time.
+  assert.equal(await stats.seed([event(now - 3 * HOUR, 5, { title: "Ancient" })]), 1);
+  await stats.flush();
+
+  const rows = await database.all<{ title: string }>("SELECT title FROM traffic_events ORDER BY at");
+  assert.deepEqual(rows.map((row) => row.title), ["Mid", "New"], "the window is the two newest by time");
+});
