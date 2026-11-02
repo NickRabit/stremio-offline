@@ -92,8 +92,10 @@ import cz.stremiooffline.tv.ui.search.toPreset
 import cz.stremiooffline.tv.ui.settings.SettingsRoute
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class Section(val route: String) {
   Search("search"),
@@ -183,6 +185,7 @@ fun Shell(
   val sectionStates = rememberSaveableStateHolder()
 
   var detail by remember { mutableStateOf<DetailData?>(null) }
+  var libraryDetailResolving by remember { mutableStateOf(false) }
   var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
   val catalogStack = remember { CatalogDetailStack() }
   var catalogReturnOrigin by remember { mutableStateOf<CatalogReturnOrigin?>(null) }
@@ -262,6 +265,33 @@ fun Shell(
     clearCatalogHistory()
     catalogDetail = args
   }
+  fun openLibraryDetail(data: DetailData) {
+    if (libraryDetailResolving) return
+    val firstPath = data.files.firstOrNull()?.path
+    if (firstPath == null) {
+      detail = data
+      return
+    }
+    libraryDetailResolving = true
+    hintScope.launch {
+      try {
+        val binding = try {
+          withTimeoutOrNull(2_000) { api.libraryTitle(firstPath) }
+        } catch (cancelled: CancellationException) {
+          throw cancelled
+        } catch (_: Exception) {
+          null
+        }
+        if (binding != null && binding.type.isNotBlank() && binding.id.isNotBlank()) {
+          openCatalog(libraryCatalogueArgs(data, binding))
+        } else {
+          detail = data
+        }
+      } finally {
+        libraryDetailResolving = false
+      }
+    }
+  }
   fun openPersonSearch(name: String) {
     detail = null
     remoteDetail = null
@@ -327,7 +357,7 @@ fun Shell(
       when (section) {
         Section.Library -> LibraryRoute(
           api = api,
-          onOpenDetail = { detail = it },
+          onOpenDetail = ::openLibraryDetail,
           onOpenRemoteItem = { libraryId, libraryName, provider, item ->
             remoteDetail = RemoteDetailData(libraryId = libraryId, libraryName = libraryName, provider = provider, item = item)
           },
@@ -355,13 +385,13 @@ fun Shell(
           },
           onOpenCatalog = ::openCatalog,
           onOpenRemote = { remoteDetail = it },
-          onOpenDetail = { detail = it },
+          onOpenDetail = ::openLibraryDetail,
           restoreToken = returnToken,
           refreshToken = resumeRefreshToken,
         )
         Section.Favorites -> FavoritesRoute(
           api = api,
-          onOpenDetail = { detail = it },
+          onOpenDetail = ::openLibraryDetail,
           onOpenCatalog = ::openCatalog,
           onOpenRemote = { remoteDetail = it },
           onOpenLibrary = { path ->
@@ -446,7 +476,7 @@ fun Shell(
                 libraryPush = action.path
                 shellState.pick(Section.Library)
               }
-              is HomeAction.OpenDetail -> detail = action.detail
+              is HomeAction.OpenDetail -> openLibraryDetail(action.detail)
               is HomeAction.OpenCatalog -> openCatalog(action.args)
               is HomeAction.OpenRemote -> remoteDetail = action.data
             }

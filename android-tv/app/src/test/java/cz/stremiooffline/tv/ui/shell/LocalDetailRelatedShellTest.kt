@@ -29,6 +29,8 @@ import cz.stremiooffline.tv.ui.detail.relatedTitleTag
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
+import androidx.compose.ui.test.onAllNodesWithText
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -72,7 +74,7 @@ class LocalDetailRelatedShellTest {
         total = 1,
         pending = false,
       )
-      libraryTitleValues[path] = LibraryTitleDto(type = "movie", id = "tt1", name = "It")
+      libraryTitleValues[path] = LibraryTitleDto(type = "movie", id = "tt1", name = "It, the film")
       titleExtrasValue = TitleExtrasDto(
         related = listOf(RelatedTitleDto(type = "movie", id = "tt2", name = "Related")),
       )
@@ -95,12 +97,15 @@ class LocalDetailRelatedShellTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogPrimary).assertExists()
+    assertTrue("the related title is on screen, not the film", compose.onAllNodesWithText("It, the film").fetchSemanticsNodes().isEmpty())
     assertEquals("movie:tt1", api.titleExtrasRequests.first().let { "${it.first}:${it.second}" })
 
     scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
     compose.waitForIdle()
 
-    compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
-    compose.onNodeWithTag(TagDetailPrimary).assertExists()
+    // Back leaves the related title and returns to the bound file's own catalogue detail.
+    compose.onNodeWithTag(TagCatalogPrimary).assertExists()
+    compose.onNodeWithTag(TagDetailPrimary).assertDoesNotExist()
+    assertTrue("the film's own detail is back", compose.onAllNodesWithText("It, the film").fetchSemanticsNodes().isNotEmpty())
   }
 }

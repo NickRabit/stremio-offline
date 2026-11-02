@@ -135,16 +135,53 @@ fun heroDescription(card: HomeCard, meta: MetaDto?): String? =
 /** Where OK on a card goes, for Home and for Continue watching alike: a continue card opens the
  *  same detail as its non-resume counterpart, and the other kinds keep their existing destination. */
 fun actionFor(card: HomeCard): HomeAction = when (card) {
-  is HomeCard.ResumeFile -> fileDetail(card.path, card.title, card.season, card.episode, card.poster, card.wide)
+  is HomeCard.ResumeFile -> card.identity?.takeIf { it.id.isNotBlank() }?.let { identity ->
+    val movie = identity.type == "movie"
+    HomeAction.OpenCatalog(
+      CatalogDetailArgs(
+        meta = MetaDto(
+          id = identity.id,
+          type = identity.type,
+          name = if (movie) card.title else "",
+          poster = if (movie) card.poster else null,
+        ),
+        addonName = "",
+        type = identity.type,
+        episode = if (identity.type == "series") {
+          card.season?.let { season ->
+            card.episode?.let { episode ->
+              ResumeEpisode(
+                ProgressKey.of("series", identity.id, "${identity.id}:$season:$episode"),
+                season,
+                episode,
+              )
+            }
+          }
+        } else null,
+        forgetKeys = card.forgetKeys,
+        preferredLocalPath = card.path,
+      ),
+    )
+  } ?: fileDetail(card.path, card.title, card.season, card.episode, card.poster, card.wide)
   is HomeCard.Completed -> fileDetail(card.path, card.title, card.season, card.episode, card.poster, card.wide)
   is HomeCard.Recent -> fileDetail(card.path, card.label, card.season, card.episode, card.poster, card.wide)
   is HomeCard.Favorite -> when {
-    card.title != null -> titleDetail(card.title, card.label, card.poster)
+    card.title != null -> titleDetail(
+      card.title,
+      card.label,
+      card.poster,
+      card.path.takeIf { card.itemKind == "file" },
+    )
     card.itemKind == "folder" -> HomeAction.OpenLibrary(card.path)
     else -> play(card.path, card.label)
   }
   is HomeCard.Tonight -> when {
-    card.title != null -> titleDetail(card.title, card.label, card.poster)
+    card.title != null -> titleDetail(
+      card.title,
+      card.label,
+      card.poster,
+      card.path.takeIf { card.itemKind == "file" },
+    )
     card.itemKind == "folder" -> HomeAction.OpenLibrary(card.path)
     else -> play(card.path, card.label)
   }
@@ -238,11 +275,17 @@ private fun fileDetail(
 )
 
 /** The catalogue detail of the title a bound card stands for, named by the card's own label. */
-private fun titleDetail(title: TitleRefDto, label: String, poster: String?): HomeAction.OpenCatalog =
+private fun titleDetail(
+  title: TitleRefDto,
+  label: String,
+  poster: String?,
+  preferredLocalPath: String?,
+): HomeAction.OpenCatalog =
   HomeAction.OpenCatalog(
     CatalogDetailArgs(
       meta = MetaDto(id = title.id, type = title.type, name = label, poster = poster),
       addonName = "",
       type = title.type,
+      preferredLocalPath = preferredLocalPath,
     ),
   )
