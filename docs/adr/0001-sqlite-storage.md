@@ -137,6 +137,8 @@ rows for evicted or trimmed keys in one batch. The one-time JSON imports use the
 `migration-backup/`. Both are caches: an unreadable JSON file or table row is
 discarded and rebuilt by probing or querying the source again.
 
+Migration 10 moved artwork recency, first-seen library file dates and external id links to `artwork_entries`, `library_seen`/`library_seen_libraries` and `external_ids`.
+
 ### Phase 3: personal state
 
 The five hot personal collections -- favourites, progress, the watchlist,

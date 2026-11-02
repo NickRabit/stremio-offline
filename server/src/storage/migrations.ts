@@ -62,4 +62,13 @@ export const MIGRATIONS: readonly Migration[] = [
       "CREATE TABLE personal_rows (user_id TEXT NOT NULL, domain TEXT NOT NULL, key TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (user_id, domain, key)) STRICT, WITHOUT ROWID",
     ],
   },
+  {
+    version: 10,
+    statements: [
+      "CREATE TABLE artwork_entries (key TEXT PRIMARY KEY, bytes INTEGER NOT NULL, at REAL NOT NULL) STRICT, WITHOUT ROWID",
+      "CREATE TABLE library_seen (library_id TEXT NOT NULL, path TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (library_id, path)) STRICT, WITHOUT ROWID",
+      "CREATE TABLE library_seen_libraries (library_id TEXT PRIMARY KEY, baseline_at TEXT NOT NULL) STRICT, WITHOUT ROWID",
+      "CREATE TABLE external_ids (imdb TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT, WITHOUT ROWID",
+    ],
+  },
 ];
