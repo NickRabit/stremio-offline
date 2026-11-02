@@ -89,6 +89,7 @@ class RemotePlaybackReportTest {
       addonKey: String?,
       remote: RemoteItemContext?,
       stableKey: String?,
+      final: Boolean,
     ) {
       saves += key
     }

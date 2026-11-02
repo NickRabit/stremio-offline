@@ -127,6 +127,7 @@ const transportFor = (server: FakeServer): MediaServerTransport => ({
 interface Harness {
   base: string;
   store: Store;
+  stateWrites: number;
   server: FakeServer;
   manager: MediaServerManager;
   playbackReports: PlaybackReport[];
@@ -145,7 +146,13 @@ const mount = async (): Promise<Harness> => {
   }));
   const keyFile = path.join(dir, "secret.key");
   await writeFile(keyFile, randomBytes(32), { mode: 0o600 });
-  const store = new Store(dir, dir);
+  let stateWrites = 0;
+  const store = new Store(dir, dir, {
+    writeState: async (file, data) => {
+      stateWrites += 1;
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
   await store.load();
   const server = new FakeServer();
   const manager = new MediaServerManager(store, new MediaServerSecrets(path.join(dir, "vault"), keyFile), {
@@ -206,9 +213,11 @@ const mount = async (): Promise<Harness> => {
   });
   const library = await manager.attachLibrary(authority(admin), connection.id, { remoteId: "lib-1" });
   await manager.patchLibrary(authority(admin), library.id, { allowedUsers: [BOB] });
+  stateWrites = 0;
 
   return {
     base, store, server, manager, playbackReports, connectionId: connection.id, libraryId: library.id,
+    get stateWrites() { return stateWrites; },
     loseAccess: () => { lost = true; },
     close: async () => {
       listener.closeAllConnections();
@@ -746,6 +755,25 @@ test("a granted member lists verified sources and their own item state without a
     harness.server.detailOf.s1 = { id: "s1", name: "Series", type: "series", providerIds: {} };
     harness.server.ancestorsOf.s1 = ["lib-1"];
     assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/s1/state`, { method: "PATCH", user: BOB, body: { position: 3 } })).status, 400);
+  });
+});
+
+test("media-server progress is deferred, unchanged positions are ignored, and a final patch is immediate", async () => {
+  await withHarness(async (harness) => {
+    const path = `/api/remote-libraries/${harness.libraryId}/items/m1/state`;
+    const report = { position: 60, duration: 7_200, mediaSourceId: "v1" };
+
+    assert.equal((await api(harness.base, path, { method: "PATCH", user: BOB, body: report })).status, 200);
+    assert.equal(harness.stateWrites, 0, "periodic progress stays in memory");
+    await harness.store.flush();
+    assert.equal(harness.stateWrites, 1);
+
+    assert.equal((await api(harness.base, path, { method: "PATCH", user: BOB, body: { ...report, position: 60.5 } })).status, 200);
+    await harness.store.flush();
+    assert.equal(harness.stateWrites, 1, "an unchanged position is not written");
+
+    assert.equal((await api(harness.base, path, { method: "PATCH", user: BOB, body: { ...report, position: 61, final: true } })).status, 200);
+    assert.equal(harness.stateWrites, 2, "the last report is written before the response");
   });
 });
 

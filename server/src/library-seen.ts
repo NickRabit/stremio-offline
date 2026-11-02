@@ -40,6 +40,10 @@ export interface RecentSeen {
   at: string;
 }
 
+export interface LibrarySeenHooks {
+  writeState?: (file: string, data: string) => Promise<void>;
+}
+
 /** A burst of walks shares one write; long enough to coalesce the sweep and a completion,
  *  short enough that Home is truthful after a drop-in. */
 const SAVE_DEBOUNCE_MS = 300;
@@ -83,6 +87,21 @@ const mtimeOf = (modified: string | number): number => {
 
 const fingerprint = (size: number, mtimeMs: number) => `${size}:${mtimeMs}`;
 
+const sameFiles = (left: Record<string, SeenFile>, right: Record<string, SeenFile>): boolean => {
+  const leftPaths = Object.keys(left);
+  const rightPaths = Object.keys(right);
+  if (leftPaths.length !== rightPaths.length) return false;
+  return leftPaths.every((relative) => {
+    const before = left[relative]!;
+    const after = right[relative];
+    return after !== undefined
+      && before.at === after.at
+      && before.baseline === after.baseline
+      && before.size === after.size
+      && before.mtimeMs === after.mtimeMs;
+  });
+};
+
 /**
  * The first time the app saw each library file. A file's own modification time is a claim about
  * the bytes, not about when the app met them: a re-copy, a re-encode or a fresh install would
@@ -91,6 +110,7 @@ const fingerprint = (size: number, mtimeMs: number) => `${size}:${mtimeMs}`;
 export class LibrarySeenStore {
   private state: SeenState = emptyState();
   private readonly file: string;
+  private readonly writeState: (file: string, data: string) => Promise<void>;
   private timer?: NodeJS.Timeout;
   private dirty = false;
   private chain: Promise<void> = Promise.resolve();
@@ -98,8 +118,9 @@ export class LibrarySeenStore {
    *  owner may still be able to recover. */
   private protected = false;
 
-  constructor(dataDir = process.env.DATA_DIR ?? "/data") {
+  constructor(dataDir = process.env.DATA_DIR ?? "/data", hooks: LibrarySeenHooks = {}) {
     this.file = path.join(dataDir, "library-seen.json");
+    this.writeState = hooks.writeState ?? ((file, data) => writeFile(file, data, { mode: 0o600 }));
   }
 
   async load(): Promise<void> {
@@ -170,6 +191,7 @@ export class LibrarySeenStore {
       }
       next[file.relative] = { at, size: file.size, mtimeMs };
     }
+    if (sameFiles(existing.files, next)) return;
     this.state.libraries[libraryId] = { baselineAt: existing.baselineAt, files: next };
     this.markDirty();
   }
@@ -238,7 +260,7 @@ export class LibrarySeenStore {
     this.dirty = false;
     try {
       const temp = `${this.file}.tmp`;
-      await writeFile(temp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
+      await this.writeState(temp, JSON.stringify(this.state, null, 2));
       await renameWithRetry(temp, this.file);
     } catch (error) {
       this.dirty = true;

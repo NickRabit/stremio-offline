@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
@@ -9,7 +12,7 @@ import { parseLibraryPath, type LibraryRecord } from "../libraries.js";
 import type { LibraryMetaRecord, TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { ResourceError } from "../media-resources.js";
-import type { Store, UserPrefs } from "../store.js";
+import { Store, type State, type UserPrefs } from "../store.js";
 import { emptyUserData, type UserData, type UserRecord } from "../users.js";
 import type { MetaItem, AddonRecord } from "../types.js";
 import { registerPersonalRoutes, type PersonalDeps } from "./personal.js";
@@ -53,6 +56,8 @@ interface Harness {
   forgottenTitles: string[][];
   /** How many writes reached `updateData`, so a single-operation forget can be counted. */
   updates: number;
+  /** How many playback reports reached the deferred helper. */
+  deferredUpdates: number;
   data(user: string): UserData;
   close(): Promise<void>;
 }
@@ -63,7 +68,7 @@ const addons: AddonRecord[] = [];
 let metaLookups: Array<{ type: string; id: string; viewer: string | undefined }> = [];
 let metaAnswer: MetaItem | null = null;
 
-const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
+const mount = async (libraries: LibraryRecord[] = [], backing?: Store): Promise<Harness> => {
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()]]);
   const prefsAsked: string[] = [];
   const favoriteCalls: Harness["favoriteCalls"] = [];
@@ -77,15 +82,22 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
   const clearedTitles: string[] = [];
   const forgottenTitles: string[][] = [];
   let updates = 0;
+  let deferredUpdates = 0;
   const userOf = (req?: express.Request) => {
     const id = req?.header("x-user");
     return id && users.has(id) ? id : undefined;
   };
+  const dataOfUser = (id: string) => backing ? backing.userData(id) : users.get(id)!;
+  const mutateBacking = (id: string, mutate: (data: UserData) => void) => (state: State) => {
+    const data = state.userData?.[id] ?? emptyUserData();
+    mutate(data);
+    state.userData = { ...(state.userData ?? {}), [id]: data };
+  };
   const deps: PersonalDeps = {
-    store: {
+    store: backing ?? ({
       libraries: () => libraries, addons: () => addons, settings: () => ({ ...instancePrefs }),
       mediaConnections: () => mediaConnections, remoteLibraries: () => remoteLibraries,
-    } as unknown as Store,
+    } as unknown as Store),
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: (req) => {
@@ -102,7 +114,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     dataOf: (req) => {
       const id = userOf(req);
       if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
-      return users.get(id)!;
+      return dataOfUser(id);
     },
     describeLibraryPath: async (key) => {
       if (broken.has(key)) throw new Error("the library is gone");
@@ -129,7 +141,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     prefsOf: (req) => {
       const id = userOf(req);
       prefsAsked.push(id ?? "anonymous");
-      return { ...instancePrefs, ...(id ? users.get(id)!.prefs : {}) } as UserPrefs;
+      return { ...instancePrefs, ...(id ? dataOfUser(id).prefs : {}) } as UserPrefs;
     },
     progressOf: (data) => data.progress as Record<string, StoredProgress>,
     scheduleFileArtwork: () => undefined,
@@ -141,7 +153,32 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
       const id = userOf(req);
       if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
       updates += 1;
-      mutate(users.get(id)!);
+      if (backing) await backing.update(mutateBacking(id, mutate));
+      else mutate(users.get(id)!);
+    },
+    updateDataUnlessUnchanged: async (req, mutate, unchanged) => {
+      const id = userOf(req);
+      if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
+      updates += 1;
+      if (backing) {
+        await backing.update((state) => {
+          const preview = structuredClone(state.userData?.[id] ?? emptyUserData());
+          mutate(preview);
+          if (unchanged(state.userData?.[id] ?? emptyUserData(), preview)) return false;
+          mutateBacking(id, mutate)(state);
+        });
+        return;
+      }
+      const preview = structuredClone(users.get(id)!);
+      mutate(preview);
+      if (!unchanged(users.get(id)!, preview)) mutate(users.get(id)!);
+    },
+    updateDataLater: async (req, mutate) => {
+      const id = userOf(req);
+      if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
+      deferredUpdates += 1;
+      if (backing) await backing.updateLater(mutateBacking(id, mutate));
+      else mutate(users.get(id)!);
     },
     watchlistOf: (data) => data.watchlist as Record<string, WatchlistEntry>,
     remotePersonal: {
@@ -186,7 +223,8 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     clearedTitles,
     forgottenTitles,
     get updates() { return updates; },
-    data: (user) => users.get(user)!,
+    get deferredUpdates() { return deferredUpdates; },
+    data: (user) => dataOfUser(user),
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -219,7 +257,7 @@ test("GET /api/watchlist answers each caller with their own rows", async (t) => 
   assert.deepEqual(bobRows.map((row) => [row.key, row.name]), [["series:tt2", "Bob's show"]]);
 });
 
-test("POST /api/progress writes the position through updateData", async (t) => {
+test("POST /api/progress writes the position through the deferred helper", async (t) => {
   const harness = await mount();
   t.after(harness.close);
 
@@ -238,6 +276,177 @@ test("POST /api/progress writes the position through updateData", async (t) => {
   assert.equal(stored.poster, "heat.jpg");
   assert.equal(typeof stored.updatedAt, "string");
   assert.deepEqual(harness.data(BOB).progress, {}, "the position is the caller's own");
+});
+
+test("periodic progress is deferred, unchanged reports are ignored, and a final report is immediate", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const report = { key: "movie:tt1", position: 120, duration: 3600, title: "Heat", path: "Films/Heat.mkv", poster: "heat.jpg" };
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  assert.equal(harness.deferredUpdates, 1);
+  assert.equal(harness.updates, 0);
+  const firstSavedAt = (harness.data(ALICE).progress["movie:tt1"] as StoredProgress).updatedAt;
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { ...report, position: report.position + 0.5 } });
+  assert.equal(harness.deferredUpdates, 1, "a sub-second position change writes nothing");
+  assert.equal((harness.data(ALICE).progress["movie:tt1"] as StoredProgress).updatedAt, firstSavedAt);
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { ...report, position: 130, final: true } });
+  assert.equal(harness.updates, 1, "the last report of a playback writes immediately");
+  assert.equal(harness.deferredUpdates, 1);
+  assert.equal((harness.data(ALICE).progress["movie:tt1"] as StoredProgress).position, 130);
+});
+
+test("progress route write counts come from the state writer", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "personal-progress-writes-"));
+  let writes = 0;
+  const store = new Store(directory, path.join(directory, "downloads"), {
+    writeState: async (file, data) => {
+      writes += 1;
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
+  await store.load();
+  writes = 0;
+  const harness = await mount([], store);
+  t.after(async () => {
+    await harness.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const report = { key: "movie:tt1", position: 120, duration: 3600, title: "Heat" };
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  assert.equal(writes, 0, "a periodic report is not written immediately");
+  await store.flush();
+  assert.equal(writes, 1);
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { ...report, position: 120.5 } });
+  await store.flush();
+  assert.equal(writes, 1, "an unchanged position causes no state write");
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { ...report, position: 121 } });
+  await store.flush();
+  assert.equal(writes, 2, "a changed position owes a deferred write");
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { ...report, position: 122, final: true } });
+  assert.equal(writes, 3, "a final report writes before answering");
+});
+
+test("an unchanged final progress report flushes a deferred position before answering", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "personal-progress-final-"));
+  const store = new Store(directory, path.join(directory, "downloads"));
+  await store.load();
+  const harness = await mount([], store);
+  t.after(async () => {
+    await harness.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const report = { key: "movie:tt1", position: 120, duration: 3600, title: "Heat" };
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { ...report, final: true } });
+
+  const saved = JSON.parse(await readFile(path.join(directory, "state.json"), "utf8")) as {
+    userData?: Record<string, { progress?: Record<string, { position?: number }> }>;
+  };
+  assert.equal(saved.userData?.[ALICE]?.progress?.["movie:tt1"]?.position, 120);
+});
+
+test("an unchanged final progress report answers with the failure when the disk refuses it", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "personal-progress-final-fail-"));
+  let fail = false;
+  const store = new Store(directory, path.join(directory, "downloads"), {
+    writeState: async (file, data) => {
+      if (fail) throw new Error("disk unavailable");
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
+  await store.load();
+  const harness = await mount([], store);
+  t.after(async () => {
+    await harness.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const report = { key: "movie:tt1", position: 120, duration: 3600, title: "Heat" };
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  fail = true;
+  const response = await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { ...report, final: true } });
+  assert.notEqual(response.status, 204, "a final report the disk refused is not reported as saved");
+  assert.equal(response.status >= 400, true, String(response.status));
+  fail = false;
+});
+
+test("two concurrent final reports never confirm a position the disk refused", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "personal-progress-final-race-"));
+  // The first write is held until the second request is in, and then refused.
+  let failNext = false;
+  let entered!: () => void;
+  const writing = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  const store = new Store(directory, path.join(directory, "downloads"), {
+    writeState: async (file, data) => {
+      if (failNext) {
+        failNext = false;
+        entered();
+        await released;
+        throw new Error("disk unavailable");
+      }
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
+  await store.load();
+  const harness = await mount([], store);
+  t.after(async () => {
+    await harness.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const report = { key: "movie:tt1", position: 120, duration: 3600, title: "Heat", final: true };
+
+  failNext = true;
+  const first = api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  await writing;
+  // The first position is in memory and its write is on its way: the second sees the same one.
+  const second = api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  release();
+  const responses = await Promise.all([first, second]);
+  const saved = JSON.parse(await readFile(path.join(directory, "state.json"), "utf8").catch(() => "{}")) as {
+    userData?: Record<string, { progress?: Record<string, { position?: number }> }>;
+  };
+  const onDisk = saved.userData?.[ALICE]?.progress?.["movie:tt1"]?.position;
+  for (const response of responses) {
+    if (response.status === 204) assert.equal(onDisk, 120, "a 204 means the position is on disk");
+  }
+  assert.equal(responses.some((response) => response.status !== 204), true, "the refused write is reported");
+});
+
+test("an unchanged periodic progress report causes no write", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "personal-progress-periodic-"));
+  let writes = 0;
+  const store = new Store(directory, path.join(directory, "downloads"), {
+    writeState: async (file, data) => {
+      writes += 1;
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
+  await store.load();
+  const harness = await mount([], store);
+  t.after(async () => {
+    await harness.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const report = { key: "movie:tt1", position: 120, duration: 3600, title: "Heat" };
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+
+  assert.equal(writes, 0, "neither periodic report writes before its delay");
+  assert.equal(harness.deferredUpdates, 1, "the unchanged report does not add another deferred change");
+  await store.flush();
+  assert.equal(writes, 1, "only the original deferred position is written");
 });
 
 const SOURCE_KEY = "t:0123456789abcdef01234567";

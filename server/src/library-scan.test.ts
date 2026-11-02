@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { LibraryScan, type LibraryScanOpts, type ScanPauseReason } from "./library-scan.js";
+import { LibraryScan, PROGRESS_SAVE_MS, type LibraryScanOpts, type ScanPauseReason } from "./library-scan.js";
 import type { LibraryCandidate, LibraryCandidateSource } from "./library-candidates.js";
 import { MATCH_RULE_VERSION, type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "./library-match.js";
 import type { MetaItem } from "./types.js";
@@ -11,6 +11,10 @@ import type { MetaItem } from "./types.js";
 const movie = (key: string): TitleUnit => ({ key, kind: "movie", relative: key, sampleFiles: [`${key}/a.mkv`] });
 const series = (key: string): TitleUnit => ({ key, kind: "series", relative: key, sampleFiles: [`${key}/a.mkv`] });
 const TTL = 14 * 24 * 60 * 60_000;
+
+test("scan progress checkpoints use the bounded interval", () => {
+  assert.equal(PROGRESS_SAVE_MS, 30_000);
+});
 const stale = () => new Date(Date.now() - TTL - 60_000).toISOString();
 const hit = (name: string, id = "tt1"): MetaItem =>
   ({ id, type: "movie", name, releaseInfo: "2020", poster: "http://x/p.jpg", background: "http://x/b.jpg", description: "Plot" });

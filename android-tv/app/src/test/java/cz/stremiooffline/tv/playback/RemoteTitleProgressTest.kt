@@ -83,6 +83,7 @@ class RemoteTitleProgressTest {
       addonKey: String?,
       remote: RemoteItemContext?,
       stableKey: String?,
+      final: Boolean,
     ) {
       savedKeys += key
       savedRemotes += remote

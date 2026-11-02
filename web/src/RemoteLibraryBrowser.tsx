@@ -1060,7 +1060,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   /** Writes one patch to the open title's state and says whether it landed. Clearing the
    *  position goes through here too: favourite and watched are left out of the patch, so the
    *  server keeps them, and a detail the reader has left is never overwritten. */
-  const toggleState = async (patch: { favorite?: boolean; watched?: boolean; position?: number; duration?: number }): Promise<boolean> => {
+  const toggleState = async (patch: { favorite?: boolean; watched?: boolean; position?: number; duration?: number; final?: true }): Promise<boolean> => {
     const library = selectedRef.current;
     const item = detailRef.current;
     if (!library || !item || item.type === "series" || !state) return false;
@@ -1542,7 +1542,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         // The version's own row goes with the title's: a position kept there before the title held
         // it is what the read falls back to, and it would hand the dropped position straight back.
         const remote = owner.kind === "remote" ? owner.item : owner.remote;
-        if (remote) await api.saveRemoteState(remote.libraryId, remote.itemId, { position: 0, duration: 0, mediaSourceId: remote.mediaSourceId });
+        if (remote) await api.saveRemoteState(remote.libraryId, remote.itemId, { position: 0, duration: 0, mediaSourceId: remote.mediaSourceId, final: true });
       }
       if (titleScopeRef.current !== scope) return false;
       setAlternativeProgress((current) => current && current.sourceKey === sourceIdentity(stream) ? null : current);
@@ -1775,7 +1775,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             onClearProgress={(stream) => {
               const owner = sourceProgressOwner(stream, addonIdentity);
               return owner?.kind === "remote" && owner.item.libraryId === selected!.id && owner.item.itemId === detail?.id
-                ? toggleState({ position: 0, duration: 0 })
+                ? toggleState({ position: 0, duration: 0, final: true })
                 : clearAlternativeProgress(stream);
             }}
             onPlay={playDetailStream}

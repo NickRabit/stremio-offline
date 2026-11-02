@@ -651,7 +651,7 @@ fun RemoteDetailScreen(
     scope.launch {
       try {
         clearTitleRow()
-        val next = api.patchRemoteItemState(detail.libraryId, detail.item.id, RemoteItemStatePatch(position = 0.0, duration = 0.0))
+        val next = api.patchRemoteItemState(detail.libraryId, detail.item.id, RemoteItemStatePatch(position = 0.0, duration = 0.0, final = true))
         if (live.value == mine) state = next
       } catch (cancelled: CancellationException) {
         throw cancelled

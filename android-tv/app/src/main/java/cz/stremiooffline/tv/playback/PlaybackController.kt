@@ -79,6 +79,8 @@ interface PlaybackApi {
     remote: RemoteItemContext? = null,
     /** The source the position was played from, so the detail can preselect it next time. */
     stableKey: String? = null,
+    /** The playback is ending, so the server writes this position immediately. */
+    final: Boolean = false,
   )
 }
 
@@ -441,7 +443,8 @@ class PlaybackController(
       if (outgoingReported != null) sendReport(ReportEvent.Stop, outgoingReported, outgoingPosition, outgoingPaused)
       // The outgoing session is closed first, in one coroutine, so the save and the delete are
       // seen before the new start rather than raced with it.
-      if (previous != null) runCatching { save(previous) }
+      // The outgoing playback has ended here, so its position is written at once, not deferred.
+      if (previous != null) runCatching { save(previous, final = true) }
       if (previousId != null) runCatching { api.deletePlayback(previousId) }
       if (mine != generation) return@launch
       // The outgoing session is closed before the new source is minted: a failure to close it must
@@ -546,7 +549,7 @@ class PlaybackController(
   }
 
   fun onEnded() {
-    saveNow()
+    saveNow(final = true)
   }
 
   /** Direct play hands the seek to the player; HLS debounces it into one `/seek`. */
@@ -784,7 +787,7 @@ class PlaybackController(
     if (outgoingReported != null) report(ReportEvent.Stop, outgoingReported, outgoingPosition, paused = !playing)
     if (payload != null || id != null) {
       scope.launch {
-        if (payload != null) runCatching { save(payload) }
+        if (payload != null) runCatching { save(payload, final = true) }
         if (id != null) runCatching { api.deletePlayback(id) }
       }
     }
@@ -796,10 +799,12 @@ class PlaybackController(
     stop()
   }
 
-  private fun saveNow() {
+  /** [final] marks the last report of a playback, which the server writes at once instead of
+   *  deferring it with the periodic ones. */
+  private fun saveNow(final: Boolean = false) {
     if (stopped || !hasPosition || sessionId == null) return
     val payload = SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey)
-    scope.launch { runCatching { save(payload) } }
+    scope.launch { runCatching { save(payload, final) } }
   }
 
   /** The remote identity of the current session, or the one an outgoing save carries. */
@@ -812,17 +817,22 @@ class PlaybackController(
    * key, naming the version that wrote it. A version nothing can name keeps the local remote-state
    * endpoint, and everything else keeps the generic progress route it always had.
    */
-  private suspend fun save(payload: SavePayload) {
+  private suspend fun save(payload: SavePayload, final: Boolean = false) {
     val context = payload.remote
     if (context != null && !VersionProgress.titleOwned(payload.key, context)) {
       remoteApi().patchRemoteItemState(
         context.libraryId,
         context.itemId,
-        RemoteItemStatePatch(position = payload.position, duration = payload.duration, mediaSourceId = context.mediaSourceId),
+        RemoteItemStatePatch(
+          position = payload.position,
+          duration = payload.duration,
+          mediaSourceId = context.mediaSourceId,
+          final = final.takeIf { it },
+        ),
       )
       return
     }
-    api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey, remote = context, stableKey = payload.stableKey)
+    api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey, remote = context, stableKey = payload.stableKey, final = final)
   }
 
   private fun startLoops() {

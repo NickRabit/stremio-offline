@@ -24,7 +24,6 @@ export type ArtworkCarry = { carried: true } | { carried: false; reason: "absent
 
 const hash = (key: string) => createHash("sha1").update(key).digest("hex");
 const STRUCTURAL_SAVE_MS = 2000;
-const TOUCH_SAVE_MS = 10 * 60_000;
 const RETRY_SAVE_MS = 60_000;
 
 export interface ArtworkSaveTimers {
@@ -52,6 +51,9 @@ export class ArtworkCache {
   private maintenance?: Promise<void>;
   private chain: Promise<unknown> = Promise.resolve();
   private indexWrites: Promise<void> = Promise.resolve();
+  private indexText?: string;
+  private recencyDirty = false;
+  private recencyRevision = 0;
 
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "artwork"),
@@ -102,11 +104,19 @@ export class ArtworkCache {
   /** One write at a time: two would share the temporary file, and a rename could move the
    *  other's half-written bytes into place. A failed write is owed again. */
   private writeIndex() {
+    const data = JSON.stringify(Object.fromEntries(this.entries));
+    if (data === this.indexText) {
+      this.recencyDirty = false;
+      return Promise.resolve();
+    }
+    const recencyRevision = this.recencyRevision;
     const run = this.indexWrites.then(async () => {
       const temp = `${this.indexFile}.tmp`;
       try {
-        await writeFile(temp, JSON.stringify(Object.fromEntries(this.entries)), { mode: 0o600 });
+        await writeFile(temp, data, { mode: 0o600 });
         await renameWithRetry(temp, this.indexFile);
+        this.indexText = data;
+        if (this.recencyRevision === recencyRevision) this.recencyDirty = false;
       } catch (error) {
         this.dirty = true;
         this.save(RETRY_SAVE_MS);
@@ -120,10 +130,13 @@ export class ArtworkCache {
   async load() {
     await mkdir(this.dir, { recursive: true });
     let stored: Record<string, { at?: unknown }> = {};
+    let raw: string | undefined;
     try {
-      const parsed: unknown = JSON.parse(await readFile(this.indexFile, "utf8"));
+      raw = await readFile(this.indexFile, "utf8");
+      const parsed: unknown = JSON.parse(raw);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) stored = parsed as Record<string, { at?: unknown }>;
     } catch { stored = {}; }
+    this.indexText = raw;
     // The index is rebuilt from what is actually on disk: a stored size is not trusted,
     // and anything the sweep took, or that was never recorded, is measured afresh.
     this.entries.clear();
@@ -145,9 +158,9 @@ export class ArtworkCache {
 
   async flush() {
     if (this.timer) { this.saveTimers.clear(this.timer); this.timer = undefined; }
-    if (this.dirty) { this.dirty = false; await this.writeIndex(); }
+    if (this.dirty || this.recencyDirty) { this.dirty = false; await this.writeIndex(); }
     await this.indexWrites;
-    if (this.dirty) { this.dirty = false; await this.writeIndex(); }
+    if (this.dirty || this.recencyDirty) { this.dirty = false; await this.writeIndex(); }
   }
 
   /** Removals run one at a time: each candidate is a snapshot, and two passes must never
@@ -249,8 +262,8 @@ export class ArtworkCache {
     this.save();
   }
 
-  /** Serving refreshes an entry, so a picture somebody keeps looking at is not the first
-   *  one dropped. The index write itself is debounced, like every other write here. */
+  /** Serving refreshes an entry in memory, so a picture somebody keeps looking at is not the
+   *  first one dropped. The next structural write or shutdown records the new order. */
   async served(file: string) {
     const name = this.storedName(file);
     if (!name) return;
@@ -259,7 +272,8 @@ export class ArtworkCache {
     if (known) this.entries.set(name, { bytes: known.bytes, at: Date.now() });
     else if (info?.isFile()) this.entries.set(name, { bytes: info.size, at: Date.now() });
     else return;
-    this.save(TOUCH_SAVE_MS);
+    this.recencyDirty = true;
+    this.recencyRevision += 1;
   }
 
   /** A thumbnail served from the memory in front of this cache: the index entry is refreshed
@@ -271,6 +285,8 @@ export class ArtworkCache {
     const known = this.entries.get(name);
     if (!known) return;
     this.entries.set(name, { bytes: known.bytes, at: Date.now() });
+    this.recencyDirty = true;
+    this.recencyRevision += 1;
   }
 
   /** Every indexed file as an absolute path, newest `at` first. Bodies are not read here. */

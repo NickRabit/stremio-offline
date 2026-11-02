@@ -10,6 +10,7 @@ import {
   DownloadQueue,
   HLS_STALL_MS,
   isPlaylist,
+  PROGRESS_SAVE_MS,
   proxiedPlaylistInput,
   SOURCE_FALLBACK_ATTEMPT_LIMIT,
   type DownloadJob,
@@ -33,6 +34,10 @@ const MB = 1024 * 1024;
 const GiB = 1024 ** 3;
 const TOTAL = 120 * MB;
 const DROP_AFTER = 51 * MB;
+
+test("download progress checkpoints use the bounded interval", () => {
+  assert.equal(PROGRESS_SAVE_MS, 30_000);
+});
 
 process.env.ALLOW_PRIVATE_ADDONS = "1";
 

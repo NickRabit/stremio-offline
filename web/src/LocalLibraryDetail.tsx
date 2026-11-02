@@ -247,14 +247,14 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     let done = false;
     if (own?.kind === "file") done = await onResetProgress(own.path);
     else if (own?.kind === "remote") {
-      try { await api.saveRemoteState(own.item.libraryId, own.item.itemId, { position: 0, duration: 0, mediaSourceId: own.item.mediaSourceId }); done = true; }
+      try { await api.saveRemoteState(own.item.libraryId, own.item.itemId, { position: 0, duration: 0, mediaSourceId: own.item.mediaSourceId, final: true }); done = true; }
       catch { done = false; }
     } else if (own?.kind === "catalogue") {
       try {
         await api.forgetProgress(own.progressKey);
         // The version's own row goes with the title's: the read falls back to it, and it would hand
         // the dropped position straight back.
-        if (own.remote) await api.saveRemoteState(own.remote.libraryId, own.remote.itemId, { position: 0, duration: 0, mediaSourceId: own.remote.mediaSourceId });
+        if (own.remote) await api.saveRemoteState(own.remote.libraryId, own.remote.itemId, { position: 0, duration: 0, mediaSourceId: own.remote.mediaSourceId, final: true });
         done = true;
       } catch { done = false; }
     }
