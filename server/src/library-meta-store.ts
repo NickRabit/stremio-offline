@@ -3,7 +3,7 @@ import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { dropKeyed, pinInherited, remapKeyed, type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion } from "./library-match.js";
 import { isPathWithin, remapPath } from "./library.js";
-import { libraryPath, parseLibraryPath } from "./libraries.js";
+import { LIBRARY_ID, libraryPath, parseLibraryPath } from "./libraries.js";
 import { log } from "./logger.js";
 import { preserveDamaged } from "./state-file.js";
 import type { AppDatabase, Statement } from "./storage/app-database.js";
@@ -47,6 +47,8 @@ interface PersistedRow {
   json: string;
 }
 
+const persistedKey = (row: Pick<PersistedRow, "kind" | "key">) => `${row.kind}\0${row.key}`;
+
 const records = <T,>(value: unknown): Record<string, T> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, T> : {};
 
@@ -72,6 +74,7 @@ function episodeRows(rows: Record<string, LibraryEpisodeRecord>): PersistedRow[]
 
 const libraryDir = (dataDir: string) => path.join(dataDir, "library");
 const fileIn = (dataDir: string, name: string) => path.join(libraryDir(dataDir), name);
+const metadataFileName = (name: string) => name === "episodes.json" || LIBRARY_ID.test(name.slice(0, -".json".length));
 
 async function writeAtomic(file: string, data: string) {
   await mkdir(path.dirname(file), { recursive: true });
@@ -128,7 +131,8 @@ export class LibraryMetaStore {
   async load() {
     const dir = libraryDir(this.dataDir);
     await mkdir(dir, { recursive: true });
-    const names = (await readdir(dir).catch(() => [])).filter((name) => name.endsWith(".json"));
+    const names = (await readdir(dir).catch(() => []))
+      .filter((name) => name.endsWith(".json") && metadataFileName(name));
     if (this.database) await this.loadDatabase(names);
     else await this.loadFiles(names);
     this.views = undefined;
@@ -180,7 +184,8 @@ export class LibraryMetaStore {
         const value = JSON.parse(row.data) as LibraryMetaRecord | LibrarySuggestion;
         if (row.kind === "meta") file.meta[row.key] = value as LibraryMetaRecord;
         else file.suggestions[row.key] = value as LibrarySuggestion;
-        persisted.set(`${row.kind}\0${row.key}`, { kind: row.kind, key: row.key, json: row.data });
+        const stored = { kind: row.kind, key: row.key, json: row.data };
+        persisted.set(persistedKey(stored), stored);
       }
       this.files.set(libraryId, file);
       this.persisted.set(libraryId, persisted);
@@ -195,7 +200,8 @@ export class LibraryMetaStore {
       const persisted = new Map<string, PersistedRow>();
       for (const row of rows) {
         this.episodeRows[row.key] = JSON.parse(row.data) as LibraryEpisodeRecord;
-        persisted.set(row.key, { kind: "episode", key: row.key, json: row.data });
+        const stored = { kind: "episode" as const, key: row.key, json: row.data };
+        persisted.set(persistedKey(stored), stored);
       }
       this.persisted.set("episodes", persisted);
       this.markers.add("episodes");
@@ -270,7 +276,7 @@ export class LibraryMetaStore {
       ? [{ sql: "DELETE FROM library_episodes" }]
       : [{ sql: "DELETE FROM library_meta WHERE library_id = ?", params: [name] }];
     for (const row of rows) {
-      persisted.set(`${row.kind}\0${row.key}`, row);
+      persisted.set(persistedKey(row), row);
       statements.push(name === "episodes"
         ? { sql: EPISODE_UPSERT, params: [row.key, row.json] }
         : { sql: META_UPSERT, params: [name, row.kind, row.key, row.json] });
@@ -541,7 +547,7 @@ export class LibraryMetaStore {
         const rows = name === "episodes"
           ? episodeRows(this.episodeRows)
           : fileRows(this.files.get(name) ?? emptyFile());
-        for (const row of rows) next.set(`${row.kind}\0${row.key}`, row);
+        for (const row of rows) next.set(persistedKey(row), row);
 
         const statements: Statement[] = [];
         for (const [key, row] of next) {

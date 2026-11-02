@@ -22,39 +22,39 @@ async function seed(dataDir: string, id: string, meta: Record<string, unknown>, 
 
 test("a library file is read into the qualified view and back", async () => {
   await withStore(async (store, dataDir) => {
-    await seed(dataDir, "lib_a", { "Show/01.mkv": record("tt1") }, { "Other show": { type: "series", id: "tt2", score: 80 } });
-    await seed(dataDir, "lib_b", { "Film.mkv": record("tt3") });
+    await seed(dataDir, "lib_aaaaaaaa", { "Show/01.mkv": record("tt1") }, { "Other show": { type: "series", id: "tt2", score: 80 } });
+    await seed(dataDir, "lib_bbbbbbbb", { "Film.mkv": record("tt3") });
     await store.load();
-    assert.deepEqual(Object.keys(store.qualifiedMeta()).sort(), ["lib_a/Show/01.mkv", "lib_b/Film.mkv"]);
-    assert.deepEqual(Object.keys(store.qualifiedSuggestions()), ["lib_a/Other show"]);
-    assert.deepEqual(Object.keys(store.meta("lib_a")), ["Show/01.mkv"], "the file keeps library-relative keys");
+    assert.deepEqual(Object.keys(store.qualifiedMeta()).sort(), ["lib_aaaaaaaa/Show/01.mkv", "lib_bbbbbbbb/Film.mkv"]);
+    assert.deepEqual(Object.keys(store.qualifiedSuggestions()), ["lib_aaaaaaaa/Other show"]);
+    assert.deepEqual(Object.keys(store.meta("lib_aaaaaaaa")), ["Show/01.mkv"], "the file keeps library-relative keys");
   });
 });
 
 test("a mosaic-only record round-trips without becoming a binding", async () => {
   await withStore(async (store, dataDir) => {
-    await seed(dataDir, "lib_a", { Movies: { type: "movie", id: "", source: "user", skipMosaic: true } });
+    await seed(dataDir, "lib_aaaaaaaa", { Movies: { type: "movie", id: "", source: "user", skipMosaic: true } });
     await store.load();
     await store.flush();
-    const row = store.qualifiedMeta()["lib_a/Movies"]!;
+    const row = store.qualifiedMeta()["lib_aaaaaaaa/Movies"]!;
     assert.equal(row.skipMosaic, true, "the flag comes back");
     assert.equal(row.id, "", "a decision, not a title");
-    assert.equal(knownTitleOf("lib_a/Movies/Title.mkv", store.qualifiedMeta()), undefined, "it is not read as a binding");
-    assert.equal(JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).meta.Movies.skipMosaic, true, "the flag is written back");
+    assert.equal(knownTitleOf("lib_aaaaaaaa/Movies/Title.mkv", store.qualifiedMeta()), undefined, "it is not read as a binding");
+    assert.equal(JSON.parse(await readFile(libraryFile(dataDir, "lib_aaaaaaaa"), "utf8")).meta.Movies.skipMosaic, true, "the flag is written back");
   });
 });
 
 test("a write only rewrites the library it was made for", async () => {
   await withStore(async (store, dataDir) => {
-    await seed(dataDir, "lib_a", { "Show/01.mkv": record("tt1") });
-    await seed(dataDir, "lib_b", { "Film.mkv": record("tt3") });
+    await seed(dataDir, "lib_aaaaaaaa", { "Show/01.mkv": record("tt1") });
+    await seed(dataDir, "lib_bbbbbbbb", { "Film.mkv": record("tt3") });
     await store.load();
-    const untouched = await stat(libraryFile(dataDir, "lib_b"));
-    await store.update("lib_a", (file) => { file.meta["Show/02.mkv"] = record("tt4"); });
+    const untouched = await stat(libraryFile(dataDir, "lib_bbbbbbbb"));
+    await store.update("lib_aaaaaaaa", (file) => { file.meta["Show/02.mkv"] = record("tt4"); });
     await store.flush();
-    assert.deepEqual(Object.keys(store.meta("lib_a")).sort(), ["Show/01.mkv", "Show/02.mkv"]);
-    assert.equal((await stat(libraryFile(dataDir, "lib_b"))).mtimeMs, untouched.mtimeMs, "the other library is not touched");
-    assert.equal(JSON.parse(await readFile(libraryFile(dataDir, "lib_b"), "utf8")).meta["Film.mkv"].id, "tt3");
+    assert.deepEqual(Object.keys(store.meta("lib_aaaaaaaa")).sort(), ["Show/01.mkv", "Show/02.mkv"]);
+    assert.equal((await stat(libraryFile(dataDir, "lib_bbbbbbbb"))).mtimeMs, untouched.mtimeMs, "the other library is not touched");
+    assert.equal(JSON.parse(await readFile(libraryFile(dataDir, "lib_bbbbbbbb"), "utf8")).meta["Film.mkv"].id, "tt3");
   });
 });
 
@@ -62,28 +62,28 @@ test("bursts of writes settle into one atomic file", async () => {
   await withStore(async (store, dataDir) => {
     await store.load();
     for (let index = 0; index < 5; index += 1) {
-      await store.update("lib_a", (file) => { file.meta[`Film ${index}.mkv`] = record(`tt${index}`); });
+      await store.update("lib_aaaaaaaa", (file) => { file.meta[`Film ${index}.mkv`] = record(`tt${index}`); });
     }
     assert.deepEqual(await readdir(path.join(dataDir, "library")).catch(() => []), [], "nothing is written before the debounce runs out");
     await store.flush();
     // NTFS keeps no POSIX mode to read back; the rest of the write is still checked there.
-    if (process.platform !== "win32") assert.equal((await stat(libraryFile(dataDir, "lib_a"))).mode & 0o777, 0o600);
-    assert.equal(Object.keys(JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).meta).length, 5);
-    assert.deepEqual(await readdir(path.join(dataDir, "library")), ["lib_a.json"], "no temporary file is left behind");
+    if (process.platform !== "win32") assert.equal((await stat(libraryFile(dataDir, "lib_aaaaaaaa"))).mode & 0o777, 0o600);
+    assert.equal(Object.keys(JSON.parse(await readFile(libraryFile(dataDir, "lib_aaaaaaaa"), "utf8")).meta).length, 5);
+    assert.deepEqual(await readdir(path.join(dataDir, "library")), ["lib_aaaaaaaa.json"], "no temporary file is left behind");
   });
 });
 
 test("episode rows land in the shared file, not in a library", async () => {
   await withStore(async (store, dataDir) => {
-    await seed(dataDir, "lib_a", {});
+    await seed(dataDir, "lib_aaaaaaaa", {});
     await store.load();
-    await store.update("lib_a", (file, episodes) => {
+    await store.update("lib_aaaaaaaa", (file, episodes) => {
       file.meta["Show/01.mkv"] = record("tt1");
       episodes["series:tt1:1:1"] = { type: "series", id: "tt1", season: 1, episode: 1, name: "One" } as never;
     });
     await store.flush();
     assert.deepEqual(Object.keys(JSON.parse(await readFile(path.join(dataDir, "library", "episodes.json"), "utf8"))), ["series:tt1:1:1"]);
-    assert.equal(Object.hasOwn(JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).meta["Show/01.mkv"], "episode"), false);
+    assert.equal(Object.hasOwn(JSON.parse(await readFile(libraryFile(dataDir, "lib_aaaaaaaa"), "utf8")).meta["Show/01.mkv"], "episode"), false);
   });
 });
 
@@ -169,16 +169,16 @@ test("a copy that stays under the folder that binds it adds no row of its own", 
 
 test("a write driven by catalogue identity walks every library", async () => {
   await withStore(async (store, dataDir) => {
-    await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });
-    await seed(dataDir, "lib_b", { "Two.mkv": record("tt1"), "Three.mkv": record("tt9") });
+    await seed(dataDir, "lib_aaaaaaaa", { "One.mkv": record("tt1") });
+    await seed(dataDir, "lib_bbbbbbbb", { "Two.mkv": record("tt1"), "Three.mkv": record("tt9") });
     await store.load();
     await store.updateAll((file) => {
       for (const [key, row] of Object.entries(file.meta)) if (row.id === "tt1") file.meta[key] = { ...row, name: "Backfilled" };
     });
     await store.flush();
-    assert.equal(store.qualifiedMeta()["lib_a/One.mkv"]!.name, "Backfilled");
-    assert.equal(store.qualifiedMeta()["lib_b/Two.mkv"]!.name, "Backfilled");
-    assert.equal(store.qualifiedMeta()["lib_b/Three.mkv"]!.name, undefined);
+    assert.equal(store.qualifiedMeta()["lib_aaaaaaaa/One.mkv"]!.name, "Backfilled");
+    assert.equal(store.qualifiedMeta()["lib_bbbbbbbb/Two.mkv"]!.name, "Backfilled");
+    assert.equal(store.qualifiedMeta()["lib_bbbbbbbb/Three.mkv"]!.name, undefined);
   });
 });
 
@@ -186,7 +186,7 @@ test("dropping the backfill stamp leaves the rest of the row alone", async () =>
   await withStore(async (store, dataDir) => {
     const filled = (id: string, name: string): LibraryMetaRecord => ({ ...record(id), name, year: "2001", description: `${name} described` });
     const fresh = filled("tt2", "Fresh");
-    await seed(dataDir, "lib_a", { "Stamped.mkv": { ...filled("tt1", "Stamped"), backfilledAt: "2026-09-14T15:51:00.000Z" }, "Fresh.mkv": fresh });
+    await seed(dataDir, "lib_aaaaaaaa", { "Stamped.mkv": { ...filled("tt1", "Stamped"), backfilledAt: "2026-09-14T15:51:00.000Z" }, "Fresh.mkv": fresh });
     await store.load();
     await store.updateAll((file) => {
       for (const [key, row] of Object.entries(file.meta)) {
@@ -195,8 +195,8 @@ test("dropping the backfill stamp leaves the rest of the row alone", async () =>
         file.meta[key] = rest;
       }
     });
-    assert.deepEqual(store.meta("lib_a")["Stamped.mkv"], filled("tt1", "Stamped"), "the stamp goes, the answer stays");
-    assert.deepEqual(store.meta("lib_a")["Fresh.mkv"], fresh, "a row without a stamp is not rewritten");
+    assert.deepEqual(store.meta("lib_aaaaaaaa")["Stamped.mkv"], filled("tt1", "Stamped"), "the stamp goes, the answer stays");
+    assert.deepEqual(store.meta("lib_aaaaaaaa")["Fresh.mkv"], fresh, "a row without a stamp is not rewritten");
   });
 });
 
@@ -227,45 +227,45 @@ test("a qualified write touches only the library that owns the key", async () =>
 
 test("forget drops the file and the keys that came from it", async () => {
   await withStore(async (store, dataDir) => {
-    await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });
-    await seed(dataDir, "lib_b", { "Two.mkv": record("tt2") });
+    await seed(dataDir, "lib_aaaaaaaa", { "One.mkv": record("tt1") });
+    await seed(dataDir, "lib_bbbbbbbb", { "Two.mkv": record("tt2") });
     await store.load();
-    await store.forget("lib_a");
-    assert.deepEqual(Object.keys(store.qualifiedMeta()), ["lib_b/Two.mkv"]);
-    assert.deepEqual(await readdir(path.join(dataDir, "library")), ["lib_b.json"]);
+    await store.forget("lib_aaaaaaaa");
+    assert.deepEqual(Object.keys(store.qualifiedMeta()), ["lib_bbbbbbbb/Two.mkv"]);
+    assert.deepEqual(await readdir(path.join(dataDir, "library")), ["lib_bbbbbbbb.json"]);
   });
 });
 
 test("a broken file is skipped instead of failing the boot", async () => {
   await withStore(async (store, dataDir) => {
-    await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });
-    await writeFile(libraryFile(dataDir, "lib_b"), "{ not json");
+    await seed(dataDir, "lib_aaaaaaaa", { "One.mkv": record("tt1") });
+    await writeFile(libraryFile(dataDir, "lib_bbbbbbbb"), "{ not json");
     await store.load();
-    assert.deepEqual(Object.keys(store.qualifiedMeta()), ["lib_a/One.mkv"]);
+    assert.deepEqual(Object.keys(store.qualifiedMeta()), ["lib_aaaaaaaa/One.mkv"]);
   });
 });
 
 test("a malformed episodes.json is skipped and the library files still load", async () => {
   await withStore(async (store, dataDir) => {
-    await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });
+    await seed(dataDir, "lib_aaaaaaaa", { "One.mkv": record("tt1") });
     await writeFile(path.join(dataDir, "library", "episodes.json"), "{broken");
     await store.load();
-    assert.deepEqual(Object.keys(store.qualifiedMeta()), ["lib_a/One.mkv"]);
+    assert.deepEqual(Object.keys(store.qualifiedMeta()), ["lib_aaaaaaaa/One.mkv"]);
     assert.deepEqual(Object.keys(store.episodes()), [], "the unreadable episode rows are dropped");
   });
 });
 
 test("a broken library file is copied aside and the next write still lands", async () => {
   await withStore(async (store, dataDir) => {
-    await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });
-    await writeFile(libraryFile(dataDir, "lib_b"), "{ not json");
+    await seed(dataDir, "lib_aaaaaaaa", { "One.mkv": record("tt1") });
+    await writeFile(libraryFile(dataDir, "lib_bbbbbbbb"), "{ not json");
     await store.load();
-    const damaged = (await readdir(path.join(dataDir, "library"))).filter((name) => name.startsWith("lib_b.json.damaged-"));
+    const damaged = (await readdir(path.join(dataDir, "library"))).filter((name) => name.startsWith("lib_bbbbbbbb.json.damaged-"));
     assert.equal(damaged.length, 1, "the original bytes are copied aside");
     assert.equal(await readFile(path.join(dataDir, "library", damaged[0]!), "utf8"), "{ not json");
-    await store.update("lib_b", (file) => { file.meta["New.mkv"] = record("tt9"); });
+    await store.update("lib_bbbbbbbb", (file) => { file.meta["New.mkv"] = record("tt9"); });
     await store.flush();
-    assert.deepEqual(JSON.parse(await readFile(libraryFile(dataDir, "lib_b"), "utf8")), {
+    assert.deepEqual(JSON.parse(await readFile(libraryFile(dataDir, "lib_bbbbbbbb"), "utf8")), {
       version: 1, meta: { "New.mkv": record("tt9") }, suggestions: {},
     }, "the fresh file is written once the original bytes are preserved");
   });
@@ -274,28 +274,28 @@ test("a broken library file is copied aside and the next write still lands", asy
 test("a library file that cannot be read is never overwritten", async () => {
   await withStore(async (store, dataDir) => {
     await mkdir(path.join(dataDir, "library"), { recursive: true });
-    await mkdir(libraryFile(dataDir, "lib_c"));
+    await mkdir(libraryFile(dataDir, "lib_cccccccc"));
     await store.load();
-    await store.update("lib_c", (file) => { file.meta["New.mkv"] = record("tt9"); });
+    await store.update("lib_cccccccc", (file) => { file.meta["New.mkv"] = record("tt9"); });
     await store.flush();
-    assert.equal((await stat(libraryFile(dataDir, "lib_c"))).isDirectory(), true, "the unreadable path is still a directory");
+    assert.equal((await stat(libraryFile(dataDir, "lib_cccccccc"))).isDirectory(), true, "the unreadable path is still a directory");
   });
 });
 
 test("a suggestion written before the review fields existed still loads and round-trips", async () => {
   await withStore(async (store, dataDir) => {
-    await seed(dataDir, "lib_a", {}, {
+    await seed(dataDir, "lib_aaaaaaaa", {}, {
       // The shape an older install has on disk: nothing but the score and the title.
       "Films/Heat": { type: "movie", id: "tt0113277", name: "Heat", year: 1995, score: 91, scannedAt: "2026-01-01T00:00:00.000Z" },
       "Films/Ronin": { type: "movie", id: "", name: "", score: 0 },
     });
     await store.load();
-    assert.deepEqual(store.qualifiedSuggestions()["lib_a/Films/Heat"], {
+    assert.deepEqual(store.qualifiedSuggestions()["lib_aaaaaaaa/Films/Heat"], {
       type: "movie", id: "tt0113277", name: "Heat", year: 1995, score: 91, scannedAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.equal("reason" in store.qualifiedSuggestions()["lib_a/Films/Heat"]!, false, "no reason is invented for an old row");
+    assert.equal("reason" in store.qualifiedSuggestions()["lib_aaaaaaaa/Films/Heat"]!, false, "no reason is invented for an old row");
     await store.flush();
-    const written = JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).suggestions;
+    const written = JSON.parse(await readFile(libraryFile(dataDir, "lib_aaaaaaaa"), "utf8")).suggestions;
     assert.equal(written["Films/Heat"].name, "Heat");
     assert.equal("reason" in written["Films/Heat"], false);
   });
@@ -373,21 +373,21 @@ test("a qualified write keeps an already built view the same as a fresh one", as
 test("a write that failed is made by the next flush, and two flushes never overlap", async () => {
   await withStore(async (store, dataDir) => {
     await store.load();
-    await store.update("lib_a", (file) => { file.meta["Heat.mkv"] = record("tt1"); });
+    await store.update("lib_aaaaaaaa", (file) => { file.meta["Heat.mkv"] = record("tt1"); });
     // A directory where the temporary file goes makes the write fail, the way a full disk would.
-    await mkdir(`${libraryFile(dataDir, "lib_a")}.tmp`, { recursive: true });
+    await mkdir(`${libraryFile(dataDir, "lib_aaaaaaaa")}.tmp`, { recursive: true });
     await store.flush();
-    await rm(`${libraryFile(dataDir, "lib_a")}.tmp`, { recursive: true });
+    await rm(`${libraryFile(dataDir, "lib_aaaaaaaa")}.tmp`, { recursive: true });
     await store.flush();
-    assert.deepEqual(Object.keys(JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).meta), ["Heat.mkv"],
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(libraryFile(dataDir, "lib_aaaaaaaa"), "utf8")).meta), ["Heat.mkv"],
       "the binding the failed write carried reaches the disk");
 
     // Two flushes in flight share one temporary file; the second must wait for the first.
-    await store.update("lib_a", (file) => { file.meta["Dune.mkv"] = record("tt2"); });
+    await store.update("lib_aaaaaaaa", (file) => { file.meta["Dune.mkv"] = record("tt2"); });
     const first = store.flush();
-    await store.update("lib_a", (file) => { file.meta["Alien.mkv"] = record("tt3"); });
+    await store.update("lib_aaaaaaaa", (file) => { file.meta["Alien.mkv"] = record("tt3"); });
     await Promise.all([first, store.flush()]);
-    assert.deepEqual(Object.keys(JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).meta).sort(),
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(libraryFile(dataDir, "lib_aaaaaaaa"), "utf8")).meta).sort(),
       ["Alien.mkv", "Dune.mkv", "Heat.mkv"], "the last write to land is the newest");
   });
 });
@@ -395,12 +395,12 @@ test("a write that failed is made by the next flush, and two flushes never overl
 test("forget does not recreate a library after its in-flight write fails", async () => {
   await withStore(async (store, dataDir) => {
     await store.load();
-    await store.update("lib_a", (file) => { file.meta["Heat.mkv"] = record("tt1"); });
-    const file = libraryFile(dataDir, "lib_a");
+    await store.update("lib_aaaaaaaa", (file) => { file.meta["Heat.mkv"] = record("tt1"); });
+    const file = libraryFile(dataDir, "lib_aaaaaaaa");
     await mkdir(`${file}.tmp`, { recursive: true });
     const writing = store.flush();
     await Promise.resolve();
-    await store.forget("lib_a");
+    await store.forget("lib_aaaaaaaa");
     await writing;
     await rm(`${file}.tmp`, { recursive: true });
     await store.flush();

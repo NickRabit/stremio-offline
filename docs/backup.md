@@ -72,6 +72,12 @@ mappings are caches and safe to lose. Copy `application.sqlite` and its `-wal` o
 while the server is stopped. The image files under `images/` remain optional to
 back up and can be left out to keep the backup small.
 
+If `application.sqlite` exists but cannot be opened, the server refuses to start
+instead of falling back to JSON. Do not delete it to work around that failure:
+migrations may already have moved authoritative data into the database. Restore
+the whole data folder from a backup, including `application.sqlite` and its
+`-wal` and `-shm` files when present.
+
 ## Restoring
 
 1. Stop the server.

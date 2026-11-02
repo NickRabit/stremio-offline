@@ -37,6 +37,7 @@ import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProgress, type WatchedMarker } from "./store.js";
 import { openAppDatabase, StorageError, type AppDatabase } from "./storage/app-database.js";
+import { chooseStorageMode } from "./storage/storage-mode.js";
 import { emptyUserData, findUserById, forEachUserData, type UserData, type UserRecord } from "./users.js";
 import type { ProgressSeries } from "./progress-series.js";
 import { advanceTorrent } from "./debrid.js";
@@ -185,7 +186,7 @@ await mediaServers.initialize();
 await externalIds.load();
 let database: AppDatabase | undefined;
 try {
-  database = await openAppDatabase({ dataDir: process.env.DATA_DIR ?? "/data" });
+  database = await chooseStorageMode(DATA_DIR, (dataDir) => openAppDatabase({ dataDir }));
   if (database) {
     tmdbIds.attachDatabase(database);
     followStore.attachDatabase(database);
@@ -194,8 +195,10 @@ try {
 } catch (error) {
   log("ERROR", "The application database could not be opened", {
     code: error instanceof StorageError ? error.code : "sql",
+    file: path.join(DATA_DIR, "application.sqlite"),
     reason: error instanceof Error ? error.message : String(error),
   });
+  throw error;
 }
 await metaStore.load();
 await tmdbIds.load(path.join(DATA_DIR, "tmdb-ids.json"));

@@ -93,6 +93,12 @@ remains a read-only migration source or fallback only for the bounded cutover
 window required by that phase. The SQLite representation becomes authoritative
 when the domain moves, and subsequent writes have one owner.
 
+Startup checks whether `application.sqlite` exists before choosing the storage
+mode. If it exists and cannot be opened, start-up fails; the server must not
+fall back to JSON because migration may already have moved the authoritative
+data into SQLite. JSON fallback is allowed only when the database file does not
+exist, as on a first run with a runtime that cannot use SQLite.
+
 ### Phase 1: image registry
 
 The `ImageProxy` URL registry moved from `images/index.json` to the

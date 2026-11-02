@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
+import { createLibraryFileFacts } from "./library-file-facts.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion } from "./library-match.js";
 import {
@@ -171,6 +172,66 @@ test("library files and episodes import once and restore every view after a rest
     [`${libB}/Beta.mkv`]: record("tt2", "Beta"),
   });
   assert.deepEqual(await readdir(path.join(dataDir, "library")), [], "a crash leftover beside a marker is moved aside");
+});
+
+test("changing one restored episode keeps the others in the database", async (t) => {
+  const fixtureState = await fixture(t);
+  const first = "series:tt1:1:1";
+  const second = "series:tt1:1:2";
+  await fixtureState.seedEpisodes({
+    [first]: episode("Pilot"),
+    [second]: episode("Second"),
+  });
+  const store = fixtureState.store();
+  await store.load();
+
+  const restarted = fixtureState.store(await fixtureState.reopen());
+  await restarted.load();
+  const changed = { ...episode("Pilot"), name: "Changed" };
+  restarted.episodes()[first] = changed;
+  await restarted.flush();
+
+  assert.deepEqual(
+    await fixtureState.database.all<{ key: string; data: string }>("SELECT key, data FROM library_episodes ORDER BY key"),
+    [
+      { key: first, data: JSON.stringify(changed) },
+      { key: second, data: JSON.stringify(episode("Second")) },
+    ],
+  );
+});
+
+test("metadata loading leaves the file-facts source for its owning store", async (t) => {
+  const fixtureState = await fixture(t);
+  const libraryId = "lib_00000001";
+  const fileFacts = path.join(fixtureState.dataDir, "library", "file-facts.json");
+  await fixtureState.seedLibrary(libraryId, { "Film.mkv": record("tt1") });
+  await fixtureState.seedEpisodes({ "series:tt1:1:1": episode("Pilot") });
+  await mkdir(path.dirname(fileFacts), { recursive: true });
+  await writeFile(fileFacts, JSON.stringify({
+    version: 1,
+    entries: {
+      [`${libraryId}/Film.mkv`]: {
+        size: 100,
+        modified: "2026-01-01T00:00:00.000Z",
+        info: null,
+        at: 1,
+      },
+    },
+  }));
+
+  await fixtureState.store().load();
+
+  assert.equal((await stat(fileFacts)).isFile(), true);
+  const facts = createLibraryFileFacts({
+    file: fileFacts,
+    database: fixtureState.database,
+    now: () => 1,
+    probe: async () => undefined,
+  });
+  await facts.flush();
+
+  assert.ok(Number((await fixtureState.database.get<{ count: number }>("SELECT COUNT(*) AS count FROM file_facts"))?.count) > 0);
+  assert.ok(Number(await marker(fixtureState.database, "domain.fileFacts").then((value) => value?.count)) > 0);
 });
 
 test("one changed match writes exactly one upsert after the debounce", async (t) => {
