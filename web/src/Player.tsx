@@ -1,6 +1,6 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
 import type Hls from "hls.js";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { hlsIfLoaded, loadHls } from "./hls-loader";
@@ -18,7 +18,7 @@ import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import { CHANNELS, playingBadges } from "./player-badges";
 import { chapterAt, chapterLabel } from "./player-chapters";
-import { activeSegment, introQueryOf, upNextPoint, type SegmentKind } from "./player-segments";
+import { activeSegment, fitSegments, introQueryOf, upNextPoint, type SegmentKind } from "./player-segments";
 import type { Capabilities, IntroSegments, PlaybackChapter, PlaybackMode, PlaybackSession, SourceProfile, Stream, Subtitle, Track, UpNextAt } from "./types";
 
 /** The title's sources as the place that plays it holds them: the rows it leads with, every other
@@ -283,7 +283,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const subtitlePreferenceRef = useRef<string | null>(subtitleLanguage);
   const [upNext, setUpNext] = useState(false);
   const [upNextSeconds, setUpNextSeconds] = useState(5);
-  const [segments, setSegments] = useState<IntroSegments | null>(null);
+  const [rawSegments, setSegments] = useState<IntroSegments | null>(null);
   const autoSkippedRef = useRef<Set<SegmentKind>>(new Set());
   const previousPositionRef = useRef(0);
   const thresholdDismissedRef = useRef(false);
@@ -410,6 +410,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [playbackFailed, setPlaybackFailed] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const segments = useMemo(() => fitSegments(rawSegments, duration), [rawSegments, duration]);
   const [scrub, setScrub] = useState<number | null>(null);
   const [buffering, setBuffering] = useState(false);
   const [error, setError] = useState("");

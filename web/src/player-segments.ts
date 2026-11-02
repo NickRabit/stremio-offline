@@ -18,6 +18,26 @@ export function introQueryOf(progressKey?: string): IntroQuery | undefined {
 
 export type SegmentKind = "intro" | "recap" | "outro";
 
+/** Credits that end this far before the file does were timed on another cut of the title. */
+const OUTRO_SLACK_SECONDS = 300;
+/** An intro or a recap starts within the opening part of the file: this share of it, at most the cap. */
+const OPENING_SHARE = 0.2;
+const OPENING_CAP_SECONDS = 20 * 60;
+
+/** IntroDB times one cut of a title and does not say which. An intro or a recap must start near the
+ *  beginning of this file and credits must run to its end; a segment that does not was timed on
+ *  another cut and is dropped. An unknown duration keeps everything. */
+export function fitSegments(segments: IntroSegments | null, duration: number): IntroSegments | null {
+  if (!segments || !Number.isFinite(duration) || duration <= 0) return segments;
+  const opening = Math.min(duration * OPENING_SHARE, OPENING_CAP_SECONDS);
+  const early = (range?: SegmentRange) => range && range.start <= opening && range.end <= duration ? range : undefined;
+  const intro = early(segments.intro);
+  const recap = early(segments.recap);
+  const outro = segments.outro && segments.outro.start < duration && segments.outro.end >= duration - OUTRO_SLACK_SECONDS
+    ? segments.outro : undefined;
+  return { ...(intro ? { intro } : {}), ...(recap ? { recap } : {}), ...(outro ? { outro } : {}) };
+}
+
 /** The segment `position` is inside, using [start, end - 1); intro wins over recap over outro on overlap. */
 export function activeSegment(segments: IntroSegments | null, position: number): { kind: SegmentKind; range: SegmentRange } | undefined {
   if (!segments) return undefined;

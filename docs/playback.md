@@ -101,6 +101,10 @@ Intro and recap → Skip automatically** skips intro and recap without asking,
 once each per episode. Only the server talks to IntroDB, sends it nothing but the
 IMDb id with the season and episode, and keeps its answers for a day, so secure
 mode leaves it on. A library file is looked up under the title it is bound to.
+IntroDB times one cut of a title and does not say which, so the players keep an
+intro or a recap only when it starts in the opening fifth of the file (at most 20
+minutes in) and credits only when they run to within five minutes of its end;
+credits from a theatrical cut are not shown in the middle of an extended edition.
 A title IntroDB does not know, or an unavailable service, simply shows no button.
 
 ## Keyboard

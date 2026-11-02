@@ -701,6 +701,14 @@ describe("Player chapters, segments and next episode", () => {
       .toEqual([["intro", "0%", "10%"], ["outro", "90%", "10%"]]);
   });
 
+  it("ignores credits timed on another cut that fall mid-film", async () => {
+    introAnswer = { outro: { start: 1800, end: 1900 } };
+    await render({ progressKey: "movie:tt0172495" });
+    await videoAt(1810);
+    expect(host.querySelector(".timeline-segment")).toBeNull();
+    expect(host.querySelector(".player-skip")).toBeNull();
+  });
+
   it("offers a skip button that seeks past the intro", async () => {
     introAnswer = { intro: { start: 5, end: 60 } };
     await render({ progressKey: "movie:tt0903747" });

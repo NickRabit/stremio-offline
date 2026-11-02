@@ -81,6 +81,7 @@ import cz.stremiooffline.tv.playback.SubtitleDelay
 import cz.stremiooffline.tv.playback.VersionProgress
 import cz.stremiooffline.tv.playback.VttCue
 import cz.stremiooffline.tv.playback.SegmentKind
+import cz.stremiooffline.tv.playback.fitSegments
 import cz.stremiooffline.tv.playback.UpNextTrigger
 import cz.stremiooffline.tv.playback.activeSegment
 import cz.stremiooffline.tv.playback.absoluteCues
@@ -173,7 +174,8 @@ fun PlayerScreen(
   // The window lost its target while a screensaver or another activity covered it.
   var reclaimFocus by remember { mutableIntStateOf(0) }
   var settings by remember { mutableStateOf(SettingsResponse()) }
-  var segments by remember(target.key) { mutableStateOf<IntroSegmentsDto?>(null) }
+  var rawSegments by remember(target.key) { mutableStateOf<IntroSegmentsDto?>(null) }
+  val segments = remember(rawSegments, state.duration) { fitSegments(rawSegments, state.duration) }
   val autoSkipped = remember(target.key) { mutableSetOf<SegmentKind>() }
   var previousPosition by remember(target.key) { mutableDoubleStateOf(0.0) }
   val upNextTrigger = remember(target.key) { UpNextTrigger() }
@@ -331,7 +333,7 @@ fun PlayerScreen(
     previousTarget = null
     switchAt = 0.0
     cues = emptyList()
-    segments = null
+    rawSegments = null
     autoSkipped.clear()
     previousPosition = 0.0
     upNextTrigger.reset()
@@ -344,13 +346,13 @@ fun PlayerScreen(
     else libraryAddonIdentity(runCatching { api.libraryTitle(path) }.getOrNull()).also { fileIdentities[path] = it }
 
   LaunchedEffect(api, target.key) {
-    segments = null
+    rawSegments = null
     // A library file's key names the file; IntroDB is asked about the title it is bound to.
     val query = introQueryOf(target.key)
       ?: (carriedSubtitleIdentity(target) ?: target.path?.let { fileIdentity(it) })
         ?.let { (type, id) -> introQueryOf("$type:$id") }
       ?: return@LaunchedEffect
-    segments = runCatching { api.introSegments(query.imdb, query.season, query.episode) }.getOrNull()
+    rawSegments = runCatching { api.introSegments(query.imdb, query.season, query.episode) }.getOrNull()
   }
   suspend fun askSubtitles(identity: Pair<String, String>): List<AddonSubtitleDto> =
     runCatching { api.subtitles(identity.first, identity.second) }.getOrDefault(emptyList())
