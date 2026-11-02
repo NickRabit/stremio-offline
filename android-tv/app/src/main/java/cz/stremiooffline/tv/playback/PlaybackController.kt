@@ -79,6 +79,8 @@ interface PlaybackApi {
     remote: RemoteItemContext? = null,
     /** The source the position was played from, so the detail can preselect it next time. */
     stableKey: String? = null,
+    /** The playback is ending, so the server writes this position immediately. */
+    final: Boolean = false,
   )
 }
 
@@ -784,7 +786,7 @@ class PlaybackController(
     if (outgoingReported != null) report(ReportEvent.Stop, outgoingReported, outgoingPosition, paused = !playing)
     if (payload != null || id != null) {
       scope.launch {
-        if (payload != null) runCatching { save(payload) }
+        if (payload != null) runCatching { save(payload, final = true) }
         if (id != null) runCatching { api.deletePlayback(id) }
       }
     }
@@ -812,17 +814,22 @@ class PlaybackController(
    * key, naming the version that wrote it. A version nothing can name keeps the local remote-state
    * endpoint, and everything else keeps the generic progress route it always had.
    */
-  private suspend fun save(payload: SavePayload) {
+  private suspend fun save(payload: SavePayload, final: Boolean = false) {
     val context = payload.remote
     if (context != null && !VersionProgress.titleOwned(payload.key, context)) {
       remoteApi().patchRemoteItemState(
         context.libraryId,
         context.itemId,
-        RemoteItemStatePatch(position = payload.position, duration = payload.duration, mediaSourceId = context.mediaSourceId),
+        RemoteItemStatePatch(
+          position = payload.position,
+          duration = payload.duration,
+          mediaSourceId = context.mediaSourceId,
+          final = final.takeIf { it },
+        ),
       )
       return
     }
-    api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey, remote = context, stableKey = payload.stableKey)
+    api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey, remote = context, stableKey = payload.stableKey, final = final)
   }
 
   private fun startLoops() {

@@ -214,6 +214,11 @@ export class Store {
   private readonly filename: string;
   private readonly downloadDir: string;
   private readonly writeState: (file: string, data: string) => Promise<void>;
+  private deferredTimer?: NodeJS.Timeout;
+  private deferredDueAt?: number;
+  private deferredPending = false;
+  private deferredRevision = 0;
+  private deferredDelayMs = 60_000;
   constructor(dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads", hooks: StoreHooks = {}) {
     this.filename = path.join(dataDir, "state.json");
     this.downloadDir = downloadDir;
@@ -527,9 +532,11 @@ export class Store {
       }
       try {
         const temp = `${this.filename}.tmp`;
+        const writtenRevision = this.deferredRevision;
         await this.writeState(temp, JSON.stringify(this.state, null, 2));
         await renameWithRetry(temp, this.filename);
         this.persisted = true;
+        if (this.deferredPending && this.deferredRevision === writtenRevision) this.clearDeferred();
         if (!this.mediaState) {
           this.mediaState = Object.prototype.hasOwnProperty.call(this.state, "mediaConnections")
             || Object.prototype.hasOwnProperty.call(this.state, "mediaSecretCleanup");
@@ -550,8 +557,76 @@ export class Store {
     this.chain = write.catch(() => undefined);
     return write;
   }
+  /** Applies a change in memory now and writes it once within `maxDelayMs`. A crash can lose
+   *  up to that delay for a position whose playback has not ended. */
+  async updateLater(mutator: (state: State) => void, maxDelayMs = 60_000): Promise<void> {
+    const before = structuredClone(this.state);
+    try {
+      mutator(this.state);
+    } catch (error) {
+      this.state = before;
+      throw error;
+    }
+    this.deferredPending = true;
+    this.deferredRevision += 1;
+    this.deferredDelayMs = Number.isFinite(maxDelayMs) && maxDelayMs > 0 ? maxDelayMs : 60_000;
+    const due = Date.now() + this.deferredDelayMs;
+    if (this.deferredTimer && this.deferredDueAt !== undefined && this.deferredDueAt <= due) return;
+    if (this.deferredTimer) clearTimeout(this.deferredTimer);
+    this.deferredDueAt = due;
+    this.deferredTimer = setTimeout(() => {
+      this.deferredTimer = undefined;
+      this.deferredDueAt = undefined;
+      void this.writeDeferred();
+    }, this.deferredDelayMs);
+    this.deferredTimer.unref?.();
+  }
+  private clearDeferred(): void {
+    if (this.deferredTimer) clearTimeout(this.deferredTimer);
+    this.deferredTimer = undefined;
+    this.deferredDueAt = undefined;
+    this.deferredPending = false;
+  }
+  private writeDeferred(): Promise<void> {
+    const write = this.chain.then(async () => {
+      if (!this.deferredPending) return;
+      const writtenRevision = this.deferredRevision;
+      try {
+        const temp = `${this.filename}.tmp`;
+        await this.writeState(temp, JSON.stringify(this.state, null, 2));
+        await renameWithRetry(temp, this.filename);
+        this.persisted = true;
+        if (!this.mediaState) {
+          this.mediaState = Object.prototype.hasOwnProperty.call(this.state, "mediaConnections")
+            || Object.prototype.hasOwnProperty.call(this.state, "mediaSecretCleanup");
+        }
+        if (this.deferredRevision === writtenRevision) this.clearDeferred();
+      } catch (error) {
+        log("ERROR", "The state could not be saved", {
+          file: path.basename(this.filename),
+          code: (error as NodeJS.ErrnoException)?.code,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        if (this.deferredPending && !this.deferredTimer) {
+          this.deferredDueAt = Date.now() + this.deferredDelayMs;
+          this.deferredTimer = setTimeout(() => {
+            this.deferredTimer = undefined;
+            this.deferredDueAt = undefined;
+            void this.writeDeferred();
+          }, this.deferredDelayMs);
+          this.deferredTimer.unref?.();
+        }
+      }
+    });
+    this.chain = write.catch(() => undefined);
+    return write;
+  }
   /** Settles once every write queued so far has landed or failed. */
-  flush(): Promise<void> {
-    return this.chain;
+  async flush(): Promise<void> {
+    if (this.deferredTimer) clearTimeout(this.deferredTimer);
+    this.deferredTimer = undefined;
+    this.deferredDueAt = undefined;
+    await this.chain;
+    if (this.deferredPending) await this.writeDeferred();
   }
 }

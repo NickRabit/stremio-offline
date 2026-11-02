@@ -1388,7 +1388,7 @@ describe("RemoteLibraryBrowser saved position", () => {
     expect(calls.sources).toHaveLength(1);
     expect(stateGet()).toHaveLength(1);
     await click(clearButton()!);
-    expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { position: 0, duration: 0 } });
+    expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { position: 0, duration: 0, final: true } });
     expect(host.querySelector(".library-detail-progress")).toBeNull();
     expect(host.querySelector('.detail-secondary button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector('.library-detail-actions button[aria-label="Mark unwatched"]')?.getAttribute("aria-pressed")).toBe("true");

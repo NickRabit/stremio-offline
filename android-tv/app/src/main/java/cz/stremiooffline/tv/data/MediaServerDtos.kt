@@ -153,6 +153,7 @@ data class RemoteItemStatePatch(
   val favorite: Boolean? = null,
   val watched: Boolean? = null,
   val mediaSourceId: String? = null,
+  val final: Boolean? = null,
 )
 
 /** One `POST /api/remote-libraries/:libraryId/items/:itemId/playing` body: the media server is told

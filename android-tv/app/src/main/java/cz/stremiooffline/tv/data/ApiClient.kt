@@ -773,11 +773,12 @@ class ApiClient(
     addonKey: String?,
     remote: RemoteItemContext?,
     stableKey: String?,
+    final: Boolean,
   ) {
     // The body drops what it does not have instead of sending nulls, the way the download body does.
     val payload = progressJson.encodeToString(
       ProgressRequest.serializer(),
-      ProgressRequest(key, position, duration, title, path, poster, addonKey, VersionProgress.writer(remote)?.let { ProgressWriter(it.first, it.second, it.third) }, stableKey),
+      ProgressRequest(key, position, duration, title, path, poster, addonKey, VersionProgress.writer(remote)?.let { ProgressWriter(it.first, it.second, it.third) }, stableKey, final.takeIf { it }),
     )
     request(Request.Builder().url(address.resolve("/api/progress")).post(payload.toRequestBody(mediaType)).build())
   }
@@ -957,6 +958,8 @@ private data class ProgressRequest(
   val remote: ProgressWriter? = null,
   /** The source the position was played from; dropped when the caller named none. */
   val stableKey: String? = null,
+  /** Named only for the last report of a playback. */
+  val final: Boolean? = null,
 )
 
 @Serializable

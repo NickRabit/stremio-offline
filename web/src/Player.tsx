@@ -1072,9 +1072,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     });
     const send = (final = false) => {
       const body = payload();
-      if (body) void api.saveProgress(body).then(() => { if (final) onProgressSavedRef.current?.(body.key); }).catch(() => undefined);
+      if (body) {
+        const saved = final ? { ...body, final: true as const } : body;
+        void api.saveProgress(saved).then(() => { if (final) onProgressSavedRef.current?.(saved.key); }).catch(() => undefined);
+      }
     };
-    const leaving = () => { const body = payload(); if (body) api.saveProgressOnUnload(body); };
+    const leaving = () => { const body = payload(); if (body) api.saveProgressOnUnload({ ...body, final: true }); };
     const timer = setInterval(send, 10_000);
     window.addEventListener("pagehide", leaving);
     return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(true); };
@@ -1093,11 +1096,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     // store again the moment the write landed -- never before it, and never on another version's.
     const send = (final = false) => {
       const body = payload();
-      if (body) void api.saveRemoteState(remoteItem.libraryId, remoteItem.itemId, body)
+      if (body) void api.saveRemoteState(remoteItem.libraryId, remoteItem.itemId, final ? { ...body, final: true } : body)
         .then(() => { if (final) onProgressSavedRef.current?.(remoteVersionKey(remoteItem)); })
         .catch(() => undefined);
     };
-    const leaving = () => { const body = payload(); if (body) api.saveRemoteStateOnUnload(remoteItem.libraryId, remoteItem.itemId, body); };
+    const leaving = () => { const body = payload(); if (body) api.saveRemoteStateOnUnload(remoteItem.libraryId, remoteItem.itemId, { ...body, final: true }); };
     const timer = setInterval(send, 10_000);
     window.addEventListener("pagehide", leaving);
     return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(true); };

@@ -600,6 +600,7 @@ test("a role the provider reports absent is remembered and keeps the card URL of
     assert.equal(row.backdropAbsent, true);
 
     // A round trip through validRecord has to keep the flags, or the next read strips them.
+    await harness.store.flush();
     const fresh = await harness.reload();
     const reread = new MediaServerPersonal(fresh, harness.manager);
     const again = await reread.cards(harness.admin, { filter: "resume" });

@@ -120,6 +120,7 @@ class PlaybackControllerTest {
       addonKey: String?,
       remote: RemoteItemContext?,
       stableKey: String?,
+      final: Boolean,
     ) {
       if (failSave) throw IllegalStateException("the server said no")
       calls += "save"

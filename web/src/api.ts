@@ -25,6 +25,8 @@ export const describeError = (error: unknown): string => {
 
 export interface ProgressPayload {
   key: string; position: number; duration: number; title?: string; path?: string; poster?: string; addonKey?: string;
+  /** The playback is ending, so the server writes this position immediately. */
+  final?: true;
   /** The source the position was played from, as the server handed it over: a later read of the
    *  title resumes from that source again. */
   stableKey?: string;
@@ -422,10 +424,10 @@ export const api = {
     request<{ streams: Stream[] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/sources`, { signal }).then((answer) => answer.streams),
   remoteState: (libraryId: string, itemId: string, signal?: AbortSignal) =>
     request<RemoteItemState>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/state`, { signal }),
-  saveRemoteState: (libraryId: string, itemId: string, body: { position?: number; duration?: number; favorite?: boolean; watched?: boolean; mediaSourceId?: string }) =>
+  saveRemoteState: (libraryId: string, itemId: string, body: { position?: number; duration?: number; favorite?: boolean; watched?: boolean; mediaSourceId?: string; final?: true }) =>
     request<RemoteItemState>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/state`, { method: "PATCH", body: JSON.stringify(body) }),
   /** The page is going away: a keepalive PATCH outlives it, so the last position still lands. */
-  saveRemoteStateOnUnload: (libraryId: string, itemId: string, body: { position?: number; duration?: number; mediaSourceId?: string }) => void fetch(
+  saveRemoteStateOnUnload: (libraryId: string, itemId: string, body: { position?: number; duration?: number; mediaSourceId?: string; final?: true }) => void fetch(
     `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/state`,
     { method: "PATCH", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
   ).catch(() => undefined),

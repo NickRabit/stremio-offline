@@ -21,6 +21,7 @@ const MAX_JSON_BYTES = 2 * 1024 * 1024;
 const NEGATIVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const IMDB_ID = /^tt\d+$/;
 const TMDB_ID = /^tmdb:(\d+)$/;
+const WRITE_INTERVAL_MS = 5_000;
 
 /** The IMDb id an id carries, when it carries one. A catalogue chooses its own ids and an
  *  addon that groups titles by source prefixes them (`mpa:webshare-index:tt2709692`), so the
@@ -85,6 +86,10 @@ interface IdFlight {
   abandoned: boolean;
 }
 
+export interface ExternalIdStoreHooks {
+  writeState?: (file: string, data: string) => Promise<void>;
+}
+
 /**
  * Wikidata ids of a catalogue title, kept on disk: an id never changes, so a title is
  * asked about once. The store is the only place that talks to Wikidata, and it does so
@@ -93,11 +98,15 @@ interface IdFlight {
 export class ExternalIdStore {
   private entries: Record<string, CachedIds> = {};
   private inFlight = new Map<string, IdFlight>();
+  private timer?: NodeJS.Timeout;
+  private dirty = false;
   private saving: Promise<void> = Promise.resolve();
   private readonly file: string;
+  private readonly writeState: (file: string, data: string) => Promise<void>;
 
-  constructor(dataDir: string, private readonly fetchImpl?: FetchLike) {
+  constructor(dataDir: string, private readonly fetchImpl?: FetchLike, hooks: ExternalIdStoreHooks = {}) {
     this.file = path.join(dataDir, "external-ids.json");
+    this.writeState = hooks.writeState ?? writeAtomic;
   }
 
   /** Reads data/external-ids.json. Never throws: a missing or broken file starts empty. */
@@ -148,7 +157,7 @@ export class ExternalIdStore {
         const found = await this.lookup(imdbId, flight.controller.signal);
         if (!found || flight.abandoned || flight.controller.signal.aborted) return null;
         this.entries[imdbId] = { ...found, at: new Date().toISOString() };
-        await this.save();
+        this.changed();
         return found;
       } catch (error) {
         if (flight.controller.signal.aborted) return null;
@@ -226,16 +235,41 @@ export class ExternalIdStore {
     }
   }
 
+  async flush(): Promise<void> {
+    for (;;) {
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = undefined;
+      if (this.dirty) {
+        this.dirty = false;
+        this.queueSave();
+      }
+      await this.saving;
+      if (!this.dirty) return;
+    }
+  }
+
+  private changed(): void {
+    this.dirty = true;
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      if (!this.dirty) return;
+      this.dirty = false;
+      this.queueSave();
+    }, WRITE_INTERVAL_MS);
+    this.timer.unref?.();
+  }
+
   /** One write at a time: two lookups finishing together would share the temporary file. */
-  private save(): Promise<void> {
+  private queueSave(): void {
+    const data = JSON.stringify({ version: 1, entries: this.entries } satisfies CacheFile, null, 2);
     this.saving = this.saving.then(async () => {
       try {
-        await writeAtomic(this.file, JSON.stringify({ version: 1, entries: this.entries } satisfies CacheFile, null, 2));
+        await this.writeState(this.file, data);
       } catch (error) {
         log("WARN", "External ids could not be saved", { file: path.basename(this.file), reason: reasonOf(error) });
       }
     });
-    return this.saving;
   }
 }
 

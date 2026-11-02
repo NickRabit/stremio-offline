@@ -650,7 +650,7 @@ describe("LocalLibraryDetail extra sources", () => {
     // The clear forgets the title's row, and the copy's own row with it, or the fallback would
     // hand the dropped position straight back.
     expect(calls.progress.map(progressKey).at(-1)).toBe("movie:tt1");
-    expect(calls.remoteWrites).toEqual([{ position: 0, duration: 0, mediaSourceId: "msX" }]);
+    expect(calls.remoteWrites).toEqual([{ position: 0, duration: 0, mediaSourceId: "msX", final: true }]);
     expect(host.querySelector(".library-detail-progress")).toBeNull();
   });
 
