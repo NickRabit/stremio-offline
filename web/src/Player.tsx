@@ -262,10 +262,6 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioPreferenceRef = useRef(audioLanguage);
   const subtitlePreferenceRef = useRef<string | null>(subtitleLanguage);
-  /** The row on screen, for the writes that outlive the render they were started in: a switch
-   *  replaces the source while the progress ticker keeps its own tick. */
-  const streamRef = useRef(stream);
-  streamRef.current = stream;
   const [upNext, setUpNext] = useState(false);
   const [upNextSeconds, setUpNextSeconds] = useState(5);
   const [segments, setSegments] = useState<IntroSegments | null>(null);
@@ -1059,14 +1055,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // reports it from `pagehide` with a request that outlives the page.
   useEffect(() => {
     if (!open || !progressKey) return;
-    // The row on screen, read live: a switch replaces it while this ticker keeps its own tick, and
-    // the position belongs to the source that is really playing.
+    // Capture the playing source: closing can replace the prop with the browse panel's row
+    // before this effect saves its final position. A switch flushes the old source first.
     const payload = () => progressToSave(reportRef.current, {
       key: progressKey, title,
-      path: streamRef.current?.localPath,
+      path: stream?.localPath,
       poster: progressPoster,
       addonKey: progressAddonKey,
-      ...(streamRef.current?.stableKey ? { stableKey: streamRef.current.stableKey } : {}),
+      ...(stream?.stableKey ? { stableKey: stream.stableKey } : {}),
       // The row says which media-server version it was played from, so the detail can name it.
       ...(remoteItem ? { remote: { libraryId: remoteItem.libraryId, itemId: remoteItem.itemId, mediaSourceId: remoteItem.mediaSourceId } } : {}),
     });
@@ -1081,7 +1077,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const timer = setInterval(send, 10_000);
     window.addEventListener("pagehide", leaving);
     return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(true); };
-  }, [open, progressKey, remoteItem, title, progressPoster, progressAddonKey]);
+  }, [open, stream, progressKey, remoteItem, title, progressPoster, progressAddonKey]);
 
   // The same cadence for a media-server version the catalogue cannot name: the only one that keeps
   // the position in the remote-state store of its own item.
