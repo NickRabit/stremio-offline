@@ -505,3 +505,32 @@ test("a missing state.json and a new account written in its place never delete t
   await third.update((state) => { state.settings.logLevel = "INFO"; });
   assert.equal((await fixtureState.database.all("SELECT user_id FROM personal_rows WHERE user_id = ?", [ADA])).length, rows);
 });
+
+test("a pre-accounts state whose strip write fails keeps its account id and data on the next start", async (t) => {
+  const fixtureState = await fixture(t);
+  await writeFile(fixtureState.file, JSON.stringify({
+    addons: [], settings: {}, defaultsInstalled: true,
+    auth: { username: "ada", passwordHash: "scrypt$00$00", secret: "secret-secret-secret" },
+    favorites: ["lib_00000001/Film.mkv"],
+    progress: { "file:lib_00000001/Film.mkv": { position: 60, duration: 600, title: "Film", updatedAt: CREATED } },
+  }, null, 2));
+  let writes = 0;
+  const failing = new Store(fixtureState.dataDir, undefined, {
+    writeState: async (file, data) => {
+      writes += 1;
+      // The account migration is saved; the strip that follows the row import fails.
+      if (writes === 2) throw new Error("state write failed");
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
+  failing.attachDatabase(fixtureState.database);
+  await assert.rejects(failing.load(), /state write failed/);
+  const id = failing.users()[0]!.id;
+
+  const restarted = new Store(fixtureState.dataDir);
+  restarted.attachDatabase(await fixtureState.reopen());
+  await restarted.load();
+  assert.equal(restarted.users()[0]?.id, id, "the account keeps the id its rows are keyed by");
+  assert.deepEqual(restarted.userData(id).favorites, ["lib_00000001/Film.mkv"]);
+  assert.ok(restarted.userData(id).progress["file:lib_00000001/Film.mkv"]);
+});

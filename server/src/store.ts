@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AddonRecord } from "./types.js";
 import { hashPassword, type AuthState } from "./auth.js";
@@ -226,6 +226,8 @@ export class Store {
   /** Whether the hot personal data is persisted as rows. Only after an import or a marker load;
    *  until then (JSON mode, or a first start that found no state.json) state.json holds it. */
   private personalActive = false;
+  /** state.json exactly as this boot read it, for the import's migration-backup copy. */
+  private loadedRaw?: string;
   /** Whether a real `state.json` has been read or written successfully in this process.
    *  Startup reconciliation that deletes files must not run off a swallowed ENOENT. */
   private persisted = false;
@@ -263,6 +265,7 @@ export class Store {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     if (raw !== undefined) {
+      this.loadedRaw = raw;
       const loaded = JSON.parse(raw) as Partial<State>;
       this.persisted = true;
       this.mediaState = Object.prototype.hasOwnProperty.call(loaded, "mediaConnections")
@@ -280,8 +283,6 @@ export class Store {
       // After `migrate`, which still reads the personal keys off the flat settings object.
       // The cast is that moment: on disk the settings are both halves in one object.
       const migration = migrateUsers(this.state as unknown as MigratableState);
-      const personalLoad = this.database ? await this.loadPersonalRows() : undefined;
-      if (personalLoad === "import") await this.writePersisted(true, false);
       if (migration.migrated || sourceProfilesChanged) {
         if (migration.migrated) {
           log("INFO", "The account was moved into the list of users", { userId: migration.userId });
@@ -289,8 +290,13 @@ export class Store {
         // Written out now. The old shape stays readable for one release, and leaving it on
         // disk would mean the next boot migrating an account whose sessions are already
         // keyed by an id the file does not have.
+        // This runs before the personal rows are imported: a pre-accounts file mints a new
+        // random account id on every boot until this write lands, so rows imported first would
+        // be keyed by an id the next boot no longer knows.
         await this.update(() => {});
       }
+      const personalLoad = this.database ? await this.loadPersonalRows() : undefined;
+      if (personalLoad === "import") await this.writePersisted(true, false);
     } else {
       this.normalizeSourceProfiles();
       // No state.json was read. With no import marker this is a first start: nothing is imported
@@ -507,7 +513,8 @@ export class Store {
       const backupDir = path.join(this.dataDir, "migration-backup");
       await mkdir(backupDir, { recursive: true, mode: 0o700 });
       if (process.platform !== "win32") await chmod(backupDir, 0o700);
-      await copyFile(this.filename, path.join(backupDir, `state-${importedAt}.json`));
+      // The bytes as they were read, before any migration of this boot rewrote the file.
+      await writeFile(path.join(backupDir, `state-${importedAt}.json`), this.loadedRaw ?? await readFile(this.filename, "utf8"), { mode: 0o600 });
     }
     const statements: Statement[] = [...rows].map(([storedKey, data]) => {
       const [userId, domain, key] = storedKey.split("\0");
