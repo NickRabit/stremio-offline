@@ -105,8 +105,8 @@ function PreviewFrame({ sessionId, time }: { sessionId: string; time: number }) 
   return image ? <img src={image} alt="" /> : null;
 }
 
-function TimelineBar({ value, max, sessionId, chapters, onScrub, onSeek, onReveal }: {
-  value: number; max: number; sessionId?: string; chapters?: PlaybackChapter[]; onScrub: (value: number | null) => void; onSeek: (value: number) => void; onReveal: () => void;
+function TimelineBar({ value, max, sessionId, chapters, segments, onScrub, onSeek, onReveal }: {
+  value: number; max: number; sessionId?: string; chapters?: PlaybackChapter[]; segments: IntroSegments | null; onScrub: (value: number | null) => void; onSeek: (value: number) => void; onReveal: () => void;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startValue: number; moved: boolean } | null>(null);
@@ -159,6 +159,7 @@ function TimelineBar({ value, max, sessionId, chapters, onScrub, onSeek, onRevea
   const percent = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
   const previewTime = dragging ? value : hover ?? 0;
   const previewChapter = chapterAt(chapters, previewTime);
+  const previewSegment = activeSegment(segments, previewTime);
   return <div
     ref={trackRef}
     className={`timeline-bar${dragging ? " scrubbing" : ""}`}
@@ -186,12 +187,20 @@ function TimelineBar({ value, max, sessionId, chapters, onScrub, onSeek, onRevea
         ? <i key={chapter.start} className="timeline-chapter" style={{ left: `${chapter.start / max * 100}%` }} aria-hidden="true" />
         : null)}
       <i className="timeline-fill" style={{ width: `${percent}%` }} />
+      {max > 0 && SEGMENT_KINDS.map((kind) => {
+        const range = segments?.[kind];
+        if (!range || range.start >= max) return null;
+        const end = Math.min(range.end, max);
+        return <i key={kind} className="timeline-segment" data-kind={kind}
+          style={{ left: `${range.start / max * 100}%`, width: `${(end - range.start) / max * 100}%` }} />;
+      })}
       <b className="timeline-thumb" style={{ left: `${percent}%` }} />
     </div>
     {(dragging || hover !== null) && <span className="timeline-preview" style={{ left: `clamp(80px, ${max > 0 ? (dragging ? value : hover ?? 0) / max * 100 : 0}%, calc(100% - 80px))` }}>
       {sessionId && <PreviewFrame sessionId={sessionId} time={previewTime} />}
       <span>{fmt(previewTime)}</span>
       {previewChapter >= 0 && <small>{chapterLabel(chapters!, previewChapter)}</small>}
+      {previewSegment && <small>{t(SEGMENT_KEY[previewSegment.kind])}</small>}
     </span>}
   </div>;
 }
@@ -240,6 +249,14 @@ const trackLabel = (track: Track) => {
 
 const SUBTITLE_DELAY_STEP_S = 0.25;
 const SUBTITLE_DELAY_LIMIT_S = 30;
+const SEGMENT_KINDS = ["intro", "recap", "outro"] as const;
+
+const SEGMENT_KEY: Record<SegmentKind, Key> = {
+  intro: "player.segmentIntro",
+  recap: "player.segmentRecap",
+  outro: "player.segmentOutro",
+};
+
 const SKIP_KEY: Record<SegmentKind, Key> = {
   intro: "player.skipIntro",
   recap: "player.skipRecap",
@@ -1481,7 +1498,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       {chapterIndex >= 0 && chapters && <div className="player-chapter" aria-live="off">{chapterLabel(chapters, chapterIndex)}</div>}
       <div className="timeline">
         <span>{fmt(position)}</span>
-        <TimelineBar sessionId={session?.id} chapters={chapters} value={Math.min(position, seekable)} max={seekable}
+        <TimelineBar sessionId={session?.id} chapters={chapters} segments={segments} value={Math.min(position, seekable)} max={seekable}
           onScrub={(next) => { revealControls(); setScrub(next); }}
           onSeek={(next) => void seekTo(next)}
           onReveal={revealControls} />

@@ -692,6 +692,15 @@ describe("Player chapters, segments and next episode", () => {
     expect(host.querySelector(".player-skip")?.textContent).toBe("Skip intro");
   });
 
+  it("marks the intro and the credits on the timeline", async () => {
+    introAnswer = { intro: { start: 0, end: 360 }, outro: { start: 3240, end: 3600 } };
+    await render({ progressKey: "series:tt0096697:1:8" });
+    await videoAt(10);
+    const marks = [...host.querySelectorAll<HTMLElement>(".timeline-segment")];
+    expect(marks.map((mark) => [mark.dataset.kind, mark.style.left, mark.style.width]))
+      .toEqual([["intro", "0%", "10%"], ["outro", "90%", "10%"]]);
+  });
+
   it("offers a skip button that seeks past the intro", async () => {
     introAnswer = { intro: { start: 5, end: 60 } };
     await render({ progressKey: "movie:tt0903747" });
