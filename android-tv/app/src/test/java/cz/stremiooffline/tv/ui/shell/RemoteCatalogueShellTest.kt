@@ -19,6 +19,8 @@ import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.HomeCard
+import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.RemoteItemDetailDto
 import cz.stremiooffline.tv.data.RemoteItemDto
@@ -35,6 +37,7 @@ import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
 import cz.stremiooffline.tv.ui.detail.TagRemoteDetailPlay
 import cz.stremiooffline.tv.ui.library.remoteItemTag
 import cz.stremiooffline.tv.ui.library.remoteLibraryTag
+import cz.stremiooffline.tv.ui.library.TagRemoteSeriesPrimary
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -136,13 +139,48 @@ class RemoteCatalogueShellTest {
   }
 
   @Test
-  fun `an item without provider ids keeps the remote detail screen`() {
+  fun `an item without provider ids opens the catalogue detail and Back restores grid focus`() {
     val item = RemoteItemDto(id = "movie", name = "Movie", type = "movie")
     mount(api(item))
 
     openItem("movie")
 
-    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagRemoteDetailPlay).assertExists() }.isSuccess }
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess }
+    compose.onNodeWithTag(TagRemoteDetailPlay).assertDoesNotExist()
+
+    scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(remoteItemTag("movie")).assertIsFocused() }.isSuccess }
+  }
+
+  @Test
+  fun `a failed episode lookup keeps the remote detail screen`() {
+    val item = RemoteItemDto(id = "show", name = "Show", type = "series")
+    val api = api(item).apply {
+      remoteItemsFailure = ApiError(ApiFailure.Generic)
+    }
+    mount(api)
+
+    openItem("show")
+
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagRemoteSeriesPrimary).assertExists() }.isSuccess
+    }
+    compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a failed film lookup keeps the remote detail screen`() {
+    val item = RemoteItemDto(id = "movie", name = "Movie", type = "movie")
+    val api = api(item).apply {
+      remoteItemFailure = ApiError(ApiFailure.Generic)
+    }
+    mount(api)
+
+    openItem("movie")
+
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagRemoteDetailPlay).assertExists() }.isSuccess
+    }
     compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
   }
 }

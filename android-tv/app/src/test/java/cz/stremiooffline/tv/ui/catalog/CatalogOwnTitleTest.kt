@@ -71,7 +71,7 @@ class CatalogOwnTitleTest {
       ),
       addonName = "",
       type = "movie",
-      ownTitle = OwnTitle(
+      backend = LibraryBackend(
         rows = mapOf("local:Films/Heat" to listOf(row(path))),
         favouritePath = "Films/Heat",
         favourite = false,
@@ -136,7 +136,7 @@ class CatalogOwnTitleTest {
       addonName = "",
       type = "series",
       episode = ResumeEpisode("series:local:$second", 1, 2),
-      ownTitle = OwnTitle(
+      backend = LibraryBackend(
         rows = mapOf(
           "local:$first" to listOf(row(first)),
           "local:$second" to listOf(row(second)),
@@ -168,7 +168,7 @@ class CatalogOwnTitleTest {
       progressValues["file:Show/E1.mkv"] = ProgressDto(position = 1200.0, duration = 1200.0)
       progressValues["file:Show/E2.mkv"] = ProgressDto(position = 300.0, duration = 1200.0)
     }
-    val own = OwnTitle(
+    val own = LibraryBackend(
       rows = mapOf(
         "local:Show/E1.mkv" to listOf(StreamDto(sourceId = "1", kind = "library", playable = true, localPath = "Show/E1.mkv")),
         "local:Show/E2.mkv" to listOf(StreamDto(sourceId = "2", kind = "library", playable = true, localPath = "Show/E2.mkv")),

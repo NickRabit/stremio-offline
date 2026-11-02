@@ -28,8 +28,6 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SearchScope
-import cz.stremiooffline.tv.data.ProgressDto
-import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
@@ -47,16 +45,6 @@ fun catalogOptionTag(index: Int): String = "catalog_option_$index"
 fun catalogHeaderTag(addonKey: String): String = "catalog_header_$addonKey"
 fun genreOptionTag(index: Int): String = "genre_option_$index"
 const val TagGenreAll = "genre_option_all"
-
-/** A title the catalogue does not know: its own copies keyed by video id (the meta id for a film),
- *  and the library item its star belongs to. */
-data class OwnTitle(
-  val rows: Map<String, List<StreamDto>>,
-  val favouritePath: String,
-  val favourite: Boolean,
-  /** Each episode's own stored position, keyed like [rows], for the progress on its card. */
-  val progress: Map<String, ProgressDto> = emptyMap(),
-)
 
 /** Everything the detail needs to open one catalogue title.
  *  [episode] is set when Home opens a remembered episode, so the detail focuses it. */
@@ -79,7 +67,7 @@ data class CatalogDetailArgs(
   val preferredRemote: RemoteItemRef? = null,
   /** The viewer's own library copy this catalogue detail was opened from. */
   val preferredLocalPath: String? = null,
-  val ownTitle: OwnTitle? = null,
+  val backend: TitleBackend = CatalogueBackend,
 )
 
 data class RemoteItemRef(val libraryId: String, val itemId: String, val mediaSourceId: String? = null)

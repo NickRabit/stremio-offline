@@ -59,7 +59,6 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.ApiError
-import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
 import cz.stremiooffline.tv.catalog.ProgressKey
 import cz.stremiooffline.tv.catalog.Streams
@@ -87,6 +86,8 @@ import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
+import cz.stremiooffline.tv.ui.catalog.remoteRows
+import cz.stremiooffline.tv.ui.catalog.remoteResumeCards
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
 import cz.stremiooffline.tv.ui.catalog.episodeLine
 import cz.stremiooffline.tv.ui.catalog.BulkOrigin
@@ -548,7 +549,7 @@ internal fun RemoteSeriesScreen(
   // Back from the player the row and Play follow what was just watched.
   LaunchedEffect(parentIdentity, restoreToken, returnToken) {
     ui.resume = try {
-      api.remotePersonal("resume", 0, 60).items.filterIsInstance<HomeCard.Remote>().filter { it.libraryId == data.libraryId }
+      remoteResumeCards(api, data.libraryId)
     } catch (cancelled: CancellationException) {
       throw cancelled
     } catch (_: ApiError) {
@@ -613,7 +614,7 @@ internal fun RemoteSeriesScreen(
     }
     delay(350)
     val versions = try {
-      api.remoteSources(data.libraryId, wanted).filter { Streams.isRemoteStream(it) }
+      remoteRows(api, data.libraryId, wanted)
     } catch (cancelled: CancellationException) {
       throw cancelled
     } catch (_: ApiError) {
@@ -951,7 +952,7 @@ private data class RemoteBulkPanelData(
 )
 
 @Composable
-private fun RemoteSeriesBulkHost(
+internal fun RemoteSeriesBulkHost(
   api: TvApi,
   origin: BulkOrigin.Remote,
   title: String,

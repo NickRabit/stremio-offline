@@ -810,6 +810,7 @@ open class FakeTvApi : TvApi {
 
   /** Every state PATCH in order, so a test can name the fields the screen wrote. */
   var remoteStatePatches: MutableList<RemoteItemStatePatch> = mutableListOf()
+  val remoteStatePatchRequests: MutableList<Triple<String, String, RemoteItemStatePatch>> = mutableListOf()
   var remoteStatePatchFailure: ApiError? = null
 
   val remotePlaybackReports: MutableList<Triple<String, String, RemotePlaybackReport>> = mutableListOf()
@@ -824,6 +825,7 @@ open class FakeTvApi : TvApi {
     patch: RemoteItemStatePatch,
   ): RemoteItemStateDto {
     remoteStatePatches += patch
+    remoteStatePatchRequests += Triple(libraryId, itemId, patch)
     remoteStatePatchFailure?.let { throw it }
     // Mirrors the server: only the fields the patch set travel and the rest stay as they were.
     remoteStateValue = remoteStateValue.copy(

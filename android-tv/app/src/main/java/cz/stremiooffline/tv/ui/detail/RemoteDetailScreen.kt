@@ -78,6 +78,7 @@ import cz.stremiooffline.tv.ui.catalog.nativeCopySubject
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.nativeRowTarget
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
+import cz.stremiooffline.tv.ui.catalog.remoteRows
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.library.RemoteSeriesScreen
@@ -311,7 +312,7 @@ fun RemoteDetailScreen(
     sourcesLoading = true
     sourcesError = false
     try {
-      val found = api.remoteSources(detail.libraryId, detail.item.id).filter { Streams.isRemoteStream(it) }
+      val found = remoteRows(api, detail.libraryId, detail.item.id)
       if (live.value != mine) return
       sources = found
     } catch (cancelled: CancellationException) {

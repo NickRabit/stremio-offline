@@ -4,6 +4,7 @@ import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.ProgressDto
+import cz.stremiooffline.tv.ui.catalog.LibraryBackend
 import cz.stremiooffline.tv.ui.detail.DetailData
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -125,9 +126,10 @@ class LibraryCatalogueTest {
     assertEquals("poster.jpg", args.meta.poster)
     assertEquals("poster.jpg", args.meta.background)
     assertEquals("movie", args.type)
-    assertEquals("folder", args.ownTitle?.favouritePath)
-    assertEquals(false, args.ownTitle?.favourite)
-    assertEquals(listOf(path), args.ownTitle?.rows?.get("local:folder")?.map { it.localPath })
+    val backend = args.backend as LibraryBackend
+    assertEquals("folder", backend.favouritePath)
+    assertEquals(false, backend.favourite)
+    assertEquals(listOf(path), backend.rows["local:folder"]?.map { it.localPath })
   }
 
   @Test
@@ -140,7 +142,7 @@ class LibraryCatalogueTest {
 
     assertEquals(
       listOf(large, small),
-      args.ownTitle?.rows?.get("local:folder")?.map { it.localPath },
+      (args.backend as LibraryBackend).rows["local:folder"]?.map { it.localPath },
     )
     assertNull(args.meta.videos)
   }
@@ -162,6 +164,6 @@ class LibraryCatalogueTest {
     assertEquals(listOf(1, 2), videos.map { it.episode })
     assertEquals(listOf("Show.S01E01.mkv", "Show.S01E02.mkv"), videos.map { it.title })
     assertEquals(ResumeEpisode("series:local:$second", 1, 2), args.episode)
-    assertEquals(second, args.ownTitle?.rows?.get("local:$second")?.single()?.localPath)
+    assertEquals(second, (args.backend as LibraryBackend).rows["local:$second"]?.single()?.localPath)
   }
 }
