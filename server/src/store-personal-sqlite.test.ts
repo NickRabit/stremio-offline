@@ -454,22 +454,31 @@ test("JSON mode keeps writing hot personal fields into state.json", async (t) =>
   assert.deepEqual(saved.userData?.[ADA]?.progress, personal("Ada", false).progress);
 });
 
-test("a missing state.json never deletes the rows of the accounts it would have named", async (t) => {
+test("a migrated install whose state.json is missing refuses to start and keeps every row", async (t) => {
   const fixtureState = await fixture(t);
   await fixtureState.seed();
   const first = new Store(fixtureState.dataDir);
   first.attachDatabase(fixtureState.database);
   await first.load();
-  const before = await fixtureState.database.all("SELECT user_id FROM personal_rows");
-  assert.ok(before.length > 0);
+  const before = (await fixtureState.database.all("SELECT user_id FROM personal_rows")).length;
+  assert.ok(before > 0);
+  const kept = await readFile(fixtureState.file, "utf8");
 
-  // A mis-mounted volume or a deleted file: the database is there, state.json is not.
+  // A mis-mounted volume or a deleted file. Carrying on would offer first-run setup.
   await rm(fixtureState.file);
   const restarted = new Store(fixtureState.dataDir);
   restarted.attachDatabase(await fixtureState.reopen());
-  await restarted.load();
+  await assert.rejects(restarted.load(), /state\.json is missing/);
+  assert.equal(restarted.users().length, 0);
+  await assert.rejects(readFile(fixtureState.file, "utf8"), { code: "ENOENT" }, "no new state is written");
+  assert.equal((await fixtureState.database.all("SELECT user_id FROM personal_rows")).length, before);
 
-  assert.equal((await fixtureState.database.all("SELECT user_id FROM personal_rows")).length, before.length);
+  // Putting the file back is all it takes.
+  await writeFile(fixtureState.file, kept);
+  const restored = new Store(fixtureState.dataDir);
+  restored.attachDatabase(await fixtureState.reopen());
+  await restored.load();
+  assert.ok(Object.keys(restored.userData(ADA).progress).length > 0);
 });
 
 test("a first start without state.json writes no file and no marker, and a later start imports", async (t) => {
@@ -488,29 +497,6 @@ test("a first start without state.json writes no file and no marker, and a later
   await restarted.load();
   assert.ok(await marker(fixtureState.database));
   assert.ok(Object.keys(restarted.userData(ADA).progress).length > 0);
-});
-
-test("a missing state.json and a new account written in its place never delete the old rows", async (t) => {
-  const fixtureState = await fixture(t);
-  await fixtureState.seed();
-  const first = new Store(fixtureState.dataDir);
-  first.attachDatabase(fixtureState.database);
-  await first.load();
-  const rows = (await fixtureState.database.all("SELECT user_id FROM personal_rows WHERE user_id = ?", [ADA])).length;
-  assert.ok(rows > 0);
-
-  await rm(fixtureState.file);
-  const second = new Store(fixtureState.dataDir);
-  second.attachDatabase(await fixtureState.reopen());
-  await second.load();
-  // The server carries on and publishes a state with a different account.
-  await second.update((state) => { state.settings.logLevel = "DEBUG"; state.defaultsInstalled = true; });
-
-  const third = new Store(fixtureState.dataDir);
-  third.attachDatabase(await fixtureState.reopen());
-  await third.load();
-  await third.update((state) => { state.settings.logLevel = "INFO"; });
-  assert.equal((await fixtureState.database.all("SELECT user_id FROM personal_rows WHERE user_id = ?", [ADA])).length, rows);
 });
 
 test("a pre-accounts state whose strip write fails keeps its account id and data on the next start", async (t) => {
@@ -592,4 +578,68 @@ test("unclaimed top-level personal data keeps the store in state.json until an a
   assert.ok(await marker(fixtureState.database));
   assert.deepEqual(restarted.userData(id).favorites, ["lib_00000001/Film.mkv"]);
   assert.ok(restarted.userData(id).progress["file:lib_00000001/Film.mkv"]);
+});
+
+test("two watchlist keys that differ only after a NUL stay two rows", async (t) => {
+  const fixtureState = await fixture(t);
+  const state = seededState();
+  state.userData![ADA]!.watchlist = {
+    "movie:tt123": { type: "movie", id: "tt123", name: "One", addedAt: CREATED },
+    "movie:tt123\u0000alt": { type: "movie", id: "tt123\u0000alt", name: "Two", addedAt: CREATED },
+  };
+  await fixtureState.seed(state);
+  const store = new Store(fixtureState.dataDir);
+  store.attachDatabase(fixtureState.database);
+  await store.load();
+  assert.equal((await fixtureState.database.all("SELECT key FROM personal_rows WHERE user_id = ? AND domain = 'watchlist'", [ADA])).length, 2);
+
+  await store.update((next) => { delete next.userData![ADA]!.watchlist["movie:tt123\u0000alt"]; });
+  const restarted = new Store(fixtureState.dataDir);
+  restarted.attachDatabase(await fixtureState.reopen());
+  await restarted.load();
+  assert.deepEqual(Object.keys(restarted.userData(ADA).watchlist), ["movie:tt123"]);
+});
+
+test("a change to both files interrupted before the rows landed is completed at the next start", async (t) => {
+  const fixtureState = await fixture(t);
+  await fixtureState.seed();
+  const batches: Statement[][] = [];
+  const controlled = controllableBatch(fixtureState.database, batches);
+  const store = new Store(fixtureState.dataDir);
+  store.attachDatabase(controlled.database);
+  await store.load();
+  controlled.control.failNext = true;
+
+  // Like forgetting a library: the cold state changes and a favourite goes with it.
+  await assert.rejects(store.update((state) => {
+    state.settings.logLevel = "ERROR";
+    state.userData![ADA]!.favorites = [];
+  }), /database write failed/);
+
+  // The process stops before the deferred retry. The next start finishes the change.
+  const restarted = new Store(fixtureState.dataDir);
+  restarted.attachDatabase(await fixtureState.reopen());
+  await restarted.load();
+  assert.equal(restarted.settings().logLevel, "ERROR");
+  assert.deepEqual(restarted.userData(ADA).favorites, []);
+  const favorites = await fixtureState.database.get<{ data: string }>(
+    "SELECT data FROM personal_rows WHERE user_id = ? AND domain = 'favorites'", [ADA],
+  );
+  assert.equal(favorites?.data, "[]");
+
+  await restarted.update((state) => { state.settings.logLevel = "INFO"; });
+  const saved = JSON.parse(await readFile(fixtureState.file, "utf8")) as Record<string, unknown>;
+  assert.equal("personalPending" in saved, false, "the journal is gone once replayed");
+});
+
+test("a change to only the rows writes no journal and no state.json", async (t) => {
+  const fixtureState = await fixture(t);
+  await fixtureState.seed();
+  const writer = recordingWrites();
+  const store = new Store(fixtureState.dataDir, undefined, { writeState: writer.hook });
+  store.attachDatabase(fixtureState.database);
+  await store.load();
+  const writesBefore = writer.writes.length;
+  await store.update((state) => { state.userData![ADA]!.favorites = ["lib_00000001/Other.mkv"]; });
+  assert.equal(writer.writes.length, writesBefore);
 });

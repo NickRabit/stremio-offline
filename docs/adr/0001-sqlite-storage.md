@@ -171,18 +171,21 @@ they cannot surface under another account, and a missing, replaced or older
 `state.json` can therefore never destroy the only copy of anybody's data. A
 deleted account's rows go with the write that deletes it. A start that finds no
 `state.json` imports nothing and writes no marker, so the personal data stays in
-the file until a start that reads it; a start that finds the marker but no
-`state.json` logs an error that says to restore the file.
+the file until a start that reads it. A start that finds the marker but no
+`state.json` refuses to start: carrying on would come up with no accounts, and
+an install with no accounts offers first-run setup to whoever reaches it.
 
-There is no cross-file atomicity between `application.sqlite` and `state.json`.
-A few operations deliberately change both: account creation and deletion,
-media-server connection or library removal, settings import, and library
-deletion. A process failure between the two writes leaves the cold change in
-place and the rows behind it. For accounts this still ends consistent: a deleted
-account's leftover rows are never loaded again, and a new account starts empty.
-The opposite order was rejected because a failed JSON write after the rows had
-committed could leave an account whose rows were already deleted, with nothing
-able to repair it after a restart.
+A few operations change both files: account creation and deletion, media-server
+connection or library removal, settings import, and library deletion. Such a
+write journals its row changes inside the `state.json` it commits
+(`personalPending`), then writes the rows, then rewrites `state.json` without
+the journal. If the process stops before the rows land, the next start replays
+the journal (upserts and deletes are idempotent) and the change is complete, so
+nothing is left half done with no request left to retry it. A write that changes
+only rows writes no journal and no `state.json`. Rows are keyed in memory by a
+JSON array, never by a separator, so map keys may hold any character. The
+opposite order (rows first) was rejected because a failed JSON write after the
+rows had committed could leave an account whose rows were already deleted.
 
 ### Backup
 
