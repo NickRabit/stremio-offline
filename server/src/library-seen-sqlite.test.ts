@@ -219,3 +219,19 @@ test("a library-seen change during an in-flight batch is written by the next flu
   assert.deepEqual(rows.map((row) => row.path), ["A.mkv", "B.mkv"]);
   assert.equal((JSON.parse(rows[0]!.data) as SeenFile).size, 11);
 });
+
+test("the pending-change list lets go of paths once they are written", async (t) => {
+  const { dataDir, database } = await fixture(t);
+  const store = new LibrarySeenStore(dataDir);
+  store.attachDatabase(database);
+  await store.load();
+  const files = Array.from({ length: 1000 }, (_, index) => file(`Film ${index}.mkv`, 10 + index, "2026-01-01T00:00:00.000Z"));
+  store.observe("lib_a", files, new Date("2026-02-01T00:00:00.000Z"));
+  await store.flush();
+  await store.forget("lib_a");
+
+  const pending = store as unknown as { dirtyFiles: Map<string, unknown>; dirtyLibraries: Map<string, unknown> };
+  assert.equal(pending.dirtyFiles.size, 0, "written paths are not kept");
+  assert.equal(pending.dirtyLibraries.size, 0);
+  assert.deepEqual(await database.all("SELECT path FROM library_seen"), []);
+});

@@ -409,8 +409,8 @@ export class LibrarySeenStore {
     if (!this.dirty) return;
     if (this.protected) {
       this.dirty = false;
-      this.dirtyFiles.forget(this.dirtyFiles.snapshot());
-      this.dirtyLibraries.forget(this.dirtyLibraries.snapshot());
+      this.dirtyFiles.release(this.dirtyFiles.snapshot());
+      this.dirtyLibraries.release(this.dirtyLibraries.snapshot());
       this.forgottenLibraries.clear();
       log("WARN", "The first-seen index was not saved over a file that could not be read or copied aside", { file: this.file });
       return;
@@ -459,8 +459,8 @@ export class LibrarySeenStore {
 
     try {
       if (statements.length) await database.batch(statements);
-      this.dirtyFiles.forget(files);
-      this.dirtyLibraries.forget(libraries);
+      this.dirtyFiles.release(files);
+      this.dirtyLibraries.release(libraries);
       for (const libraryId of forgotten) this.forgottenLibraries.delete(libraryId);
     } catch (error) {
       this.dirty = true;

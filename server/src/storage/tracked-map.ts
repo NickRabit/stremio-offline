@@ -32,6 +32,16 @@ export class TrackedMap<K, V> extends Map<K, V> {
     }
   }
 
+  /** For a map used only as a list of pending changes: forgets what the snapshot covered and
+   *  drops those entries too, unless a newer change marked them again meanwhile. Without this
+   *  such a list keeps every key it has ever seen. */
+  release(snapshot: TrackedSnapshot<K>): void {
+    this.forget(snapshot);
+    for (const key of snapshot.keys()) {
+      if (!this.generations.has(key)) super.delete(key);
+    }
+  }
+
   hasDirty(): boolean {
     return this.generations.size > 0;
   }
