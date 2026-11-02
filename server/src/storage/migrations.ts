@@ -16,4 +16,10 @@ export const MIGRATIONS: readonly Migration[] = [
       "CREATE TABLE image_sources (id TEXT PRIMARY KEY, url TEXT NOT NULL, width INTEGER, ext TEXT, bytes INTEGER, at INTEGER NOT NULL) STRICT",
     ],
   },
+  {
+    version: 3,
+    statements: [
+      "CREATE TABLE hourly_counts (domain TEXT NOT NULL, hour TEXT NOT NULL, key TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (domain, hour, key)) STRICT, WITHOUT ROWID",
+    ],
+  },
 ];

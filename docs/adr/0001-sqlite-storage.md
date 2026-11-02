@@ -101,6 +101,16 @@ remains the synchronous read path. Scheduled flushes write only changed rows in
 one transaction; image bytes remain in `images/` and their eviction policy is
 unchanged. No other JSON store moved in this phase.
 
+### Phase 2: hourly counts
+
+Picture and provider-call statistics moved from `image-stats.json` and
+`provider-stats.json` to the shared `hourly_counts` table. Their in-memory
+hourly buckets remain the synchronous read path. A flush upserts only pairs
+changed since the previous write, with generation tracking keeping counts that
+change during a write pending for the next flush. The same batch prunes hours
+outside the 400-day retention window. A domain marker in `meta` controls the
+one-time JSON import, and the old files are moved to `migration-backup/`.
+
 ### Backup
 
 Backups are offline in this phase: stop the server, then copy the entire data
