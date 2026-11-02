@@ -35,8 +35,14 @@ const PERSONAL_DOMAINS = [...PERSONAL_MAP_DOMAINS, "favorites"] as const;
 type PersonalDomain = typeof PERSONAL_DOMAINS[number];
 type PersonalMapDomain = typeof PERSONAL_MAP_DOMAINS[number];
 
+/** The in-memory key of one row. JSON, not a separator: a map key may contain any character,
+ *  NUL included, and splitting on a separator would merge two different keys into one. */
 const personalKey = (userId: string, domain: PersonalDomain, key: string) =>
-  `${userId}\0${domain}\0${key}`;
+  JSON.stringify([userId, domain, key]);
+const splitPersonalKey = (stored: string) => JSON.parse(stored) as [string, PersonalDomain, string];
+/** One row change, as the state file journals it for a write that changes both files. */
+type PersonalOp = [userId: string, domain: string, key: string, data: string | null];
+const PERSONAL_JOURNAL = "personalPending";
 const PERSONAL_INSERT = "INSERT INTO personal_rows (user_id, domain, key, data) VALUES (?, ?, ?, ?)";
 const PERSONAL_UPSERT = "INSERT INTO personal_rows (user_id, domain, key, data) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, domain, key) DO UPDATE SET data = excluded.data";
 const PERSONAL_DELETE = "DELETE FROM personal_rows WHERE user_id = ? AND domain = ? AND key = ?";
@@ -299,16 +305,18 @@ export class Store {
       // No state.json was read. With no import marker this is a first start: nothing is imported
       // and no marker is written, so the personal data stays in state.json until a later start
       // finds the file and imports it. With a marker, the file has gone missing while the rows
-      // still hold somebody's data: they are left alone, never loaded and never deleted, and the
-      // log says how to get them back.
+      // still hold somebody's data: the start stops (see below) and nothing is deleted.
       if (this.database) {
         const marker = await this.database.get<{ value: string }>("SELECT value FROM meta WHERE key = ?", [PERSONAL_MARKER]);
         if (marker) {
+          // Carrying on would start with no accounts at all, and an install with no accounts
+          // offers first-run setup: anybody who reached it would create a new administrator.
+          // The rows say this install had accounts, so the start stops until the file is back.
           const held = await this.database.get<{ n: number }>("SELECT count(DISTINCT user_id) AS n FROM personal_rows");
-          log("ERROR", "state.json is missing while application.sqlite holds personal data; restore state.json from a backup or from migration-backup/ before using the server", {
+          log("ERROR", "state.json is missing while application.sqlite holds the data of existing accounts; restore state.json from a backup or from migration-backup/ and start again", {
             accounts: held?.n ?? 0,
           });
-          await this.loadPersonalRows();
+          throw new Error("state.json is missing while application.sqlite holds existing accounts. Restore state.json from a backup or from migration-backup/ and start again.");
         }
       }
     }
@@ -421,6 +429,7 @@ export class Store {
     for (const data of Object.values(state.userData ?? {})) {
       for (const domain of PERSONAL_DOMAINS) delete data[domain];
     }
+    delete (state as unknown as Record<string, unknown>)[PERSONAL_JOURNAL];
     return JSON.stringify(state, null, 2);
   }
   private async loadPersonalRows(): Promise<"import" | undefined> {
@@ -439,6 +448,27 @@ export class Store {
       return await this.importPersonalRows();
     }
 
+    // A write that changed both files journals its row changes in state.json first. Found here,
+    // the process stopped before the rows landed: they are applied now (upserts and deletes are
+    // idempotent, so a journal whose rows did land is harmless) and the next write drops it.
+    const journal = (this.state as unknown as Record<string, unknown>)[PERSONAL_JOURNAL];
+    let journalReplayed = false;
+    if (journal !== undefined) {
+      if (!Array.isArray(journal) || journal.some((op) => !Array.isArray(op) || op.length !== 4
+        || typeof op[0] !== "string" || typeof op[1] !== "string" || typeof op[2] !== "string"
+        || (op[3] !== null && typeof op[3] !== "string")
+        || !(PERSONAL_DOMAINS as readonly string[]).includes(op[1]))) {
+        throw new Error("The pending personal changes in state.json are malformed.");
+      }
+      const ops = journal as PersonalOp[];
+      if (ops.length) {
+        await database.batch(ops.map(([userId, domain, key, data]) => data === null
+          ? { sql: PERSONAL_DELETE, params: [userId, domain, key] }
+          : { sql: PERSONAL_UPSERT, params: [userId, domain, key, data] }));
+      }
+      delete (this.state as unknown as Record<string, unknown>)[PERSONAL_JOURNAL];
+      journalReplayed = true;
+    }
     const stored = await database.all<{ user_id: string; domain: string; key: string; data: string }>(
       "SELECT user_id, domain, key, data FROM personal_rows ORDER BY user_id, domain, key",
     );
@@ -509,7 +539,7 @@ export class Store {
     // them means a missing, replaced or older state.json can never destroy the only copy of
     // anybody's data. A deleted account's rows go with the write that deletes it.
     this.persistedCold = this.coldJson();
-    this.coldStripPending = stripCold;
+    this.coldStripPending = stripCold || journalReplayed;
     this.personalActive = true;
     return undefined;
   }
@@ -527,7 +557,7 @@ export class Store {
       await writeFile(path.join(backupDir, `state-${importedAt}.json`), await readFile(this.filename, "utf8"), { mode: 0o600 });
     }
     const statements: Statement[] = [...rows].map(([storedKey, data]) => {
-      const [userId, domain, key] = storedKey.split("\0");
+      const [userId, domain, key] = splitPersonalKey(storedKey);
       return { sql: PERSONAL_INSERT, params: [userId!, domain!, key!, data] };
     });
     statements.push({
@@ -738,45 +768,62 @@ export class Store {
     }
 
     const nextRows = this.personalRows();
-    const statements: Statement[] = [];
+    const ops: PersonalOp[] = [];
     for (const [key, data] of nextRows) {
-      if (this.persistedRows.get(key) !== data) {
-        const [userId, domain, rowKey] = key.split("\0");
-        statements.push({ sql: PERSONAL_UPSERT, params: [userId!, domain!, rowKey!, data] });
-      }
+      if (this.persistedRows.get(key) !== data) ops.push([...splitPersonalKey(key), data]);
     }
     for (const key of this.persistedRows.keys()) {
-      if (nextRows.has(key)) continue;
-      const [userId, domain, rowKey] = key.split("\0");
-      statements.push({ sql: PERSONAL_DELETE, params: [userId!, domain!, rowKey!] });
+      if (!nextRows.has(key)) ops.push([...splitPersonalKey(key), null]);
     }
+    const statements: Statement[] = ops.map(([userId, domain, key, data]) => data === null
+      ? { sql: PERSONAL_DELETE, params: [userId, domain, key] }
+      : { sql: PERSONAL_UPSERT, params: [userId, domain, key, data] });
 
-    // state.json first, rows second. state.json names the accounts, and load deletes the rows
-    // of an account it no longer names: so a crash after the JSON landed but before the rows
-    // did still ends consistent (a deleted account's rows are cleaned up, a new account starts
-    // empty). Rows first would let a failed JSON write leave an account whose rows were
-    // already deleted, which nothing could repair after a restart.
+    // state.json first, rows second: state.json names the accounts and is the commit point.
     const cold = this.coldJson();
     const writeCold = forceCold || this.coldStripPending || cold !== this.persistedCold;
-    let coldWritten = false;
+
+    if (writeCold && statements.length) {
+      // A write that changes both files (an account, a library, a media server, an import)
+      // journals its row changes inside the state file it commits. If the process stops
+      // before the rows land, the next start replays them, so the change is never left half
+      // done -- a forgotten library cannot keep its favourites, with nothing left to retry.
+      const journaled = JSON.parse(cold) as Record<string, unknown>;
+      journaled[PERSONAL_JOURNAL] = ops;
+      await this.writeJson(JSON.stringify(journaled, null, 2));
+      // What is on disk now is not `cold`: the next write must replace it either way.
+      this.persistedCold = undefined;
+      try {
+        await this.database.batch(statements);
+        this.persistedRows = nextRows;
+      } catch (error) {
+        // state.json holds the change and its journal while the caller rolls memory back.
+        // Retry from memory, which rewrites state.json without the journal.
+        if (deferJsonFailure) this.deferredRetry();
+        throw error;
+      }
+      try {
+        await this.writeJson(cold);
+        this.persistedCold = cold;
+        this.coldStripPending = false;
+      } catch (error) {
+        // Both halves are durable; only the journal is left, and replaying it is harmless.
+        this.coldStripPending = true;
+        log("WARN", "The state file still carries pending personal changes that are already saved", {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
     if (writeCold) {
       await this.writeJson(cold);
       this.persistedCold = cold;
       this.coldStripPending = false;
-      coldWritten = true;
     }
     if (!statements.length) return;
-    try {
-      await this.database.batch(statements);
-      this.persistedRows = nextRows;
-    } catch (error) {
-      if (coldWritten && deferJsonFailure) {
-        // state.json already holds this change but the caller rolls memory back. Retry from
-        // memory so the next successful write puts both files back in step with it.
-        this.deferredRetry();
-      }
-      throw error;
-    }
+    await this.database.batch(statements);
+    this.persistedRows = nextRows;
   }
   /** Writes run one after another, or two concurrent saves would fight over the same .tmp file.
    *
