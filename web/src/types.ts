@@ -535,6 +535,7 @@ export interface ActiveStream {
 export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number; downloadSegments: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string; downloadTitleLanguage: "ui" | string;
   mergeByName: boolean; streamSort: string; defaultRulesProfileId?: string; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean; libraryScanPauseOnDownload: boolean;
+  upNextAt: UpNextAt; skipSegmentsAuto: boolean;
   secureMode: boolean;
   /** What the server writes down, as opposed to what the log view filters back out. */
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
@@ -572,11 +573,23 @@ export interface SettingsBackup {
   addons: Array<{ manifestUrl: string; role: Addon["role"]; enabled: boolean; globalSearch: boolean; showOnHome?: boolean; homeCatalogs?: string[]; addedAt: string; downloadSettings: AddonDownloadSettings }>;
 }
 export interface Capabilities { h264: boolean; hevc: boolean; hevc10: boolean; vp8: boolean; vp9: boolean; av1: boolean; aac: boolean; mp3: boolean; opus: boolean; vorbis: boolean; ac3: boolean; eac3: boolean; flac: boolean }
+export type UpNextAt = "end" | "pct97" | "pct98" | "pct99" | "sec30" | "sec60" | "sec120" | "sec180";
+export interface PlaybackChapter { start: number; end: number; title?: string }
+export interface PlaybackFacts {
+  resolution?: number;
+  hdr?: "dolbyVision" | "hdr10" | "hlg";
+  videoCodec?: string;
+  audioCodec?: string;
+  audioChannels?: number;
+}
+export interface SegmentRange { start: number; end: number }
+export interface IntroSegments { intro?: SegmentRange; recap?: SegmentRange; outro?: SegmentRange }
 export interface PlaybackSession {
   seekRestored?: boolean;
   id: string; mode: PlaybackMode; url: string; offset: number; duration?: number; video?: string; audio?: string; hardware: boolean; acceleration: boolean;
   audioTracks: Track[]; subtitleTracks: Track[]; audioTrack: number; subtitleTrack: number | null;
   quality: number | null; sidecarUrl?: string; subtitleIds?: Record<string, string>;
+  chapters?: PlaybackChapter[]; playing?: PlaybackFacts;
   /** `url` addresses a playlist, so the element cannot simply be handed it. */
   playlist?: boolean;
 }

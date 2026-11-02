@@ -44,6 +44,8 @@ export type TileShape = "poster" | "wide";
 export type StartView = "catalog" | "home" | "library";
 /** Which segment the library root's shelf shows. */
 export type LibraryShelf = "resume" | "episodes" | "favorites";
+export type UpNextAt = "end" | "pct97" | "pct98" | "pct99" | "sec30" | "sec60" | "sec120" | "sec180";
+export const UP_NEXT_AT: readonly UpNextAt[] = ["end", "pct97", "pct98", "pct99", "sec30", "sec60", "sec120", "sec180"];
 /** Settings that belong to the instance. Only an administrator changes these. */
 export interface InstanceSettings {
   concurrentDownloads: number; parallelPerProvider: number;
@@ -81,6 +83,11 @@ export interface UserPrefs {
   startView: StartView;
   /** The segment the library root's one shelf shows; Continue unless the person chose otherwise. */
   libraryShelf: LibraryShelf;
+  /** When the next episode is offered: "end" (when playback ends), "pct97"/"pct98"/"pct99"
+   *  (that share of the duration), or "sec30"/"sec60"/"sec120"/"sec180" (that long before the end). */
+  upNextAt: UpNextAt;
+  /** Skip intro and recap segments without asking. */
+  skipSegmentsAuto: boolean;
   /** One account's own Home: the row order it placed, the rows it hid and the extra feeds it
    *  added. Absent means the instance's default Home. */
   homeLayout?: HomeLayout;
@@ -161,7 +168,7 @@ export interface State { schemaVersion?: number;
    *  only: it never leaves the process except as a store write, and never names a token. */
   mediaSecretCleanup?: string[] }
 const baseInstanceSettings: InstanceSettings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
-const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume" };
+const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", upNextAt: "end", skipSegmentsAuto: false };
 
 /** A fresh install starts with the one library the download directory has always been,
  *  so it never runs the migration an upgrade needs. */

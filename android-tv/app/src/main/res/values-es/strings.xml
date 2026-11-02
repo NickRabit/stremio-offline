@@ -176,6 +176,11 @@
   <string name="player_subtitle_delay">Tiempo de subtítulos</string>
   <string name="player_subtitle_in_step">al paso</string>
   <string name="player_from_addon">complemento</string>
+  <string name="player_chapters">Capítulos</string>
+  <string name="player_chapter_number">Capítulo %1$s</string>
+  <string name="player_skip_intro">Saltar introducción</string>
+  <string name="player_skip_recap">Saltar resumen</string>
+  <string name="player_skip_outro">Saltar créditos</string>
   <string name="player_up_next">ARRIBA SIGUIENTE</string>
   <string name="player_up_next_countdown">Comienza en %1$s s</string>
   <string name="player_play_now">Juega ahora</string>
@@ -209,6 +214,11 @@
   <string name="settings_stream_sort">Orden de origen predeterminado</string>
   <string name="settings_default_rules_hint">«Recomendado» ordena las fuentes según estas reglas y Reproducir elige la primera que las cumple.</string>
   <string name="settings_start_view">Página de inicio</string>
+  <string name="settings_up_next_at">Ofrecer el siguiente episodio</string>
+  <string name="settings_up_next_end">Cuando termine el episodio</string>
+  <string name="settings_up_next_percent">Al %1$s %%</string>
+  <string name="settings_up_next_seconds">%1$s s antes del final</string>
+  <string name="settings_up_next_minutes">%1$s min antes del final</string>
   <string name="tv_settings_title">Este televisor</string>
   <string name="tv_account">Cuenta</string>
   <string name="tv_device">Dispositivo</string>
@@ -226,6 +236,8 @@
   <string name="tv_prefer_conversion_note">Cada reproducción empieza como en un navegador, así que el servidor convierte lo que la TV no puede reproducir. Inicio más lento y más carga en el servidor.</string>
   <string name="tv_on">Activado</string>
   <string name="tv_off">Desactivado</string>
+  <string name="tv_chapters_button">Capítulos</string>
+  <string name="tv_skip_segments_auto">Saltar automáticamente la introducción y el resumen</string>
   <string name="tv_back_to_source">Volver a la fuente anterior</string>
   <string name="library_mosaic_alt">Mosaico de carteles de %1$s películas</string>
   <string name="library_show_in_library">Mostrar en la biblioteca</string>

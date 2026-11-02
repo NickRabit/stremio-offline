@@ -180,6 +180,11 @@
   <string name="player_subtitle_delay">Время субтитров</string>
   <string name="player_subtitle_in_step">в шаге</string>
   <string name="player_from_addon">Аддон</string>
+  <string name="player_chapters">Главы</string>
+  <string name="player_chapter_number">Глава %1$s</string>
+  <string name="player_skip_intro">Пропустить вступление</string>
+  <string name="player_skip_recap">Пропустить краткий обзор</string>
+  <string name="player_skip_outro">Пропустить титры</string>
   <string name="player_up_next">СЛЕДУЮЩИЙ</string>
   <string name="player_up_next_countdown">Начнется через %1$s с.</string>
   <string name="player_play_now">Играть сейчас</string>
@@ -213,6 +218,11 @@
   <string name="settings_stream_sort">Исходный порядок по умолчанию</string>
   <string name="settings_default_rules_hint">«Рекомендуется» сортирует источники по этим правилам, а «Воспроизвести» выбирает первый подходящий.</string>
   <string name="settings_start_view">Начальная страница</string>
+  <string name="settings_up_next_at">Предлагать следующий эпизод</string>
+  <string name="settings_up_next_end">Когда эпизод закончится</string>
+  <string name="settings_up_next_percent">При %1$s %%</string>
+  <string name="settings_up_next_seconds">За %1$s с до конца</string>
+  <string name="settings_up_next_minutes">За %1$s мин до конца</string>
   <string name="tv_settings_title">Этот телевизор</string>
   <string name="tv_account">Аккаунт</string>
   <string name="tv_device">Устройство</string>
@@ -230,6 +240,8 @@
   <string name="tv_prefer_conversion_note">Каждое воспроизведение начинается как в браузере, поэтому сервер конвертирует то, что телевизор не может воспроизвести. Медленнее запуск и выше нагрузка на сервер.</string>
   <string name="tv_on">Включено</string>
   <string name="tv_off">Выключено</string>
+  <string name="tv_chapters_button">Главы</string>
+  <string name="tv_skip_segments_auto">Автоматически пропускать вступление и краткий обзор</string>
   <string name="tv_back_to_source">Вернуться к предыдущему источнику</string>
   <string name="library_mosaic_alt">Постерная мозаика из %1$s фильмов</string>
   <string name="library_show_in_library">Показать в библиотеке</string>

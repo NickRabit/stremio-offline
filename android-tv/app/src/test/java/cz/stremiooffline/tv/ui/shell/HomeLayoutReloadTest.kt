@@ -106,7 +106,7 @@ class HomeLayoutReloadTest {
 
     railTo(Section.Account, Key.DirectionDown)
     compose.onNodeWithTag(TagSettingsRowServer).assertExists()
-    repeat(7) { press(Key.DirectionDown) }
+    repeat(9) { press(Key.DirectionDown) }
     compose.onNodeWithTag(TagSettingsRowHomeLayout).assertIsFocused()
     press(Key.DirectionCenter)
     compose.onNodeWithTag(homeLayoutRowTag("resume")).assertIsFocused()

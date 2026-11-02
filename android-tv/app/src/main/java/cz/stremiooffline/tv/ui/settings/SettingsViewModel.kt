@@ -28,6 +28,8 @@ data class SettingsState(
   /** Wire value of the account's default source order: `rule:<id>`, a fixed order, or legacy `recommended`. */
   val streamSort: String? = null,
   val startView: String? = null,
+  val upNextAt: String? = null,
+  val skipSegmentsAuto: Boolean = false,
   val serverVersion: String? = null,
   /** The last write that failed; the screen shows it and the row already holds the old value. */
   val error: ApiFailure? = null,
@@ -125,6 +127,8 @@ class SettingsViewModel(
         subtitleLanguage = settings?.subtitleLanguage,
         streamSort = settings?.streamSort,
         startView = settings?.startView,
+        upNextAt = settings?.upNextAt,
+        skipSegmentsAuto = settings?.skipSegmentsAuto ?: false,
         serverVersion = version,
       )
     }
@@ -351,6 +355,33 @@ class SettingsViewModel(
         answer.startView?.let { state = state.copy(startView = it) }
       } catch (error: ApiError) {
         state = state.copy(startView = before, error = error.failure)
+      }
+    }
+  }
+
+  fun setUpNextAt(value: String) {
+    val before = state.upNextAt
+    state = state.copy(upNextAt = value, error = null)
+    viewModelScope.launch {
+      try {
+        val answer = api.updateSettings("upNextAt", value)
+        answer.upNextAt?.let { state = state.copy(upNextAt = it) }
+      } catch (error: ApiError) {
+        state = state.copy(upNextAt = before, error = error.failure)
+      }
+    }
+  }
+
+  fun toggleSkipSegmentsAuto() {
+    val before = state.skipSegmentsAuto
+    val next = !before
+    state = state.copy(skipSegmentsAuto = next, error = null)
+    viewModelScope.launch {
+      try {
+        val answer = api.updateSettingFlag("skipSegmentsAuto", next)
+        state = state.copy(skipSegmentsAuto = answer.skipSegmentsAuto)
+      } catch (error: ApiError) {
+        state = state.copy(skipSegmentsAuto = before, error = error.failure)
       }
     }
   }

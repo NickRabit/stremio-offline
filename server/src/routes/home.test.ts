@@ -42,6 +42,7 @@ const SOURCE_KEY = "t:0123456789abcdef01234567";
 const instancePrefs: UserPrefs = {
   uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui",
   mergeByName: false, streamSort: "recommended", trackProgress: true, showResumeRow: true,
+  upNextAt: "end", skipSegmentsAuto: false,
   tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster",
   startView: "catalog",
   libraryShelf: "resume",

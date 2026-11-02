@@ -288,6 +288,74 @@ test("PATCH /api/settings stores each library page shape separately", async (t) 
   assert.equal(harness.state.userData?.[CAROL]?.prefs.resumeTileShape, "poster");
 });
 
+test("PATCH /api/settings stores the next-episode and segment choices for one account", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: { upNextAt: "sec60", skipSegmentsAuto: true },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.upNextAt, "sec60");
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.skipSegmentsAuto, true);
+  assert.equal(harness.state.userData?.[BOB]?.prefs.upNextAt, "end");
+  assert.equal(harness.state.userData?.[BOB]?.prefs.skipSegmentsAuto, false);
+  const body = await response.json() as { upNextAt: string; skipSegmentsAuto: boolean };
+  assert.equal(body.upNextAt, "sec60");
+  assert.equal(body.skipSegmentsAuto, true);
+  const read = await (await api(harness.base, "/api/settings", { user: "carol" })).json() as Record<string, unknown>;
+  assert.equal(read.upNextAt, "sec60");
+  assert.equal(read.skipSegmentsAuto, true);
+});
+
+test("PATCH /api/settings refuses an unknown next-episode choice without writing either value", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.userData![CAROL]!.prefs.upNextAt = "sec30";
+  harness.state.userData![CAROL]!.prefs.skipSegmentsAuto = false;
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: { upNextAt: "pct50", skipSegmentsAuto: true },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.invalidRequest");
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.upNextAt, "sec30");
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.skipSegmentsAuto, false);
+});
+
+test("the next-episode and segment choices survive a settings backup round trip", async (t) => {
+  const source = await mount();
+  t.after(source.close);
+  await api(source.base, "/api/settings", {
+    method: "PATCH",
+    user: "ada",
+    body: { upNextAt: "sec120", skipSegmentsAuto: true },
+  });
+  const backup = await (await api(source.base, "/api/settings/export", { user: "ada" })).json() as {
+    settings: { upNextAt: string; skipSegmentsAuto: boolean };
+  };
+  assert.equal(backup.settings.upNextAt, "sec120");
+  assert.equal(backup.settings.skipSegmentsAuto, true);
+
+  const target = await mount();
+  t.after(target.close);
+  const restored = await api(target.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: backup,
+  });
+
+  assert.equal(restored.status, 200);
+  assert.equal(target.state.userData?.[ADA]?.prefs.upNextAt, "sec120");
+  assert.equal(target.state.userData?.[ADA]?.prefs.skipSegmentsAuto, true);
+});
+
 test("PATCH /api/settings sends an instance key to the instance and a personal key to the caller", async (t) => {
   const harness = await mount();
   t.after(harness.close);

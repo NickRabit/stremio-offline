@@ -176,6 +176,11 @@
   <string name="player_subtitle_delay">Tempistica dei sottotitoli</string>
   <string name="player_subtitle_in_step">al passo</string>
   <string name="player_from_addon">Componente aggiuntivo</string>
+  <string name="player_chapters">Capitoli</string>
+  <string name="player_chapter_number">Capitolo %1$s</string>
+  <string name="player_skip_intro">Salta introduzione</string>
+  <string name="player_skip_recap">Salta riepilogo</string>
+  <string name="player_skip_outro">Salta titoli di coda</string>
   <string name="player_up_next">AVANTI AVANTI</string>
   <string name="player_up_next_countdown">Inizia tra %1$s secondi</string>
   <string name="player_play_now">Gioca ora</string>
@@ -209,6 +214,11 @@
   <string name="settings_stream_sort">Ordine di origine predefinito</string>
   <string name="settings_default_rules_hint">«Consigliato» ordina le fonti secondo queste regole e Riproduci sceglie la prima che le rispetta.</string>
   <string name="settings_start_view">Pagina iniziale</string>
+  <string name="settings_up_next_at">Proponi l\'episodio successivo</string>
+  <string name="settings_up_next_end">Quando l\'episodio termina</string>
+  <string name="settings_up_next_percent">Al %1$s %%</string>
+  <string name="settings_up_next_seconds">%1$s s prima della fine</string>
+  <string name="settings_up_next_minutes">%1$s min prima della fine</string>
   <string name="tv_settings_title">Questa TV</string>
   <string name="tv_account">Account</string>
   <string name="tv_device">Dispositivo</string>
@@ -226,6 +236,8 @@
   <string name="tv_prefer_conversion_note">Ogni riproduzione parte come in un browser, quindi il server converte ciò che il televisore non riesce a leggere. Avvio più lento e carico maggiore sul server.</string>
   <string name="tv_on">Attivo</string>
   <string name="tv_off">Disattivo</string>
+  <string name="tv_chapters_button">Capitoli</string>
+  <string name="tv_skip_segments_auto">Salta automaticamente introduzione e riepilogo</string>
   <string name="tv_back_to_source">Torna alla sorgente precedente</string>
   <string name="library_mosaic_alt">Mosaico di poster di %1$s film</string>
   <string name="library_show_in_library">Mostra in biblioteca</string>

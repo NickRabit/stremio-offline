@@ -4,7 +4,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { codecTag, dolbyVisionProfile, hasDolbyVisionEnhancementLayer, hasDolbyVisionSideData, looksUnreachable, pickVariant, playlistArgsFrom, probe } from "./probe.js";
+import { chaptersFrom, codecTag, dolbyVisionProfile, hasDolbyVisionEnhancementLayer, hasDolbyVisionSideData, looksUnreachable, pickVariant, playlistArgsFrom, probe } from "./probe.js";
 
 test("the picky segment options are passed only to a build that has them", () => {
   assert.deepEqual(
@@ -71,6 +71,43 @@ test("the Dolby Vision profile is read from the configuration record for the log
   assert.equal(dolbyVisionProfile({ side_data_list: [{ side_data_type: "DOVI configuration record", dv_profile: 8 }] }), 8);
   assert.equal(dolbyVisionProfile({ side_data_list: [{ side_data_type: "Mastering display metadata" }] }), undefined);
   assert.equal(dolbyVisionProfile({}), undefined);
+});
+
+test("chapters are sorted, titled and require at least two valid entries", () => {
+  assert.deepEqual(chaptersFrom([
+    { start_time: "20.5", end_time: "30", tags: { title: "  Second  " } },
+    { start_time: "10", end_time: "20", tags: { title: "First" } },
+  ]), [
+    { start: 10, end: 20, title: "First" },
+    { start: 20.5, end: 30, title: "Second" },
+  ]);
+  assert.equal(chaptersFrom([{ start_time: "0", end_time: "10" }]), undefined);
+});
+
+test("invalid and duplicate chapters are dropped and blank titles are omitted", () => {
+  assert.deepEqual(chaptersFrom([
+    { start_time: "-1", end_time: "5" },
+    { start_time: "", end_time: "5" },
+    { start_time: "10", end_time: "10" },
+    { start_time: "NaN", end_time: "20" },
+    { start_time: "30", end_time: "25" },
+    { start_time: "40", end_time: "50", tags: { title: "   " } },
+    { start_time: "60", end_time: "70" },
+    { start_time: "40", end_time: "55" },
+  ]), [
+    { start: 40, end: 50 },
+    { start: 60, end: 70 },
+  ]);
+});
+
+test("chapter lists are capped at the first 500 after sorting", () => {
+  const chapters = chaptersFrom(Array.from({ length: 600 }, (_, index) => ({
+    start_time: String(599 - index),
+    end_time: String(600 - index),
+  })));
+  assert.equal(chapters?.length, 500);
+  assert.equal(chapters?.[0]?.start, 0);
+  assert.equal(chapters?.[499]?.start, 499);
 });
 
 // A real process stands in for ffprobe here: the point of these tests is that an aborted probe

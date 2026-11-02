@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -58,6 +61,9 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Languages
+import cz.stremiooffline.tv.data.PlaybackChapterDto
+import cz.stremiooffline.tv.playback.chapterAt
+import cz.stremiooffline.tv.playback.chapterLabelOf
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -74,6 +80,11 @@ const val TAG_OSD_QUALITY = "osd_quality"
 const val TAG_OSD_NEXT = "osd_next"
 const val TAG_OSD_DIAG = "osd_diag"
 const val TAG_OSD_TIMELINE = "osd_timeline"
+const val TAG_OSD_BADGES = "osd_badges"
+const val TAG_OSD_CHAPTER_MARK = "osd_chapter_mark"
+const val TAG_OSD_CHAPTER = "osd_chapter"
+const val TAG_OSD_CHAPTERS = "osd_chapters"
+const val TAG_OSD_SKIP = "osd_skip"
 const val TAG_ERROR_PANEL = "error_panel"
 
 /** The seek icons beside the plain `10` labels. */
@@ -158,6 +169,8 @@ fun Osd(
   position: Double,
   duration: Double,
   playing: Boolean,
+  facts: cz.stremiooffline.tv.data.PlaybackFactsDto? = null,
+  chapters: List<PlaybackChapterDto> = emptyList(),
   playFocus: FocusRequester,
   onBack10: () -> Unit,
   onForward10: () -> Unit,
@@ -182,12 +195,25 @@ fun Osd(
   qualityLabel: String = "",
   qualityFocus: FocusRequester? = null,
   onQualityFocus: ((Boolean) -> Unit)? = null,
+  onChapters: (() -> Unit)? = null,
+  chaptersLabel: String = "",
+  chaptersFocus: FocusRequester? = null,
   onNext: (() -> Unit)? = null,
   nextLabel: String = "",
+  onSkip: (() -> Unit)? = null,
+  skipLabel: String = "",
   onDiagnostics: () -> Unit = {},
   diagnosticsLabel: String = "",
   diagnosticsFocus: FocusRequester? = null,
 ) {
+  val badges = playingBadges(facts)
+  val chapterIndex = if (chapters.size >= 2) chapterAt(chapters, position) else -1
+  val chapterLabel = if (chapterIndex >= 0) {
+    val numbered = stringResource(R.string.player_chapter_number, chapterIndex + 1)
+    chapterLabelOf(chapters, chapterIndex) { numbered }
+  } else {
+    null
+  }
   Box(Modifier.fillMaxSize()) {
     Column(
       Modifier
@@ -199,6 +225,25 @@ fun Osd(
     ) {
       Text(eyebrow, color = Tokens.Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.8.sp)
       Text(title, color = Tokens.Text, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+      if (badges.isNotEmpty()) {
+        Row(
+          modifier = Modifier.testTag(TAG_OSD_BADGES),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          badges.forEach { badge ->
+            Text(
+              badge,
+              color = Tokens.Text,
+              fontSize = 9.sp,
+              fontWeight = FontWeight.Bold,
+              modifier = Modifier
+                .background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
+                .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+          }
+        }
+      }
     }
 
     Column(
@@ -209,10 +254,15 @@ fun Osd(
         .padding(horizontal = Tokens.SafeX, vertical = Tokens.SafeY),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+      if (chapterLabel != null) {
+        Text(chapterLabel, color = Tokens.Muted, fontSize = 11.sp, modifier = Modifier.testTag(TAG_OSD_CHAPTER))
+      }
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(formatTime(position), color = Tokens.Text, fontSize = 11.sp)
         Timeline(
           fraction = if (duration > 0) (position / duration).toFloat() else 0f,
+          chapters = chapters,
+          duration = duration,
           onSeekStep = onSeekStep,
           onActivity = onActivity,
           modifier = Modifier.weight(1f),
@@ -271,12 +321,31 @@ fun Osd(
             onFocusChange = onQualityFocus,
           ) { }
         }
+        if (chapters.size >= 2 && onChapters != null) {
+          RoundButton(
+            label = chaptersLabel,
+            text = "\u2630",
+            tag = TAG_OSD_CHAPTERS,
+            onClick = onChapters,
+            onActivity = onActivity,
+            focusRequester = chaptersFocus,
+          ) { }
+        }
         if (onNext != null) {
           RoundButton(
             label = nextLabel,
             text = "\u00BB",
             tag = TAG_OSD_NEXT,
             onClick = onNext,
+            onActivity = onActivity,
+          ) { }
+        }
+        if (onSkip != null) {
+          RoundButton(
+            label = skipLabel,
+            text = skipLabel,
+            tag = TAG_OSD_SKIP,
+            onClick = onSkip,
             onActivity = onActivity,
           ) { }
         }
@@ -296,6 +365,8 @@ fun Osd(
 @Composable
 private fun Timeline(
   fraction: Float,
+  chapters: List<PlaybackChapterDto>,
+  duration: Double,
   onSeekStep: (Int, Long) -> Unit,
   onActivity: () -> Unit,
   modifier: Modifier = Modifier,
@@ -329,6 +400,20 @@ private fun Timeline(
         .background(Color.White.copy(alpha = 0.18f)),
     ) {
       Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f)).background(Tokens.Accent))
+    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+      chapters.forEach { chapter ->
+        if (chapter.start > 0 && chapter.start < duration) {
+          Box(
+            Modifier
+              .offset(x = maxWidth * (chapter.start / duration).toFloat())
+              .width(2.dp)
+              .fillMaxHeight()
+              .background(Color.White.copy(alpha = 0.45f))
+              .testTag(TAG_OSD_CHAPTER_MARK),
+          )
+        }
+      }
     }
     if (focused) {
       Box(

@@ -6,6 +6,8 @@ import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
+import cz.stremiooffline.tv.data.PlaybackChapterDto
+import cz.stremiooffline.tv.data.PlaybackFactsDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemStateDto
@@ -135,6 +137,8 @@ data class PlaybackState(
   val subtitleIds: Map<String, String> = emptyMap(),
   val videoCodec: String? = null,
   val audioCodec: String? = null,
+  val chapters: List<PlaybackChapterDto> = emptyList(),
+  val playing: PlaybackFactsDto? = null,
   /** The source id the current session plays, so a caller can ask the server for its neighbour. */
   val sourceId: String? = null,
   /** The absolute position the player should start or seek to after `revision` changes. */
@@ -967,6 +971,8 @@ class PlaybackController(
         subtitleIds = descriptor.subtitleIds.ifEmpty { it.subtitleIds },
         videoCodec = descriptor.video,
         audioCodec = descriptor.audio,
+        chapters = descriptor.chapters,
+        playing = descriptor.playing,
         sourceId = currentSourceId,
         target = target,
         revision = if (bumpRevision) it.revision + 1 else it.revision,

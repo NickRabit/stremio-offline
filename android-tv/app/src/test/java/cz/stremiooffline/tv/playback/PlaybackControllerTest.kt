@@ -3,7 +3,9 @@ package cz.stremiooffline.tv.playback
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.CopyDto
 import cz.stremiooffline.tv.data.AddonSubtitleDto
+import cz.stremiooffline.tv.data.PlaybackChapterDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
+import cz.stremiooffline.tv.data.PlaybackFactsDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.TrackChange
@@ -139,6 +141,21 @@ class PlaybackControllerTest {
     assertEquals("src", api.started[0].first)
     assertEquals(capabilities, api.started[0].second)
     assertEquals(120.0, api.started[0].third, 0.001)
+  }
+
+  @Test
+  fun `the descriptor chapters and playing facts reach the screen state`() = runTest {
+    val api = FakeApi()
+    val chapters = listOf(PlaybackChapterDto(0.0, 300.0, "Opening"))
+    val playing = PlaybackFactsDto(resolution = 2160, hdr = "hdr10")
+    api.descriptor = api.descriptor.copy(chapters = chapters, playing = playing)
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "movie:tt12345", "It", path = null, resume = false)
+    runCurrent()
+
+    assertEquals(chapters, controller.state.value.chapters)
+    assertEquals(playing, controller.state.value.playing)
   }
 
   @Test

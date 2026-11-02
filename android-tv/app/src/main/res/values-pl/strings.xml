@@ -180,6 +180,11 @@
   <string name="player_subtitle_delay">Czas napisów</string>
   <string name="player_subtitle_in_step">w kroku</string>
   <string name="player_from_addon">Dodatek</string>
+  <string name="player_chapters">Rozdziały</string>
+  <string name="player_chapter_number">Rozdział %1$s</string>
+  <string name="player_skip_intro">Pomiń intro</string>
+  <string name="player_skip_recap">Pomiń streszczenie</string>
+  <string name="player_skip_outro">Pomiń napisy końcowe</string>
   <string name="player_up_next">DALEJ</string>
   <string name="player_up_next_countdown">Rozpoczyna się za %1$s s</string>
   <string name="player_play_now">Zagraj teraz</string>
@@ -213,6 +218,11 @@
   <string name="settings_stream_sort">Domyślna kolejność źródeł</string>
   <string name="settings_default_rules_hint">„Zalecane” sortuje źródła według tych reguł, a Odtwórz wybiera pierwsze, które je spełnia.</string>
   <string name="settings_start_view">Strona startowa</string>
+  <string name="settings_up_next_at">Proponuj następny odcinek</string>
+  <string name="settings_up_next_end">Gdy odcinek się skończy</string>
+  <string name="settings_up_next_percent">Przy %1$s %%</string>
+  <string name="settings_up_next_seconds">%1$s s przed końcem</string>
+  <string name="settings_up_next_minutes">%1$s min przed końcem</string>
   <string name="tv_settings_title">Ten telewizor</string>
   <string name="tv_account">Konto</string>
   <string name="tv_device">Urządzenie</string>
@@ -230,6 +240,8 @@
   <string name="tv_prefer_conversion_note">Każde odtwarzanie startuje jak w przeglądarce, więc serwer konwertuje to, czego telewizor nie odtworzy. Wolniejszy start i większe obciążenie serwera.</string>
   <string name="tv_on">Włączone</string>
   <string name="tv_off">Wyłączone</string>
+  <string name="tv_chapters_button">Rozdziały</string>
+  <string name="tv_skip_segments_auto">Automatycznie pomijaj intro i streszczenie</string>
   <string name="tv_back_to_source">Wróć do poprzedniego źródła</string>
   <string name="library_mosaic_alt">Mozaika plakatowa z %1$s filmów</string>
   <string name="library_show_in_library">Pokaż w bibliotece</string>

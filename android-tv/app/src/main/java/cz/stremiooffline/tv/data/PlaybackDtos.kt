@@ -62,6 +62,28 @@ data class SidecarFetch(val text: String, val complete: Boolean, val coverage: D
 @Serializable
 data class CopyDto(val video: Boolean = true, val audio: Boolean = true)
 
+@Serializable
+data class PlaybackChapterDto(val start: Double = 0.0, val end: Double = 0.0, val title: String? = null)
+
+@Serializable
+data class PlaybackFactsDto(
+  val resolution: Int? = null,
+  val hdr: String? = null,
+  val videoCodec: String? = null,
+  val audioCodec: String? = null,
+  val audioChannels: Int? = null,
+)
+
+@Serializable
+data class SegmentRangeDto(val start: Double = 0.0, val end: Double = 0.0)
+
+@Serializable
+data class IntroSegmentsDto(
+  val intro: SegmentRangeDto? = null,
+  val recap: SegmentRangeDto? = null,
+  val outro: SegmentRangeDto? = null,
+)
+
 /** One playback session as `POST /api/playback` and its seek/escalate replies describe it. */
 @Serializable
 data class PlaybackDescriptorDto(
@@ -86,6 +108,8 @@ data class PlaybackDescriptorDto(
   val copy: CopyDto? = null,
   /** The picture height that was chosen, or null for the server's own choice. */
   val quality: Int? = null,
+  val chapters: List<PlaybackChapterDto> = emptyList(),
+  val playing: PlaybackFactsDto? = null,
   /** `POST /api/playback` maps each offered addon subtitle id to the id this session must use. */
   val subtitleIds: Map<String, String> = emptyMap(),
 )

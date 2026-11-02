@@ -28,7 +28,7 @@ import {
   type TravelParameters,
 } from "../source-profiles.js";
 import type { DownloadRules } from "../download-rules.js";
-import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type StoredSourceProfile, type UserPrefs } from "../store.js";
+import { memberSettings, publicSettings, UP_NEXT_AT, type InstanceSettings, type Settings, type State, type StoredSourceProfile, type UpNextAt, type UserPrefs } from "../store.js";
 import { normalizeStreamSort } from "../stream-sort.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
@@ -226,6 +226,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const {
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
+      upNextAt, skipSegmentsAuto,
       tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
       homeLayout, downloadSourceProfile, followSourceProfile, defaultRulesProfileId,
       ...instance
@@ -235,6 +236,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       prefs: {
         uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
         mergeByName, streamSort, trackProgress, showResumeRow, tileSize,
+        upNextAt, skipSegmentsAuto,
         catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape,
         followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
         ...(homeLayout ? { homeLayout } : {}),
@@ -453,6 +455,9 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const languageBefore = prefsOf(req).uiLanguage;
     const userId = accountIdOf(req);
     const touchesPrefs = PERSONAL_SETTINGS.some((key) => req.body[key] !== undefined);
+    if (req.body.upNextAt !== undefined && !UP_NEXT_AT.includes(req.body.upNextAt as UpNextAt)) {
+      throw new AppError("The request was not understood.", "err.invalidRequest", 400);
+    }
     // The shape is checked before the write so a malformed body is refused whole; a
     // well-formed one that names a feed the caller may not use has that feed dropped below.
     // A body whose arrays are larger than any account could arrange is refused too, so a
@@ -504,6 +509,8 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.mergeByName !== undefined) prefs.mergeByName = Boolean(req.body.mergeByName);
       if (req.body.trackProgress !== undefined) prefs.trackProgress = Boolean(req.body.trackProgress);
       if (req.body.showResumeRow !== undefined) prefs.showResumeRow = Boolean(req.body.showResumeRow);
+      if (req.body.upNextAt !== undefined) prefs.upNextAt = req.body.upNextAt as UpNextAt;
+      if (req.body.skipSegmentsAuto !== undefined) prefs.skipSegmentsAuto = Boolean(req.body.skipSegmentsAuto);
       if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
       if (req.body.libraryScanPauseOnDownload !== undefined) state.settings.libraryScanPauseOnDownload = Boolean(req.body.libraryScanPauseOnDownload);
       // Detail has to be recorded before it can be read: a line the server never wrote is not
