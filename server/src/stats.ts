@@ -1,8 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { ActivityLog } from "./activity.js";
+import { ActivityLog, markerStatement, readMarker, writeMarker } from "./activity.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
+import type { AppDatabase, Statement } from "./storage/app-database.js";
+import { moveToMigrationBackup } from "./storage/hourly-counts.js";
 
 /** Where the traffic flows from. The library reads a file from disk and so costs the line
  * nothing -- it is kept apart and not mixed into the external traffic figures. */
@@ -216,19 +218,59 @@ export function summarize(events: TrafficEvent[], hours = 720, now = new Date())
  * the last 24 hours, so the merge loses nothing and the file stops growing with the length
  * of the transfers. */
 export function compact(events: TrafficEvent[], before: number): TrafficEvent[] {
-  const merged = new Map<string, TrafficEvent>();
-  const recent: TrafficEvent[] = [];
+  return compactWithChange(events, before).events;
+}
+
+interface Compaction {
+  events: TrafficEvent[];
+  changed: boolean;
+  origins: Map<TrafficEvent, TrafficEvent>;
+  covered: Set<TrafficEvent>;
+}
+
+function compactWithChange(events: TrafficEvent[], before: number): Compaction {
+  const merged = new Map<string, { event: TrafficEvent; origin: TrafficEvent; count: number }>();
+  const recent: Array<{ event: TrafficEvent; origin: TrafficEvent }> = [];
+  const covered = new Set<TrafficEvent>();
   for (const event of events) {
     const at = Date.parse(event.at);
-    if (Number.isNaN(at) || at >= before) { recent.push(event); continue; }
+    if (Number.isNaN(at) || at >= before) { recent.push({ event, origin: event }); continue; }
+    covered.add(event);
     const hour = Math.floor(at / HOUR) * HOUR;
     const key = `${hour}|${event.source}|${event.provider}|${event.addonKey ?? ""}|${event.title}|${event.kind}`;
     const bucket = merged.get(key);
-    if (bucket) { bucket.bytes += event.bytes; bucket.items += event.items; }
-    else merged.set(key, { ...event, at: new Date(hour).toISOString() });
+    if (bucket) {
+      bucket.event.bytes += event.bytes;
+      bucket.event.items += event.items;
+      bucket.count += 1;
+    } else {
+      merged.set(key, {
+        event: { ...event, at: new Date(hour).toISOString() },
+        origin: event,
+        count: 1,
+      });
+    }
   }
-  if (!merged.size) return events;
-  return [...merged.values(), ...recent].sort((a, b) => a.at.localeCompare(b.at));
+
+  const changed = [...merged.values()].some((bucket) =>
+    bucket.count > 1 || bucket.event.at !== bucket.origin.at);
+  if (!changed) return { events, changed: false, origins: new Map(), covered: new Set() };
+
+  const origins = new Map<TrafficEvent, TrafficEvent>();
+  const compacted = [...merged.values()].map((bucket) => {
+    origins.set(bucket.event, bucket.origin);
+    return bucket.event;
+  });
+  const kept = recent.map((item) => {
+    origins.set(item.event, item.origin);
+    return item.event;
+  });
+  return {
+    events: [...compacted, ...kept].sort((a, b) => a.at.localeCompare(b.at)),
+    changed: true,
+    origins,
+    covered,
+  };
 }
 
 /** The oldest entries are dropped so the file does not grow without bound. */
@@ -237,8 +279,33 @@ const LIMIT = 20_000;
  * so a minute is fine enough while the file is not written constantly. */
 const FLUSH_MS = 60_000;
 
+export interface StatsLogOptions {
+  limit?: number;
+}
+
+interface TrafficRow {
+  seq: number;
+  at: string;
+  source: TrafficSource;
+  provider: string;
+  addon_key: string | null;
+  addon_name: string | null;
+  title: string;
+  kind: TrafficEvent["kind"];
+  bytes: number;
+  items: number;
+}
+
+const DOMAIN = "traffic";
+const INSERT = "INSERT INTO traffic_events (seq, at, source, provider, addon_key, addon_name, title, kind, bytes, items) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (seq) DO NOTHING";
+
 export class StatsLog {
   private events: TrafficEvent[] = [];
+  private seqs = new WeakMap<TrafficEvent, number>();
+  private attemptedSeqs = new WeakMap<TrafficEvent, number>();
+  private unsavedEvents = new Set<TrafficEvent>();
+  private nextSeq = 1;
+  private generation = 0;
   /** Increments in progress that have no entry of their own yet. */
   private pending = new Map<string, { meta: TrafficMeta; bytes: number; items: number }>();
   private file: string;
@@ -246,16 +313,32 @@ export class StatsLog {
   private unsaved = false;
   private timer?: NodeJS.Timeout;
   private compactedAt = 0;
+  private loaded = false;
+  private database?: AppDatabase;
+  private readonly limit: number;
 
   readonly activity: ActivityLog;
 
-  constructor(dataDir = process.env.DATA_DIR ?? "/data") {
+  constructor(dataDir = process.env.DATA_DIR ?? "/data", options: StatsLogOptions = {}) {
     this.file = path.join(dataDir, "stats.json");
     this.activity = new ActivityLog(dataDir);
+    this.limit = options.limit ?? LIMIT;
+  }
+
+  attachDatabase(database: AppDatabase): void {
+    if (this.loaded) throw new Error("The traffic database must be attached before load.");
+    this.database = database;
+    this.activity.attachDatabase(database);
   }
 
   async load() {
+    this.loaded = true;
     await this.activity.load();
+    if (this.database) {
+      await this.loadDatabase(this.database);
+      this.startTimer();
+      return this.events.length;
+    }
     await mkdir(path.dirname(this.file), { recursive: true });
     try {
       const stored: Array<Partial<TrafficEvent>> = JSON.parse(await readFile(this.file, "utf8"));
@@ -264,7 +347,7 @@ export class StatsLog {
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     // The timer holds pending increments for at most a minute; unref so it does not keep
     // the server alive when it wants to exit.
-    if (!this.timer) { this.timer = setInterval(() => this.flushQuietly(), FLUSH_MS); this.timer.unref(); }
+    this.startTimer();
     return this.events.length;
   }
 
@@ -276,6 +359,7 @@ export class StatsLog {
     const missing = events.filter((event) => !oldest || event.at < oldest);
     if (!missing.length) return 0;
     this.events = [...this.events, ...missing].sort((a, b) => a.at.localeCompare(b.at));
+    this.markUnsaved(missing);
     await this.save();
     return missing.length;
   }
@@ -312,10 +396,16 @@ export class StatsLog {
   flush() {
     if (!this.pending.size) return this.chain.then(() => this.unsaved ? this.save() : undefined);
     const at = new Date().toISOString();
+    const appended: TrafficEvent[] = [];
     for (const { meta, bytes, items } of this.pending.values()) {
-      if (bytes || items) this.events.push({ ...meta, at, bytes, items });
+      if (bytes || items) {
+        const event = { ...meta, at, bytes, items };
+        this.events.push(event);
+        appended.push(event);
+      }
     }
     this.pending.clear();
+    this.markUnsaved(appended);
     return this.save();
   }
 
@@ -323,9 +413,10 @@ export class StatsLog {
 
   private save() {
     const now = Date.now();
-    if (now - this.compactedAt > HOUR) { this.events = compact(this.events, now - DAY); this.compactedAt = now; }
-    if (this.events.length > LIMIT) this.events = this.events.slice(-LIMIT);
     const write = this.chain.then(async () => {
+      if (this.database) return await this.writeDatabase(this.database, now);
+      if (now - this.compactedAt > HOUR) { this.events = compact(this.events, now - DAY); this.compactedAt = now; }
+      if (this.events.length > this.limit) this.events = this.events.slice(-this.limit);
       const temp = `${this.file}.tmp`;
       await writeFile(temp, JSON.stringify(this.events), { mode: 0o600 });
       await renameWithRetry(temp, this.file);
@@ -335,4 +426,184 @@ export class StatsLog {
     this.chain = write.catch(() => undefined);
     return write;
   }
+
+  private async writeDatabase(database: AppDatabase, now: number): Promise<void> {
+    if (!this.unsaved) return;
+    const base = this.events.slice();
+    const baseGeneration = this.generation;
+    const before = now - DAY;
+    const compaction = now - this.compactedAt > HOUR
+      ? compactWithChange(base, before)
+      : { events: base, changed: false, origins: new Map<TrafficEvent, TrafficEvent>(), covered: new Set<TrafficEvent>() };
+    const next = compaction.events.length > this.limit
+      ? compaction.events.slice(-this.limit)
+      : compaction.events;
+    const trim = Math.max(0, compaction.events.length - this.limit);
+    const statements: Statement[] = [];
+    const written = new Map<TrafficEvent, number>();
+    const replacements = new Map<TrafficEvent, number>();
+    const compactionWrites = new Set<TrafficEvent>();
+
+    if (compaction.changed) {
+      statements.push({
+        sql: "DELETE FROM traffic_events WHERE at < ?",
+        params: [new Date(before).toISOString()],
+      });
+      for (const event of compaction.events) {
+        const at = Date.parse(event.at);
+        if (Number.isNaN(at) || at >= before) continue;
+        const origin = compaction.origins.get(event) ?? event;
+        const seq = this.unsavedEvents.has(origin) ? this.assignSeq(origin) : this.seqs.get(origin);
+        if (seq === undefined) continue;
+        replacements.set(event, seq);
+        compactionWrites.add(origin);
+        written.set(origin, seq);
+        statements.push({ sql: INSERT, params: trafficParams(seq, event) });
+      }
+    }
+
+    const unsaved = [...this.unsavedEvents];
+    for (const event of unsaved) {
+      if (compactionWrites.has(event)) continue;
+      const at = Date.parse(event.at);
+      if (compaction.changed && !Number.isNaN(at) && at < before) continue;
+      const seq = this.assignSeq(event);
+      written.set(event, seq);
+      statements.push({ sql: INSERT, params: trafficParams(seq, event) });
+    }
+
+    if (trim > 0) {
+      statements.push({
+        sql: "DELETE FROM traffic_events WHERE seq IN (SELECT seq FROM traffic_events ORDER BY seq LIMIT ?)",
+        params: [trim],
+      });
+    }
+
+    if (statements.length) await database.batch(statements);
+    this.events = [...next, ...this.events.slice(base.length)];
+    for (const [event, seq] of written) {
+      this.seqs.set(event, seq);
+      this.attemptedSeqs.delete(event);
+      this.unsavedEvents.delete(event);
+    }
+    for (const [event, seq] of replacements) this.seqs.set(event, seq);
+    for (const event of compaction.covered) {
+      this.unsavedEvents.delete(event);
+      this.attemptedSeqs.delete(event);
+    }
+    if (now - this.compactedAt > HOUR) this.compactedAt = now;
+    this.unsaved = this.generation !== baseGeneration || this.unsavedEvents.size > 0;
+  }
+
+  private markUnsaved(events: TrafficEvent[]): void {
+    if (this.database) for (const event of events) this.unsavedEvents.add(event);
+    this.generation += 1;
+    this.unsaved = true;
+  }
+
+  private assignSeq(event: TrafficEvent): number {
+    const assigned = this.attemptedSeqs.get(event);
+    if (assigned !== undefined) return assigned;
+    const seq = this.nextSeq++;
+    this.attemptedSeqs.set(event, seq);
+    return seq;
+  }
+
+  private async loadDatabase(database: AppDatabase): Promise<void> {
+    const marker = await readMarker(database, DOMAIN);
+    if (marker) {
+      await this.loadRows(database);
+      await moveToMigrationBackup(this.file, path.dirname(this.file), `${this.backupStem()}-${Date.now()}.json`);
+      return;
+    }
+
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await readFile(this.file, "utf8")) as unknown;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        await writeMarker(database, DOMAIN, { importedAt: Date.now(), source: path.basename(this.file), count: 0 });
+        return;
+      }
+      await this.markUnreadable(database, error);
+      return;
+    }
+    if (!Array.isArray(raw)) {
+      await this.markUnreadable(database, new Error("The traffic statistics are not an array."));
+      return;
+    }
+
+    const rows = (raw as Array<Partial<TrafficEvent>>).map((event) => ({
+      ...event,
+      source: event.source ?? "download",
+      items: event.items ?? 1,
+    } as TrafficEvent));
+    const importedAt = Date.now();
+    const statements: Statement[] = rows.map((event, index) => ({
+      sql: INSERT,
+      params: trafficParams(index + 1, event),
+    }));
+    statements.push(markerStatement(DOMAIN, { importedAt, source: path.basename(this.file), count: rows.length }));
+    await database.batch(statements);
+    await this.loadRows(database);
+    await moveToMigrationBackup(this.file, path.dirname(this.file), `${this.backupStem()}-${importedAt}.json`);
+  }
+
+  private async markUnreadable(database: AppDatabase, error: unknown): Promise<void> {
+    const importedAt = Date.now();
+    log("ERROR", "The traffic statistics could not be imported", { reason: String(error).slice(0, 200) });
+    await moveToMigrationBackup(
+      this.file,
+      path.dirname(this.file),
+      `${this.backupStem()}-unreadable-${importedAt}.json`,
+    );
+    await writeMarker(database, DOMAIN, { importedAt, source: "unreadable", count: 0 });
+    this.events = [];
+  }
+
+  private async loadRows(database: AppDatabase): Promise<void> {
+    const rows = await database.all<TrafficRow>(
+      "SELECT seq, at, source, provider, addon_key, addon_name, title, kind, bytes, items FROM traffic_events ORDER BY seq",
+    );
+    this.events = rows.map((row) => {
+      const event: TrafficEvent = {
+        at: row.at,
+        source: row.source,
+        provider: row.provider,
+        ...(row.addon_key === null ? {} : { addonKey: row.addon_key }),
+        ...(row.addon_name === null ? {} : { addonName: row.addon_name }),
+        title: row.title,
+        kind: row.kind,
+        bytes: row.bytes,
+        items: row.items,
+      };
+      this.seqs.set(event, row.seq);
+      return event;
+    });
+    this.nextSeq = rows.reduce((max, row) => Math.max(max, row.seq), 0) + 1;
+  }
+
+  private backupStem(): string {
+    const name = path.basename(this.file);
+    return name.endsWith(".json") ? name.slice(0, -5) : name;
+  }
+
+  private startTimer(): void {
+    if (!this.timer) { this.timer = setInterval(() => this.flushQuietly(), FLUSH_MS); this.timer.unref(); }
+  }
+}
+
+function trafficParams(seq: number, event: TrafficEvent) {
+  return [
+    seq,
+    event.at,
+    event.source,
+    event.provider,
+    event.addonKey ?? null,
+    event.addonName ?? null,
+    event.title,
+    event.kind,
+    event.bytes,
+    event.items,
+  ];
 }

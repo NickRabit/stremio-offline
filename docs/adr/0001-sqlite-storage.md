@@ -111,6 +111,16 @@ change during a write pending for the next flush. The same batch prunes hours
 outside the 400-day retention window. A domain marker in `meta` controls the
 one-time JSON import, and the old files are moved to `migration-backup/`.
 
+### Phase 2b: activity and traffic
+
+Activity history and traffic events moved from `activity.json` and `stats.json`
+to the `activity` and `traffic_events` tables. Their in-memory arrays remain the
+synchronous read path. A flush inserts only new events; activity trimming and
+traffic trimming or hourly compaction are deletes and inserts in the same
+batch, limited to the rows that changed. The one-time JSON imports use the
+`domain.activity` and `domain.traffic` markers and move the old files to
+`migration-backup/`.
+
 ### Backup
 
 Backups are offline in this phase: stop the server, then copy the entire data

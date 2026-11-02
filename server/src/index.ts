@@ -421,6 +421,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
 const stats = new StatsLog();
 const imageStats = new ImageStats(path.join(DATA_DIR, "image-stats.json"));
 if (database) imageStats.attachDatabase(database);
+if (database) stats.attachDatabase(database);
 useImageStats(imageStats);
 const mosaics = new MosaicCache();
 const providerStats = new ProviderStats(path.join(DATA_DIR, "provider-stats.json"));
@@ -2900,7 +2901,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.flush(), () => stats.activity.flush(), () => Promise.allSettled([images.flush(), imageStats.flush(), providerStats.flush()]).then(() => database?.close()), () => artworks.flush(), () => metaStore.flush(), () => libraryFileFacts.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  flushes: [() => Promise.allSettled([stats.flush(), stats.activity.flush(), images.flush(), imageStats.flush(), providerStats.flush()]).then(() => database?.close()), () => artworks.flush(), () => metaStore.flush(), () => libraryFileFacts.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,
