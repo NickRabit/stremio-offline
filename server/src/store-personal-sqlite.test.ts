@@ -352,8 +352,10 @@ test("an account deletion interrupted after state.json still ends consistent aft
   const restarted = new Store(fixtureState.dataDir);
   restarted.attachDatabase(await fixtureState.reopen());
   await restarted.load();
-  assert.equal(restarted.users().some((user) => user.id === BOB), false);
-  assert.equal(await fixtureState.database.get("SELECT user_id FROM personal_rows WHERE user_id = ?", [BOB]), undefined);
+  assert.equal(restarted.users().some((user) => user.id === BOB), false, "the deletion stands");
+  // Bob's rows stay behind, unloaded: his id is never reused, so they surface nowhere.
+  const onDisk = JSON.parse(await readFile(fixtureState.file, "utf8")) as State;
+  assert.equal(Object.keys(onDisk.userData ?? {}).includes(BOB), false);
   assert.ok(Object.keys(restarted.userData(ADA).progress).length > 0, "the other account keeps its rows");
 });
 
@@ -410,7 +412,7 @@ test("rows win over stale hot fields and the next cold write strips them", async
   }
 });
 
-test("rows for an account absent from state.userData are deleted at load", async (t) => {
+test("rows for an account absent from state.userData are kept but not loaded", async (t) => {
   const fixtureState = await fixture(t);
   await fixtureState.seed();
   const first = new Store(fixtureState.dataDir);
@@ -424,11 +426,10 @@ test("rows for an account absent from state.userData are deleted at load", async
   const restarted = new Store(fixtureState.dataDir);
   restarted.attachDatabase(await fixtureState.reopen());
   await restarted.load();
+  await restarted.update((state) => { state.settings.logLevel = "DEBUG"; });
 
-  assert.equal(
-    await fixtureState.database.get("SELECT user_id FROM personal_rows WHERE user_id = ?", ["usr_ffffffff"]),
-    undefined,
-  );
+  assert.equal(restarted.users().some((user) => user.id === "usr_ffffffff"), false);
+  assert.ok(await fixtureState.database.get("SELECT user_id FROM personal_rows WHERE user_id = ?", ["usr_ffffffff"]));
 });
 
 test("JSON mode keeps writing hot personal fields into state.json", async (t) => {
@@ -464,12 +465,43 @@ test("a missing state.json never deletes the rows of the accounts it would have 
   assert.equal((await fixtureState.database.all("SELECT user_id FROM personal_rows")).length, before.length);
 });
 
-test("a first start without state.json writes no state file", async (t) => {
+test("a first start without state.json writes no file and no marker, and a later start imports", async (t) => {
   const fixtureState = await fixture(t);
   const store = new Store(fixtureState.dataDir);
   store.attachDatabase(fixtureState.database);
   await store.load();
 
   await assert.rejects(readFile(fixtureState.file, "utf8"), { code: "ENOENT" });
-  assert.ok(await marker(fixtureState.database), "the import is still recorded");
+  assert.equal(await marker(fixtureState.database), undefined, "nothing is recorded for a state that was never read");
+
+  // A state.json that appears afterwards (a restored backup) is imported on the next start.
+  await fixtureState.seed();
+  const restarted = new Store(fixtureState.dataDir);
+  restarted.attachDatabase(await fixtureState.reopen());
+  await restarted.load();
+  assert.ok(await marker(fixtureState.database));
+  assert.ok(Object.keys(restarted.userData(ADA).progress).length > 0);
+});
+
+test("a missing state.json and a new account written in its place never delete the old rows", async (t) => {
+  const fixtureState = await fixture(t);
+  await fixtureState.seed();
+  const first = new Store(fixtureState.dataDir);
+  first.attachDatabase(fixtureState.database);
+  await first.load();
+  const rows = (await fixtureState.database.all("SELECT user_id FROM personal_rows WHERE user_id = ?", [ADA])).length;
+  assert.ok(rows > 0);
+
+  await rm(fixtureState.file);
+  const second = new Store(fixtureState.dataDir);
+  second.attachDatabase(await fixtureState.reopen());
+  await second.load();
+  // The server carries on and publishes a state with a different account.
+  await second.update((state) => { state.settings.logLevel = "DEBUG"; state.defaultsInstalled = true; });
+
+  const third = new Store(fixtureState.dataDir);
+  third.attachDatabase(await fixtureState.reopen());
+  await third.load();
+  await third.update((state) => { state.settings.logLevel = "INFO"; });
+  assert.equal((await fixtureState.database.all("SELECT user_id FROM personal_rows WHERE user_id = ?", [ADA])).length, rows);
 });

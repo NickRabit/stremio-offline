@@ -223,6 +223,9 @@ export class Store {
   private persistedRows = new Map<string, string>();
   private persistedCold?: string;
   private coldStripPending = false;
+  /** Whether the hot personal data is persisted as rows. Only after an import or a marker load;
+   *  until then (JSON mode, or a first start that found no state.json) state.json holds it. */
+  private personalActive = false;
   /** Whether a real `state.json` has been read or written successfully in this process.
    *  Startup reconciliation that deletes files must not run off a swallowed ENOENT. */
   private persisted = false;
@@ -290,9 +293,21 @@ export class Store {
       }
     } else {
       this.normalizeSourceProfiles();
-      // A first start has no state.json to strip, and writing one here would mark the state as
-      // persisted, which is what keeps a missing or mis-mounted file from authorizing cleanup.
-      if (this.database) await this.loadPersonalRows();
+      // No state.json was read. With no import marker this is a first start: nothing is imported
+      // and no marker is written, so the personal data stays in state.json until a later start
+      // finds the file and imports it. With a marker, the file has gone missing while the rows
+      // still hold somebody's data: they are left alone, never loaded and never deleted, and the
+      // log says how to get them back.
+      if (this.database) {
+        const marker = await this.database.get<{ value: string }>("SELECT value FROM meta WHERE key = ?", [PERSONAL_MARKER]);
+        if (marker) {
+          const held = await this.database.get<{ n: number }>("SELECT count(DISTINCT user_id) AS n FROM personal_rows");
+          log("ERROR", "state.json is missing while application.sqlite holds personal data; restore state.json from a backup or from migration-backup/ before using the server", {
+            accounts: held?.n ?? 0,
+          });
+          await this.loadPersonalRows();
+        }
+      }
     }
   }
   addons() { return this.state.addons; }
@@ -475,18 +490,13 @@ export class Store {
         );
       }
     }
-    const unknownUsers = [...new Set(stored.map((row) => row.user_id).filter((userId) => !known.has(userId)))];
-    // Only a state.json that was actually read can say an account is gone. A missing file (a
-    // mis-mounted volume, a deleted state) names no accounts, and deleting every row then would
-    // destroy data that is otherwise recoverable.
-    if (unknownUsers.length && this.persisted) {
-      await database.batch(unknownUsers.map((userId) => ({
-        sql: "DELETE FROM personal_rows WHERE user_id = ?",
-        params: [userId],
-      })));
-    }
+    // Rows of an account this state.json does not name are neither loaded nor deleted. Account ids
+    // are random and never reused, so such rows cannot surface under someone else, and keeping
+    // them means a missing, replaced or older state.json can never destroy the only copy of
+    // anybody's data. A deleted account's rows go with the write that deletes it.
     this.persistedCold = this.coldJson();
     this.coldStripPending = stripCold;
+    this.personalActive = true;
     return undefined;
   }
   private async importPersonalRows(): Promise<"import"> {
@@ -514,6 +524,7 @@ export class Store {
     });
     await database.batch(statements);
     this.persistedRows = rows;
+    this.personalActive = true;
     return "import";
   }
   private normalizeSourceProfiles(): boolean {
@@ -704,7 +715,7 @@ export class Store {
     }
   }
   private async writePersisted(forceCold = false, deferJsonFailure = true): Promise<void> {
-    if (!this.database) {
+    if (!this.database || !this.personalActive) {
       await this.writeJson(JSON.stringify(this.state, null, 2));
       return;
     }

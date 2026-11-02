@@ -153,18 +153,26 @@ fields left in `state.json` and forces their removal on the next write.
 Every write compares the hot fields with the persisted row map and the cold
 state with the last written cold JSON. Only changed rows and a changed cold file
 are written. The cold file is written first, then the rows. `state.json` names
-the accounts, and a load deletes the rows of an account it no longer names, so
-the file is the commit point for account-level changes. If the JSON write fails,
-nothing was written and memory is rolled back. If the JSON lands and the row
-batch fails, memory is rolled back and deferred retry debt rewrites both files
-from memory.
+the accounts, so it is the commit point for account-level changes. If the JSON
+write fails, nothing was written and memory is rolled back. If the JSON lands
+and the row batch fails, memory is rolled back and deferred retry debt rewrites
+both files from memory.
+
+A load never deletes rows. Rows of an account the loaded `state.json` does not
+name are neither loaded nor removed: account ids are random and never reused, so
+they cannot surface under another account, and a missing, replaced or older
+`state.json` can therefore never destroy the only copy of anybody's data. A
+deleted account's rows go with the write that deletes it. A start that finds no
+`state.json` imports nothing and writes no marker, so the personal data stays in
+the file until a start that reads it; a start that finds the marker but no
+`state.json` logs an error that says to restore the file.
 
 There is no cross-file atomicity between `application.sqlite` and `state.json`.
 A few operations deliberately change both: account creation and deletion,
 media-server connection or library removal, settings import, and library
 deletion. A process failure between the two writes leaves the cold change in
 place and the rows behind it. For accounts this still ends consistent: a deleted
-account's rows are removed at the next load, and a new account starts empty.
+account's leftover rows are never loaded again, and a new account starts empty.
 The opposite order was rejected because a failed JSON write after the rows had
 committed could leave an account whose rows were already deleted, with nothing
 able to repair it after a restart.
