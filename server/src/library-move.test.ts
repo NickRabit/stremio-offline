@@ -435,15 +435,22 @@ const reportProgress = (target: string) =>
 
 const progressAt = async (key: string) => (await api(`/api/progress/${encodeURIComponent(key)}`)).json();
 
-/** The stored progress rows, key and stored `path`, as the state file holds them. A read through
- *  a file key may answer the title's row -- that is the alias this suite now expects -- so what a
- *  move left behind is read from the store itself. */
+/** The stored progress rows, key and stored `path`, as SQLite holds them. A read through a file
+ *  key may answer the title's row -- that is the alias this suite now expects -- so what a move
+ *  left behind is read from the store itself. */
 const storedProgress = async (): Promise<Array<[string, string | undefined]>> => {
-  const state = JSON.parse(await readFile(path.join(dataDir, "state.json"), "utf8")) as {
-    userData?: Record<string, { progress?: Record<string, { path?: string }> }>;
-  };
-  return Object.values(state.userData ?? {}).flatMap((data) =>
-    Object.entries(data.progress ?? {}).map(([key, row]) => [key, row.path] as [string, string | undefined]));
+  const database = new DatabaseSync(path.join(dataDir, "application.sqlite"), { readOnly: true });
+  try {
+    const rows = database.prepare(
+      "SELECT key, data FROM personal_rows WHERE domain = 'progress' ORDER BY user_id, key",
+    ).all() as Array<{ key: string; data: string }>;
+    return rows.map((row) => {
+      const data = JSON.parse(row.data) as { path?: string };
+      return [row.key, data.path];
+    });
+  } finally {
+    database.close();
+  }
 };
 
 const assertNothingStoredFor = async (file: string) => {

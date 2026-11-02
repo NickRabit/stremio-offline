@@ -20,8 +20,8 @@ hashes. Store them like passwords. The settings export is described in
 
 | Path | Holds | Back it up? |
 | --- | --- | --- |
-| `application.sqlite` (with `-wal`/`-shm`) | The image link registry, hourly picture and provider-call counts, activity history, traffic events, library match history and episode metadata, library file facts, followed series and automatic-download decisions, the download queue and history, and TMDB id mappings | **Yes** — copy it with the rest of `DATA_PATH` while the server is stopped |
-| `state.json` | Accounts, grants, libraries, settings, addons, each account's favourites, resume positions, watchlist and search history | **Yes** — cannot be rebuilt |
+| `application.sqlite` (with `-wal`/`-shm`) | The image link registry, hourly picture and provider-call counts, activity history, traffic events, library match history and episode metadata, library file facts, followed series and automatic-download decisions, the download queue and history, TMDB id mappings, and each account's favourites, resume positions, watchlist, watched-series markers and remote-media state | **Yes** — copy it with the rest of `DATA_PATH` while the server is stopped |
+| `state.json` | Accounts, grants, libraries, settings, addons, and each account's preferences, addon order, browse and search history, and follow defaults. When `application.sqlite` exists, the hot personal collections live in the database instead | **Yes** — cannot be rebuilt |
 | `media-server.key` | Key that decrypts saved Jellyfin and Emby logins. Present only when the server created it; a deployment that sets `MEDIA_SERVER_KEY_FILE` keeps the key at that path instead | **Yes** — without it those logins cannot be read |
 | `media-server-secrets/` | Encrypted provider tokens | **Yes** — together with the key and `state.json` |
 | `library/<library id>.json`, `library/episodes.json`, `follows.json`, `downloads.json` | Library match history and episode metadata, followed series and automatic-download decisions, and the download queue and history, from before the move to `application.sqlite`. Once their one-time import has run they are moved to `migration-backup/` | **Yes** while there is no `application.sqlite`: a first start that could not open SQLite keeps running on these files, and they are then the only copy. **No** once they have been moved to `migration-backup/` — the current data is in `application.sqlite` |
@@ -32,7 +32,7 @@ hashes. Store them like passwords. The settings export is described in
 | `title-extras/` | Cached cast, similar titles and ratings of opened titles | **No** — refetched on demand |
 | `artwork/` | Thumbnails the server generated from the media | Optional — regenerated, which takes ffmpeg time |
 | `images/*.jpg`, `images/*.png`, and other image files | Cached posters and backgrounds from the catalogues | Optional — the links are in `application.sqlite`; the bytes are refetched on demand |
-| `migration-backup/` | The pre-migration `images/index.json`, `image-stats.json`, `provider-stats.json`, `stats.json`, `activity.json`, `follows.json`, `downloads.json` and library metadata files | Optional — safe to delete once the migration is satisfactory |
+| `migration-backup/` | The pre-migration `state-*.json`, `images/index.json`, `image-stats.json`, `provider-stats.json`, `stats.json`, `activity.json`, `follows.json`, `downloads.json` and library metadata files | Optional — safe to delete once the migration is satisfactory |
 | `remote-images/` | Cached Jellyfin and Emby posters | **No** — refetched on demand |
 | `app.log` | The log | No |
 | `*.damaged-*` | A state file that could not be read at start, kept aside | Keep until you have looked at it |
@@ -62,12 +62,13 @@ the library metadata and the library operations that are still waiting in
 memory. Statistics collected in the last minute before the stop are not kept.
 
 The picture and provider-call statistics, traffic events, activity history,
-library file facts and TMDB id mappings live in `application.sqlite`; their old
-JSON files are kept only in `migration-backup/`. The file facts and TMDB id
-mappings are caches and safe to lose. Copy `application.sqlite` and its `-wal` or
-`-shm` files whenever they are present, together with the rest of `DATA_PATH`,
-while the server is stopped. The image files under `images/` remain optional to
-back up and can be left out to keep the backup small.
+library file facts, TMDB id mappings and each account's hot personal collections
+live in `application.sqlite`. The first personal-data import leaves a byte copy
+of the original state file in `migration-backup/state-*.json`. The file facts
+and TMDB id mappings are caches and safe to lose. Copy `application.sqlite` and
+its `-wal` or `-shm` files whenever they are present, together with the rest of
+`DATA_PATH`, while the server is stopped. The image files under `images/` remain
+optional to back up and can be left out to keep the backup small.
 
 If `application.sqlite` exists but cannot be opened, the server refuses to start
 instead of falling back to JSON. Do not delete it to work around that failure:

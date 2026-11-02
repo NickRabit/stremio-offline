@@ -181,13 +181,11 @@ const mediaServerPersonal = new MediaServerPersonal(store, mediaServers, async (
 });
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
-await store.load();
-await mediaServers.initialize();
-await externalIds.load();
 let database: AppDatabase | undefined;
 try {
   database = await chooseStorageMode(DATA_DIR, (dataDir) => openAppDatabase({ dataDir }));
   if (database) {
+    store.attachDatabase(database);
     tmdbIds.attachDatabase(database);
     followStore.attachDatabase(database);
     metaStore.attachDatabase(database);
@@ -200,6 +198,9 @@ try {
   });
   throw error;
 }
+await store.load();
+await mediaServers.initialize();
+await externalIds.load();
 await metaStore.load();
 await tmdbIds.load(path.join(DATA_DIR, "tmdb-ids.json"));
 await attachTitleExtrasDisk(path.join(DATA_DIR, "title-extras"));

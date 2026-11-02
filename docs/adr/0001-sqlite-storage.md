@@ -137,6 +137,35 @@ rows for evicted or trimmed keys in one batch. The one-time JSON imports use the
 `migration-backup/`. Both are caches: an unreadable JSON file or table row is
 discarded and rebuilt by probing or querying the source again.
 
+### Phase 3: personal state
+
+The five hot personal collections -- favourites, progress, the watchlist,
+watched-series markers and remote-media state -- moved from `state.json` to the
+`personal_rows` table. The in-memory `UserData` shape is unchanged, so callers
+keep using the existing synchronous accessors and mutators.
+
+The one-time import writes all rows and the `domain.personal` marker in one
+transaction, after copying the original state file to
+`migration-backup/state-<importedAt>.json`. Once the marker exists, SQLite rows
+are authoritative for those collections. A marker-present load ignores any hot
+fields left in `state.json` and forces their removal on the next write.
+
+Every write compares the hot fields with the persisted row map and the cold
+state with the last written cold JSON. Only changed rows and a changed cold file
+are written. Rows are committed first, then the cold file, so a crash cannot
+leave a cold change implying personal data that the database has not accepted.
+If the row batch fails, memory is rolled back. If the row batch succeeds and the
+JSON write fails, the update still rolls back and deferred retry debt converges
+the rows back to memory.
+
+There is no cross-file atomicity between `application.sqlite` and `state.json`.
+A few operations deliberately change both: account creation and deletion,
+media-server connection or library removal, settings import, and library
+deletion. A process or disk failure between the two writes can leave those mixed
+changes temporarily split. The row-first order makes the retry converge to the
+last in-memory state rather than preserving a partially applied update as a new
+authoritative snapshot.
+
 ### Backup
 
 Backups are offline in this phase: stop the server, then copy the entire data
