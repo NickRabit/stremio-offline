@@ -4,6 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker Hub](https://img.shields.io/badge/docker%20hub-nickrabit%2Fstremio--offline-2496ed?logo=docker&logoColor=white)](https://hub.docker.com/r/nickrabit/stremio-offline)
 [![GHCR](https://img.shields.io/badge/ghcr.io-stremio--offline-2496ed?logo=github&logoColor=white)](https://github.com/NickRabit/stremio-offline/pkgs/container/stremio-offline)
+[![Portainer template](https://img.shields.io/badge/portainer-template-13bef9)](docs/install-portainer-unraid.md#portainer)
+[![Unraid template](https://img.shields.io/badge/unraid-template-f15a2c)](docs/install-portainer-unraid.md#unraid)
 
 Self-hosted web client for standard [Stremio](https://www.stremio.com/) addons.
 It reads catalog and stream manifests, aggregates streams and subtitles, plays
@@ -163,6 +165,12 @@ on Docker Hub, whose page has a self-contained Compose file for a fresh
 directory. Both registries carry `latest`, every release version and every
 commit.
 
+For a GUI-managed Docker host, use the
+**[Portainer template](docs/install-portainer-unraid.md#portainer)** or the
+**[Unraid CA template](docs/install-portainer-unraid.md#unraid)**. Both expose
+the image, web port, persistent data and download paths through their normal
+installation UI.
+
 ### On a Synology NAS
 
 The usual target, and the one case with real setup work — folder ownership,
@@ -237,6 +245,7 @@ on demand, so a catalogue the provider adds later still shows up. See
 | Guide | What is in it |
 | --- | --- |
 | [Install on a Synology NAS](docs/install-synology.md) | Container Manager and SSH paths, `PUID`/`PGID`, backups, reverse proxy |
+| [Portainer and Unraid templates](docs/install-portainer-unraid.md) | Template setup, persistent folders and the current listing status |
 | [Configuration reference](docs/configuration.md) | Every environment variable, with defaults |
 | [Phones and tablets](docs/mobile.md) | iPhone, iPad and Android, Home Screen setup, server access |
 | [Playback](docs/playback.md) | Direct play vs. remux vs. transcode, seeking, tracks, subtitles |

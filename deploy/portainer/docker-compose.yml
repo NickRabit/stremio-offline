@@ -1,0 +1,36 @@
+services:
+  stremio-offline:
+    image: ghcr.io/nickrabit/stremio-offline:latest
+    container_name: stremio-offline
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${STREMIO_OFFLINE_PORT:-8090}:8080"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      FIX_PERMISSIONS: "${FIX_PERMISSIONS:-0}"
+      DATA_DIR: /data
+      DOWNLOAD_DIR: /downloads
+      LIBRARY_ROOTS: "${LIBRARY_ROOTS:-}"
+      ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
+      ALLOW_ADDON_HOSTS: "${ALLOW_ADDON_HOSTS:-}"
+      IMAGE_CACHE_MB: "${IMAGE_CACHE_MB:-512}"
+      ARTWORK_CACHE_MB: "${ARTWORK_CACHE_MB:-256}"
+    # Add this block on a Linux host with Intel QuickSync or VAAPI hardware:
+    #
+    # devices:
+    #   - /dev/dri:/dev/dri
+    #
+    # Also set RENDER_GID to the group that owns the render node. See
+    # docs/hardware-acceleration.md.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    volumes:
+      - "${DATA_PATH:-./data}:/data"
+      - "${DOWNLOAD_PATH:-./downloads}:/downloads"

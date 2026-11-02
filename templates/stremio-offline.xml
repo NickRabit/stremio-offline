@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Stremio-Offline</Name>
+  <Repository>ghcr.io/nickrabit/stremio-offline:latest</Repository>
+  <Registry>https://github.com/NickRabit/stremio-offline/pkgs/container/stremio-offline</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/NickRabit/stremio-offline/issues</Support>
+  <Project>https://github.com/NickRabit/stremio-offline</Project>
+  <Overview>Unofficial self-hosted web client for Stremio addons. Browse addon catalogs, play or convert compatible media, queue downloads, and keep a local library with artwork, metadata and Jellyfin or Emby connections.&#xD;&#xD;[b]After installation[/b] open the WebUI and create the first administrator account. Keep the data folder for upgrades and backups. Hardware transcoding requires adding the render device in Advanced View.</Overview>
+  <Category>MediaApp:Video</Category>
+  <WebUI>http://[IP]:[PORT:8080]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/NickRabit/stremio-offline/main/templates/stremio-offline.xml</TemplateURL>
+  <ReadMe>https://github.com/NickRabit/stremio-offline/blob/main/docs/install-portainer-unraid.md#unraid</ReadMe>
+  <Icon>https://raw.githubusercontent.com/NickRabit/stremio-offline/main/web/public/icon-512.png</Icon>
+  <ExtraSearchTerms>stremio self hosted homelab media server jellyfin emby real debrid android tv</ExtraSearchTerms>
+  <Requires>An always-on Docker host is recommended. Hardware conversion requires a compatible render device such as /dev/dri.</Requires>
+  <Changes>Initial Community Applications template.</Changes>
+  <Date>2026-11-02</Date>
+  <License>MIT</License>
+  <Screenshot>https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/home.jpg</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/detail.jpg</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/downloads.jpg</Screenshot>
+  <ExtraParams>--init</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <Description>Self-hosted Stremio addon client with playback, downloads and a local library.</Description>
+  <Networking>
+    <Mode>bridge</Mode>
+    <Publish>
+      <Port>
+        <HostPort>8090</HostPort>
+        <ContainerPort>8080</ContainerPort>
+        <Protocol>tcp</Protocol>
+      </Port>
+    </Publish>
+  </Networking>
+  <Data>
+    <Volume>
+      <HostDir>/mnt/user/appdata/stremio-offline</HostDir>
+      <ContainerDir>/data</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/downloads/stremio-offline</HostDir>
+      <ContainerDir>/downloads</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+  </Data>
+  <Environment/>
+  <Config Name="Web UI Port" Target="8080" Default="8090" Mode="tcp" Description="Host port for the Stremio Offline web interface." Type="Port" Display="always" Required="true" Mask="false">8090</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/stremio-offline" Mode="rw" Description="Accounts, addons, artwork and the application database. Include this folder in backups." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/stremio-offline</Config>
+  <Config Name="Downloads" Target="/downloads" Default="/mnt/user/downloads/stremio-offline" Mode="rw" Description="Downloaded media and the default local library." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/downloads/stremio-offline</Config>
+  <Config Name="Timezone" Target="TZ" Default="Etc/UTC" Mode="" Description="IANA timezone used by the server." Type="Variable" Display="always" Required="true" Mask="false">Etc/UTC</Config>
+  <Config Name="User ID" Target="PUID" Default="99" Mode="" Description="UID that owns and writes the mounted folders." Type="Variable" Display="always" Required="true" Mask="false">99</Config>
+  <Config Name="Group ID" Target="PGID" Default="100" Mode="" Description="GID that owns and writes the mounted folders." Type="Variable" Display="always" Required="true" Mask="false">100</Config>
+  <Config Name="Fix Permissions" Target="FIX_PERMISSIONS" Default="0" Mode="" Description="Set to 1 once when the folders need to be chowned to the User ID and Group ID." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="Additional Library Roots" Target="LIBRARY_ROOTS" Default="" Mode="" Description="Comma-separated container paths for extra libraries. Add the matching paths in Advanced View first." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Allowed Private Addon Hosts" Target="ALLOW_ADDON_HOSTS" Default="" Mode="" Description="Comma-separated private hosts that addons may access." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Allow All Private-network Addons" Target="ALLOW_PRIVATE_ADDONS" Default="0" Mode="" Description="Only enable when every addon may reach the private network." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+</Container>
