@@ -3,7 +3,7 @@ import test from "node:test";
 import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -79,6 +79,51 @@ test("PLAYBACK_DIR cleans and uses only its owned child", async (t) => {
 
   assert.notEqual(started.mode, "direct");
   assert.ok(existsSync(path.join(owned, started.id, String(manager.sessions.get(started.id).generation))));
+});
+
+test("a playback root that is a symbolic link is replaced, never emptied through", { skip: process.platform === "win32" }, async (t) => {
+  const previous = process.env.PLAYBACK_DIR;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PLAYBACK_DIR;
+    else process.env.PLAYBACK_DIR = previous;
+  });
+  for (const configured of [true, false]) {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "playback-link-data-"));
+    const playbackParent = await mkdtemp(path.join(os.tmpdir(), "playback-link-parent-"));
+    const elsewhere = await mkdtemp(path.join(os.tmpdir(), "playback-link-target-"));
+    t.after(() => Promise.all([dataDir, playbackParent, elsewhere].map((dir) => rm(dir, { recursive: true, force: true }))));
+    await writeFile(path.join(elsewhere, "precious.txt"), "keep");
+    const root = configured ? path.join(playbackParent, "stremio-offline-playback") : path.join(dataDir, "playback");
+    await symlink(elsewhere, root);
+    if (configured) process.env.PLAYBACK_DIR = playbackParent;
+    else delete process.env.PLAYBACK_DIR;
+
+    const manager = new PlaybackManager(dataDir) as any;
+    await loadPlaybackManager(manager);
+
+    assert.equal(await readFile(path.join(elsewhere, "precious.txt"), "utf8"), "keep", `configured=${configured}`);
+    assert.equal(manager.root, root);
+    assert.equal((await lstat(root)).isDirectory(), true, "the link was replaced by a real folder");
+    assert.deepEqual(await readdir(root), []);
+  }
+});
+
+test("a relative PLAYBACK_DIR is resolved to an absolute root", async (t) => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "playback-relative-data-"));
+  const parent = await mkdtemp(path.join(os.tmpdir(), "playback-relative-"));
+  t.after(() => Promise.all([rm(dataDir, { recursive: true, force: true }), rm(parent, { recursive: true, force: true })]));
+  const previous = process.env.PLAYBACK_DIR;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PLAYBACK_DIR;
+    else process.env.PLAYBACK_DIR = previous;
+  });
+  process.env.PLAYBACK_DIR = path.relative(process.cwd(), parent);
+
+  const manager = new PlaybackManager(dataDir) as any;
+  await loadPlaybackManager(manager);
+
+  assert.equal(path.isAbsolute(manager.root), true);
+  assert.equal(manager.root, path.join(parent, "stremio-offline-playback"));
 });
 
 test("an unset PLAYBACK_DIR keeps the DATA_DIR/playback root", async (t) => {

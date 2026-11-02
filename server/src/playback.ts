@@ -1,7 +1,7 @@
 import { AppError } from "./errors.js";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import { access, chmod, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { mediaResources, safeSourceText } from "./media-resources.js";
@@ -410,7 +410,9 @@ export class PlaybackManager {
   ) {
     this.fallbackRoot = path.join(dataDir, "playback");
     const configured = playbackDir?.trim();
-    this.configuredRoot = configured ? path.join(configured, "stremio-offline-playback") : undefined;
+    // FFmpeg runs with the session folder as its working directory and is also given that folder
+    // as the output prefix, so a relative root would nest the output inside itself.
+    this.configuredRoot = configured ? path.resolve(configured, "stremio-offline-playback") : undefined;
     this.root = this.configuredRoot ?? this.fallbackRoot;
   }
 
@@ -456,12 +458,19 @@ export class PlaybackManager {
     setInterval(() => this.reap(), 30_000).unref();
   }
 
+  /** Empties the owned root. The root itself is checked without following links: a symbolic link
+   *  or a file in its place is removed as an entry, never read through, so nothing outside the
+   *  owned folder can be deleted. */
   private async emptyRoot(root: string) {
-    const entries = await readdir(root).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return [];
+    const entry = await lstat(root).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
       throw error;
     });
-    await Promise.all(entries.map((entry) => rm(path.join(root, entry), { recursive: true, force: true })));
+    if (entry && !entry.isDirectory()) await rm(root, { force: true });
+    else if (entry) {
+      const entries = await readdir(root);
+      await Promise.all(entries.map((name) => rm(path.join(root, name), { recursive: true, force: true })));
+    }
     await mkdir(root, { recursive: true, mode: 0o700 });
     await chmod(root, 0o700);
   }
