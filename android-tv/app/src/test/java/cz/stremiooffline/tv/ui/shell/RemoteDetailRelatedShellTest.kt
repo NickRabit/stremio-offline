@@ -26,12 +26,14 @@ import cz.stremiooffline.tv.data.HomeRowDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.RemoteItemDetailDto
+import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
-import cz.stremiooffline.tv.data.TitleRefDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagCatalogChosenSource
 import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
@@ -78,7 +80,7 @@ class RemoteDetailRelatedShellTest {
   @Test
   fun `a similar title from a media-server detail starts on that server's copy`() {
     val card = HomeCard.Remote(key = "remote:one", title = "Movie", provider = "jellyfin",
-      libraryId = "rlibA", libraryName = "Filmy", itemId = "iA", identity = TitleRefDto("movie", "tt1"))
+      libraryId = "rlibA", libraryName = "Filmy", itemId = "iA")
     val encoded = HomeCardsJson.encodeToJsonElement(HomeCard.serializer(), card) as JsonObject
     val api = FakeTvApi().apply {
       settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", streamSort = "size-desc", realDebridConfigured = true)
@@ -87,6 +89,9 @@ class RemoteDetailRelatedShellTest {
       }
       remoteSourcesValue = listOf(StreamDto(sourceId = "remote1", kind = "remote", playable = true,
         remoteItem = RemoteItemContext(libraryId = "rlibA", itemId = "iA", mediaSourceId = "v1", progressKey = "remote:one")))
+      remoteItemValues["rlibA:iA"] = RemoteItemDetailDto(
+        RemoteItemDto(id = "iA", name = "Movie", type = "movie", providerIds = RemoteProviderIdsDto(imdb = "tt1")),
+      )
       titleExtrasValue = TitleExtrasDto(related = listOf(RelatedTitleDto(type = "movie", id = "tt2", name = "Related")))
       metaValues["movie:tt2"] = MetaDto(id = "tt2", type = "movie", name = "Related")
       remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Filmy", provider = "jellyfin"))

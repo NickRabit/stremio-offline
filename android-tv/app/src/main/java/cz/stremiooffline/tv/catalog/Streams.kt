@@ -259,6 +259,19 @@ object Streams {
   fun remoteFirst(rows: List<StreamDto>, prefer: Boolean): List<StreamDto> =
     if (!prefer) rows else rows.filter(::isRemoteStream) + rows.filterNot(::isRemoteStream)
 
+  fun originRemoteRow(
+    rows: List<StreamDto>,
+    libraryId: String,
+    itemId: String,
+    mediaSourceId: String?,
+  ): StreamDto? {
+    val itemRows = rows.filter {
+      it.playable && it.remoteItem?.libraryId == libraryId && it.remoteItem?.itemId == itemId
+    }
+    if (mediaSourceId != null) itemRows.firstOrNull { it.remoteItem?.mediaSourceId == mediaSourceId }?.let { return it }
+    return itemRows.firstOrNull()
+  }
+
   /** The addon filter value that stands for the viewer's own library copies, the web's
    *  `LOCAL_SOURCE`: a manifest name is a plain string, so a leading control character can
    *  never collide with an addon of the same name. */

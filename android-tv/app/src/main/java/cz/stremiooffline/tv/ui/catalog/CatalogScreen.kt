@@ -63,7 +63,11 @@ data class CatalogDetailArgs(
   val focusRelatedId: String? = null,
   /** Opened from a Jellyfin/Emby title: that server's copy leads Play. */
   val preferRemote: Boolean = false,
+  /** The exact media-server version this catalogue detail was opened from. */
+  val preferredRemote: RemoteItemRef? = null,
 )
+
+data class RemoteItemRef(val libraryId: String, val itemId: String, val mediaSourceId: String? = null)
 
 private enum class CatalogPanel { Catalogs, Genres }
 
