@@ -4,8 +4,11 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.actionFor
 import cz.stremiooffline.tv.ui.home.cardLabel
+import cz.stremiooffline.tv.ui.home.heroDescription
+import cz.stremiooffline.tv.ui.home.heroMetaLine
 import cz.stremiooffline.tv.ui.home.heroMetaRef
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -178,6 +181,43 @@ class HomeCardsTest {
 
     assertEquals("movie" to "tt9", bound.heroMetaRef())
     assertNull(unbound.heroMetaRef())
+  }
+
+  @Test
+  fun `a bound resume file keeps its episode code and year when metadata arrives`() {
+    val card = HomeCard.ResumeFile(
+      key = "file:show",
+      title = "Show",
+      path = "Shows/Show/S01E02.mkv",
+      season = 1,
+      episode = 2,
+      identity = TitleRefDto("series", "tt9"),
+    )
+    val meta = MetaDto(
+      id = "tt9",
+      type = "series",
+      year = JsonPrimitive("2001"),
+      genres = listOf("Drama"),
+    )
+
+    val line = heroMetaLine(card, meta)
+
+    assertTrue(line, line.contains(card.episodeCodeText!!))
+    assertTrue(line, line.contains("2001"))
+  }
+
+  @Test
+  fun `a resume file description prefers metadata and falls back to its subtitle`() {
+    val card = HomeCard.ResumeFile(
+      key = "file:show",
+      title = "Show",
+      subtitle = "Pilot",
+      path = "Shows/Show/S01E02.mkv",
+      identity = TitleRefDto("series", "tt9"),
+    )
+
+    assertEquals("Pilot", heroDescription(card, MetaDto(id = "tt9", type = "series")))
+    assertEquals("Plot", heroDescription(card, MetaDto(id = "tt9", type = "series", description = "Plot")))
   }
 
   @Test

@@ -77,6 +77,8 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/library\/browse$/ },
   { method: "GET", pattern: /^\/library\/mosaic$/ },
   { method: "GET", pattern: /^\/library\/gallery$/ },
+  // The handler scopes the answer to the viewer.
+  { method: "GET", pattern: /^\/library\/identity$/ },
   { method: "GET", pattern: /^\/library\/folders$/ },
   { method: "GET", pattern: /^\/library\/thumb$/ },
   { method: "GET", pattern: /^\/library\/next\/[^/]+$/ },
@@ -110,6 +112,8 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/meta\/[^/]+\/[^/]+\/extras$/ },
   { method: "GET", pattern: /^\/links\/[^/]+\/[^/]+$/ },
   { method: "GET", pattern: /^\/trailer\/[^/]+\/[^/]+$/ },
+  // Public intro timings for the player, keyed by catalogue id: nothing of any account.
+  { method: "GET", pattern: /^\/intro-segments$/ },
   { method: "GET", pattern: /^\/library\/links$/ },
   { method: "GET", pattern: /^\/library\/trailer$/ },
   { method: "GET", pattern: /^\/library\/title$/ },

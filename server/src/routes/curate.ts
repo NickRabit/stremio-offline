@@ -4,7 +4,7 @@ import { readdir, stat } from "node:fs/promises";
 import { AppError } from "../errors.js";
 import { assertStillAdmin } from "../roles.js";
 import { normalizeLanguage } from "../language.js";
-import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
+import { libraryFor, libraryVisible, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryCandidateSource } from "../library-candidates.js";
 import { episodeNumberOf, knownEntryForUnit, knownTitleOf, lookupSkipped, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, suggestionForUnit, unitFor, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
@@ -17,7 +17,7 @@ import { isPathWithin, isVideo } from "../library.js";
 import { mediaResources, ResourceError, type ResourceOwner } from "../media-resources.js";
 import { nextVideoFile } from "../next-file.js";
 import type { UserPrefs } from "../store.js";
-import { asyncRoute, type RouteContext } from "./context.js";
+import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 /** How many rows the manual identity search offers: enough to pick from, not a catalogue. */
 const SEARCH_RESULT_LIMIT = 20;
@@ -64,9 +64,10 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
   });
 
   app.get("/api/library/identity", asyncRoute(async (req, res) => {
+    const viewer = viewerOf(currentUser(req));
     const relative = String(req.query.path ?? "").trim();
     const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
-    if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
+    if (!resolved || !libraryVisible(resolved.library, viewer)) throw new AppError("Invalid path.", "err.invalidPath");
     // The unit the clicked row belongs to, and the title that unit is read as: a folder named
     // for a film keeps the folder title, a loose film in a collection keeps its own name.
     const unit = unitFor(resolved.key, await libraryUnits());
@@ -78,8 +79,8 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const known = knownEntryForUnit(unit, records, resolved.key)?.record;
     const language = prefsOf(req).uiLanguage;
     const wantedLanguage = store.settings().tmdbApiKey ? language : undefined;
-    if (needsBackfill(known, undefined, wantedLanguage)) scheduleMetaBackfill(known!.type, known!.id, language);
-    const suggestion = suggestionForUnit(unit, suggestions, resolved.key);
+    if (viewer.role === "admin" && needsBackfill(known, undefined, wantedLanguage)) scheduleMetaBackfill(known!.type, known!.id, language);
+    const suggestion = viewer.role === "admin" ? suggestionForUnit(unit, suggestions, resolved.key) : undefined;
     const isFile = isVideo(posixBase(resolved.key));
     // A file of a series unit is numbered by the show's own style as well, not only by a tag.
     const numbers = episodeNumberOf(resolved.key, ownRecord(resolved.key, records), { loose: unit?.kind === "series" });
