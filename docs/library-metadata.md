@@ -202,11 +202,15 @@ artwork is regenerated explicitly or a correction is confirmed.
 
 | Path | Holds |
 | --- | --- |
-| `DATA_PATH/library/<library id>.json` | That library's matches and waiting suggestions, keyed relative to its root. |
-| `DATA_PATH/library/episodes.json` | Episode titles and stills, shared across libraries. |
+| `DATA_PATH/application.sqlite` | Each library's matches and waiting suggestions, keyed relative to its root (`library_meta`), and episode titles and stills shared across libraries (`library_episodes`). |
 | `DATA_PATH/library-scan.json` | An interrupted scan, so it resumes instead of restarting. |
 
-All of it sits under `DATA_PATH`, so copying that folder keeps the work. The
+The old `library/<library id>.json` and `library/episodes.json` files are
+imported once and moved to `migration-backup/`; current changes go to SQLite.
+They are still used if the first start falls back to JSON without a database.
+
+All of it sits under `DATA_PATH`. Copy the folder with the server stopped,
+including SQLite sidecar files when present; see [Backup](backup.md). The
 settings backup does **not** carry it — see
 [Addons and downloads](downloads.md#backing-up-the-configuration).
 

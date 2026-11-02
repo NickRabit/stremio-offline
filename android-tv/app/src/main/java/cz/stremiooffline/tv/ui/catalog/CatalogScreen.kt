@@ -65,6 +65,8 @@ data class CatalogDetailArgs(
   val preferRemote: Boolean = false,
   /** The exact media-server version this catalogue detail was opened from. */
   val preferredRemote: RemoteItemRef? = null,
+  /** The viewer's own library copy this catalogue detail was opened from. */
+  val preferredLocalPath: String? = null,
 )
 
 data class RemoteItemRef(val libraryId: String, val itemId: String, val mediaSourceId: String? = null)

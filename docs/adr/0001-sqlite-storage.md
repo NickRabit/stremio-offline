@@ -8,8 +8,9 @@
 The application currently persists several domains as whole JSON files. The
 selective migration plan in issue #644 moves one domain at a time so each move
 can be tested independently. This ADR records the shared storage decisions and
-the phase 0-1 infrastructure. Phase 1 starts using it for the image link
-registry.
+the storage infrastructure and migrated domains. Phases 1 through 2c move
+image links, statistics, activity and caches; phases 3 through 5 move downloads,
+follows and library metadata. These shipped together in #679 (0.7.7).
 
 ## Decision
 
@@ -137,7 +138,35 @@ rows for evicted or trimmed keys in one batch. The one-time JSON imports use the
 `migration-backup/`. Both are caches: an unreadable JSON file or table row is
 discarded and rebuilt by probing or querying the source again.
 
-### Phase 3: personal state
+### Phase 3: download queue
+
+Downloads moved to `download_jobs`, retaining job order and the existing
+serialized admission and recovery contracts. Writes upsert changed jobs and
+delete removed ones in a transaction. The `domain.downloads` marker controls
+the one-time import of `downloads.json` into SQLite; the old file moves to
+`migration-backup/` after cutover.
+
+### Phase 4: followed series
+
+Followed series and automatic-download decisions moved to `follows`, retaining
+order and writing only changed records. The `domain.follows` marker controls
+the one-time import of `follows.json`, which then moves to `migration-backup/`.
+Follow/queue reconciliation is still required: sharing a database does not make
+their separate mutations one transaction.
+
+### Phase 5: library metadata
+
+Matches and suggestions moved to `library_meta`, keyed by library, record kind
+and relative path; shared episode metadata moved to `library_episodes`.
+Per-library `domain.libraryMeta.<id>` markers and `domain.libraryEpisodes`
+control the imports from `library/<id>.json` and `library/episodes.json`.
+Writes update changed records rather than rewriting the complete collections;
+the imported files move to `migration-backup/`.
+
+Accounts, grants and settings remain in `state.json`; the per-account personal
+collections moved in phase 6. Library operations and scan journals remain JSON.
+
+### Phase 6: personal state
 
 The five hot personal collections -- favourites, progress, the watchlist,
 watched-series markers and remote-media state -- moved from `state.json` to the

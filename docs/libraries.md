@@ -217,18 +217,23 @@ For manual relocation, stop the server, move the whole tree, restart and choose
 
 ## Where the state lives
 
-Nothing about a library is hidden in a database:
+Library configuration stays in JSON; matches and episode metadata use the
+shared SQLite database:
 
 | Path | Holds |
 | --- | --- |
 | `DATA_PATH/state.json` | The library records and the grants made from the picker. |
-| `DATA_PATH/library/<library id>.json` | The match history of one library, keyed relative to its root. |
-| `DATA_PATH/library/episodes.json` | Episode titles and stills, shared across libraries. |
+| `DATA_PATH/application.sqlite` | Library matches and suggestions keyed relative to each root, shared episode metadata and cached file facts, alongside other server data. |
 | `DATA_PATH/artwork/<library id>/` | The thumbnails the server generated for that library. |
 | `DATA_PATH/library-scan.json`, `library-ops.json` | An interrupted scan or bulk job, so it resumes instead of restarting. |
 
-Back up `DATA_PATH` and you have the accounts, the addons, the libraries and what
-they remember. The media is a separate question. What to copy, what to leave
+Before SQLite migration, matches lived in `library/<library id>.json` and
+`library/episodes.json`; the one-time import moves them to `migration-backup/`.
+They remain authoritative only when a first start falls back to JSON without
+a database.
+
+Back up `DATA_PATH` with the server stopped and you have the accounts, addons,
+libraries and what they remember. The media is a separate question. What to copy, what to leave
 out and how to restore is in [Backing up and restoring](backup.md).
 
 With more than one account, a library is also something an administrator grants:

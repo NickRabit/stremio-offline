@@ -9,13 +9,11 @@ needs VAAPI. See [Hardware acceleration](hardware-acceleration.md) for the setup
 
 ## Direction and delivery order
 
-Rechecked against `origin/main` at `0b3e8b2b` (0.5.36) on 2026-10-10; the
-order below was set by the owner on 2026-10-30, after comparing the October
-releases of Nuvio and Stremio. The feature inventory and near-term work below
-describe that revision; the dated engineering audit later in this file is
-retained as an audit record, not a claim that every older probe or count
-describes today's checkout. The Done list and the media-server and
-source-selection sections were brought up to date with 0.7.3 on 2026-11-01.
+Rechecked against `origin/main` at `d3549e44` (0.7.14) on 2026-11-02.
+The delivery order was set by the owner on 2026-10-30; shipped work has been
+removed from the remaining priorities without changing their relative order.
+The dated engineering audit later in this file is retained as a historical
+record, not a description of today's stores, probes or file counts.
 
 The core product is now broad: following and automatic episode downloads,
 Home, enhanced search, and desktop apps for macOS, Windows, and Linux have
@@ -27,13 +25,13 @@ metadata store, or scheduler for each platform.
 | Order | Current opportunity | What remains |
 | --- | --- | --- |
 | 4 | Queue controls | Night-only window first, then an aggregate speed limit and a completion notice; current download limits cover concurrency, not these controls. |
-| 5 | Selective SQLite storage | Move large, often rewritten collections out of whole-file JSON rewrites, phase by phase, per [#644](https://github.com/NickRabit/stremio-offline/issues/644). |
 | 6 | Library file fingerprint | Re-associate metadata, favourites and resume positions when a file is moved outside the app, by size and a partial hash; best built on the SQLite storage. See [Library](#library). |
 | 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
 | Alongside | Major dependency updates | Node 26 for the server image and CI, then Vite 8 with its React plugin, then TypeScript 7; Electron waits for a reason. See [Major dependency updates](#major-dependency-updates). |
 | Then | Search by cast and crew | A person in the title detail opens what that person made, not a text search for the name: TMDB filmography when a key is set, the owned copies first. See [Search by cast and crew](#search-by-cast-and-crew). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
+| Implemented | Selective SQLite storage | Image links, statistics, activity, file facts, TMDB id mappings, downloads, follows and library metadata now use changed-row writes in one embedded database (#679, 0.7.7). Accounts and settings stay in JSON. [Storage](#storage), [decision record](adr/0001-sqlite-storage.md). |
 | Implemented | Player chapters and badges | Chapter marks, the current chapter and a chapter list; badges for what is playing (resolution, HDR, audio), on the web, desktop and Android TV. [Playback](playback.md#what-is-playing-chapters-intro-and-credits). |
 | Implemented | Intro skip and next-episode threshold | Skip intro, recap and credits from IntroDB (server-side, off in secure mode) with optional auto-skip; Up next at a chosen point or where the credits start. Web, desktop and Android TV. |
 | Implemented | Richer title detail | Cast and crew with photos, similar titles, ratings, the age rating, trailers and what will play, from one server route on the web, desktop and Android TV (0.6.24 to 0.6.28). [Specification](title-detail-spec.md). |
@@ -71,15 +69,23 @@ Shipped in `main`; implementation details live in the linked guides.
   source, video, audio and file that will play, for catalogue, library and
   Jellyfin/Emby titles on every client. A series shows its episodes, the next
   one and the progress. Photos, the age rating and similar titles need a TMDB
-  key. [Specification](title-detail-spec.md).
+  key. Ordinary accounts can load these extras too (#684). Library files and
+  media-server Continue watching cards open the unified detail on Android TV;
+  remembered playback sources survive closing the player (#693).
+  [Specification](title-detail-spec.md).
 - **Accounts**: administrator and user roles, per-user libraries, addons,
   download permissions, preferences and session revocation. [Accounts](users.md).
 - **Playback**: direct play, remux, hardware transcode (VAAPI, NVENC,
   VideoToolbox), timeline previews, subtitle timing, next-episode countdown,
-  device volume memory and a Fill screen toggle. A seek that is slow or refused
+  device volume memory and a Fill screen toggle. Chapters, playing badges,
+  IntroDB intro/recap/credits skipping with optional auto-skip, and a configurable
+  Up next point are available on web, desktop and Android TV (0.7.4); secure mode
+  disables IntroDB lookups. A seek that is slow or refused
   keeps the stream alive, an HLS source named `.mp4` is converted from its
   tallest rendition, and a conversion that falls behind playback says whether
-  the source or FFmpeg is waiting. AirPlay is disabled.
+  the source or FFmpeg is waiting. Conversion output can use a separate disk
+  through `PLAYBACK_DIR` (#683); bounded conversion buffering remains separate
+  work, not a property of that setting. AirPlay is disabled.
   [Playback](playback.md), [Troubleshooting](troubleshooting.md).
 - **Following**: follow a series or a film for its releases, on a Following
   page with an overview, a release calendar and download activity, with
@@ -138,6 +144,12 @@ Shipped in `main`; implementation details live in the linked guides.
   Compact navigation has five slots and a More menu on phones and short
   landscape screens; Favourites and Continue watching fold into More there.
   [Home page](home-spec.md).
+- **Storage and disk writes**: selective SQLite storage for the image registry,
+  statistics, activity, file facts, TMDB id mappings, download queue, follows
+  and library metadata (0.7.7). Progress writes are coalesced, unchanged reports
+  skip writes, and final playback positions and explicit user actions retain
+  immediate persistence (#681). Accounts and settings remain in `state.json`.
+  [Storage](#storage), [Backup](backup.md).
 - **Statistics and diagnostics**: traffic by source, active streams, admin
   activity history, grouped errors and redacted logs.
   [Activity history](users.md#activity-history), [Diagnostics](troubleshooting.md).
@@ -295,11 +307,22 @@ browser are a separate later idea.
 
 ### Storage
 
-Large and often mutated collections (the image index, the download queue,
-statistics, activity) are rewritten as whole JSON files. Move them to SQLite
-selectively, keeping JSON where it fits and keeping the recovery, backup and
-authorization guarantees. The plan, phases and measurements live in
-[#644](https://github.com/NickRabit/stremio-offline/issues/644).
+Selective migration shipped in #679 (0.7.7), following
+[#644](https://github.com/NickRabit/stremio-offline/issues/644). One worker owns
+`application.sqlite`; image links, hourly picture/provider counts, traffic,
+activity, file facts, TMDB id mappings, downloads, follows and library metadata
+write only changed rows. The one-time imports move old JSON files to
+`migration-backup/`. Accounts, grants, preferences and resume positions remain
+in `state.json`; library operations and scan progress also stay in JSON.
+
+The [decision record](adr/0001-sqlite-storage.md) owns runtime and cutover
+contracts, and [Backup](backup.md) describes stopped-instance backup and restore.
+An existing database that cannot be opened blocks startup; it never silently
+falls back to stale JSON. Online backup is still deferred. Packaged
+Windows/Linux Electron verification remains open in the decision record.
+SQLite does not replace filesystem journals or make separate domain mutations
+one transaction. Further migration needs measured benefit; the file-fingerprint
+feature can now build on this storage.
 
 ### Major dependency updates
 
@@ -331,17 +354,21 @@ Ubuntu base image majors stay manual as well (24.04 on purpose since #634).
 
 ### Android TV
 
-A native client for the TCL televisions and the Shield, with the web's Home,
-Catalog and Library and a player that plays MKV without a server conversion.
-It starts with a server-only PR that lets a native client declare containers,
-profiles and audio passthrough. Scope, contracts and PR order:
+The native client has shipped for the TCL televisions and the Shield, with
+Home, Catalog, Library and a player that supports MKV without a server
+conversion when the device can decode its tracks. The server accepts native
+container, profile and audio-passthrough capabilities. Original scope and contracts:
 [Android TV client](android-tv-spec.md).
 
 Since the first real-TV tests the television also has: smart series download (the
 web dialog's choices as D-pad panels over `POST /api/downloads/bulk`), per-title
 source sorting and filters, a search history shared with the web and cleared from
 Settings, voice search (hidden without a recognizer), a Continue watching
-section with Forget progress, and the unified Favourites.
+section with Forget progress, and the unified Favourites. Chapters, playing
+badges, segment skipping and configurable Up next shipped in 0.7.4. Library
+files/folders and media-server Continue watching cards now open the unified
+title detail (#688, #690); next-episode playback requests that episode's addon
+subtitles (#687).
 
 Still open on the television:
 
@@ -372,6 +399,12 @@ Deliberately not done: moving the catalogue search out of `App.tsx` (search and
 browsing share one loader, so a clean move would change request order) and
 splitting `style.css` (its rules interleave by area). The text below is the
 plan as it was written.
+
+Storage update (2026-11-02): the JSON-first decision below was superseded by
+#679; see [Storage](#storage). The inventory and separate-file descriptions
+below describe the October audit, before selective SQLite migration.
+Filesystem recovery and follow/queue reconciliation still cross domains and
+are not made atomic merely by sharing a database.
 
 Reviewed on 2026-10-04 against `main` at `b4b4c2a` (0.5.7). This section
 validates the proposed refactoring/hardening plan against that revision; it

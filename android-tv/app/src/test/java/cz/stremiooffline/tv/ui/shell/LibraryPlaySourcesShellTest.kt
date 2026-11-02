@@ -35,6 +35,7 @@ import cz.stremiooffline.tv.ui.catalog.OfferedSources
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.sourceRowTag
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.TagDetailPrimary
 import cz.stremiooffline.tv.ui.player.TAG_OSD_SOURCES
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
@@ -51,7 +52,8 @@ import org.robolectric.annotation.Config
 /**
  * A play started from the library, driven by the remote: a file bound to a catalogue title gets
  * the Sources button under the session and offers the file that is playing plus the addon rows.
- * A file with no binding keeps the player it always had, and a slow answer never delays Play.
+ * A file with no binding keeps the player it always had, and a slow binding falls back to that
+ * detail after the lookup deadline.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-xhdpi")
@@ -213,32 +215,27 @@ class LibraryPlaySourcesShellTest {
     compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("It.mkv"))
     compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Alpha"))
     press(Key.Back)
-    // The detail, Sources and subtitles each name the file once; the switch repeats none of them.
-    assertEquals(3, fake.libraryTitleRequests.size)
+    // The shell resolves the file once and the player's subtitles name it once; the switch repeats neither.
+    assertEquals(2, fake.libraryTitleRequests.size)
     assertEquals(1, fake.streamSourcesRequests.size)
-    // The detail's Will play row and the player's Sources.
-    assertEquals(2, fake.localStreamsRequests.size)
+    // The catalogue detail loads the local rows once and the player keeps that list.
+    assertEquals(1, fake.localStreamsRequests.size)
     assertEquals(1, fake.remoteMatchRequests.size)
   }
 
   @Test
-  fun `a slow source answer does not delay Play`() {
+  fun `a slow binding lookup falls back to the library detail after the timeout`() {
     val fake = api()
     val gate = CompletableDeferred<Unit>()
     fake.libraryTitleGate = gate
     mount(fake)
 
-    playFromLibrary()
+    compose.onNodeWithTag("It").assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { focused(TagDetailPrimary) }
 
-    assertEquals(listOf("src:$path"), fake.startedSources)
     assertTrue(fake.libraryTitleRequests.contains(path))
-    compose.onNodeWithTag(TAG_OSD_SOURCES).assertDoesNotExist()
-
-    fake.libraryTitleValues[path] = LibraryTitleDto("movie", "tt1", name = "It")
-    gate.complete(Unit)
-    compose.waitForIdle()
-
-    compose.onNodeWithTag(TAG_OSD_SOURCES).assertExists()
+    assertEquals(emptyList<String>(), fake.startedSources)
   }
 
   /** An addon play a native detail started with several rows keeps those rows and accepts the

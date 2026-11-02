@@ -272,6 +272,9 @@ object Streams {
     return itemRows.firstOrNull()
   }
 
+  fun originLocalRow(rows: List<StreamDto>, path: String): StreamDto? =
+    rows.firstOrNull { it.playable && isLocalStream(it) && it.localPath == path }
+
   /** The addon filter value that stands for the viewer's own library copies, the web's
    *  `LOCAL_SOURCE`: a manifest name is a plain string, so a leading control character can
    *  never collide with an addon of the same name. */

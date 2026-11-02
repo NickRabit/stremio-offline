@@ -24,6 +24,18 @@ class ActionForTest {
     forgetKeys = listOf(Progress.libraryKey(path)),
   )
 
+  private fun boundFile(
+    type: String = "movie",
+    season: Int? = null,
+    episode: Int? = null,
+  ) = file(title = "Local title").copy(
+    season = season,
+    episode = episode,
+    poster = "poster.jpg",
+    identity = TitleRefDto(type = type, id = "tt1"),
+    forgetKeys = listOf("${type}:tt1"),
+  )
+
   private fun catalogue(path: String? = null, pending: Boolean = false) = HomeCard.ResumeCatalogue(
     key = "series:tt1:1:2",
     title = "Show · Two",
@@ -52,6 +64,42 @@ class ActionForTest {
     val detail = (action as HomeAction.OpenDetail).detail
     assertEquals("browse/A.mkv", detail.files.single().path)
     assertEquals("A", detail.title)
+  }
+
+  @Test
+  fun `a bound resume movie opens the catalogue with its own file`() {
+    val action = actionFor(boundFile())
+
+    assertTrue(action is HomeAction.OpenCatalog)
+    val args = (action as HomeAction.OpenCatalog).args
+    assertEquals("tt1", args.meta.id)
+    assertEquals("movie", args.meta.type)
+    assertEquals("Local title", args.meta.name)
+    assertEquals("poster.jpg", args.meta.poster)
+    assertEquals("", args.addonName)
+    assertEquals("movie", args.type)
+    assertEquals(listOf("movie:tt1"), args.forgetKeys)
+    assertEquals("browse/A.mkv", args.preferredLocalPath)
+    assertNull(args.episode)
+  }
+
+  @Test
+  fun `a bound resume episode opens the catalogue on its episode without the file name`() {
+    val action = actionFor(boundFile(type = "series", season = 2, episode = 3))
+
+    assertTrue(action is HomeAction.OpenCatalog)
+    val args = (action as HomeAction.OpenCatalog).args
+    assertEquals("tt1", args.meta.id)
+    assertEquals("series", args.meta.type)
+    assertEquals("", args.meta.name)
+    assertNull(args.meta.poster)
+    assertEquals(ResumeEpisode("series:tt1:2:3", 2, 3), args.episode)
+    assertEquals("browse/A.mkv", args.preferredLocalPath)
+  }
+
+  @Test
+  fun `an unbound resume file keeps opening the library detail`() {
+    assertTrue(actionFor(file()) is HomeAction.OpenDetail)
   }
 
   @Test
@@ -99,6 +147,19 @@ class ActionForTest {
       assertEquals("", args.addonName)
       assertNull(args.episode)
     }
+  }
+
+  @Test
+  fun `a favourite file passes its local copy to the catalogue detail`() {
+    val card = favorite(
+      itemKind = "file",
+      title = TitleRefDto(type = "movie", id = "tt9"),
+    )
+
+    val action = actionFor(card)
+
+    assertTrue(action is HomeAction.OpenCatalog)
+    assertEquals(card.path, (action as HomeAction.OpenCatalog).args.preferredLocalPath)
   }
 
   @Test

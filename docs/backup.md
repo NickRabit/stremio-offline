@@ -59,7 +59,8 @@ On a Synology, stop the project in Container Manager, let Hyper Backup (or a
 scheduled task) copy the data folder, then start the project again. Give the
 server the few seconds it takes to stop: on the way out it writes the accounts,
 the library metadata and the library operations that are still waiting in
-memory. Statistics collected in the last minute before the stop are not kept.
+memory. A graceful shutdown also flushes pending database-backed statistics;
+an abrupt termination can lose updates that had not yet been flushed.
 
 The picture and provider-call statistics, traffic events, activity history,
 library file facts, TMDB id mappings and each account's hot personal collections
