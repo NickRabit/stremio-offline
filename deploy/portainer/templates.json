@@ -56,7 +56,7 @@
         {
           "name": "FIX_PERMISSIONS",
           "label": "Fix permissions",
-          "description": "Set to 1 once when the data and download folders need to be chowned to PUID and PGID.",
+          "description": "Set to 1 once when the download folder needs to be chowned to PUID and PGID. The data folder is fixed on every start.",
           "default": "0",
           "select": [
             {
@@ -69,6 +69,12 @@
               "value": "1"
             }
           ]
+        },
+        {
+          "name": "RENDER_GID",
+          "label": "Render group ID",
+          "description": "GID that owns /dev/dri/renderD128. Only needed after adding /dev/dri for hardware conversion.",
+          "default": ""
         },
         {
           "name": "LIBRARY_ROOTS",
