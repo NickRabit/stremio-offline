@@ -18,6 +18,25 @@ fun introQueryOf(progressKey: String?): IntroQuery? {
 
 enum class SegmentKind { Intro, Recap, Outro }
 
+/** Credits that end this far before the file does were timed on another cut of the title. */
+private const val OUTRO_SLACK_SECONDS = 300.0
+/** An intro or a recap starts within the opening part of the file: this share of it, at most the cap. */
+private const val OPENING_SHARE = 0.2
+private const val OPENING_CAP_SECONDS = 20 * 60.0
+
+/**
+ * IntroDB times one cut of a title and does not say which. An intro or a recap must start near the
+ * beginning of this file and credits must run to its end; a segment that does not was timed on
+ * another cut and is dropped. An unknown duration keeps everything.
+ */
+fun fitSegments(segments: IntroSegmentsDto?, duration: Double): IntroSegmentsDto? {
+  if (segments == null || !duration.isFinite() || duration <= 0) return segments
+  val opening = minOf(duration * OPENING_SHARE, OPENING_CAP_SECONDS)
+  fun early(range: SegmentRangeDto?) = range?.takeIf { it.start <= opening && it.end <= duration }
+  val outro = segments.outro?.takeIf { it.start < duration && it.end >= duration - OUTRO_SLACK_SECONDS }
+  return IntroSegmentsDto(intro = early(segments.intro), recap = early(segments.recap), outro = outro)
+}
+
 data class ActiveSegment(val kind: SegmentKind, val range: SegmentRangeDto)
 
 fun activeSegment(segments: IntroSegmentsDto?, position: Double): ActiveSegment? {

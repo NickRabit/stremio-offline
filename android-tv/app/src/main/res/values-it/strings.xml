@@ -462,4 +462,6 @@
   <string name="detail_action_whole_series">Serie completa</string>
   <string name="detail_action_folder">Cartella</string>
   <string name="home_open_detail">Apri dettaglio</string>
+  <string name="detail_tech_file">File</string>
+  <string name="sources_audio_channels">%1$s can.</string>
 </resources>

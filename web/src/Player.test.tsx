@@ -684,6 +684,31 @@ describe("Player chapters, segments and next episode", () => {
     expect(introRequests).toHaveLength(1);
   });
 
+  it("asks for a library file's segments under the title it is bound to", async () => {
+    introAnswer = { intro: { start: 0, end: 30 } };
+    await render({ progressKey: "file:Series/South Park/S20E01.mkv", catalogueKey: "series:tt0121955:20:1" });
+    expect(introRequests).toEqual(["/api/intro-segments?imdb=tt0121955&season=20&episode=1"]);
+    await videoAt(10);
+    expect(host.querySelector(".player-skip")?.textContent).toBe("Skip intro");
+  });
+
+  it("marks the intro and the credits on the timeline", async () => {
+    introAnswer = { intro: { start: 0, end: 360 }, outro: { start: 3240, end: 3600 } };
+    await render({ progressKey: "series:tt0096697:1:8" });
+    await videoAt(10);
+    const marks = [...host.querySelectorAll<HTMLElement>(".timeline-segment")];
+    expect(marks.map((mark) => [mark.dataset.kind, mark.style.left, mark.style.width]))
+      .toEqual([["intro", "0%", "10%"], ["outro", "90%", "10%"]]);
+  });
+
+  it("ignores credits timed on another cut that fall mid-film", async () => {
+    introAnswer = { outro: { start: 1800, end: 1900 } };
+    await render({ progressKey: "movie:tt0172495" });
+    await videoAt(1810);
+    expect(host.querySelector(".timeline-segment")).toBeNull();
+    expect(host.querySelector(".player-skip")).toBeNull();
+  });
+
   it("offers a skip button that seeks past the intro", async () => {
     introAnswer = { intro: { start: 5, end: 60 } };
     await render({ progressKey: "movie:tt0903747" });

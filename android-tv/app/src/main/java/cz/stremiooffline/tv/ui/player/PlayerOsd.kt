@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Languages
+import cz.stremiooffline.tv.data.IntroSegmentsDto
 import cz.stremiooffline.tv.data.PlaybackChapterDto
 import cz.stremiooffline.tv.playback.chapterAt
 import cz.stremiooffline.tv.playback.chapterLabelOf
@@ -82,10 +83,14 @@ const val TAG_OSD_DIAG = "osd_diag"
 const val TAG_OSD_TIMELINE = "osd_timeline"
 const val TAG_OSD_BADGES = "osd_badges"
 const val TAG_OSD_CHAPTER_MARK = "osd_chapter_mark"
+const val TAG_OSD_SEGMENT_MARK = "osd_segment_mark"
 const val TAG_OSD_CHAPTER = "osd_chapter"
 const val TAG_OSD_CHAPTERS = "osd_chapters"
 const val TAG_OSD_SKIP = "osd_skip"
 const val TAG_ERROR_PANEL = "error_panel"
+
+/** Intro, recap and credits shaded on the timeline, the web player's colour. */
+private val SegmentMark = Color(0xD96EC6FF)
 
 /** The seek icons beside the plain `10` labels. */
 const val SEEK_BACK_LABEL = "10"
@@ -171,6 +176,7 @@ fun Osd(
   playing: Boolean,
   facts: cz.stremiooffline.tv.data.PlaybackFactsDto? = null,
   chapters: List<PlaybackChapterDto> = emptyList(),
+  segments: IntroSegmentsDto? = null,
   playFocus: FocusRequester,
   onBack10: () -> Unit,
   onForward10: () -> Unit,
@@ -262,6 +268,7 @@ fun Osd(
         Timeline(
           fraction = if (duration > 0) (position / duration).toFloat() else 0f,
           chapters = chapters,
+          segments = segments,
           duration = duration,
           onSeekStep = onSeekStep,
           onActivity = onActivity,
@@ -366,6 +373,7 @@ fun Osd(
 private fun Timeline(
   fraction: Float,
   chapters: List<PlaybackChapterDto>,
+  segments: IntroSegmentsDto?,
   duration: Double,
   onSeekStep: (Int, Long) -> Unit,
   onActivity: () -> Unit,
@@ -403,6 +411,20 @@ private fun Timeline(
     }
     // A chapter start is a thin gap cut into the bar itself, not a tick standing above it.
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+      listOfNotNull(segments?.intro, segments?.recap, segments?.outro).forEach { range ->
+        if (duration > 0 && range.start < duration) {
+          val end = minOf(range.end, duration)
+          Box(
+            Modifier
+              .offset(x = maxWidth * (range.start / duration).toFloat())
+              .width(maxWidth * ((end - range.start) / duration).toFloat())
+              .height(if (focused) 10.dp else 8.dp)
+              .clip(RoundedCornerShape(2.dp))
+              .background(SegmentMark)
+              .testTag(TAG_OSD_SEGMENT_MARK),
+          )
+        }
+      }
       chapters.forEach { chapter ->
         if (chapter.start > 0 && chapter.start < duration) {
           Box(

@@ -17,6 +17,8 @@ const numberParam = (value: unknown) => {
   return number;
 };
 
+// Secure mode keeps the browser away from third parties. IntroDB is asked by the server with
+// nothing but an IMDb id, like the catalogue lookups, so the switch does not touch it.
 export function registerIntroSegmentRoutes(app: express.Application, deps: IntroSegmentDeps): void {
   app.get("/api/intro-segments", asyncRoute(async (req, res) => {
     const imdb = req.query.imdb;
@@ -32,7 +34,6 @@ export function registerIntroSegmentRoutes(app: express.Application, deps: Intro
         episode: numberParam(req.query.episode),
       } : {}),
     };
-    if (deps.store.settings().secureMode) return res.json({});
 
     const disconnect = routeDisconnectSignal(req, res);
     try {

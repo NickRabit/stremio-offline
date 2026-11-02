@@ -484,4 +484,6 @@
   <string name="detail_action_whole_series">Celý seriál</string>
   <string name="detail_action_folder">Složka</string>
   <string name="home_open_detail">Otevřít detail</string>
+  <string name="detail_tech_file">Soubor</string>
+  <string name="sources_audio_channels">%1$s kan.</string>
 </resources>

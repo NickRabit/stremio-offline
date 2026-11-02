@@ -50,6 +50,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.catalog.ProgressKey
 import cz.stremiooffline.tv.catalog.Resume
+import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.ApiError
@@ -123,6 +124,42 @@ internal fun originRow(args: CatalogDetailArgs, rows: List<StreamDto>): StreamDt
   args.preferredRemote?.let {
     Streams.originRemoteRow(rows, it.libraryId, it.itemId, it.mediaSourceId)
   } ?: args.preferredLocalPath?.let { Streams.originLocalRow(rows, it) }
+
+/** The episode a card named, standing in when the catalogue does not list it (or did not answer):
+ *  its own copies still load by its id, so a card never loses the episode it was opened for. */
+internal fun cardEpisode(metaId: String, episode: ResumeEpisode?): VideoDto? =
+  episode?.let { VideoDto(id = "$metaId:${it.season}:${it.number}", season = it.season, episode = it.number) }
+
+/** The media-server item this detail was opened from, while [videoId] is that item: always for a
+ *  film, and for a series only on the episode the detail was opened on. */
+internal fun originFor(args: CatalogDetailArgs, videoId: String): RemoteItemRef? {
+  val origin = args.preferredRemote?.takeIf { it.itemId.isNotBlank() } ?: return null
+  val episode = args.episode ?: return origin.takeIf { args.type != "series" }
+  return origin.takeIf { videoId == "${args.meta.id}:${episode.season}:${episode.number}" }
+}
+
+/**
+ * A library's matched rows, plus the versions of the item the detail was opened from when the
+ * match by catalogue id missed it: the copy the viewer chose never drops out of the list.
+ */
+internal suspend fun withOriginVersions(
+  api: TvApi,
+  origin: RemoteItemRef?,
+  libraryId: String,
+  matched: List<StreamDto>?,
+): List<StreamDto>? {
+  if (origin == null || origin.libraryId != libraryId) return matched
+  if (matched.orEmpty().any { it.remoteItem?.itemId == origin.itemId }) return matched
+  val read = try {
+    withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteSources(libraryId, origin.itemId) }
+  } catch (cancelled: CancellationException) {
+    throw cancelled
+  } catch (_: ApiError) {
+    null
+  }
+  val own = read.orEmpty().filter(Streams::isRemoteStream)
+  return if (own.isEmpty()) matched else matched.orEmpty() + own
+}
 
 /** What the message line under the actions tells the viewer; the kind picks its colour. */
 internal enum class CatalogNotice { Neutral, Success, Failure }
@@ -285,7 +322,10 @@ fun CatalogDetailScreen(
         // Home names the episode it remembers; without one, the stored position decides.
         val wanted = args.episode ?: if (resuming) storedEpisode else null
         val watched = Resume.resumeVideo(videos, wanted)
-        pick.selectedVideo = watched ?: nextRelevantEpisode(videos, Resume.resumeVideo(videos, storedEpisode)) ?: firstReleased(videos)
+        pick.selectedVideo = watched
+          ?: cardEpisode(meta.id, args.episode)
+          ?: nextRelevantEpisode(videos, Resume.resumeVideo(videos, storedEpisode))
+          ?: firstReleased(videos)
         pick.season = wanted?.season ?: defaultSeason(videos)
       }
     }
@@ -397,7 +437,7 @@ fun CatalogDetailScreen(
     coroutineScope {
       foundLibraries.forEach { library ->
         launch {
-          val part = try {
+          val matched = try {
             // The resolved catalogue title, never the episode's own, is the provider's name filter.
             withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteMatchedStreams(library.id, streamType, id, nameHint = meta.name) }
           } catch (cancelled: CancellationException) {
@@ -405,6 +445,7 @@ fun CatalogDetailScreen(
           } catch (_: ApiError) {
             null
           }
+          val part = withOriginVersions(api, originFor(args, id), library.id, matched)
           updates.withLock {
             if (request != remote.request) return@withLock
             val match = RemoteMatch(library.id, library.provider, library.name, part.orEmpty(), failed = part == null)

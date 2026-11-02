@@ -33,7 +33,7 @@ metadata store, or scheduler for each platform.
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
 | Implemented | Selective SQLite storage | Image links, statistics, activity, file facts, TMDB id mappings, downloads, follows and library metadata now use changed-row writes in one embedded database (#679, 0.7.7). Accounts and settings stay in JSON. [Storage](#storage), [decision record](adr/0001-sqlite-storage.md). |
 | Implemented | Player chapters and badges | Chapter marks, the current chapter and a chapter list; badges for what is playing (resolution, HDR, audio), on the web, desktop and Android TV. [Playback](playback.md#what-is-playing-chapters-intro-and-credits). |
-| Implemented | Intro skip and next-episode threshold | Skip intro, recap and credits from IntroDB (server-side, off in secure mode) with optional auto-skip; Up next at a chosen point or where the credits start. Web, desktop and Android TV. |
+| Implemented | Intro skip and next-episode threshold | Skip intro, recap and credits from IntroDB (server-side, secure mode included) with optional auto-skip; Up next at a chosen point or where the credits start. Web, desktop and Android TV. |
 | Implemented | Richer title detail | Cast and crew with photos, similar titles, ratings, the age rating, trailers and what will play, from one server route on the web, desktop and Android TV (0.6.24 to 0.6.28). [Specification](title-detail-spec.md). |
 | Implemented | Personal Home layout | Each account arranges its own Home: which rows show, their order, and extra catalogue feeds from the addons it may use. The instance's Show on Home switches stay the default. |
 | Implemented | Jellyfin and Emby libraries | Native read-only libraries, per-library grants, proxy/FFmpeg and local history. [Specification](media-server-libraries-spec.md). |
@@ -79,8 +79,8 @@ Shipped in `main`; implementation details live in the linked guides.
   VideoToolbox), timeline previews, subtitle timing, next-episode countdown,
   device volume memory and a Fill screen toggle. Chapters, playing badges,
   IntroDB intro/recap/credits skipping with optional auto-skip, and a configurable
-  Up next point are available on web, desktop and Android TV (0.7.4); secure mode
-  disables IntroDB lookups. A seek that is slow or refused
+  Up next point are available on web, desktop and Android TV (0.7.4); IntroDB
+  is asked in secure mode too. A seek that is slow or refused
   keeps the stream alive, an HLS source named `.mp4` is converted from its
   tallest rendition, and a conversion that falls behind playback says whether
   the source or FFmpeg is waiting. Conversion output can use a separate disk
