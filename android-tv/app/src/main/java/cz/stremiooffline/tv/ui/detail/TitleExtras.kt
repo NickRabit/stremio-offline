@@ -803,7 +803,9 @@ internal fun videoResolution(heightPixels: Int?, releaseText: String?): String? 
     height >= 700 -> "720p"
     height > 0 -> "${height}p"
     else -> releaseText?.let { text ->
-      Regex("\\b(2160|1440|1080|720|576|480)[pi]\\b", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.let { "${it}p" }
+      // The scan letter stays: 1080i is an interlaced broadcast, not 1080p.
+      Regex("\\b(2160|1440|1080|720|576|480)([pi])\\b", RegexOption.IGNORE_CASE).find(text)
+        ?.let { "${it.groupValues[1]}${it.groupValues[2].lowercase()}" }
         ?: "2160p".takeIf { Regex("\\b(4k|uhd)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text) }
     }
   }

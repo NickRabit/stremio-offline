@@ -30,6 +30,8 @@ class AudioFormatTest {
     org.junit.Assert.assertEquals("1080p", videoResolution(1036, null))
     org.junit.Assert.assertEquals("480p", videoResolution(null, "Film.480p.XviD.avi"))
     org.junit.Assert.assertEquals("2160p", videoResolution(null, "Film 4K HDR"))
+    org.junit.Assert.assertEquals("1080i", videoResolution(null, "Concert.1080i.mkv"))
+    org.junit.Assert.assertEquals("720p", videoResolution(null, "Show.720P.WEB.mkv"))
     org.junit.Assert.assertEquals(null, videoResolution(null, "Film.avi"))
   }
 
