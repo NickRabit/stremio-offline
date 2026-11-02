@@ -12,6 +12,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -28,6 +29,8 @@ import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.ui.FakeTvApi
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -267,6 +270,57 @@ class CatalogScreenTest {
     press(Key.DirectionCenter)
     compose.onNodeWithTag(catalogOptionTag(0)).assertTextContains("(movie)", substring = true)
     compose.onNodeWithTag(catalogOptionTag(1)).assertTextContains("(series)", substring = true)
+  }
+
+  @Test
+  fun `catalogues are grouped under indented addon headers`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(
+      feature("Popular", addonKey = "a"),
+      feature("New", addonKey = "a", id = "new"),
+      feature("Films", addonKey = "b", id = "films"),
+    )
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogChip)
+      .assertTextContains("Popular · Popular (movie)", substring = true)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(catalogHeaderTag("a")).assertExists()
+    compose.onNodeWithTag(catalogHeaderTag("b")).assertExists()
+    compose.onNodeWithText("Popular").assertExists()
+    compose.onNodeWithText("Films").assertExists()
+
+    val optionText = compose.onNodeWithTag(catalogOptionTag(0))
+      .fetchSemanticsNode().config[SemanticsProperties.Text].joinToString("") { it.text }
+    assertFalse(optionText, optionText.contains(" · "))
+    val headerLeft = compose.onNodeWithTag(catalogHeaderTag("a")).getUnclippedBoundsInRoot().left
+    val optionLeft = compose.onNodeWithTag(catalogOptionTag(0)).getUnclippedBoundsInRoot().left
+    assertTrue("catalogue option should be indented from its addon header", optionLeft > headerLeft)
+  }
+
+  @Test
+  fun `D-pad Down crosses from one addon group to the next`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(
+      feature("Popular", addonKey = "a"),
+      feature("New", addonKey = "a", id = "new"),
+      feature("Films", addonKey = "b", id = "films"),
+    )
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    api.catalogPages["b"] = listOf(listOf(meta("ttB", name = "Beta")))
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(catalogOptionTag(1)).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(catalogOptionTag(2)).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(posterTag(meta("ttB", name = "Beta"))).assertExists()
   }
 
   @Test

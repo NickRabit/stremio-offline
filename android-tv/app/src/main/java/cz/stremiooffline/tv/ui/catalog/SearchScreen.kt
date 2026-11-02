@@ -418,7 +418,7 @@ private fun typeTag(type: String): String = when (type) {
 }
 
 /** The catalogues of an addon sit under its header, indented so the groups read at a glance. */
-private val ScopeIndent = 22.dp
+internal val ScopeIndent = 22.dp
 
 internal sealed interface ScopeRow {
   val selected: Boolean
@@ -535,7 +535,7 @@ internal fun SearchScopePanel(
 /** A group heading inside the scope panel: the addon's name and, when only a picked addon is
  *  searched, the web's note. */
 @Composable
-private fun ScopeGroupHeader(name: String, note: String?, modifier: Modifier = Modifier) {
+internal fun ScopeGroupHeader(name: String, note: String?, modifier: Modifier = Modifier) {
   Column(modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
     Text(name, color = Tokens.Text, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     if (note != null) Text(note, color = Tokens.Muted, fontSize = 9.5.sp)

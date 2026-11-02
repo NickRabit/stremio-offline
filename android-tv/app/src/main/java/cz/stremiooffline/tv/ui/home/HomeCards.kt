@@ -96,8 +96,9 @@ fun captionOf(card: HomeCard, label: String?): String? = listOfNotNull(
 ).joinToString(" · ").ifEmpty { null }
 
 /** The catalogue title a card's hero describes itself with: the type and the id `meta` is asked
- *  for. Nothing for the kinds the library backs, which carry no catalogue metadata and ask for none. */
+ *  for. Library-backed cards answer only when they carry a catalogue identity. */
 fun HomeCard.heroMetaRef(): Pair<String, String>? = when (this) {
+  is HomeCard.ResumeFile -> identity?.let { it.type to it.id }
   is HomeCard.ResumeCatalogue -> type to id
   is HomeCard.Episode -> type to metaId
   is HomeCard.Discovery -> type to id
@@ -124,8 +125,7 @@ fun heroMetaLine(card: HomeCard, meta: MetaDto?): String {
   return listOfNotNull(card.yearText, card.episodeCodeText).joinToString(" · ")
 }
 
-/** The hero's description: the catalogue's own text, or the subtitle a library file carries.
- *  Nothing when it has neither, so a library card asks for no metadata. */
+/** The hero's description: the catalogue's own text, or the subtitle an unbound library file carries. */
 fun heroDescription(card: HomeCard, meta: MetaDto?): String? =
   if (meta != null) {
     meta.description?.takeIf { it.isNotBlank() }

@@ -167,6 +167,20 @@ class HomeCardsTest {
   }
 
   @Test
+  fun `heroMetaRef names the catalogue title a resume file is bound to`() {
+    val bound = HomeCard.ResumeFile(
+      key = "file:a",
+      title = "It",
+      path = "browse/a",
+      identity = TitleRefDto("movie", "tt9"),
+    )
+    val unbound = HomeCard.ResumeFile(key = "file:b", title = "Other", path = "browse/b")
+
+    assertEquals("movie" to "tt9", bound.heroMetaRef())
+    assertNull(unbound.heroMetaRef())
+  }
+
+  @Test
   fun `the optional identity, path and forget keys decode, and a body without them still does`() {
     val decoded = decodeHomeRow(
       row(
