@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<CommunityApplications>
+  <Profile>Stremio Offline is an unofficial self-hosted client for Stremio addons. It brings catalog and stream listings into a web app, supports direct play and hardware conversion, keeps a durable download queue, and organizes downloaded media into local and Jellyfin or Emby libraries. The Docker image is the primary distribution; desktop and Android TV clients connect to the same server.</Profile>
+  <Icon>https://raw.githubusercontent.com/NickRabit/stremio-offline/main/web/public/icon-512.png</Icon>
+  <WebPage>https://github.com/NickRabit/stremio-offline</WebPage>
+  <DonateLink>https://ko-fi.com/nickrabit</DonateLink>
+  <DonateText>Support Stremio Offline development.</DonateText>
+  <Photo>https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/home.jpg</Photo>
+  <Photo>https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/detail.jpg</Photo>
+  <Photo>https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/tv-home.jpg</Photo>
+</CommunityApplications>

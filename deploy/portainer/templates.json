@@ -1,0 +1,117 @@
+{
+  "version": "2",
+  "templates": [
+    {
+      "type": 3,
+      "title": "Stremio Offline",
+      "description": "Unofficial self-hosted web client for Stremio addons, with catalogs, playback, downloads and a local library.",
+      "note": "Configure persistent data and download folders before deployment. The image and health check are ready to use; Intel QuickSync requires adding /dev/dri to the generated stack.",
+      "categories": [
+        "media",
+        "self-hosted"
+      ],
+      "platform": "linux",
+      "logo": "https://raw.githubusercontent.com/NickRabit/stremio-offline/main/web/public/icon-512.png",
+      "repository": {
+        "url": "https://github.com/NickRabit/stremio-offline",
+        "stackfile": "deploy/portainer/docker-compose.yml"
+      },
+      "env": [
+        {
+          "name": "STREMIO_OFFLINE_PORT",
+          "label": "Web UI port",
+          "description": "Host port for the web interface.",
+          "default": "8090"
+        },
+        {
+          "name": "DATA_PATH",
+          "label": "Data folder",
+          "description": "Host folder for accounts, addons, artwork and the application database.",
+          "default": "/var/lib/stremio-offline/data"
+        },
+        {
+          "name": "DOWNLOAD_PATH",
+          "label": "Download folder",
+          "description": "Host folder for downloaded media and the default local library.",
+          "default": "/var/lib/stremio-offline/downloads"
+        },
+        {
+          "name": "TZ",
+          "label": "Timezone",
+          "description": "IANA timezone used by the server.",
+          "default": "Etc/UTC"
+        },
+        {
+          "name": "PUID",
+          "label": "User ID",
+          "description": "UID that owns and writes the mounted folders.",
+          "default": "1000"
+        },
+        {
+          "name": "PGID",
+          "label": "Group ID",
+          "description": "GID that owns and writes the mounted folders.",
+          "default": "1000"
+        },
+        {
+          "name": "FIX_PERMISSIONS",
+          "label": "Fix permissions",
+          "description": "Set to 1 once when the data and download folders need to be chowned to PUID and PGID.",
+          "default": "0",
+          "select": [
+            {
+              "text": "No",
+              "value": "0",
+              "default": true
+            },
+            {
+              "text": "Yes, once",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "LIBRARY_ROOTS",
+          "label": "Additional library roots",
+          "description": "Comma-separated container paths for extra library folders. Leave empty to use only the download folder.",
+          "default": ""
+        },
+        {
+          "name": "ALLOW_PRIVATE_ADDONS",
+          "label": "Allow private-network addons",
+          "description": "Only enable when every addon may reach the private network.",
+          "default": "0",
+          "select": [
+            {
+              "text": "No",
+              "value": "0",
+              "default": true
+            },
+            {
+              "text": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "ALLOW_ADDON_HOSTS",
+          "label": "Allowed private addon hosts",
+          "description": "Comma-separated private hosts that addons may access. This is safer than ALLOW_PRIVATE_ADDONS.",
+          "default": ""
+        },
+        {
+          "name": "IMAGE_CACHE_MB",
+          "label": "Artwork cache limit (MB)",
+          "description": "Maximum disk space used by the server-side artwork cache.",
+          "default": "512"
+        },
+        {
+          "name": "ARTWORK_CACHE_MB",
+          "label": "Library thumbnail limit (MB)",
+          "description": "Maximum disk space used by generated library thumbnails.",
+          "default": "256"
+        }
+      ]
+    }
+  ]
+}
