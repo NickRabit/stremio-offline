@@ -162,6 +162,7 @@ disk wear, a browser compatibility result, or a test on QuickSync/DS920+.
 | Option | Verdict |
 | --- | --- |
 | Move today's output to tmpfs | Reject as the solution: a full film or concurrent sessions can exhaust it; direct mount also needs startup cleanup changes |
+| Configurable location in legacy mode | `PLAYBACK_DIR` now supports converted films on another disk, but it remains unbounded, so a RAM folder can run out of memory without the bounded design below |
 | Delete old files on a timer | Reject: age is unrelated to pause, download completion, fallback ownership, or stale playlists |
 | FFmpeg sliding list plus deletion only | Reject: production can outrun viewing and erase its current position |
 | Lower `readrate` | Can reduce bursts; cannot impose a memory limit or handle pauses |

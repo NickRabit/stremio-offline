@@ -390,7 +390,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   // A job paused for a library asks whether it is back; the probe is refreshed first so a
   // disk that was plugged in is seen within the queue's own retry, not the cache's.
   libraryState: async (libraryId) => { await refreshLibraryHealth(); return libraryFor(store.libraries(), libraryId); },
-}); const playback = new PlaybackManager(undefined, (id) => {
+}); const playback = new PlaybackManager(DATA_DIR, (id) => {
   const owned = playbackOwners.get(id);
   if (owned) {
     // The tombstone matters: a player that has just been closed still has range requests in
@@ -406,7 +406,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   airplayAccess.remove(id);
   throughput.forget(id);
   sourcePace.forget(id);
-});
+}, process.env.PLAYBACK_DIR);
 const stats = new StatsLog();
 const imageStats = new ImageStats(path.join(DATA_DIR, "image-stats.json"));
 useImageStats(imageStats);

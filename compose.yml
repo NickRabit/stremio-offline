@@ -15,6 +15,8 @@ services:
       FIX_PERMISSIONS: "${FIX_PERMISSIONS:-0}"
       DATA_DIR: /data
       DOWNLOAD_DIR: /downloads
+      # Parent folder for temporary conversion output. Empty keeps DATA_DIR/playback.
+      PLAYBACK_DIR: "${PLAYBACK_DIR:-}"
       # How much to log: DEBUG adds requests and playback progress.
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       LOG_MAX_BYTES: "${LOG_MAX_BYTES:-5242880}"
@@ -102,6 +104,9 @@ services:
       # anything else.
       - "${DATA_PATH:-./data}:/data"
       - "${DOWNLOAD_PATH:-./downloads}:/downloads"
+      # Optional separate disk for converted films. Uncomment this mount and set
+      # PLAYBACK_DIR=/playback to use it. The server writes only in the owned child.
+      # - "${PLAYBACK_PATH:-/volume2/playback}:/playback"
       # A second library on another disk. Point EXTRA_LIBRARY_PATH at it (a NAS
       # share, an external drive) and list the container path in LIBRARY_ROOTS --
       # a mount alone grants nothing. The default keeps an empty folder next to
