@@ -60,6 +60,7 @@ export interface PersonalDeps extends RouteContext {
   thumbUrl(param: "path" | "dir" | "key", value: string, art: string | undefined, shape?: ArtShape): Promise<string | undefined>;
   updateData(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
   updateDataLater(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
+  updateDataUnlessUnchanged(req: express.Request | undefined, mutate: (data: UserData) => void, unchanged: (before: UserData, after: UserData) => boolean): Promise<void>;
   watchlistOf(data: UserData): Record<string, WatchlistEntry>;
   wirePath(key: string): string;
   /** The account's own verified media-server cards, read for the one merged Favourites list. */
@@ -270,7 +271,7 @@ const metadataArtwork = (meta: MetaItem | null): TitleArtwork => {
 };
 
 export function registerPersonalRoutes(app: express.Application, deps: PersonalDeps): PersonalApi {
-  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls, thumbUrl, updateData, updateDataLater, watchlistOf, wirePath, remotePersonal, authorityOf } = deps;
+  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls, thumbUrl, updateData, updateDataLater, updateDataUnlessUnchanged, watchlistOf, wirePath, remotePersonal, authorityOf } = deps;
   const titleArtworks = new WeakMap<express.Request, {
     titles: Set<string>;
     metadata: Map<string, Promise<TitleArtwork>>;
@@ -693,15 +694,19 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       const markerIds = Object.keys(markers).sort((a, b) => markers[b]!.updatedAt.localeCompare(markers[a]!.updatedAt));
       data.watchedSeries = Object.fromEntries(markerIds.slice(0, 60).map((id) => [id, markers[id]!]));
     };
+    const unchanged = (before: UserData, after: UserData) =>
+      progressMapsEqual(progressOf(before), progressOf(after), markersOf(before), markersOf(after));
+    // The last report of a playback is judged and written in the store's chain, so a concurrent
+    // final whose write failed and rolled back cannot make this one skip its own change.
+    if (req.body.final === true) {
+      await updateDataUnlessUnchanged(req, applyReport, unchanged);
+      return void res.status(204).end();
+    }
     const current = dataOf(req);
     const preview = structuredClone(current);
     applyReport(preview);
-    if (progressMapsEqual(progressOf(current), progressOf(preview), markersOf(current), markersOf(preview))) {
-      if (req.body.final === true) await store.saveNow();
-      return void res.status(204).end();
-    }
-    if (req.body.final === true) await updateData(req, applyReport);
-    else await updateDataLater(req, applyReport);
+    if (unchanged(current, preview)) return void res.status(204).end();
+    await updateDataLater(req, applyReport);
     res.status(204).end();
   }));
   app.delete("/api/progress", asyncRoute(async (req, res) => {

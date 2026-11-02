@@ -445,14 +445,16 @@ test("an unchanged final media-server report flushes the deferred position befor
 test("an unchanged final media-server report answers with the failure when the disk refuses it", async () => {
   await withHarness(async (harness) => {
     await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600 });
-    const original = harness.store.saveNow.bind(harness.store);
-    harness.store.saveNow = async () => { throw new Error("disk unavailable"); };
+    // The store's own writer refuses, so the failure has to travel through the real write path.
+    const writable = harness.store as unknown as { writeState: (file: string, data: string) => Promise<void> };
+    const original = writable.writeState;
+    writable.writeState = async () => { throw new Error("disk unavailable"); };
     try {
       await assert.rejects(
         harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true }),
         /disk unavailable/,
       );
-    } finally { harness.store.saveNow = original; }
+    } finally { writable.writeState = original; }
   });
 });
 

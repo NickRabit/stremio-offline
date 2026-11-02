@@ -156,6 +156,23 @@ const mount = async (libraries: LibraryRecord[] = [], backing?: Store): Promise<
       if (backing) await backing.update(mutateBacking(id, mutate));
       else mutate(users.get(id)!);
     },
+    updateDataUnlessUnchanged: async (req, mutate, unchanged) => {
+      const id = userOf(req);
+      if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
+      updates += 1;
+      if (backing) {
+        await backing.update((state) => {
+          const preview = structuredClone(state.userData?.[id] ?? emptyUserData());
+          mutate(preview);
+          if (unchanged(state.userData?.[id] ?? emptyUserData(), preview)) return false;
+          mutateBacking(id, mutate)(state);
+        });
+        return;
+      }
+      const preview = structuredClone(users.get(id)!);
+      mutate(preview);
+      if (!unchanged(users.get(id)!, preview)) mutate(users.get(id)!);
+    },
     updateDataLater: async (req, mutate) => {
       const id = userOf(req);
       if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
@@ -359,6 +376,51 @@ test("an unchanged final progress report answers with the failure when the disk 
   assert.notEqual(response.status, 204, "a final report the disk refused is not reported as saved");
   assert.equal(response.status >= 400, true, String(response.status));
   fail = false;
+});
+
+test("two concurrent final reports never confirm a position the disk refused", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "personal-progress-final-race-"));
+  // The first write is held until the second request is in, and then refused.
+  let failNext = false;
+  let entered!: () => void;
+  const writing = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  const store = new Store(directory, path.join(directory, "downloads"), {
+    writeState: async (file, data) => {
+      if (failNext) {
+        failNext = false;
+        entered();
+        await released;
+        throw new Error("disk unavailable");
+      }
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
+  await store.load();
+  const harness = await mount([], store);
+  t.after(async () => {
+    await harness.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const report = { key: "movie:tt1", position: 120, duration: 3600, title: "Heat", final: true };
+
+  failNext = true;
+  const first = api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  await writing;
+  // The first position is in memory and its write is on its way: the second sees the same one.
+  const second = api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  release();
+  const responses = await Promise.all([first, second]);
+  const saved = JSON.parse(await readFile(path.join(directory, "state.json"), "utf8").catch(() => "{}")) as {
+    userData?: Record<string, { progress?: Record<string, { position?: number }> }>;
+  };
+  const onDisk = saved.userData?.[ALICE]?.progress?.["movie:tt1"]?.position;
+  for (const response of responses) {
+    if (response.status === 204) assert.equal(onDisk, 120, "a 204 means the position is on disk");
+  }
+  assert.equal(responses.some((response) => response.status !== 204), true, "the refused write is reported");
 });
 
 test("an unchanged periodic progress report causes no write", async (t) => {

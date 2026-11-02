@@ -242,6 +242,11 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
       if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
       mutate(users.get(id)!);
     },
+    updateDataUnlessUnchanged: async (req, mutate) => {
+      const id = userOf(req);
+      if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
+      mutate(users.get(id)!);
+    },
     watchlistOf: (data) => data.watchlist as Record<string, WatchlistEntry>,
     // The remote half is a card projection here; the media-server read itself has its own suite.
     remotePersonal: {

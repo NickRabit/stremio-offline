@@ -487,8 +487,7 @@ export class MediaServerPersonal {
     const record = this.build(previous, resolved, patch, this.store.prefs(resolved.userId).trackProgress, written.title);
     // A star request also changes the title's shared watchlist, which the record alone does not
     // show: an episode can carry favorite: false while its show is starred through another item.
-    if (previous && patch.favorite === undefined && sameRemoteRecord(previous, record)) {
-      if (patch.final === true) await this.store.saveNow();
+    if (patch.final !== true && previous && patch.favorite === undefined && sameRemoteRecord(previous, record)) {
       return stateOf(previous, watchlistOf(this.store.userData(resolved.userId)));
     }
     let state!: RemoteItemState;
@@ -496,6 +495,13 @@ export class MediaServerPersonal {
       this.assertWrite(next, authority, resolved);
       const stored = validRecord(this.mapOf(resolved.userId, next)[resolved.key]);
       const built = this.build(stored, resolved, patch, this.trackProgressOf(next, resolved.userId), written.title);
+      // A final report that changes nothing is judged here, in the store's chain, so a concurrent
+      // final whose write failed and rolled back cannot make this one skip its own change. Only a
+      // deferred change still owed is written then, and a failure still rejects.
+      if (patch.final === true && stored && patch.favorite === undefined && sameRemoteRecord(stored, built)) {
+        state = stateOf(stored, watchlistOf(next.userData?.[resolved.userId] ?? emptyUserData()));
+        return false;
+      }
       const map: Record<string, unknown> = { ...this.mapOf(resolved.userId, next), [resolved.key]: built };
       this.enforceBound(map, resolved.key);
       const data = next.userData?.[resolved.userId] ?? emptyUserData();

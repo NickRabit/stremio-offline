@@ -520,15 +520,22 @@ export class Store {
    *  The change is made only when this write's turn comes and taken back if the write fails,
    *  so a change nobody could save is not left in memory for a later write to carry to disk.
    *  The caller still gets the rejection and the chain carries on past it. */
-  async update(mutator: (state: State) => void) {
+  async update(mutator: (state: State) => unknown) {
     const write = this.chain.then(async () => {
       const before = structuredClone(this.state);
+      let result: unknown;
       try {
-        mutator(this.state);
+        result = mutator(this.state);
       } catch (error) {
         // A refusal is not a save failure: take the change back and let the caller hear it.
         this.state = before;
         throw error;
+      }
+      // The mutator found nothing to change, judged inside the chain so it sees the state after
+      // any earlier write and its rollback. Only a deferred change still owed is written then.
+      if (result === false) {
+        this.state = before;
+        if (!this.deferredPending) return;
       }
       try {
         const temp = `${this.filename}.tmp`;
@@ -591,7 +598,7 @@ export class Store {
     this.deferredDueAt = undefined;
     this.deferredPending = false;
   }
-  private writeDeferred(rethrow = false): Promise<void> {
+  private writeDeferred(): Promise<void> {
     const write = this.chain.then(async () => {
       if (!this.deferredPending) return;
       const writtenRevision = this.deferredRevision;
@@ -620,21 +627,10 @@ export class Store {
           }, this.deferredDelayMs);
           this.deferredTimer.unref?.();
         }
-        if (rethrow) throw error;
       }
     });
     this.chain = write.catch(() => undefined);
     return write;
-  }
-  /** Writes every change applied so far now and rejects when it could not be saved, so a caller
-   *  that promised durability (a final playback report) can answer with the failure instead of
-   *  success. A failed write keeps its retry, exactly as a timed deferred write does. */
-  async saveNow(): Promise<void> {
-    if (this.deferredTimer) clearTimeout(this.deferredTimer);
-    this.deferredTimer = undefined;
-    this.deferredDueAt = undefined;
-    await this.chain;
-    if (this.deferredPending) await this.writeDeferred(true);
   }
   /** Settles once every write queued so far has landed or failed. */
   async flush(): Promise<void> {

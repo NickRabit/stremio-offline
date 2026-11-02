@@ -811,25 +811,30 @@ test("a failed deferred write keeps memory and is retried", async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("saveNow rejects when the deferred write fails, while flush stays quiet", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-later-"));
+test("an update that finds nothing to change writes only a deferred change still owed", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-unchanged-"));
+  let writes = 0;
   let fail = false;
   const store = new Store(directory, undefined, {
     writeState: async (file, data) => {
+      writes += 1;
       if (fail) throw new Error("disk unavailable");
       await writeFile(file, data, { mode: 0o600 });
     },
   });
   try {
     await store.load();
-    fail = true;
+    writes = 0;
+    await store.update(() => false);
+    assert.equal(writes, 0, "no debt, no write");
+
     await store.updateLater((state) => { state.settings.logLevel = "DEBUG"; }, 60_000);
-    await assert.rejects(store.saveNow(), /disk unavailable/);
-    assert.equal(store.settings().logLevel, "DEBUG", "the failed write does not roll memory back");
-    await store.flush();
+    fail = true;
+    await assert.rejects(store.update(() => false), /disk unavailable/);
+    assert.equal(store.settings().logLevel, "DEBUG", "the owed change stays in memory");
     fail = false;
-    await store.saveNow();
+    await store.update(() => false);
     const saved = JSON.parse(await readFile(path.join(directory, "state.json"), "utf8")) as { settings: { logLevel?: string } };
-    assert.equal(saved.settings.logLevel, "DEBUG", "the debt stayed and the next save carried it");
+    assert.equal(saved.settings.logLevel, "DEBUG");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
