@@ -947,7 +947,10 @@ class StreamsTest {
     assertEquals(exact, Streams.originRemoteRow(rows, "rlibA", "iA", "ms2"))
     assertEquals(first, Streams.originRemoteRow(rows, "rlibA", "iA", "missing"))
     assertEquals(first, Streams.originRemoteRow(rows, "rlibA", "iA", null))
-    assertNull(Streams.originRemoteRow(rows, "rlibA", "iC", "ms1"))
+    // Another episode of the same server, or a whole series, keeps the viewer on that server.
+    assertEquals(otherItem, Streams.originRemoteRow(rows, "rlibA", "iC", "ms1"))
+    assertEquals(otherItem, Streams.originRemoteRow(rows, "rlibA", "", null))
+    assertNull(Streams.originRemoteRow(rows, "rlibC", "iA", null))
   }
 
   @Test

@@ -495,6 +495,32 @@ class DetailScreenTest {
   }
 
   @Test
+  fun `an old library file still names its picture, its sound and its file`() {
+    val path = "Shows/Show/Show - S01E04.avi"
+    val api = FakeTvApi().apply {
+      libraryTitleValues[path] = LibraryTitleDto(type = "movie", id = "tt1", name = "It")
+      localStreamsValues["movie:tt1"] = listOf(
+        StreamDto(
+          sourceId = "it",
+          kind = "library",
+          localPath = path,
+          libraryName = "TV test",
+          behaviorHints = BehaviorHintsDto(filename = "Show - S01E04.avi", videoSize = 183_000_000.0),
+          videoFacts = VideoFactsDto(heightPixels = 352),
+          audioFacts = cz.stremiooffline.tv.data.AudioFactsDto(codec = "mp3", channels = 2),
+        ),
+      )
+    }
+    mount(detail(listOf(file(path))), sourcesApi = api)
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("352p", substring = true) }.isSuccess
+    }
+
+    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("MP3 2.0", substring = true)
+    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("Show - S01E04.avi", substring = true)
+  }
+
+  @Test
   fun `an unbound library file asks for no extras and draws no rows`() {
     val path = "Films/Loose.mkv"
     val api = FakeTvApi()

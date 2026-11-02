@@ -126,4 +126,59 @@ class LibraryCatalogueShellTest {
     }
     compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
   }
+
+  @Test
+  fun `a folder of different films never opens as its first film's title`() {
+    val api = api().apply {
+      pages[null] = BrowseResult(
+        path = "",
+        items = listOf(BrowseItem.Folder(path = "Mix", name = "Mix", fileCount = 2)),
+        total = 1,
+        pending = false,
+      )
+      pages["Mix"] = BrowseResult(
+        path = "Mix",
+        items = listOf(
+          BrowseItem.File(path = "Mix/Heat.mkv", label = "Heat.mkv"),
+          BrowseItem.File(path = "Mix/Alien.mkv", label = "Alien.mkv"),
+        ),
+        total = 2,
+        pending = false,
+      )
+      libraryTitleValues["Mix/Heat.mkv"] = LibraryTitleDto(type = "movie", id = "tt1", name = "Heat")
+    }
+    mount(api)
+
+    compose.onNodeWithTag("Mix").assertIsFocused()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagDetailPrimary).assertExists() }.isSuccess
+    }
+
+    // The folder as a whole decides, never its first file (the library detail then reads its own).
+    assertEquals("Mix", api.libraryTitleRequests.first())
+    compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a late binding answer opens nothing once the viewer left for another section`() {
+    val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+    val api = api().apply {
+      libraryTitleValues[path] = LibraryTitleDto(type = "movie", id = "tt1", name = "It")
+      libraryTitleGate = gate
+    }
+    mount(api)
+
+    openIt()
+    compose.waitUntil(5_000) { api.libraryTitleRequests.isNotEmpty() }
+    // The viewer moves to Home on the rail before the server answers.
+    compose.onNodeWithTag(railTag(Section.Home)).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    gate.complete(Unit)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
+    compose.onNodeWithTag(TagDetailPrimary).assertDoesNotExist()
+  }
 }

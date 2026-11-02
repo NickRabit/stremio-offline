@@ -75,6 +75,7 @@ import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.RelatedTitleDto
+import cz.stremiooffline.tv.data.AudioFactsDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
@@ -694,12 +695,8 @@ fun TitleTechBlock(
     },
   ).joinToString(" · ")
   val facts = stream.videoFacts
-  val resolution = when {
-    (facts?.heightPixels ?: 0) >= 2_000 -> "2160p"
-    (facts?.heightPixels ?: 0) >= 1_000 -> "1080p"
-    (facts?.heightPixels ?: 0) >= 700 -> "720p"
-    else -> null
-  }
+  val releaseText = stream.behaviorHints?.filename ?: stream.title ?: stream.name
+  val resolution = videoResolution(facts?.heightPixels, releaseText)
   val videoTags = listOfNotNull(
     when (facts?.range) {
       "hdr" -> "HDR10"
@@ -718,13 +715,17 @@ fun TitleTechBlock(
   } else {
     Streams.streamLanguages(stream, titleLanguage)
   }).map { languageName(it, locale) }.distinct()
-  val audioTag = audioFormat(Streams.streamText(stream)).takeIf { it.isNotEmpty() }
+  // What the server read out of a library file beats what its name advertises.
+  val audioTag = audioFactsText(stream.audioFacts, stringResource(R.string.sources_audio_channels))
+    ?: audioFormat(Streams.streamText(stream)).takeIf { it.isNotEmpty() }
+  val fileName = stream.behaviorHints?.filename?.takeIf { it.isNotBlank() && it != willPlayName(stream) }
   val subtitles = stream.subtitleLanguages.map { languageName(it, locale) }.distinct()
   val rows = listOf(
     source.takeIf { it.isNotBlank() },
     resolution,
     audioLanguages.takeIf { it.isNotEmpty() }.then(audioTag),
     subtitles.takeIf { it.isNotEmpty() },
+    fileName,
   )
   if (rows.all { it == null }) return
 
@@ -746,6 +747,7 @@ fun TitleTechBlock(
     if (subtitles.isNotEmpty()) {
       TechRow(stringResource(R.string.detail_tech_subtitles), subtitles.joinToString(", "))
     }
+    fileName?.let { TechRow(stringResource(R.string.detail_tech_file), it) }
   }
 }
 
@@ -789,6 +791,37 @@ private fun languageName(code: String, locale: Locale): String {
     ?.takeIf { it.isNotBlank() && it != trimmed }
     ?.replaceFirstChar { if (it.isLowerCase()) it.titlecase(locale) else it.toString() }
     ?: trimmed.uppercase(locale)
+}
+
+/** The picture's height: the usual names from 720 lines up, the exact count below them, and the
+ *  name a release advertises when nothing was read from the file. */
+internal fun videoResolution(heightPixels: Int?, releaseText: String?): String? {
+  val height = heightPixels ?: 0
+  return when {
+    height >= 2_000 -> "2160p"
+    height >= 1_000 -> "1080p"
+    height >= 700 -> "720p"
+    height > 0 -> "${height}p"
+    else -> releaseText?.let { text ->
+      // The scan letter stays: 1080i is an interlaced broadcast, not 1080p.
+      Regex("\\b(2160|1440|1080|720|576|480)([pi])\\b", RegexOption.IGNORE_CASE).find(text)
+        ?.let { "${it.groupValues[1]}${it.groupValues[2].lowercase()}" }
+        ?: "2160p".takeIf { Regex("\\b(4k|uhd)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text) }
+    }
+  }
+}
+
+private val READ_AUDIO_CODECS = mapOf(
+  "aac" to "AAC", "ac3" to "DD", "eac3" to "DD+", "dts" to "DTS",
+  "truehd" to "TrueHD", "opus" to "Opus", "flac" to "FLAC", "mp3" to "MP3",
+)
+private val CHANNEL_LAYOUTS = mapOf(1 to "1.0", 2 to "2.0", 6 to "5.1", 8 to "7.1")
+
+/** The web's `audioFactsText`: the read codec and channel layout; [channelsPattern] (`%1$s ch`) names an odd count. */
+internal fun audioFactsText(facts: AudioFactsDto?, channelsPattern: String): String? {
+  if (facts == null) return null
+  val channels = facts.channels?.takeIf { it > 0 }?.let { CHANNEL_LAYOUTS[it] ?: channelsPattern.format(it) }
+  return listOfNotNull(facts.codec?.let { READ_AUDIO_CODECS[it] }, channels).joinToString(" ").ifEmpty { null }
 }
 
 internal fun audioFormat(text: String): String {

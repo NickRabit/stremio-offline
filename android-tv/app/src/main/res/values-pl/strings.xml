@@ -484,4 +484,6 @@
   <string name="detail_action_whole_series">Cały serial</string>
   <string name="detail_action_folder">Folder</string>
   <string name="home_open_detail">Otwórz szczegóły</string>
+  <string name="detail_tech_file">Plik</string>
+  <string name="sources_audio_channels">%1$s kan.</string>
 </resources>

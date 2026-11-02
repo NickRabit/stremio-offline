@@ -259,17 +259,21 @@ object Streams {
   fun remoteFirst(rows: List<StreamDto>, prefer: Boolean): List<StreamDto> =
     if (!prefer) rows else rows.filter(::isRemoteStream) + rows.filterNot(::isRemoteStream)
 
+  /**
+   * The row of the media-server item a detail was opened from: its media source, else the item,
+   * else -- for another episode, or an [itemId] left blank for a whole series -- the first row of
+   * the same library, so a viewer who came from that server stays on it.
+   */
   fun originRemoteRow(
     rows: List<StreamDto>,
     libraryId: String,
     itemId: String,
     mediaSourceId: String?,
   ): StreamDto? {
-    val itemRows = rows.filter {
-      it.playable && it.remoteItem?.libraryId == libraryId && it.remoteItem?.itemId == itemId
-    }
+    val libraryRows = rows.filter { it.playable && it.remoteItem?.libraryId == libraryId }
+    val itemRows = libraryRows.filter { it.remoteItem?.itemId == itemId }
     if (mediaSourceId != null) itemRows.firstOrNull { it.remoteItem?.mediaSourceId == mediaSourceId }?.let { return it }
-    return itemRows.firstOrNull()
+    return itemRows.firstOrNull() ?: libraryRows.firstOrNull()
   }
 
   fun originLocalRow(rows: List<StreamDto>, path: String): StreamDto? =

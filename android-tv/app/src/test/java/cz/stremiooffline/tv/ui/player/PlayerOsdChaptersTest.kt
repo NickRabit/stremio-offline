@@ -14,7 +14,11 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
+import cz.stremiooffline.tv.data.IntroSegmentsDto
+import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.PlaybackChapterDto
+import cz.stremiooffline.tv.data.SegmentRangeDto
+import cz.stremiooffline.tv.playback.IntroQuery
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
@@ -37,7 +41,11 @@ class PlayerOsdChaptersTest {
     PlaybackChapterDto(1800.0, 3600.0, "Finale"),
   )
 
-  private fun mount(items: List<PlaybackChapterDto> = chapters): FakeTvApi {
+  private fun mount(
+    items: List<PlaybackChapterDto> = chapters,
+    target: PlayTarget = PlayTarget(key = "movie:tt12345", title = "It", resume = false, sourceId = "src1"),
+    prepare: FakeTvApi.() -> Unit = {},
+  ): FakeTvApi {
     val answer = PlaybackDescriptorDto(
       id = "p1",
       url = "/stream.m3u8",
@@ -48,11 +56,12 @@ class PlayerOsdChaptersTest {
     val api = FakeTvApi().apply {
       startAnswer = answer
       seekAnswer = answer
+      prepare()
     }
     compose.setContent {
       PlayerScreen(
         api = api,
-        target = PlayTarget(key = "movie:tt12345", title = "It", resume = false, sourceId = "src1"),
+        target = target,
         onExit = {},
       )
     }
@@ -148,5 +157,28 @@ class PlayerOsdChaptersTest {
 
     compose.onNodeWithTag(TagChaptersPanel).assertDoesNotExist()
     compose.onNodeWithTag(TAG_OSD_CHAPTERS).assertIsFocused()
+  }
+
+  @Test
+  fun `the timeline shades the intro and the credits`() {
+    mount {
+      introSegmentsValue = IntroSegmentsDto(intro = SegmentRangeDto(0.0, 87.0), outro = SegmentRangeDto(3400.0, 3600.0))
+    }
+
+    assertEquals(2, compose.onAllNodesWithTag(TAG_OSD_SEGMENT_MARK).fetchSemanticsNodes().size)
+  }
+
+  @Test
+  fun `a library file asks IntroDB about the episode it is bound to`() {
+    val path = "lib_1/Simpsonovi/01 serie/S01E08.mkv"
+    val api = mount(
+      target = PlayTarget(key = "file:$path", title = "Simpsonovi", resume = false, sourceId = "src1", path = path),
+    ) {
+      libraryTitleValues[path] = LibraryTitleDto(type = "series", id = "tt0096697", videoId = "tt0096697:1:8")
+      introSegmentsValue = IntroSegmentsDto(intro = SegmentRangeDto(0.0, 87.0))
+    }
+
+    assertEquals(listOf(IntroQuery("tt0096697", 1, 8)), api.introSegmentRequests)
+    assertEquals(1, compose.onAllNodesWithTag(TAG_OSD_SEGMENT_MARK).fetchSemanticsNodes().size)
   }
 }

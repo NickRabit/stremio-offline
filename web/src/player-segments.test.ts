@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeSegment, introQueryOf, upNextPoint } from "./player-segments";
+import { activeSegment, fitSegments, introQueryOf, upNextPoint } from "./player-segments";
 import type { UpNextAt } from "./types";
 
 describe("introQueryOf", () => {
@@ -61,5 +61,33 @@ describe("upNextPoint", () => {
     expect(upNextPoint("end", 3600, { start: 3500, end: 3600 })).toBeUndefined();
     expect(upNextPoint("sec60", 0)).toBeUndefined();
     expect(upNextPoint("sec180", 100)).toBeUndefined();
+  });
+});
+
+describe("fitSegments", () => {
+  const credits = { intro: { start: 0, end: 60 }, outro: { start: 8903, end: 9299 } };
+
+  it("keeps credits that run to the end of the file", () => {
+    expect(fitSegments(credits, 9330)).toEqual(credits);
+  });
+
+  it("drops credits timed on a shorter cut, keeping the intro", () => {
+    expect(fitSegments(credits, 10258)).toEqual({ intro: { start: 0, end: 60 } });
+  });
+
+  it("drops credits that start after the file ends", () => {
+    expect(fitSegments(credits, 8000)).toEqual({ intro: { start: 0, end: 60 } });
+  });
+
+  it("drops an intro that starts deep into the file", () => {
+    expect(fitSegments({ intro: { start: 1500, end: 1560 } }, 2600)).toEqual({});
+  });
+
+  it("keeps a cold-open intro a few minutes in", () => {
+    expect(fitSegments({ intro: { start: 437, end: 531 } }, 3700)).toEqual({ intro: { start: 437, end: 531 } });
+  });
+
+  it("keeps everything while the duration is unknown", () => {
+    expect(fitSegments(credits, 0)).toEqual(credits);
   });
 });

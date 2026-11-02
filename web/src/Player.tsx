@@ -1,6 +1,6 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
 import type Hls from "hls.js";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { hlsIfLoaded, loadHls } from "./hls-loader";
@@ -18,7 +18,7 @@ import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import { CHANNELS, playingBadges } from "./player-badges";
 import { chapterAt, chapterLabel } from "./player-chapters";
-import { activeSegment, introQueryOf, upNextPoint, type SegmentKind } from "./player-segments";
+import { activeSegment, fitSegments, introQueryOf, upNextPoint, type SegmentKind } from "./player-segments";
 import type { Capabilities, IntroSegments, PlaybackChapter, PlaybackMode, PlaybackSession, SourceProfile, Stream, Subtitle, Track, UpNextAt } from "./types";
 
 /** The title's sources as the place that plays it holds them: the rows it leads with, every other
@@ -39,6 +39,8 @@ export interface PlayerSources {
 }
 
 interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void; upNextAt?: UpNextAt; skipSegmentsAuto?: boolean;
+  /** The catalogue title on screen (`series:tt…:1:2`) when the progress key names a library file instead. */
+  catalogueKey?: string;
   /** The playing title's sources; absent for a place that offers none at all. */
   sources?: PlayerSources;
   /** Where a freshly handed source starts; a switch carries the position it was chosen at. */
@@ -103,8 +105,8 @@ function PreviewFrame({ sessionId, time }: { sessionId: string; time: number }) 
   return image ? <img src={image} alt="" /> : null;
 }
 
-function TimelineBar({ value, max, sessionId, chapters, onScrub, onSeek, onReveal }: {
-  value: number; max: number; sessionId?: string; chapters?: PlaybackChapter[]; onScrub: (value: number | null) => void; onSeek: (value: number) => void; onReveal: () => void;
+function TimelineBar({ value, max, sessionId, chapters, segments, onScrub, onSeek, onReveal }: {
+  value: number; max: number; sessionId?: string; chapters?: PlaybackChapter[]; segments: IntroSegments | null; onScrub: (value: number | null) => void; onSeek: (value: number) => void; onReveal: () => void;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startValue: number; moved: boolean } | null>(null);
@@ -157,6 +159,7 @@ function TimelineBar({ value, max, sessionId, chapters, onScrub, onSeek, onRevea
   const percent = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
   const previewTime = dragging ? value : hover ?? 0;
   const previewChapter = chapterAt(chapters, previewTime);
+  const previewSegment = activeSegment(segments, previewTime);
   return <div
     ref={trackRef}
     className={`timeline-bar${dragging ? " scrubbing" : ""}`}
@@ -184,12 +187,20 @@ function TimelineBar({ value, max, sessionId, chapters, onScrub, onSeek, onRevea
         ? <i key={chapter.start} className="timeline-chapter" style={{ left: `${chapter.start / max * 100}%` }} aria-hidden="true" />
         : null)}
       <i className="timeline-fill" style={{ width: `${percent}%` }} />
+      {max > 0 && SEGMENT_KINDS.map((kind) => {
+        const range = segments?.[kind];
+        if (!range || range.start >= max) return null;
+        const end = Math.min(range.end, max);
+        return <i key={kind} className="timeline-segment" data-kind={kind}
+          style={{ left: `${range.start / max * 100}%`, width: `${(end - range.start) / max * 100}%` }} />;
+      })}
       <b className="timeline-thumb" style={{ left: `${percent}%` }} />
     </div>
     {(dragging || hover !== null) && <span className="timeline-preview" style={{ left: `clamp(80px, ${max > 0 ? (dragging ? value : hover ?? 0) / max * 100 : 0}%, calc(100% - 80px))` }}>
       {sessionId && <PreviewFrame sessionId={sessionId} time={previewTime} />}
       <span>{fmt(previewTime)}</span>
       {previewChapter >= 0 && <small>{chapterLabel(chapters!, previewChapter)}</small>}
+      {previewSegment && <small>{t(SEGMENT_KEY[previewSegment.kind])}</small>}
     </span>}
   </div>;
 }
@@ -238,13 +249,21 @@ const trackLabel = (track: Track) => {
 
 const SUBTITLE_DELAY_STEP_S = 0.25;
 const SUBTITLE_DELAY_LIMIT_S = 30;
+const SEGMENT_KINDS = ["intro", "recap", "outro"] as const;
+
+const SEGMENT_KEY: Record<SegmentKind, Key> = {
+  intro: "player.segmentIntro",
+  recap: "player.segmentRecap",
+  outro: "player.segmentOutro",
+};
+
 const SKIP_KEY: Record<SegmentKind, Key> = {
   intro: "player.skipIntro",
   recap: "player.skipRecap",
   outro: "player.skipOutro",
 };
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, catalogueKey }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -264,7 +283,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const subtitlePreferenceRef = useRef<string | null>(subtitleLanguage);
   const [upNext, setUpNext] = useState(false);
   const [upNextSeconds, setUpNextSeconds] = useState(5);
-  const [segments, setSegments] = useState<IntroSegments | null>(null);
+  const [rawSegments, setSegments] = useState<IntroSegments | null>(null);
   const autoSkippedRef = useRef<Set<SegmentKind>>(new Set());
   const previousPositionRef = useRef(0);
   const thresholdDismissedRef = useRef(false);
@@ -312,7 +331,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
 
   useEffect(() => {
     setSegments(null);
-    const query = introQueryOf(progressKey);
+    const query = introQueryOf(catalogueKey ?? progressKey);
     if (!query) return;
     const controller = new AbortController();
     void api.introSegments(query, controller.signal).then(
@@ -320,7 +339,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       () => undefined,
     );
     return () => controller.abort();
-  }, [stream, progressKey]);
+  }, [stream, progressKey, catalogueKey]);
 
   // Track choices and a running countdown belong to the film on screen. The player outlives
   // its overlay, so both are dropped when it closes instead of following the viewer to the
@@ -391,6 +410,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [playbackFailed, setPlaybackFailed] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const segments = useMemo(() => fitSegments(rawSegments, duration), [rawSegments, duration]);
   const [scrub, setScrub] = useState<number | null>(null);
   const [buffering, setBuffering] = useState(false);
   const [error, setError] = useState("");
@@ -1479,7 +1499,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       {chapterIndex >= 0 && chapters && <div className="player-chapter" aria-live="off">{chapterLabel(chapters, chapterIndex)}</div>}
       <div className="timeline">
         <span>{fmt(position)}</span>
-        <TimelineBar sessionId={session?.id} chapters={chapters} value={Math.min(position, seekable)} max={seekable}
+        <TimelineBar sessionId={session?.id} chapters={chapters} segments={segments} value={Math.min(position, seekable)} max={seekable}
           onScrub={(next) => { revealControls(); setScrub(next); }}
           onSeek={(next) => void seekTo(next)}
           onReveal={revealControls} />

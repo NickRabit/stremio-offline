@@ -462,4 +462,6 @@
   <string name="detail_action_whole_series">Toute la série</string>
   <string name="detail_action_folder">Dossier</string>
   <string name="home_open_detail">Ouvrir la fiche</string>
+  <string name="detail_tech_file">Fichier</string>
+  <string name="sources_audio_channels">%1$s can.</string>
 </resources>

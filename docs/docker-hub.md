@@ -25,7 +25,6 @@ right to use.
 - Audio tracks, embedded subtitles and subtitle addons.
 - Chapter navigation, badges for the playing video/audio, intro/recap/credits
   skipping and a configurable Up next point on web, desktop and Android TV.
-  IntroDB segment lookup is disabled in secure mode.
 - Persistent downloads with resume support, disk-space handling and save rules.
 - Prepare and download a season or a whole show from a title detail, including
   Jellyfin/Emby series, on the web and Android TV. Download rules choose

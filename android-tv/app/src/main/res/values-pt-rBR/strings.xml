@@ -462,4 +462,6 @@
   <string name="detail_action_whole_series">Série completa</string>
   <string name="detail_action_folder">Pasta</string>
   <string name="home_open_detail">Abrir detalhes</string>
+  <string name="detail_tech_file">Arquivo</string>
+  <string name="sources_audio_channels">%1$s can.</string>
 </resources>

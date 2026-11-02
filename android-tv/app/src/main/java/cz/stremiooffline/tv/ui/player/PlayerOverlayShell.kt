@@ -35,6 +35,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.IntroSegmentsDto
 import cz.stremiooffline.tv.data.PlaybackChapterDto
 import cz.stremiooffline.tv.data.PlaybackFactsDto
 import cz.stremiooffline.tv.playback.PlaybackController
@@ -103,6 +104,7 @@ fun PlayerOverlayShell(
   qualityLabel: String = "",
   qualityFocus: FocusRequester? = null,
   chapters: List<PlaybackChapterDto> = emptyList(),
+  segments: IntroSegmentsDto? = null,
   onChapters: (() -> Unit)? = null,
   chaptersLabel: String = "",
   chaptersFocus: FocusRequester? = null,
@@ -288,6 +290,7 @@ fun PlayerOverlayShell(
         playing = pauseShown,
         facts = facts,
         chapters = chapters,
+        segments = segments,
         playFocus = playFocus,
         onBack10 = { seekBy(-SEEK_STEP_SECONDS) },
         onForward10 = { seekBy(SEEK_STEP_SECONDS) },
