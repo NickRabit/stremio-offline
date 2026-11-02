@@ -19,9 +19,9 @@ remains authoritative for Sonarr/Radarr.
 | The *arr probe uses a disposable adapter | Keep protocol feasibility distinct from production queue/authentication/import evidence |
 
 Keep the existing TypeScript services, persistence model and deployment
-model. The 2026-10-04 audit evaluated a local SQLite migration and deferred it;
-see [Local SQLite migration](#local-sqlite-migration). No database migration,
-microservice split or whole-application rewrite is required. Extract narrow service
+model. Selective SQLite storage shipped in #679 on 2026-11-02, superseding
+the 2026-10-04 deferral; see [Local SQLite migration](#local-sqlite-migration).
+No microservice split or whole-application rewrite is required. Extract narrow service
 boundaries when a feature needs them. Test invariants at the domain layer and
 use a small number of end-to-end scenarios for wiring and user interaction.
 
@@ -186,10 +186,15 @@ regression tests. This gate precedes bulk rename and external staging.
 
 ## Local SQLite migration
 
-Status: **deferred.** Evaluated on 2026-10-04 against `b4b4c2a`; keep the JSON
-stores and harden them. This replaces the audit's first draft, which preferred
-a staged migration. The [engineering roadmap](roadmap.md#engineering-health)
-owns delivery order and the persistent-state inventory.
+Status: **selective migration shipped** in #679 (0.7.7) on 2026-11-02.
+The [current decision record](adr/0001-sqlite-storage.md) supersedes the deferral below;
+[Storage](roadmap.md#storage) lists migrated domains and remaining work, and
+[Backup](backup.md) owns the backup/restore procedure. Accounts/settings and
+filesystem-operation journals remain in JSON. Online backup is deferred.
+
+The rest of this section records the 2026-10-04 evaluation against `b4b4c2a`
+and its original revisit criteria. Its runtime probes, sample sizes and proposed
+constraints are historical evidence, not the current storage contract.
 
 ### Runtime feasibility is not the obstacle
 
