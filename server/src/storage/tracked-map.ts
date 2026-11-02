@@ -12,7 +12,8 @@ export class TrackedMap<K, V> extends Map<K, V> {
 
   override delete(key: K): boolean {
     const deleted = super.delete(key);
-    this.touch(key);
+    // Deleting a key that was not there changes nothing, so it owes no write.
+    if (deleted) this.touch(key);
     return deleted;
   }
 
@@ -28,6 +29,16 @@ export class TrackedMap<K, V> extends Map<K, V> {
   forget(snapshot: TrackedSnapshot<K>): void {
     for (const [key, generation] of snapshot) {
       if (this.generations.get(key) === generation) this.generations.delete(key);
+    }
+  }
+
+  /** For a map used only as a list of pending changes: forgets what the snapshot covered and
+   *  drops those entries too, unless a newer change marked them again meanwhile. Without this
+   *  such a list keeps every key it has ever seen. */
+  release(snapshot: TrackedSnapshot<K>): void {
+    this.forget(snapshot);
+    for (const key of snapshot.keys()) {
+      if (!this.generations.has(key)) super.delete(key);
     }
   }
 

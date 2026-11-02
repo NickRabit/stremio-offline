@@ -4,6 +4,9 @@ import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { parseLibraryPath } from "./libraries.js";
 import { log } from "./logger.js";
+import type { AppDatabase, Statement } from "./storage/app-database.js";
+import { moveToMigrationBackup } from "./storage/hourly-counts.js";
+import { TrackedMap } from "./storage/tracked-map.js";
 
 /**
  * The thumbnails this server generates itself -- a frame out of the video, or the
@@ -25,6 +28,9 @@ export type ArtworkCarry = { carried: true } | { carried: false; reason: "absent
 const hash = (key: string) => createHash("sha1").update(key).digest("hex");
 const STRUCTURAL_SAVE_MS = 2000;
 const RETRY_SAVE_MS = 60_000;
+const DOMAIN = "artwork";
+const UPSERT = "INSERT INTO artwork_entries (key, bytes, at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET bytes = excluded.bytes, at = excluded.at";
+const DELETE = "DELETE FROM artwork_entries WHERE key = ?";
 
 export interface ArtworkSaveTimers {
   set(run: () => void, ms: number): unknown;
@@ -44,13 +50,16 @@ function evictionFloor(cap: number): number {
 }
 
 export class ArtworkCache {
-  private entries = new Map<string, Entry>();
+  private entries = new TrackedMap<string, Entry>();
+  private database?: AppDatabase;
+  private loaded = false;
   private timer?: unknown;
   private saveDue = 0;
   private dirty = false;
   private maintenance?: Promise<void>;
   private chain: Promise<unknown> = Promise.resolve();
   private indexWrites: Promise<void> = Promise.resolve();
+  private databaseWriteQueued = false;
   private indexText?: string;
   private recencyDirty = false;
   private recencyRevision = 0;
@@ -65,6 +74,11 @@ export class ArtworkCache {
   ) {}
 
   private get indexFile() { return path.join(this.dir, "index.json"); }
+
+  attachDatabase(database: AppDatabase): void {
+    if (this.loaded) throw new Error("The artwork database must be attached before load.");
+    this.database = database;
+  }
 
   /** Where the thumbnail of a qualified key goes: the library is the directory, the rest
    *  is the hash of the library-relative key, `dir:` marking a folder so a file and a
@@ -104,8 +118,11 @@ export class ArtworkCache {
   /** One write at a time: two would share the temporary file, and a rename could move the
    *  other's half-written bytes into place. A failed write is owed again. */
   private writeIndex() {
+    if (this.database) return this.writeDatabaseIndex(this.database);
+    const snapshot = this.entries.snapshot();
     const data = JSON.stringify(Object.fromEntries(this.entries));
     if (data === this.indexText) {
+      this.entries.forget(snapshot);
       this.recencyDirty = false;
       return Promise.resolve();
     }
@@ -116,7 +133,36 @@ export class ArtworkCache {
         await writeFile(temp, data, { mode: 0o600 });
         await renameWithRetry(temp, this.indexFile);
         this.indexText = data;
+        this.entries.forget(snapshot);
         if (this.recencyRevision === recencyRevision) this.recencyDirty = false;
+      } catch (error) {
+        this.dirty = true;
+        this.save(RETRY_SAVE_MS);
+        log("WARN", "The artwork cache index could not be saved", { reason: String(error).slice(0, 120) });
+      }
+    });
+    this.indexWrites = run;
+    return run;
+  }
+
+  private writeDatabaseIndex(database: AppDatabase): Promise<void> {
+    if (this.databaseWriteQueued) return this.indexWrites;
+    this.databaseWriteQueued = true;
+    const run = this.indexWrites.catch(() => undefined).then(async () => {
+      this.databaseWriteQueued = false;
+      const snapshot = this.entries.snapshot();
+      const statements: Statement[] = [];
+      for (const key of snapshot.keys()) {
+        const entry = this.entries.get(key);
+        statements.push(entry
+          ? { sql: UPSERT, params: [key, entry.bytes, entry.at] }
+          : { sql: DELETE, params: [key] });
+      }
+      if (!statements.length) return;
+      try {
+        await database.batch(statements);
+        this.entries.forget(snapshot);
+        if (!this.entries.hasDirty()) this.recencyDirty = false;
       } catch (error) {
         this.dirty = true;
         this.save(RETRY_SAVE_MS);
@@ -129,6 +175,11 @@ export class ArtworkCache {
 
   async load() {
     await mkdir(this.dir, { recursive: true });
+    this.loaded = true;
+    if (this.database) {
+      await this.loadDatabase(this.database);
+      return;
+    }
     let stored: Record<string, { at?: unknown }> = {};
     let raw: string | undefined;
     try {
@@ -152,15 +203,139 @@ export class ArtworkCache {
         this.entries.set(name, { bytes: info.size, at });
       }
     }
+    this.entries.forget(this.entries.snapshot());
     await this.writeIndex();
     await this.evict();
   }
 
   async flush() {
     if (this.timer) { this.saveTimers.clear(this.timer); this.timer = undefined; }
-    if (this.dirty || this.recencyDirty) { this.dirty = false; await this.writeIndex(); }
+    if (this.dirty || this.recencyDirty || this.entries.hasDirty()) { this.dirty = false; await this.writeIndex(); }
     await this.indexWrites;
-    if (this.dirty || this.recencyDirty) { this.dirty = false; await this.writeIndex(); }
+    if (this.dirty || this.recencyDirty || this.entries.hasDirty()) { this.dirty = false; await this.writeIndex(); }
+  }
+
+  /** The thumbnails on disk, and which library folders were read completely. A folder whose
+   *  listing or a file's lstat failed for any reason other than the file being gone is not
+   *  complete: its rows are kept as they are, because a failed read says nothing about which
+   *  thumbnails are really missing. */
+  private async scanFiles(): Promise<{ files: Map<string, { size: number; mtimeMs: number }>; complete: Set<string> | undefined }> {
+    const files = new Map<string, { size: number; mtimeMs: number }>();
+    let libraries;
+    try {
+      libraries = await readdir(this.dir, { withFileTypes: true });
+    } catch {
+      return { files, complete: undefined };
+    }
+    const complete = new Set<string>();
+    for (const library of libraries) {
+      if (!library.isDirectory()) continue;
+      let entries;
+      try {
+        entries = await readdir(path.join(this.dir, library.name), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      let whole = true;
+      for (const file of entries) {
+        if (!file.isFile() || !/^[0-9a-f]{40}\.jpg$/.test(file.name)) continue;
+        const name = path.join(library.name, file.name);
+        try {
+          const info = await lstat(path.join(this.dir, name));
+          if (info.isFile()) files.set(name, { size: info.size, mtimeMs: info.mtimeMs });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") whole = false;
+        }
+      }
+      if (whole) complete.add(library.name);
+    }
+    return { files, complete };
+  }
+
+  /** Whether a stored key may be dropped for not being on disk: only inside a folder that was
+   *  read completely, or a library folder that no longer exists in a root that was listed. */
+  private static settled(key: string, complete: Set<string> | undefined, listed: Set<string>): boolean {
+    if (!complete) return false;
+    const library = key.split(/[\\/]/)[0] ?? "";
+    return complete.has(library) || !listed.has(library);
+  }
+
+  private async loadDatabase(database: AppDatabase): Promise<void> {
+    const marker = await database.get("SELECT value FROM meta WHERE key = ?", [`domain.${DOMAIN}`]);
+    const { files, complete } = await this.scanFiles();
+    const listed = new Set(complete ? (await readdir(this.dir, { withFileTypes: true }).catch(() => []))
+      .filter((entry) => entry.isDirectory()).map((entry) => entry.name) : []);
+    const importedAt = Date.now();
+    const statements: Statement[] = [];
+
+    if (marker) {
+      const rows = await database.all<{ key: string; bytes: number; at: number }>(
+        "SELECT key, bytes, at FROM artwork_entries",
+      );
+      const stored = new Map(rows.map((row) => [row.key, row]));
+      // The one scan above is the only look at the disk: a thumbnail removed after it is simply
+      // missing later, never a second lstat that could reject and abort the start.
+      for (const [name, { size: bytes, mtimeMs }] of files) {
+        const row = stored.get(name);
+        const validAt = row && Number.isFinite(row.at) && row.at > 0;
+        this.entries.set(name, { bytes, at: validAt ? row.at : mtimeMs });
+        if (!validAt || row.bytes !== bytes) {
+          statements.push({ sql: UPSERT, params: [name, bytes, validAt ? row.at : mtimeMs] });
+        }
+      }
+      for (const [key, row] of stored) {
+        if (files.has(key)) continue;
+        if (ArtworkCache.settled(key, complete, listed)) {
+          statements.push({ sql: DELETE, params: [key] });
+        } else if (Number.isFinite(row.at) && row.at > 0) {
+          // Not read this time: keep what the row knows rather than forget its recency.
+          this.entries.set(key, { bytes: row.bytes, at: row.at });
+        }
+      }
+    } else {
+      if (!complete) {
+        // The thumbnail folder could not be listed at all: importing now would record no
+        // thumbnails and move the index (and its recency) aside. The import waits for a start
+        // that can read the folder.
+        log("WARN", "The artwork folder could not be read, the index import waits for the next start", { dir: this.dir });
+        return;
+      }
+      let stored: Record<string, { at?: unknown }> = {};
+      try {
+        const parsed: unknown = JSON.parse(await readFile(this.indexFile, "utf8"));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          stored = parsed as Record<string, { at?: unknown }>;
+        }
+      } catch {
+        stored = {};
+      }
+      for (const [name, { size: bytes, mtimeMs }] of files) {
+        const prior = stored[name]?.at;
+        const at = typeof prior === "number" && Number.isFinite(prior) && prior > 0
+          ? prior
+          : mtimeMs;
+        this.entries.set(name, { bytes, at });
+        statements.push({ sql: UPSERT, params: [name, bytes, at] });
+      }
+      statements.push({
+        sql: "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params: [`domain.${DOMAIN}`, JSON.stringify({
+          importedAt,
+          source: path.basename(this.indexFile),
+          count: files.size,
+        })],
+      });
+    }
+
+    const snapshot = this.entries.snapshot();
+    if (statements.length) await database.batch(statements);
+    this.entries.forget(snapshot);
+    await moveToMigrationBackup(
+      this.indexFile,
+      path.dirname(database.info.file),
+      `artwork-index-${importedAt}.json`,
+    );
+    await this.evict();
   }
 
   /** Removals run one at a time: each candidate is a snapshot, and two passes must never
@@ -329,8 +504,10 @@ export class ArtworkCache {
       total -= current.bytes;
       removed += 1;
     }
-    if (removed) log("INFO", "Cached thumbnails dropped to stay under the limit", { removed });
-    this.save();
+    if (removed) {
+      log("INFO", "Cached thumbnails dropped to stay under the limit", { removed });
+    }
+    if (removed || !this.database) this.save();
   }
 
   get size() { return this.entries.size; }

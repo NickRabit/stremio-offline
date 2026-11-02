@@ -189,6 +189,9 @@ try {
     tmdbIds.attachDatabase(database);
     followStore.attachDatabase(database);
     metaStore.attachDatabase(database);
+    artworks.attachDatabase(database);
+    seen.attachDatabase(database);
+    externalIds.attachDatabase(database);
   }
 } catch (error) {
   log("ERROR", "The application database could not be opened", {
@@ -2943,6 +2946,9 @@ const flushDatabaseStores = async () => {
     providerStats.flush(),
     libraryFileFacts.flush(),
     tmdbIds.flush(),
+    artworks.flush(),
+    seen.flush(),
+    externalIds.flush(),
   ]);
 };
 const shutdown = createShutdown({
@@ -2950,8 +2956,8 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [flushDatabaseStores, () => externalIds.flush(), () => artworks.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
-  lateFlushes: [flushDatabaseStores, () => externalIds.flush()],
+  flushes: [flushDatabaseStores, () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  lateFlushes: [flushDatabaseStores],
   store,
   closeStorage: async () => {
     queue.freezePersistence();
