@@ -464,8 +464,11 @@ describe("Player progress reporting", () => {
     // The switched-to source runs its own session; what is written next is where it got to.
     await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
     await rerender({ stream: other, progressKey: "movie:tt5000", open: false });
-    expect(progressPosts).toEqual([expect.objectContaining({ key: "movie:tt5000", position: 120, duration: 3600, stableKey: other.stableKey })]);
-    expect(progressPosts[0]).not.toHaveProperty("path");
+    expect(progressPosts).toEqual([
+      expect.objectContaining({ key: "movie:tt5000", position: 120, stableKey: file.stableKey, path: file.localPath }),
+      expect.objectContaining({ key: "movie:tt5000", position: 120, duration: 3600, stableKey: other.stableKey }),
+    ]);
+    expect(progressPosts[1]).not.toHaveProperty("path");
   });
 
   it("names the file a library row plays from, beside the source's own handle", async () => {
@@ -734,5 +737,36 @@ describe("Player chapters, segments and next episode", () => {
     await startPlaying();
     await videoAt(3599);
     expect(host.querySelector(".player-up-next")).toBeNull();
+  });
+});
+
+describe("Player final source identity", () => {
+  const videoAt = (position: number) => act(async () => {
+    const video = host.querySelector("video")!;
+    video.currentTime = position;
+    video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+  });
+  const original = addonRow({ sourceId: "hd", stableKey: `a:${"a".repeat(24)}` });
+  const replacement = addonRow({ sourceId: "4k", stableKey: `a:${"b".repeat(24)}` });
+
+  it.each([original, null])("saves the playing source when closing reveals another stream: %s", async (behind) => {
+    await render({ stream: replacement, progressKey: "movie:tt0172495" });
+    await videoAt(120);
+    await rerender({ stream: behind, open: false, progressKey: "movie:tt0172495" });
+    expect(progressPosts).toEqual([expect.objectContaining({
+      key: "movie:tt0172495", position: 120, stableKey: replacement.stableKey, final: true,
+    })]);
+  });
+
+  it("keeps each source's final position paired with its own identity across a switch", async () => {
+    await render({ stream: original, progressKey: "movie:tt0172495" });
+    await videoAt(120);
+    await rerender({ stream: replacement, progressKey: "movie:tt0172495" });
+    await videoAt(130);
+    await rerender({ stream: null, open: false, progressKey: "movie:tt0172495" });
+    expect(progressPosts.map(({ position, stableKey }) => ({ position, stableKey }))).toEqual([
+      { position: 120, stableKey: original.stableKey },
+      { position: 130, stableKey: replacement.stableKey },
+    ]);
   });
 });

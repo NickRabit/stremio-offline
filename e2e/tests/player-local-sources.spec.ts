@@ -84,6 +84,46 @@ test.describe("the player's sources for a library file", () => {
     await expect(panel.locator(".identify-hint")).toHaveCount(0);
   };
 
+  test("a Home source change survives closing playback and reloading the page", async ({ page, request }) => {
+    const key = "movie:tt-e2e-movie";
+    const progressUrl = `/api/progress/${encodeURIComponent(key)}`;
+    const addon = (await (await request.get("/api/streams/movie/tt-e2e-movie")).json())[0];
+    const local = (await (await request.get("/api/local-streams/movie/tt-e2e-movie")).json())
+      .find((row: { localPath?: string }) => row.localPath?.endsWith(filmFile));
+    expect(addon.stableKey).toBeTruthy();
+    expect(local.stableKey).toBeTruthy();
+    await request.post("/api/progress", { data: { key, title: "Zkušební film", position: 40, duration: 120, stableKey: addon.stableKey } });
+    const openHomeDetail = async () => {
+      await page.getByRole("button", { name: "Domů", exact: true }).click();
+      await page.locator('.home-row[data-row="resume"] .browse-item', { hasText: "Zkušební film" })
+        .getByRole("button").first().click();
+      await expect(page.locator(".catalogue-title-detail")).toBeVisible();
+    };
+    try {
+      await page.goto("/");
+      await openHomeDetail();
+      const detail = page.locator(".catalogue-title-detail");
+      await expect(detail.locator(".detail-tech")).toContainText("E2E");
+      await detail.getByRole("button", { name: "Vybrat zdroj", exact: true }).click();
+      await page.getByRole("dialog", { name: "Vybrat zdroj", exact: true })
+        .locator(".library-source-list button", { hasText: filmFile }).first().click();
+      await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
+      const video = page.locator(".player-overlay video");
+      await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.currentTime)).toBeGreaterThan(41);
+      await page.locator(".player-overlay").dispatchEvent("pointermove");
+      await page.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
+      await expect.poll(async () => (await (await request.get(progressUrl)).json())?.stableKey).toBe(local.stableKey);
+      await page.reload();
+      await openHomeDetail();
+      await expect(detail.locator(".source-file")).toHaveText(filmFile);
+      await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
+      await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.currentTime)).toBeGreaterThan(40);
+    } finally {
+      await page.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click().catch(() => undefined);
+      await request.delete(progressUrl);
+    }
+  });
+
   test("a matched file offers the title's sources, and the title stays put across a switch", async ({ page }) => {
     await openLibraryRow(page, filmFolder);
     await play(page);

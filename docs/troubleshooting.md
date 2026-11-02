@@ -130,38 +130,33 @@ WARN Wikidata did not answer, the links stay partial {"id":"tt0107290","status":
 
 ## Rolling the image back
 
-`state.json` carries a `schemaVersion`. Ours is `3`: version 2 is the libraries
-shape, where stored paths gained a library id in front of them
-(`lib_ab12cd34/Show/01 serie/01.mkv`), and version 3 is the accounts shape, where
-the single account became a list and the personal half of the settings moved
-into each account's own data. An older image reading that file cannot resolve
-the paths or find the account, so the library would come up with no match history
-and no thumbnails and you would be asked to set the instance up again.
+Restore the **whole data folder from a backup taken by the target version**,
+with the server stopped. Keep the current folder aside first. A newer version
+may have migrated both `state.json` and `application.sqlite`; an older image
+cannot be assumed to read those formats. The database refuses a schema newer
+than it supports. See [Backing up and restoring](backup.md#restoring).
 
-The migration copies the file it found to `state.json.v1.bak` in `DATA_DIR`
-before touching anything. To roll back, stop the container, copy that file over
-`state.json` and start the old image:
-
-```sh
-cp data/state.json.v1.bak data/state.json
-```
-
-Nothing in the library itself is renamed or moved by the migration, so a
-rollback loses nothing but the time spent on the newer build.
-
-The `v1.bak` name is the file the *libraries* migration wrote the first time it
-ran; later migrations leave it alone rather than overwriting it, so it stays the
-copy of the pre-libraries state. Rolling back a single version with it means
-losing the accounts as well. Per-library match history lives beside it in
-`library/<library id>.json` and is additive, so it survives either way.
+The old `state.json.v1.bak` is the snapshot from before the libraries migration,
+not a backup of the current instance. Restoring it alone loses later accounts
+and preferences and does not roll back the SQLite domains. Likewise, files in
+`migration-backup/` are snapshots from cutover, not current download, follow or
+match history. There is no automatic reverse migration to JSON.
 
 ## When a state file is damaged
 
-The download queue (`downloads.json`), the library operations
-(`library-ops.json`), the scan progress (`library-scan.json`) and the match
-history (`library/<library id>.json`, `library/episodes.json`) are plain JSON in
-`DATA_DIR`. If one of them cannot be parsed at start, its exact bytes are first
-copied next to it as `<name>.damaged-<time>-<random>`, the log says so at
+Downloads, follows and library match/episode history normally live in
+`DATA_DIR/application.sqlite`. If an existing database cannot be opened, startup
+fails rather than switching to stale JSON. Read the error in the log, check disk
+access and restore the complete stopped-instance backup when needed. Keep the
+failed database and any `-wal`/`-shm` files for diagnosis; deleting the database
+to force JSON fallback can discard the current state.
+
+Library operations (`library-ops.json`) and scan progress (`library-scan.json`)
+still use JSON. The queue (`downloads.json`) and match history
+(`library/<library id>.json`, `library/episodes.json`) use the legacy JSON path
+only before migration or when a first start falls back without a database.
+For these JSON stores, if a file cannot be parsed at start, its exact bytes are
+first copied next to it as `<name>.damaged-<time>-<random>`, the log says so at
 `ERROR`, and that store starts empty. Nothing else is lost, and every later
 damaged file gets its own copy.
 
@@ -171,8 +166,9 @@ The queue or the library operations then refuse new work with *The download
 queue file could not be read* or *The library operations file could not be
 read*. Fix the permissions or restore the file from a backup, and restart.
 
-To put a damaged file back, stop the server, repair the copy and move it over
-the original name:
+To put a damaged JSON file back, stop the server, repair the copy and move it
+over the original name. This example applies only to an unmigrated JSON queue;
+restoring `downloads.json` does not replace a queue already imported into SQLite:
 
 ```sh
 cp data/downloads.json.damaged-2026-10-05T12-00-00-000Z-a1b2c3 data/downloads.json

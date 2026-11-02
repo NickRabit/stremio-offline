@@ -23,9 +23,13 @@ right to use.
 - Direct playback, remuxing and FFmpeg transcoding, with Intel QuickSync and
   VAAPI on compatible Linux hosts.
 - Audio tracks, embedded subtitles and subtitle addons.
+- Chapter navigation, badges for the playing video/audio, intro/recap/credits
+  skipping and a configurable Up next point on web, desktop and Android TV.
+  IntroDB segment lookup is disabled in secure mode.
 - Persistent downloads with resume support, disk-space handling and save rules.
-- Download rules for seasons and whole shows: resolution, size, audio and
-  subtitle language, chosen when each episode's turn comes.
+- Prepare and download a season or a whole show from a title detail, including
+  Jellyfin/Emby series, on the web and Android TV. Download rules choose
+  resolution, size, audio and subtitle language when each episode's turn comes.
 - Following series and films, with a release calendar and optional automatic
   downloads.
 - A personal Home page and one search across addons, libraries and media
@@ -203,12 +207,20 @@ explains how to tell the GPU is really working.
 
 | Container path | What to keep |
 | --- | --- |
-| `/data` | Accounts, settings, addon configuration, library metadata and artwork |
+| `/data` | Accounts, settings, addons, library metadata, follows, download queue/history, statistics and artwork |
 | `/downloads` | Downloaded media |
 
-Back up both host folders. Recreating the container keeps your installation
-when these mounts are preserved. Extra libraries require both a volume mount
-and the `LIBRARY_ROOTS` configuration; see the library guide.
+Back up `/data` with the server stopped, and back up downloaded media and any
+extra library folders separately. Recreating the container keeps your
+installation when these mounts are preserved. Extra libraries require both a
+volume mount and the `LIBRARY_ROOTS` configuration; see the library guide.
+
+Library matches, episodes, downloads, follows, statistics and several caches
+now live in `/data/application.sqlite`; accounts and settings stay in
+`/data/state.json`. Copy the complete data folder, including SQLite `-wal` and
+`-shm` files when present. A copy of the live database file alone is not a valid
+backup. Old JSON files in `migration-backup/` are cutover snapshots, not current
+state. See [Backup and restore](https://github.com/NickRabit/stremio-offline/blob/main/docs/backup.md).
 
 ## Updating
 
@@ -260,7 +272,7 @@ Raw torrents require a Real-Debrid token; the app does not include a torrent eng
 [Report an issue](https://github.com/NickRabit/stremio-offline/issues) ·
 [Support development](https://ko-fi.com/nickrabit)
 
-The application code is MIT licensed. The image includes Debian's FFmpeg with
+The application code is MIT licensed. The image includes Ubuntu's FFmpeg with
 GPL components, run as a separate process. See
 [licensing details](https://github.com/NickRabit/stremio-offline/blob/main/docs/licensing.md)
 for licenses and source information.

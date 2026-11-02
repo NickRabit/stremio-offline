@@ -951,6 +951,18 @@ class StreamsTest {
   }
 
   @Test
+  fun `originLocalRow matches only playable local rows of the exact path`() {
+    val first = stream(sourceId = "first", kind = "library", localPath = "/film.mkv")
+    val second = stream(sourceId = "second", kind = "library", localPath = "/film.mkv")
+    val otherPath = stream(sourceId = "other", kind = "library", localPath = "/other.mkv")
+    val addon = stream(sourceId = "addon", kind = "remote", localPath = "/film.mkv")
+    val unplayable = stream(sourceId = "unplayable", kind = "library", playable = false, localPath = "/film.mkv")
+
+    assertEquals(first, Streams.originLocalRow(listOf(unplayable, otherPath, addon, first, second), "/film.mkv"))
+    assertNull(Streams.originLocalRow(listOf(unplayable, otherPath, addon), "/film.mkv"))
+  }
+
+  @Test
   fun `of parses a rule id, the fixed sorts and recommended`() {
     assertEquals(StreamSort.Rule("balanced"), StreamSort.of("rule:balanced"))
     assertEquals("rule:balanced", StreamSort.Rule("balanced").wire)
