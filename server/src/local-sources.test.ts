@@ -195,3 +195,87 @@ test("a file in a library with no matching record is not a copy", () => {
     records: { [libraryPath(lib.id, "Heat (1995)")]: movie("tt9999999") }, libraries: [lib],
   }), []);
 });
+
+test("verified IMDb and TMDB aliases include every copy while preserving overrides and visibility", async () => {
+  const { tmdbIds } = await import("./tmdb-ids.js");
+  const { localTitleIds } = await import("./local-sources.js");
+  tmdbIds.rememberPair("movie", "tt4383594", 322240);
+  const lib = library("lib_00000001");
+  const hidden = library("lib_00000002");
+  const files = [
+    found(lib.id, "Já, kocour (2016)/Já, kocour (2016).mkv", 900),
+    found(lib.id, "Nine Lives/Nine Lives.mkv", 400),
+    found(lib.id, "Nine Lives/Nine Lives 720p.mkv", 300),
+    found(hidden.id, "Nine Lives/Nine Lives.mkv", 200),
+  ];
+  const records = {
+    [libraryPath(lib.id, "Já, kocour (2016)")]: movie("tmdb:322240"),
+    [libraryPath(lib.id, "Nine Lives")]: movie("tt4383594"),
+    [files[2]!.relative]: movie("tt0113277"),
+    [libraryPath(hidden.id, "Nine Lives")]: movie("tmdb:322240"),
+  };
+  for (const id of ["tt4383594", "tmdb:322240"]) {
+    const titleIds = await localTitleIds("movie", id, records);
+    const copies = localCopies({ type: "movie", id, titleIds, records, files, units: unitsOf(files, [lib, hidden]), libraries: [lib] });
+    assert.deepEqual(copies.map((copy) => copy.key), files.slice(0, 2).map((file) => file.relative));
+    const unmatched = unmatchAt(records, files[0]!.relative);
+    assert.deepEqual(localCopies({ type: "movie", id, titleIds, records: unmatched, files, units: unitsOf(files, [lib, hidden]), libraries: [lib] }).map((copy) => copy.key), [files[1]!.relative]);
+  }
+});
+
+test("episode aliases retain the requested season and episode and do not mix media types", async () => {
+  const { tmdbIds } = await import("./tmdb-ids.js");
+  const { localTitleIds } = await import("./local-sources.js");
+  tmdbIds.rememberPair("series", "tt0944947", 1399);
+  const lib = library("lib_00000001", { type: "series" });
+  const files = [found(lib.id, "Show/Season 1/Show S01E02.mkv"), found(lib.id, "Show/Season 2/Show S02E02.mkv")];
+  const records = { [libraryPath(lib.id, "Show")]: series("tmdb:1399") };
+  const titleIds = await localTitleIds("series", "tt0944947:1:2", records);
+  assert.deepEqual(titleIds, ["tt0944947", "tmdb:1399"]);
+  assert.deepEqual(localCopies({ type: "series", id: "tt0944947:1:2", titleIds, files, records, units: unitsOf(files, [lib]), libraries: [lib] }).map((copy) => copy.key), [files[0]!.relative]);
+  assert.deepEqual(await localTitleIds("movie", "tt0944947", records), ["tt0944947"]);
+});
+
+test("local aliases resolve a cache miss once and keep exact ids after a failed lookup", async () => {
+  const { localTitleIds } = await import("./local-sources.js");
+  const records = { "lib_00000001/Film": movie("tmdb:999001") };
+  let calls = 0;
+  const fetcher = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ movie_results: [{ id: 999001 }] }), { headers: { "content-type": "application/json" } });
+  };
+  assert.deepEqual(await localTitleIds("movie", "tt9990001", records, { apiKey: "test", language: "en" }, fetcher), ["tt9990001", "tmdb:999001"]);
+  assert.deepEqual(await localTitleIds("movie", "tt9990001", records, { apiKey: "test", language: "en" }, fetcher), ["tt9990001", "tmdb:999001"]);
+  assert.equal(calls, 1);
+  const reverse = { "lib_00000001/Film": movie("tt9990002") };
+  assert.deepEqual(await localTitleIds("movie", "tmdb:999002", reverse, { apiKey: "test", language: "en" }, async () => new Response(JSON.stringify({ imdb_id: "tt9990002" }), { headers: { "content-type": "application/json" } })), ["tmdb:999002", "tt9990002"]);
+  assert.deepEqual(await localTitleIds("movie", "tt9990003", records, { apiKey: "test", language: "en" }, async () => { throw new Error("offline"); }), ["tt9990003"]);
+  assert.deepEqual(await localTitleIds("movie", "tt9990004", records), ["tt9990004"]);
+  assert.deepEqual(await localTitleIds("series", "invalid", records), []);
+  assert.deepEqual(await localTitleIds("movie", "tt9990005", {}, { apiKey: "test", language: "en" }, async () => { throw new Error("must not fetch without alternate bindings"); }), ["tt9990005"]);
+});
+
+test("concurrent alias misses share one request and a failed lookup backs off", async () => {
+  const { localTitleIds } = await import("./local-sources.js");
+  const records = { "lib_00000001/Film": movie("tmdb:999006") };
+  const config = { apiKey: "test", language: "en" };
+  let calls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const fetcher = async () => {
+    calls += 1;
+    await gate;
+    return new Response(JSON.stringify({ movie_results: [{ id: 999006 }] }), { headers: { "content-type": "application/json" } });
+  };
+  const first = localTitleIds("movie", "tt9990006", records, config, fetcher);
+  const second = localTitleIds("movie", "tt9990006", records, config, fetcher);
+  release();
+  assert.deepEqual(await Promise.all([first, second]), [["tt9990006", "tmdb:999006"], ["tt9990006", "tmdb:999006"]]);
+  assert.equal(calls, 1);
+  calls = 0;
+  const offline = async () => { calls += 1; throw new Error("offline"); };
+  assert.deepEqual(await localTitleIds("movie", "tt9990007", records, config, offline), ["tt9990007"]);
+  assert.deepEqual(await localTitleIds("movie", "tt9990007", records, config, offline), ["tt9990007"]);
+  assert.equal(calls, 1);
+  assert.deepEqual(await localTitleIds("movie", "mpa:provider:tt9990006", records), ["mpa:provider:tt9990006", "tt9990006", "tmdb:999006"]);
+});

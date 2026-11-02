@@ -847,3 +847,30 @@ test("the carve-out guard compares folders, not spellings, where the volume fold
   // do another way costs less than a library taken along by one.
   assert.equal(holdsLibraryRoot(carveOuts, "archiv"), true, "a fold nobody answered with is folded");
 });
+
+test("a library filter lists a matching folder once without repeating its descendants", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-filter-distinct-"));
+  try {
+    await mkdir(path.join(root, "Já, kocour (2016)", "kocour extras"), { recursive: true });
+    await mkdir(path.join(root, "Archive"), { recursive: true });
+    await writeFile(path.join(root, "Já, kocour (2016)", "Já, kocour (2016).mkv"), "xxx");
+    await writeFile(path.join(root, "Já, kocour (2016)", "kocour extras", "kocour trailer.mp4"), "x");
+    await writeFile(path.join(root, "Archive", "Jiný kocour.mkv"), "xx");
+    await writeFile(path.join(root, "kocour loose.mkv"), "x");
+    for (const sort of ["name", "size", "added", "random"] as const) {
+      const result = await browseDirectory(root, "", "koc", 0, 60, sort);
+      assert.equal(result.total, 3, sort);
+      assert.deepEqual(result.items.map((item) => item.path).sort(), ["Archive/Jiný kocour.mkv", "Já, kocour (2016)", "kocour loose.mkv"], sort);
+      const first = await browseDirectory(root, "", "koc", 0, 2, sort);
+      const next = await browseDirectory(root, "", "koc", 2, 2, sort);
+      assert.equal(first.total, 3);
+      assert.equal(next.total, 3);
+      assert.equal(new Set([...first.items, ...next.items].map((item) => item.path)).size, 3);
+    }
+    const favorite = "Já, kocour (2016)/Já, kocour (2016).mkv";
+    const filtered = await browseDirectory(root, "", "koc", 0, 60, "name", false, "", new Set([favorite]));
+    assert.deepEqual(filtered.items.map((item) => item.path), [favorite], "a folder excluded by favourites cannot hide a matching file");
+    const inside = await browseDirectory(root, "Já, kocour (2016)", "koc", 0, 60, "name");
+    assert.equal(inside.total, 2, "opening the folder still exposes its file and subfolder");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

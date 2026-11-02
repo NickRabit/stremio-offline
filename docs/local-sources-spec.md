@@ -40,8 +40,6 @@ the server's web interface and bundle the same server) and the Android TV app.
 - Files without a binding, or bound to a different title. A wrong or missing
   binding is fixed with **Identify** in the library; the catalogue does not
   guess by name.
-- Matching across id schemes (a library title bound to `tmdb:…` while the
-  catalogue shows `tt…`). Only an exact id match counts in this version.
 - Series ids that do not end in `:<season>:<episode>`. The parse below cannot
   tell `kitsu:123:5` (an absolute episode number) from a season and episode, so
   it reads it as title `kitsu`, season 123, episode 5; such an id gets no local
@@ -90,9 +88,15 @@ A file qualifies when all of the following hold:
    `knownTitleForUnit(unitFor(file, units), records, file)` from
    `server/src/library-match.ts`, with `records = metaStore.qualifiedMeta()` and
    `units = await libraryUnits({ stale: true })`, returns a record whose
-   `type` equals the requested type and whose `id` equals the title id. This is
-   the same resolution the Library view uses (`attachBrowseMeta`), so the
-   answer is exactly what the Library view shows as that title. An **Unmatch**
+   `type` equals the requested type and whose `id` equals the title id or its
+   verified IMDb/TMDB equivalent. The existing TMDB id cache supplies pairs; a
+   missing pair is resolved through TMDB only when its API key is configured and
+   the visible libraries contain bindings of the alternate scheme. Concurrent
+   misses share one lookup with a two-second deadline; failed lookups back off
+   for thirty seconds. Lookup failure leaves
+   exact matches available. Names are never used to infer equivalence. This is
+   the effective binding resolution the Library view uses (`attachBrowseMeta`),
+   extended with equivalent ids for source eligibility. An **Unmatch**
    on a file is honoured, and so is a nearer binding on a sub-folder that is a
    title unit of its own. A sub-folder that is not a unit (a season folder
    inside a show of a series library) resolves to the show's binding, in the
@@ -103,7 +107,8 @@ A file qualifies when all of the following hold:
 
 Evaluating rule 3 for every file in a large library is too slow
 (`unitFor` filters every unit per call). First collect the binding keys whose
-record has the requested `type` and `id` (one pass over `records`), build a
+record has the requested `type` and any of the verified equivalent title ids
+(one pass over `records`), build a
 candidate set from files equal to or inside those keys (`isPathWithin`)
 **plus every sample file of a unit whose key is equal to or inside those keys**,
 and only then apply rules 3 and 4. Deduplicate candidates by qualified file key.

@@ -1,3 +1,8 @@
+import type { FetchLike } from "./debrid.js";
+import { FreshValueCache } from "./value-cache.js";
+import { imdbOf } from "./external-ids.js";
+import { tmdbIds } from "./tmdb-ids.js";
+import { tmdbExternalIdResult, tmdbIdOf, type TmdbConfig } from "./tmdb.js";
 import { isPathWithin, type FoundFile } from "./library.js";
 import { episodeNumberOf, knownTitleForUnit, unitFor, type LibraryMetaRecord, type TitleUnit } from "./library-match.js";
 import { parseLibraryPath, type LibraryRecord } from "./libraries.js";
@@ -18,11 +23,44 @@ export function parseLocalRequest(type: string, id: string): LocalRequest | unde
   return { type: "series", titleId: parts.slice(0, -2).join(":"), season: Number(season), episode: Number(episode) };
 }
 
+const aliasLookups = new FreshValueCache<string | null>(30_000, { maxEntries: 256 });
+
+/** Resolve only the alternate id scheme present in the library, using verified TMDB pairs. */
+export async function localTitleIds(type: string, id: string, records: Record<string, LibraryMetaRecord>,
+  config?: TmdbConfig, fetchImpl?: FetchLike): Promise<string[]> {
+  const request = parseLocalRequest(type, id);
+  if (!request) return [];
+  const ids = [request.titleId];
+  const bindings = Object.values(records).filter((record) => record.type === request.type && record.id);
+  const imdbId = imdbOf(request.titleId);
+  if (imdbId && imdbId !== request.titleId) ids.push(imdbId);
+  const tmdb = /^tmdb:(\d+)$/.exec(request.titleId);
+  if (tmdb && bindings.some((record) => /^tt\d+$/.test(record.id!))) {
+    const cached = tmdbIds.imdbOf(request.type, Number(tmdb[1]));
+    const imdb = cached === undefined && config
+      ? await aliasLookups.get(`${request.type}:${request.titleId}`, async () => {
+        const result = await tmdbExternalIdResult(request.type, Number(tmdb[1]), config, fetchImpl, AbortSignal.timeout(2_000)).catch(() => null);
+        return result?.status === "found" ? result.imdb : null;
+      }) : cached;
+    if (imdb) ids.push(imdb);
+  } else if (imdbId && bindings.some((record) => /^tmdb:\d+$/.test(record.id!))) {
+    const cached = tmdbIds.tmdbOf(request.type, imdbId);
+    const resolved = cached === undefined && config
+      ? await aliasLookups.get(`${request.type}:${imdbId}`, async () => {
+        const result = await tmdbIdOf(request.type, imdbId, config, fetchImpl, AbortSignal.timeout(2_000)).catch(() => null);
+        return result ? String(result) : null;
+      }) : cached;
+    if (resolved) ids.push(`tmdb:${resolved}`);
+  }
+  return ids;
+}
+
 export interface LocalCopy { key: string; libraryId: string; size: number; modified: string }
 
 /** The library files that are a copy of one catalogue title or episode, in answer order. */
 export function localCopies(input: {
   type: string; id: string;
+  titleIds?: readonly string[];
   files: FoundFile[];
   units: TitleUnit[];
   records: Record<string, LibraryMetaRecord>;
@@ -31,8 +69,9 @@ export function localCopies(input: {
   const request = parseLocalRequest(input.type, input.id);
   if (!request) return [];
 
+  const titleIds = new Set([request.titleId, ...(input.titleIds ?? [])]);
   const bindingKeys = Object.keys(input.records)
-    .filter((key) => input.records[key]!.id === request.titleId && input.records[key]!.type === request.type);
+    .filter((key) => titleIds.has(input.records[key]!.id ?? "") && input.records[key]!.type === request.type);
   if (!bindingKeys.length) return [];
 
   const covered = (key: string) => bindingKeys.some((binding) => isPathWithin(key, binding));
@@ -53,7 +92,7 @@ export function localCopies(input: {
     const order = libraryId ? orders.get(libraryId) : undefined;
     if (libraryId === undefined || order === undefined) continue;
     const record = knownTitleForUnit(unitFor(key, input.units), input.records, key);
-    if (!record || record.type !== request.type || record.id !== request.titleId) continue;
+    if (!record || record.type !== request.type || !titleIds.has(record.id ?? "")) continue;
     const file = byKey.get(key);
     if (!file) continue;
     if (request.type === "series") {
