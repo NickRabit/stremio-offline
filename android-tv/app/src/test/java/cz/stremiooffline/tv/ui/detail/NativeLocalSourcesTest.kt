@@ -199,7 +199,8 @@ class NativeLocalSourcesTest {
     assertEquals(listOf(film), api.libraryTitleRequests)
     assertTrue(api.streamSourcesRequests.isEmpty())
     assertTrue(api.streamsRequests.isEmpty())
-    assertTrue(api.localStreamsRequests.isEmpty())
+    // Only the library's own listing, which names what the file holds on the Will play row.
+    assertEquals(listOf("movie:tt1"), api.localStreamsRequests)
     assertEquals(0, api.remoteLibrariesCalls)
     assertEquals(0, api.settingsCalls)
   }
@@ -214,7 +215,8 @@ class NativeLocalSourcesTest {
     assertEquals(listOf(film), api.libraryTitleRequests)
     assertEquals(listOf("movie:tt1"), api.streamSourcesRequests)
     assertEquals(listOf("movie:tt1|alpha"), api.streamsRequests)
-    assertEquals(listOf("movie:tt1"), api.localStreamsRequests)
+    // The detail's own listing for the Will play row, then the panel's local group.
+    assertEquals(listOf("movie:tt1", "movie:tt1"), api.localStreamsRequests)
     assertEquals(listOf("rlibB|movie|tt1"), api.remoteMatchRequests)
 
     compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("It.mkv"))
@@ -276,7 +278,8 @@ class NativeLocalSourcesTest {
       hasText("Show.S01E01.mkv") and hasAnyAncestor(hasTestTag(TagSourcesPanel)),
     ).assertCountEquals(0)
     // The series picker reads the first file for its resume marker before the panel reads its card.
-    assertEquals(listOf(episodes.first().path, episodes.first().path, secondEpisode), api.libraryTitleRequests)
+    // The card's episode is read for its Will play row and again by the panel it opened.
+    assertEquals(listOf(episodes.first().path, episodes.first().path, secondEpisode, secondEpisode), api.libraryTitleRequests)
     assertEquals(listOf("series:tt5:1:2"), api.streamSourcesRequests)
     assertTrue(played.isEmpty())
   }
@@ -323,7 +326,7 @@ class NativeLocalSourcesTest {
     assertEquals(listOf(film), api.libraryTitleRequests)
     assertEquals(1, api.streamSourcesRequests.size)
     assertEquals(1, api.streamsRequests.size)
-    assertEquals(1, api.localStreamsRequests.size)
+    assertEquals(2, api.localStreamsRequests.size)
     assertEquals(1, api.remoteLibrariesCalls)
     assertEquals(1, api.remoteMatchRequests.size)
   }

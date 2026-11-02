@@ -305,9 +305,11 @@ fun DetailScreen(
   val playIndex = current.files.indexOfFirst { !isCompleted(it) }.let { if (it < 0) 0 else it }
   val playFile = seriesPick.chosen(current) ?: current.files.getOrNull(playIndex)
   // Every episode of a show is bound to the same title, so its extras are read once, not per card.
-  LaunchedEffect(detail.gridPath, if (isEpisodeDetail(current)) current.files.firstOrNull()?.path else playFile?.path, sourcesApi) {
-    extras.loadLibrary(sourcesApi ?: return@LaunchedEffect, if (isEpisodeDetail(current)) current.files.firstOrNull()?.path else playFile?.path, null)
+  val extrasPath = if (isEpisodeDetail(current)) current.files.firstOrNull()?.path else playFile?.path
+  LaunchedEffect(detail.gridPath, extrasPath, sourcesApi) {
+    extras.loadLibrary(sourcesApi ?: return@LaunchedEffect, extrasPath, null)
   }
+  val listedFile = rememberLibraryFileRow(sourcesApi, playFile, extras, extrasPath)
   val resuming = playFile?.let { Progress.resumePosition(positionOf(it), durationOf(it)) != null } == true
   /** A saved position that is not offered as Resume still gets a Start over beside Play. */
   val hasStoredProgress = positionOf(playFile) > 0.0
@@ -378,7 +380,7 @@ fun DetailScreen(
   val realDebrid = groupState?.realDebridConfigured == true
   fun currentPick(): StreamDto? = pickedRow
     ?.takeIf { pickedAtDefaultPath == playFile?.path && loadedRows.any { row -> row === it } }
-  val actionRow = currentPick() ?: playFile?.let(::fileRow)
+  val actionRow = currentPick() ?: listedFile ?: playFile?.let(::fileRow)
 
   fun openSources(file: BrowseItem.File?, opener: FocusRequester?, fromCard: Boolean = false) {
     val target = file ?: sourcesFile ?: playFile ?: return

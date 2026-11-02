@@ -216,7 +216,8 @@ class LibraryPlaySourcesShellTest {
     // The detail, Sources and subtitles each name the file once; the switch repeats none of them.
     assertEquals(3, fake.libraryTitleRequests.size)
     assertEquals(1, fake.streamSourcesRequests.size)
-    assertEquals(1, fake.localStreamsRequests.size)
+    // The detail's Will play row and the player's Sources.
+    assertEquals(2, fake.localStreamsRequests.size)
     assertEquals(1, fake.remoteMatchRequests.size)
   }
 
