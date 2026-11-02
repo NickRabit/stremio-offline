@@ -1,10 +1,13 @@
 package cz.stremiooffline.tv.ui.home
 
+import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.HomeProgress
 import cz.stremiooffline.tv.data.TitleRefDto
 import cz.stremiooffline.tv.playback.Progress
+import cz.stremiooffline.tv.ui.catalog.RemoteItemRef
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -114,5 +117,66 @@ class ActionForTest {
     val action = actionFor(card)
     assertTrue(action is HomeAction.OpenRemote)
     assertEquals(false, (action as HomeAction.OpenRemote).data.autoPlay)
+  }
+
+  @Test
+  fun `a named remote movie opens the catalogue with its exact server version`() {
+    val card = HomeCard.Remote(
+      key = "remote:1",
+      title = "Heat",
+      libraryId = "rlibA",
+      itemId = "iA",
+      itemType = "movie",
+      mediaSourceId = "ms1",
+      poster = "poster.jpg",
+      identity = TitleRefDto(type = "movie", id = "tt1"),
+      forgetKeys = listOf("movie:tt1"),
+    )
+
+    val action = actionFor(card)
+
+    assertTrue(action is HomeAction.OpenCatalog)
+    val args = (action as HomeAction.OpenCatalog).args
+    assertEquals("tt1", args.meta.id)
+    assertEquals("movie", args.meta.type)
+    assertEquals("Heat", args.meta.name)
+    assertEquals("poster.jpg", args.meta.poster)
+    assertEquals("", args.addonName)
+    assertEquals("movie", args.type)
+    assertEquals(listOf("movie:tt1"), args.forgetKeys)
+    assertFalse(args.autoPlay)
+    assertTrue(args.preferRemote)
+    assertEquals(RemoteItemRef("rlibA", "iA", "ms1"), args.preferredRemote)
+    assertNull(args.episode)
+  }
+
+  @Test
+  fun `a named remote episode opens the catalogue on its series season and episode`() {
+    val card = HomeCard.Remote(
+      key = "remote:2",
+      title = "The Rains of Castamere",
+      libraryId = "rlibA",
+      itemId = "episode-9",
+      itemType = "episode",
+      mediaSourceId = "ms9",
+      season = 2,
+      episode = 3,
+      identity = TitleRefDto(type = "series", id = "tt9"),
+    )
+
+    val action = actionFor(card)
+
+    assertTrue(action is HomeAction.OpenCatalog)
+    val args = (action as HomeAction.OpenCatalog).args
+    assertEquals("tt9", args.meta.id)
+    assertEquals("series", args.meta.type)
+    // The card names the episode; the series name and poster come from the catalogue.
+    assertEquals("", args.meta.name)
+    assertEquals(null, args.meta.poster)
+    assertEquals(
+      ResumeEpisode("series:tt9:2:3", 2, 3),
+      args.episode,
+    )
+    assertEquals(RemoteItemRef("rlibA", "episode-9", "ms9"), args.preferredRemote)
   }
 }
