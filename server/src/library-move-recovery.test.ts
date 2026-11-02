@@ -118,7 +118,7 @@ const bootAgain = async (env: Env) => {
 const seedState = async (env: Env) => {
   const from = `${env.a}/${ITEM}`;
   assert.equal((await api(env, "/api/library/favorite", { method: "POST", body: { path: from, favorite: true } })).status, 200);
-  assert.equal((await api(env, "/api/progress", { method: "POST", body: { key: `file:${from}`, path: from, position: 120, duration: 3600, title: "X" } })).status, 204);
+  assert.equal((await api(env, "/api/progress", { method: "POST", body: { key: `file:${from}`, path: from, position: 120, duration: 3600, title: "X", final: true } })).status, 204);
   const matched = await api(env, "/api/library/match", { method: "POST", body: { path: from, type: "series", id: "tt0000001" } });
   assert.equal(matched.status, 200, `the manual match was refused\n${env.server!.log()}`);
   await waitFor("the match row on disk", async () => {
