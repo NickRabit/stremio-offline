@@ -162,6 +162,10 @@ data class SourceRuleVerdictDto(
   val rank: List<Double> = emptyList(),
 )
 
+/** The main sound track as ffprobe read it out of a library file. */
+@Serializable
+data class AudioFactsDto(val codec: String? = null, val channels: Int? = null)
+
 /** The video evidence the source rules evaluated. Unknown JSON keys stay ignored. */
 @Serializable
 data class VideoFactsDto(
@@ -207,6 +211,8 @@ data class StreamDto(
   val subtitleLanguages: List<String> = emptyList(),
   val audioLanguagesGuessed: Boolean = false,
   val videoFacts: VideoFactsDto? = null,
+  /** The main sound track as the server read it out of a library file. */
+  val audioFacts: AudioFactsDto? = null,
   /** The same source's handle in every session; the server mints it and the app never computes it. */
   val stableKey: String? = null,
   /** One verdict per rules profile, keyed by profile id. */

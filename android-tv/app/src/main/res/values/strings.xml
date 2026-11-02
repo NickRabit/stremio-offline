@@ -462,4 +462,6 @@
   <string name="detail_action_whole_series">Whole series</string>
   <string name="detail_action_folder">Folder</string>
   <string name="home_open_detail">Open detail</string>
+  <string name="detail_tech_file">File</string>
+  <string name="sources_audio_channels">%1$s ch</string>
 </resources>

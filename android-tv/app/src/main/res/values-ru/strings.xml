@@ -484,4 +484,6 @@
   <string name="detail_action_whole_series">Весь сериал</string>
   <string name="detail_action_folder">Папка</string>
   <string name="home_open_detail">Открыть описание</string>
+  <string name="detail_tech_file">Файл</string>
+  <string name="sources_audio_channels">%1$s кан.</string>
 </resources>
