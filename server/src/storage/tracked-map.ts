@@ -12,7 +12,8 @@ export class TrackedMap<K, V> extends Map<K, V> {
 
   override delete(key: K): boolean {
     const deleted = super.delete(key);
-    this.touch(key);
+    // Deleting a key that was not there changes nothing, so it owes no write.
+    if (deleted) this.touch(key);
     return deleted;
   }
 

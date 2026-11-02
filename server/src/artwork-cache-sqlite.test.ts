@@ -260,3 +260,17 @@ test("a thumbnail removed while the artwork index loads does not abort the load"
   await cache.load();
   assert.ok(cache.size >= 1);
 });
+
+test("removing a thumbnail the index never held writes nothing", async (t) => {
+  const { artworkDir, database } = await fixture(t);
+  await put(artworkDir, "Kept.mkv", 100);
+  const batches: Statement[][] = [];
+  const cache = new ArtworkCache(artworkDir, 1024 * 1024);
+  cache.attachDatabase(observingBatch(database, batches));
+  await cache.load();
+  batches.length = 0;
+
+  await cache.removed(path.join(artworkDir, name("lib_aaaaaaaa", "Never.mkv")));
+  await cache.flush();
+  assert.equal(batches.length, 0);
+});
