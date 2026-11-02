@@ -974,6 +974,7 @@ open class FakeTvApi : TvApi {
     addonKey: String?,
     remote: RemoteItemContext?,
     stableKey: String?,
+    final: Boolean,
   ) {
     progressSaves += ProgressSave(key, position, duration, title, path, poster, addonKey, remote, stableKey)
   }

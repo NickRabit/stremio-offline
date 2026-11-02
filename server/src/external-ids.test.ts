@@ -142,7 +142,8 @@ test("two concurrent lookups of one id share a single query", async (t) => {
   assert.equal(calls, 1);
   assert.deepEqual(first, { tmdbMovie: "31410" });
   assert.deepEqual(second, first);
-  // One query means one save: the write sits inside the promise both callers await.
+  await store.flush();
+  // One query means one save when the debounced write is flushed.
   const written = JSON.parse(await readFile(cacheFile(dir), "utf8")) as { entries: Record<string, unknown> };
   assert.deepEqual(Object.keys(written.entries), ["tt0090257"]);
 });
@@ -208,6 +209,7 @@ test("the last caller leaving cancels the body, writes nothing, and a retry asks
   assert.equal(calls, 2, "the retry starts a new query instead of joining the abandoned one");
   assert.deepEqual(await retry, {});
   assert.equal(await until(source.cancelled), true);
+  await store.flush();
   const written = JSON.parse(await readFile(cacheFile(dir), "utf8")) as { entries: Record<string, unknown> };
   assert.deepEqual(Object.keys(written.entries), ["tt0090257"]);
 });
@@ -300,6 +302,7 @@ test("the answer is written to disk and a fresh store reads it back without a ca
   const store = new ExternalIdStore(dir, fetchImpl);
   await store.load();
   await store.ids("tt0090257");
+  await store.flush();
 
   const written = JSON.parse(await readFile(cacheFile(dir), "utf8")) as { version: number; entries: Record<string, ExternalIds & { at: string }> };
   assert.equal(written.version, 1);
@@ -323,6 +326,7 @@ test("an answer with no ids is kept for 30 days and asked again after that", asy
   assert.deepEqual(await store.ids("tt0090257"), {});
   assert.deepEqual(await store.ids("tt0090257"), {});
   assert.equal(calls, 1);
+  await store.flush();
 
   const stale = JSON.parse(await readFile(cacheFile(dir), "utf8")) as { entries: Record<string, ExternalIds & { at: string }> };
   stale.entries.tt0090257!.at = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
@@ -332,6 +336,31 @@ test("an answer with no ids is kept for 30 days and asked again after that", asy
   await fresh.load();
   assert.deepEqual(await fresh.ids("tt0090257"), {});
   assert.equal(calls, 2);
+});
+
+test("ten lookups within the debounce window produce one write", async (t) => {
+  const dir = await tempDir();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  let writes = 0;
+  const store = new ExternalIdStore(
+    dir,
+    async (url) => {
+      const id = new URL(url).searchParams.get("query")?.match(/wdt:P345 "(tt\d+)"/)?.[1] ?? "";
+      return bindings([{ tmdbMovie: { value: String(Number(id.slice(2))) } }]);
+    },
+    {
+      writeState: async (file, data) => {
+        writes += 1;
+        await writeFile(file, data, { mode: 0o600 });
+      },
+    },
+  );
+  await store.load();
+
+  await Promise.all(Array.from({ length: 10 }, (_, index) => store.ids(`tt0000000${index}`)));
+  assert.equal(writes, 0, "nothing is written before the debounce expires");
+  await store.flush();
+  assert.equal(writes, 1);
 });
 
 test("a refused lookup answers null, caches nothing and is tried again", async (t) => {

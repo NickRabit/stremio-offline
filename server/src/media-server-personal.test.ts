@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -255,6 +255,23 @@ test("a malformed title is dropped, so it stands for nothing", async () => {
   });
 });
 
+test("an episode whose own flag is off can still remove the star it shows through its show", async () => {
+  for (const provider of providers) {
+    await withHarness(async (harness) => {
+      const libraryId = provider === "jellyfin" ? harness.libraryId : harness.embyLibraryId;
+      await harness.personal.patch(harness.admin, libraryId, "te2", { position: 10, duration: 100, final: true });
+      await harness.personal.patch(harness.admin, libraryId, "te1", { favorite: true });
+      assert.equal(recordOf(harness, "te2")?.favorite, false, "the episode's own flag stays off");
+      assert.equal((await harness.personal.read(harness.admin, libraryId, "te2")).favorite, true, "it shows the show's star");
+
+      const state = await harness.personal.patch(harness.admin, libraryId, "te2", { favorite: false });
+      assert.equal(state.favorite, false, provider);
+      assert.deepEqual(Object.keys(harness.store.userData(ADA).watchlist!), [], "the show's star is gone");
+      assert.equal((await harness.personal.read(harness.admin, libraryId, "te1")).favorite, false);
+    });
+  }
+});
+
 test("a remote star is the title's star, and the title's star reads on every record of it", async () => {
   for (const provider of providers) {
     await withHarness(async (harness) => {
@@ -409,6 +426,82 @@ test("repeated local progress over one item costs the provider nothing inside th
     assert.equal((await harness.personal.read(harness.admin, harness.libraryId, "m1")).position, 20, "the account's own state is read locally");
     assert.equal(providerCalls(harness, "detail"), read.detail);
     assert.equal(JSON.stringify(harness.store.userData(ADA).remoteMedia).includes('"position":20'), true, "and the write landed in the state");
+  });
+});
+
+test("an unchanged final media-server report flushes the deferred position before answering", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600 });
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true });
+
+    const saved = JSON.parse(await readFile(path.join(harness.dir, "state.json"), "utf8")) as {
+      userData?: Record<string, { remoteMedia?: Record<string, { itemId?: string; position?: number }> }>;
+    };
+    const row = Object.values(saved.userData?.[ADA]?.remoteMedia ?? {}).find((item) => item.itemId === "m1");
+    assert.equal(row?.position, 120);
+  });
+});
+
+test("an unchanged final media-server report answers with the failure when the disk refuses it", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600 });
+    // The store's own writer refuses, so the failure has to travel through the real write path.
+    const writable = harness.store as unknown as { writeState: (file: string, data: string) => Promise<void> };
+    const original = writable.writeState;
+    writable.writeState = async () => { throw new Error("disk unavailable"); };
+    try {
+      await assert.rejects(
+        harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true }),
+        /disk unavailable/,
+      );
+    } finally { writable.writeState = original; }
+  });
+});
+
+test("clearing a remote position is written at once, without final", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true });
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 0, duration: 0 });
+
+    const saved = JSON.parse(await readFile(path.join(harness.dir, "state.json"), "utf8")) as {
+      userData?: Record<string, { remoteMedia?: Record<string, { itemId?: string; position?: number }> }>;
+    };
+    const row = Object.values(saved.userData?.[ADA]?.remoteMedia ?? {}).find((item) => item.itemId === "m1");
+    assert.notEqual(row?.position, 120, "the forgotten position is not left only in memory");
+  });
+});
+
+test("two concurrent watched toggles never confirm a change the disk refused", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true });
+    // The first write is held until the second toggle is in, and then refused.
+    const writable = harness.store as unknown as { writeState: (file: string, data: string) => Promise<void> };
+    const original = writable.writeState;
+    let entered!: () => void;
+    const writing = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let failNext = true;
+    writable.writeState = async (file, data) => {
+      if (failNext) {
+        failNext = false;
+        entered();
+        await released;
+        throw new Error("disk unavailable");
+      }
+      await original(file, data);
+    };
+    try {
+      const first = harness.personal.patch(harness.admin, harness.libraryId, "m1", { watched: true }).then(() => "ok", () => "failed");
+      await writing;
+      const second = harness.personal.patch(harness.admin, harness.libraryId, "m1", { watched: true }).then(() => "ok", () => "failed");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      release();
+      const outcomes = await Promise.all([first, second]);
+      const watched = (await harness.personal.read(harness.admin, harness.libraryId, "m1")).watched;
+      assert.equal(outcomes[0], "failed");
+      if (outcomes[1] === "ok") assert.equal(watched, true, "a confirmed toggle is kept");
+    } finally { writable.writeState = original; }
   });
 });
 
@@ -600,6 +693,7 @@ test("a role the provider reports absent is remembered and keeps the card URL of
     assert.equal(row.backdropAbsent, true);
 
     // A round trip through validRecord has to keep the flags, or the next read strips them.
+    await harness.store.flush();
     const fresh = await harness.reload();
     const reread = new MediaServerPersonal(fresh, harness.manager);
     const again = await reread.cards(harness.admin, { filter: "resume" });

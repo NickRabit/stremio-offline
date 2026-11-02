@@ -106,6 +106,8 @@ export class LibraryOps {
   /** Jobs whose `finished` hook is under way. They read as still running, so nobody hears
    *  "done" before the hook has had its say. */
   private finishing = new Set<string>();
+  /** The serialized content last read or successfully written. */
+  private stored?: string;
   /** Set when the state file could not be read or was written by a newer version: work is
    *  refused rather than overwriting a file the owner may still be able to fix. */
   private unreadable = false;
@@ -120,6 +122,7 @@ export class LibraryOps {
       return;
     }
     let saved: unknown = undefined;
+    let stored: string | undefined;
     if (state.kind === "read") {
       try { saved = JSON.parse(state.raw); } catch { saved = undefined; }
       const object = saved !== null && typeof saved === "object" && !Array.isArray(saved);
@@ -130,6 +133,7 @@ export class LibraryOps {
         return;
       }
       const shaped = object && version === 1 && Array.isArray((saved as { jobs?: unknown }).jobs);
+      if (shaped) stored = state.raw;
       if (!shaped) {
         try {
           const preserved = await preserveDamaged(this.options.file, state.raw);
@@ -148,6 +152,7 @@ export class LibraryOps {
         ? { ...job, status: "paused", pauseReason: "queue", current: undefined }
         : job);
     }
+    this.stored = stored;
     await this.save();
     // A job that ended while the process was going down still carries the flag: its hook
     // never ran, and a terminal job never reaches the pump again. Run it before the pump.
@@ -375,11 +380,13 @@ export class LibraryOps {
     const finished = ended.filter((job, index) => job.notifyPending || index >= ended.length - 20);
     const state: StoredState = { version: 1, jobs: [...active, ...finished].sort((a, b) => a.startedAt.localeCompare(b.startedAt)) };
     const serialized = JSON.stringify(state, null, 2);
+    if (serialized === this.stored) return Promise.resolve();
     this.saveTail = this.saveTail.catch(() => undefined).then(async () => {
       await mkdir(path.dirname(this.options.file), { recursive: true });
       const temporary = `${this.options.file}.tmp`;
       await writeFile(temporary, serialized, { mode: 0o600 });
       await renameWithRetry(temporary, this.options.file);
+      this.stored = serialized;
     });
     return this.saveTail;
   }

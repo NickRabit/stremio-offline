@@ -490,7 +490,7 @@ fun Shell(
       loadDestinations = nativeDestinations,
       onQueue = nativeQueue,
       // Mark watched stores the file's own key as finished, exactly as the player's last seconds do.
-      markWatched = { file -> api.saveProgress(Progress.libraryKey(file.path), 1.0, 1.0, file.label, file.path, null, null, null) },
+      markWatched = { file -> api.saveProgress(Progress.libraryKey(file.path), 1.0, 1.0, file.label, file.path, null, null, null, final = true) },
       onSearchPerson = ::openPersonSearch,
       onOpenRelated = { related -> openRelatedFromUnderlying(related, CatalogReturnOrigin.Local) },
     )

@@ -82,7 +82,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
       if (card.kind === "remote") {
         if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
         // Forgetting a remote card clears its position only; the favourite and watched flags stay.
-        void api.saveRemoteState(card.libraryId, card.itemId, { position: 0, duration: 0 }).then(latest.current.onForgotten, latest.current.onError);
+        void api.saveRemoteState(card.libraryId, card.itemId, { position: 0, duration: 0, final: true }).then(latest.current.onForgotten, latest.current.onError);
         return;
       }
       if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
