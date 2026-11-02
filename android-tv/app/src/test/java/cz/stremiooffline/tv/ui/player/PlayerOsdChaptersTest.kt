@@ -19,6 +19,7 @@ import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -80,6 +81,16 @@ class PlayerOsdChaptersTest {
 
     assertEquals(2, compose.onAllNodesWithTag(TAG_OSD_CHAPTER_MARK).fetchSemanticsNodes().size)
     compose.onNodeWithTag(TAG_OSD_CHAPTER).assertTextEquals("Opening")
+  }
+
+  @Test
+  fun `a chapter mark stays within the bar instead of standing above it`() {
+    mount()
+
+    compose.onAllNodesWithTag(TAG_OSD_CHAPTER_MARK).fetchSemanticsNodes().forEach { node ->
+      val heightDp = node.size.height / compose.density.density
+      assertTrue("mark is $heightDp dp tall", heightDp <= 6f)
+    }
   }
 
   @Test
