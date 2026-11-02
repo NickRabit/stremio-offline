@@ -471,6 +471,8 @@
   <string name="detail_tech_video">Wideo</string>
   <string name="detail_tech_audio">Dźwięk</string>
   <string name="detail_tech_subtitles">Napisy</string>
+  <string name="detail_tech_file">Plik</string>
+  <string name="detail_audio_channels">%d kan.</string>
   <string name="detail_videos">Zwiastuny i dodatki</string>
   <string name="detail_video_trailer">Zwiastun</string>
   <string name="detail_video_teaser">Teaser</string>

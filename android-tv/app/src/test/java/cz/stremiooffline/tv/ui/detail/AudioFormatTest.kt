@@ -23,4 +23,22 @@ class AudioFormatTest {
     assertEquals("DTS-HD MA", audioFormat("Movie.2026.DTS-HD.MA.mkv"))
     assertEquals("", audioFormat("Movie.2026.1080p.WEB-DL.mkv"))
   }
+
+  @Test
+  fun `a read picture under 720 lines keeps its own height`() {
+    org.junit.Assert.assertEquals("352p", videoResolution(352, "Show - S01E04.avi"))
+    org.junit.Assert.assertEquals("1080p", videoResolution(1036, null))
+    org.junit.Assert.assertEquals("480p", videoResolution(null, "Film.480p.XviD.avi"))
+    org.junit.Assert.assertEquals("2160p", videoResolution(null, "Film 4K HDR"))
+    org.junit.Assert.assertEquals(null, videoResolution(null, "Film.avi"))
+  }
+
+  @Test
+  fun `the sound read from a file names its codec and layout`() {
+    val ch = "%d ch"
+    org.junit.Assert.assertEquals("MP3 2.0", audioFactsText(cz.stremiooffline.tv.data.AudioFactsDto("mp3", 2), ch))
+    org.junit.Assert.assertEquals("DD+ 5.1", audioFactsText(cz.stremiooffline.tv.data.AudioFactsDto("eac3", 6), ch))
+    org.junit.Assert.assertEquals("3 ch", audioFactsText(cz.stremiooffline.tv.data.AudioFactsDto(null, 3), ch))
+    org.junit.Assert.assertEquals(null, audioFactsText(cz.stremiooffline.tv.data.AudioFactsDto(), ch))
+  }
 }

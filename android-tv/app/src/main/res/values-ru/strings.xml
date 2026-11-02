@@ -471,6 +471,8 @@
   <string name="detail_tech_video">Видео</string>
   <string name="detail_tech_audio">Звук</string>
   <string name="detail_tech_subtitles">Субтитры</string>
+  <string name="detail_tech_file">Файл</string>
+  <string name="detail_audio_channels">%d кан.</string>
   <string name="detail_videos">Трейлеры и бонусы</string>
   <string name="detail_video_trailer">Трейлер</string>
   <string name="detail_video_teaser">Тизер</string>
