@@ -684,6 +684,14 @@ describe("Player chapters, segments and next episode", () => {
     expect(introRequests).toHaveLength(1);
   });
 
+  it("asks for a library file's segments under the title it is bound to", async () => {
+    introAnswer = { intro: { start: 0, end: 30 } };
+    await render({ progressKey: "file:Series/South Park/S20E01.mkv", catalogueKey: "series:tt0121955:20:1" });
+    expect(introRequests).toEqual(["/api/intro-segments?imdb=tt0121955&season=20&episode=1"]);
+    await videoAt(10);
+    expect(host.querySelector(".player-skip")?.textContent).toBe("Skip intro");
+  });
+
   it("offers a skip button that seeks past the intro", async () => {
     introAnswer = { intro: { start: 5, end: 60 } };
     await render({ progressKey: "movie:tt0903747" });

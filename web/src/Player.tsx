@@ -39,6 +39,8 @@ export interface PlayerSources {
 }
 
 interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void; upNextAt?: UpNextAt; skipSegmentsAuto?: boolean;
+  /** The catalogue title on screen (`series:tt…:1:2`) when the progress key names a library file instead. */
+  catalogueKey?: string;
   /** The playing title's sources; absent for a place that offers none at all. */
   sources?: PlayerSources;
   /** Where a freshly handed source starts; a switch carries the position it was chosen at. */
@@ -244,7 +246,7 @@ const SKIP_KEY: Record<SegmentKind, Key> = {
   outro: "player.skipOutro",
 };
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, catalogueKey }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -312,7 +314,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
 
   useEffect(() => {
     setSegments(null);
-    const query = introQueryOf(progressKey);
+    const query = introQueryOf(catalogueKey ?? progressKey);
     if (!query) return;
     const controller = new AbortController();
     void api.introSegments(query, controller.signal).then(
@@ -320,7 +322,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       () => undefined,
     );
     return () => controller.abort();
-  }, [stream, progressKey]);
+  }, [stream, progressKey, catalogueKey]);
 
   // Track choices and a running countdown belong to the film on screen. The player outlives
   // its overlay, so both are dropped when it closes instead of following the viewer to the

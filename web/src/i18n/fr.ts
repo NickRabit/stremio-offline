@@ -1384,7 +1384,7 @@ export const fr: Catalog = {
   "settings.upNextSeconds": "{seconds} s avant la fin",
   "settings.upNextMinutes": "{minutes} min avant la fin",
   "settings.skipSegments": "Introduction et récapitulatif",
-  "settings.skipSegmentsHint": "Les horaires viennent d’IntroDB, une base de données communautaire. Le serveur l’interroge et apprend donc quel titre est lu ; le mode sécurisé désactive cela.",
+  "settings.skipSegmentsHint": "Les horaires viennent d’IntroDB, une base de données communautaire. Le serveur l’interroge et apprend donc quel titre est lu.",
   "settings.skipSegmentsLabel": "Comment passer l’introduction et le récapitulatif",
   "settings.skipAsk": "Afficher le bouton Passer",
   "settings.skipAuto": "Passer automatiquement",

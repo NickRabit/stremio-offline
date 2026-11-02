@@ -1384,7 +1384,7 @@ export const de: Catalog = {
   "settings.upNextSeconds": "{seconds} s vor dem Ende",
   "settings.upNextMinutes": "{minutes} Min. vor dem Ende",
   "settings.skipSegments": "Intro und Rückblick",
-  "settings.skipSegmentsHint": "Die Zeiten kommen von IntroDB, einer Community-Datenbank. Der Server fragt sie ab und erfährt dadurch, welcher Titel läuft; der sichere Modus schaltet das ab.",
+  "settings.skipSegmentsHint": "Die Zeiten kommen von IntroDB, einer Community-Datenbank. Der Server fragt sie ab und erfährt dadurch, welcher Titel läuft.",
   "settings.skipSegmentsLabel": "Wie Intro und Rückblick übersprungen werden",
   "settings.skipAsk": "Schaltfläche „Überspringen“ anzeigen",
   "settings.skipAuto": "Automatisch überspringen",

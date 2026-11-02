@@ -1384,7 +1384,7 @@ export const ptBR: Catalog = {
   "settings.upNextSeconds": "{seconds} s antes do fim",
   "settings.upNextMinutes": "{minutes} min antes do fim",
   "settings.skipSegments": "Introdução e resumo",
-  "settings.skipSegmentsHint": "Os horários vêm do IntroDB, um banco de dados da comunidade. O servidor o consulta e descobre qual título está sendo reproduzido; o modo seguro desativa isso.",
+  "settings.skipSegmentsHint": "Os horários vêm do IntroDB, um banco de dados da comunidade. O servidor o consulta e descobre qual título está sendo reproduzido.",
   "settings.skipSegmentsLabel": "Como pular a introdução e o resumo",
   "settings.skipAsk": "Mostrar o botão Pular",
   "settings.skipAuto": "Pular automaticamente",

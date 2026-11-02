@@ -1384,7 +1384,7 @@ export const pl: Catalog = {
   "settings.upNextSeconds": "{seconds} s przed końcem",
   "settings.upNextMinutes": "{minutes} min przed końcem",
   "settings.skipSegments": "Intro i streszczenie",
-  "settings.skipSegmentsHint": "Czasy pochodzą ze społecznościowej bazy IntroDB. Serwer odpytuje ją, więc dowiaduje się, który tytuł jest odtwarzany; tryb bezpieczny to wyłącza.",
+  "settings.skipSegmentsHint": "Czasy pochodzą ze społecznościowej bazy IntroDB. Serwer odpytuje ją, więc dowiaduje się, który tytuł jest odtwarzany.",
   "settings.skipSegmentsLabel": "Jak pomijać intro i streszczenie",
   "settings.skipAsk": "Pokaż przycisk Pomiń",
   "settings.skipAuto": "Pomijaj automatycznie",

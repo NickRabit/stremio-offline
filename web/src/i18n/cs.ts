@@ -1429,7 +1429,7 @@ export const cs: Catalog = {
   "settings.upNextSeconds": "{seconds} s před koncem",
   "settings.upNextMinutes": "{minutes} min před koncem",
   "settings.skipSegments": "Úvod a rekapitulace",
-  "settings.skipSegmentsHint": "Časy pocházejí z komunitní databáze IntroDB. Ptá se jí server, takže se dozví, co se přehrává; bezpečný režim to vypíná.",
+  "settings.skipSegmentsHint": "Časy pocházejí z komunitní databáze IntroDB. Ptá se jí server, takže se dozví, co se přehrává.",
   "settings.skipSegmentsLabel": "Jak přeskakovat úvod a rekapitulaci",
   "settings.skipAsk": "Zobrazit tlačítko Přeskočit",
   "settings.skipAuto": "Přeskakovat automaticky",

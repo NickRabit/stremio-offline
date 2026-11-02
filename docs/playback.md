@@ -98,9 +98,10 @@ and the end credits are. While one of them plays, **Skip intro**, **Skip recap**
 **Skip credits** appears (on the TV, OK skips while the controls are hidden).
 Skip credits starts the next episode when there is one. **Settings → Playback →
 Intro and recap → Skip automatically** skips intro and recap without asking,
-once each per episode. Only the server talks to IntroDB and keeps its answers for
-a day; secure mode turns the lookup off. A title IntroDB does not know, or an
-unavailable service, simply shows no button.
+once each per episode. Only the server talks to IntroDB, sends it nothing but the
+IMDb id with the season and episode, and keeps its answers for a day, so secure
+mode leaves it on. A library file is looked up under the title it is bound to.
+A title IntroDB does not know, or an unavailable service, simply shows no button.
 
 ## Keyboard
 

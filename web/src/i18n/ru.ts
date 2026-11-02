@@ -1384,7 +1384,7 @@ export const ru: Catalog = {
   "settings.upNextSeconds": "За {seconds} с до конца",
   "settings.upNextMinutes": "За {minutes} мин до конца",
   "settings.skipSegments": "Вступление и краткий обзор",
-  "settings.skipSegmentsHint": "Время берётся из IntroDB, базы данных сообщества. Сервер обращается к ней и узнаёт, какой заголовок воспроизводится; безопасный режим это отключает.",
+  "settings.skipSegmentsHint": "Время берётся из IntroDB, базы данных сообщества. Сервер обращается к ней и узнаёт, какой заголовок воспроизводится.",
   "settings.skipSegmentsLabel": "Как пропускать вступление и краткий обзор",
   "settings.skipAsk": "Показывать кнопку «Пропустить»",
   "settings.skipAuto": "Пропускать автоматически",

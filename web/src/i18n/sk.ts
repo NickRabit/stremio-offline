@@ -1384,7 +1384,7 @@ export const sk: Catalog = {
   "settings.upNextSeconds": "{seconds} s pred koncom",
   "settings.upNextMinutes": "{minutes} min pred koncom",
   "settings.skipSegments": "Úvod a rekapitulácia",
-  "settings.skipSegmentsHint": "Časy pochádzajú z komunitnej databázy IntroDB. Server sa jej pýta, takže zistí, ktorý titul sa prehráva; bezpečný režim to vypína.",
+  "settings.skipSegmentsHint": "Časy pochádzajú z komunitnej databázy IntroDB. Server sa jej pýta, takže zistí, ktorý titul sa prehráva.",
   "settings.skipSegmentsLabel": "Ako preskakovať úvod a rekapituláciu",
   "settings.skipAsk": "Zobraziť tlačidlo Preskočiť",
   "settings.skipAuto": "Preskakovať automaticky",

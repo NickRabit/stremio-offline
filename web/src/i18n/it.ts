@@ -1384,7 +1384,7 @@ export const it: Catalog = {
   "settings.upNextSeconds": "{seconds} s prima della fine",
   "settings.upNextMinutes": "{minutes} min prima della fine",
   "settings.skipSegments": "Introduzione e riepilogo",
-  "settings.skipSegmentsHint": "Gli orari provengono da IntroDB, un database della community. Il server lo interroga, quindi scopre quale titolo viene riprodotto; la modalità sicura lo disattiva.",
+  "settings.skipSegmentsHint": "Gli orari provengono da IntroDB, un database della community. Il server lo interroga, quindi scopre quale titolo viene riprodotto.",
   "settings.skipSegmentsLabel": "Come saltare introduzione e riepilogo",
   "settings.skipAsk": "Mostra il pulsante Salta",
   "settings.skipAuto": "Salta automaticamente",

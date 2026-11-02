@@ -1434,7 +1434,7 @@ export const en = {
   "settings.upNextSeconds": "{seconds} s before the end",
   "settings.upNextMinutes": "{minutes} min before the end",
   "settings.skipSegments": "Intro and recap",
-  "settings.skipSegmentsHint": "Times come from IntroDB, a community database. The server asks it, so it learns which title plays; secure mode turns this off.",
+  "settings.skipSegmentsHint": "Times come from IntroDB, a community database. The server asks it, so it learns which title plays.",
   "settings.skipSegmentsLabel": "How intro and recap are skipped",
   "settings.skipAsk": "Show a Skip button",
   "settings.skipAuto": "Skip automatically",
