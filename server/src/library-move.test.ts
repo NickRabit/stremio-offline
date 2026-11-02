@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { spawnServer, type SpawnedServer } from "./test-server.js";
 
 /** The move rules have no unit seam: the route, `assertMoveType`, `transferLibraryItem`
@@ -395,11 +396,24 @@ const carriedWire = (name: string) => `${shows}/${carried(name)}`;
 
 /** One library's match file, read the way the route debounces it to disk. */
 const libraryMeta = async (libraryId: string) => {
+  const database = new DatabaseSync(path.join(dataDir, "application.sqlite"), { readOnly: true });
   try {
-    return JSON.parse(await readFile(path.join(dataDir, "library", `${libraryId}.json`), "utf8")) as {
-      version: number; meta: Record<string, { id?: string }>; suggestions: Record<string, unknown>;
-    };
-  } catch { return undefined; }
+    if (!database.prepare("SELECT key FROM meta WHERE key = ?").get(`domain.libraryMeta.${libraryId}`)) return undefined;
+    const rows = database.prepare(
+      "SELECT kind, key, data FROM library_meta WHERE library_id = ?",
+    ).all(libraryId) as Array<{ kind: string; key: string; data: string }>;
+    const meta: Record<string, { id?: string }> = {};
+    const suggestions: Record<string, unknown> = {};
+    for (const row of rows) {
+      if (row.kind === "meta") meta[row.key] = JSON.parse(row.data) as { id?: string };
+      else if (row.kind === "suggestion") suggestions[row.key] = JSON.parse(row.data);
+    }
+    return { version: 1, meta, suggestions };
+  } catch {
+    return undefined;
+  } finally {
+    database.close();
+  }
 };
 
 /** The relative key the manual match wrote for an item at `relative` -- the file's own path,

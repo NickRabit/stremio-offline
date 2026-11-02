@@ -3,6 +3,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { toPosix } from "./libraries.js";
 import { spawnServer, type SpawnedServer } from "./test-server.js";
 
@@ -122,8 +123,17 @@ const seedState = async (env: Env) => {
   const matched = await api(env, "/api/library/match", { method: "POST", body: { path: from, type: "series", id: "tt0000001" } });
   assert.equal(matched.status, 200, `the manual match was refused\n${env.server!.log()}`);
   await waitFor("the match row on disk", async () => {
-    const file = await readFile(path.join(env.dataDir, "library", `${env.a}.json`), "utf8").catch(() => "");
-    return file.includes("tt0000001") ? true : undefined;
+    const database = new DatabaseSync(path.join(env.dataDir, "application.sqlite"), { readOnly: true });
+    try {
+      const rows = database.prepare(
+        "SELECT data FROM library_meta WHERE library_id = ? AND kind = 'meta'",
+      ).all(env.a) as Array<{ data: string }>;
+      return rows.some((row) => row.data.includes("tt0000001")) ? true : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      database.close();
+    }
   });
 };
 

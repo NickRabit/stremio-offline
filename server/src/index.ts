@@ -182,7 +182,6 @@ let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
 await mediaServers.initialize();
-await metaStore.load();
 await externalIds.load();
 let database: AppDatabase | undefined;
 try {
@@ -190,6 +189,7 @@ try {
   if (database) {
     tmdbIds.attachDatabase(database);
     followStore.attachDatabase(database);
+    metaStore.attachDatabase(database);
   }
 } catch (error) {
   log("ERROR", "The application database could not be opened", {
@@ -197,6 +197,7 @@ try {
     reason: error instanceof Error ? error.message : String(error),
   });
 }
+await metaStore.load();
 await tmdbIds.load(path.join(DATA_DIR, "tmdb-ids.json"));
 await attachTitleExtrasDisk(path.join(DATA_DIR, "title-extras"));
 await debridReady.load();
@@ -2912,10 +2913,10 @@ const shutdown = createShutdown({
     try {
       if (database) await queue.stop();
     } finally {
-      await Promise.allSettled([...(database ? [followStore.flush()] : []), stats.flush(), stats.activity.flush(), images.flush(), imageStats.flush(), providerStats.flush(), libraryFileFacts.flush(), tmdbIds.flush()]);
+      await Promise.allSettled([...(database ? [followStore.flush()] : []), metaStore.flush(), stats.flush(), stats.activity.flush(), images.flush(), imageStats.flush(), providerStats.flush(), libraryFileFacts.flush(), tmdbIds.flush()]);
       await database?.close();
     }
-  }, () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  }, () => artworks.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,

@@ -49,4 +49,11 @@ export const MIGRATIONS: readonly Migration[] = [
       "CREATE TABLE follows (id TEXT PRIMARY KEY, position INTEGER NOT NULL, data TEXT NOT NULL) STRICT",
     ],
   },
+  {
+    version: 8,
+    statements: [
+      "CREATE TABLE library_meta (library_id TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (library_id, kind, key)) STRICT, WITHOUT ROWID",
+      "CREATE TABLE library_episodes (key TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT, WITHOUT ROWID",
+    ],
+  },
 ];

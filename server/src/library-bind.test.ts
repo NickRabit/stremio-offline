@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { spawnServer, type SpawnedServer } from "./test-server.js";
 import { SCHEMA_VERSION } from "./store.js";
 
@@ -31,8 +32,23 @@ const api = (pathname: string, init: { method?: string; body?: unknown } = {}) =
   });
 
 const storedMeta = async (): Promise<LibraryMetaFile | undefined> => {
-  const raw = await readFile(path.join(dataDir, "library", `${libraryId}.json`), "utf8").catch(() => undefined);
-  return raw ? JSON.parse(raw) as LibraryMetaFile : undefined;
+  const database = new DatabaseSync(path.join(dataDir, "application.sqlite"), { readOnly: true });
+  try {
+    if (!database.prepare("SELECT key FROM meta WHERE key = ?").get(`domain.libraryMeta.${libraryId}`)) return undefined;
+    const rows = database.prepare(
+      "SELECT kind, key, data FROM library_meta WHERE library_id = ?",
+    ).all(libraryId) as Array<{ kind: string; key: string; data: string }>;
+    const file: LibraryMetaFile = { meta: {}, suggestions: {} };
+    for (const row of rows) {
+      if (row.kind === "meta") file.meta[row.key] = JSON.parse(row.data) as LibraryMetaFile["meta"][string];
+      else if (row.kind === "suggestion") file.suggestions[row.key] = JSON.parse(row.data) as LibraryMetaFile["suggestions"][string];
+    }
+    return file;
+  } catch {
+    return undefined;
+  } finally {
+    database.close();
+  }
 };
 
 const waitForMeta = async (accept: (file: LibraryMetaFile) => boolean, timeout = 10_000) => {
