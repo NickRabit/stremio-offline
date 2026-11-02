@@ -35,7 +35,8 @@ devices:
   - /dev/dri:/dev/dri
 ```
 
-Set `RENDER_GID` to the group that owns `/dev/dri/renderD128`; see
+Set the **Render group ID** field (`RENDER_GID`) to the group that owns
+`/dev/dri/renderD128`; see
 [Hardware acceleration](hardware-acceleration.md) for the full check. Hosts
 without `/dev/dri` must leave the device out.
 
@@ -52,7 +53,8 @@ It installs the GHCR image, stores application data under
 `/mnt/user/appdata/stremio-offline`, stores downloads under
 `/mnt/user/downloads/stremio-offline`, and exposes the user/group, timezone and
 private-addon settings in Unraid's normal container form. Add `/dev/dri` as a
-device in Advanced View when the host supports Intel QuickSync or VAAPI.
+device in Advanced View when the host supports Intel QuickSync or VAAPI, and set
+**Render Group ID** to the group that owns `/dev/dri/renderD128`.
 
 The template is prepared as the source for submission but is not yet
 guaranteed to appear in the Community Applications catalogue. Until it is
