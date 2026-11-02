@@ -6,11 +6,25 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.playback.Progress
 import kotlin.coroutines.cancellation.CancellationException
+
+internal fun libraryFileRow(file: BrowseItem.File): StreamDto = StreamDto(
+  sourceId = Progress.libraryKey(file.path),
+  kind = "library",
+  playable = true,
+  name = file.label,
+  localPath = file.path,
+  behaviorHints = BehaviorHintsDto(
+    filename = file.label,
+    videoSize = file.size.takeIf { it > 0 },
+  ),
+)
 
 /**
  * The server's own listing of [file] as a copy of the title it is bound to: the row the catalogue

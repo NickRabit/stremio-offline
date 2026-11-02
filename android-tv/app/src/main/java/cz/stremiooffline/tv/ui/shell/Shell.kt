@@ -274,11 +274,16 @@ fun Shell(
   }
   fun openLibraryDetail(data: DetailData) {
     detailLookup.cancel()
+    val own = ownCatalogueArgsOrNull(data)
+    if (own == null) {
+      detail = data
+      return
+    }
     // One file stands for itself; a folder of several only for a title bound to the folder as a
     // whole -- a folder of different films never opens as the first one's title.
     val lookupPath = if (data.files.size == 1) data.files.single().path else data.gridPath.takeIf { data.files.isNotEmpty() }
     if (lookupPath.isNullOrBlank()) {
-      detail = data
+      openCatalog(own)
       return
     }
     detailLookup.job = hintScope.launch {
@@ -293,7 +298,7 @@ fun Shell(
         if (binding != null && binding.type.isNotBlank() && binding.id.isNotBlank()) {
           openCatalog(libraryCatalogueArgs(data, binding))
         } else {
-          detail = data
+          openCatalog(own)
         }
       } finally {
         detailLookup.done(coroutineContext[Job])

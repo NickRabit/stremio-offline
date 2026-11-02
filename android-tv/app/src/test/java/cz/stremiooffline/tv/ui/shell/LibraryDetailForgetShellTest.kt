@@ -24,8 +24,8 @@ import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.ui.FakeTvApi
-import cz.stremiooffline.tv.ui.detail.TagDetailForget
-import cz.stremiooffline.tv.ui.detail.TagDetailWatched
+import cz.stremiooffline.tv.ui.catalog.TagCatalogForget
+import cz.stremiooffline.tv.ui.catalog.TagCatalogWatched
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -36,7 +36,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** The real shell must wire the detail's Forget to the API, so a clear survives reopening. */
+/** The real shell must wire own-title Forget to the API, so a clear survives reopening. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-xhdpi")
 class LibraryDetailForgetShellTest {
@@ -106,7 +106,7 @@ class LibraryDetailForgetShellTest {
     compose.waitForIdle()
   }
 
-  /** The root's only folder holds files, so it opens a library detail. */
+  /** The root's only folder holds files, so it opens an own-title catalogue detail. */
   private fun openIt() {
     compose.onNodeWithTag("It").assertIsFocused()
     press(Key.DirectionCenter)
@@ -128,9 +128,9 @@ class LibraryDetailForgetShellTest {
 
     openIt()
     compose.onNodeWithText("Resume").assertExists()
-    compose.onNodeWithTag(TagDetailWatched).assertTextContains("32 % watched")
+    compose.onNodeWithTag(TagCatalogWatched).assertTextContains("32 % watched")
 
-    focusByTag(TagDetailForget)
+    focusByTag(TagCatalogForget)
     press(Key.DirectionCenter)
     press(Key.DirectionDown)
     press(Key.DirectionCenter)
@@ -139,13 +139,13 @@ class LibraryDetailForgetShellTest {
     assertEquals(listOf(listOf("file:$path")), api.forgetCalls)
     assertFalse(api.progressValues.containsKey("file:$path"))
     compose.onNodeWithText("Play").assertExists()
-    compose.onNodeWithTag(TagDetailWatched).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogWatched).assertDoesNotExist()
 
     back()
     openIt()
 
     compose.onNodeWithText("Play").assertExists()
-    compose.onNodeWithTag(TagDetailWatched).assertDoesNotExist()
-    compose.onNodeWithTag(TagDetailForget).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogWatched).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogForget).assertDoesNotExist()
   }
 }

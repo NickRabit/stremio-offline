@@ -21,7 +21,7 @@ import cz.stremiooffline.tv.data.FavoriteItemDto
 import cz.stremiooffline.tv.data.FavoriteToggleDto
 import cz.stremiooffline.tv.data.FavoritesPage
 import cz.stremiooffline.tv.ui.FakeTvApi
-import cz.stremiooffline.tv.ui.detail.TagDetailFavourite
+import cz.stremiooffline.tv.ui.catalog.TagCatalogFavourite
 import cz.stremiooffline.tv.ui.favorites.favoriteCardTag
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -103,10 +103,10 @@ class FavoritesNavigationTest {
 
   private fun focusFavourite() {
     repeat(4) {
-      if (focused(TagDetailFavourite)) return
+      if (focused(TagCatalogFavourite)) return
       press(Key.DirectionRight)
     }
-    compose.onNodeWithTag(TagDetailFavourite).assertIsFocused()
+    compose.onNodeWithTag(TagCatalogFavourite).assertIsFocused()
   }
 
   @Test

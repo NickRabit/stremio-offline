@@ -51,7 +51,6 @@ import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BrowseItem
-import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.LibraryTitleDto
@@ -380,7 +379,7 @@ fun DetailScreen(
   val realDebrid = groupState?.realDebridConfigured == true
   fun currentPick(): StreamDto? = pickedRow
     ?.takeIf { pickedAtDefaultPath == playFile?.path && loadedRows.any { row -> row === it } }
-  val actionRow = currentPick() ?: listedFile ?: playFile?.let(::fileRow)
+  val actionRow = currentPick() ?: listedFile ?: playFile?.let(::libraryFileRow)
 
   fun openSources(file: BrowseItem.File?, opener: FocusRequester?, fromCard: Boolean = false) {
     val target = file ?: sourcesFile ?: playFile ?: return
@@ -981,28 +980,16 @@ internal fun isEpisodeDetail(detail: DetailData): Boolean =
  * largest reported size first the way the web orders its versions, or every copy of the one episode
  * the panel was opened on. A sibling episode is a different video, so it never joins an episode's list.
  */
-private fun ownFileRows(detail: DetailData, file: BrowseItem.File?): List<StreamDto> {
+internal fun ownFileRows(detail: DetailData, file: BrowseItem.File?): List<StreamDto> {
   if (file == null) return emptyList()
   val files = (if (isEpisodeDetail(detail)) copiesOf(detail.files, file) else detail.files).sortedByDescending { it.size }
-  return files.map(::fileRow)
+  return files.map(::libraryFileRow)
 }
 
 /** The episode title one file stands for, when the detail lists episodes: its number pair, never a
  *  filename read as a title. */
 private fun episodeTitleOf(detail: DetailData, file: BrowseItem.File?): String? =
   if (file == null || !isEpisodeDetail(detail)) null else episodeLabel(file)
-
-private fun fileRow(file: BrowseItem.File): StreamDto = StreamDto(
-  sourceId = Progress.libraryKey(file.path),
-  kind = "library",
-  playable = true,
-  name = file.label,
-  localPath = file.path,
-  behaviorHints = BehaviorHintsDto(
-    filename = file.label,
-    videoSize = file.size.takeIf { it > 0 },
-  ),
-)
 
 private fun metaLine(detail: DetailData, files: String): String {
   val parts = mutableListOf<String>()
