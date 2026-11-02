@@ -402,7 +402,9 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   // A job paused for a library asks whether it is back; the probe is refreshed first so a
   // disk that was plugged in is seen within the queue's own retry, not the cache's.
   libraryState: async (libraryId) => { await refreshLibraryHealth(); return libraryFor(store.libraries(), libraryId); },
-}); const playback = new PlaybackManager(undefined, (id) => {
+});
+if (database) queue.attachDatabase(database);
+const playback = new PlaybackManager(undefined, (id) => {
   const owned = playbackOwners.get(id);
   if (owned) {
     // The tombstone matters: a player that has just been closed still has range requests in
@@ -2903,7 +2905,14 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => Promise.allSettled([stats.flush(), stats.activity.flush(), images.flush(), imageStats.flush(), providerStats.flush(), libraryFileFacts.flush(), tmdbIds.flush()]).then(() => database?.close()), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  flushes: [async () => {
+    try {
+      if (database) await queue.stop();
+    } finally {
+      await Promise.allSettled([stats.flush(), stats.activity.flush(), images.flush(), imageStats.flush(), providerStats.flush(), libraryFileFacts.flush(), tmdbIds.flush()]);
+      await database?.close();
+    }
+  }, () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,

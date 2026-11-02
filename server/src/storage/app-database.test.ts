@@ -39,7 +39,7 @@ function fixture(t: TestContext) {
 test("a fresh database has the schema and an owner-only file", async (t) => {
   const { open } = fixture(t);
   const database = await open();
-  assert.equal(database.info.schemaVersion, 5);
+  assert.equal(database.info.schemaVersion, 6);
   assert.equal(database.info.journalMode, "wal");
   assert.deepEqual(
     await database.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'meta'"),
@@ -69,6 +69,10 @@ test("a fresh database has the schema and an owner-only file", async (t) => {
     await database.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tmdb_ids'"),
     { name: "tmdb_ids" },
   );
+  assert.deepEqual(
+    await database.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'download_jobs'"),
+    { name: "download_jobs" },
+  );
   if (process.platform !== "win32") {
     assert.equal(statSync(database.info.file).mode & 0o777, 0o600);
   }
@@ -77,7 +81,7 @@ test("a fresh database has the schema and an owner-only file", async (t) => {
 test("reopening applies only migrations newer than the stored schema version", async (t) => {
   const { open } = fixture(t);
   const migration: Migration = {
-    version: 6,
+    version: 7,
     statements: [
       "CREATE TABLE migration_runs (id INTEGER PRIMARY KEY)",
       "INSERT INTO migration_runs (id) VALUES (1)",
@@ -88,7 +92,7 @@ test("reopening applies only migrations newer than the stored schema version", a
   await first.close();
   const second = await open({ migrations });
   assert.deepEqual(await second.all("SELECT id FROM migration_runs"), [{ id: 1 }]);
-  assert.equal(second.info.schemaVersion, 6);
+  assert.equal(second.info.schemaVersion, 7);
 });
 
 test("a failed batch statement rolls back the whole transaction", async (t) => {

@@ -37,4 +37,10 @@ export const MIGRATIONS: readonly Migration[] = [
       "CREATE TABLE tmdb_ids (direction TEXT NOT NULL, key TEXT NOT NULL, value TEXT, at INTEGER NOT NULL, PRIMARY KEY (direction, key)) STRICT, WITHOUT ROWID",
     ],
   },
+  {
+    version: 6,
+    statements: [
+      "CREATE TABLE download_jobs (id TEXT PRIMARY KEY, position INTEGER NOT NULL, data TEXT NOT NULL) STRICT",
+    ],
+  },
 ];

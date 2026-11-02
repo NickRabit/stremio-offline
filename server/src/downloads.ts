@@ -59,6 +59,8 @@ import {
   type RulesContinuationCursorV1,
 } from "./source-rules.js";
 import { isExecutableDownloadProfile } from "./source-profiles.js";
+import type { AppDatabase, Statement } from "./storage/app-database.js";
+import { moveToMigrationBackup } from "./storage/hourly-counts.js";
 import type {
   ProviderPriorityProfileResolution,
   ProviderPriorityProfileResolverInput,
@@ -666,8 +668,117 @@ interface QueueWriteChange {
   revert: () => void;
 }
 
+const DOWNLOAD_QUEUE_DOMAIN = "downloads";
+const DOWNLOAD_JOB_UPSERT = "INSERT INTO download_jobs (id, position, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET position = excluded.position, data = excluded.data";
+
+function parseQueueJobs(parsed: unknown): DownloadJob[] {
+  if (!Array.isArray(parsed)) throw new Error("The queue state is not a list.");
+  const canonicalSnapshots: Array<{ index: number; snapshot: SourceAdmissionSnapshotV1 }> = [];
+  const canonicalCursors: Array<{ index: number; cursor: TravelContinuationCursorV1 }> = [];
+  const canonicalRulesCursors: Array<{ index: number; cursor: RulesContinuationCursorV1 }> = [];
+  const canonicalSourceFallbackAttempts: Array<{ index: number; attempts: number }> = [];
+  const canonicalTemporaryFailures: Array<{ index: number; failures: number }> = [];
+  const canonicalBudgetAttempts: Array<{ index: number; attempts: number }> = [];
+  const canonicalRulesTemporaryFailures: Array<{ index: number; failures: number }> = [];
+  const canonicalRulesBudgetAttempts: Array<{ index: number; attempts: number }> = [];
+  for (const [index, rawJob] of parsed.entries()) {
+    if (rawJob === null || typeof rawJob !== "object") continue;
+    const row = rawJob as Record<string, unknown>;
+    const snapshot = Object.hasOwn(rawJob, "sourceAdmission")
+      ? parseDownloadSourceAdmissionSnapshotV1((rawJob as { sourceAdmission: unknown }).sourceAdmission)
+      : undefined;
+    normalizePrivateStateAliases(row, snapshot);
+    if (snapshot) canonicalSnapshots.push({ index, snapshot });
+    validateSelectedAddonIdentities(row, snapshot);
+    const cursor = Object.hasOwn(rawJob, "travelCursor")
+      ? parseTravelContinuationCursorV1((rawJob as { travelCursor: unknown }).travelCursor)
+      : undefined;
+    if (cursor !== undefined) {
+      if (!supportsTravelCursor(rawJob as DownloadJob, snapshot)) {
+        throw new Error("The Travel continuation cursor is misplaced.");
+      }
+      canonicalCursors.push({ index, cursor });
+    }
+    const rulesCursor = Object.hasOwn(rawJob, "rulesCursor")
+      ? parseRulesContinuationCursorV1((rawJob as { rulesCursor: unknown }).rulesCursor)
+      : undefined;
+    if (rulesCursor !== undefined) {
+      if (!supportsRulesCursor(rawJob as DownloadJob, snapshot)) {
+        throw new Error("The rules continuation cursor is misplaced.");
+      }
+      canonicalRulesCursors.push({ index, cursor: rulesCursor });
+    }
+    if (Object.hasOwn(rawJob, "sourceFallbackAttempts")) {
+      const attempts = (rawJob as { sourceFallbackAttempts: unknown }).sourceFallbackAttempts;
+      if (!isExecutableDownloadSnapshot(snapshot) || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
+        || attempts > SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+        throw new Error("The selected source fallback count is invalid.");
+      }
+      canonicalSourceFallbackAttempts.push({ index, attempts });
+    }
+    if (Object.hasOwn(rawJob, "travelTemporaryFailures")) {
+      const failures = (rawJob as { travelTemporaryFailures: unknown }).travelTemporaryFailures;
+      if (cursor === undefined || typeof failures !== "number" || !Number.isSafeInteger(failures) || failures < 0
+        || failures > TRAVEL_TEMPORARY_FAILURE_LIMIT) {
+        throw new Error("The Travel temporary-failure count is invalid.");
+      }
+      canonicalTemporaryFailures.push({ index, failures });
+    }
+    if (Object.hasOwn(rawJob, "travelBudgetAttempts")) {
+      const attempts = (rawJob as { travelBudgetAttempts: unknown }).travelBudgetAttempts;
+      if (cursor === undefined || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
+        || attempts > TRAVEL_BUDGET_ATTEMPT_LIMIT) {
+        throw new Error("The Travel budget-attempt count is invalid.");
+      }
+      canonicalBudgetAttempts.push({ index, attempts });
+    }
+    if (Object.hasOwn(rawJob, "rulesTemporaryFailures")) {
+      const failures = (rawJob as { rulesTemporaryFailures: unknown }).rulesTemporaryFailures;
+      if (rulesCursor === undefined || typeof failures !== "number" || !Number.isSafeInteger(failures) || failures < 0
+        || failures > RULES_TEMPORARY_FAILURE_LIMIT) {
+        throw new Error("The rules temporary-failure count is invalid.");
+      }
+      canonicalRulesTemporaryFailures.push({ index, failures });
+    }
+    if (Object.hasOwn(rawJob, "rulesBudgetAttempts")) {
+      const attempts = (rawJob as { rulesBudgetAttempts: unknown }).rulesBudgetAttempts;
+      if (rulesCursor === undefined || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
+        || attempts > RULES_BUDGET_ATTEMPT_LIMIT) {
+        throw new Error("The rules budget-attempt count is invalid.");
+      }
+      canonicalRulesBudgetAttempts.push({ index, attempts });
+    }
+    if (Object.hasOwn(rawJob, "reusedLocalCopy")) {
+      const entry = rawJob as Record<string, unknown>;
+      const source = entry.source as Record<string, unknown> | undefined;
+      const target = typeof entry.target === "string" ? parseLibraryPath(entry.target) : undefined;
+      if (entry.reusedLocalCopy !== true || entry.status !== "completed"
+        || !Object.hasOwn(entry, "sourceAdmission")
+        || !source || typeof source !== "object" || Array.isArray(source)
+        || typeof source.type !== "string" || typeof source.videoId !== "string"
+        || Object.hasOwn(entry, "stream")
+        || !target || typeof entry.libraryId !== "string" || target.libraryId !== entry.libraryId) {
+        throw new Error("The reused local-copy marker is misplaced.");
+      }
+    }
+  }
+  const jobs = parsed as DownloadJob[];
+  for (const { index, snapshot } of canonicalSnapshots) jobs[index]!.sourceAdmission = snapshot;
+  for (const { index, cursor } of canonicalCursors) jobs[index]!.travelCursor = cursor;
+  for (const { index, cursor } of canonicalRulesCursors) jobs[index]!.rulesCursor = cursor;
+  for (const { index, attempts } of canonicalSourceFallbackAttempts) jobs[index]!.sourceFallbackAttempts = attempts;
+  for (const { index, failures } of canonicalTemporaryFailures) jobs[index]!.travelTemporaryFailures = failures;
+  for (const { index, attempts } of canonicalBudgetAttempts) jobs[index]!.travelBudgetAttempts = attempts;
+  for (const { index, failures } of canonicalRulesTemporaryFailures) jobs[index]!.rulesTemporaryFailures = failures;
+  for (const { index, attempts } of canonicalRulesBudgetAttempts) jobs[index]!.rulesBudgetAttempts = attempts;
+  return jobs;
+}
+
 export class DownloadQueue {
   private jobs: DownloadJob[] = [];
+  private database?: AppDatabase;
+  private loaded = false;
+  private persisted = new Map<string, { position: number; json: string }>();
   private active = new Map<string, AbortController>();
   /** The transfers still in flight, so stop() can wait for their last state write. */
   private running = new Set<Promise<void>>();
@@ -814,145 +925,214 @@ export class DownloadQueue {
     await this.saveChain;
   }
 
-  async load() {
-    await mkdir(path.dirname(this.stateFile), { recursive: true });
-    await mkdir(this.downloadDir, { recursive: true });
+  attachDatabase(database: AppDatabase): void {
+    if (this.loaded) throw new Error("The download queue database must be attached before load.");
+    this.database = database;
+  }
+
+  private markQueueUnreadable(message: string, error: unknown, context: Record<string, unknown> = {}) {
+    this.unreadable = true;
+    log("ERROR", message, {
+      ...context,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  private queueMarkerStatement(marker: Record<string, unknown>): Statement {
+    return {
+      sql: "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+      params: [`domain.${DOWNLOAD_QUEUE_DOMAIN}`, JSON.stringify(marker)],
+    };
+  }
+
+  private async moveQueueFileAside(database: AppDatabase, suffix: string): Promise<void> {
+    await moveToMigrationBackup(
+      this.stateFile,
+      path.dirname(database.info.file),
+      `downloads-${suffix}.json`,
+    );
+  }
+
+  private async loadDatabase(database: AppDatabase): Promise<boolean> {
+    let marker: { value: string } | undefined;
+    try {
+      marker = await database.get<{ value: string }>(
+        "SELECT value FROM meta WHERE key = ?",
+        [`domain.${DOWNLOAD_QUEUE_DOMAIN}`],
+      );
+    } catch (error) {
+      this.markQueueUnreadable("The download queue database could not be read", error);
+      return false;
+    }
+
+    if (marker) {
+      try {
+        const rows = await database.all<{ id: string; position: number; data: string }>(
+          "SELECT id, position, data FROM download_jobs ORDER BY position",
+        );
+        const parsed = rows.map((row) => {
+          if (typeof row.id !== "string" || !Number.isSafeInteger(row.position) || typeof row.data !== "string") {
+            throw new Error("A download queue row is malformed.");
+          }
+          const job = JSON.parse(row.data) as unknown;
+          if (!job || typeof job !== "object" || Array.isArray(job) || (job as { id?: unknown }).id !== row.id) {
+            throw new Error("A download queue row does not contain its job.");
+          }
+          return job;
+        });
+        this.jobs = parseQueueJobs(parsed);
+        this.persisted = new Map(rows.map((row) => [row.id, { position: row.position, json: row.data }]));
+      } catch (error) {
+        this.markQueueUnreadable("The download queue database could not be read", error);
+        return false;
+      }
+      await this.moveQueueFileAside(database, String(this.now()));
+      return true;
+    }
+
+    const state = await readStateFile(this.stateFile);
+    if (state.kind === "unreadable") {
+      this.markQueueUnreadable("The queue state could not be read, it is left as it is", state.error, { file: this.stateFile });
+      return false;
+    }
+    if (state.kind === "absent") {
+      try {
+        const markerStatement = this.queueMarkerStatement({
+          importedAt: this.now(),
+          source: path.basename(this.stateFile),
+          count: 0,
+        });
+        await database.run(markerStatement.sql, markerStatement.params);
+      } catch (error) {
+        this.markQueueUnreadable("The download queue could not be imported", error);
+        return false;
+      }
+      this.jobs = [];
+      this.persisted.clear();
+      return true;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(state.raw);
+    } catch (error) {
+      return await this.importDamagedQueue(database, state.raw, error);
+    }
+    if (!Array.isArray(parsed)) {
+      return await this.importDamagedQueue(database, state.raw, new Error("The queue state is not a list."));
+    }
+
+    let jobs: DownloadJob[];
+    try {
+      jobs = parseQueueJobs(parsed);
+    } catch (error) {
+      this.markQueueUnreadable("The queue contains an invalid private source state", error, { file: this.stateFile });
+      return false;
+    }
+
+    const importedAt = this.now();
+    const statements: Statement[] = jobs.map((job, position) => ({
+      sql: DOWNLOAD_JOB_UPSERT,
+      params: [job.id, position, JSON.stringify(job)],
+    }));
+    statements.push(this.queueMarkerStatement({
+      importedAt,
+      source: path.basename(this.stateFile),
+      count: jobs.length,
+    }));
+    try {
+      await database.batch(statements);
+    } catch (error) {
+      this.markQueueUnreadable("The download queue could not be imported", error);
+      return false;
+    }
+    this.jobs = jobs;
+    this.persisted = new Map(jobs.map((job, position) => [job.id, { position, json: JSON.stringify(job) }]));
+    await this.moveQueueFileAside(database, String(importedAt));
+    return true;
+  }
+
+  private async importDamagedQueue(database: AppDatabase, raw: string, error: unknown): Promise<boolean> {
+    try {
+      const preserved = await preserveDamaged(this.stateFile, raw);
+      log("ERROR", "The queue state was damaged, it was copied aside and the queue starts empty", {
+        file: path.basename(preserved),
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      const marker = this.queueMarkerStatement({
+        importedAt: this.now(),
+        source: "unreadable",
+        count: 0,
+      });
+      await database.run(marker.sql, marker.params);
+      this.jobs = [];
+      this.persisted.clear();
+      await this.moveQueueFileAside(database, `unreadable-${this.now()}`);
+      return true;
+    } catch (importError) {
+      this.markQueueUnreadable("The download queue could not be imported", importError);
+      return false;
+    }
+  }
+
+  private async loadFile(): Promise<boolean> {
     const state = await readStateFile(this.stateFile);
     if (state.kind === "unreadable") {
       this.unreadable = true;
-      log("ERROR", "The queue state could not be read, it is left as it is", { file: this.stateFile, reason: state.error instanceof Error ? state.error.message : String(state.error) });
-      return;
+      log("ERROR", "The queue state could not be read, it is left as it is", {
+        file: this.stateFile,
+        reason: state.error instanceof Error ? state.error.message : String(state.error),
+      });
+      return false;
     }
-    if (state.kind === "read") {
-      let parsed: unknown = undefined;
-      let isList = false;
+    if (state.kind !== "read") return true;
+
+    let parsed: unknown = undefined;
+    let isList = false;
+    try {
+      parsed = JSON.parse(state.raw);
+      isList = Array.isArray(parsed);
+    } catch {
+      isList = false;
+    }
+    if (isList) {
       try {
-        parsed = JSON.parse(state.raw);
-        isList = Array.isArray(parsed);
-      } catch { isList = false; }
-      if (isList) {
-        const canonicalSnapshots: Array<{ index: number; snapshot: SourceAdmissionSnapshotV1 }> = [];
-        const canonicalCursors: Array<{ index: number; cursor: TravelContinuationCursorV1 }> = [];
-        const canonicalRulesCursors: Array<{ index: number; cursor: RulesContinuationCursorV1 }> = [];
-        const canonicalSourceFallbackAttempts: Array<{ index: number; attempts: number }> = [];
-        const canonicalTemporaryFailures: Array<{ index: number; failures: number }> = [];
-        const canonicalBudgetAttempts: Array<{ index: number; attempts: number }> = [];
-        const canonicalRulesTemporaryFailures: Array<{ index: number; failures: number }> = [];
-        const canonicalRulesBudgetAttempts: Array<{ index: number; attempts: number }> = [];
-        try {
-          for (const [index, rawJob] of (parsed as unknown[]).entries()) {
-            if (rawJob === null || typeof rawJob !== "object") continue;
-            const row = rawJob as Record<string, unknown>;
-            const snapshot = Object.hasOwn(rawJob, "sourceAdmission")
-              ? parseDownloadSourceAdmissionSnapshotV1((rawJob as { sourceAdmission: unknown }).sourceAdmission)
-              : undefined;
-            normalizePrivateStateAliases(row, snapshot);
-            if (snapshot) canonicalSnapshots.push({ index, snapshot });
-            validateSelectedAddonIdentities(row, snapshot);
-            const cursor = Object.hasOwn(rawJob, "travelCursor")
-              ? parseTravelContinuationCursorV1((rawJob as { travelCursor: unknown }).travelCursor)
-              : undefined;
-            if (cursor !== undefined) {
-              if (!supportsTravelCursor(rawJob as DownloadJob, snapshot)) {
-                throw new Error("The Travel continuation cursor is misplaced.");
-              }
-              canonicalCursors.push({ index, cursor });
-            }
-            const rulesCursor = Object.hasOwn(rawJob, "rulesCursor")
-              ? parseRulesContinuationCursorV1((rawJob as { rulesCursor: unknown }).rulesCursor)
-              : undefined;
-            if (rulesCursor !== undefined) {
-              if (!supportsRulesCursor(rawJob as DownloadJob, snapshot)) {
-                throw new Error("The rules continuation cursor is misplaced.");
-              }
-              canonicalRulesCursors.push({ index, cursor: rulesCursor });
-            }
-            if (Object.hasOwn(rawJob, "sourceFallbackAttempts")) {
-              const attempts = (rawJob as { sourceFallbackAttempts: unknown }).sourceFallbackAttempts;
-              if (!isExecutableDownloadSnapshot(snapshot) || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
-                || attempts > SOURCE_FALLBACK_ATTEMPT_LIMIT) {
-                throw new Error("The selected source fallback count is invalid.");
-              }
-              canonicalSourceFallbackAttempts.push({ index, attempts });
-            }
-            if (Object.hasOwn(rawJob, "travelTemporaryFailures")) {
-              const failures = (rawJob as { travelTemporaryFailures: unknown }).travelTemporaryFailures;
-              if (cursor === undefined || typeof failures !== "number" || !Number.isSafeInteger(failures) || failures < 0
-                || failures > TRAVEL_TEMPORARY_FAILURE_LIMIT) {
-                throw new Error("The Travel temporary-failure count is invalid.");
-              }
-              canonicalTemporaryFailures.push({ index, failures });
-            }
-            if (Object.hasOwn(rawJob, "travelBudgetAttempts")) {
-              const attempts = (rawJob as { travelBudgetAttempts: unknown }).travelBudgetAttempts;
-              if (cursor === undefined || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
-                || attempts > TRAVEL_BUDGET_ATTEMPT_LIMIT) {
-                throw new Error("The Travel budget-attempt count is invalid.");
-              }
-              canonicalBudgetAttempts.push({ index, attempts });
-            }
-            if (Object.hasOwn(rawJob, "rulesTemporaryFailures")) {
-              const failures = (rawJob as { rulesTemporaryFailures: unknown }).rulesTemporaryFailures;
-              if (rulesCursor === undefined || typeof failures !== "number" || !Number.isSafeInteger(failures) || failures < 0
-                || failures > RULES_TEMPORARY_FAILURE_LIMIT) {
-                throw new Error("The rules temporary-failure count is invalid.");
-              }
-              canonicalRulesTemporaryFailures.push({ index, failures });
-            }
-            if (Object.hasOwn(rawJob, "rulesBudgetAttempts")) {
-              const attempts = (rawJob as { rulesBudgetAttempts: unknown }).rulesBudgetAttempts;
-              if (rulesCursor === undefined || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
-                || attempts > RULES_BUDGET_ATTEMPT_LIMIT) {
-                throw new Error("The rules budget-attempt count is invalid.");
-              }
-              canonicalRulesBudgetAttempts.push({ index, attempts });
-            }
-            if (Object.hasOwn(rawJob, "reusedLocalCopy")) {
-              const row = rawJob as Record<string, unknown>;
-              const source = row.source as Record<string, unknown> | undefined;
-              const target = typeof row.target === "string" ? parseLibraryPath(row.target) : undefined;
-              if (row.reusedLocalCopy !== true || row.status !== "completed"
-                || !Object.hasOwn(row, "sourceAdmission")
-                || !source || typeof source !== "object" || Array.isArray(source)
-                || typeof source.type !== "string" || typeof source.videoId !== "string"
-                || Object.hasOwn(row, "stream")
-                || !target || typeof row.libraryId !== "string" || target.libraryId !== row.libraryId) {
-                throw new Error("The reused local-copy marker is misplaced.");
-              }
-            }
-          }
-        } catch (error) {
-          this.unreadable = true;
-          log("ERROR", "The queue contains an invalid private source state", {
-            file: this.stateFile,
-            reason: error instanceof SourceAdmissionValidationError
-              ? "invalid source admission snapshot"
-              : "private source state could not be validated",
-          });
-          return;
-        }
-        const jobs = parsed as DownloadJob[];
-        for (const { index, snapshot } of canonicalSnapshots) jobs[index]!.sourceAdmission = snapshot;
-        for (const { index, cursor } of canonicalCursors) jobs[index]!.travelCursor = cursor;
-        for (const { index, cursor } of canonicalRulesCursors) jobs[index]!.rulesCursor = cursor;
-        for (const { index, attempts } of canonicalSourceFallbackAttempts) jobs[index]!.sourceFallbackAttempts = attempts;
-        for (const { index, failures } of canonicalTemporaryFailures) jobs[index]!.travelTemporaryFailures = failures;
-        for (const { index, attempts } of canonicalBudgetAttempts) jobs[index]!.travelBudgetAttempts = attempts;
-        for (const { index, failures } of canonicalRulesTemporaryFailures) jobs[index]!.rulesTemporaryFailures = failures;
-        for (const { index, attempts } of canonicalRulesBudgetAttempts) jobs[index]!.rulesBudgetAttempts = attempts;
-        this.jobs = jobs;
-      } else {
-        try {
-          const preserved = await preserveDamaged(this.stateFile, state.raw);
-          log("ERROR", "The queue state was damaged, it was copied aside and the queue starts empty", { file: path.basename(preserved) });
-          this.jobs = [];
-        } catch (error) {
-          this.unreadable = true;
-          log("ERROR", "The queue state could not be read, it is left as it is", { file: this.stateFile, reason: error instanceof Error ? error.message : String(error) });
-          return;
-        }
+        this.jobs = parseQueueJobs(parsed);
+      } catch (error) {
+        this.unreadable = true;
+        log("ERROR", "The queue contains an invalid private source state", {
+          file: this.stateFile,
+          reason: error instanceof SourceAdmissionValidationError
+            ? "invalid source admission snapshot"
+            : "private source state could not be validated",
+        });
+        return false;
       }
+      return true;
     }
+
+    try {
+      const preserved = await preserveDamaged(this.stateFile, state.raw);
+      log("ERROR", "The queue state was damaged, it was copied aside and the queue starts empty", { file: path.basename(preserved) });
+      this.jobs = [];
+      return true;
+    } catch (error) {
+      this.unreadable = true;
+      log("ERROR", "The queue state could not be read, it is left as it is", {
+        file: this.stateFile,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  async load() {
+    this.loaded = true;
+    await mkdir(path.dirname(this.stateFile), { recursive: true });
+    await mkdir(this.downloadDir, { recursive: true });
+    if (this.database) {
+      if (!await this.loadDatabase(this.database)) return;
+    } else if (!await this.loadFile()) return;
     for (const job of this.jobs) {
       if (job.status === "downloading" || job.status === "checking") job.status = "queued";
       job.updatedAt ??= job.createdAt;
@@ -2092,6 +2272,24 @@ export class DownloadQueue {
       if (this.unreadable) return;
       await change?.apply();
       try {
+        if (this.database) {
+          const statements: Statement[] = [];
+          const next = new Map<string, { position: number; json: string }>();
+          for (const [position, job] of this.jobs.entries()) {
+            const json = JSON.stringify(job);
+            next.set(job.id, { position, json });
+            const stored = this.persisted.get(job.id);
+            if (!stored || stored.position !== position || stored.json !== json) {
+              statements.push({ sql: DOWNLOAD_JOB_UPSERT, params: [job.id, position, json] });
+            }
+          }
+          for (const id of this.persisted.keys()) {
+            if (!next.has(id)) statements.push({ sql: "DELETE FROM download_jobs WHERE id = ?", params: [id] });
+          }
+          if (statements.length) await this.database.batch(statements);
+          this.persisted = next;
+          return;
+        }
         const tmp = `${this.stateFile}.tmp`;
         await this.writeState(tmp, JSON.stringify(this.jobs, null, 2));
         await renameWithRetry(tmp, this.stateFile);
