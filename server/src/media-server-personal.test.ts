@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -409,6 +409,19 @@ test("repeated local progress over one item costs the provider nothing inside th
     assert.equal((await harness.personal.read(harness.admin, harness.libraryId, "m1")).position, 20, "the account's own state is read locally");
     assert.equal(providerCalls(harness, "detail"), read.detail);
     assert.equal(JSON.stringify(harness.store.userData(ADA).remoteMedia).includes('"position":20'), true, "and the write landed in the state");
+  });
+});
+
+test("an unchanged final media-server report flushes the deferred position before answering", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600 });
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true });
+
+    const saved = JSON.parse(await readFile(path.join(harness.dir, "state.json"), "utf8")) as {
+      userData?: Record<string, { remoteMedia?: Record<string, { itemId?: string; position?: number }> }>;
+    };
+    const row = Object.values(saved.userData?.[ADA]?.remoteMedia ?? {}).find((item) => item.itemId === "m1");
+    assert.equal(row?.position, 120);
   });
 });
 

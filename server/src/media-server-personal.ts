@@ -486,6 +486,7 @@ export class MediaServerPersonal {
     const previous = validRecord(this.mapOf(resolved.userId)[resolved.key]);
     const record = this.build(previous, resolved, patch, this.store.prefs(resolved.userId).trackProgress, written.title);
     if (previous && sameRemoteRecord(previous, record)) {
+      if (patch.final === true) await this.store.flush();
       return stateOf(previous, watchlistOf(this.store.userData(resolved.userId)));
     }
     let state!: RemoteItemState;

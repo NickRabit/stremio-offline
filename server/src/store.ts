@@ -557,29 +557,33 @@ export class Store {
     this.chain = write.catch(() => undefined);
     return write;
   }
-  /** Applies a change in memory now and writes it once within `maxDelayMs`. A crash can lose
-   *  up to that delay for a position whose playback has not ended. */
+  /** Applies a change in memory after the writes already queued and writes it once within
+   *  `maxDelayMs`. A crash can lose up to that delay for a position whose playback has not ended. */
   async updateLater(mutator: (state: State) => void, maxDelayMs = 60_000): Promise<void> {
-    const before = structuredClone(this.state);
-    try {
-      mutator(this.state);
-    } catch (error) {
-      this.state = before;
-      throw error;
-    }
-    this.deferredPending = true;
-    this.deferredRevision += 1;
-    this.deferredDelayMs = Number.isFinite(maxDelayMs) && maxDelayMs > 0 ? maxDelayMs : 60_000;
-    const due = Date.now() + this.deferredDelayMs;
-    if (this.deferredTimer && this.deferredDueAt !== undefined && this.deferredDueAt <= due) return;
-    if (this.deferredTimer) clearTimeout(this.deferredTimer);
-    this.deferredDueAt = due;
-    this.deferredTimer = setTimeout(() => {
-      this.deferredTimer = undefined;
-      this.deferredDueAt = undefined;
-      void this.writeDeferred();
-    }, this.deferredDelayMs);
-    this.deferredTimer.unref?.();
+    const apply = this.chain.then(() => {
+      const before = structuredClone(this.state);
+      try {
+        mutator(this.state);
+      } catch (error) {
+        this.state = before;
+        throw error;
+      }
+      this.deferredPending = true;
+      this.deferredRevision += 1;
+      this.deferredDelayMs = Number.isFinite(maxDelayMs) && maxDelayMs > 0 ? maxDelayMs : 60_000;
+      const due = Date.now() + this.deferredDelayMs;
+      if (this.deferredTimer && this.deferredDueAt !== undefined && this.deferredDueAt <= due) return;
+      if (this.deferredTimer) clearTimeout(this.deferredTimer);
+      this.deferredDueAt = due;
+      this.deferredTimer = setTimeout(() => {
+        this.deferredTimer = undefined;
+        this.deferredDueAt = undefined;
+        void this.writeDeferred();
+      }, this.deferredDelayMs);
+      this.deferredTimer.unref?.();
+    });
+    this.chain = apply.catch(() => undefined);
+    return apply;
   }
   private clearDeferred(): void {
     if (this.deferredTimer) clearTimeout(this.deferredTimer);

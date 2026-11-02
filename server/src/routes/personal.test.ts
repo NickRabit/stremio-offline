@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -314,6 +314,52 @@ test("progress route write counts come from the state writer", async (t) => {
 
   await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { ...report, position: 122, final: true } });
   assert.equal(writes, 3, "a final report writes before answering");
+});
+
+test("an unchanged final progress report flushes a deferred position before answering", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "personal-progress-final-"));
+  const store = new Store(directory, path.join(directory, "downloads"));
+  await store.load();
+  const harness = await mount([], store);
+  t.after(async () => {
+    await harness.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const report = { key: "movie:tt1", position: 120, duration: 3600, title: "Heat" };
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { ...report, final: true } });
+
+  const saved = JSON.parse(await readFile(path.join(directory, "state.json"), "utf8")) as {
+    userData?: Record<string, { progress?: Record<string, { position?: number }> }>;
+  };
+  assert.equal(saved.userData?.[ALICE]?.progress?.["movie:tt1"]?.position, 120);
+});
+
+test("an unchanged periodic progress report causes no write", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "personal-progress-periodic-"));
+  let writes = 0;
+  const store = new Store(directory, path.join(directory, "downloads"), {
+    writeState: async (file, data) => {
+      writes += 1;
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
+  await store.load();
+  const harness = await mount([], store);
+  t.after(async () => {
+    await harness.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const report = { key: "movie:tt1", position: 120, duration: 3600, title: "Heat" };
+
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+  await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: report });
+
+  assert.equal(writes, 0, "neither periodic report writes before its delay");
+  assert.equal(harness.deferredUpdates, 1, "the unchanged report does not add another deferred change");
+  await store.flush();
+  assert.equal(writes, 1, "only the original deferred position is written");
 });
 
 const SOURCE_KEY = "t:0123456789abcdef01234567";

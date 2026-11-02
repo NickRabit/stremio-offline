@@ -718,6 +718,42 @@ test("updateLater changes memory at once and coalesces many calls into one write
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("a failed update cannot roll back a deferred change queued behind it", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-later-"));
+  let started!: () => void;
+  let release!: () => void;
+  const writeStarted = new Promise<void>((resolve) => { started = resolve; });
+  const writeHeld = new Promise<void>((resolve) => { release = resolve; });
+  let writes = 0;
+  const store = new Store(directory, undefined, {
+    writeState: async (file, data) => {
+      writes += 1;
+      if (writes === 1) {
+        started();
+        await writeHeld;
+        throw new Error("update failed");
+      }
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
+  try {
+    await store.load();
+    const failingUpdate = store.update((state) => { state.settings.logLevel = "WARN"; });
+    const rejected = assert.rejects(failingUpdate, /update failed/);
+    await writeStarted;
+
+    const deferred = store.updateLater((state) => { state.settings.logLevel = "DEBUG"; }, 60_000);
+    release();
+    await rejected;
+    await deferred;
+
+    assert.equal(store.settings().logLevel, "DEBUG", "the newer deferred change survives the failed update");
+    await store.flush();
+    const saved = JSON.parse(await readFile(path.join(directory, "state.json"), "utf8")) as { settings: { logLevel?: string } };
+    assert.equal(saved.settings.logLevel, "DEBUG", "the deferred write persists the surviving change");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("an update between deferred calls writes and clears their debt", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-later-"));
   let writes = 0;
