@@ -76,4 +76,35 @@ class CatalogOriginLocalTest {
     assertEquals("file:$second", target.key)
     assertNull(target.sourceId)
   }
+
+  @Test
+  fun `a card's episode still plays its own copy when the catalogue does not answer`() {
+    val path = "Shows/Show/Show.S02E03.mkv"
+    val api = FakeTvApi().apply {
+      settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", streamSort = "recommended", realDebridConfigured = true)
+      // No metaValues: the metadata provider fails, so the catalogue lists no episodes at all.
+      localStreamsValues["series:tt9:2:3"] = listOf(local("ep", path))
+    }
+    compose.setContent {
+      CatalogDetailScreen(
+        api = api,
+        args = CatalogDetailArgs(
+          meta = MetaDto(id = "tt9", type = "series"),
+          addonName = "",
+          type = "series",
+          episode = cz.stremiooffline.tv.catalog.ResumeEpisode("series:tt9:2:3", 2, 3),
+          preferredLocalPath = path,
+        ),
+        imageUrl = { null },
+        onPlay = { played += it },
+        onBack = {},
+      )
+    }
+    compose.waitUntil(5_000) { api.localStreamsRequests.contains("series:tt9:2:3") }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).performKeyInput { pressKey(Key.DirectionCenter) }
+
+    assertEquals(path, played.single().path)
+  }
 }
