@@ -82,7 +82,7 @@ import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { LibrarySeenStore } from "./library-seen.js";
-import { localCopies } from "./local-sources.js";
+import { localCopies, localTitleIds } from "./local-sources.js";
 import {
   findAdequateExistingLocalCopy,
   sidecarLanguage,
@@ -1359,7 +1359,12 @@ registerCatalogRoutes(app, {
   localCopies: async (type, id, viewer) => {
     const visible = visibleLibraries(store.libraries(), viewer);
     const [files, units] = await Promise.all([libraryFiles({ stale: true }), libraryUnits({ stale: true })]);
-    const copies = localCopies({ type, id, files, units, records: metaStore.qualifiedMeta(), libraries: visible });
+    const visibleIds = new Set(visible.map((library) => library.id));
+    const records = Object.fromEntries(Object.entries(metaStore.qualifiedMeta())
+      .filter(([key]) => visibleIds.has(parseLibraryPath(key)?.libraryId ?? "")));
+    const apiKey = store.settings().tmdbApiKey;
+    const titleIds = await localTitleIds(type, id, records, apiKey ? { apiKey, language: "en" } : undefined);
+    const copies = localCopies({ type, id, titleIds, files, units, records, libraries: visible });
     const names = new Map(visible.map((library) => [library.id, library.name]));
     return copies.map((copy) => ({
       key: copy.key, libraryId: copy.libraryId, libraryName: names.get(copy.libraryId) ?? "",

@@ -723,8 +723,17 @@ export async function browseDirectory(root: string, relative: string, query = ""
 
   // The filter has to run before paging. Otherwise a favourite on the second page would
   // never be seen and the total would be wrong.
-  const ordered = sortFiles(mixed, sort, descending, seed)
-    .filter((item) => !onlyPaths || onlyPaths.has(item.path));
+  const eligible = mixed.filter((item) => !onlyPaths || onlyPaths.has(item.path));
+  const folders = new Set(eligible.filter((item) => item.folder).map((item) => item.path));
+  const distinct = query.trim() ? eligible.filter((item) => {
+    let parent = path.posix.dirname(item.path);
+    while (parent && parent !== ".") {
+      if (folders.has(parent)) return false;
+      parent = path.posix.dirname(parent);
+    }
+    return true;
+  }) : eligible;
+  const ordered = sortFiles(distinct, sort, descending, seed);
   const page = ordered.slice(skip, skip + limit);
 
   const items: BrowseItem[] = [];
