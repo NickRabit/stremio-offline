@@ -376,7 +376,12 @@ open class FakeTvApi : TvApi {
     return libraryTitleValues[path]
   }
 
-  override suspend fun progress(key: String): ProgressDto? = progressValues[key]
+  val progressRequests: MutableList<String> = mutableListOf()
+
+  override suspend fun progress(key: String): ProgressDto? {
+    progressRequests += key
+    return progressValues[key]
+  }
 
   override suspend fun catalogs(): List<CatalogDto> {
     if (failCatalogs) throw ApiError(ApiFailure.Generic)
@@ -976,7 +981,7 @@ open class FakeTvApi : TvApi {
     stableKey: String?,
     final: Boolean,
   ) {
-    progressSaves += ProgressSave(key, position, duration, title, path, poster, addonKey, remote, stableKey)
+    progressSaves += ProgressSave(key, position, duration, title, path, poster, addonKey, remote, stableKey, final)
   }
 
   /** Every `saveProgress()` call in order, so a test can name the key and the numbers behind it. */
@@ -993,6 +998,7 @@ data class ProgressSave(
   val addonKey: String?,
   val remote: RemoteItemContext?,
   val stableKey: String?,
+  val final: Boolean,
 )
 
 data class CatalogRequest(val addonKey: String, val type: String, val id: String, val skip: Int, val genre: String?)

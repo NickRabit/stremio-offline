@@ -32,10 +32,10 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.OfferedSources
+import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.sourceRowTag
 import cz.stremiooffline.tv.ui.detail.PlayTarget
-import cz.stremiooffline.tv.ui.detail.TagDetailPrimary
 import cz.stremiooffline.tv.ui.player.TAG_OSD_SOURCES
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
@@ -52,8 +52,8 @@ import org.robolectric.annotation.Config
 /**
  * A play started from the library, driven by the remote: a file bound to a catalogue title gets
  * the Sources button under the session and offers the file that is playing plus the addon rows.
- * A file with no binding keeps the player it always had, and a slow binding falls back to that
- * detail after the lookup deadline.
+ * A file with no binding offers only the player's own copy, and a slow binding falls back to its
+ * own-title catalogue detail after the lookup deadline.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-xhdpi")
@@ -166,11 +166,15 @@ class LibraryPlaySourcesShellTest {
 
   @Test
   fun `a library play of an unbound file has no Sources button`() {
-    mount(api())
+    val fake = api()
+    mount(fake)
 
     playFromLibrary()
 
+    // One file of the viewer's own is all there is: nothing to switch to, nothing asked.
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertDoesNotExist()
+    assertEquals(emptyList<String>(), fake.streamSourcesRequests)
+    assertEquals(emptyList<String>(), fake.streamsRequests)
   }
 
   /** The library flow keeps its own list: switching to an addon row inside the player must not
@@ -224,7 +228,7 @@ class LibraryPlaySourcesShellTest {
   }
 
   @Test
-  fun `a slow binding lookup falls back to the library detail after the timeout`() {
+  fun `a slow binding lookup falls back to the own-title detail after the timeout`() {
     val fake = api()
     val gate = CompletableDeferred<Unit>()
     fake.libraryTitleGate = gate
@@ -232,7 +236,7 @@ class LibraryPlaySourcesShellTest {
 
     compose.onNodeWithTag("It").assertIsFocused()
     press(Key.DirectionCenter)
-    compose.waitUntil(5_000) { focused(TagDetailPrimary) }
+    compose.waitUntil(5_000) { focused(TagCatalogPrimary) }
 
     assertTrue(fake.libraryTitleRequests.contains(path))
     assertEquals(emptyList<String>(), fake.startedSources)
