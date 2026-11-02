@@ -11,8 +11,14 @@ import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.playback.Progress
 import kotlinx.coroutines.CancellationException
+
+data class RemoteEpisodes(
+  val videos: List<VideoDto>,
+  val resume: List<HomeCard.Remote>,
+)
 
 /** Where a detail's own data and actions come from, as the web's CatalogueTitleDetail,
  *  LocalLibraryDetail and RemoteLibraryBrowser feed LibraryTitleDetail. */
@@ -48,6 +54,9 @@ interface TitleBackend {
 
   /** Whether To library is offered for [active], and the action when it is; null = the catalogue's. */
   fun toLibrary(active: StreamDto?): LibraryCopy?
+
+  /** Reads the episodes a remote series did not carry when its detail opened. */
+  suspend fun loadEpisodes(api: TvApi): RemoteEpisodes? = null
 }
 
 internal object CatalogueBackend : TitleBackend {
@@ -112,7 +121,7 @@ internal class RemoteBackend(
   val libraryName: String,
   val provider: String,
   val item: RemoteItemDto,
-  val episodes: List<RemoteItemDto> = emptyList(),
+  episodes: List<RemoteItemDto> = emptyList(),
   private val resume: List<HomeCard.Remote> = emptyList(),
   val seriesName: String? = item.seriesName ?: item.name.takeIf { item.type == "series" },
   val seriesIds: RemoteProviderIdsDto? = item.providerIds.takeIf { catalogueIdentity("series", it) != null },
@@ -120,12 +129,18 @@ internal class RemoteBackend(
   override val catalogue = false
 
   private var state: RemoteItemStateDto? = null
+  private var episodeItems = episodes
 
   private fun episodeId(videoId: String): String? =
-    episodes.firstOrNull { remoteVideoId(libraryId, it.id) == videoId }?.id
+    episodeItems.firstOrNull { remoteVideoId(libraryId, it.id) == videoId }?.id
 
   override suspend fun ownRows(api: TvApi, videoId: String): List<StreamDto> {
-    val itemId = if (item.type == "movie") item.id else episodeId(videoId)
+    val itemId = when {
+      item.type == "movie" -> item.id
+      episodeItems.isNotEmpty() -> episodeId(videoId)
+      videoId == remoteMetaId(libraryId, item.id) -> item.id
+      else -> null
+    }
     return itemId?.let { remoteRows(api, libraryId, it) }.orEmpty()
   }
 
@@ -194,7 +209,7 @@ internal class RemoteBackend(
     } catch (_: ApiError) {
       resume.filter { it.libraryId == libraryId }
     }
-    val known = episodes.mapTo(HashSet()) { it.id }
+    val known = episodeItems.mapTo(HashSet()) { it.id }
     return cards.mapNotNull { card ->
       if (card.itemType != "episode" || card.itemId !in known) return@mapNotNull null
       val progress = card.progress ?: return@mapNotNull null
@@ -218,7 +233,7 @@ internal class RemoteBackend(
       origin = BulkOrigin.Remote(libraryId, libraryName, provider, item.id),
       title = seriesName ?: item.name,
       selected = active?.remoteItem?.itemId
-        ?.let { id -> episodes.firstOrNull { it.id == id } }
+        ?.let { id -> episodeItems.firstOrNull { it.id == id } }
         ?.let {
           LibraryCopy.Native(
             libraryId = libraryId,
@@ -230,6 +245,33 @@ internal class RemoteBackend(
         },
     )
     else -> null
+  }
+
+  override suspend fun loadEpisodes(api: TvApi): RemoteEpisodes? {
+    if (item.type != "series") return null
+    val found = remoteEpisodeList(api, libraryId, item.id)
+    episodeItems = found
+    if (found.isEmpty()) return RemoteEpisodes(emptyList(), resume)
+    val cards = try {
+      remoteResumeCards(api, libraryId)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      resume.filter { it.libraryId == libraryId }
+    }
+    return RemoteEpisodes(
+      videos = found.map { episode ->
+        VideoDto(
+          id = remoteVideoId(libraryId, episode.id),
+          title = episode.name,
+          season = episode.season,
+          episode = episode.episode,
+          overview = episode.overview,
+          thumbnail = episode.wide ?: episode.poster,
+        )
+      },
+      resume = cards,
+    )
   }
 }
 
