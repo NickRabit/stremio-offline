@@ -121,6 +121,16 @@ batch, limited to the rows that changed. The one-time JSON imports use the
 `domain.activity` and `domain.traffic` markers and move the old files to
 `migration-backup/`.
 
+### Phase 2c: caches
+
+Library file facts and TMDB id mappings moved from `library/file-facts.json` and
+`tmdb-ids.json` to the `file_facts` and `tmdb_ids` tables. Their in-memory maps
+remain the synchronous read path. A flush upserts only dirty keys and deletes
+rows for evicted or trimmed keys in one batch. The one-time JSON imports use the
+`domain.fileFacts` and `domain.tmdbIds` markers and move the old files to
+`migration-backup/`. Both are caches: an unreadable JSON file or table row is
+discarded and rebuilt by probing or querying the source again.
+
 ### Backup
 
 Backups are offline in this phase: stop the server, then copy the entire data

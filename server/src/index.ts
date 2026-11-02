@@ -184,6 +184,16 @@ await store.load();
 await mediaServers.initialize();
 await metaStore.load();
 await externalIds.load();
+let database: AppDatabase | undefined;
+try {
+  database = await openAppDatabase({ dataDir: process.env.DATA_DIR ?? "/data" });
+  if (database) tmdbIds.attachDatabase(database);
+} catch (error) {
+  log("ERROR", "The application database could not be opened", {
+    code: error instanceof StorageError ? error.code : "sql",
+    reason: error instanceof Error ? error.message : String(error),
+  });
+}
 await tmdbIds.load(path.join(DATA_DIR, "tmdb-ids.json"));
 await attachTitleExtrasDisk(path.join(DATA_DIR, "title-extras"));
 await debridReady.load();
@@ -220,16 +230,7 @@ log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
 configureSecureMode(() => store.settings().secureMode !== false);
 await initLogger(); startLogMaintenance();
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
-let database: AppDatabase | undefined;
-try {
-  database = await openAppDatabase({ dataDir: process.env.DATA_DIR ?? "/data" });
-  images.attachDatabase(database);
-} catch (error) {
-  log("ERROR", "The application database could not be opened", {
-    code: error instanceof StorageError ? error.code : "sql",
-    reason: error instanceof Error ? error.message : String(error),
-  });
-}
+if (database) images.attachDatabase(database);
 await images.load();
 await artworks.load();
 await remoteImages.load();
@@ -1123,6 +1124,7 @@ const durationOfKey = async (key: string): Promise<number | undefined> => {
 /** What each library file holds, read once and remembered until the file changes. */
 const libraryFileFacts = createLibraryFileFacts({
   file: path.join(DATA_DIR, "library", "file-facts.json"),
+  database,
   probe: (key, signal) => probe(mediaPath(key), signal),
 });
 
@@ -2901,7 +2903,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => Promise.allSettled([stats.flush(), stats.activity.flush(), images.flush(), imageStats.flush(), providerStats.flush()]).then(() => database?.close()), () => artworks.flush(), () => metaStore.flush(), () => libraryFileFacts.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  flushes: [() => Promise.allSettled([stats.flush(), stats.activity.flush(), images.flush(), imageStats.flush(), providerStats.flush(), libraryFileFacts.flush(), tmdbIds.flush()]).then(() => database?.close()), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,

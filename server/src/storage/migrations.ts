@@ -30,4 +30,11 @@ export const MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX traffic_events_at ON traffic_events (at)",
     ],
   },
+  {
+    version: 5,
+    statements: [
+      "CREATE TABLE file_facts (key TEXT PRIMARY KEY, size INTEGER NOT NULL, modified TEXT NOT NULL, info TEXT, at INTEGER NOT NULL) STRICT",
+      "CREATE TABLE tmdb_ids (direction TEXT NOT NULL, key TEXT NOT NULL, value TEXT, at INTEGER NOT NULL, PRIMARY KEY (direction, key)) STRICT, WITHOUT ROWID",
+    ],
+  },
 ];

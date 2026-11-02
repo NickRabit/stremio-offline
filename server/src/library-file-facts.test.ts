@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -66,6 +66,25 @@ test("readings survive a restart through the data file", async (t) => {
   const second = createLibraryFileFacts({ file, probe: async () => { reads += 1; return info(); } });
   assert.equal((await second.read([stamp("lib_1/a.mkv")])).get("lib_1/a.mkv")?.audioTracks.length, 2);
   assert.equal(reads, 0);
+});
+
+test("an unchanged reading does not rewrite the JSON file", async (t) => {
+  const file = path.join(await temp(t), "library", "file-facts.json");
+  let reads = 0;
+  const facts = createLibraryFileFacts({
+    file,
+    probe: async () => { reads += 1; return info(); },
+    saveDelayMs: 60_000,
+  });
+  await facts.read([stamp("lib_1/a.mkv")]);
+  await facts.flush();
+  await writeFile(file, "sentinel");
+
+  await facts.read([stamp("lib_1/a.mkv")]);
+  await facts.flush();
+
+  assert.equal(reads, 1);
+  assert.equal(await readFile(file, "utf8"), "sentinel");
 });
 
 test("a file ffprobe cannot read is not asked again until a day has passed", async () => {
