@@ -299,7 +299,7 @@ export class Store {
         await this.update(() => {});
       }
       const personalLoad = this.database ? await this.loadPersonalRows() : undefined;
-      if (personalLoad === "import") await this.writePersisted(true, false);
+      if (personalLoad === "import") await this.writePersisted(true);
     } else {
       this.normalizeSourceProfiles();
       // No state.json was read. With no import marker this is a first start: nothing is imported
@@ -474,7 +474,8 @@ export class Store {
     const raw = await database.all<{ user_id: string; domain: string; key: Uint8Array | string; data: string }>(
       "SELECT user_id, domain, CAST(key AS BLOB) AS key, data FROM personal_rows ORDER BY user_id, domain, key",
     );
-    const utf8 = new TextDecoder("utf-8", { fatal: true });
+    // ignoreBOM: a leading U+FEFF is part of the key, not a byte-order mark to drop.
+    const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
     const stored = raw.map((row) => ({
       ...row,
       key: typeof row.key === "string" ? row.key : utf8.decode(row.key),
@@ -768,7 +769,7 @@ export class Store {
         || Object.prototype.hasOwnProperty.call(this.state, "mediaSecretCleanup");
     }
   }
-  private async writePersisted(forceCold = false, deferJsonFailure = true): Promise<void> {
+  private async writePersisted(forceCold = false): Promise<void> {
     if (!this.database || !this.personalActive) {
       await this.writeJson(JSON.stringify(this.state, null, 2));
       return;
@@ -804,10 +805,15 @@ export class Store {
         await this.database.batch(statements);
         this.persistedRows = nextRows;
       } catch (error) {
-        // state.json holds the change and its journal while the caller rolls memory back.
-        // Retry from memory, which rewrites state.json without the journal.
-        if (deferJsonFailure) this.deferredRetry();
-        throw error;
+        // The journaled state.json is the commit: a restart replays it, so the change has
+        // happened whatever happens next. Rolling memory back now would answer "failed" for a
+        // change the next start completes, so it stands; the rows are retried from memory,
+        // and the journal stays on disk until they land.
+        log("WARN", "Personal changes are saved in state.json and will be written to the database again", {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        this.deferredRetry();
+        return;
       }
       try {
         await this.writeJson(cold);

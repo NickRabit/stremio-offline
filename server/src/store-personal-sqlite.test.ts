@@ -291,7 +291,7 @@ test("deleting an account deletes all of its personal rows", async (t) => {
   assert.equal(await fixtureState.database.get("SELECT COUNT(*) AS count FROM personal_rows WHERE user_id = ?", [BOB]).then((row) => row?.count), 5);
 });
 
-test("a failed row batch after state.json rejects the update and converges both files on flush", async (t) => {
+test("a change to both files whose row batch fails stands, and the rows follow on the next write", async (t) => {
   const fixtureState = await fixture(t);
   await fixtureState.seed();
   const batches: Statement[][] = [];
@@ -299,24 +299,26 @@ test("a failed row batch after state.json rejects the update and converges both 
   const store = new Store(fixtureState.dataDir);
   store.attachDatabase(controlled.database);
   await store.load();
-  const beforeData = structuredClone(store.userData(ADA));
-  const beforeSettings = structuredClone(store.settings());
-  const before = await readFile(fixtureState.file, "utf8");
   controlled.control.failNext = true;
 
-  await assert.rejects(store.update((state) => {
+  // The journaled state.json is the commit, so the update succeeds and memory keeps it.
+  await store.update((state) => {
     state.userData![ADA]!.progress.changed = { position: 1, duration: 2 };
     state.settings.logLevel = "ERROR";
-  }), /database write failed/);
+  });
+  assert.equal(store.settings().logLevel, "ERROR");
+  assert.ok(store.userData(ADA).progress.changed);
+  const journaled = JSON.parse(await readFile(fixtureState.file, "utf8")) as Record<string, unknown>;
+  assert.ok(Array.isArray(journaled.personalPending), "the journal stays until the rows land");
 
-  assert.deepEqual(store.userData(ADA), beforeData);
-  assert.deepEqual(store.settings(), beforeSettings);
   await store.flush();
-  assert.equal(await readFile(fixtureState.file, "utf8"), before, "state.json is back in step with memory");
-  assert.equal(await fixtureState.database.get(
+  const row = await fixtureState.database.get<{ data: string }>(
     "SELECT data FROM personal_rows WHERE user_id = ? AND domain = ? AND key = ?",
     [ADA, "progress", "changed"],
-  ), undefined);
+  );
+  assert.equal(row?.data, JSON.stringify({ position: 1, duration: 2 }));
+  const saved = JSON.parse(await readFile(fixtureState.file, "utf8")) as Record<string, unknown>;
+  assert.equal("personalPending" in saved, false);
 });
 
 test("a failed state.json write writes no rows at all", async (t) => {
@@ -350,10 +352,12 @@ test("an account deletion interrupted after state.json still ends consistent aft
   await store.load();
   controlled.control.failNext = true;
 
-  await assert.rejects(store.update((state) => {
+  // The deletion is answered as done, and it is done whichever moment the process stops.
+  await store.update((state) => {
     state.users = (state.users ?? []).filter((user) => user.id !== BOB);
     delete state.userData![BOB];
-  }), /database write failed/);
+  });
+  assert.equal(store.users().some((user) => user.id === BOB), false);
 
   // The process stops before the deferred retry: a restart reads state.json without Bob.
   const restarted = new Store(fixtureState.dataDir);
@@ -611,10 +615,10 @@ test("a change to both files interrupted before the rows landed is completed at 
   controlled.control.failNext = true;
 
   // Like forgetting a library: the cold state changes and a favourite goes with it.
-  await assert.rejects(store.update((state) => {
+  await store.update((state) => {
     state.settings.logLevel = "ERROR";
     state.userData![ADA]!.favorites = [];
-  }), /database write failed/);
+  });
 
   // The process stops before the deferred retry. The next start finishes the change.
   const restarted = new Store(fixtureState.dataDir);
@@ -669,4 +673,24 @@ test("two keys that differ only after a NUL both survive a restart", async (t) =
   await again.load();
   await again.update((next) => { next.settings.logLevel = "DEBUG"; });
   assert.equal(batches.length, 0);
+});
+
+test("a key that starts with U+FEFF stays distinct from the same key without it", async (t) => {
+  const fixtureState = await fixture(t);
+  const state = seededState();
+  state.userData![ADA]!.watchlist = {
+    "abc": { type: "movie", id: "abc", name: "Plain", addedAt: CREATED },
+    "\uFEFFabc": { type: "movie", id: "\uFEFFabc", name: "Marked", addedAt: CREATED },
+  };
+  await fixtureState.seed(state);
+  const store = new Store(fixtureState.dataDir);
+  store.attachDatabase(fixtureState.database);
+  await store.load();
+
+  const restarted = new Store(fixtureState.dataDir);
+  restarted.attachDatabase(await fixtureState.reopen());
+  await restarted.load();
+  const watchlist = restarted.userData(ADA).watchlist as Record<string, { name: string }>;
+  assert.equal(watchlist["abc"]?.name, "Plain");
+  assert.equal(watchlist["\uFEFFabc"]?.name, "Marked");
 });
