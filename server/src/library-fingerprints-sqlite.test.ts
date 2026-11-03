@@ -142,9 +142,11 @@ test("a time-matched copy with different bytes is rejected after hashing both fi
   const { database, root } = await fixture(t);
   const source = Buffer.from("source bytes");
   await writeFile(path.join(root, "A.mkv"), source);
-  const modified = new Date(Date.now() - 20 * 60_000).toISOString();
-  const when = new Date(modified);
+  const when = new Date(Date.now() - 20 * 60_000);
   await utimes(path.join(root, "A.mkv"), when, when);
+  // The walk reads the time back from the file, as the library walk does: utimes can land a
+  // fraction of a millisecond away from the time it was given.
+  const modified = (await stat(path.join(root, "A.mkv"))).mtime.toISOString();
   const store = new LibraryFingerprints({ now: () => Date.now() });
   store.attachDatabase(database);
   await store.load();
