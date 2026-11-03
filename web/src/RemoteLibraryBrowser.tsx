@@ -209,15 +209,22 @@ const itemFacts = (item: RemoteItem) => {
 /** Mixed libraries keep the provider's folders; a library of one medium flattens to titles. */
 const effectiveMode = (library: RemoteLibrary): RemoteBrowseMode =>
   library.browseMode ?? (library.type === "mixed" ? "folders" : "titles");
-const mergeDetailMeta = (base: RemoteItem, full: RemoteItem): RemoteItem => ({
-  ...base,
-  overview: full.overview ?? base.overview,
-  genres: full.genres?.length ? full.genres : base.genres,
-  year: full.year ?? base.year,
-  durationTicks: full.durationTicks ?? base.durationTicks,
-  size: full.size ?? base.size,
-  addedAt: full.addedAt ?? base.addedAt,
-});
+const mergeDetailMeta = (base: RemoteItem, full: RemoteItem): RemoteItem => {
+  const hasCatalogueId = Boolean(base.providerIds.imdb || base.providerIds.tmdb);
+  return {
+    ...base,
+    ...(hasCatalogueId ? {} : {
+      providerIds: { ...full.providerIds, ...base.providerIds },
+      ...(full.providerIdsMatched ? { providerIdsMatched: true } : {}),
+    }),
+    overview: full.overview ?? base.overview,
+    genres: full.genres?.length ? full.genres : base.genres,
+    year: full.year ?? base.year,
+    durationTicks: full.durationTicks ?? base.durationTicks,
+    size: full.size ?? base.size,
+    addedAt: full.addedAt ?? base.addedAt,
+  };
+};
 const sortFor = (sort: LibraryViewPrefs["sort"]): RemoteItemSort =>
   sort === "added" || sort === "size" ? sort : "name";
 type RemoteItemSort = "name" | "added" | "size";

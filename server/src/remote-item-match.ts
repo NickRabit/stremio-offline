@@ -9,6 +9,7 @@ const MISS_TTL_MS = 6 * 60 * 60 * 1_000;
 const FAILURE_TTL_MS = 10 * 60 * 1_000;
 const MAX_CACHE_ENTRIES = 2_000;
 const MAX_CONCURRENT_SEARCHES = 2;
+const MAX_QUEUED_SEARCHES = 50;
 const DEFAULT_TIMEOUT_MS = 2_000;
 
 interface CachedMatch {
@@ -21,12 +22,15 @@ interface MatchOutcome {
   failed?: boolean;
 }
 
-type MatchItem = Pick<ProviderItem, "id" | "name" | "type" | "providerIds" | "year"> & {
+class MatchQueueFull extends Error {}
+
+type MatchItem = Pick<ProviderItem, "id" | "name" | "type" | "providerIds" | "year" | "musicVideo"> & {
   originalTitle?: string;
 };
 
 interface RemoteItemMatcherOptions {
   timeoutMs?: number;
+  maxQueuedSearches?: number;
 }
 
 const matchableKind = (type: string): type is TitleKind => type === "movie" || type === "series";
@@ -52,6 +56,7 @@ const waitAtMost = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T 
 
 export class RemoteItemMatcher {
   private readonly timeoutMs: number;
+  private readonly maxQueuedSearches: number;
   private readonly cache = new Map<string, CachedMatch>();
   private readonly pending = new Map<string, Promise<MatchOutcome>>();
   private readonly waiting: Array<() => void> = [];
@@ -59,10 +64,11 @@ export class RemoteItemMatcher {
 
   constructor(private readonly candidates: LibraryCandidateSource, options: RemoteItemMatcherOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.maxQueuedSearches = Math.max(0, options.maxQueuedSearches ?? MAX_QUEUED_SEARCHES);
   }
 
   async enrich(libraryId: string, item: PublicRemoteItem, language: string): Promise<PublicRemoteItem> {
-    if (!matchableKind(item.type) || item.providerIds.imdb || item.providerIds.tmdb) return item;
+    if (item.musicVideo || !matchableKind(item.type) || item.providerIds.imdb || item.providerIds.tmdb) return item;
     const key = JSON.stringify([libraryId, item.id, item.name, item.year]);
     const cached = this.cached(key);
     const outcome = cached ? { providerIds: cached.providerIds } : await waitAtMost(this.pendingMatch(key, libraryId, item, language), this.timeoutMs);
@@ -101,6 +107,7 @@ export class RemoteItemMatcher {
         return outcome;
       })
       .catch((error: unknown) => {
+        if (error instanceof MatchQueueFull) return {};
         log("WARN", "The remote item title match failed", {
           libraryId,
           itemId: item.id,
@@ -131,6 +138,7 @@ export class RemoteItemMatcher {
 
   private async bounded<T>(work: () => Promise<T>): Promise<T> {
     if (this.activeSearches >= MAX_CONCURRENT_SEARCHES) {
+      if (this.waiting.length >= this.maxQueuedSearches) throw new MatchQueueFull();
       await new Promise<void>((resolve) => { this.waiting.push(resolve); });
     }
     this.activeSearches += 1;
@@ -143,7 +151,7 @@ export class RemoteItemMatcher {
   }
 
   private async search(libraryId: string, item: MatchItem, language: string): Promise<MatchOutcome> {
-    if (!matchableKind(item.type)) return {};
+    if (item.musicVideo || !matchableKind(item.type)) return {};
     const kind = item.type;
     const parsed = parsedFromRemoteItem(item);
     const title = parsed.title || parsed.query;
@@ -153,7 +161,7 @@ export class RemoteItemMatcher {
       const found = await this.candidates.searchLibraryCandidates(
         title,
         kind,
-        item.year ?? undefined,
+        parsed.year,
         language,
         originalTitle ? [originalTitle] : [],
       );

@@ -129,6 +129,7 @@ interface FakeCandidates extends LibraryCandidateSource {
   results: LibraryCandidate[];
   calls: Array<{ query: string; kind: string; year: number | undefined; language: string; extraQueries: string[] }>;
   hold?: Promise<void>;
+  failure?: Error;
 }
 
 const fakeCandidates = (): FakeCandidates => {
@@ -137,6 +138,7 @@ const fakeCandidates = (): FakeCandidates => {
     calls: [],
     searchLibraryCandidates: async (query, kind, year, language, extraQueries = []) => {
       candidates.calls.push({ query, kind, year, language, extraQueries: [...extraQueries] });
+      if (candidates.failure) throw candidates.failure;
       await candidates.hold;
       return structuredClone(candidates.results);
     },
@@ -406,6 +408,30 @@ test("remote detail maps a resolved TMDB-only catalogue identity to providerIds.
   });
 });
 
+test("remote detail never matches a music video as a film", async () => {
+  await withHarness(async (harness) => {
+    harness.server.detailOf.clip = {
+      id: "clip",
+      name: "A Music Video",
+      type: "movie",
+      musicVideo: true,
+      providerIds: {},
+      year: 2020,
+    };
+    harness.server.ancestorsOf.clip = ["lib-1"];
+    harness.candidates.results = [{
+      provider: "cinemeta",
+      item: { id: "tt1", type: "movie", name: "A Music Video", releaseInfo: "2020", voteCount: 500 },
+    }];
+
+    const response = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/clip`, { user: BOB });
+    const body = await response.json() as { item: ProviderItem & { providerIdsMatched?: boolean } };
+    assert.deepEqual(body.item.providerIds, {});
+    assert.equal(body.item.providerIdsMatched, undefined);
+    assert.equal(harness.candidates.calls.length, 0);
+  });
+});
+
 test("remote detail matching without a year follows the library's strict rules; a year must be exact", async () => {
   await withHarness(async (harness) => {
     // No provider year (an unidentified folder on the media server): judged like a library file
@@ -431,6 +457,73 @@ test("remote detail matching without a year follows the library's strict rules; 
     const body = await response.json() as { item: ProviderItem & { providerIdsMatched?: boolean } };
     assert.deepEqual(body.item.providerIds, {});
     assert.equal(body.item.providerIdsMatched, undefined);
+  });
+});
+
+test("remote detail only searches movie and series items", async () => {
+  await withHarness(async (harness) => {
+    harness.server.detailOf.episode1 = { id: "episode1", name: "Pilot", type: "episode", providerIds: {}, year: 2020 };
+    harness.server.ancestorsOf.episode1 = ["lib-1"];
+    harness.server.detailOf.season1 = { id: "season1", name: "Season 1", type: "season", providerIds: {}, year: 2020 };
+    harness.server.ancestorsOf.season1 = ["lib-1"];
+    harness.candidates.results = [{
+      provider: "cinemeta",
+      item: { id: "tt1", type: "movie", name: "Pilot", releaseInfo: "2020", voteCount: 500 },
+    }];
+    for (const itemId of ["episode1", "season1"]) {
+      const response = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/${itemId}`, { user: BOB });
+      const body = await response.json() as { item: ProviderItem & { providerIdsMatched?: boolean } };
+      assert.deepEqual(body.item.providerIds, {});
+      assert.equal(body.item.providerIdsMatched, undefined);
+    }
+    assert.equal(harness.candidates.calls.length, 0);
+  });
+});
+
+test("remote detail matching keeps a film and a series of the same name apart", async () => {
+  await withHarness(async (harness) => {
+    harness.server.detailOf.show = { id: "show", name: "Shared Name", type: "series", providerIds: {} };
+    harness.server.ancestorsOf.show = ["lib-1"];
+    harness.server.detailOf.film = { id: "film", name: "Shared Name", type: "movie", providerIds: {} };
+    harness.server.ancestorsOf.film = ["lib-1"];
+    harness.candidates.results = [{
+      provider: "cinemeta",
+      item: { id: "tt1001", type: "movie", name: "Shared Name", voteCount: 500 },
+    }];
+
+    const show = await (await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/show`, { user: BOB })).json() as { item: ProviderItem };
+    assert.deepEqual(show.item.providerIds, {});
+    assert.equal(harness.candidates.calls[0]!.kind, "series");
+
+    const film = await (await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/film`, { user: BOB })).json() as { item: ProviderItem };
+    assert.equal(film.item.providerIds.imdb, "tt1001");
+    assert.equal(harness.candidates.calls[1]!.kind, "movie");
+  });
+});
+
+test("remote detail refuses an inaccessible library before searching", async () => {
+  await withHarness(async (harness) => {
+    harness.server.detailOf.series1 = { id: "series1", name: "Jiste pane ministře", type: "series", providerIds: {} };
+    harness.server.ancestorsOf.series1 = ["lib-1"];
+    await harness.manager.patchLibrary(authority(admin), harness.libraryId, { allowedUsers: [] });
+    const response = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/series1`, { user: BOB });
+    assert.equal(response.status, 404);
+    assert.equal(harness.candidates.calls.length, 0);
+  });
+});
+
+test("a name year without a provider year searches and scores like a library file", async () => {
+  await withHarness(async (harness) => {
+    harness.server.detailOf.doctor = { id: "doctor", name: "Doctor Who (2005)", type: "movie", providerIds: {} };
+    harness.server.ancestorsOf.doctor = ["lib-1"];
+    harness.candidates.results = [{
+      provider: "cinemeta",
+      item: { id: "tt2006", type: "movie", name: "Doctor Who", releaseInfo: "2006", voteCount: 500 },
+    }];
+    const response = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/doctor`, { user: BOB });
+    const body = await response.json() as { item: ProviderItem };
+    assert.equal(body.item.providerIds.imdb, "tt2006");
+    assert.equal(harness.candidates.calls[0]!.year, 2005);
   });
 });
 

@@ -771,6 +771,7 @@ test("music videos browse and open as standalone media without catalogue movie m
   });
   const page = await provider.pageItems("tok", "user-1", "music-library");
   assert.equal(page.items[0].type, "movie");
+  assert.equal(page.items[0].musicVideo, true);
   assert.equal(page.items[0].durationTicks, 1200000000);
   assert.deepEqual(page.items[0].providerIds, {}, "music video IDs must not match a catalogue movie");
   assert.deepEqual(await provider.detail("tok", "user-1", "clip-1"), page.items[0]);
