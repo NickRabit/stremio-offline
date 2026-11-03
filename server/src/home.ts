@@ -7,6 +7,8 @@ export const HOME_CANDIDATES = 30;
 export const HOME_MARKER_LIMIT = 20;
 export const HOME_LOOKUP_DEADLINE_MS = 1500;
 export const HOME_FORGET_LIMIT = 50;
+/** How many unknown TMDB-to-IMDb pairs one Continue watching read asks TMDB for. */
+export const HOME_TITLE_PAIR_LOOKUPS = 20;
 /** How many part-watched library files the merged Continue watching list reads before it
  *  pages them. The public `/api/library/resume` keeps its own, smaller ceiling. */
 export const HOME_RESUME_FILE_LIMIT = 2000;
@@ -259,6 +261,23 @@ export interface ResumeSources {
   catalogue: ResumeCatalogueItem[];
   files: ResumeFileItem[];
   remote?: RemoteHomeCard[];
+  /** The IMDb id a TMDB id is known to stand for. A file bound through TMDB and a catalogue row
+   *  keyed by IMDb are one title, so they must be one card. */
+  imdbOf?: (type: ResumeIdentity["type"], tmdbId: number) => string | undefined;
+}
+
+/** The TMDB id an identity names in its `tmdb:` form, or undefined for any other id. */
+export function tmdbIdOfIdentity(identity: ResumeIdentity): number | undefined {
+  const match = /^tmdb:([1-9][0-9]*)$/.exec(identity.id);
+  return match ? Number(match[1]) : undefined;
+}
+
+/** The key one title groups under: its IMDb form whenever that is known, whichever form it came in. */
+function groupKeyOf(identity: ResumeIdentity | undefined, imdbOf: ResumeSources["imdbOf"]): string | undefined {
+  if (!identity) return undefined;
+  const tmdb = tmdbIdOfIdentity(identity);
+  const imdb = tmdb !== undefined ? imdbOf?.(identity.type, tmdb) : undefined;
+  return `${identity.type}:${imdb ?? identity.id}`;
 }
 
 export function boundCards<T>(items: T[], limit: number = HOME_ROW_LIMIT): { items: T[]; hasMore: boolean } {
@@ -327,13 +346,14 @@ function cardFor(candidates: ResumeCandidate[]): ResumeCard {
 }
 
 /** Merge the two Continue watching sources into one card per title. Only equal identities
- *  merge; an unknown identity stays its own card. */
+ *  merge, a TMDB id counting as the IMDb id it is known to stand for; an unknown identity stays
+ *  its own card. */
 function resumeGroups(sources: ResumeSources): ResumeGroup[] {
   const candidates: ResumeCandidate[] = [
-    ...sources.files.map((item): ResumeCandidate => ({ source: "file", identity: item.identity ? `${item.identity.type}:${item.identity.id}` : undefined, item })),
-    ...sources.catalogue.map((item): ResumeCandidate => ({ source: "catalogue", identity: item.identity ? `${item.identity.type}:${item.identity.id}` : undefined, item })),
+    ...sources.files.map((item): ResumeCandidate => ({ source: "file", identity: groupKeyOf(item.identity, sources.imdbOf), item })),
+    ...sources.catalogue.map((item): ResumeCandidate => ({ source: "catalogue", identity: groupKeyOf(item.identity, sources.imdbOf), item })),
     // A media-server card joins the title it stands for; one nothing can name stays its own card.
-    ...(sources.remote ?? []).map((card): ResumeCandidate => ({ source: "remote", identity: card.identity ? `${card.identity.type}:${card.identity.id}` : undefined, item: card })),
+    ...(sources.remote ?? []).map((card): ResumeCandidate => ({ source: "remote", identity: groupKeyOf(card.identity, sources.imdbOf), item: card })),
   ];
   const groups = new Map<string, ResumeCandidate[]>();
   const singles: ResumeCandidate[] = [];
