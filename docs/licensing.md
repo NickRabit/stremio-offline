@@ -21,7 +21,7 @@ What that requires depends on who hands FFmpeg over.
 ### Docker image (`ghcr.io/nickrabit/stremio-offline`)
 
 The image uses an Ubuntu 24.04 runtime and installs Ubuntu's `ffmpeg` package.
-The build stage uses `node:22-trixie-slim` and copies only Node.js and the
+The build stage uses `node:26-trixie-slim` and copies only Node.js and the
 production npm dependencies into the runtime. Ubuntu builds FFmpeg with
 `--enable-gpl`, **x264** and **x265**, so the FFmpeg in the image is licensed
 **GPL-2.0-or-later**, as are x264 and x265. The other packages the image

@@ -329,7 +329,7 @@ feature can now build on this storage.
 Majors are done by hand, one PR each, in this order; Dependabot keeps minor
 and patch updates. Checked against `main` on 2026-10-30.
 
-1. **Node 22 → 26** (Active LTS since 2026-10-28; Node 22 is in maintenance
+1. **Node 22 → 26** — done: the image builds on `node:26-trixie-slim`, the runtime installs `libatomic1` (the Node 26 binary needs it), every workflow uses 26, and CI keeps a `check` run on Node 24 for the desktop. Original notes: (Active LTS since 2026-10-28; Node 22 is in maintenance
    until April 2027, so this is not urgent). Change the build stage in the
    `Dockerfile` and `node-version` in every workflow. The runtime stage is
    `ubuntu:24.04` with only the `node` binary copied in, so check whether
@@ -338,7 +338,7 @@ and patch updates. Checked against `main` on 2026-10-30.
    inside Electron's own Node** (`utilityProcess`, Node 24 in Electron 44), so
    the server must keep working on Node 24: do not raise `engines` to
    `>=26`, do not use Node 26-only APIs, and keep a CI run on Node 24.
-2. **Vite 6 → 8** with `@vitejs/plugin-react` 6, which requires Vite 8. Vite
+2. **Vite 6 → 8** — done (Vite 8.3.5, `@vitejs/plugin-react` 6.2.1): the web and desktop builds keep the same chunks and come out 2–3 % smaller; the desktop renderer builds about six times faster. Original notes: with `@vitejs/plugin-react` 6, which requires Vite 8. Vite
    8 builds with Rolldown, so compare the production bundle and the desktop
    renderer, not only that the build passes. It does not need Node 26.
    Vitest is already on 4; Vitest 5 accepts Vite 6–8 and can follow in its

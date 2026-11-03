@@ -518,11 +518,11 @@ test("a same-size replacement during a deferred probe is not adequate", async ()
         },
       },
     );
-    const originalStat = await stat(file);
+    const originalStat = await stat(file, { bigint: true });
     while (!probing) await new Promise((resolve) => setTimeout(resolve, 5));
     await rename(file, `${file}.original`);
-    await writeFile(file, Buffer.alloc(originalStat.size));
-    const replacementStat = await stat(file);
+    await writeFile(file, Buffer.alloc(Number(originalStat.size)));
+    const replacementStat = await stat(file, { bigint: true });
     assert.notEqual(replacementStat.ino, originalStat.ino);
     release.release();
     assert.equal((await result).status, "absent");

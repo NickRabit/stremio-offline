@@ -78,9 +78,11 @@ interface OwnerScope {
 interface PresentCopy extends LocalCopy {
   absolute: string;
   actualSize: number;
-  ino: number;
-  dev: number;
-  mtimeMs: number;
+  /** Read as bigint: a Windows file id is larger than 2^53 and, as a number, two different
+   *  files can round to the same value, so a replacement would read as the original. */
+  ino: bigint;
+  dev: bigint;
+  mtimeNs: bigint;
 }
 
 const isMissingPathError = (error: unknown): boolean => {
@@ -259,17 +261,17 @@ async function inspectExistingLocalCopy(
     }
     if (!resolved || resolved.key !== copy.key) return { status: "unresolved" };
     try {
-      const info = await stat(resolved.absolute);
-      if (!info.isFile() || info.size <= 0) return { status: "absent" };
+      const info = await stat(resolved.absolute, { bigint: true });
+      if (!info.isFile() || info.size <= 0n) return { status: "absent" };
       return {
         status: "present",
         copy: {
           ...copy,
           absolute: resolved.absolute,
-          actualSize: info.size,
+          actualSize: Number(info.size),
           ino: info.ino,
           dev: info.dev,
-          mtimeMs: info.mtimeMs,
+          mtimeNs: info.mtimeNs,
         },
       };
     } catch (error) {
@@ -300,15 +302,15 @@ async function inspectExistingLocalCopy(
 
     let firstInfo;
     try {
-      firstInfo = await stat(first.absolute);
+      firstInfo = await stat(first.absolute, { bigint: true });
     } catch (error) {
       return isMissingPathError(error) ? { status: "absent" } : { status: "unresolved" };
     }
     if (!firstInfo.isFile()
-      || firstInfo.size !== copy.actualSize
+      || Number(firstInfo.size) !== copy.actualSize
       || firstInfo.ino !== copy.ino
       || firstInfo.dev !== copy.dev
-      || firstInfo.mtimeMs !== copy.mtimeMs) return { status: "absent" };
+      || firstInfo.mtimeNs !== copy.mtimeNs) return { status: "absent" };
 
     let finalResolved: ResolvedPath | undefined;
     try {
@@ -320,15 +322,15 @@ async function inspectExistingLocalCopy(
 
     let finalInfo;
     try {
-      finalInfo = await stat(finalResolved.absolute);
+      finalInfo = await stat(finalResolved.absolute, { bigint: true });
     } catch (error) {
       return isMissingPathError(error) ? { status: "absent" } : { status: "unresolved" };
     }
     if (!finalInfo.isFile()
-      || finalInfo.size !== copy.actualSize
+      || Number(finalInfo.size) !== copy.actualSize
       || finalInfo.ino !== copy.ino
       || finalInfo.dev !== copy.dev
-      || finalInfo.mtimeMs !== copy.mtimeMs) return { status: "absent" };
+      || finalInfo.mtimeNs !== copy.mtimeNs) return { status: "absent" };
 
     const finalScope = currentScope();
     return finalScope !== undefined

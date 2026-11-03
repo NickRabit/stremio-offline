@@ -223,6 +223,19 @@ jobs:
             *) echo "::error::VAAPI drivers are missing from the amd64 image, QuickSync would not run on a NAS."; exit 1 ;;
           esac
 
+      # The runtime stage copies only the node binary into ubuntu:24.04, so a shared library a
+      # new Node release needs (libatomic for Node 26) would ship missing without failing the
+      # build. Start node, and the database driver the server needs, on both architectures.
+      - uses: docker/setup-qemu-action@v3
+      - name: Start node in both images
+        run: |
+          IMAGE="${{ needs.manifest.outputs.image }}"
+          for platform in linux/amd64 linux/arm64; do
+            docker pull --platform "$platform" "$IMAGE:${{ github.sha }}"
+            docker run --rm --platform "$platform" --entrypoint node "$IMAGE:${{ github.sha }}" \
+              -e 'const { DatabaseSync } = require("node:sqlite"); new DatabaseSync(":memory:").exec("select 1"); console.log(process.platform, process.arch, process.version, "ok")'
+          done
+
       - name: Pack amd64 for download
         if: inputs.bundle
         run: |
