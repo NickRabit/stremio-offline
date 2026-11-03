@@ -1530,6 +1530,7 @@ export const it: Catalog = {
   "err.setupLocalOnly": "Crea il primo account sul computer che esegue l'app.",
   "err.badCredentials": "Nome utente o password errati.",
   "err.tooManyAttempts": "Troppi tentativi falliti. Riprova tra {seconds} secondi.",
+  "err.tooManyRequests": "Troppe richieste. Riprova tra {seconds} secondi.",
   "err.hostUnavailable": "{host} non risponde. Riprova tra {seconds} secondi.",
   "err.searchInvalidRequest": "La richiesta di ricerca non è valida.",
   "err.searchNotFound": "Questa ricerca non esiste più. Cerca di nuovo.",

@@ -118,6 +118,7 @@ const TABLE: Record<string, ErrorClassification> = {
   "err.badCredentials": { category: "authentication", retry: "action" },
   "err.notSignedIn": { category: "authentication", retry: "action" },
   "err.tooManyAttempts": { category: "authentication", retry: "manual" },
+  "err.tooManyRequests": { category: "network", retry: "manual" },
   "err.wrongCurrentPassword": { category: "authentication", retry: "action" },
   "err.unknownUser": { category: "authentication", retry: "action" },
   "err.noAccount": { category: "configuration", retry: "action" },

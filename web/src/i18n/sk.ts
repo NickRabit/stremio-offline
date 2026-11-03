@@ -1530,6 +1530,7 @@ export const sk: Catalog = {
   "err.setupLocalOnly": "Vytvorte prvý účet na počítači, na ktorom je spustená aplikácia.",
   "err.badCredentials": "Nesprávne používateľské meno alebo heslo.",
   "err.tooManyAttempts": "Príliš veľa neúspešných pokusov. Skúste to znova o {seconds} s.",
+  "err.tooManyRequests": "Príliš veľa požiadaviek. Skúste to znova o {seconds} s.",
   "err.hostUnavailable": "{host} neodpovedá. Skúste to znova o {seconds} s.",
   "err.searchInvalidRequest": "Požiadavka na vyhľadávanie nie je platná.",
   "err.searchNotFound": "Toto vyhľadávanie už neexistuje. Hľadajte znova.",
