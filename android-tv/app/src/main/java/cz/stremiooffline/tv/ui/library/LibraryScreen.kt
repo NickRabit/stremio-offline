@@ -31,6 +31,11 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -39,6 +44,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
@@ -54,6 +61,9 @@ import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
 import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.ShuffleRun
+import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.detail.seriesFiles
 import cz.stremiooffline.tv.ui.detail.episodeLabel
 import cz.stremiooffline.tv.ui.search.LibrarySearchScope
@@ -63,6 +73,10 @@ import kotlinx.coroutines.launch
 
 const val TagLibraryBreadcrumb = "library_breadcrumb"
 const val TagLibraryAllGrid = "library_all_grid"
+const val TagLibraryShufflePanel = "library_shuffle_panel"
+const val TagLibraryShuffleAction = "library_shuffle_action"
+
+private data class LibraryShuffleTarget(val path: String, val title: String)
 
 /** The composed mosaic in the poster shape, as the web's `remoteMosaicArtwork` asks for it: the URL
  *  with its `shape` query parameter set to `poster` (added, or replaced if present). */
@@ -86,6 +100,7 @@ internal fun posterMosaicUrl(url: String): String {
 fun LibraryRoute(
   api: TvApi,
   onOpenDetail: (DetailData) -> Unit,
+  onPlay: (PlayTarget) -> Unit = {},
   /** A native remote item was opened; the shell shows its detail and plays its versions. */
   onOpenRemoteItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit = { _, _, _, _ -> throw UnsupportedOperationException("Remote item opened without a handler") },
   /** Bumped when a remote detail or its player closes, so the remote grid restores its focus. */
@@ -140,6 +155,62 @@ fun LibraryRoute(
   val requesters = remember { mutableMapOf<String, FocusRequester>() }
   val gridFocus = remember { FocusRequester() }
   val fallbackTitle = stringResource(R.string.tv_library_title)
+  val playRandomText = stringResource(R.string.library_play_random)
+  val playRandomEmptyText = stringResource(R.string.library_play_random_empty)
+  val loadErrorText = stringResource(R.string.tv_load_error)
+  val remoteLoadErrorText = stringResource(R.string.media_server_error)
+  val shuffleEntry = remember { FocusRequester() }
+  var shuffleTarget by remember { mutableStateOf<LibraryShuffleTarget?>(null) }
+  var remoteShuffleTarget by remember { mutableStateOf<RemoteShuffleTarget?>(null) }
+  var shuffleNotice by remember { mutableStateOf<String?>(null) }
+
+  fun openShuffle(item: BrowseItem) {
+    shuffleNotice = null
+    remoteShuffleTarget = null
+    shuffleTarget = when (item) {
+      is BrowseItem.Library, is BrowseItem.Folder -> LibraryShuffleTarget(item.path, item.title)
+      is BrowseItem.File -> LibraryShuffleTarget(
+        path = state.current?.path.orEmpty(),
+        title = state.current?.title?.ifBlank { fallbackTitle } ?: fallbackTitle,
+      )
+    }
+  }
+
+  fun openRemoteShuffle(target: RemoteShuffleTarget) {
+    shuffleNotice = null
+    shuffleTarget = null
+    remoteShuffleTarget = target
+  }
+
+  fun startShuffle(target: LibraryShuffleTarget) {
+    shuffleTarget = null
+    scope.launch {
+      try {
+        val answer = api.startShuffle(target.path)
+        val path = answer.item.path ?: return@launch
+        onPlay(
+          PlayTarget(
+            key = Progress.libraryKey(path),
+            title = answer.item.title,
+            resume = false,
+            path = path,
+            shuffle = ShuffleRun(answer.id, answer.upcoming?.title),
+          ),
+        )
+      } catch (error: ApiError) {
+        shuffleNotice = if (error.failure == ApiFailure.NotFound) playRandomEmptyText else loadErrorText
+      } catch (_: Exception) {
+        shuffleNotice = loadErrorText
+      }
+    }
+  }
+
+  fun startRemoteShuffle(target: RemoteShuffleTarget) {
+    remoteShuffleTarget = null
+    scope.launch {
+      playRemoteShuffle(api, target, playRandomEmptyText, remoteLoadErrorText, { shuffleNotice = it }, onPlay)
+    }
+  }
   // The flag-off fallback still narrows the level in place, so it keeps its editor text and the
   // query the level is committed to.
   val committed = state.current?.search.orEmpty()
@@ -282,200 +353,239 @@ fun LibraryRoute(
     }
   }
 
-  Column(
-    modifier = modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX),
-    verticalArrangement = Arrangement.spacedBy(6.dp),
-  ) {
-    LibraryHeader(
-      segment = segment,
-      onAll = { enteredFromAll = null; segment = LibrarySegment.All },
-      onFiles = { enteredFromAll = null; segment = LibrarySegment.Files },
-      onServers = { enteredFromAll = null; segment = LibrarySegment.Servers },
-    )
-
-    if (segment == LibrarySegment.All) {
-      val local = state.pages.firstOrNull()?.items.orEmpty().filterIsInstance<BrowseItem.Library>()
-      val remote = remoteViewModel.state.libraries
-      // The All grid draws the same rows the two halves do, so it loads the root and the list itself.
-      LaunchedEffect(Unit) { if (viewModel.state.pages.isEmpty()) viewModel.start() }
-      LaunchedEffect(Unit) {
-        if (remoteViewModel.state.libraries.isEmpty() && !remoteViewModel.state.librariesLoading) {
-          remoteViewModel.loadLibraries()
-        }
-      }
-      LibraryToolbar(
-        onSearch = {},
-        available = false,
-        openFocus = searchAction,
+  Box(modifier.fillMaxSize()) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      LibraryHeader(
+        segment = segment,
+        onAll = { enteredFromAll = null; segment = LibrarySegment.All },
+        onFiles = { enteredFromAll = null; segment = LibrarySegment.Files },
+        onServers = { enteredFromAll = null; segment = LibrarySegment.Servers },
       )
-      Box(Modifier.weight(1f).fillMaxWidth()) {
-        // The local root's loading is the only one the All grid waits for; the media-server list
-        // simply contributes no tiles while it is empty, loading or failed.
-        if (state.loading && local.isEmpty()) {
-          ShimmerCards()
-        } else {
-          BoxWithConstraints(Modifier.fillMaxSize()) {
-            val columns = (((maxWidth.value + 18f) / 378f).toInt()).coerceAtLeast(1)
-            LazyVerticalGrid(
-              columns = GridCells.Fixed(columns),
-              state = allGridState,
-              modifier = Modifier.focusRequester(allGridFocus).focusGroup().testTag(TagLibraryAllGrid),
-              contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
-              horizontalArrangement = Arrangement.spacedBy(18.dp),
-              verticalArrangement = Arrangement.spacedBy(18.dp),
-            ) {
-              itemsIndexed(local, key = { _, item -> allLocalKey(item.path) }) { _, item ->
-                val key = allLocalKey(item.path)
-                val requester = remember(key) { FocusRequester() }
-                allRequesters[key] = requester
-                LocalLibraryCard(
-                  item = item,
-                  api = api,
-                  cardTag = allLocalTag(item.path),
-                  onClick = {
-                    enteredFromAll = key
-                    segment = LibrarySegment.Files
-                    viewModel.open(item.path, item.title)
-                  },
-                  modifier = Modifier
-                    .focusRequester(requester)
-                    .onFocusChanged { if (it.isFocused) viewModel.selectedPath = item.path },
-                )
-              }
-              items(remote, key = { library -> allRemoteKey(library.id) }) { library ->
-                val key = allRemoteKey(library.id)
-                val requester = remember(key) { FocusRequester() }
-                allRequesters[key] = requester
-                RemoteArtTile(
-                  title = library.name,
-                  libraryId = library.id,
-                  parentId = null,
-                  mosaic = library.mosaic,
-                  poster = library.poster,
-                  container = true,
-                  viewModel = remoteViewModel,
-                  imageUrl = { path -> path?.let(api::url) },
-                  cardTag = allRemoteTag(library.id),
-                  caption = libraryCaption(library.provider),
-                  onClick = {
-                    enteredFromAll = key
-                    segment = LibrarySegment.Servers
-                    remoteViewModel.openLibrary(library)
-                  },
-                  modifier = Modifier.focusRequester(requester),
-                )
+      shuffleNotice?.let { Text(it, color = Tokens.Red, fontSize = 11.sp) }
+
+      if (segment == LibrarySegment.All) {
+        val local = state.pages.firstOrNull()?.items.orEmpty().filterIsInstance<BrowseItem.Library>()
+        val remote = remoteViewModel.state.libraries
+        // The All grid draws the same rows the two halves do, so it loads the root and the list itself.
+        LaunchedEffect(Unit) { if (viewModel.state.pages.isEmpty()) viewModel.start() }
+        LaunchedEffect(Unit) {
+          if (remoteViewModel.state.libraries.isEmpty() && !remoteViewModel.state.librariesLoading) {
+            remoteViewModel.loadLibraries()
+          }
+        }
+        LibraryToolbar(
+          onSearch = {},
+          available = false,
+          openFocus = searchAction,
+        )
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+          // The local root's loading is the only one the All grid waits for; the media-server list
+          // simply contributes no tiles while it is empty, loading or failed.
+          if (state.loading && local.isEmpty()) {
+            ShimmerCards()
+          } else {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+              val columns = (((maxWidth.value + 18f) / 378f).toInt()).coerceAtLeast(1)
+              LazyVerticalGrid(
+                columns = GridCells.Fixed(columns),
+                state = allGridState,
+                modifier = Modifier.focusRequester(allGridFocus).focusGroup().testTag(TagLibraryAllGrid),
+                contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+              ) {
+                itemsIndexed(local, key = { _, item -> allLocalKey(item.path) }) { _, item ->
+                  val key = allLocalKey(item.path)
+                  val requester = remember(key) { FocusRequester() }
+                  allRequesters[key] = requester
+                  LocalLibraryCard(
+                    item = item,
+                    api = api,
+                    cardTag = allLocalTag(item.path),
+                    onMenu = { openShuffle(item) },
+                    onClick = {
+                      enteredFromAll = key
+                      segment = LibrarySegment.Files
+                      viewModel.open(item.path, item.title)
+                    },
+                    modifier = Modifier
+                      .focusRequester(requester)
+                      .libraryShuffleMenu { openShuffle(item) }
+                      .onFocusChanged { if (it.isFocused) viewModel.selectedPath = item.path },
+                  )
+                }
+                items(remote, key = { library -> allRemoteKey(library.id) }) { library ->
+                  val key = allRemoteKey(library.id)
+                  val requester = remember(key) { FocusRequester() }
+                  allRequesters[key] = requester
+                  RemoteArtTile(
+                    title = library.name,
+                    libraryId = library.id,
+                    parentId = null,
+                    mosaic = library.mosaic,
+                    poster = library.poster,
+                    container = true,
+                    viewModel = remoteViewModel,
+                    imageUrl = { path -> path?.let(api::url) },
+                    cardTag = allRemoteTag(library.id),
+                    caption = libraryCaption(library.provider),
+                    onLongClick = {
+                      openRemoteShuffle(RemoteShuffleTarget(library.id, null, library.name))
+                    },
+                    onClick = {
+                      enteredFromAll = key
+                      segment = LibrarySegment.Servers
+                      remoteViewModel.openLibrary(library)
+                    },
+                    modifier = Modifier
+                      .focusRequester(requester)
+                      .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && (event.key == Key.Menu || event.key == Key.Info)) {
+                          openRemoteShuffle(RemoteShuffleTarget(library.id, null, library.name))
+                          true
+                        } else {
+                          false
+                        }
+                      },
+                  )
+                }
               }
             }
           }
         }
-      }
-    } else if (segment == LibrarySegment.Files) {
-      // The filesystem's own path, and only while the files half is the one on screen.
-      if (state.pages.size > 1) {
-        LibraryBreadcrumbLine(
-          state.pages.joinToString("  ›  ") { it.title.ifEmpty { fallbackTitle } },
-          TagLibraryBreadcrumb,
-        )
-      }
-      // The root that lists the libraries themselves is the one level the server cannot narrow; a
-      // real directory stays searchable while it loads, answers nothing or fails, so a committed
-      // query can always be reopened and cleared.
-      val searchable = state.current?.searchable == true
-      if (searchEverywhereEnabled) {
-        LibraryToolbar(
-          onSearch = { openLibrarySearch() },
-          available = searchAvailable,
-          openFocus = searchAction,
-        )
-      } else {
-        LibrarySearchFallback(
-          open = editorOpen && searchable,
-          query = query,
-          onQuery = { query = it },
-          onOpen = { editorOpen = true; query = committed },
-          onSubmit = { editorOpen = false; viewModel.search(query) },
-          onClose = { editorOpen = false },
-          available = searchable,
-          openFocus = searchAction,
-          fieldFocus = searchField,
-        )
-      }
-      Box(Modifier.weight(1f).fillMaxWidth()) {
-        when {
-          state.loading -> ShimmerCards()
-          state.error -> ErrorPanel { viewModel.retry() }
-          items.isEmpty() -> Text(
-            // A level that was narrowed and matched nothing says so rather than reading as empty.
-            stringResource(if (committed.isNotEmpty()) R.string.media_server_no_matches else R.string.tv_library_empty),
-            color = Tokens.Muted,
-            fontSize = 12.sp,
+      } else if (segment == LibrarySegment.Files) {
+        // The filesystem's own path, and only while the files half is the one on screen.
+        if (state.pages.size > 1) {
+          LibraryBreadcrumbLine(
+            state.pages.joinToString("  ›  ") { it.title.ifEmpty { fallbackTitle } },
+            TagLibraryBreadcrumb,
           )
-          else -> BoxWithConstraints(Modifier.fillMaxSize()) {
-            val wideRoots = items.any { it is BrowseItem.Library }
-            val columns = (((maxWidth.value + 18f) / if (wideRoots) 378f else 128f).toInt()).coerceAtLeast(1)
-            LazyVerticalGrid(
-              columns = GridCells.Fixed(columns),
-              modifier = Modifier.focusRequester(gridFocus).focusGroup(),
-              // Room for the focused card's scale and ring so the first row is not clipped.
-              contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
-              horizontalArrangement = Arrangement.spacedBy(18.dp),
-              verticalArrangement = Arrangement.spacedBy(18.dp),
-            ) {
-              itemsIndexed(items, key = { _, item -> item.path.ifEmpty { item.title } }) { index, item ->
-                val key = item.path.ifEmpty { item.title }
-                val requester = remember(key) { FocusRequester() }
-                requesters[key] = requester
-                LocalLibraryCard(
-                  item = item,
-                  api = api,
-                  cardTag = key,
-                  onClick = {
-                    when (item) {
-                      is BrowseItem.Library -> viewModel.open(item.path, item.title)
-                      is BrowseItem.Folder -> openFolder(item)
-                      is BrowseItem.File -> onOpenDetail(DetailData.ofFile(item))
-                    }
-                  },
-                  modifier = Modifier
-                    .focusRequester(requester)
-                    .then(
-                      if (index < columns && searchAvailable) {
-                        Modifier.focusProperties { up = searchAction }
-                      } else {
-                        Modifier
-                      },
-                    )
-                    .onFocusChanged {
-                      if (it.isFocused) {
-                        viewModel.selectedPath = key
-                        requesters[key] = requester
-                        if (index >= items.size - columns) viewModel.loadMore()
+        }
+        // The root that lists the libraries themselves is the one level the server cannot narrow; a
+        // real directory stays searchable while it loads, answers nothing or fails, so a committed
+        // query can always be reopened and cleared.
+        val searchable = state.current?.searchable == true
+        if (searchEverywhereEnabled) {
+          LibraryToolbar(
+            onSearch = { openLibrarySearch() },
+            available = searchAvailable,
+            openFocus = searchAction,
+          )
+        } else {
+          LibrarySearchFallback(
+            open = editorOpen && searchable,
+            query = query,
+            onQuery = { query = it },
+            onOpen = { editorOpen = true; query = committed },
+            onSubmit = { editorOpen = false; viewModel.search(query) },
+            onClose = { editorOpen = false },
+            available = searchable,
+            openFocus = searchAction,
+            fieldFocus = searchField,
+          )
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+          when {
+            state.loading -> ShimmerCards()
+            state.error -> ErrorPanel { viewModel.retry() }
+            items.isEmpty() -> Text(
+              // A level that was narrowed and matched nothing says so rather than reading as empty.
+              stringResource(if (committed.isNotEmpty()) R.string.media_server_no_matches else R.string.tv_library_empty),
+              color = Tokens.Muted,
+              fontSize = 12.sp,
+            )
+            else -> BoxWithConstraints(Modifier.fillMaxSize()) {
+              val wideRoots = items.any { it is BrowseItem.Library }
+              val columns = (((maxWidth.value + 18f) / if (wideRoots) 378f else 128f).toInt()).coerceAtLeast(1)
+              LazyVerticalGrid(
+                columns = GridCells.Fixed(columns),
+                modifier = Modifier.focusRequester(gridFocus).focusGroup(),
+                // Room for the focused card's scale and ring so the first row is not clipped.
+                contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+              ) {
+                itemsIndexed(items, key = { _, item -> item.path.ifEmpty { item.title } }) { index, item ->
+                  val key = item.path.ifEmpty { item.title }
+                  val requester = remember(key) { FocusRequester() }
+                  requesters[key] = requester
+                  LocalLibraryCard(
+                    item = item,
+                    api = api,
+                    cardTag = key,
+                    onMenu = { openShuffle(item) },
+                    onClick = {
+                      when (item) {
+                        is BrowseItem.Library -> viewModel.open(item.path, item.title)
+                        is BrowseItem.Folder -> openFolder(item)
+                        is BrowseItem.File -> onOpenDetail(DetailData.ofFile(item))
                       }
                     },
-                )
+                    modifier = Modifier
+                      .focusRequester(requester)
+                      .libraryShuffleMenu { openShuffle(item) }
+                      .then(
+                        if (index < columns && searchAvailable) {
+                          Modifier.focusProperties { up = searchAction }
+                        } else {
+                          Modifier
+                        },
+                      )
+                      .onFocusChanged {
+                        if (it.isFocused) {
+                          viewModel.selectedPath = key
+                          requesters[key] = requester
+                          if (index >= items.size - columns) viewModel.loadMore()
+                        }
+                      },
+                  )
+                }
               }
             }
           }
         }
+      } else {
+        RemoteLibraryRoute(
+          api = api,
+          imageUrl = { path -> path?.let(api::url) },
+          segment = segment,
+          onOpenItem = onOpenRemoteItem,
+          onPlay = onPlay,
+          onShuffle = ::openRemoteShuffle,
+          onBackToFiles = { segment = LibrarySegment.Files },
+          onBackToAll = if (enteredFromAll != null) ({ segment = LibrarySegment.All }) else null,
+          modifier = Modifier.weight(1f),
+          restoreToken = restoreToken,
+          backEnabled = backEnabled,
+          loadDestinations = loadDestinations,
+          onQueue = onQueue,
+          // The section's own header and padding are already in place above and around this half.
+          embedded = true,
+          searchEverywhereEnabled = searchEverywhereEnabled,
+          onOpenSearch = onOpenSearch,
+          searchReturnToken = searchReturnToken,
+        )
       }
-    } else {
-      RemoteLibraryRoute(
-        api = api,
-        imageUrl = { path -> path?.let(api::url) },
-        segment = segment,
-        onOpenItem = onOpenRemoteItem,
-        onBackToFiles = { segment = LibrarySegment.Files },
-        onBackToAll = if (enteredFromAll != null) ({ segment = LibrarySegment.All }) else null,
-        modifier = Modifier.weight(1f),
-        restoreToken = restoreToken,
-        backEnabled = backEnabled,
-        loadDestinations = loadDestinations,
-        onQueue = onQueue,
-        // The section's own header and padding are already in place above and around this half.
-        embedded = true,
-        searchEverywhereEnabled = searchEverywhereEnabled,
-        onOpenSearch = onOpenSearch,
-        searchReturnToken = searchReturnToken,
+    }
+    shuffleTarget?.let { target ->
+      RemoteShufflePanel(
+        title = target.title,
+        entry = shuffleEntry,
+        text = playRandomText,
+        onClose = { shuffleTarget = null },
+        onStart = { startShuffle(target) },
+      )
+    }
+    remoteShuffleTarget?.let { target ->
+      RemoteShufflePanel(
+        title = target.title,
+        entry = shuffleEntry,
+        text = playRandomText,
+        onClose = { remoteShuffleTarget = null },
+        onStart = { startRemoteShuffle(target) },
       )
     }
   }
@@ -498,6 +608,7 @@ private fun LocalLibraryCard(
   api: TvApi,
   cardTag: String,
   onClick: () -> Unit,
+  onMenu: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   if (item is BrowseItem.Library) {
@@ -513,6 +624,7 @@ private fun LocalLibraryCard(
       },
       cardTag = cardTag,
       onClick = onClick,
+      onLongClick = onMenu,
       modifier = modifier,
     )
   } else {
@@ -525,10 +637,21 @@ private fun LocalLibraryCard(
       mosaic = item.mosaic.map(api::url),
       imageBeforeMosaic = item.mosaicImage != null && item.mosaic.size >= 2,
       onClick = onClick,
+      onLongClick = onMenu,
       modifier = modifier,
     )
   }
 }
+
+private fun Modifier.libraryShuffleMenu(onMenu: () -> Unit): Modifier =
+  onPreviewKeyEvent { event ->
+    if (event.type == KeyEventType.KeyDown && (event.key == Key.Menu || event.key == Key.Info)) {
+      onMenu()
+      true
+    } else {
+      false
+    }
+  }
 
 @Composable
 private fun ErrorPanel(onRetry: () -> Unit) {

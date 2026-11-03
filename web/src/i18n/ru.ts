@@ -966,6 +966,8 @@ export const ru: Catalog = {
   "library.continue": "Продолжить",
   "library.thisFile": "Этот файл",
   "library.tools": "Библиотечные инструменты",
+  "library.playRandom": "Воспроизвести случайно",
+  "library.playRandomEmpty": "Здесь нечего воспроизводить.",
   "library.scan": "Сканировать библиотеку",
   "library.scanHint": "В некоторых папках еще нет плаката. Сканируйте библиотеку, чтобы найти названия из ваших каталогов.",
   "library.scanProgress": "{done} из {total} · {matched} соответствует",

@@ -120,8 +120,9 @@ class CatalogDetailTest {
       remote: cz.stremiooffline.tv.data.RemoteItemContext?,
       stableKey: String?,
       final: Boolean,
+      shuffle: Boolean,
     ) {
-      super.saveProgress(key, position, duration, title, path, poster, addonKey, remote, stableKey, final)
+      super.saveProgress(key, position, duration, title, path, poster, addonKey, remote, stableKey, final, shuffle)
       progressValues[key] = ProgressDto(position, duration)
     }
   }

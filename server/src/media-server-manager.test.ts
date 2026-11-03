@@ -3109,6 +3109,58 @@ test("browseDirectory reads one provider page for the root and never touches the
   });
 });
 
+test("shufflePool keeps only playable titles under a proved folder", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.detailOf["folder-a"] = folder("folder-a", { parentId: "music" });
+    harness.server.ancestorsOf["folder-a"] = ["music"];
+    harness.server.items["folder-a"] = [
+      movie("m1", "Film"),
+      episode("e1", { seriesName: "Show", seriesId: "show", season: 1, episode: 2, parentId: "folder-a" }),
+      { id: "music-video", name: "Video", type: "movie", musicVideo: true as const, providerIds: {} },
+      folder("nested"),
+      { id: "series", name: "Show", type: "series", providerIds: {} },
+      { id: "season", name: "Season 1", type: "season", providerIds: {} },
+    ];
+
+    const pool = await harness.manager.shufflePool(harness.admin, library.id, "folder-a");
+
+    assert.equal(pool.items.length, 3);
+    assert.equal(pool.capped, false);
+    assert.equal(pool.items[0]?.title, "Film");
+    assert.equal(pool.items[1]?.title, "Show · S1E2 Episode e1");
+    assert.equal(pool.items[2]?.title, "Video");
+    assert.ok(pool.items.every((item) => item.itemId !== "nested" && item.itemId !== "series" && item.itemId !== "season"));
+  });
+});
+
+test("shufflePool caps a large folder at 5000 playable titles", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.items["music"] = Array.from({ length: 5003 }, (_, index) => movie(`bulk-${index}`, `Bulk ${index}`));
+
+    const pool = await harness.manager.shufflePool(harness.admin, library.id, undefined);
+
+    assert.equal(pool.items.length, 5000);
+    assert.equal(pool.capped, true);
+    assert.equal(harness.server.calls.filter((call) => call === "items").length, 25, "the pool never exceeds its page budget");
+  });
+});
+
+test("a remote shuffle cursor stops when the library grant or connection generation changes", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [BOB] });
+    const connection = harness.store.mediaConnections()[0]!;
+    const bobAuthority: MediaServerAuthority = { actor: { id: BOB, secret: bob.secret }, assertCurrent: () => undefined };
+    assert.equal(harness.manager.shuffleStillCurrent(bobAuthority, library.id, connection.generation), true);
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [] });
+    assert.equal(harness.manager.shuffleStillCurrent(bobAuthority, library.id, connection.generation), false);
+    const current = harness.store.mediaConnections()[0]!;
+    assert.equal(harness.manager.shuffleStillCurrent(harness.admin, library.id, current.generation + 1), false);
+  });
+});
+
 test("browseDirectory pages a nested folder and binds the cursor to every axis", async () => {
   await withHarness(async (harness) => {
     const library = await directoryLibrary(harness, "music");

@@ -118,6 +118,7 @@ import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
 import { registerSearchEverywhereRoutes, searchEverywhereEnabled } from "./routes/search-everywhere.js";
+import { registerShuffleRoutes } from "./routes/shuffle.js";
 import { registerSourceProfilesRoutes } from "./routes/source-profiles.js";
 import { IntroSegmentsCache } from "./intro-segments.js";
 import { materializeOwnerSourceAdmission, materializeOwnerSourceProfileAdmission } from "./routes/source-profile-selection.js";
@@ -2880,6 +2881,35 @@ await libraryOps.load();
 registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId), progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps });
 
 const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
+
+registerShuffleRoutes(app, {
+  ...routeContext,
+  metaStore,
+  localFiles: async (libraryId, relativePrefix) => {
+    const library = libraryFor(store.libraries(), libraryId);
+    if (!library) return [];
+    return filesOf(await libraryFiles(), library)
+      .map((file) => relativeKeyIn(library.id, file.relative))
+      .filter((relative): relative is string => relative !== undefined
+        && (relativePrefix === "" || isPathWithin(relative, relativePrefix)));
+  },
+  describeLibraryPath,
+  libraryKey,
+  wirePath,
+  mediaServers,
+  authorityOf,
+  fileAvailable: async (key, viewer) => {
+    const target = await libraryTarget(key, viewer).catch(() => undefined);
+    return Boolean(target && (await stat(target).catch(() => undefined))?.isFile());
+  },
+  isCarvedOut: (key) => {
+    const parsed = parseLibraryPath(key);
+    if (!parsed) return false;
+    const library = libraryFor(store.libraries(), parsed.libraryId);
+    if (!library) return false;
+    return [...carveOutsOf(library)].some((carveOut) => isPathWithin(parsed.relative, carveOut));
+  },
+});
 
 // Home's confirm row shows what the curate route proposes, so it is registered once that
 // route exists.

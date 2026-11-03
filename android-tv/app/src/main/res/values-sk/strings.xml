@@ -41,6 +41,8 @@
   <string name="tv_library_type_panel">Typ</string>
   <string name="tv_library_empty">Zatiaľ tu nič nie je. Stiahnuté súbory sa objavia v tejto knižnici.</string>
   <string name="tv_library_files">Súborov: %1$s</string>
+  <string name="library_play_random">Prehrať náhodne</string>
+  <string name="library_play_random_empty">Tu nie je čo prehrať.</string>
   <string name="tv_detail_eyebrow_library">Vo vašej knižnici</string>
   <string name="tv_detail_watched">Zhliadnuté %1$s %%</string>
   <string name="tv_play">Prehrať</string>

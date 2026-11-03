@@ -69,6 +69,7 @@ export interface ProviderDirectoryOptions {
 export const DIRECTORY_MEDIA_TYPES = "Movie,Series,Season,Episode,MusicVideo";
 export const DIRECTORY_FOLDER_TYPES = `Folder,${DIRECTORY_MEDIA_TYPES}`;
 export const DIRECTORY_TITLE_TYPES = "Movie,Series,MusicVideo";
+export const SHUFFLE_ITEM_TYPES = "Movie,Episode,MusicVideo";
 
 export interface ProviderItem {
   id: string;
@@ -163,7 +164,7 @@ export interface MediaServerProvider {
   logout(token: string, signal?: AbortSignal): Promise<void>;
   currentAccount(token: string, accountId: string, signal?: AbortSignal): Promise<{ accountId: string; policy: RemoteAccountPolicy }>;
   listLibraries(token: string, accountId: string, signal?: AbortSignal): Promise<ProviderLibrary[]>;
-  pageItems(token: string, accountId: string, libraryId: string, options?: { cursor?: string; limit?: number; search?: string }, signal?: AbortSignal): Promise<ProviderPage>;
+  pageItems(token: string, accountId: string, libraryId: string, options?: { cursor?: string; limit?: number; search?: string; includeItemTypes?: typeof SHUFFLE_ITEM_TYPES }, signal?: AbortSignal): Promise<ProviderPage>;
   /** One native browse page of `parentId`: a folder's children or a library's titles. The
    *  options map strictly onto the fixed transport operation; one page per request, no scan. */
   pageDirectory(token: string, accountId: string, parentId: string, options: ProviderDirectoryOptions, signal?: AbortSignal): Promise<ProviderPage>;
@@ -772,13 +773,17 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     token: string,
     accountId: string,
     libraryId: string,
-    options: { cursor?: string; limit?: number; search?: string } = {},
+    options: { cursor?: string; limit?: number; search?: string; includeItemTypes?: typeof SHUFFLE_ITEM_TYPES } = {},
     signal?: AbortSignal,
   ): Promise<ProviderPage> {
     const limit = options.limit ?? 100;
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw invalid("The media-server page limit is out of range.");
     const search = options.search;
     if (search !== undefined && (typeof search !== "string" || search.length === 0 || search.length > SEARCH_MAX)) throw invalid("The media-server search term is not allowed.");
+    const itemTypes = options.includeItemTypes ?? "Movie,Series,Season,Episode,MusicVideo";
+    if (itemTypes !== "Movie,Series,Season,Episode,MusicVideo" && itemTypes !== SHUFFLE_ITEM_TYPES) {
+      throw invalid("The media-server item types are not allowed.");
+    }
     let offset = 0;
     if (options.cursor !== undefined) {
       const decoded = decodeCursor(options.cursor);
@@ -790,7 +795,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     const args = {
       userId: accountId,
       parentId: libraryId,
-      includeItemTypes: "Movie,Series,Season,Episode,MusicVideo",
+      includeItemTypes: itemTypes,
       startIndex: offset,
       limit,
       ...(search !== undefined ? { searchTerm: search } : {}),

@@ -966,6 +966,8 @@ export const sk: Catalog = {
   "library.continue": "Pokračovať",
   "library.thisFile": "Tento súbor",
   "library.tools": "Nástroje knižnice",
+  "library.playRandom": "Prehrať náhodne",
+  "library.playRandomEmpty": "Tu nie je čo prehrať.",
   "library.scan": "Skenovať knižnicu",
   "library.scanHint": "Niektoré priečinky ešte nemajú plagát. Naskenujte knižnicu, aby zodpovedala titulom z vašich katalógov.",
   "library.scanProgress": "{done} z {total} · {matched} zhodných",

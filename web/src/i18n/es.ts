@@ -966,6 +966,8 @@ export const es: Catalog = {
   "library.continue": "Continuar",
   "library.thisFile": "este archivo",
   "library.tools": "Herramientas de biblioteca",
+  "library.playRandom": "Reproducir aleatorio",
+  "library.playRandomEmpty": "Aquí no hay nada que reproducir.",
   "library.scan": "Biblioteca de escaneo",
   "library.scanHint": "Algunas carpetas aún no tienen cartel. Escanee la biblioteca para hacer coincidir los títulos de sus catálogos.",
   "library.scanProgress": "{done} de {total} · {matched} coincidente",

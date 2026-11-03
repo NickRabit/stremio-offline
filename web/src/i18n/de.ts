@@ -966,6 +966,8 @@ export const de: Catalog = {
   "library.continue": "Weiter",
   "library.thisFile": "Diese Datei",
   "library.tools": "Bibliothekswerkzeuge",
+  "library.playRandom": "Zufällig abspielen",
+  "library.playRandomEmpty": "Hier gibt es nichts abzuspielen.",
   "library.scan": "Bibliothek scannen",
   "library.scanHint": "Einige Ordner haben noch kein Poster. Durchsuchen Sie die Bibliothek nach Titeln aus Ihren Katalogen.",
   "library.scanProgress": "{done} von {total} · {matched} abgeglichen",
