@@ -279,11 +279,14 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       if (ordered === null) return null;
       const ruleId = sortRuleId(resolvedSort);
       const merged = [...libraryRows, ...ordered];
+      // A title opened from a Jellyfin/Emby one keeps the rows exactly as before #674; only a search
+      // open ranks the library rows with every other source.
+      if (remoteFirst) return merged;
       return ruleId && merged.some((stream) => stream.rules?.[ruleId])
         ? merged.sort((left, right) => compareRuleRank(left, right, ruleId))
         : merged;
     },
-    [libraryRows, ordered, resolvedSort],
+    [libraryRows, ordered, resolvedSort, remoteFirst],
   );
   /** The first playable row the active rule accepts, then the first unverified row. */
   const firstPlayable = pickDefaultStream(detailSources ?? [], sortRuleId(resolvedSort)) ?? null;
