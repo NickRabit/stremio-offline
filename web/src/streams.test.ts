@@ -418,8 +418,8 @@ describe("pickNextEpisodeStream", () => {
 
   it("prefers an addon that meets the active rule over a local copy that breaks it", () => {
     const current = stream({ addonKey: "same", addonName: "Same" });
-    const local = stream({ name: "local breaks", kind: "library", localPath: "lib/next.mkv", rules: { balanced: verdict([0], "breaks") } });
-    const addon = stream({ name: "addon meets", addonKey: "same", addonName: "Same", rules: { balanced: verdict([1]) } });
+    const local = stream({ name: "local breaks", kind: "library", localPath: "lib/next.mkv", rules: { balanced: verdict([2, 0], "breaks") } });
+    const addon = stream({ name: "addon meets", addonKey: "same", addonName: "Same", rules: { balanced: verdict([0, 1]) } });
     expect(pickNextEpisodeStream([addon], current, "cs", new Map(), undefined, "rule:balanced", [local])).toBe(addon);
   });
 

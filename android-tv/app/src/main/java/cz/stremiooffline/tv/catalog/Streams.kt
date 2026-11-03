@@ -358,11 +358,11 @@ object Streams {
    * The list a source panel shows, as the web builds it. [addon] is already filtered and sorted.
    * The Local choice of the addon filter shows the library copies alone, and a named addon shows
    * its streams alone. With no addon filter, a rule that carries verdicts sorts the library
-   * copies, the remote versions and the addon rows together by that rank. The server already
-   * puts a local copy first only when the rule uses the viewer's order, so this list does not
-   * prepend one. Without a verdict the copies still lead, then the remote versions, then the
-   * addon rows. A size sort ranks by size and breaks a tie as local, then remote, then addon,
-   * with [origins] ahead of those three. An addon sort concatenates in that same order.
+   * copies, the remote versions and the addon rows together by status and then rule rank. Local
+   * is one candidate in that ordering, positioned by the rule's provider criterion. Without a
+   * verdict the copies still lead, then the remote versions, then the addon rows. A size sort
+   * ranks by size and breaks a tie as local, then remote, then addon, with [origins] ahead of
+   * those three. An addon sort concatenates in that same order.
    * [origins], the item's own versions, stay ahead of the rule merge and use the same rank
    * order among themselves.
    *

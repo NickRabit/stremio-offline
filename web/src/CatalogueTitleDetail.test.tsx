@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget, type CatalogueTitleDetailProps } from "./CatalogueTitleDetail";
 import { setLocale } from "./i18n";
 import { clearTitleExtras } from "./title-extras";
-import type { Meta, RemoteLibrary, Stream, Video } from "./types";
+import type { Meta, RemoteLibrary, SourceRuleVerdict, Stream, Video } from "./types";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -18,6 +18,9 @@ const local = (path: string, name: string, size?: number): Stream => ({
   sourceId: `lib:${path}`, kind: "library", playable: true, localPath: path, libraryName: "Films", name,
   behaviorHints: { filename: name, ...(size === undefined ? {} : { videoSize: size }) },
 });
+
+const ruleVerdict = (rank: number[], status: SourceRuleVerdict["status"]): SourceRuleVerdict =>
+  ({ profileId: "balanced", status, reasons: [], rank });
 
 const remote = (id: string, name: string, size?: number): Stream => ({
   sourceId: `remote:${id}`, kind: "remote", playable: true, name, provider: "emby", libraryId: "rlib_a", libraryName: "Emby",
@@ -183,6 +186,48 @@ describe("CatalogueTitleDetail metadata", () => {
 });
 
 describe("CatalogueTitleDetail sources", () => {
+  it("ranks a better meeting addon before a worse meeting library row for libraryFirst", async () => {
+    const worseLibrary = { ...remote("ms1", "Emby copy", 500), rules: { balanced: ruleVerdict([0, 1], "meets") } };
+    const betterAddon = { ...addon("a1", "1080p", 1_000), rules: { balanced: ruleVerdict([0, 0], "meets") } };
+    remoteReply = () => json({ streams: [worseLibrary] });
+    streamReply = () => json([betterAddon]);
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: {} },
+      libraryFirst: true,
+      defaultSort: "rule:balanced",
+    });
+    await flush();
+    expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "a1" }), expect.anything(), false);
+  });
+
+  it("#676 guard: a meeting addon stays ahead of a breaking local copy with libraryFirst", async () => {
+    const breakingLocal = { ...local("lib/film.mkv", "local", 500), rules: { balanced: ruleVerdict([2, 0], "breaks") } };
+    const meetingAddon = { ...addon("a1", "1080p", 1_000), rules: { balanced: ruleVerdict([0, 1], "meets") } };
+    localReply = () => json([breakingLocal]);
+    streamReply = () => json([meetingAddon]);
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() },
+      libraryFirst: true,
+      defaultSort: "rule:balanced",
+    });
+    await click(playButton());
+    expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "a1" }), expect.anything(), false);
+  });
+
+  it("#674 tie check: keeps a meeting local copy ahead when preferences tie", async () => {
+    const meetingLocal = { ...local("lib/film.mkv", "local", 500), rules: { balanced: ruleVerdict([0, 0], "meets") } };
+    const meetingAddon = { ...addon("a1", "1080p", 1_000), rules: { balanced: ruleVerdict([0, 1], "meets") } };
+    localReply = () => json([meetingLocal]);
+    streamReply = () => json([meetingAddon]);
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() },
+      libraryFirst: true,
+      defaultSort: "rule:balanced",
+    });
+    await click(playButton());
+    expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ localPath: "lib/film.mkv" }), expect.anything(), false);
+  });
+
   it("loads other libraries with a library-first title and lets their row lead Play", async () => {
     const remoteRows = deferred<Response>();
     remoteReply = () => remoteRows.promise;
