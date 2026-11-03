@@ -897,6 +897,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .player-chapters button{justify-content:space-between;font-size:11px;padding:7px 9px}
 .player-chapters button[aria-current="true"]{border-color:var(--accent);color:var(--accent2)}
 .player-skip{position:absolute;right:24px;bottom:96px;z-index:5;background:#0b0e13e6;border-color:#ffffff55}
+/* Above the controls whatever their height: on a narrow phone they wrap to two rows, and a fixed
+   offset put the button over the timeline. */
+.player-overlay .player-skip{right:max(16px,env(safe-area-inset-right));bottom:calc(var(--player-bottom-height,120px) + 12px);transition:bottom .18s ease}
+.player-overlay.controls-hidden .player-skip{bottom:max(24px,env(safe-area-inset-bottom))}
 @media(max-width:380px){.player-overlay .player-controls{gap:2px}.player-overlay .player-controls button{padding:6px}.player-overlay .player-controls button svg{width:20px}}
 
 /* Settings use one reading order at every viewport width. */
@@ -2305,8 +2309,8 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .age-badge{display:inline-block;font-style:normal;font-weight:800;font-size:10px;line-height:1;padding:3px 5px;border:1px solid #f1f4f866;border-radius:4px;color:var(--text);vertical-align:1px}
 .original-line{min-width:0;max-width:100%;font-size:13px;color:var(--muted)}
 .original-line b{color:var(--text);font-weight:600}
-.next-episode{display:inline-block;min-width:0;max-width:100%;font-size:13px;line-height:1.4;color:var(--text);background:#ff5b3814;border:1px solid #ff5b3844;border-radius:14px;padding:5px 12px}
-.next-episode b{color:var(--accent2)}
+p.next-episode{display:inline-block;min-width:0;max-width:100%;font-size:13px;line-height:1.4;color:var(--text);background:#ff5b3814;border:1px solid #ff5b3844;border-radius:14px;padding:5px 12px}
+p.next-episode b{color:var(--accent2)}
 .title-extras{position:relative;z-index:1;display:grid;grid-template-columns:minmax(0,1fr);gap:22px;margin-top:18px;min-width:0;max-width:100%}
 .extras-row{min-width:0;max-width:100%}
 .extras-row h3{display:flex;align-items:baseline;gap:10px;margin:0 0 10px;font-size:14px}
