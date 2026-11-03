@@ -2,6 +2,9 @@ import { AppError } from "./errors.js";
 import nodeDns, { type LookupAddress, type LookupOptions } from "node:dns";
 import { type LookupFunction } from "node:net";
 import { Agent, fetch as undiciFetch } from "undici";
+// undici 8 negotiates HTTP/2 by default. The checked transports stay on HTTP/1.1, as they were
+// with undici 7: streams and ranges through addons and media servers are proven on it, and
+// HTTP/2 is a change of its own, not part of a version update.
 import { addressRefusal, type AddressPolicy } from "./address-policy.js";
 import { log } from "./logger.js";
 
@@ -95,7 +98,7 @@ const checkedLookup: DnsLookup = (hostname, options, callback) => {
   });
 };
 
-const agent = new Agent({ connect: { lookup: checkedLookup as unknown as LookupFunction } });
+const agent = new Agent({ allowH2: false, connect: { lookup: checkedLookup as unknown as LookupFunction } });
 
 type FetchTransport = (url: URL, init: RequestInit) => Promise<Response>;
 

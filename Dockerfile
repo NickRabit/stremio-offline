@@ -8,8 +8,12 @@ RUN npm ci
 COPY packages/source-selection packages/source-selection
 COPY server server
 COPY web web
+# server/node_modules holds what the server needs in a version other packages in the
+# lockfile do not share (undici 8 beside Electron's undici 7); it is created even when
+# empty so the runtime stage can always copy it.
 RUN npm run build \
     && npm ci --omit=dev --workspace=@stremio-offline/server \
+    && mkdir -p server/node_modules \
     && npm cache clean --force
 
 FROM ubuntu:24.04 AS runtime
@@ -34,6 +38,7 @@ COPY packages/source-selection/package.json packages/source-selection/package.js
 COPY server/package.json server/package.json
 COPY web/package.json web/package.json
 COPY --from=build /app/node_modules /app/node_modules
+COPY --from=build /app/server/node_modules /app/server/node_modules
 COPY --from=build /app/packages/source-selection/dist /app/packages/source-selection/dist
 COPY --from=build /app/server/dist /app/server/dist
 COPY --from=build /app/web/dist /app/web
