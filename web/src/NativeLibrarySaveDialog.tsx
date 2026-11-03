@@ -130,7 +130,10 @@ function NativeLibrarySaveDialogContent({ library, item, series, knownSources, i
   // for a movie, and catalogue artwork when the caller already holds it. No remote proxy path,
   // no filename guess and no title lookup ever reaches it; an item without ids copies bare.
   const media = (): Record<string, unknown> => {
-    const ref = item.type === "movie" ? catalogueRef("movie", item.providerIds) : catalogueRef("series", loadedSeries?.providerIds);
+    const matched = item.providerIdsMatched === true || loadedSeries?.providerIdsMatched === true;
+    const ref = matched
+      ? null
+      : item.type === "movie" ? catalogueRef("movie", item.providerIds) : catalogueRef("series", loadedSeries?.providerIds);
     const art = {
       ...(artwork?.poster ? { poster: artwork.poster } : {}),
       ...(artwork?.background ? { background: artwork.background } : {}),

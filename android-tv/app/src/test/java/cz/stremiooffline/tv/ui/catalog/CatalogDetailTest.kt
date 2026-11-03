@@ -903,6 +903,167 @@ class CatalogDetailTest {
     assertFalse(api.streamsRequests.contains("series:tt1:1:1"))
   }
 
+  private fun storedSeriesEpisode(
+    updatedAt: String,
+    position: Double = 300.0,
+    duration: Double = 1200.0,
+    pending: Boolean = false,
+  ) = ProgressEntryDto(
+    key = "series:tt1:1:4",
+    position = position,
+    duration = duration,
+    title = "Show · S01E04",
+    updatedAt = updatedAt,
+    pending = pending,
+    series = ProgressEntryDto.Series(id = "tt1", name = "Show", season = 1, episode = 4),
+  )
+
+  @Test
+  fun `a newer in-progress catalogue episode wins over the episode the card opened on`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(
+      VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+      VideoDto(id = "tt1:1:4", title = "Four", season = 1, episode = 4),
+    )
+    api.progressEntries = listOf(storedSeriesEpisode("2026-01-02T00:00:00Z"))
+    mount(
+      api,
+      CatalogDetailArgs(
+        MetaDto(id = "tt1", type = "series", name = "Show"),
+        "Cinemeta",
+        "series",
+        episode = ResumeEpisode("series:tt1:1:1", 1, 1, updatedAt = "2026-01-01T00:00:00Z"),
+      ),
+    )
+    compose.waitForIdle()
+
+    assertTrue(api.streamsRequests.contains("series:tt1:1:4"))
+    assertFalse(api.streamsRequests.contains("series:tt1:1:1"))
+  }
+
+  @Test
+  fun `a newer card episode wins over an older in-progress catalogue episode`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(
+      VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+      VideoDto(id = "tt1:1:4", title = "Four", season = 1, episode = 4),
+    )
+    api.progressEntries = listOf(storedSeriesEpisode("2026-01-01T00:00:00Z"))
+    mount(
+      api,
+      CatalogDetailArgs(
+        MetaDto(id = "tt1", type = "series", name = "Show"),
+        "Cinemeta",
+        "series",
+        episode = ResumeEpisode("series:tt1:1:1", 1, 1, updatedAt = "2026-01-02T00:00:00Z"),
+      ),
+    )
+    compose.waitForIdle()
+
+    assertTrue(api.streamsRequests.contains("series:tt1:1:1"))
+    assertFalse(api.streamsRequests.contains("series:tt1:1:4"))
+  }
+
+  @Test
+  fun `a card without an update time yields to the in-progress catalogue episode`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(
+      VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+      VideoDto(id = "tt1:1:4", title = "Four", season = 1, episode = 4),
+    )
+    api.progressEntries = listOf(storedSeriesEpisode("2026-01-02T00:00:00Z"))
+    mount(
+      api,
+      CatalogDetailArgs(
+        MetaDto(id = "tt1", type = "series", name = "Show"),
+        "Cinemeta",
+        "series",
+        episode = ResumeEpisode("series:tt1:1:1", 1, 1),
+      ),
+    )
+    compose.waitForIdle()
+
+    assertTrue(api.streamsRequests.contains("series:tt1:1:4"))
+    assertFalse(api.streamsRequests.contains("series:tt1:1:1"))
+  }
+
+  @Test
+  fun `a catalogue episode at the thirty second boundary does not override the card`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(
+      VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+      VideoDto(id = "tt1:1:4", title = "Four", season = 1, episode = 4),
+    )
+    api.progressEntries = listOf(storedSeriesEpisode("2026-01-02T00:00:00Z", position = 30.0))
+    mount(
+      api,
+      CatalogDetailArgs(
+        MetaDto(id = "tt1", type = "series", name = "Show"),
+        "Cinemeta",
+        "series",
+        episode = ResumeEpisode("series:tt1:1:1", 1, 1, updatedAt = "2026-01-01T00:00:00Z"),
+      ),
+    )
+    compose.waitForIdle()
+
+    assertTrue(api.streamsRequests.contains("series:tt1:1:1"))
+    assertFalse(api.streamsRequests.contains("series:tt1:1:4"))
+  }
+
+  @Test
+  fun `a finished catalogue episode does not override the card`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(
+      VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+      VideoDto(id = "tt1:1:4", title = "Four", season = 1, episode = 4),
+    )
+    api.progressEntries = listOf(storedSeriesEpisode("2026-01-02T00:00:00Z", position = 1200.0))
+    mount(
+      api,
+      CatalogDetailArgs(
+        MetaDto(id = "tt1", type = "series", name = "Show"),
+        "Cinemeta",
+        "series",
+        episode = ResumeEpisode("series:tt1:1:1", 1, 1, updatedAt = "2026-01-01T00:00:00Z"),
+      ),
+    )
+    compose.waitForIdle()
+
+    assertTrue(api.streamsRequests.contains("series:tt1:1:1"))
+    assertFalse(api.streamsRequests.contains("series:tt1:1:4"))
+  }
+
+  @Test
+  fun `a pending catalogue episode does not override the card`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(
+      VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+      VideoDto(id = "tt1:1:4", title = "Four", season = 1, episode = 4),
+    )
+    api.progressEntries = listOf(storedSeriesEpisode("2026-01-02T00:00:00Z", pending = true))
+    mount(
+      api,
+      CatalogDetailArgs(
+        MetaDto(id = "tt1", type = "series", name = "Show"),
+        "Cinemeta",
+        "series",
+        episode = ResumeEpisode("series:tt1:1:1", 1, 1, updatedAt = "2026-01-01T00:00:00Z"),
+      ),
+    )
+    compose.waitForIdle()
+
+    assertTrue(api.streamsRequests.contains("series:tt1:1:1"))
+    assertFalse(api.streamsRequests.contains("series:tt1:1:4"))
+  }
+
+  @Test
+  fun `only parseable update times can make a card newer`() {
+    assertEquals(null, updatedAtMillis(null))
+    assertEquals(null, updatedAtMillis(""))
+    assertEquals(null, updatedAtMillis("not-a-time"))
+    assertTrue(updatedAtMillis("2026-01-02T00:00:00Z")!! > updatedAtMillis("2026-01-01T00:00:00.000Z")!!)
+  }
+
   @Test
   fun `the season row scrolls as the D-pad walks to a far season`() {
     val api = seriesApi()

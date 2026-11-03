@@ -7,7 +7,6 @@ import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.SourceRuleVerdictDto
 import cz.stremiooffline.tv.data.StreamDto
-import cz.stremiooffline.tv.ui.detail.remotePrimary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -694,14 +693,6 @@ class StreamsTest {
       listOf("meets", "breaks"),
       names(Streams.arrangeStreams(listOf(breaks, meets), filters(sort = StreamSort.of("rule:p1")), "cs")),
     )
-  }
-
-  @Test
-  fun `remotePrimary picks the own version that meets the rule and falls back to the first`() {
-    val first = remote("first", "rlibA", "iA", "First", verdict("breaks", listOf(1.0)))
-    val meets = remote("meets", "rlibA", "iA", "Meets", verdict("meets", listOf(0.0)))
-    assertEquals(meets, remotePrimary(listOf(first, meets), null, null, "p1"))
-    assertEquals(first, remotePrimary(listOf(first), null, null, "p1"))
   }
 
   @Test

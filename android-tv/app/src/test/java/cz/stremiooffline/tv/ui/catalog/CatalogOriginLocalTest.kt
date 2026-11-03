@@ -10,6 +10,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.FakeTvApi
@@ -75,6 +76,46 @@ class CatalogOriginLocalTest {
     assertEquals(second, target.path)
     assertEquals("file:$second", target.key)
     assertNull(target.sourceId)
+  }
+
+  @Test
+  fun `an in-progress stored addon row wins over the preferred local path`() {
+    val path = "Films/Heat/Heat.2160p.mkv"
+    val addon = StreamDto(
+      sourceId = "addon-version",
+      kind = "remote",
+      playable = true,
+      name = "Addon version",
+      stableKey = "addon-key",
+    )
+    val api = FakeTvApi().apply {
+      settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", streamSort = "recommended", realDebridConfigured = true)
+      streamsValues["movie:tt1"] = listOf(addon)
+      localStreamsValues["movie:tt1"] = listOf(local("library-copy", path))
+      progressValues["movie:tt1"] = ProgressDto(position = 120.0, duration = 600.0, stableKey = addon.stableKey)
+    }
+    compose.setContent {
+      CatalogDetailScreen(
+        api = api,
+        args = CatalogDetailArgs(
+          meta = MetaDto(id = "tt1", type = "movie", name = "Heat"),
+          addonName = "",
+          type = "movie",
+          preferredLocalPath = path,
+        ),
+        imageUrl = { null },
+        onPlay = { played += it },
+        onBack = {},
+      )
+    }
+    compose.waitUntil(5_000) { api.localStreamsRequests.contains("movie:tt1") }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).performKeyInput { pressKey(Key.DirectionCenter) }
+
+    val target = played.single()
+    assertEquals("addon-version", target.sourceId)
+    assertNull(target.path)
   }
 
   @Test

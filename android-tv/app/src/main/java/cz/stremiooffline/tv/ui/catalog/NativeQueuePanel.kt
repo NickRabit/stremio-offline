@@ -73,9 +73,14 @@ fun catalogueIdentity(type: String, ids: RemoteProviderIdsDto): Pair<String, Str
 
 /** The subject of one exact native item. An episode takes its title and ids from the parent
  *  series; an item whose parent is unknown copies without an id rather than guessing one. */
-fun nativeCopySubject(item: RemoteItemDto, seriesName: String?, seriesIds: RemoteProviderIdsDto?): NativeCopySubject =
+fun nativeCopySubject(
+  item: RemoteItemDto,
+  seriesName: String?,
+  seriesIds: RemoteProviderIdsDto?,
+  seriesIdsMatched: Boolean = false,
+): NativeCopySubject =
   if (item.type == "episode") {
-    val identity = seriesIds?.let { catalogueIdentity("series", it) }
+    val identity = if (item.providerIdsMatched || seriesIdsMatched) null else seriesIds?.let { catalogueIdentity("series", it) }
     NativeCopySubject(
       kind = "episode",
       title = seriesName?.takeIf { it.isNotBlank() } ?: item.name,
@@ -86,7 +91,7 @@ fun nativeCopySubject(item: RemoteItemDto, seriesName: String?, seriesIds: Remot
       episodeTitle = item.name,
     )
   } else {
-    val identity = catalogueIdentity("movie", item.providerIds)
+    val identity = if (item.providerIdsMatched) null else catalogueIdentity("movie", item.providerIds)
     NativeCopySubject(
       kind = "movie",
       title = item.name,
@@ -178,11 +183,13 @@ suspend fun resolveNativeCopy(
   item: RemoteItemDto,
   seriesName: String?,
   seriesIds: RemoteProviderIdsDto?,
+  seriesProviderIdsMatched: Boolean = false,
   sources: List<StreamDto>?,
   loadDestinations: suspend () -> List<LibraryDto>,
 ): NativeCopyRequest {
   var name = seriesName
   var ids = seriesIds
+  var idsMatched = seriesProviderIdsMatched
   val seriesId = item.seriesId
   if (item.type == "episode" && ids == null && seriesId != null) {
     val parent = try {
@@ -195,11 +202,12 @@ suspend fun resolveNativeCopy(
     if (parent != null && parent.type == "series") {
       name = parent.name
       ids = parent.providerIds
+      idsMatched = parent.providerIdsMatched
     }
   }
   val versions = sources ?: api.remoteSources(libraryId, item.id)
   return NativeCopyRequest(
-    subject = nativeCopySubject(item, name, ids),
+    subject = nativeCopySubject(item, name, ids, idsMatched),
     versions = versions,
     destinations = loadDestinations(),
   )

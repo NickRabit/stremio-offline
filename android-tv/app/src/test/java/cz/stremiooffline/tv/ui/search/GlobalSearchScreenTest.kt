@@ -1104,6 +1104,9 @@ class GlobalSearchScreenTest {
     compose.onNodeWithTag(TagGlobalSearchChooser).assertDoesNotExist()
     assertEquals("tt1", catalogOpened?.meta?.id)
     assertEquals("movie", catalogOpened?.type)
+    assertNull(catalogOpened?.preferredRemote)
+    assertNull(catalogOpened?.preferredLocalPath)
+    assertEquals(false, catalogOpened?.preferRemote)
   }
 
   @Test

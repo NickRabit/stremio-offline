@@ -139,10 +139,10 @@ test("the source filter keeps the local copy apart from the addon streams", asyn
   await expect(rows.first().locator("i.local")).toContainText("Lokální");
   await expect(rows.first()).toContainText(movieFile);
 
+  // All sources: the copy on disk is one of the rows the rule ranks (#674), no longer pinned first.
   await chooseAll(page);
   await expect(rows).toHaveCount(3);
   await expect(rows.locator("i.local")).toHaveCount(1);
-  await expect(rows.first().locator("i.local")).toContainText("Lokální");
 });
 
 test("an episode has its own local copy and a later one has none", async ({ page }) => {

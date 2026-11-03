@@ -6,7 +6,12 @@ import cz.stremiooffline.tv.data.VideoDto
 /** What a Continue-watching row opens; a series row remembers the episode. */
 data class ResumeMeta(val id: String, val type: String, val name: String, val poster: String?)
 
-data class ResumeEpisode(val key: String, val season: Int, val number: Int)
+data class ResumeEpisode(
+  val key: String,
+  val season: Int,
+  val number: Int,
+  val updatedAt: String? = null,
+)
 
 data class ResumeTarget(val meta: ResumeMeta, val episode: ResumeEpisode? = null)
 
@@ -34,7 +39,7 @@ object Resume {
     if (series != null) {
       return ResumeTarget(
         meta = ResumeMeta(series.id, "series", series.name, entry.poster),
-        episode = ResumeEpisode(entry.key, series.season, series.episode),
+        episode = ResumeEpisode(entry.key, series.season, series.episode, entry.updatedAt),
       )
     }
     val parts = entry.key.split(":")
