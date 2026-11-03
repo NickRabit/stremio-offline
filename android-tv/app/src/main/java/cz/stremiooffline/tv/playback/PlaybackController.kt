@@ -81,6 +81,8 @@ interface PlaybackApi {
     stableKey: String? = null,
     /** The playback is ending, so the server writes this position immediately. */
     final: Boolean = false,
+    /** Set for a random-run play so the server leaves series markers alone. */
+    shuffle: Boolean = false,
   )
 }
 
@@ -196,6 +198,7 @@ class PlaybackController(
   /** Set only for a native remote play: the identity whose position the title's own key holds, or
    *  whose own remote-state endpoint holds it when nothing can name the title. */
   private var remote: RemoteItemContext? = null
+  private var shuffle = false
   /** The identity a `start` was sent for in this session; null while no start report exists. */
   private var reported: ReportedPlay? = null
   /** Reports leave one at a time, in order: a progress that overtook a stop would reopen the
@@ -227,6 +230,7 @@ class PlaybackController(
     val carrySubtitle: SubtitleChoice? = null,
     /** The native remote identity this session plays, or null for a filesystem or addon play. */
     val remote: RemoteItemContext? = null,
+    val shuffle: Boolean = false,
   )
 
   private var plan: StartPlan? = null
@@ -299,7 +303,8 @@ class PlaybackController(
     mint: (suspend () -> String?)? = null,
     carrySubtitle: SubtitleChoice? = null,
     remote: RemoteItemContext? = null,
-  ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null, trackChoice = trackChoice, stableKey = stableKey, mint = mint, carrySubtitle = carrySubtitle, remote = remote)
+    shuffle: Boolean = false,
+  ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null, trackChoice = trackChoice, stableKey = stableKey, mint = mint, carrySubtitle = carrySubtitle, remote = remote, shuffle = shuffle)
 
   /**
    * Starts a session for [key]. [sourceId] is a source the server already handed out; when it is
@@ -324,9 +329,10 @@ class PlaybackController(
     stableKey: String? = null,
     /** The viewer's own track choices; only a switch inside a session names them. */
     trackChoice: TrackPreferences? = null,
+    shuffle: Boolean = false,
   ) {
     if (released) return
-    begin(startPlan(sourceId, key, title, path, at, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, trackChoice = trackChoice, stableKey = stableKey, mint = mint, remote = remoteItem))
+    begin(startPlan(sourceId, key, title, path, at, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, trackChoice = trackChoice, stableKey = stableKey, mint = mint, remote = remoteItem, shuffle = shuffle))
   }
 
   /**
@@ -369,11 +375,12 @@ class PlaybackController(
     path: String?,
     resume: Boolean,
     poster: String? = null,
+    shuffle: Boolean = false,
     mint: suspend () -> String?,
   ) {
     if (released) return
     val current = plan ?: return
-    begin(startPlan(null, key, title, path, null, resume, poster, current.addonKey, emptyList(), current.audioPreference, current.subtitlePreference, mint = mint))
+    begin(startPlan(null, key, title, path, null, resume, poster, current.addonKey, emptyList(), current.audioPreference, current.subtitlePreference, mint = mint, shuffle = shuffle))
   }
 
   /**
@@ -408,7 +415,7 @@ class PlaybackController(
     val previousId = sessionId
     // The outgoing identity is captured before the new plan replaces it, so a switch between two
     // versions of one remote item still saves under the same stable key.
-    val previous = if (previousId != null && hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey) else null
+    val previous = if (previousId != null && hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey, shuffle) else null
     val outgoingReported = reported
     val outgoingPosition = position
     val outgoingPaused = !playing
@@ -423,6 +430,7 @@ class PlaybackController(
     addonKey = next.addonKey
     stableKey = next.stableKey
     remote = next.remote
+    shuffle = next.shuffle
     playing = false
     ready = false
     hasPosition = false
@@ -786,7 +794,7 @@ class PlaybackController(
     val outgoingReported = reported
     val outgoingPosition = position
     reported = null
-    val payload = if (hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey) else null
+    val payload = if (hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey, shuffle) else null
     sessionId = null
     if (outgoingReported != null) report(ReportEvent.Stop, outgoingReported, outgoingPosition, paused = !playing)
     if (payload != null || id != null) {
@@ -807,7 +815,7 @@ class PlaybackController(
    *  deferring it with the periodic ones. */
   private fun saveNow(final: Boolean = false) {
     if (stopped || !hasPosition || sessionId == null) return
-    val payload = SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey)
+    val payload = SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey, shuffle)
     scope.launch { runCatching { save(payload, final) } }
   }
 
@@ -823,7 +831,7 @@ class PlaybackController(
    */
   private suspend fun save(payload: SavePayload, final: Boolean = false) {
     val context = payload.remote
-    if (context != null && !VersionProgress.titleOwned(payload.key, context)) {
+    if (!payload.shuffle && context != null && !VersionProgress.titleOwned(payload.key, context)) {
       remoteApi().patchRemoteItemState(
         context.libraryId,
         context.itemId,
@@ -836,7 +844,7 @@ class PlaybackController(
       )
       return
     }
-    api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey, remote = context, stableKey = payload.stableKey, final = final)
+    api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey, remote = context, stableKey = payload.stableKey, final = final, shuffle = payload.shuffle)
   }
 
   private fun startLoops() {
@@ -858,7 +866,7 @@ class PlaybackController(
     saveJob = scope.launch {
       while (isActive) {
         delay(SAVE_INTERVAL_MS)
-        if (playing && hasPosition) runCatching { save(SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey)) }
+        if (playing && hasPosition) runCatching { save(SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey, shuffle)) }
       }
     }
     reportJob = scope.launch {
@@ -1038,6 +1046,7 @@ class PlaybackController(
     val remote: RemoteItemContext?,
     /** The stable handle of the row the position was played from. */
     val stableKey: String?,
+    val shuffle: Boolean,
   )
 
   companion object {

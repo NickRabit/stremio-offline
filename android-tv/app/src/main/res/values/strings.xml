@@ -41,6 +41,8 @@
   <string name="tv_library_type_panel">Type</string>
   <string name="tv_library_empty">Nothing here yet. Files you download appear in this library.</string>
   <string name="tv_library_files">%1$s files</string>
+  <string name="library_play_random">Play random</string>
+  <string name="library_play_random_empty">Nothing to play here.</string>
   <string name="tv_detail_eyebrow_library">In your library</string>
   <string name="tv_detail_watched">%1$s %% watched</string>
   <string name="tv_play">Play</string>

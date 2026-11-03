@@ -105,6 +105,7 @@ import cz.stremiooffline.tv.ui.catalog.libraryAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.RemoteSourcesFailure
 import cz.stremiooffline.tv.ui.catalog.sourceFilterChips
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.ShuffleRun
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -218,10 +219,18 @@ fun PlayerScreen(
 
   val currentState by rememberUpdatedState(state)
   val currentNext by rememberUpdatedState(nextEpisode)
+  val closedShuffle = remember { mutableSetOf<String>() }
+
+  fun closeShuffle() {
+    val id = currentTarget.shuffle?.id ?: return
+    if (!closedShuffle.add(id)) return
+    sessionScope.launch { runCatching { api.deleteShuffle(id) } }
+  }
 
   /** Every way out of the player releases the session first, whether or not the caller unmounts us. */
   val leave = {
     controller.release()
+    closeShuffle()
     onExit(state.sourceId)
   }
 
@@ -301,6 +310,36 @@ fun PlayerScreen(
   fun startNext() {
     val next = currentNext ?: return
     nextCard = false
+    val run = currentTarget.shuffle
+    if (run != null) {
+      nextEpisode = null
+      scope.launch {
+        val answer = runCatching { api.shuffleNext(run.id) }.getOrNull() ?: return@launch
+        val item = answer.item ?: return@launch
+        fileReplaced = true
+        delaySeconds = 0.0
+        cues = emptyList()
+        title = item.title
+        val nextTarget = PlayTarget(
+          key = Progress.libraryKey(item.path),
+          title = item.title,
+          resume = false,
+          path = item.path,
+          shuffle = ShuffleRun(run.id, answer.upcoming?.title),
+        )
+        currentTarget = nextTarget
+        nextEpisode = answer.upcoming?.title?.let { NextEpisode("", it) }
+        controller.playNext(
+          key = nextTarget.key,
+          title = nextTarget.title,
+          path = nextTarget.path,
+          resume = false,
+          shuffle = true,
+        ) { runCatching { api.librarySource(item.path) }.getOrNull()?.sourceId }
+        nextSubtitlesFor = nextTarget
+      }
+      return
+    }
     fileReplaced = true
     delaySeconds = 0.0
     cues = emptyList()
@@ -457,6 +496,7 @@ fun PlayerScreen(
         mint = target.path?.let { path -> { runCatching { api.librarySource(path) }.getOrNull()?.sourceId?.takeIf { it.isNotBlank() } } },
         remoteItem = target.remoteItem,
         stableKey = target.stableKey,
+        shuffle = target.shuffle != null,
       )
     }
   }
@@ -511,6 +551,7 @@ fun PlayerScreen(
       subtitlePreference = settings.subtitleLanguage,
       remoteItem = episode.remoteItem,
       stableKey = episode.stableKey,
+      shuffle = episode.shuffle != null,
     )
   }
 
@@ -578,8 +619,21 @@ fun PlayerScreen(
   }
 
   // The next library file is resolved once the session is up, so the offer is ready at the end.
-  LaunchedEffect(state.started, state.startedAt, state.sourceId, target.path) {
-    if (!state.started || target.path == null) return@LaunchedEffect
+  LaunchedEffect(
+    state.started,
+    state.startedAt,
+    state.sourceId,
+    target.path,
+    currentTarget.shuffle?.id,
+    currentTarget.shuffle?.upcomingTitle,
+  ) {
+    if (!state.started) return@LaunchedEffect
+    val run = currentTarget.shuffle
+    if (run != null) {
+      nextEpisode = run.upcomingTitle?.let { NextEpisode("", it) }
+      return@LaunchedEffect
+    }
+    if (target.path == null) return@LaunchedEffect
     val id = state.sourceId ?: return@LaunchedEffect
     nextEpisode = runCatching { api.libraryNext(id) }.getOrNull()?.let(::nextEpisodeOf)
   }
@@ -735,6 +789,7 @@ fun PlayerScreen(
   DisposableEffect(Unit) {
     onDispose {
       controller.release()
+      closeShuffle()
       mediaSession.release()
       exoPlayer.release()
     }
@@ -1159,6 +1214,7 @@ internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget 
       remoteSources = Streams.remoteVersionsOf(incomingRemote, current.remoteSources + current.initialSources.orEmpty())
         .ifEmpty { listOf(stream) },
       initialSources = current.initialSources,
+      shuffle = current.shuffle,
     )
   }
   val path = stream.localPath
@@ -1176,6 +1232,7 @@ internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget 
       subtitleName = current.subtitleName,
       catalogue = current.catalogue,
       initialSources = current.initialSources,
+      shuffle = current.shuffle,
     )
   }
   // An ordinary addon row. A catalogue play and a native detail's play both carry the title's own
@@ -1195,6 +1252,7 @@ internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget 
     subtitleName = current.subtitleName,
     catalogue = current.catalogue,
     initialSources = current.initialSources,
+    shuffle = current.shuffle,
   )
 }
 

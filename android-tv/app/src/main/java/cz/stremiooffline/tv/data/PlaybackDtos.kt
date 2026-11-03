@@ -43,6 +43,37 @@ data class AddonSubtitleDto(
 @Serializable
 data class NextFileDto(val path: String = "", val title: String = "")
 
+@Serializable
+data class ShuffleItemDto(
+  val path: String = "",
+  val title: String = "",
+  val season: Int? = null,
+  val episode: Int? = null,
+)
+
+@Serializable
+data class ShuffleUpcomingDto(val title: String = "")
+
+@Serializable
+data class ShuffleStartDto(
+  val id: String = "",
+  val item: ShuffleItemDto = ShuffleItemDto(),
+  val total: Int = 0,
+  val capped: Boolean = false,
+  val hasNext: Boolean = false,
+  val hasPrevious: Boolean = false,
+  val upcoming: ShuffleUpcomingDto? = null,
+)
+
+@Serializable
+data class ShuffleNextDto(
+  val item: ShuffleItemDto? = null,
+  val hasNext: Boolean = false,
+  val hasPrevious: Boolean = false,
+  val exhausted: Boolean = false,
+  val upcoming: ShuffleUpcomingDto? = null,
+)
+
 /** One `POST /api/playback/:id/track` change, with the absolute position it applies at. */
 sealed interface TrackChange {
   val time: Double

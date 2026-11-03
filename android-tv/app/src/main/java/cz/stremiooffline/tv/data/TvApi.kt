@@ -235,6 +235,15 @@ interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, C
   /** The next library file after this source, or null when there is none. */
   suspend fun libraryNext(sourceId: String): NextFileDto?
 
+  /** Starts a random run for one visible library folder or root. */
+  suspend fun startShuffle(path: String): ShuffleStartDto
+
+  /** Advances one random run; an exhausted answer has no item. */
+  suspend fun shuffleNext(id: String): ShuffleNextDto
+
+  /** Ends one random run. Callers treat this as best effort. */
+  suspend fun deleteShuffle(id: String)
+
   /** IntroDB segments for a movie or one series episode. */
   suspend fun introSegments(imdb: String, season: Int?, episode: Int?): IntroSegmentsDto
 

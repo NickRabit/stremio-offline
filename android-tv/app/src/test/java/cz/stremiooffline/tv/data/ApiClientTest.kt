@@ -135,6 +135,37 @@ class ApiClientTest {
   }
 
   @Test
+  fun `shuffle start next and delete use the client-neutral routes`() = runTest {
+    val api = client(start())
+    server.enqueue(
+      MockResponse().setBody(
+        """{"id":"run1","item":{"path":"Films/One.mkv","title":"One"},"total":2,"hasNext":true,"hasPrevious":false,"upcoming":{"title":"Two"}}""",
+      ),
+    )
+    val started = api.startShuffle("Films")
+    val startRequest = server.takeRequest()
+    assertEquals("/api/shuffle", startRequest.path)
+    assertEquals("POST", startRequest.method)
+    assertTrue(startRequest.body.readUtf8().contains("\"path\":\"Films\""))
+    assertEquals("One", started.item.title)
+    assertEquals("Two", started.upcoming?.title)
+
+    server.enqueue(
+      MockResponse().setBody(
+        """{"item":{"path":"Films/Two.mkv","title":"Two"},"hasNext":false,"hasPrevious":true}""",
+      ),
+    )
+    assertEquals("Films/Two.mkv", api.shuffleNext("run1").item?.path)
+    assertEquals("/api/shuffle/run1/next", server.takeRequest().path)
+
+    server.enqueue(MockResponse().setResponseCode(204))
+    api.deleteShuffle("run1")
+    val delete = server.takeRequest()
+    assertEquals("/api/shuffle/run1", delete.path)
+    assertEquals("DELETE", delete.method)
+  }
+
+  @Test
   fun `favourite posts the path and the wanted state`() = runTest {
     server.enqueue(MockResponse().setBody("""{"path":"lib_1/Films/It.mkv","favorite":true}"""))
     val result = client(start()).setFavorite("lib_1/Films/It.mkv", true)
@@ -291,6 +322,10 @@ class ApiClientTest {
     val library = server.takeRequest().body.readUtf8()
     assertTrue(library, !library.contains("poster"))
     assertTrue(library, !library.contains("addonKey"))
+
+    server.enqueue(MockResponse().setResponseCode(204))
+    api.saveProgress("file:Films/It.mkv", 42.0, 1_000.0, "It", "Films/It.mkv", shuffle = true)
+    assertTrue(server.takeRequest().body.readUtf8().contains("\"shuffle\":true"))
   }
 
   @Test

@@ -40,6 +40,8 @@ tv.libraryTitle
 tv.libraryTypePanel
 tv.libraryEmpty
 tv.libraryFiles
+library.playRandom
+library.playRandomEmpty
 tv.detailEyebrowLibrary
 tv.detailWatched
 tv.play

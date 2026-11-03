@@ -32,8 +32,13 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.pressKey
+import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
+import cz.stremiooffline.tv.data.ShuffleItemDto
+import cz.stremiooffline.tv.data.ShuffleStartDto
+import cz.stremiooffline.tv.data.ShuffleUpcomingDto
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.data.RemoteItemDto
@@ -44,6 +49,7 @@ import cz.stremiooffline.tv.ui.components.libraryRootCountTag
 import cz.stremiooffline.tv.ui.BrowseRequest
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.search.LibrarySearchScope
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
@@ -87,6 +93,7 @@ class LibraryScreenTest {
     api: FakeTvApi,
     pendingDelayMs: Long = 1_500L,
     onDetail: (DetailData) -> Unit = {},
+    onPlay: (PlayTarget) -> Unit = {},
     onOpenSearch: ((LibrarySearchScope) -> Unit)? = null,
     searchEverywhereEnabled: Boolean = false,
   ) {
@@ -96,6 +103,7 @@ class LibraryScreenTest {
       LibraryRoute(
         api = api,
         onOpenDetail = onDetail,
+        onPlay = onPlay,
         onOpenSearch = onOpenSearch ?: {},
         searchEverywhereEnabled = searchEverywhereEnabled,
         pendingDelayMs = pendingDelayMs,
@@ -140,6 +148,102 @@ class LibraryScreenTest {
 
     compose.onNodeWithTag("Films").assertIsFocused()
     compose.onNodeWithTag("Shows").assertExists()
+  }
+
+  @Test
+  fun `Menu on a folder opens Play random and starts the run on the returned file`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(folder("Shows", "Shows")), 1, false)
+    api.shuffleStartValue = ShuffleStartDto(
+      id = "run1",
+      item = ShuffleItemDto(path = "Shows/First.mkv", title = "First"),
+      total = 2,
+      hasNext = true,
+      upcoming = ShuffleUpcomingDto("Second"),
+    )
+    val played = mutableListOf<PlayTarget>()
+    mount(api, onPlay = { played += it })
+    switchTo("Files")
+
+    compose.onNodeWithTag("Shows").performKeyInput { pressKey(Key.Menu) }
+    compose.onNodeWithTag(TagLibraryShufflePanel).assertExists()
+    compose.onNodeWithText("Play random").assertExists()
+    focusOn(TagLibraryShuffleAction)
+    press(Key.DirectionCenter)
+
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+    assertEquals(listOf("Shows"), api.shuffleStarts)
+    assertEquals("Shows/First.mkv", played.single().path)
+    assertEquals(false, played.single().resume)
+    assertEquals("Second", played.single().shuffle?.upcomingTitle)
+  }
+
+  @Test
+  fun `Menu on a file starts the folder currently shown`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(folder("yyy", "yyy")), 1, false)
+    api.pages["yyy"] = BrowseResult("yyy", listOf(folder("yyy/xxx", "xxx")), 1, false)
+    api.pages["yyy/xxx"] = BrowseResult("yyy/xxx", listOf(folder("yyy/xxx/zzz", "zzz")), 1, false)
+    api.pages["yyy/xxx/zzz"] = BrowseResult(
+      "yyy/xxx/zzz",
+      listOf(file("yyy/xxx/zzz/E10.mkv"), folder("yyy/xxx/zzz/sub", "sub")),
+      2,
+      false,
+    )
+    api.shuffleStartValue = ShuffleStartDto(id = "run2", item = ShuffleItemDto("yyy/xxx/zzz/E10.mkv", "E10"))
+    val played = mutableListOf<PlayTarget>()
+    mount(api, onPlay = { played += it })
+    switchTo("Files")
+    for (tag in listOf("yyy", "yyy/xxx", "yyy/xxx/zzz")) {
+      compose.onNodeWithTag(tag).performKeyInput { pressKey(Key.DirectionCenter) }
+      compose.waitForIdle()
+      compose.mainClock.advanceTimeBy(150)
+      compose.waitForIdle()
+    }
+
+    compose.onNodeWithTag("yyy/xxx/zzz/E10.mkv").performKeyInput { pressKey(Key.Menu) }
+    compose.onNodeWithTag(TagLibraryShufflePanel).assertExists()
+    focusOn(TagLibraryShuffleAction)
+    press(Key.DirectionCenter)
+
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+    assertEquals(listOf("yyy/xxx/zzz"), api.shuffleStarts)
+  }
+
+  @Test
+  fun `long OK on a folder opens the same Play random panel`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(folder("Shows", "Shows")), 1, false)
+    api.shuffleStartValue = ShuffleStartDto(id = "run3", item = ShuffleItemDto("Shows/First.mkv", "First"))
+    val played = mutableListOf<PlayTarget>()
+    mount(api, onPlay = { played += it })
+    switchTo("Files")
+
+    compose.onNodeWithTag("Shows").performSemanticsAction(SemanticsActions.OnLongClick) { it() }
+    compose.onNodeWithTag(TagLibraryShufflePanel).assertExists()
+    focusOn(TagLibraryShuffleAction)
+    press(Key.DirectionCenter)
+
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+    assertEquals(listOf("Shows"), api.shuffleStarts)
+  }
+
+  @Test
+  fun `an empty random folder uses the existing notice`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(folder("Empty", "Empty")), 1, false)
+    api.shuffleStartFailure = ApiFailure.NotFound
+    mount(api)
+    switchTo("Files")
+
+    compose.onNodeWithTag("Empty").performKeyInput { pressKey(Key.Menu) }
+    focusOn(TagLibraryShuffleAction)
+    press(Key.DirectionCenter)
+
+    compose.waitUntil(5_000) { api.shuffleStarts.isNotEmpty() }
+    compose.onNodeWithText(
+      ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.library_play_random_empty),
+    ).assertExists()
   }
 
   @Test

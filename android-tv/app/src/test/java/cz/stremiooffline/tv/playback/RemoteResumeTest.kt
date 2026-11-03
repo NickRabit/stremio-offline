@@ -64,6 +64,7 @@ class RemoteResumeTest {
       remote: RemoteItemContext?,
       stableKey: String?,
       final: Boolean,
+      shuffle: Boolean,
     ) {}
 
     override suspend fun remoteItemState(libraryId: String, itemId: String): RemoteItemStateDto = stored

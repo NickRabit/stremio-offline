@@ -402,6 +402,24 @@ class ApiClient(
     return body.decode()
   }
 
+  override suspend fun startShuffle(path: String): ShuffleStartDto {
+    val payload = json.encodeToString(ShuffleBody.serializer(), ShuffleBody(path))
+    return request(Request.Builder().url(address.resolve("/api/shuffle")).post(payload.toRequestBody(mediaType)).build())
+      .decode<ShuffleStartDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun shuffleNext(id: String): ShuffleNextDto =
+    request(
+      Request.Builder()
+        .url(address.resolve("/api/shuffle/" + encode(id) + "/next"))
+        .post("{}".toRequestBody(mediaType))
+        .build(),
+    ).decode<ShuffleNextDto>() ?: throw ApiError(ApiFailure.Generic)
+
+  override suspend fun deleteShuffle(id: String) {
+    request(Request.Builder().url(address.resolve("/api/shuffle/" + encode(id))).delete().build())
+  }
+
   override suspend fun introSegments(imdb: String, season: Int?, episode: Int?): IntroSegmentsDto {
     val query = buildString {
       append("/api/intro-segments?imdb=").append(encode(imdb))
@@ -774,11 +792,12 @@ class ApiClient(
     remote: RemoteItemContext?,
     stableKey: String?,
     final: Boolean,
+    shuffle: Boolean,
   ) {
     // The body drops what it does not have instead of sending nulls, the way the download body does.
     val payload = progressJson.encodeToString(
       ProgressRequest.serializer(),
-      ProgressRequest(key, position, duration, title, path, poster, addonKey, VersionProgress.writer(remote)?.let { ProgressWriter(it.first, it.second, it.third) }, stableKey, final.takeIf { it }),
+      ProgressRequest(key, position, duration, title, path, poster, addonKey, VersionProgress.writer(remote)?.let { ProgressWriter(it.first, it.second, it.third) }, stableKey, final.takeIf { it }, shuffle.takeIf { it }),
     )
     request(Request.Builder().url(address.resolve("/api/progress")).post(payload.toRequestBody(mediaType)).build())
   }
@@ -927,6 +946,9 @@ private data class DownloadRequest(
 private data class TimeRequest(val time: Double)
 
 @Serializable
+private data class ShuffleBody(val path: String)
+
+@Serializable
 private data class PlaybackStartRequest(
   val sourceId: String,
   val capabilities: ClientCapabilitiesDto,
@@ -965,6 +987,7 @@ private data class ProgressRequest(
   val stableKey: String? = null,
   /** Named only for the last report of a playback. */
   val final: Boolean? = null,
+  val shuffle: Boolean? = null,
 )
 
 @Serializable
