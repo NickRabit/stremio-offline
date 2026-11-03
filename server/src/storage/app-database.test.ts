@@ -201,9 +201,11 @@ test("a worker crash breaks pending and later calls", async (t) => {
   let worker: Worker | undefined;
   const database = await open({ onWorker: (created) => { worker = created; } });
   assert.ok(worker);
-  // A query long enough that the worker is still inside it when it is terminated; a trivial
-  // one can finish first on a fast runner, and then nothing is pending to break.
-  const pending = database.get("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 200000000) SELECT count(*) AS value FROM c");
+  // Keep this call in the parent while the worker exits, independently of query speed.
+  const postMessage = worker.postMessage;
+  worker.postMessage = (() => undefined) as typeof worker.postMessage;
+  const pending = database.get("SELECT 1 AS value");
+  worker.postMessage = postMessage;
   const terminated = worker.terminate();
   await assert.rejects(pending, { name: "StorageError", code: "broken" });
   await terminated;
