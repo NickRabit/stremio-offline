@@ -82,6 +82,7 @@ export interface ProviderItem {
   episode?: number;
   episodeEnd?: number;
   providerIds: { imdb?: string; tmdb?: string; tvdb?: string };
+  originalTitle?: string;
   durationTicks?: number;
   overview?: string; year?: number; genres?: string[]; size?: number; addedAt?: string;
   /** The provider's premiere date, when it reported a parseable one. */
@@ -333,6 +334,8 @@ function providerItem(raw: unknown): ProviderItem {
     type,
     providerIds: item.Type === "MusicVideo" ? {} : readProviderIds(item.ProviderIds),
   };
+  const originalTitle = optionalString(item.OriginalTitle, MEDIA_SERVER_LIMITS.name);
+  if (originalTitle !== undefined) result.originalTitle = originalTitle;
   const parentId = optionalString(item.ParentId, MEDIA_SERVER_LIMITS.upstreamId);
   if (parentId !== undefined) result.parentId = parentId;
   const seriesId = optionalString(item.SeriesId, MEDIA_SERVER_LIMITS.upstreamId);
