@@ -8,9 +8,9 @@ import { images } from "../images.js";
 import { allowedAddons } from "../addons.js";
 import { HomeCatalogCache, homeCatalogOfferings, homeCatalogTargets, type HomeCatalogTarget } from "../home-catalogs.js";
 import {
-  HOME_BUILTIN_LABELS, HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_RESUME_FILE_LIMIT, HOME_ROW_LIMIT,
+  HOME_BUILTIN_LABELS, HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_RESUME_FILE_LIMIT, HOME_ROW_LIMIT, HOME_TITLE_PAIR_LOOKUPS,
   arrangeHomeRows, boundCards, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, mergeResume, parseHomeLayout,
-  parseResumeFilter, resumePage,
+  parseResumeFilter, resumePage, tmdbIdOfIdentity,
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
   type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeIdentity, type ResumeSources,
 } from "../home.js";
@@ -98,6 +98,11 @@ export interface HomeDeps extends RouteContext {
   now?: () => number;
   /** Tests inject a few milliseconds instead of waiting the real deadline out. */
   homeLookupDeadlineMs?: number;
+  /** The IMDb id a TMDB id is already known to stand for, read from the shared id map. */
+  imdbOfTmdb?: (type: "movie" | "series", tmdbId: number) => string | null | undefined;
+  /** Asks TMDB once for the IMDb id behind a TMDB id the map does not know yet; the answer lands
+   *  in the same map. */
+  learnImdbOfTmdb?: (type: "movie" | "series", tmdbId: number) => Promise<unknown>;
 }
 
 const ALL_ROWS: BuiltinHomeRowId[] = [...HOME_BUILTIN_ROWS];
@@ -141,7 +146,7 @@ const shuffleOf = (raw: unknown): number => {
 };
 
 export function registerHomeRoutes(app: express.Application, deps: HomeDeps): void {
-  const { store, currentUser, requireAccess, personal, remotePersonal, authorityOf, completedJobs, newEpisodes, describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
+  const { store, currentUser, requireAccess, personal, remotePersonal, authorityOf, completedJobs, newEpisodes, describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS, imdbOfTmdb, learnImdbOfTmdb } = deps;
 
   /** A key the caller may open now: its library is still configured, switched on and granted.
    *  `pathVisible` covers the removed and the lost-grant case; the enabled switch is Home's.
@@ -268,12 +273,37 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       ...(item.seriesPath ? { seriesPath: item.seriesPath } : {}),
       ...(item.identity ? { identity: item.identity } : {}),
     }));
+    await learnTitlePairs([...files, ...catalogue, ...(remote?.items ?? [])].map((item) => item.identity));
+    const imdbOf = imdbOfTmdb
+      ? (type: "movie" | "series", tmdbId: number) => imdbOfTmdb(type, tmdbId) ?? undefined
+      : undefined;
     return {
-      sources: { catalogue, files, ...(remote ? { remote: remote.items } : {}) },
+      sources: { catalogue, files, ...(remote ? { remote: remote.items } : {}), ...(imdbOf ? { imdbOf } : {}) },
       partial: progress.partial || remote === undefined || remote.partial === true,
       pending: resume.pending,
       ...(remote ? { proof: { authority, cards: remote } } : {}),
     };
+  };
+
+  /** A title the viewer reached once through TMDB and once through IMDb is one card only when
+   *  the pair is known. The few pairs the shared map has not met yet are asked for here, bounded
+   *  and within the Home deadline; a pair that does not arrive in time leaves two cards this once. */
+  const learnTitlePairs = async (identities: Array<ResumeIdentity | undefined>): Promise<void> => {
+    if (!imdbOfTmdb || !learnImdbOfTmdb) return;
+    const unknown = new Map<string, { type: "movie" | "series"; tmdbId: number }>();
+    for (const identity of identities) {
+      if (!identity) continue;
+      const tmdbId = tmdbIdOfIdentity(identity);
+      if (tmdbId === undefined || imdbOfTmdb(identity.type, tmdbId) !== undefined) continue;
+      unknown.set(`${identity.type}:${tmdbId}`, { type: identity.type, tmdbId });
+    }
+    if (!unknown.size) return;
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<void>((resolve) => { timer = setTimeout(resolve, homeLookupDeadlineMs); });
+    const asked = mapBounded([...unknown.values()].slice(0, HOME_TITLE_PAIR_LOOKUPS), 4, ({ type, tmdbId }) =>
+      learnImdbOfTmdb(type, tmdbId).catch(() => undefined));
+    await Promise.race([asked, deadline]);
+    if (timer) clearTimeout(timer);
   };
 
   const enrichResumeArtwork = async (req: express.Request, items: ResumeCard[]): Promise<ResumeCard[]> => {
