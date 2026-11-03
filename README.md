@@ -44,10 +44,9 @@ shows the responsive phone interface. It uses CC BY Blender Foundation open
 movies; no media or demo addon is included with the app.
 
 [Movie Night Travels With You (1:38)](https://www.youtube.com/watch?v=LLAD5VTk9E8)
-shows how an Android TV on the home network and a phone browser connected through
-your own VPN browse the same library. The server fetches addon catalogs and serves
-video from supported addons, Jellyfin, Emby and local files. Streaming away from
-home needs enough home upload and mobile bandwidth for the chosen quality.
+follows a request through your home server, from browsing an addon catalog to
+playing a film from an addon, Jellyfin, Emby or a file on your NAS. The demo
+also shows the server delivering a cached poster while its source is paused.
 
 ## What it does
 
