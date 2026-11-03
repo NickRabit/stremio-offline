@@ -358,7 +358,10 @@ The remaining majors after these, one PR each:
   the same names and render the same markup, size and classes; only
   `CircleCheck` and `CalendarClock` are slightly redrawn. Icons without a
   label stay `aria-hidden` as in 0.577.
-- **`@types/node` 22 → 24**, the lowest Node the server runs on (Electron's).
+- **`@types/node`** stays on the 22 line (22.20.5), the floor in `engines`: types
+  for a newer Node would accept APIs that Node 22 lacks, and CI only runs 24
+  and 26, so nothing would catch them. Move to 24 together with raising the
+  floor to 24, at the latest when Node 22 leaves maintenance in April 2027.
 
 Ubuntu base image majors stay manual as well (24.04 on purpose since #634).
 
