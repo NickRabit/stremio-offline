@@ -32,8 +32,8 @@ internal fun remoteCatalogueArgs(
   } else {
     MetaDto(id = id, type = "series", name = metadata.seriesName.orEmpty())
   }
-  val resumeEpisode: ((Int, Int) -> ResumeEpisode) = { season, episode ->
-    ResumeEpisode(ProgressKey.of("series", id, "$id:$season:$episode"), season, episode)
+  val resumeEpisode: ((Int, Int, String?) -> ResumeEpisode) = { season, episode, updatedAt ->
+    ResumeEpisode(ProgressKey.of("series", id, "$id:$season:$episode"), season, episode, updatedAt)
   }
   return when {
     item.type == "movie" -> CatalogDetailArgs(
@@ -48,7 +48,7 @@ internal fun remoteCatalogueArgs(
       meta = MetaDto(id = id, type = "series"),
       addonName = "",
       type = identity.first,
-      episode = resumeEpisode(item.season, item.episode),
+      episode = resumeEpisode(item.season, item.episode, data.updatedAt),
       autoPlay = data.autoPlay,
       preferRemote = true,
       preferredRemote = RemoteItemRef(data.libraryId, item.id),
@@ -66,9 +66,9 @@ internal fun remoteCatalogueArgs(
       } else {
         null
       }
-      val cardEpisode = card?.let {
-        it.season?.let { season ->
-          it.episode?.let { episode -> resumeEpisode(season, episode) }
+      val cardEpisode = card?.let { resumeCard ->
+        resumeCard.season?.let { season ->
+          resumeCard.episode?.let { episode -> resumeEpisode(season, episode, resumeCard.updatedAt) }
         }
       }
       CatalogDetailArgs(

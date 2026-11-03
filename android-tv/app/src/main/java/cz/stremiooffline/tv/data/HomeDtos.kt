@@ -93,6 +93,7 @@ sealed interface HomeCard {
     val episode: Int? = null,
     /** The title the file is bound to, when the catalogue can name it. */
     val identity: TitleRefDto? = null,
+    val updatedAt: String? = null,
     /** Every stored key this card stands for; the detail forgets them together. */
     val forgetKeys: List<String> = emptyList(),
   ) : HomeCard
@@ -111,6 +112,7 @@ sealed interface HomeCard {
     val episode: Int? = null,
     val progress: HomeProgress? = null,
     val pending: Boolean = false,
+    val updatedAt: String? = null,
     /** The library file that wrote the position, when it is a video: the card plays that file. */
     val path: String? = null,
     val forgetKeys: List<String> = emptyList(),

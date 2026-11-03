@@ -13,6 +13,7 @@ data class RemoteDetailData(
   /** The parent series' external ids, when the caller already holds them, so an episode's copy
    *  carries the series' catalogue id without reading the parent again. */
   val seriesIds: RemoteProviderIdsDto? = null,
+  val updatedAt: String? = null,
   /** Opened from Continue watching: Play is pressed once the item and a version have loaded. */
   val autoPlay: Boolean = false,
 ) {

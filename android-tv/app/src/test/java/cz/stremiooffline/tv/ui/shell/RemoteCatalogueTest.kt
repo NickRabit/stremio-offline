@@ -119,6 +119,22 @@ class RemoteCatalogueTest {
   }
 
   @Test
+  fun `a catalogue episode keeps the card's update time`() {
+    val opened = episode("e3", 2, 1)
+    val updatedAt = "2026-01-02T00:00:00.000Z"
+    val args = remoteCatalogueArgs(
+      data(opened).copy(updatedAt = updatedAt),
+      RemoteMetadata(opened, "Show", null),
+      "series" to "tt9",
+      emptyList(),
+    )
+
+    assertEquals(2, args.episode?.season)
+    assertEquals(1, args.episode?.number)
+    assertEquals(updatedAt, args.episode?.updatedAt)
+  }
+
+  @Test
   fun `a failed series lookup falls back to the item without episodes`() {
     val show = RemoteItemDto(id = "show", name = "Show", type = "series", poster = "poster")
     val args = remoteFallbackCatalogueArgs(data(show))

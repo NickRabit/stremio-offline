@@ -21,6 +21,7 @@ import { canQueue, isLocalStream, isRemoteStream } from "./streams";
 import { sourceTargetRule } from "./save-target";
 import { DetailRatings, ratingsFrom } from "./detail-copy";
 import type { CatalogueDetailTarget } from "./CatalogueTitleDetail";
+import { seriesEntry } from "./resume-target";
 import { remoteDetailArtwork } from "./remote-artwork";
 import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
 import { pickTileArt } from "./tile-shape";
@@ -166,6 +167,7 @@ type ListingSnapshot = {
 };
 
 const PAGE_SIZE = 60;
+const CATALOGUE_EPISODE_PAGE_LIMIT = 20;
 const emptyStatus = (): Status => ({ items: [], total: 0, loading: false, error: "" });
 const aborted = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
 const isStale = (error: unknown) => error instanceof ApiError && (error.status === 409 || error.messageKey === "err.mediaServerStale");
@@ -542,6 +544,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   useEffect(() => {
     const library = selected;
     if (!library || !series) return;
+    const catalogue = catalogueRef("series", series.providerIds);
     const epoch = ++episodeEpoch.current;
     const controller = new AbortController();
     cancelEpisodesMore();
@@ -549,23 +552,57 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     const resume = api.remotePersonal("resume", { limit: 60, signal: controller.signal })
       .then((answer) => answer.items)
       .catch(() => []);
+    const stored = catalogue
+      ? api.progressList().catch(() => [])
+      : Promise.resolve([]);
     Promise.all([
       api.remoteBrowse(library.id, { parentId: series.id, mode: "titles", type: "episode", limit: PAGE_SIZE, signal: controller.signal }),
       resume,
+      stored,
     ])
-      .then(async ([page, resumeItems]) => {
+      .then(async ([page, resumeItems, progressEntries]) => {
         if (epoch !== episodeEpoch.current) return;
         setEpisodes({ items: page.items, cursor: page.cursor, total: page.total, loading: false, error: "" });
         if (!page.items.length || detailRef.current?.type !== "series" || detailRef.current.id !== series.id) return;
         const mine = resumeItems.filter((card) => card.libraryId === library.id);
         const resumedId = mine.find((card) => page.items.some((episode) => episode.id === card.itemId))?.itemId;
+        let resumedCard = mine.find((card) => card.itemId === resumedId);
         let resumed = page.items.find((episode) => episode.id === resumedId);
         // The episode in progress may sit past the first page. A card names no series, so each
         // remaining episode card is read by its id and kept only when it belongs to this one.
         for (const card of resumed ? [] : mine.filter((entry) => entry.itemType === "episode").slice(0, 6)) {
           const found = await api.remoteItem(library.id, card.itemId, controller.signal).then(({ item }) => item, () => null);
           if (epoch !== episodeEpoch.current || controller.signal.aborted) return;
-          if (found?.type === "episode" && found.seriesId === series.id) { resumed = found; break; }
+          if (found?.type === "episode" && found.seriesId === series.id) {
+            resumed = found;
+            resumedCard = card;
+            break;
+          }
+        }
+        const catalogueEntry = catalogue ? seriesEntry(progressEntries, catalogue.id) : undefined;
+        const target = catalogueEntry?.series;
+        const inProgress = Boolean(catalogueEntry && !catalogueEntry.pending && catalogueEntry.position > 30 &&
+          (!(catalogueEntry.duration > 0) || catalogueEntry.position / catalogueEntry.duration < 0.94));
+        if (inProgress && target) {
+          const matches = (episode: RemoteItem) =>
+            episode.type === "episode" && episode.season === target.season && episode.episode === target.episode;
+          const cardTime = Date.parse(resumedCard?.updatedAt ?? "");
+          const storedTime = Date.parse(catalogueEntry.updatedAt);
+          const storedIsNewer = !resumedCard || !Number.isFinite(cardTime) ||
+            (Number.isFinite(storedTime) && storedTime > cardTime);
+          if (storedIsNewer) {
+            let catalogueEpisode = page.items.find(matches);
+            let cursor = page.cursor;
+            for (let pageNumber = 0; !catalogueEpisode && cursor && pageNumber < CATALOGUE_EPISODE_PAGE_LIMIT; pageNumber += 1) {
+              const next = await api.remoteBrowse(library.id, {
+                parentId: series.id, mode: "titles", type: "episode", limit: PAGE_SIZE, cursor, signal: controller.signal,
+              });
+              if (epoch !== episodeEpoch.current || controller.signal.aborted) return;
+              catalogueEpisode = next.items.find(matches);
+              cursor = next.cursor;
+            }
+            if (catalogueEpisode) resumed = catalogueEpisode;
+          }
         }
         if (detailRef.current?.type !== "series" || detailRef.current.id !== series.id) return;
         const firstUnwatched = page.items.find((episode) => !itemStatesRef.current[stateKey(library.id, episode.id)]?.watched);
@@ -578,7 +615,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         setEpisodes({ items: [], total: 0, loading: false, error: describeError(error) });
       });
     return () => { controller.abort(); if (episodeEpoch.current === epoch) episodeEpoch.current += 1; cancelEpisodesMore(); };
-  }, [selected, series?.id, episodeNonce]);
+  }, [selected, series?.id, series?.providerIds.imdb, series?.providerIds.tmdb, episodeNonce]);
 
   // A series read from a listing has only the row's summary. Its full record is needed even after
   // the first episode replaces the temporary series detail.
