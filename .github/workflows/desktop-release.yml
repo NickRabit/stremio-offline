@@ -34,7 +34,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
 
       # Validate the tag before the job checks it out or builds from it: it has

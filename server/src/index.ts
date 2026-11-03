@@ -42,7 +42,7 @@ import { emptyUserData, findUserById, forEachUserData, type UserData, type UserR
 import type { ProgressSeries } from "./progress-series.js";
 import { advanceTorrent } from "./debrid.js";
 import { DebridReadyStore } from "./debrid-ready.js";
-import { tmdbGallery, tmdbMeta, tmdbMovieReleases, tmdbSeasonAirDates, type TmdbConfig } from "./tmdb.js";
+import { tmdbExternalIdResult, tmdbGallery, tmdbMeta, tmdbMovieReleases, tmdbSeasonAirDates, type TmdbConfig } from "./tmdb.js";
 import { tmdbIds } from "./tmdb-ids.js";
 import { attachTitleExtrasDisk } from "./title-extras.js";
 import { createLibraryCandidates } from "./library-candidates.js";
@@ -2800,7 +2800,13 @@ const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryC
 // route exists.
 const homeCatalogs = new HomeCatalogCache();
 const warmHomeCatalogs = () => { if (!homeCatalogs.idle) homeCatalogs.warm(homeCatalogTargets(store.addons())); };
-registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, remotePersonal: mediaServerPersonal, authorityOf, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched, include) => followService.newEpisodes(ownerUserId, watched, include), describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
+registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, remotePersonal: mediaServerPersonal, authorityOf, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched, include) => followService.newEpisodes(ownerUserId, watched, include), describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows,
+  imdbOfTmdb: (type, tmdbId) => tmdbIds.imdbOf(type, tmdbId),
+  learnImdbOfTmdb: (type, tmdbId) => {
+    const config = tmdbConfigOf(prefsOf().uiLanguage);
+    return config ? tmdbExternalIdResult(type, tmdbId, config) : Promise.resolve();
+  },
+});
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, mediaSources: mediaServerSources, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, mediaSources: mediaServerSources, deviceTransfers, jobView, sourceOf, ownerOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf, defaultDownloadLibrary: downloadDefaultLibrary });

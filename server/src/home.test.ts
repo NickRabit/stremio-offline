@@ -109,6 +109,29 @@ test("a library film and its catalogue row merge into one card, whichever half i
   assert.equal(tie.items[0]!.kind, "resume-file");
 });
 
+test("a file bound through TMDB and a catalogue row keyed by IMDb are one card once the pair is known", () => {
+  // Real case: "Já, kocour" played from a library file bound as tmdb:322240 and from a Jellyfin
+  // version in the catalogue detail, keyed tt4383594.
+  const fileHalf = file({ key: "file:lib/Ja kocour.mkv", identity: { type: "movie", id: "tmdb:322240" }, updatedAt: at(3) });
+  const catalogueHalf = catalogue({ key: "movie:tt4383594", type: "movie", id: "tt4383594", identity: { type: "movie", id: "tt4383594" }, updatedAt: at(2) });
+  const remoteHalf = remoteCard({ key: "remote:k", identity: { type: "movie", id: "tmdb:322240" }, updatedAt: at(1) });
+
+  assert.equal(mergeResume({ files: [fileHalf], catalogue: [catalogueHalf] }).items.length, 2, "an unknown pair stays two cards");
+
+  const pairs = (type: "movie" | "series", tmdbId: number) => type === "movie" && tmdbId === 322240 ? "tt4383594" : undefined;
+  const { items } = mergeResume({ files: [fileHalf], catalogue: [catalogueHalf], remote: [remoteHalf], imdbOf: pairs });
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.kind, "resume-file", "the newest half wins");
+  assert.deepEqual(forgetKeys(items[0]!), ["file:lib/Ja kocour.mkv", "movie:tt4383594"]);
+
+  const series = mergeResume({
+    files: [file({ key: "file:s", identity: { type: "series", id: "tmdb:322240" } })],
+    catalogue: [catalogueHalf],
+    imdbOf: pairs,
+  });
+  assert.equal(series.items.length, 2, "the pair is typed: a series with the same TMDB number stays apart");
+});
+
 test("a film and a series that share an id never merge, because the identity is typed", () => {
   const { items } = mergeResume({
     files: [],

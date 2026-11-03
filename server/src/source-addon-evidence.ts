@@ -177,8 +177,20 @@ export function videoCodecFromListing(stream: StreamItem): SourceFact<VideoCodec
   return unknown();
 }
 
+// Dolby Vision and HDR exist only on HEVC or AV1 at 720p and above. Some addons read the "DV" of
+// "DVDRip" or "DVB" as Dolby Vision, so a listed range is not believed where the same listing rules
+// it out.
+const listedRangeImpossible = (stream: StreamItem, text: string): boolean => {
+  if (["xvid", "divx"].some((token) => hasListingToken(text, token))) return true;
+  const codec = videoCodecFromListing(stream);
+  if (codec.evidence === "listed" && codec.value === "h264") return true;
+  const height = heightFromListing(stream);
+  return height !== undefined && height < 720;
+};
+
 export function videoRangeFromListing(stream: StreamItem): SourceFact<VideoRange> {
   const text = listingText(stream);
+  if (listedRangeImpossible(stream, text)) return unknown();
   for (const [range, tokens] of VIDEO_RANGE_TOKENS) {
     if (tokens.some((token) => hasListingToken(text, token))) {
       return { evidence: "listed", value: range };
