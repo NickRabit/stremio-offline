@@ -11,9 +11,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     # The image runs Node 26; the desktop apps run the same server inside Electron's own Node
     # (24 in Electron 44), so the server must keep passing there too.
     strategy:
@@ -50,6 +55,7 @@ jobs:
   # browser image is Linux-only by design, so this job leaves them out.
   windows:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -69,6 +75,7 @@ jobs:
   # same image is used locally when baselines are involved. See docs/testing.md.
   e2e:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
     steps:
@@ -98,6 +105,7 @@ jobs:
   # build: the account setup leaves is enough, so they run beside it instead of after it.
   e2e-browsers:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
     steps:
@@ -130,6 +138,7 @@ jobs:
   # viewport a replay of the whole journey suite -- around two minutes per job.
   e2e-layout:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
     strategy:
