@@ -353,7 +353,10 @@ The remaining majors after these, one PR each:
   newer, so the Node 24 inside Electron still runs it.
 - **lucide-react 0.x → 1** for the icons; compare the screens, since icons can
   be renamed.
-- **`@types/node` 22 → 24**, the lowest Node the server runs on (Electron's).
+- **`@types/node`** stays on the 22 line (22.20.5), the floor in `engines`: types
+  for a newer Node would accept APIs that Node 22 lacks, and CI only runs 24
+  and 26, so nothing would catch them. Move to 24 together with raising the
+  floor to 24, at the latest when Node 22 leaves maintenance in April 2027.
 
 Ubuntu base image majors stay manual as well (24.04 on purpose since #634).
 
