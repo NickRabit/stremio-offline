@@ -335,6 +335,22 @@ test("video codecs and ranges come from whole listing tokens", () => {
   }
 });
 
+test("a listed range the same listing rules out is not believed", () => {
+  // Real Cineshare rows: the addon tags DVD and DVB-T rips "Dolby Vision".
+  const impossible = [
+    { title: "Yes.Prime.Minister.S01E04.1986.iNTERNAL.DVDRip.XviD.MultiDub.CZ-MAGiCBOX.avi\n🌈 Dolby Vision", name: "Webshare" },
+    { title: "Jiste-pane-ministre-S01E04.Lovok.DVB-T.x264.mp4\n🌈 Dolby Vision", name: "SD" },
+    { title: "Movie.2019.576p.HDR.mkv" },
+    { title: "Movie.2019.DivX.HDR10.avi" },
+  ];
+  for (const stream of impossible) {
+    assert.deepEqual(videoRangeFromListing(stream), { evidence: "unknown" }, stream.title);
+  }
+  assert.deepEqual(videoRangeFromListing({ title: "Movie.2019.2160p.DV.HEVC.mkv" }), { evidence: "listed", value: "dolbyVision" });
+  assert.deepEqual(videoRangeFromListing({ title: "Movie.2019.1080p.HDR10.x265.mkv" }), { evidence: "listed", value: "hdr" });
+  assert.deepEqual(videoRangeFromListing({ title: "Movie.2019.DV.mkv" }), { evidence: "listed", value: "dolbyVision" });
+});
+
 test("admission rejects an excluded listed release kind and lets an unknown pass", () => {
   const providerKeys = ["addon:one"];
   const original = travelDefinition.policy;
