@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { createLibraryActions, type LibraryActionDeps, type TransferStep } from "./library-actions.js";
+import { ART_VARIANTS, artVariantKey } from "./artwork.js";
 import { carryMovePairs, type FingerprintPair } from "./library-fingerprints.js";
 import type { FoundFile } from "./library.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -27,6 +28,7 @@ const harness = (options: {
   libraries?: () => LibraryRecord[];
   files?: Array<{ relative: string }>;
   metaStore?: LibraryActionDeps["metaStore"];
+  artworks?: LibraryActionDeps["artworks"];
   seen?: LibraryActionDeps["seen"];
   updateEveryData?: LibraryActionDeps["updateEveryData"];
   progressOf?: LibraryActionDeps["progressOf"];
@@ -50,7 +52,7 @@ const harness = (options: {
       holds,
       flush: async () => undefined,
     },
-    artworks: {
+    artworks: options.artworks ?? {
       moveKey: async (from: string) => { calls.moved.push(from); return { carried: true as const }; },
       copyKey: async () => ({ carried: true as const }),
     },
@@ -172,6 +174,7 @@ const withCarry = async (
     data: UserData,
   ) => Promise<void>,
   seenFiles = files,
+  carryOptions: Parameters<typeof harness>[0] = {},
 ) => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "library-carry-"));
   try {
@@ -193,6 +196,7 @@ const withCarry = async (
       watchlist: {},
     } as UserData;
     await withRoot(files, (root, actions, calls) => run(root, actions, calls, metaStore, seen, data), {
+      ...carryOptions,
       metaStore,
       seen,
       progressOf: (value) => value.progress as ReturnType<LibraryActionDeps["progressOf"]>,
@@ -371,6 +375,49 @@ test("carryHandMove replaces an automatic target row and keeps a manual one", as
     await metaStore.flush();
     assert.equal(metaStore.qualifiedMeta()[to]?.id, "tt-manual");
   });
+});
+
+test("a carried replay of an in-app move keeps the moved file's own match and target artwork", async () => {
+  const from = `${LIBRARY_ID}/Show/bonus.mkv`;
+  const to = `${LIBRARY_ID}/Movies/bonus.mkv`;
+  const artwork = new Map<string, string>();
+  for (const variant of ART_VARIANTS) {
+    artwork.set(artVariantKey(from, variant), "source-file");
+    artwork.set(artVariantKey(`dir:${from}`, variant), "source-folder");
+  }
+  const artworks: LibraryActionDeps["artworks"] = {
+    moveKey: async (source, target) => {
+      if (!artwork.has(source)) return { carried: false, reason: "absent" };
+      artwork.set(target, artwork.get(source)!);
+      artwork.delete(source);
+      return { carried: true };
+    },
+    copyKey: async () => ({ carried: true }),
+  };
+  await withCarry({
+    Show: { type: "series", id: "tt-show", source: "user", locked: true },
+    "Show/bonus.mkv": { type: "movie", id: "tt-movie", source: "scan", locked: false },
+  }, ["Show/bonus.mkv", "Movies/.keep"], async (_root, actions, _calls, metaStore, seen, data) => {
+    await actions.transferLibraryItem(from, `${LIBRARY_ID}/Movies`);
+    seen.move(LIBRARY_ID, "Show/bonus.mkv", LIBRARY_ID, "Movies/bonus.mkv");
+    await metaStore.flush();
+    await seen.flush();
+
+    const beforeMeta = structuredClone(metaStore.qualifiedMeta()[to]);
+    const beforeArt = [...artwork].filter(([key]) => key.includes(to));
+    const beforeFavorites = [...data.favorites];
+    const beforeSeen = seen.recent([LIBRARY_ID], 10);
+    assert.equal(beforeMeta?.id, "tt-movie");
+    assert.ok(beforeArt.length > 0);
+
+    await actions.carryHandMove(from, to, false);
+    await metaStore.flush();
+    await seen.flush();
+    assert.deepEqual(metaStore.qualifiedMeta()[to], beforeMeta);
+    assert.deepEqual([...artwork].filter(([key]) => key.includes(to)), beforeArt);
+    assert.deepEqual(data.favorites, beforeFavorites);
+    assert.deepEqual(seen.recent([LIBRARY_ID], 10), beforeSeen);
+  }, ["Show/bonus.mkv"], { artworks });
 });
 
 const withRoot = async (

@@ -89,6 +89,18 @@ test("a complete folder move is lifted once at its highest folder", () => {
   }]);
 });
 
+test("a complete file set does not lift into a folder that already held files", () => {
+  const mtime = Date.parse(OLD);
+  const result = pairMoves([
+    row(A, "Show A/e1.mkv", 10, mtime),
+    row(A, "Show A/e2.mkv", 11, mtime),
+  ], [walk(A, [
+    file("Show B/e1.mkv", 10),
+    file("Show B/e2.mkv", 11),
+  ])], { now: NOW });
+  assert.deepEqual(liftFolders(result.pairs, result.vanished, undefined, () => true), result.pairs);
+});
+
 test("a partial folder move stays file by file", () => {
   const mtime = Date.parse(OLD);
   const result = pairMoves([

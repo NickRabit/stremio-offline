@@ -1368,7 +1368,9 @@ const maintenance = createMaintenance({
         try {
           await artworkSweep();
           if (signal.aborted) return;
-          const pairs = await fingerprints.reconcile(walks, sweepDeps.busy);
+          const walkedIds = new Set(walks.map((walk) => walk.libraryId));
+          const complete = walkableLibraries().every((library) => walkedIds.has(library.id));
+          const pairs = await fingerprints.reconcile(walks, { busy: sweepDeps.busy, complete });
           const result = await carryMovePairs(
             pairs,
             async (pair) => {
@@ -1385,6 +1387,8 @@ const maintenance = createMaintenance({
                 pair.folder,
                 targetFiles,
               );
+              await metaStore.flush();
+              await seen.flush();
             },
             (pair) => fingerprints.commitPair(pair),
             async () => {

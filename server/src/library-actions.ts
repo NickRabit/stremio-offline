@@ -357,7 +357,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     await relocateArtwork(carried, fromKey, toKey);
     const target = metaStore.qualifiedMeta()[toKey];
     const manualTarget = Boolean(target && !isAutomaticRecord(target));
-    if (!manualTarget) await metaStore.relocate(fromKey, toKey, true);
+    if (metaStore.holds(fromKey) && !manualTarget) await metaStore.relocate(fromKey, toKey, true);
     await remapPersonalState(fromKey, toKey);
     seen.move(parsedFrom.libraryId, parsedFrom.relative, parsedTo.libraryId, parsedTo.relative);
   };

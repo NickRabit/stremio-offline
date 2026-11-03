@@ -167,6 +167,7 @@ export function liftFolders(
   pairs: readonly FingerprintPair[],
   vanished: readonly FingerprintRow[],
   absentFolders?: ReadonlySet<string>,
+  occupied?: (libraryId: string, folder: string) => boolean,
 ): FingerprintPair[] {
   const accepted = new Map(pairs.map((pair) => [
     pathKey(pair.libraryId, pair.from),
@@ -223,16 +224,18 @@ export function liftFolders(
       to = destination;
     }
     if (!valid || to === undefined) continue;
-    const targetKey = pathKey(sourcePairs[0]!.toLibraryId, to);
+    const toLibraryId = sourcePairs[0]!.toLibraryId;
+    if (occupied?.(toLibraryId, to)) continue;
+    const targetKey = pathKey(toLibraryId, to);
     if (usedTargets.has(targetKey)) continue;
-    if (sourcePairs.some((pair) => pair.toLibraryId !== sourcePairs[0]!.toLibraryId)) continue;
+    if (sourcePairs.some((pair) => pair.toLibraryId !== toLibraryId)) continue;
 
     usedTargets.add(targetKey);
     for (const pair of sourcePairs) consumed.add(pathKey(pair.libraryId, pair.from));
     folders.push({
       libraryId: candidate.libraryId,
       from: candidate.from,
-      toLibraryId: sourcePairs[0]!.toLibraryId,
+      toLibraryId,
       to,
       folder: true,
     });
@@ -314,14 +317,14 @@ export class LibraryFingerprints {
 
   async reconcile(
     walks: Array<{ libraryId: string; root: string; files: FingerprintWalkFile[] }>,
-    busy: () => boolean = () => false,
+    options: { busy?: () => boolean; complete?: boolean } = {},
   ): Promise<FingerprintPair[]> {
     this.ambiguous = 0;
     this.deferred = false;
     this.pending = new Map();
     if (!this.database || !this.loaded) return [];
     const now = this.now();
-    this.beginHashPass(busy);
+    this.beginHashPass(options.busy ?? (() => false));
     const candidates = await this.hashMoveCandidates(walks, now);
     const pairing = pairMoves([...this.rows.values()], walks, { now, newHashes: candidates.hashes });
     this.ambiguous = pairing.ambiguous;
@@ -336,7 +339,10 @@ export class LibraryFingerprints {
     }
 
     const absent = await this.absentSourceFolders(pairing.vanished, walks);
-    const pairs = liftFolders(pairing.pairs, pairing.vanished, absent);
+    const occupied = (libraryId: string, folder: string) =>
+      [...this.rows.values()].some((row) =>
+        row.libraryId === libraryId && isPathWithin(row.relative, folder));
+    const pairs = liftFolders(pairing.pairs, pairing.vanished, absent, occupied);
     const walkFiles = new Map(walks.flatMap((walk) =>
       walk.files.map((file) => [pathKey(walk.libraryId, file.relative), file] as const)));
     for (const pair of pairs) {
@@ -406,6 +412,11 @@ export class LibraryFingerprints {
       if (candidates.deferredSizes.has(row.size) || skippedSizes.has(row.size)) {
         next.set(pathKey(row.libraryId, row.relative), row);
         this.deferred = true;
+      } else if (options.complete === false) {
+        // A library missing from this pass may be where the file went, so the row waits for a
+        // pass that saw them all. It does not hold back first-seen stamping: a share that stays
+        // off for days must not stop new files being stamped in every other library.
+        next.set(pathKey(row.libraryId, row.relative), row);
       }
     }
 
@@ -451,12 +462,10 @@ export class LibraryFingerprints {
       try {
         handle = await this.open(file, "r");
         const info = await handle.stat();
-        const hash = await contentHash(handle, info.size);
+        if (info.size !== row.size || Math.trunc(info.mtimeMs) !== row.mtimeMs) continue;
+        const hash = await contentHash(handle, row.size);
         this.rows.set(pathKey(row.libraryId, row.relative), {
-          libraryId: row.libraryId,
-          relative: row.relative,
-          size: info.size,
-          mtimeMs: info.mtimeMs,
+          ...row,
           hash,
         });
         this.dirty.set(pathKey(row.libraryId, row.relative), this.rows.get(pathKey(row.libraryId, row.relative)));
