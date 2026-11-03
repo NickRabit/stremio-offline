@@ -3977,6 +3977,11 @@ export function App() {
             {!libraryList && !localDetail && !openLocalSeries && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => { setBrowseDesc((value) => !value); persistLibraryPrefs({ order: browseDesc ? "asc" : "desc" }); }} disabled={browseSort === "random"}>
               {browseDesc ? <ArrowDown/> : <ArrowUp/>}
             </button>}
+            {/* Plays this folder and every folder under it in random order; the player then moves on to
+                the next random title instead of the next file. */}
+            {!libraryList && !localDetail && !openLocalSeries && !browsePath.startsWith(":") && <button title={t("library.playRandom")} aria-label={t("library.playRandom")} onClick={() => void startRandom(browsePath)}>
+              <Shuffle/>
+            </button>}
             {/* Only while the scan has something waiting: with nothing to confirm the filter
                 would list an empty folder and say nothing about why. */}
             {!libraryList && !localDetail && !openLocalSeries && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
@@ -4005,9 +4010,6 @@ export function App() {
                 setMenuFor(menuFor === ":library-tools" ? null : ":library-tools");
               }}><MoreVertical/></button>
               <div id="library-maintenance-actions" className={`library-maintenance-actions${menuFor === ":library-tools" ? " open" : ""}`}>
-                {!libraryList && !browsePath.startsWith(":") && <button title={t("library.playRandom")} onClick={() => void startRandom(browsePath)}>
-                  <Shuffle/> {t("library.playRandom")}
-                </button>}
                 <button title={t("library.scan")} onClick={() => void startScan()} disabled={scanning}>
                   <Sparkles/> {t("library.scan")}
                 </button>

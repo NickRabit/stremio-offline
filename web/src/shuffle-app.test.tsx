@@ -45,6 +45,7 @@ let host: HTMLDivElement;
 let sourceBodies: Array<{ path: string }>;
 let playbackBodies: Array<Record<string, unknown>>;
 let shuffleDeletes: string[];
+let shuffleStarts: Array<{ path: string }>;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -54,6 +55,7 @@ beforeEach(() => {
   sourceBodies = [];
   playbackBodies = [];
   shuffleDeletes = [];
+  shuffleStarts = [];
   vi.stubGlobal("matchMedia", () => ({
     matches: false, media: "", onchange: null,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -106,6 +108,7 @@ beforeEach(() => {
       pending: false,
     });
     if (path === "/api/shuffle" && method === "POST") {
+      shuffleStarts.push(JSON.parse(String(init?.body)) as { path: string });
       return json({
         id: "shuffle_one",
         item: { path: "Films/First.mkv", title: "First" },
@@ -205,6 +208,17 @@ describe("Play random", () => {
     await until(() => sourceBodies.some((body) => body.path === "Films/Second.mkv"));
     await until(() => playbackBodies.some((body) => body.sourceId === "source_second"));
     expect(playbackBodies.find((body) => body.sourceId === "source_second")).toEqual(expect.objectContaining({ time: 0 }));
+  });
+
+  it("starts the folder on screen from the toolbar beside the sort controls", async () => {
+    await openLibrary();
+    const button = host.querySelector<HTMLButtonElement>(".browse-tools button[aria-label='Play random']");
+    expect(button).toBeTruthy();
+    expect(host.querySelector("#library-maintenance-actions")?.textContent).not.toContain("Play random");
+    await act(async () => { button!.click(); });
+    await until(() => sourceBodies.some((body) => body.path === "Films/First.mkv"));
+    expect(shuffleStarts).toHaveLength(1);
+    expect(shuffleStarts[0]!.path).not.toBe("Films");
   });
 
   it("ends and deletes the run when a normal file is opened", async () => {
