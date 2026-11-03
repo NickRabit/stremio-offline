@@ -79,6 +79,7 @@ fun remoteDetailOf(card: HomeCard.Remote): RemoteDetailData {
       providerIds = providerIds,
     ),
     seriesIds = parentIds,
+    updatedAt = card.updatedAt,
   )
 }
 

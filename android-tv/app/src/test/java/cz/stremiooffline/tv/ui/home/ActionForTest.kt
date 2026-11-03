@@ -173,11 +173,19 @@ class ActionForTest {
 
   @Test
   fun `a remote card opens its own detail without playing`() {
-    val card = HomeCard.Remote(key = "remote:1", title = "Heat", libraryId = "rlibA", itemId = "iA", itemType = "movie")
+    val card = HomeCard.Remote(
+      key = "remote:1",
+      title = "Heat",
+      libraryId = "rlibA",
+      itemId = "iA",
+      itemType = "movie",
+      updatedAt = "2026-01-02T00:00:00.000Z",
+    )
 
     val action = actionFor(card)
     assertTrue(action is HomeAction.OpenRemote)
     assertEquals(false, (action as HomeAction.OpenRemote).data.autoPlay)
+    assertEquals(card.updatedAt, action.data.updatedAt)
   }
 
   @Test

@@ -48,7 +48,7 @@ internal fun remoteCatalogueArgs(
       meta = MetaDto(id = id, type = "series"),
       addonName = "",
       type = identity.first,
-      episode = resumeEpisode(item.season, item.episode, null),
+      episode = resumeEpisode(item.season, item.episode, data.updatedAt),
       autoPlay = data.autoPlay,
       preferRemote = true,
       preferredRemote = RemoteItemRef(data.libraryId, item.id),

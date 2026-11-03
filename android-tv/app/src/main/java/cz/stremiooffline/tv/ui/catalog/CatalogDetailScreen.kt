@@ -88,7 +88,10 @@ import cz.stremiooffline.tv.ui.detail.downIntoExtras
 import cz.stremiooffline.tv.ui.detail.scrollToTopOnFocus
 import cz.stremiooffline.tv.ui.library.RemoteSeriesBulkHost
 import cz.stremiooffline.tv.ui.theme.Tokens
+import java.text.ParsePosition
+import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.TimeZone
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -132,11 +135,29 @@ internal fun storedResumeRow(
   stored: ProgressEntryDto?,
   movie: ProgressDto?,
 ): StreamDto? {
+  if (stored?.pending == true) return null
   val stableKey = stored?.stableKey ?: movie?.stableKey ?: return null
   val position = stored?.position ?: movie?.position ?: return null
   val duration = stored?.duration ?: movie?.duration ?: return null
   if (Progress.resumePosition(position, duration) == null) return null
   return stableKey.takeIf { it.isNotBlank() }?.let { key -> rows.firstOrNull { it.stableKey == key } }
+}
+
+private val UPDATED_AT_PATTERNS = listOf(
+  "yyyy-MM-dd'T'HH:mm:ss.SSSX",
+  "yyyy-MM-dd'T'HH:mm:ssX",
+)
+
+internal fun updatedAtMillis(value: String?): Long? {
+  val text = value?.takeIf { it.isNotBlank() } ?: return null
+  return UPDATED_AT_PATTERNS.firstNotNullOfOrNull { pattern ->
+    val position = ParsePosition(0)
+    val format = SimpleDateFormat(pattern, Locale.US).apply {
+      timeZone = TimeZone.getTimeZone("UTC")
+      isLenient = false
+    }
+    format.parse(text, position)?.time?.takeIf { position.index == text.length }
+  }
 }
 
 /** The episode a card named, standing in when the catalogue does not list it (or did not answer):
@@ -345,9 +366,12 @@ fun CatalogDetailScreen(
         val videos = meta.videos.orEmpty()
         val stored = seriesEntry(entries, meta.id)
         val storedEpisode = stored?.let { Resume.resumeTarget(it).episode }
-        val resuming = stored?.let { Progress.resumePosition(it.position, it.duration) != null } == true
-        val cardIsNewer = args.episode?.updatedAt?.let { cardTime ->
-          stored?.updatedAt?.let { storedTime -> cardTime > storedTime }
+        val resuming = stored?.let {
+          !it.pending && it.position > Progress.MIN_RESUME_SECONDS &&
+            Progress.resumePosition(it.position, it.duration) != null
+        } == true
+        val cardIsNewer = updatedAtMillis(args.episode?.updatedAt)?.let { cardTime ->
+          updatedAtMillis(stored?.updatedAt)?.let { storedTime -> cardTime > storedTime } ?: true
         } ?: false
         // A card without a time loses to a title position known to be in progress.
         val wanted = when {

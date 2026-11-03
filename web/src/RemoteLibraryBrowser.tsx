@@ -167,6 +167,7 @@ type ListingSnapshot = {
 };
 
 const PAGE_SIZE = 60;
+const CATALOGUE_EPISODE_PAGE_LIMIT = 20;
 const emptyStatus = (): Status => ({ items: [], total: 0, loading: false, error: "" });
 const aborted = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
 const isStale = (error: unknown) => error instanceof ApiError && (error.status === 409 || error.messageKey === "err.mediaServerStale");
@@ -580,22 +581,28 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         }
         const catalogueEntry = catalogue ? seriesEntry(progressEntries, catalogue.id) : undefined;
         const target = catalogueEntry?.series;
-        const inProgress = Boolean(catalogueEntry && !catalogueEntry.pending && catalogueEntry.position > 30);
+        const inProgress = Boolean(catalogueEntry && !catalogueEntry.pending && catalogueEntry.position > 30 &&
+          (!(catalogueEntry.duration > 0) || catalogueEntry.position / catalogueEntry.duration < 0.94));
         if (inProgress && target) {
           const matches = (episode: RemoteItem) =>
             episode.type === "episode" && episode.season === target.season && episode.episode === target.episode;
-          let catalogueEpisode = page.items.find(matches);
-          let cursor = page.cursor;
-          while (!catalogueEpisode && cursor) {
-            const next = await api.remoteBrowse(library.id, {
-              parentId: series.id, mode: "titles", type: "episode", limit: PAGE_SIZE, cursor, signal: controller.signal,
-            });
-            if (epoch !== episodeEpoch.current || controller.signal.aborted) return;
-            catalogueEpisode = next.items.find(matches);
-            cursor = next.cursor;
+          const cardTime = Date.parse(resumedCard?.updatedAt ?? "");
+          const storedTime = Date.parse(catalogueEntry.updatedAt);
+          const storedIsNewer = !resumedCard || !Number.isFinite(cardTime) ||
+            (Number.isFinite(storedTime) && storedTime > cardTime);
+          if (storedIsNewer) {
+            let catalogueEpisode = page.items.find(matches);
+            let cursor = page.cursor;
+            for (let pageNumber = 0; !catalogueEpisode && cursor && pageNumber < CATALOGUE_EPISODE_PAGE_LIMIT; pageNumber += 1) {
+              const next = await api.remoteBrowse(library.id, {
+                parentId: series.id, mode: "titles", type: "episode", limit: PAGE_SIZE, cursor, signal: controller.signal,
+              });
+              if (epoch !== episodeEpoch.current || controller.signal.aborted) return;
+              catalogueEpisode = next.items.find(matches);
+              cursor = next.cursor;
+            }
+            if (catalogueEpisode) resumed = catalogueEpisode;
           }
-          const storedIsNewer = !resumedCard || Date.parse(catalogueEntry.updatedAt) > Date.parse(resumedCard.updatedAt);
-          if (catalogueEpisode && storedIsNewer) resumed = catalogueEpisode;
         }
         if (detailRef.current?.type !== "series" || detailRef.current.id !== series.id) return;
         const firstUnwatched = page.items.find((episode) => !itemStatesRef.current[stateKey(library.id, episode.id)]?.watched);
