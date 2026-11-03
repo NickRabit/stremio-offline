@@ -33,7 +33,7 @@
     "test:media-client": "node --test scripts/media-client-verification.test.mjs"
   },
   "engines": {
-    "node": ">=22.12"
+    "node": ">=22.19"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

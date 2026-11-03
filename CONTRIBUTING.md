@@ -14,7 +14,7 @@ focused changes are easier to review than large ones.
 
 ## Development
 
-You need Node.js 22.12 or newer. Docker is required to run the app the way it is
+You need Node.js 22.19 or newer. Docker is required to run the app the way it is
 meant to run.
 
 ```bash
