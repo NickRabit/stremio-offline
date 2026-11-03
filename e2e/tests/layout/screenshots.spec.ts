@@ -69,9 +69,15 @@ test.describe("screenshots", () => {
     await localSource.click();
     await expect(localSource).toHaveAttribute("aria-pressed", "true");
     await settle(page);
-    // The portrait phone baseline starts at the first source; probing can shift it during the click.
+    // Resetting the portrait list also restores its header, independently of click/probe timing.
     if (test.info().project.name === "mobile") {
-      await detail.locator(".stream-list").evaluate((list) => { list.scrollTop = 0; });
+      await expect.poll(async () => {
+        await detail.locator(".stream-list").evaluate((list) => {
+          list.scrollTop = 0;
+          list.dispatchEvent(new Event("scroll"));
+        });
+        return detail.locator(".hero").isVisible();
+      }).toBe(true);
     }
 
     await expect(page).toHaveScreenshot("title-detail.png", {
