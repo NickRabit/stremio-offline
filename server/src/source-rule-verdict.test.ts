@@ -219,7 +219,23 @@ test("an unknown language under an only rule remains unverified", () => {
   assert.deepEqual(verdict.reasons, []);
 });
 
-test("provider rank is local, then remote, then addon and ranks are padded equally", () => {
+test("a preference-winning meeting addon ranks before a meeting local copy under the viewer order", () => {
+  const local = listedLocalCopyEvidence({
+    key: "lib_00000001/movie.English.1080p.mkv",
+    size: 10,
+  }, 0);
+  const source = addon("addon", {
+    url: "https://cdn.example/movie.mp4",
+    name: "Czech 1080p",
+  });
+  const verdicts = ruleVerdicts(snapshot(rule()), [local, source]);
+
+  assert.equal(verdicts.get(local.sourceId)?.status, "meets");
+  assert.equal(verdicts.get(source.sourceId)?.status, "meets");
+  assert.ok(compareRanks(verdicts.get(source.sourceId)!.rank, verdicts.get(local.sourceId)!.rank) < 0);
+});
+
+test("viewer provider order breaks a preference tie as local, then remote, then addon", () => {
   const local = listedLocalCopyEvidence({ key: "lib_00000001/movie.mkv", size: 10 }, 0);
   const remote = addon("remote", { url: "https://media.example/movie.mp4", name: "Original" }, "remote:remote-1");
   const remoteCandidate: SourceEvidenceCandidateV1 = {
@@ -228,17 +244,25 @@ test("provider rank is local, then remote, then addon and ranks are padded equal
     sourceKind: "mediaServerOriginal",
   };
   const addonCandidate = addon("addon", { url: "https://cdn.example/movie.mp4", name: "Original" });
-  const verdicts = ruleVerdicts(snapshot(rule()), [local, remoteCandidate, addonCandidate]);
+  const admission = snapshot(rule({
+    audio: { mode: "any", language: "mine", fallback: null },
+    preference: ["addonOrder"],
+  }));
+  const verdicts = ruleVerdicts(admission, [local, remoteCandidate, addonCandidate]);
 
   const localVerdict = verdicts.get(local.sourceId)!;
   const remoteVerdict = verdicts.get(remoteCandidate.sourceId)!;
   const addonVerdict = verdicts.get(addonCandidate.sourceId)!;
+  assert.equal(localVerdict.status, "meets");
+  assert.equal(remoteVerdict.status, "meets");
+  assert.equal(addonVerdict.status, "meets");
   assert.equal(new Set([localVerdict.rank.length, remoteVerdict.rank.length, addonVerdict.rank.length]).size, 1);
+  assert.equal(localVerdict.rank.length, admission.policy.criteria.length + 3);
   assert.equal(localVerdict.rank[0], 0);
-  assert.equal(remoteVerdict.rank[0], 1);
-  assert.equal(addonVerdict.rank[0], 1);
-  assert.ok(localVerdict.rank.at(-1)! < remoteVerdict.rank.at(-1)!);
-  assert.ok(remoteVerdict.rank.at(-1)! < addonVerdict.rank.at(-1)!);
+  assert.equal(remoteVerdict.rank[0], 0);
+  assert.equal(addonVerdict.rank[0], 0);
+  assert.ok(compareRanks(localVerdict.rank, remoteVerdict.rank) < 0);
+  assert.ok(compareRanks(remoteVerdict.rank, addonVerdict.rank) < 0);
 });
 
 test("an explicit mixed provider order determines the verdict ranks", () => {
@@ -251,23 +275,23 @@ test("an explicit mixed provider order determines the verdict ranks", () => {
   };
   const addonCandidate = addon("addon", { url: "https://cdn.example/movie.mp4", name: "Original" });
   const providerKeys = ["addon:a", "remote:remote-1", "local"];
+  const admission = snapshot(rule({
+    addons: { scope: "all", order: { explicit: ["a", "remote:remote-1", "local"] } },
+  }), providerKeys);
   const verdicts = ruleVerdicts(
-    snapshot(rule({
-      addons: { scope: "all", order: { explicit: ["a", "remote:remote-1", "local"] } },
-    }), providerKeys),
+    admission,
     [local, remoteCandidate, addonCandidate],
   );
 
   assert.equal(verdicts.get(local.sourceId)!.rank[0], 0);
   assert.equal(verdicts.get(remoteCandidate.sourceId)!.rank[0], 0);
   assert.equal(verdicts.get(addonCandidate.sourceId)!.rank[0], 0);
-  assert.ok(verdicts.get(addonCandidate.sourceId)!.rank.at(-1)!
-    < verdicts.get(remoteCandidate.sourceId)!.rank.at(-1)!);
-  assert.ok(verdicts.get(remoteCandidate.sourceId)!.rank.at(-1)!
-    < verdicts.get(local.sourceId)!.rank.at(-1)!);
+  assert.equal(verdicts.get(local.sourceId)!.rank.length, admission.policy.criteria.length + 3);
+  assert.ok(compareRanks(verdicts.get(addonCandidate.sourceId)!.rank, verdicts.get(remoteCandidate.sourceId)!.rank) < 0);
+  assert.ok(compareRanks(verdicts.get(remoteCandidate.sourceId)!.rank, verdicts.get(local.sourceId)!.rank) < 0);
 });
 
-test("viewer provider order keeps a breaking local copy first while an explicit order ranks it last", () => {
+test("a breaking local copy ranks below a meeting addon under the viewer provider order", () => {
   const local = listedLocalCopyEvidence({
     key: "lib_00000001/movie.Czech.1080p.mkv",
     size: 30_000_000_000,
@@ -285,7 +309,7 @@ test("viewer provider order keeps a breaking local copy first while an explicit 
   });
   const viewer = ruleVerdicts(snapshot(sized), [source, local]);
   assert.deepEqual(viewer.get(local.sourceId)?.reasons, ["size"]);
-  assert.ok(compareRanks(viewer.get(local.sourceId)!.rank, viewer.get(source.sourceId)!.rank) < 0);
+  assert.ok(compareRanks(viewer.get(source.sourceId)!.rank, viewer.get(local.sourceId)!.rank) < 0);
 
   const explicitKeys = ["addon:a", "addon:b", "remote:remote-1", "local"];
   const firstAddon = addon("first", { url: "https://cdn.example/first.mp4", name: "Czech 1080p" });

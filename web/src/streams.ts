@@ -146,8 +146,9 @@ export function catalogAddonCounts(streams: Stream[], filter: string, priority: 
   return [...counts.entries()].sort((a, b) => (rank(a[0]) - rank(b[0])) || (b[1] - a[1]));
 }
 
-/** Local files lead the unfiltered rule and addon-priority lists. Other sorts rank them with
- *  addon rows, while a named addon and the dedicated local filter stay exclusive. */
+/** Under a rule, local files are ranked with every other source by the server's rule rank (a tie
+ *  still puts them first); the legacy `recommended` and addon-priority lists keep them first. A named
+ *  addon and the dedicated local filter stay exclusive. */
 export function catalogSourceRows(
   local: Stream[], addonStreams: Stream[], filter: string, sort: StreamOrder,
   preferredLanguage = "en", priority: Map<string, number> = new Map(), titleLanguage?: string,

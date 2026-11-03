@@ -16,6 +16,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
@@ -137,6 +138,24 @@ class CatalogOriginRemoteTest {
     val target = played.single()
     assertEquals("remote-version", target.sourceId)
     assertEquals(RemoteItemContext("rlibA", "item-1", "media-1", "remote:rlibA:item-1"), target.remoteItem)
+  }
+
+  @Test
+  fun `an in-progress stored addon row wins over the preferred remote row`() {
+    val api = api(CompletableDeferred(Unit)).apply {
+      addonStreams["movie:tt1|alpha"] = listOf(addonRow().copy(stableKey = "addon-key"))
+      progressValues["movie:tt1"] = ProgressDto(position = 120.0, duration = 600.0, stableKey = "addon-key")
+    }
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitUntil(5_000) { api.remoteMatchRequests.contains(gateKey) }
+    compose.waitForIdle()
+
+    play()
+
+    val target = played.single()
+    assertEquals("addon-version", target.sourceId)
+    assertNull(target.remoteItem)
   }
 
   @Test

@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.RemoteItemDetailDto
 import cz.stremiooffline.tv.data.DownloadTargetSettingsDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
@@ -33,6 +34,17 @@ class NativeCopySubjectTest {
   }
 
   @Test
+  fun `a matched movie copies without a catalogue id`() {
+    val item = RemoteItemDto(
+      id = "m1", name = "Heat", type = "movie",
+      providerIds = RemoteProviderIdsDto(imdb = "tt0113277"), providerIdsMatched = true,
+    )
+    val subject = nativeCopySubject(item, null, null)
+    assertNull(subject.id)
+    assertNull(subject.metaType)
+  }
+
+  @Test
   fun `an episode takes the series title and ids and its own numbers`() {
     val item = RemoteItemDto(id = "e1", name = "Pilot", type = "episode", seriesId = "s1", season = 1, episode = 2)
     val subject = nativeCopySubject(item, "The Show", RemoteProviderIdsDto(imdb = "tt5000"))
@@ -53,6 +65,38 @@ class NativeCopySubjectTest {
     assertNull(subject.metaType)
     assertEquals("Clip", subject.title)
     assertEquals("Clip", subject.episodeTitle)
+  }
+
+  @Test
+  fun `an episode does not inherit ids matched for its series`() {
+    val item = RemoteItemDto(id = "e1", name = "Pilot", type = "episode", seriesId = "s1", season = 1, episode = 2)
+    val subject = nativeCopySubject(item, "The Show", RemoteProviderIdsDto(imdb = "tt5000"), seriesIdsMatched = true)
+    assertNull(subject.id)
+    assertNull(subject.metaType)
+  }
+
+  @Test
+  fun `an episode parent read keeps a matched id out of the copy`() = runBlocking {
+    val api = object : RemoteLibraryApi {
+      override suspend fun remoteItem(libraryId: String, itemId: String) = RemoteItemDetailDto(
+        RemoteItemDto(
+          id = "s1", name = "The Show", type = "series",
+          providerIds = RemoteProviderIdsDto(imdb = "tt5000"), providerIdsMatched = true,
+        ),
+      )
+    }
+    val request = resolveNativeCopy(
+      api = api,
+      libraryId = "rlib_a",
+      item = RemoteItemDto(id = "e1", name = "Pilot", type = "episode", seriesId = "s1", season = 1, episode = 2),
+      seriesName = null,
+      seriesIds = null,
+      sources = emptyList(),
+      loadDestinations = { emptyList() },
+    )
+    assertNull(request.subject.id)
+    assertNull(request.subject.metaType)
+    assertEquals("The Show", request.subject.title)
   }
 
   @Test

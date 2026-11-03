@@ -236,7 +236,12 @@ export const adminRemoteLibrary = (record: RemoteLibraryRecord, provider?: Media
  *  unknown fact keeps the legacy URL. Two optional paths built from an encoded local library and
  *  item handle, a fixed image role and a validated tag can never turn a cached provider row into
  *  a client-admitted URL. */
-export type PublicRemoteItem = Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "hasThumbImage" | "primaryImageTag" | "backdropImageTag" | "thumbImageTag"> & { poster?: string; wide?: string; fanart?: string };
+export type PublicRemoteItem = Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "hasThumbImage" | "primaryImageTag" | "backdropImageTag" | "thumbImageTag"> & {
+  poster?: string;
+  wide?: string;
+  fanart?: string;
+  providerIdsMatched?: true;
+};
 
 /** The one shape an artwork tag may take: bounded, URL-safe and credential-free, so it can travel
  *  in a query string verbatim and never smuggle a remote path, query or address. */

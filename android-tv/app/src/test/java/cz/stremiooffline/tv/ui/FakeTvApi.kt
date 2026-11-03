@@ -983,8 +983,11 @@ open class FakeTvApi : TvApi {
     stableKey: String?,
     final: Boolean,
   ) {
+    progressSaveFailure?.let { throw ApiError(it) }
     progressSaves += ProgressSave(key, position, duration, title, path, poster, addonKey, remote, stableKey, final)
   }
+
+  var progressSaveFailure: ApiFailure? = null
 
   /** Every `saveProgress()` call in order, so a test can name the key and the numbers behind it. */
   val progressSaves: MutableList<ProgressSave> = mutableListOf()

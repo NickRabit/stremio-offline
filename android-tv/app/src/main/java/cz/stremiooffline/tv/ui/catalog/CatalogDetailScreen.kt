@@ -88,7 +88,10 @@ import cz.stremiooffline.tv.ui.detail.downIntoExtras
 import cz.stremiooffline.tv.ui.detail.scrollToTopOnFocus
 import cz.stremiooffline.tv.ui.library.RemoteSeriesBulkHost
 import cz.stremiooffline.tv.ui.theme.Tokens
+import java.text.ParsePosition
+import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.TimeZone
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -125,6 +128,37 @@ internal fun originRow(args: CatalogDetailArgs, rows: List<StreamDto>): StreamDt
   args.preferredRemote?.let {
     Streams.originRemoteRow(rows, it.libraryId, it.itemId, it.mediaSourceId)
   } ?: args.preferredLocalPath?.let { Streams.originLocalRow(rows, it) }
+
+/** The row a stored position names, only while that position is still worth resuming. */
+internal fun storedResumeRow(
+  rows: List<StreamDto>,
+  stored: ProgressEntryDto?,
+  movie: ProgressDto?,
+): StreamDto? {
+  if (stored?.pending == true) return null
+  val stableKey = stored?.stableKey ?: movie?.stableKey ?: return null
+  val position = stored?.position ?: movie?.position ?: return null
+  val duration = stored?.duration ?: movie?.duration ?: return null
+  if (Progress.resumePosition(position, duration) == null) return null
+  return stableKey.takeIf { it.isNotBlank() }?.let { key -> rows.firstOrNull { it.stableKey == key } }
+}
+
+private val UPDATED_AT_PATTERNS = listOf(
+  "yyyy-MM-dd'T'HH:mm:ss.SSSX",
+  "yyyy-MM-dd'T'HH:mm:ssX",
+)
+
+internal fun updatedAtMillis(value: String?): Long? {
+  val text = value?.takeIf { it.isNotBlank() } ?: return null
+  return UPDATED_AT_PATTERNS.firstNotNullOfOrNull { pattern ->
+    val position = ParsePosition(0)
+    val format = SimpleDateFormat(pattern, Locale.US).apply {
+      timeZone = TimeZone.getTimeZone("UTC")
+      isLenient = false
+    }
+    format.parse(text, position)?.time?.takeIf { position.index == text.length }
+  }
+}
 
 /** The episode a card named, standing in when the catalogue does not list it (or did not answer):
  *  its own copies still load by its id, so a card never loses the episode it was opened for. */
@@ -332,9 +366,20 @@ fun CatalogDetailScreen(
         val videos = meta.videos.orEmpty()
         val stored = seriesEntry(entries, meta.id)
         val storedEpisode = stored?.let { Resume.resumeTarget(it).episode }
-        val resuming = args.episode == null && stored?.let { Progress.resumePosition(it.position, it.duration) != null } == true
-        // Home names the episode it remembers; without one, the stored position decides.
-        val wanted = args.episode ?: if (resuming) storedEpisode else null
+        val resuming = stored?.let {
+          !it.pending && it.position > Progress.MIN_RESUME_SECONDS &&
+            Progress.resumePosition(it.position, it.duration) != null
+        } == true
+        val cardIsNewer = updatedAtMillis(args.episode?.updatedAt)?.let { cardTime ->
+          updatedAtMillis(stored?.updatedAt)?.let { storedTime -> cardTime > storedTime } ?: true
+        } ?: false
+        // A card without a time loses to a title position known to be in progress.
+        val wanted = when {
+          !resuming -> args.episode
+          args.episode == null || storedEpisode == null -> args.episode ?: storedEpisode
+          cardIsNewer -> args.episode
+          else -> storedEpisode
+        }
         val watched = Resume.resumeVideo(videos, wanted)
         pick.selectedVideo = watched
           ?: cardEpisode(meta.id, args.episode)
@@ -345,9 +390,42 @@ fun CatalogDetailScreen(
     }
   }
 
+  LaunchedEffect(args.meta.id, pick.sourcesRetry) {
+    if (args.backend.catalogue || !isSeries || meta.videos.orEmpty().isNotEmpty()) return@LaunchedEffect
+    remote.episodes = null
+    pick.sourcesLoaded = false
+    pick.sourcesFailed = false
+    try {
+      remote.episodes = args.backend.loadEpisodes(api)
+      if (remote.episodes?.videos.orEmpty().isEmpty()) {
+        pick.sourcesLoaded = true
+        return@LaunchedEffect
+      }
+      meta = meta.copy(videos = remote.episodes?.videos)
+      pick.selectedVideo = remoteEpisodeChoice(remote.episodes, args.episode)
+      pick.season = pick.selectedVideo?.season ?: defaultSeason(remote.episodes?.videos.orEmpty())
+      ui.episodeProgress = args.backend.episodeProgress(api)
+      notice(null)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (error: ApiError) {
+      pick.sourcesFailed = true
+      pick.sourcesLoaded = true
+      notice(error.serverMessage ?: texts.loadError, CatalogNotice.Failure)
+    }
+  }
+
   // Each source addon is asked on its own so the first answer is usable without waiting for the
   // slowest, and a change of video clears the list at once so nothing plays a stale source.
   LaunchedEffect(streamsKey, pick.sourcesRetry) {
+    if (
+      !args.backend.catalogue &&
+      isSeries &&
+      meta.videos.orEmpty().isEmpty() &&
+      pick.selectedVideo == null
+    ) {
+      return@LaunchedEffect
+    }
     val request = ++pick.localRequest
     pick.streams = emptyList()
     pick.localStreams = emptyList()
@@ -542,7 +620,14 @@ fun CatalogDetailScreen(
   }
   // The row of the source last played leads, so Resume continues in it. A rule with verdicts
   // then takes a row that meets it; the call lives in Streams so this screen only passes the sort.
-  val preferredStream = (if (!args.backend.catalogue) {
+  val resumeEntry = if (isSeries) seriesEntry(entries, meta.id) else null
+  val storedPosition = if (isSeries) resumeEntry?.position ?: 0.0 else movieProgress?.position ?: 0.0
+  val storedDuration = if (isSeries) resumeEntry?.duration ?: 0.0 else movieProgress?.duration ?: 0.0
+  val preferredStream = storedResumeRow(
+    rows,
+    if (isSeries) entries.firstOrNull { it.key == progressKey } else null,
+    if (isSeries) null else movieProgress,
+  ) ?: (if (!args.backend.catalogue) {
     rows.firstOrNull { stream ->
       val item = stream.remoteItem
       item != null &&
@@ -552,7 +637,7 @@ fun CatalogDetailScreen(
     null
   }) ?: originRow(args, rows) ?: Streams.pickDefaultStream(
       Streams.remoteFirst(rows, args.preferRemote),
-      (if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey),
+      if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey,
       Streams.ruleIdOf(filters.sort),
     )
   val chosenStream = pick.selectedStream?.takeIf { pick.pickedStream && rows.contains(it) }
@@ -589,8 +674,11 @@ fun CatalogDetailScreen(
 
   // A later addon may outrank the one already picked, but only while the viewer has not chosen.
   LaunchedEffect(rows, anyAsking, preferredStream?.stableKey, remoteProgress.preferred) {
-    val storedKey =
-      if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey
+    val storedRow = storedResumeRow(
+      rows,
+      if (isSeries) entries.firstOrNull { it.key == progressKey } else null,
+      if (isSeries) null else movieProgress,
+    )
     val origin = originRow(args, rows)
     val next = Streams.repickStream(
       playing = false,
@@ -604,7 +692,7 @@ fun CatalogDetailScreen(
       selected = pick.selectedStream,
       preferred = preferredStream,
       upgrade = preferredStream?.let(Streams::isLocalStream) == true && pick.selectedStream?.let(Streams::isLocalStream) != true,
-      restore = (preferredStream?.stableKey != null && preferredStream.stableKey == storedKey) ||
+      restore = (storedRow != null && preferredStream == storedRow) ||
         (origin != null && preferredStream == origin) ||
         (
           !args.backend.catalogue &&
@@ -643,10 +731,7 @@ fun CatalogDetailScreen(
     pick.chosenInPanel = true
   }
 
-  val resumeEntry = if (isSeries) seriesEntry(entries, meta.id) else null
   val resumeEpisode = if (isSeries) Resume.resumeVideo(meta.videos.orEmpty(), resumeEntry?.let { Resume.resumeTarget(it).episode }) else null
-  val storedPosition = if (isSeries) resumeEntry?.position ?: 0.0 else movieProgress?.position ?: 0.0
-  val storedDuration = if (isSeries) resumeEntry?.duration ?: 0.0 else movieProgress?.duration ?: 0.0
   // A matched remote version carries its own row, keyed by its opaque identity and the version the
   // viewer picked: the read below fills [remoteProgress] for exactly that identity.
   val activeRemoteItem = activeStream?.remoteItem
@@ -1018,6 +1103,7 @@ fun CatalogDetailScreen(
         throw cancelled
       } catch (error: ApiError) {
         favourite = !wanted
+        notice(error.serverMessage ?: texts.actionError, CatalogNotice.Failure)
       } finally {
         favouriteBusy = false
       }
@@ -1054,7 +1140,8 @@ fun CatalogDetailScreen(
         runCatching { focus.primary.requestFocus() }
       } catch (cancelled: CancellationException) {
         throw cancelled
-      } catch (_: ApiError) {
+      } catch (error: ApiError) {
+        notice(error.serverMessage ?: texts.actionError, CatalogNotice.Failure)
       } finally {
         ui.forget.busy = false
       }
@@ -1333,16 +1420,16 @@ fun CatalogDetailScreen(
           EyeIcon,
         ) {
             scope.launch {
-              val handled = runCatching {
-                args.backend.markWatched(
-                  api,
-                  activeStream,
-                  playerTitle,
-                  args.meta.poster ?: meta.poster,
-                )
-              }.getOrDefault(false)
-              if (!handled && args.backend.catalogue) {
-                runCatching {
+              try {
+                if (
+                  !args.backend.markWatched(
+                    api,
+                    activeStream,
+                    playerTitle,
+                    args.meta.poster ?: meta.poster,
+                  ) &&
+                  args.backend.catalogue
+                ) {
                   api.saveProgress(
                     progressKey,
                     1.0,
@@ -1355,25 +1442,29 @@ fun CatalogDetailScreen(
                     final = true,
                   )
                 }
-              }
-              if (!args.backend.catalogue) {
-                ui.episodeProgress = runCatching { args.backend.episodeProgress(api) }
-                  .getOrDefault(ui.episodeProgress)
-                pick.localProgress = activeStream?.takeIf(Streams::isLocalStream)?.localPath
-                  ?.let { path -> runCatching { api.progress(Progress.libraryKey(path)) }.getOrNull() }
-                activeRemoteItem?.let { item ->
-                  remoteProgress.row = VersionProgress.savedState(
-                    null,
-                    item,
-                    { key -> api.progress(key) },
-                    { libraryId, itemId -> api.remoteItemState(libraryId, itemId) },
-                  )
-                  remoteProgress.key = remoteIdentity
+                if (!args.backend.catalogue) {
+                  ui.episodeProgress = runCatching { args.backend.episodeProgress(api) }
+                    .getOrDefault(ui.episodeProgress)
+                  pick.localProgress = activeStream?.takeIf(Streams::isLocalStream)?.localPath
+                    ?.let { path -> runCatching { api.progress(Progress.libraryKey(path)) }.getOrNull() }
+                  activeRemoteItem?.let { item ->
+                    remoteProgress.row = VersionProgress.savedState(
+                      null,
+                      item,
+                      { key -> api.progress(key) },
+                      { libraryId, itemId -> api.remoteItemState(libraryId, itemId) },
+                    )
+                    remoteProgress.key = remoteIdentity
+                  }
+                } else if (isSeries) {
+                  entries = runCatching { api.progressList() }.getOrDefault(entries)
+                } else {
+                  movieProgress = runCatching { api.progress(ProgressKey.of(streamType, meta.id)) }.getOrNull()
                 }
-              } else if (isSeries) {
-                entries = runCatching { api.progressList() }.getOrDefault(entries)
-              } else {
-                movieProgress = runCatching { api.progress(ProgressKey.of(streamType, meta.id)) }.getOrNull()
+              } catch (cancelled: CancellationException) {
+                throw cancelled
+              } catch (error: ApiError) {
+                notice(error.serverMessage ?: texts.actionError, CatalogNotice.Failure)
               }
             }
         } else null,
@@ -1836,6 +1927,16 @@ internal fun nextRelevantEpisode(videos: List<VideoDto>, lastWatched: VideoDto?,
 internal fun firstReleased(videos: List<VideoDto>, today: String = utcToday()): VideoDto? =
   orderedEpisodes(videos).firstOrNull { (releasedDate(it) ?: "0000-01-01") <= today }
 
+private fun remoteEpisodeChoice(loaded: RemoteEpisodes?, wanted: ResumeEpisode?): VideoDto? {
+  val card = loaded?.resume?.firstOrNull { resume ->
+    resume.itemType == "episode" &&
+      loaded.videos.any { it.id == remoteVideoId(resume.libraryId, resume.itemId) }
+  }
+  return Resume.resumeVideo(loaded?.videos, wanted)
+    ?: loaded?.videos?.firstOrNull { it.id == card?.let { remoteVideoId(it.libraryId, it.itemId) } }
+    ?: firstReleased(loaded?.videos.orEmpty())
+}
+
 /** The stored row of one series, from the field first and from the key second. */
 internal fun seriesEntry(entries: List<ProgressEntryDto>, metaId: String): ProgressEntryDto? =
   entries.firstOrNull { it.series?.id == metaId }
@@ -1872,6 +1973,7 @@ private data class DetailTexts(
   val torrent: String,
   val noSources: String,
   val loadError: String,
+  val actionError: String,
   val toLibrary: String,
   val findingSources: String,
   val playWhenReady: String,
@@ -1886,6 +1988,7 @@ private fun detailTexts(): DetailTexts = DetailTexts(
   torrent = stringResource(R.string.err_torrent_not_playable),
   noSources = stringResource(R.string.sources_none),
   loadError = stringResource(R.string.tv_load_error),
+  actionError = stringResource(R.string.tv_err_generic),
   toLibrary = stringResource(R.string.save_to_library),
   findingSources = stringResource(R.string.tv_finding_sources),
   playWhenReady = stringResource(R.string.tv_play_when_ready),
@@ -1950,6 +2053,7 @@ private class RemoteSourcesState {
   var request by mutableIntStateOf(0)
   /** The title or episode the groups belong to, so a retry of the same one can keep them. */
   var key: String? = null
+  var episodes by mutableStateOf<RemoteEpisodes?>(null)
 }
 
 /** The local remote-state row and the identity/generation it was read for. */
