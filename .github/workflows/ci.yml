@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # The image runs Node 26; the desktop apps run the same server inside Electron's own Node
-    # (24 in Electron 44), so the server must keep passing there too.
+    # (24 in Electron 45), so the server must keep passing there too.
     strategy:
       fail-fast: false
       matrix:
