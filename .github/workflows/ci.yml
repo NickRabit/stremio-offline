@@ -14,11 +14,18 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    # The image runs Node 26; the desktop apps run the same server inside Electron's own Node
+    # (24 in Electron 44), so the server must keep passing there too.
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["26", "24"]
+    name: check (node ${{ matrix.node }})
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node }}
           cache: npm
       # A bump that misses one manifest only fails the release's desktop job, after the
       # image is out. Here it fails the pull request instead.
@@ -47,7 +54,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
       - run: npm ci
         env:
@@ -68,7 +75,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
       - run: npm ci
         env:
@@ -97,7 +104,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
       - run: npm ci
         env:
@@ -134,7 +141,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
       - run: npm ci
         env:

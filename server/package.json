@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/server",
   "private": true,
-  "version": "0.7.32",
+  "version": "0.7.36",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -19,6 +19,6 @@
     "@types/express": "5.0.6",
     "@types/node": "22.15.30",
     "tsx": "4.23.15",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   }
 }

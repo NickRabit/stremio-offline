@@ -13,14 +13,14 @@ step where the command differs.
 
 | Tool | Why | Install (macOS) | Check |
 | --- | --- | --- | --- |
-| Node.js 22 | server and web build, unit tests | `brew install node@22` | `node --version` → `v22.x` |
+| Node.js 26 | server and web build, unit tests (CI also checks 24) | `brew install node@26` | `node --version` → `v26.x` |
 | Docker | local deployment and e2e (`npm run test:e2e:docker`) | Docker Desktop | `docker compose version` |
 | GitHub CLI | pull requests, workflow runs | `brew install gh`, then `gh auth login` | `gh auth status` |
 | JDK 17 | Android Gradle Plugin | `brew install --cask temurin@17` | `/usr/libexec/java_home -v 17` |
 | Android command-line tools | `sdkmanager`, `avdmanager` | `brew install --cask android-commandlinetools` | `sdkmanager --version` |
 
-`node@22` is keg-only, so it is not on `PATH` until the profile says so.
-On Linux use the NodeSource or distribution package for Node 22, the
+`node@26` is keg-only, so it is not on `PATH` until the profile says so.
+On Linux use the NodeSource or distribution package for Node 26, the
 `temurin-17-jdk` package, and the command-line tools zip from
 developer.android.com unpacked to `$HOME/Android/Sdk/cmdline-tools/latest`.
 
@@ -32,7 +32,7 @@ system Gradle is not needed.
 Append to `~/.zprofile` (bash: `~/.bash_profile`), then open a new shell:
 
 ```bash
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
+export PATH="/opt/homebrew/opt/node@26/bin:$PATH"
 export JAVA_HOME="$(/usr/libexec/java_home -v 17)"
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
@@ -170,7 +170,7 @@ The worker's sandbox has no Node or Java, so the reviewer runs the gates
 
 ## Checklist for an agent
 
-- [ ] `node --version` is 22.x and `npm test` passes at the repository root.
+- [ ] `node --version` is 26.x and `npm test` passes at the repository root.
 - [ ] `docker compose up -d --build` brings up a container whose
       `/api/status` answers `{"status":"ok",…}`.
 - [ ] `java -version` under `JAVA_HOME` is 17.
