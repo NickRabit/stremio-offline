@@ -38,7 +38,7 @@ export interface PlayerSources {
   onSwitch: (stream: Stream, positionSeconds: number) => Promise<void> | void;
 }
 
-interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void; upNextAt?: UpNextAt; skipSegmentsAuto?: boolean;
+interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void; upNextAt?: UpNextAt; skipSegmentsAuto?: boolean; shuffle?: boolean;
   /** The catalogue title on screen (`series:tt…:1:2`) when the progress key names a library file instead. */
   catalogueKey?: string;
   /** The playing title's sources; absent for a place that offers none at all. */
@@ -263,7 +263,7 @@ const SKIP_KEY: Record<SegmentKind, Key> = {
   outro: "player.skipOutro",
 };
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, catalogueKey }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, shuffle = false, catalogueKey }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -1083,6 +1083,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       poster: progressPoster,
       addonKey: progressAddonKey,
       ...(stream?.stableKey ? { stableKey: stream.stableKey } : {}),
+      ...(shuffle ? { shuffle: true as const } : {}),
       // The row says which media-server version it was played from, so the detail can name it.
       ...(remoteItem ? { remote: { libraryId: remoteItem.libraryId, itemId: remoteItem.itemId, mediaSourceId: remoteItem.mediaSourceId } } : {}),
     });
@@ -1097,7 +1098,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const timer = setInterval(send, 10_000);
     window.addEventListener("pagehide", leaving);
     return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(true); };
-  }, [open, stream, progressKey, remoteItem, title, progressPoster, progressAddonKey]);
+  }, [open, stream, progressKey, remoteItem, title, progressPoster, progressAddonKey, shuffle]);
 
   // The same cadence for a media-server version the catalogue cannot name: the only one that keeps
   // the position in the remote-state store of its own item.

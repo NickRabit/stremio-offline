@@ -1,6 +1,6 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useCrumbsAtEnd } from "./crumbs";
-import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, describeError, saveToDevice } from "./api";
 import { LoginScreen, PasswordChangeRequired } from "./Login";
@@ -782,6 +782,10 @@ export function App() {
   const fileMeta = (item: Extract<BrowseItem, { kind: "file" }>) =>
     [item.year, bytes(item.size)].filter(Boolean).join(" · ");
   const [localStream, setLocalStream] = useState<Stream | null>(null); const [localTitle, setLocalTitle] = useState("");
+  const [shuffleState, setShuffleState] = useState<{ id: string; upcoming?: { title: string }; hasPrevious: boolean; previousTitle?: string } | null>(null);
+  const shuffleStateRef = useRef<{ id: string; upcoming?: { title: string }; hasPrevious: boolean; previousTitle?: string } | null>(null);
+  const shufflePathRef = useRef<string | null>(null);
+  shuffleStateRef.current = shuffleState;
   /** Whether the local film now opening must ignore its saved position and start at zero. */
   const [localFromBeginning, setLocalFromBeginning] = useState(false);
   const [localProgressRevision, setLocalProgressRevision] = useState(0);
@@ -1931,14 +1935,98 @@ export function App() {
   const [nextFile, setNextFile] = useState<{ path: string; title: string } | null>(null);
   const [nextBusy, setNextBusy] = useState(false);
   const nextBusyRef = useRef(false);
+  const endShuffle = () => {
+    const id = shuffleStateRef.current?.id;
+    shuffleStateRef.current = null;
+    shufflePathRef.current = null;
+    setShuffleState(null);
+    if (id) void api.deleteShuffle(id).catch(() => undefined);
+  };
+  const playShuffleItem = async (
+    item: { path: string; title: string; season?: number },
+    state: { id: string; upcoming?: { title: string }; hasPrevious: boolean; previousTitle?: string },
+  ) => {
+    shuffleStateRef.current = state;
+    shufflePathRef.current = item.path;
+    setShuffleState(state);
+    const played = await playLocal(item.title, item.path, undefined, item.season !== undefined, undefined, true, undefined, undefined, true);
+    if (!played) endShuffle();
+    return played;
+  };
+  const startRandom = async (path: string) => {
+    setMenuFor(null);
+    endShuffle();
+    try {
+      const answer = await api.startShuffle(path);
+      await playShuffleItem(answer.item, {
+        id: answer.id,
+        ...(answer.upcoming ? { upcoming: answer.upcoming } : {}),
+        hasPrevious: false,
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) notify(t("library.playRandomEmpty"));
+      else fail(error);
+    }
+  };
+  const nextRandom = async () => {
+    const current = shuffleStateRef.current;
+    if (!current || nextBusyRef.current) return false;
+    nextBusyRef.current = true; setNextBusy(true);
+    try {
+      const answer = await api.nextShuffle(current.id);
+      if (!answer.item) {
+        const exhausted = { ...current, upcoming: undefined };
+        shuffleStateRef.current = exhausted;
+        setShuffleState(exhausted);
+        return false;
+      }
+      return await playShuffleItem(answer.item, {
+        id: current.id,
+        ...(answer.upcoming ? { upcoming: answer.upcoming } : {}),
+        hasPrevious: answer.hasPrevious,
+        ...(localTitle ? { previousTitle: localTitle } : {}),
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) endShuffle();
+      else fail(error);
+      return false;
+    } finally {
+      nextBusyRef.current = false; setNextBusy(false);
+    }
+  };
+  const previousRandom = async () => {
+    const current = shuffleStateRef.current;
+    if (!current || nextBusyRef.current) return false;
+    nextBusyRef.current = true; setNextBusy(true);
+    try {
+      const answer = await api.previousShuffle(current.id);
+      if (!answer.item) {
+        const started = { ...current, hasPrevious: false };
+        shuffleStateRef.current = started;
+        setShuffleState(started);
+        return false;
+      }
+      return await playShuffleItem(answer.item, {
+        id: current.id,
+        ...(answer.upcoming ? { upcoming: answer.upcoming } : {}),
+        hasPrevious: answer.hasPrevious,
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) endShuffle();
+      else fail(error);
+      return false;
+    } finally {
+      nextBusyRef.current = false; setNextBusy(false);
+    }
+  };
   useEffect(() => {
     setNextFile(null); setPreviousFile(null);
-    if (!playerOpen || !localStream) return;
+    if (!playerOpen || !localStream || shuffleState) return;
     let stale = false;
     void api.previousLibraryFile(localStream.sourceId).then((file) => { if (!stale) setPreviousFile(file); }).catch(() => undefined);
     void api.nextLibraryFile(localStream.sourceId).then((file) => { if (!stale) setNextFile(file); }).catch(() => undefined);
     return () => { stale = true; };
-  }, [playerOpen, localStream]);
+  }, [playerOpen, localStream, shuffleState]);
   const playAdjacent = async (file: { path: string; title: string }) => {
     if (!file || nextBusyRef.current) return false;
     nextBusyRef.current = true; setNextBusy(true);
@@ -1957,7 +2045,8 @@ export function App() {
       .catch(() => undefined);
     return () => controller.abort();
   }, [fileSubtitleKey]);
-  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor, fromBeginning = false, identity?: { type: "movie" | "series"; id: string }, session?: { key: string; panel?: boolean }) => {
+  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor, fromBeginning = false, identity?: { type: "movie" | "series"; id: string }, session?: { key: string; panel?: boolean }, shufflePlay = false) => {
+    if (!shufflePlay) endShuffle();
     // A file of the library plays as itself: the catalogue identity of whatever was open before
     // never travels with it. A caller that already knows the binding hands it over; otherwise the
     // one the matcher wrote is read beside the source, and a lookup that fails plays the file with
@@ -1994,6 +2083,7 @@ export function App() {
    *  remote identity the row carries, the viewer's own copy under its file path. None of them
    *  borrows the library file's player, and each reports to the store its owner reads. */
   const playAlternative = (request: AlternativePlay) => {
+    endShuffle();
     const owner = sourceProgressOwner(request.stream, request.catalogue);
     if (!owner) return;
     const scope = ++alternativeScopeRef.current.generation;
@@ -2582,7 +2672,10 @@ export function App() {
     void promise.catch(() => undefined);
     nextEpisodePrefetchRef.current = { id, promise };
   }, [playerOpen, localStream, detailPlaying, selected?.id, selected?.type, catalogueNext?.id, currentCatalog?.type]);
-  const stopPlayback = () => { setPlayerOpen(false); setPlayerSourcesOpen(false); setLocalStream(null); setLocalEpisode(false); setLocalFromBeginning(false); setStartAtSeconds(undefined); setPlayingCatalogue(null); setPlayerSubject(null); setDetailPlaying(null); setPlaybackPreferences({}); };
+  const stopPlayback = () => {
+    endShuffle();
+    setPlayerOpen(false); setPlayerSourcesOpen(false); setLocalStream(null); setLocalEpisode(false); setLocalFromBeginning(false); setStartAtSeconds(undefined); setPlayingCatalogue(null); setPlayerSubject(null); setDetailPlaying(null); setPlaybackPreferences({});
+  };
   /** The next episode is a new subject for the player on screen: the header names it, the
    *  progress store takes its key and the source list asks for its own sources, never the
    *  episode's that just ended. */
@@ -2638,6 +2731,7 @@ export function App() {
   };
   const playNextCatalogEpisode = async () => {
     if (!selected || !nextCatalogEpisode || nextBusyRef.current) return false;
+    endShuffle();
     nextBusyRef.current = true; setNextBusy(true);
     const currentStream = selectedStream;
     const type = selected.type || currentCatalog?.type || "series";
@@ -2738,6 +2832,7 @@ export function App() {
    *  hands its source to the player exactly as before. */
   const startCatalogPlayback = () => {
     if (!selected) return;
+    endShuffle();
     const playback = catalogPlaybackChoice(selectedStream, sourceRows);
     if (!playback) return;
     if (playback.kind === "choose") {
@@ -3296,6 +3391,7 @@ export function App() {
    *  other row travels under the detail's own title and episode. The browse panel's selection --
    *  the title it shows, the episode and source it picked -- is never moved by it. */
   const playCatalogueDetail = (stream: Stream, target: CatalogueDetailTarget, fromBeginning: boolean) => {
+    endShuffle();
     const anchor = { kind: "catalog" as const, key: `${target.type}:${target.id}` };
     if (isLocalStream(stream) && stream.localPath) {
       setDetailPlaying(null);
@@ -3400,6 +3496,7 @@ export function App() {
   /** Handing the player another source of the same title: it starts through the ordinary play
    *  path at the position it was chosen at, and the title's own progress is left untouched. */
   const switchPlaybackSource = async (stream: Stream, positionSeconds: number): Promise<void> => {
+    endShuffle();
     const ref = playbackCatalogueRef();
     if (!ref) throw new Error(t("player.noOtherSource"));
     playbackReturn.current = capturePlaybackReturn({ kind: "catalog", key: `${ref.type}:${ref.id}` });
@@ -3555,6 +3652,22 @@ export function App() {
   // The row the main player is on: the file of the library, the row the shared detail started, or
   // the row a catalogue tile played. It leads the player's chooser under its own class's name.
   const playingStream = localStream ?? detailPlaying?.stream ?? selectedStream;
+  const shuffleActive = Boolean(shuffleState && localStream?.localPath === shufflePathRef.current);
+  const playerNextTitle = shuffleActive
+    ? shuffleState?.upcoming?.title
+    : localStream ? nextFile?.title : detailPlaying ? (nextDetailEpisode ? episodeLabel(nextDetailEpisode) : undefined) : catalogueNext ? episodeLabel(catalogueNext) : undefined;
+  const playerOnNext = shuffleActive
+    ? (shuffleState?.upcoming ? nextRandom : undefined)
+    : localStream ? (nextFile ? () => playAdjacent(nextFile) : undefined) : detailPlaying ? (nextDetailEpisode ? playNextDetailEpisode : undefined) : catalogueNext ? playNextCatalogEpisode : undefined;
+  const playerAutoNext = shuffleActive
+    ? true
+    : localStream ? localEpisode : detailPlaying ? Boolean(nextDetailEpisode) : Boolean(catalogueNext);
+  const playerPreviousTitle = shuffleActive
+    ? (shuffleState?.hasPrevious ? shuffleState.previousTitle : undefined)
+    : previousFile?.title;
+  const playerOnPrevious = shuffleActive
+    ? (shuffleState?.hasPrevious ? previousRandom : undefined)
+    : previousFile ? () => playAdjacent(previousFile) : undefined;
 
   return <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
   <div className={`app-shell tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -3892,6 +4005,9 @@ export function App() {
                 setMenuFor(menuFor === ":library-tools" ? null : ":library-tools");
               }}><MoreVertical/></button>
               <div id="library-maintenance-actions" className={`library-maintenance-actions${menuFor === ":library-tools" ? " open" : ""}`}>
+                {!libraryList && !browsePath.startsWith(":") && <button title={t("library.playRandom")} onClick={() => void startRandom(browsePath)}>
+                  <Shuffle/> {t("library.playRandom")}
+                </button>}
                 <button title={t("library.scan")} onClick={() => void startScan()} disabled={scanning}>
                   <Sparkles/> {t("library.scan")}
                 </button>
@@ -4027,6 +4143,7 @@ export function App() {
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
                     {!selectionMode && <LibraryItemMenu name={item.name} open={menuFor === item.path} onToggle={() => openMenu(item)}>
+                      <button onClick={() => void startRandom(item.path)}><Shuffle/> {t("library.playRandom")}</button>
                       {item.match === "matched" && <TitleChips trailer={libraryTrailers[item.path] ?? null} links={libraryLinks[item.path] ?? []} onTrailer={setTrailerOpen} secureMode={settings.secureMode}/>}
                       {admin && matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
@@ -4104,7 +4221,7 @@ export function App() {
       </>}
     </main>
     <TrailerPlayer trailer={trailerOpen} onClose={() => setTrailerOpen(null)}/>
-    <Player nextTitle={localStream ? nextFile?.title : detailPlaying ? (nextDetailEpisode ? episodeLabel(nextDetailEpisode) : undefined) : catalogueNext ? episodeLabel(catalogueNext) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : detailPlaying ? (nextDetailEpisode ? playNextDetailEpisode : undefined) : catalogueNext ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : detailPlaying ? Boolean(nextDetailEpisode) : Boolean(catalogueNext)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} upNextAt={settings.upNextAt} skipSegmentsAuto={settings.skipSegmentsAuto} onPreferences={setPlaybackPreferences}
+    <Player nextTitle={playerNextTitle} nextBusy={nextBusy} onNext={playerOnNext} autoNext={playerAutoNext} previousTitle={playerPreviousTitle} onPrevious={playerOnPrevious} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} upNextAt={settings.upNextAt} skipSegmentsAuto={settings.skipSegmentsAuto} shuffle={shuffleActive} onPreferences={setPlaybackPreferences}
       catalogueKey={localStream && playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
       progressPoster={localStream ? localPoster : detailPlaying ? detailPlaying.target.poster : playerSubject?.poster ?? localPoster}

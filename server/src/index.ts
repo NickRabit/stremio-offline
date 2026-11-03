@@ -118,6 +118,7 @@ import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
 import { registerSearchEverywhereRoutes, searchEverywhereEnabled } from "./routes/search-everywhere.js";
+import { registerShuffleRoutes } from "./routes/shuffle.js";
 import { registerSourceProfilesRoutes } from "./routes/source-profiles.js";
 import { IntroSegmentsCache } from "./intro-segments.js";
 import { materializeOwnerSourceAdmission, materializeOwnerSourceProfileAdmission } from "./routes/source-profile-selection.js";
@@ -2880,6 +2881,19 @@ await libraryOps.load();
 registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId), progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps });
 
 const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
+
+registerShuffleRoutes(app, {
+  ...routeContext,
+  seen,
+  metaStore,
+  describeLibraryPath,
+  libraryKey,
+  wirePath,
+  fileAvailable: async (key, viewer) => {
+    const target = await libraryTarget(key, viewer).catch(() => undefined);
+    return Boolean(target && (await stat(target).catch(() => undefined))?.isFile());
+  },
+});
 
 // Home's confirm row shows what the curate route proposes, so it is registered once that
 // route exists.
