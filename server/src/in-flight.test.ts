@@ -22,15 +22,27 @@ test("a request counts until it finishes or its connection closes, once", () => 
   assert.equal(inFlight.active(), 0);
 });
 
-test("draining waits for a request that arrives after it started", async () => {
+test("draining waits for a request that arrives after it started", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const inFlight = new InFlight();
-  const started = Date.now();
   const drained = inFlight.drained(100, 2_000, 5);
-  let late: EventEmitter | undefined;
-  setTimeout(() => { late = begin(inFlight); }, 30);
-  setTimeout(() => late?.emit("finish"), 150);
+  let result: boolean | undefined;
+  void drained.then((value) => { result = value; });
+
+  t.mock.timers.tick(10);
+  const late = begin(inFlight);
+  t.mock.timers.tick(90);
+  await Promise.resolve();
+  assert.equal(result, undefined, "the deadline is measured from when the late request ended");
+
+  t.mock.timers.tick(50);
+  late.emit("finish");
+  t.mock.timers.tick(5);
+  t.mock.timers.tick(100);
+  await Promise.resolve();
+  assert.equal(result, true, "the drain completes after a full quiet spell");
+  assert.equal(Date.now(), 255);
   assert.equal(await drained, true);
-  assert.ok(Date.now() - started >= 240, "the quiet spell restarts after the late request ends");
 });
 
 test("draining gives up at the limit while a request never ends", async () => {
