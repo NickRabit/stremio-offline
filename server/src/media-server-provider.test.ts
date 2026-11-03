@@ -771,6 +771,7 @@ test("music videos browse and open as standalone media without catalogue movie m
   });
   const page = await provider.pageItems("tok", "user-1", "music-library");
   assert.equal(page.items[0].type, "movie");
+  assert.equal(page.items[0].musicVideo, true);
   assert.equal(page.items[0].durationTicks, 1200000000);
   assert.deepEqual(page.items[0].providerIds, {}, "music video IDs must not match a catalogue movie");
   assert.deepEqual(await provider.detail("tok", "user-1", "clip-1"), page.items[0]);
@@ -888,9 +889,9 @@ test("native movie filters retain music videos and folders, and episode pages us
 
 test("provider metadata is bounded, optional, and does not project paths or raw URLs", async () => {
   for (const kind of ["jellyfin", "emby"] as const) {
-    const { provider } = fixture(() => ({ Id: "m", Name: "Movie", Type: "Movie", Overview: "A story", ProductionYear: 2024, Genres: ["Drama", "Drama", "Comedy", null, "x".repeat(129)], Size: 1234, RunTimeTicks: 1200000000, DateCreated: "2026-10-13T00:00:00Z", Path: "/private/movie.mkv", RemoteTrailers: [{ Url: "https://upstream.invalid" }] }), kind);
+    const { provider } = fixture(() => ({ Id: "m", Name: "Movie", OriginalTitle: "Original Movie", Type: "Movie", Overview: "A story", ProductionYear: 2024, Genres: ["Drama", "Drama", "Comedy", null, "x".repeat(129)], Size: 1234, RunTimeTicks: 1200000000, DateCreated: "2026-10-13T00:00:00Z", Path: "/private/movie.mkv", RemoteTrailers: [{ Url: "https://upstream.invalid" }] }), kind);
     const item = await provider.detail("token", "user", "m");
-    assert.deepEqual(item, { id: "m", name: "Movie", type: "movie", providerIds: {}, overview: "A story", year: 2024, genres: ["Drama", "Comedy"], size: 1234, durationTicks: 1200000000, addedAt: "2026-10-13T00:00:00.000Z" });
+    assert.deepEqual(item, { id: "m", name: "Movie", originalTitle: "Original Movie", type: "movie", providerIds: {}, overview: "A story", year: 2024, genres: ["Drama", "Comedy"], size: 1234, durationTicks: 1200000000, addedAt: "2026-10-13T00:00:00.000Z" });
     const bad = fixture(() => ({ Id: "m", Name: "Movie", Type: "Movie", Overview: "x".repeat(4097), ProductionYear: 99999, Genres: "Drama", Size: -1, DateCreated: "invalid" }), kind);
     assert.deepEqual(await bad.provider.detail("token", "user", "m"), { id: "m", name: "Movie", type: "movie", providerIds: {} });
   }

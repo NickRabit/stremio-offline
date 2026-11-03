@@ -10,6 +10,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -34,10 +35,10 @@ import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagCatalogEpisode
 import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
-import cz.stremiooffline.tv.ui.detail.TagRemoteDetailPlay
+import cz.stremiooffline.tv.ui.catalog.TagCatalogRetry
+import cz.stremiooffline.tv.ui.catalog.TagCatalogSources
 import cz.stremiooffline.tv.ui.library.remoteItemTag
 import cz.stremiooffline.tv.ui.library.remoteLibraryTag
-import cz.stremiooffline.tv.ui.library.TagRemoteSeriesPrimary
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -146,14 +147,14 @@ class RemoteCatalogueShellTest {
     openItem("movie")
 
     compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess }
-    compose.onNodeWithTag(TagRemoteDetailPlay).assertDoesNotExist()
+    assertTrue(compose.onAllNodesWithText("Movie").fetchSemanticsNodes().isNotEmpty())
 
     scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
     compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(remoteItemTag("movie")).assertIsFocused() }.isSuccess }
   }
 
   @Test
-  fun `a failed episode lookup keeps the remote detail screen`() {
+  fun `a failed episode lookup opens the catalogue fallback`() {
     val item = RemoteItemDto(id = "show", name = "Show", type = "series")
     val api = api(item).apply {
       remoteItemsFailure = ApiError(ApiFailure.Generic)
@@ -162,14 +163,12 @@ class RemoteCatalogueShellTest {
 
     openItem("show")
 
-    compose.waitUntil(5_000) {
-      runCatching { compose.onNodeWithTag(TagRemoteSeriesPrimary).assertExists() }.isSuccess
-    }
-    compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess }
+    assertTrue(compose.onAllNodesWithText("Show").fetchSemanticsNodes().isNotEmpty())
   }
 
   @Test
-  fun `a failed film lookup keeps the remote detail screen`() {
+  fun `a failed film lookup opens the catalogue fallback`() {
     val item = RemoteItemDto(id = "movie", name = "Movie", type = "movie")
     val api = api(item).apply {
       remoteItemFailure = ApiError(ApiFailure.Generic)
@@ -178,9 +177,24 @@ class RemoteCatalogueShellTest {
 
     openItem("movie")
 
-    compose.waitUntil(5_000) {
-      runCatching { compose.onNodeWithTag(TagRemoteDetailPlay).assertExists() }.isSuccess
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess }
+    assertTrue(compose.onAllNodesWithText("Movie").fetchSemanticsNodes().isNotEmpty())
+  }
+
+  @Test
+  fun `a fallback film whose rows fail shows the catalogue sources retry`() {
+    val item = RemoteItemDto(id = "movie", name = "Movie", type = "movie")
+    val api = api(item).apply {
+      remoteItemFailure = ApiError(ApiFailure.Generic)
+      remoteSourcesFailure = ApiError(ApiFailure.Generic)
     }
-    compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
+    mount(api)
+
+    openItem("movie")
+
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess }
+    compose.onNodeWithTag(TagCatalogSources).performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagCatalogRetry).assertExists() }.isSuccess }
   }
 }

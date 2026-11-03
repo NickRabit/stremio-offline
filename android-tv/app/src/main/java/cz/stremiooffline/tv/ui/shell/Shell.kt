@@ -66,7 +66,6 @@ import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.diagnostics.AppLog
-import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.components.BrandMark
 import cz.stremiooffline.tv.ui.components.outlineIcon
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
@@ -76,11 +75,9 @@ import cz.stremiooffline.tv.ui.catalog.OfferedSources
 import cz.stremiooffline.tv.ui.catalog.remoteResumeCards
 import cz.stremiooffline.tv.ui.catalog.SearchScreen
 import cz.stremiooffline.tv.ui.detail.DetailData
-import cz.stremiooffline.tv.ui.detail.DetailScreen
 import cz.stremiooffline.tv.ui.detail.initialRemoteMetadata
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
-import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
 import cz.stremiooffline.tv.ui.detail.remoteExtrasIdentity
 import cz.stremiooffline.tv.ui.detail.remoteMetadataNeedsItem
 import cz.stremiooffline.tv.ui.detail.resolveRemoteMetadata
@@ -191,15 +188,12 @@ fun Shell(
   val current = shellState.selected
   val sectionStates = rememberSaveableStateHolder()
 
-  var detail by remember { mutableStateOf<DetailData?>(null) }
   // The one binding lookup still out. A newer choice, another detail or another section replaces
   // it, so a late answer never opens a detail over what the viewer moved on to.
   val detailLookup = remember { DetailLookup() }
   var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
   val catalogStack = remember { CatalogDetailStack() }
   var catalogReturnOrigin by remember { mutableStateOf<CatalogReturnOrigin?>(null) }
-  /** One native remote item's detail over the library; its versions play through the same player. */
-  var remoteDetail by remember { mutableStateOf<RemoteDetailData?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
   /** The streams of the title the player is on: the catalogue reports them while addons answer. */
   var playerSources by remember { mutableStateOf(OfferedSources()) }
@@ -275,13 +269,20 @@ fun Shell(
     clearCatalogHistory()
     catalogDetail = args
   }
+  fun openLibraryFolder(path: String) {
+    detailLookup.cancel()
+    clearCatalogHistory()
+    catalogDetail = null
+    libraryPush = path
+    shellState.pick(Section.Library)
+  }
   fun openLibraryDetail(data: DetailData) {
     detailLookup.cancel()
-    val own = ownCatalogueArgsOrNull(data)
-    if (own == null) {
-      detail = data
+    if (data.files.isEmpty()) {
+      openLibraryFolder(data.gridPath)
       return
     }
+    val own = ownCatalogueArgs(data)
     // One file stands for itself; a folder of several only for a title bound to the folder as a
     // whole -- a folder of different films never opens as the first one's title.
     val lookupPath = if (data.files.size == 1) data.files.single().path else data.gridPath.takeIf { data.files.isNotEmpty() }
@@ -310,10 +311,6 @@ fun Shell(
   }
   fun openRemoteDetail(data: RemoteDetailData) {
     detailLookup.cancel()
-    if (data.autoStartOver) {
-      remoteDetail = data
-      return
-    }
     detailLookup.job = hintScope.launch {
       try {
         val resolved = try {
@@ -360,7 +357,7 @@ fun Shell(
           null
         }
         if (resolved == null) {
-          remoteDetail = data
+          openCatalog(remoteFallbackCatalogueArgs(data))
         } else {
           openCatalog(resolved)
         }
@@ -370,8 +367,6 @@ fun Shell(
     }
   }
   fun openPersonSearch(name: String) {
-    detail = null
-    remoteDetail = null
     catalogDetail = null
     clearCatalogHistory()
     searchScope = SearchScope()
@@ -409,7 +404,7 @@ fun Shell(
 
   // A detail or the player covers the section it was opened from; the hidden section's own Back
   // handlers must not consume Back while it is up.
-  val overlayOpen = detail != null || catalogDetail != null || remoteDetail != null || player != null
+  val overlayOpen = catalogDetail != null || player != null
 
   ShellScaffold(
     username = username,
@@ -426,7 +421,7 @@ fun Shell(
       true
     },
     onBackToExit = onExitApp,
-    railHidden = detail != null || catalogDetail != null || remoteDetail != null,
+    railHidden = catalogDetail != null,
   ) { focusRequester ->
     val section = current
     val accountFocus = remember { FocusRequester() }
@@ -572,71 +567,6 @@ fun Shell(
     }
   }
 
-  val openDetail = detail
-  if (openDetail != null) OverlayFocusTrap(fenced = player == null) {
-    DetailScreen(
-      detail = openDetail,
-      imageUrl = { path -> path?.let(api::url) },
-      onPlay = {
-        playerSources = OfferedSources()
-        playedSourceId = null
-        player = it
-      },
-      onBack = {
-        clearCatalogHistory()
-        detail = null
-        returnToken++
-      },
-      progress = api::progress,
-      setFavorite = { path, wanted -> api.setFavorite(path, wanted).favorite },
-      forgetProgress = api::forgetProgress,
-      restoreToken = detailReturnToken,
-      backEnabled = player == null,
-      // The panel's supplementary groups need the catalogue surface; the destinations and the queue
-      // call are already the shell's own collaborators.
-      sourcesApi = api,
-      loadDestinations = nativeDestinations,
-      onQueue = nativeQueue,
-      // Mark watched stores the file's own key as finished, exactly as the player's last seconds do.
-      markWatched = { file -> api.saveProgress(Progress.libraryKey(file.path), 1.0, 1.0, file.label, file.path, null, null, null, final = true) },
-      onSearchPerson = ::openPersonSearch,
-      onOpenRelated = { related -> openRelatedFromUnderlying(related, CatalogReturnOrigin.Local) },
-    )
-  }
-
-  val shownRemoteDetail = remoteDetail
-  if (shownRemoteDetail != null) OverlayFocusTrap(fenced = player == null) {
-    RemoteDetailScreen(
-      api = api,
-      data = shownRemoteDetail,
-      imageUrl = { path -> path?.let(api::url) },
-      onPlay = {
-        // The item's versions stay available while the player discovers supplementary groups.
-        player = it
-      },
-      onBack = {
-        clearCatalogHistory()
-        remoteDetail = null
-        returnToken++
-      },
-      backEnabled = player == null,
-      restoreToken = detailReturnToken,
-      loadDestinations = nativeDestinations,
-      bulkApi = api,
-      onQueue = nativeQueue,
-      // The screen's own RemoteLibraryApi stays exactly that; the addon discovery needs the
-      // catalogue surface, which the shell's real api already implements.
-      catalogueApi = api,
-      // The title's own row outranks the item's remote state, so the TV reads the same key the
-      // web does for a version the catalogue can name.
-      titleProgress = api::progress,
-      forgetTitle = { key -> api.forgetProgress(listOf(key)) },
-      loadExtras = { type, id -> api.titleExtras(type, id, null) },
-      onSearchPerson = ::openPersonSearch,
-      onOpenRelated = { related -> openRelatedFromUnderlying(related, CatalogReturnOrigin.Remote) },
-    )
-  }
-
   val openCatalogDetail = catalogDetail
   if (openCatalogDetail != null) OverlayFocusTrap(fenced = player == null) {
     CatalogDetailScreen(
@@ -650,12 +580,7 @@ fun Shell(
       onSources = { playerSources = it },
       playedSourceId = playedSourceId,
       onShowInLibrary = { folder ->
-        detail = null
-        remoteDetail = null
-        clearCatalogHistory()
-        catalogDetail = null
-        libraryPush = folder
-        shellState.pick(Section.Library)
+        openLibraryFolder(folder)
       },
       onBack = {
         val previous = catalogStack.pop()
@@ -704,7 +629,7 @@ fun Shell(
       onExit = { endedSourceId ->
         playedSourceId = endedSourceId
         player = null
-        if (detail != null || catalogDetail != null || remoteDetail != null) detailReturnToken++ else returnToken++
+        if (catalogDetail != null) detailReturnToken++ else returnToken++
       },
     )
   }

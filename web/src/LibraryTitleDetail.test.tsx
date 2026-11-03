@@ -1020,6 +1020,20 @@ describe("LibraryTitleDetail initial source", () => {
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "picked-row" }));
   });
 
+  it("keeps a source the viewer picked before opening the detail ahead of the stored row", () => {
+    // `initialSource` is passed only for a row the viewer chose in the catalogue panel (App's
+    // pickedRef), so it is an explicit pick and outranks the resumed version.
+    const resume = { ...addon("resumed-row", "Resumed torrent", 20), stableKey: `a:${"a".repeat(24)}` };
+    const picked = { ...addon("picked-row", "Picked torrent", 30), stableKey: `b:${"b".repeat(24)}` };
+    const { onPlay } = render({
+      sources: [picked, resume],
+      initialSource: picked,
+      resumeStableKey: resume.stableKey,
+    });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "picked-row" }));
+  });
+
   it("lets the viewer take another row over the one the detail opened on", () => {
     const { onPlay } = render({ sources: [addon("a2", "1080p", 1_000)], initialSource: addon("picked-row", "Torrent 4K", 4_000_000_000) });
     click(host.querySelector(".split-button-toggle"));

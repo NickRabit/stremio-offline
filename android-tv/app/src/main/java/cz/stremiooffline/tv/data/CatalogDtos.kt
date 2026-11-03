@@ -269,6 +269,7 @@ data class ProgressEntryDto(
   val poster: String? = null,
   val addonKey: String? = null,
   val updatedAt: String? = null,
+  val pending: Boolean = false,
   val series: Series? = null,
 ) {
   @Serializable

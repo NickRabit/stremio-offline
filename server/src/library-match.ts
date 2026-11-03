@@ -378,6 +378,21 @@ export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: Tit
   };
 }
 
+export function parsedFromRemoteItem(item: {
+  name: string;
+  originalTitle?: string;
+  year?: number;
+}): ParsedMedia {
+  const parsed = parseMediaName(item.name);
+  const original = item.originalTitle?.trim() ? parseMediaName(item.originalTitle) : undefined;
+  const originalTitle = original?.title || original?.query;
+  return {
+    ...parsed,
+    ...(item.year == null ? {} : { year: item.year }),
+    ...(originalTitle && normalizeTitle(originalTitle) !== normalizeTitle(parsed.title) ? { query: originalTitle } : {}),
+  };
+}
+
 const ROMAN_SPELLING: Record<number, string> = {
   1: "i", 2: "ii", 3: "iii", 4: "iv", 5: "v", 6: "vi", 7: "vii", 8: "viii", 9: "ix", 10: "x",
 };

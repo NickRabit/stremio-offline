@@ -319,6 +319,7 @@ export interface RemoteItem {
   id: string; name: string; type: RemoteItemType; parentId?: string; seriesId?: string;
   season?: number; episode?: number;
   providerIds: { imdb?: string; tmdb?: string; tvdb?: string };
+  providerIdsMatched?: boolean;
   durationTicks?: number;
   /** Normalized, bounded metadata the server projects from the provider. Absent when the
    *  provider does not say it; never an upstream file path. */

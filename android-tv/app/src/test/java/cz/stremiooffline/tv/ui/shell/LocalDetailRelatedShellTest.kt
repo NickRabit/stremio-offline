@@ -24,7 +24,6 @@ import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
-import cz.stremiooffline.tv.ui.detail.TagDetailPrimary
 import cz.stremiooffline.tv.ui.detail.relatedTitleTag
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -105,7 +104,6 @@ class LocalDetailRelatedShellTest {
 
     // Back leaves the related title and returns to the bound file's own catalogue detail.
     compose.onNodeWithTag(TagCatalogPrimary).assertExists()
-    compose.onNodeWithTag(TagDetailPrimary).assertDoesNotExist()
     assertTrue("the film's own detail is back", compose.onAllNodesWithText("It, the film").fetchSemanticsNodes().isNotEmpty())
   }
 }
