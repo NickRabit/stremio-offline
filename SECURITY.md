@@ -25,6 +25,38 @@ Please include:
 You should hear back within a week. A fix, a workaround, or a reason it will
 not be treated as a vulnerability will follow once the report is understood.
 
+## Automated checks
+
+- GitHub secret scanning checks for supported credential patterns and push
+  protection can stop a detected secret before it enters the repository.
+- GitHub CodeQL scans the JavaScript and TypeScript workspaces through the
+  default code scanning setup.
+- A weekly workflow builds the final runtime image and scans its operating
+  system packages and bundled libraries with Trivy. Fixable `HIGH` and
+  `CRITICAL` findings fail the workflow after the SARIF report has been
+  uploaded to code scanning.
+
+Review findings in **Security -> Code scanning**. Do not copy exploit details,
+secret values or sensitive source excerpts into public issues, workflow
+summaries or ordinary artifacts. Suppress a finding only with a narrow scanner
+rule that records the reason, owner and review or expiry date. A scanner
+failure or an incomplete upload is not a clean result.
+
+The current baseline covers JavaScript and TypeScript in CodeQL and a freshly
+built `linux/amd64` runtime image in Trivy. It does not cover Kotlin, Swift,
+GitHub Actions, the arm64 image variant or the exact digest published by the
+release workflow. The Trivy policy excludes unfixed vulnerabilities and fails
+on every remaining `HIGH` or `CRITICAL` finding; it does not distinguish a new
+finding from one that already existed.
+
+To update the scanner, review the Trivy action release and its pinned setup
+dependency, update the action commit and commented version, review the selected
+Trivy version and its release notes, then run **Security scan** manually before
+merging. The vulnerability database updates on every run. GitHub can delay a
+scheduled run or disable schedules after a period without repository activity,
+so maintainers should also run the workflow manually after quiet periods and
+check the latest successful run.
+
 ## What this project is careful about
 
 - Addon code never runs here. The server only reads JSON APIs.
