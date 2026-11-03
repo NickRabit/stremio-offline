@@ -8,7 +8,7 @@ import { test } from "node:test";
 import express from "express";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { activityItems, aheadWindow, calendarFeed, calendarItems, downloadEligibility, effectiveRulesAdmission, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue, type FollowSourceProfile } from "./follows.js";
+import { activityItems, aheadWindow, calendarFeed, calendarItems, downloadEligibility, effectiveRulesAdmission, effectiveSelection, followEpisodeAt, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue, type FollowSourceProfile } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
 import { registerFollowRoutes, type FollowDeps as FollowRouteDeps } from "./routes/follows.js";
 import { materializeSourceAdmissionDefinition, materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, SourceAdmissionRejected, type SourceAdmissionSnapshotV1 } from "./source-admission.js";
@@ -27,6 +27,21 @@ const episode = (season: number, number: number, videoId: string, released?: str
   ...(released ? { released } : {}),
   ...(ambiguous ? { ambiguous: true } : {}),
 });
+
+test("an episode key cannot resolve an inherited object property", () => {
+  const own = episode(1, 1, "v1");
+  const follow = {
+    id: "follow-a", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show",
+    createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z",
+    enabled: true, revision: 1, nextCheckAt: "2024-01-01T00:00:00.000Z", failures: 0,
+    episodes: { [own.key]: own },
+  } satisfies Follow;
+
+  assert.equal(followEpisodeAt(follow, own.key), own);
+  assert.equal(followEpisodeAt(follow, "__proto__"), undefined);
+  assert.equal(followEpisodeAt(follow, "constructor"), undefined);
+});
+
 const loaded = async (dir: string) => { const store = new FollowStore(dir); await store.load(); return store; };
 const messageKeyOf = (error: unknown) => (error as { messageKey?: string }).messageKey;
 const profileAdmission = (profileId: string = SOURCE_PROFILE_IDS.travel): SourceAdmissionSnapshotV1 => {
