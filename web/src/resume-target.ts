@@ -1,9 +1,13 @@
-import type { Meta, Video } from "./types";
+import type { Meta, ProgressEntry, Video } from "./types";
 
 export interface ResumeTarget {
   meta: Pick<Meta, "id" | "type" | "name" | "poster">;
   /** Absent for a movie. */
   episode?: { key: string; season: number; number: number };
+}
+
+export function seriesEntry(entries: ProgressEntry[], id: string): ProgressEntry | undefined {
+  return entries.find((entry) => entry.series?.id === id);
 }
 
 /** The video id a stored key was built from: the player keys an episode as

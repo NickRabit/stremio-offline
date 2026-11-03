@@ -104,7 +104,7 @@ beforeEach(() => {
   addonProviders = () => json([]);
   addonStreams = () => json([]);
   addonSubtitles = () => json([]);
-  addonProgress = () => json(null);
+  addonProgress = (url) => json(url.pathname === "/api/progress" ? [] : null);
   extrasReply = () => json({ people: [], related: [], source: "addon" });
   localCopies = () => json([]);
   remoteLibraryStreams = () => json({ streams: [] });
@@ -348,6 +348,62 @@ describe("RemoteLibraryBrowser listing", () => {
     expect(host.querySelector(".episode-current")!.textContent).toContain("Second");
     expect(host.querySelector(".library-detail-play .split-button .primary")!.textContent).toContain("Play");
     expect(calls.sources.at(-1)!.pathname).toBe("/api/remote-libraries/rlib_a/items/e2/sources");
+  });
+
+  it("opens an identified series on a newer catalogue episode than the server's resume card", async () => {
+    const show: RemoteItem = { id: "show", name: "Show", type: "series", providerIds: { imdb: "tt7000" } };
+    const episodes = [1, 2, 3, 4].map((number): RemoteItem => ({
+      id: `e${number}`, name: number === 4 ? "Episode Four" : `Episode ${number}`,
+      type: "episode", season: 1, episode: number, seriesId: "show", providerIds: {},
+    }));
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? episodes : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/show") ? show : episodes.find((episode) => url.pathname.endsWith(`/${episode.id}`))!, capabilities });
+    personal = () => json({ items: [{
+      kind: "remote", key: "remote:e1", title: "Episode 1", provider: "jellyfin", libraryId: "rlib_a",
+      libraryName: "Music videos", itemId: "e1", itemType: "episode", season: 1, episode: 1,
+      progress: { position: 60, duration: 600 }, updatedAt: "2026-01-01T00:00:00.000Z",
+    }], total: 1 });
+    addonProgress = (url) => url.pathname === "/api/progress"
+      ? json([{
+        key: "series:tt7000:1:4", position: 600, duration: 1200, title: "Show · S01E04",
+        updatedAt: "2026-01-02T00:00:00.000Z",
+        series: { id: "tt7000", name: "Show", season: 1, episode: 4 },
+      }])
+      : json(null);
+    await openRootLibrary();
+
+    await click(tileButtons()[0]!);
+    await flush();
+
+    expect(host.querySelector(".library-title-detail .hero .meta-line")!.textContent).toBe("S1 E4");
+    expect(host.querySelector(".episode-current")!.textContent).toContain("Episode Four");
+    expect(calls.browse.some((url) => url.searchParams.get("parentId") === "show" && url.searchParams.get("type") === "episode")).toBe(true);
+  });
+
+  it("keeps the server resume card order for a series without a catalogue identity", async () => {
+    const show: RemoteItem = { id: "show", name: "Show", type: "series", providerIds: {} };
+    const episodes = [1, 2, 3, 4].map((number): RemoteItem => ({
+      id: `e${number}`, name: `Episode ${number}`, type: "episode", season: 1, episode: number, seriesId: "show", providerIds: {},
+    }));
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? episodes : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/show") ? show : episodes.find((episode) => url.pathname.endsWith(`/${episode.id}`))!, capabilities });
+    personal = () => json({ items: [{
+      kind: "remote", key: "remote:e2", title: "Episode 2", provider: "jellyfin", libraryId: "rlib_a",
+      libraryName: "Music videos", itemId: "e2", itemType: "episode", season: 1, episode: 2,
+      progress: { position: 60, duration: 600 }, updatedAt: "2026-01-01T00:00:00.000Z",
+    }], total: 1 });
+    addonProgress = () => json([{
+      key: "series:tt7000:1:4", position: 600, duration: 1200, title: "Show · S01E04",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      series: { id: "tt7000", name: "Show", season: 1, episode: 4 },
+    }]);
+    await openRootLibrary();
+
+    await click(tileButtons()[0]!);
+    await flush();
+
+    expect(host.querySelector(".library-title-detail .hero .meta-line")!.textContent).toBe("S1 E2");
+    expect(host.querySelector(".episode-current")!.textContent).toContain("Episode 2");
   });
 
   it("offers whole-series copying on a series page only when the caller authorizes it", async () => {
@@ -1684,7 +1740,11 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await selectAddonRow();
     // The episode has no version of its own, so the title's record is read as the detail opens,
     // and again for the addon row the viewer then picks. Both use the parent series' key.
-    expect(addonGetPaths()).toEqual(["/api/progress/series%3Att7000%3A1%3A2", "/api/progress/series%3Att7000%3A1%3A2"]);
+    expect(addonGetPaths()).toEqual([
+      "/api/progress",
+      "/api/progress/series%3Att7000%3A1%3A2",
+      "/api/progress/series%3Att7000%3A1%3A2",
+    ]);
   });
 
   it("stores the parent show's poster for a native episode", async () => {

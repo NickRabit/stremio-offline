@@ -154,6 +154,7 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
                 ProgressKey.of("series", identity.id, "${identity.id}:$season:$episode"),
                 season,
                 episode,
+                card.updatedAt,
               )
             }
           }
@@ -190,7 +191,9 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
       meta = MetaDto(id = card.id, type = card.type, name = card.name, poster = card.poster),
       addonName = "",
       type = card.type,
-      episode = card.episode?.let { episode -> card.season?.let { season -> ResumeEpisode(card.key, season, episode) } },
+      episode = card.episode?.let { episode ->
+        card.season?.let { season -> ResumeEpisode(card.key, season, episode, card.updatedAt) }
+      },
       forgetKeys = card.forgetKeys,
       autoPlay = false,
     ),
@@ -241,6 +244,7 @@ private fun catalogueArgsOf(card: HomeCard.Remote): CatalogDetailArgs? {
           ProgressKey.of("series", identity.id, "${identity.id}:$season:$episode"),
           season,
           episode,
+          card.updatedAt,
         )
       }
     } else null,

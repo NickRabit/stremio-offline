@@ -903,6 +903,61 @@ class CatalogDetailTest {
     assertFalse(api.streamsRequests.contains("series:tt1:1:1"))
   }
 
+  private fun storedSeriesEpisode(updatedAt: String) = ProgressEntryDto(
+    key = "series:tt1:1:4",
+    position = 300.0,
+    duration = 1200.0,
+    title = "Show · S01E04",
+    updatedAt = updatedAt,
+    series = ProgressEntryDto.Series(id = "tt1", name = "Show", season = 1, episode = 4),
+  )
+
+  @Test
+  fun `a newer in-progress catalogue episode wins over the episode the card opened on`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(
+      VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+      VideoDto(id = "tt1:1:4", title = "Four", season = 1, episode = 4),
+    )
+    api.progressEntries = listOf(storedSeriesEpisode("2026-01-02T00:00:00Z"))
+    mount(
+      api,
+      CatalogDetailArgs(
+        MetaDto(id = "tt1", type = "series", name = "Show"),
+        "Cinemeta",
+        "series",
+        episode = ResumeEpisode("series:tt1:1:1", 1, 1, updatedAt = "2026-01-01T00:00:00Z"),
+      ),
+    )
+    compose.waitForIdle()
+
+    assertTrue(api.streamsRequests.contains("series:tt1:1:4"))
+    assertFalse(api.streamsRequests.contains("series:tt1:1:1"))
+  }
+
+  @Test
+  fun `a newer card episode wins over an older in-progress catalogue episode`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(
+      VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+      VideoDto(id = "tt1:1:4", title = "Four", season = 1, episode = 4),
+    )
+    api.progressEntries = listOf(storedSeriesEpisode("2026-01-01T00:00:00Z"))
+    mount(
+      api,
+      CatalogDetailArgs(
+        MetaDto(id = "tt1", type = "series", name = "Show"),
+        "Cinemeta",
+        "series",
+        episode = ResumeEpisode("series:tt1:1:1", 1, 1, updatedAt = "2026-01-02T00:00:00Z"),
+      ),
+    )
+    compose.waitForIdle()
+
+    assertTrue(api.streamsRequests.contains("series:tt1:1:1"))
+    assertFalse(api.streamsRequests.contains("series:tt1:1:4"))
+  }
+
   @Test
   fun `the season row scrolls as the D-pad walks to a far season`() {
     val api = seriesApi()
