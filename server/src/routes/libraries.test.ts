@@ -32,6 +32,7 @@ interface Harness {
   contentStops: Array<{ libraryId?: string; userId?: string }>;
   /** Every library id the first-seen index was asked to forget, in order. */
   seenForgotten: string[];
+  fingerprintsForgotten: string[];
   stored: () => LibraryRecord[];
   userGrants: () => RootGrant[];
   allGrants: () => RootGrant[];
@@ -72,6 +73,7 @@ const mount = async (
   const enqueued: unknown[] = [];
   const invalidated: string[] = [];
   const seenForgotten: string[] = [];
+  const fingerprintsForgotten: string[] = [];
   const queuePauses: Harness["queuePauses"] = [];
   const contentStops: Harness["contentStops"] = [];
   // A write can be held, so two requests can both read the state before either mutator runs.
@@ -130,6 +132,7 @@ const mount = async (
     },
     metaStore: { qualifiedMeta: () => ({}), forget: async () => undefined } as unknown as LibraryMetaStore,
     seen: { forget: async (libraryId: string) => { seenForgotten.push(libraryId); } } as unknown as LibrarySeenStore,
+    fingerprints: { forget: async (libraryId: string) => { fingerprintsForgotten.push(libraryId); } },
     libraryOps: { enqueue: async (operation: unknown) => { enqueued.push(operation); return { id: "op-1" }; } } as unknown as LibraryOps,
   };
   const app = express();
@@ -151,6 +154,7 @@ const mount = async (
     contentStops,
     stored: () => state.libraries,
     seenForgotten,
+    fingerprintsForgotten,
     settings: () => state.settings,
     userGrants: () => state.grants,
     loseSession: (after: number) => { sessionReads = after; },
@@ -404,9 +408,11 @@ test("a library's first-seen index is forgotten only when the removal asks to fo
 
   assert.equal((await api(harness.base, "/api/libraries/lib_aaaaaaaa", { method: "DELETE" })).status, 204);
   assert.deepEqual(harness.seenForgotten, [], "a plain removal keeps the first-seen index, as it keeps the artwork");
+  assert.deepEqual(harness.fingerprintsForgotten, [], "a plain removal keeps file fingerprints");
 
   assert.equal((await api(harness.base, "/api/libraries/lib_bbbbbbbb?forget=1", { method: "DELETE" })).status, 204);
   assert.deepEqual(harness.seenForgotten, ["lib_bbbbbbbb"]);
+  assert.deepEqual(harness.fingerprintsForgotten, ["lib_bbbbbbbb"]);
 });
 
 /** A root the picker would accept: inside the grant, and a real folder. */

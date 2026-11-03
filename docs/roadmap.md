@@ -25,7 +25,7 @@ metadata store, or scheduler for each platform.
 | Order | Current opportunity | What remains |
 | --- | --- | --- |
 | 4 | Queue controls | Night-only window first, then an aggregate speed limit and a completion notice; current download limits cover concurrency, not these controls. |
-| 6 | Library file fingerprint | Re-associate metadata, favourites and resume positions when a file is moved outside the app, by size and a partial hash; best built on the SQLite storage. See [Library](#library). |
+| Implemented | Library file fingerprint | Re-associates metadata, favourites, resume positions, artwork and first-seen dates when a file is moved outside the app, using size, modification time and a partial content hash. [Libraries](libraries.md#files-moved-outside-the-app). |
 | 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
 | Alongside | Major dependency updates | Node 26 for the server image and CI, then Vite 8 with its React plugin, then TypeScript 7; Electron waits for a reason. See [Major dependency updates](#major-dependency-updates). |
 | Then | Search by cast and crew | A person in the title detail opens what that person made, not a text search for the name: TMDB filmography when a key is set, the owned copies first. See [Search by cast and crew](#search-by-cast-and-crew). |
@@ -280,23 +280,16 @@ next-episode threshold have shipped (see [Done](#done) and [Playback](playback.m
 
 ### Library
 
+The library file fingerprint has shipped. A complete maintenance walk recognizes
+unique hand moves across all libraries and carries the path-based records to the
+new location; ambiguous cases stay untouched.
+
 - A guided split of the download directory from the library manager. The
   supported route — carve-outs plus **Change folder** — is written up in
   [Libraries](libraries.md#splitting-the-download-directory); what is missing is
   a wizard that offers it at the moment someone needs it.
 - Bulk rename by pattern. Deliberately out of the first multi-library release;
   the operations queue is shaped to take it without a migration.
-- A per-file fingerprint so a move outside the app keeps its metadata,
-  favourites and resume position. Today identity follows the relative path, so
-  a file moved on the NAS by hand shows up as a new item. Store size and a
-  SHA-256 of the first and last MiB; when a new path matches exactly one file
-  that disappeared, take over its record, and leave anything ambiguous as a
-  suggestion. Modification time is not compared, since a copy to another disk
-  changes it, and files still being written are skipped. A series is one
-  top-level folder, so a renamed series folder needs the show's match carried
-  over as well, not only its files. The library's existing fingerprint only
-  detects that something changed. Build it on the SQLite storage rather than
-  growing the JSON files.
 
 ### Queue controls
 
@@ -312,8 +305,9 @@ Selective migration shipped in #679 (0.7.7), following
 `application.sqlite`; image links, hourly picture/provider counts, traffic,
 activity, file facts, TMDB id mappings, downloads, follows and library metadata
 write only changed rows. The one-time imports move old JSON files to
-`migration-backup/`. Accounts, grants, preferences and resume positions remain
-in `state.json`; library operations and scan progress also stay in JSON.
+`migration-backup/`. Accounts, grants, settings and preferences remain in
+`state.json`; favourites, resume positions, watchlist and watched-series markers
+moved to SQLite in #685. Library operations and scan progress also stay in JSON.
 
 The [decision record](adr/0001-sqlite-storage.md) owns runtime and cutover
 contracts, and [Backup](backup.md) describes stopped-instance backup and restore.

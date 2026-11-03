@@ -12,6 +12,10 @@ export interface SweepDeps {
   scan(library: SweepLibrary): Promise<CheckedWalk>;
   /** Qualified keys of queued downloads (`queuedArtworkKey`). */
   queuedKeys(): string[];
+  /** Library-relative fingerprint paths that may still own artwork during a hand move. */
+  trackedKeys(libraryId: string): string[];
+  /** Whether a tracked key still owns its artwork after the current walk. */
+  keep(key: string): boolean;
   /** Basenames of every `ART_VARIANTS` file of one key. */
   artNames(key: string): string[];
   directoryOf(libraryId: string): string;
@@ -93,6 +97,14 @@ export function createArtworkSweep(deps: SweepDeps): () => Promise<{ removed: nu
         for (const entry of buildLibrary(walk.files)) {
           rememberArt(libraryPath(library.id, entry.key));
           for (const file of entry.files) remember(libraryPath(library.id, file.path));
+        }
+        // A tracked file may be the source of a hand move that is carried after this sweep, so
+        // its thumbnails stay: the file's, its folders', and the title's own entry key, where a
+        // series or a film in a folder keeps its catalogue poster.
+        const tracked = deps.trackedKeys(library.id).filter((relative) => deps.keep(libraryPath(library.id, relative)));
+        for (const relative of tracked) remember(libraryPath(library.id, relative));
+        for (const entry of buildLibrary(tracked.map((relative) => ({ relative, size: 0, modified: "" })))) {
+          rememberArt(libraryPath(library.id, entry.key));
         }
         for (const key of queued) if (parseLibraryPath(key)?.libraryId === library.id) remember(key);
 

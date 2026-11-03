@@ -50,6 +50,8 @@ const makeSweep = (options: {
   libraries: SweepLibrary[];
   scan: (library: SweepLibrary) => Promise<CheckedWalk>;
   queuedKeys?: () => string[];
+  trackedKeys?: (libraryId: string) => string[];
+  keep?: (key: string) => boolean;
   busy?: () => boolean;
   epoch?: () => number;
   now?: () => number;
@@ -60,6 +62,8 @@ const makeSweep = (options: {
   libraries: async () => options.libraries,
   scan: options.scan,
   queuedKeys: options.queuedKeys ?? (() => []),
+  trackedKeys: options.trackedKeys ?? (() => []),
+  keep: options.keep ?? (() => true),
   artNames: (key) => { options.onArtNames?.(key); return namesFor(options.cache, key); },
   directoryOf: (libraryId) => options.cache.dirOf(libraryId),
   remove: options.remove ?? (async (file) => { await rm(file, { force: true }); await options.cache.removed(file); }),
@@ -93,6 +97,51 @@ test("a deleted video's thumbnail goes, live variants, ancestors and a queued ke
     assert.deepEqual(await sweep(), { removed: 1 });
     for (const file of [live, wide, gallery, folder, ancestor, fresh, queued]) assert.ok(await exists(file), `${file} is kept`);
     assert.equal(await exists(gone), false, "the thumbnail of a video that is gone is removed");
+  });
+});
+
+test("a vanished tracked file keeps its thumbnail until the hand move carries it", async () => {
+  await withSweep(async ({ cache, dataDir }) => {
+    const root = path.join(dataDir, "media");
+    const source = "lib_aaaaaaaa/Old/movie.mkv";
+    const target = "lib_aaaaaaaa/New/movie.mkv";
+    const sourceArt = await put(cache, source);
+    const kept: string[] = [];
+    const sweep = makeSweep({
+      cache,
+      libraries: [library(root)],
+      scan: async () => ({ files: [{ relative: "New/movie.mkv", size: 1, modified: new Date().toISOString() }], complete: true }),
+      trackedKeys: () => ["Old/movie.mkv"],
+      keep: (key) => { kept.push(key); return key === source; },
+    });
+
+    await sweep();
+    assert.ok(kept.includes(source));
+    assert.ok(await exists(sourceArt), "the source artwork survives the sweep");
+    assert.deepEqual(await cache.moveKey(source, target), { carried: true });
+    assert.equal(await exists(sourceArt), false);
+    assert.ok(await exists(cache.file(target)), "the carry then moves it to the new key");
+  });
+});
+
+test("a folder renamed by hand keeps the title's own poster until the carry moves it", async () => {
+  await withSweep(async ({ cache, dataDir }) => {
+    const root = path.join(dataDir, "media");
+    // A series keeps its catalogue poster under the entry key, which is neither a file nor a
+    // `dir:` folder key, and the sweep runs before the carry in the same pass.
+    const entryArt = await put(cache, "lib_aaaaaaaa/Show");
+    const folderArt = await put(cache, "dir:lib_aaaaaaaa/Show");
+    const fileArt = await put(cache, "lib_aaaaaaaa/Show/S01/e1.mkv");
+    const sweep = makeSweep({
+      cache,
+      libraries: [library(root)],
+      scan: async () => ({ files: [{ relative: "Show 2/S01/e1.mkv", size: 1, modified: new Date(0).toISOString() }], complete: true }),
+      trackedKeys: () => ["Show/S01/e1.mkv"],
+      keep: () => true,
+    });
+
+    await sweep();
+    for (const file of [entryArt, folderArt, fileArt]) assert.ok(await exists(file), `${file} survives the sweep`);
   });
 });
 

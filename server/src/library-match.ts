@@ -1128,7 +1128,11 @@ export function pinInherited(
 }
 
 export function remapKeyed<T>(records: Record<string, T>, from: string, to: string): Record<string, T> {
-  return Object.fromEntries(Object.entries(records).map(([key, value]) => [remapPath(key, from, to), value]));
+  const carried = Object.entries(records)
+    .filter(([key]) => isPathWithin(key, from))
+    .map(([key, value]) => [remapPath(key, from, to), value] as const);
+  const remaining = Object.entries(records).filter(([key]) => !isPathWithin(key, from));
+  return Object.fromEntries([...remaining, ...carried]);
 }
 
 export function dropKeyed<T>(records: Record<string, T>, relative: string): Record<string, T> {

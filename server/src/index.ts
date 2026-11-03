@@ -82,6 +82,7 @@ import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { LibrarySeenStore } from "./library-seen.js";
+import { carryMovePairs, LibraryFingerprints } from "./library-fingerprints.js";
 import { localCopies, localTitleIds } from "./local-sources.js";
 import {
   findAdequateExistingLocalCopy,
@@ -154,6 +155,7 @@ const debridReady = new DebridReadyStore(DATA_DIR);
 const followStore = new FollowStore(DATA_DIR);
 /** When this app first met each library file, so "Recently added" is not the file's own date. */
 const seen = new LibrarySeenStore(DATA_DIR);
+const fingerprints = new LibraryFingerprints();
 /** The log bundles clients upload, one JSON file each under the data directory. */
 const clientLogs = new ClientLogStore(DATA_DIR);
 /** The encrypted provider tokens and the administration/browsing service over the stored
@@ -191,6 +193,7 @@ try {
     metaStore.attachDatabase(database);
     artworks.attachDatabase(database);
     seen.attachDatabase(database);
+    fingerprints.attachDatabase(database);
     externalIds.attachDatabase(database);
   }
 } catch (error) {
@@ -210,6 +213,7 @@ await attachTitleExtrasDisk(path.join(DATA_DIR, "title-extras"));
 await debridReady.load();
 await followStore.load(store.sourceProfiles());
 await seen.load();
+await fingerprints.load();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
 if (libraryMigration.metadata) log("INFO", "Library metadata moved out of the state", { rows: libraryMigration.metadata });
 if (libraryMigration.artworkSetting) log("INFO", "The global artwork location was retired", { libraries: libraryMigration.artworkSetting });
@@ -1301,6 +1305,7 @@ const rootReadable = async (root: string) => { try { await access(root, constant
 /** The sweep's collaborators. Several are wrapped in an arrow on purpose: `storeArt` and
  *  `removeArtwork` are declared further down, and a read before their declaration would pass
  *  tsc and fail the bundle at start-up. */
+let fingerprintWalks: Array<{ libraryId: string; root: string; files: FoundFile[] }> | undefined;
 const sweepDeps: SweepDeps = {
   libraries: async () => {
     await refreshLibraryHealth();
@@ -1321,7 +1326,7 @@ const sweepDeps: SweepDeps = {
     const walk = await listVideosChecked(library.root, library.exclude);
     // Only a complete walk speaks for the tree: a folder that could not be read must not read
     // as files that just arrived, nor let the walk's absence drop ones that are still there.
-    if (walk.complete) seen.observe(library.id, walk.files, new Date());
+    if (walk.complete) fingerprintWalks?.push({ libraryId: library.id, root: library.root, files: walk.files });
     return walk;
   },
   // The poster is saved when the job is queued, while the source does not exist yet.
@@ -1330,6 +1335,11 @@ const sweepDeps: SweepDeps = {
     const key = queuedArtworkKey(job);
     return key ? [key] : [];
   }),
+  trackedKeys: (libraryId) => fingerprints.trackedKeys(libraryId),
+  keep: (key) => {
+    const parsed = parseLibraryPath(key);
+    return Boolean(parsed && fingerprints.has(parsed.libraryId, parsed.relative));
+  },
   artNames: (key) => ART_VARIANTS.flatMap((variant) => {
     const file = storeArt(key, variant);
     return file ? [path.basename(file)] : [];
@@ -1349,7 +1359,73 @@ const maintenance = createMaintenance({
     { name: "remote-images", run: () => remoteImages.maintain() },
     // The pass signal is swapped in here: the sweep is built once so its empty-library
     // memory survives between passes, and the signal only exists while a pass is running.
-    { name: "artwork-sweep", run: (signal) => { sweepDeps.signal = signal; return artworkSweep().then(() => undefined); } },
+    {
+      name: "artwork-sweep",
+      run: async (signal) => {
+        sweepDeps.signal = signal;
+        const walks: NonNullable<typeof fingerprintWalks> = [];
+        fingerprintWalks = walks;
+        try {
+          await artworkSweep();
+          if (signal.aborted) return;
+          // The walks took minutes; a library forgotten meanwhile must not come back as rows.
+          const configured = new Set(store.libraries().map((library) => library.id));
+          for (let index = walks.length - 1; index >= 0; index -= 1) {
+            if (!configured.has(walks[index]!.libraryId)) walks.splice(index, 1);
+          }
+          const walkedIds = new Set(walks.map((walk) => walk.libraryId));
+          const complete = store.libraries().filter((library) => library.enabled).every((library) => walkedIds.has(library.id));
+          const hashBusy = () => sweepDeps.busy()
+            || playbackBusy()
+            || queue.list().some((job) => job.status === "checking" || job.status === "downloading");
+          const pairs = await fingerprints.reconcile(walks, { busy: hashBusy, complete });
+          const fingerprintedWalks = walks.filter((walk) => !fingerprints.lastSkippedWalks.has(walk.libraryId));
+          const result = await carryMovePairs(
+            pairs,
+            async (pair) => {
+              const targetFiles = pair.folder
+                ? walks.flatMap((walk) => walk.libraryId === pair.toLibraryId
+                  ? walk.files
+                    .filter((file) => isPathWithin(file.relative, pair.to))
+                    .map((file) => libraryPath(walk.libraryId, file.relative))
+                  : [])
+                : undefined;
+              await carryHandMove(
+                libraryPath(pair.libraryId, pair.from),
+                libraryPath(pair.toLibraryId, pair.to),
+                pair.folder,
+                targetFiles,
+              );
+              await metaStore.flush();
+              await seen.flush();
+            },
+            (pair) => fingerprints.commitPair(pair),
+            async () => {
+              if (fingerprints.lastDeferred) return;
+              const observedAt = new Date();
+              for (const walk of fingerprintedWalks) seen.observe(walk.libraryId, walk.files, observedAt);
+            },
+          );
+          const carried = result.carried;
+          if (result.failed) log("WARN", "A library item moved outside the app could not have its records carried");
+          if (carried) {
+            invalidateLibrary();
+            await metaStore.flush();
+          }
+          const roots = new Map(fingerprintedWalks.map((walk) => [walk.libraryId, walk.root]));
+          const hashed = await fingerprints.hashPending(roots, hashBusy);
+          await fingerprints.flush();
+          log("INFO", "Library file fingerprints checked", {
+            carried,
+            folders: pairs.filter((pair) => pair.folder).length,
+            ambiguous: fingerprints.lastAmbiguous,
+            hashed,
+          });
+        } finally {
+          fingerprintWalks = undefined;
+        }
+      },
+    },
   ],
 });
 registerCatalogRoutes(app, {
@@ -2261,7 +2337,7 @@ registerFollowRoutes(app, { ...routeContext, follows: followService, followStore
 
 // The file operations on library items live in `library-actions.ts`; these bindings keep the
 // call sites and the route dependency objects unchanged.
-const { clearGeneratedArt, deleteLibraryItem, relocateLibraryPath, transferLibraryItem, rerootItem } = createLibraryActions({
+const { clearGeneratedArt, deleteLibraryItem, carryHandMove, relocateLibraryPath, transferLibraryItem, rerootItem } = createLibraryActions({
   store,
   metaStore,
   artworks,
@@ -2280,6 +2356,7 @@ const { clearGeneratedArt, deleteLibraryItem, relocateLibraryPath, transferLibra
   watchlistOf,
   updateEveryData,
   invalidateLibrary,
+  seen,
   setLibraryOpsWriting: (writing) => { libraryOpsWriting = writing; },
 });
 
@@ -2792,7 +2869,7 @@ const libraryOps = new LibraryOps({
 });
 await libraryOps.load();
 
-registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId), progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, libraryOps });
+registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId), progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps });
 
 const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 
@@ -2969,6 +3046,7 @@ const flushDatabaseStores = async () => {
     tmdbIds.flush(),
     artworks.flush(),
     seen.flush(),
+    fingerprints.flush(),
     externalIds.flush(),
   ]);
 };

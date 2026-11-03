@@ -79,6 +79,20 @@ test("a moved baseline file stays out of the row", async () => {
   });
 });
 
+test("a cross-library hand move keeps its original first-seen date when observation is deferred", async () => {
+  await withStore(async (store) => {
+    store.observe("lib_a", [], new Date("2026-01-01T00:00:00.000Z"));
+    store.observe("lib_b", [], new Date("2026-01-01T00:00:00.000Z"));
+    store.observe("lib_a", [file("Old.mkv", 10, "2026-01-02T00:00:00.000Z")], new Date("2026-02-01T00:00:00.000Z"));
+    store.move("lib_a", "Old.mkv", "lib_b", "New.mkv");
+    store.observe("lib_a", [], new Date("2026-03-01T00:00:00.000Z"));
+    store.observe("lib_b", [file("New.mkv", 10, "2026-01-02T00:00:00.000Z")], new Date("2026-03-01T00:00:00.000Z"));
+    assert.deepEqual(store.recent(["lib_b"], 10), [
+      { libraryId: "lib_b", relative: "New.mkv", at: "2026-02-01T00:00:00.000Z" },
+    ]);
+  });
+});
+
 test("a fingerprint shared by two vanished paths is ambiguous, so the new file is stamped", async () => {
   await withStore(async (store) => {
     store.observe("lib_a", [], new Date("2026-01-01T00:00:00.000Z"));

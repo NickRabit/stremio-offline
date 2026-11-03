@@ -4,7 +4,7 @@ import { ART_VARIANTS, artVariantKey } from "./artwork.js";
 import type { ArtworkCache } from "./artwork-cache.js";
 import { AppError } from "./errors.js";
 import { emptiedFolders, foldersBetween, holdsLibraryRoot, isPathWithin, moveDestination, orphanedCatalogKeys, remapPath, type FoundFile } from "./library.js";
-import { dropKeyed, knownTitleEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { dropKeyed, isAutomaticRecord, knownTitleEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import type { LibraryMetaStore } from "./library-meta-store.js";
 import type { LibraryHealth } from "./library-probe.js";
 import { libraryPath, parseLibraryPath, posixBase, posixJoin, resolveLibraryPath, toPosix, type LibraryRecord } from "./libraries.js";
@@ -12,6 +12,7 @@ import { placeholderOnly, removePlaceholder, transferLibraryPath, type TransferP
 import { log } from "./logger.js";
 import { renamedSidecar, subtitleSidecars } from "./library-sidecars.js";
 import type { LibraryOp, OpsJournal } from "./library-ops.js";
+import type { LibrarySeenStore } from "./library-seen.js";
 import type { Store, StoredProgress, WatchlistEntry } from "./store.js";
 import type { UserData } from "./users.js";
 
@@ -37,6 +38,7 @@ export interface LibraryActionDeps {
   watchlistOf(data: UserData): Record<string, WatchlistEntry>;
   updateEveryData(mutate: (data: UserData) => void): Promise<void>;
   invalidateLibrary(): void;
+  seen: Pick<LibrarySeenStore, "move">;
   /** Keeps the thumbnail sweep off a library while an operation writes to it. */
   setLibraryOpsWriting(writing: boolean): void;
 }
@@ -54,6 +56,7 @@ export interface LibraryActions {
   assertMoveType(key: string, destination: LibraryRecord, confirmed?: boolean): Promise<void>;
   pathPresent(target: string): Promise<boolean>;
   finishTransfer(step: TransferStep, sourceLeft?: string, replay?: boolean): Promise<string>;
+  carryHandMove(fromKey: string, toKey: string, folder: boolean, files?: string[]): Promise<void>;
   recordPublished(step: { from: string; to: string }, journal?: OpsJournal): Promise<void>;
   resumeTransfer(step: TransferStep, journal?: OpsJournal): Promise<string | undefined>;
   transferLibraryItem(relative: string, folder: string, copy?: boolean, progress?: TransferProgress, confirmTypeMismatch?: boolean, journal?: OpsJournal): Promise<string>;
@@ -85,7 +88,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
   const {
     store, metaStore, artworks, libraryFiles, libraryUnits, carveOutsOf, healthOf, libraryOfKey,
     wirePath, mediaPath, fileExists, isFileKey, removeGeneratedArt, ownRecord, progressOf, watchlistOf,
-    updateEveryData, invalidateLibrary, setLibraryOpsWriting,
+    updateEveryData, invalidateLibrary, seen, setLibraryOpsWriting,
   } = deps;
 
   /** Everything the store remembers about a path, dropped in one go. Returns the catalogue
@@ -121,13 +124,21 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
    *  the remap is idempotent. */
   const remapPersonalState = async (key: string, nextKey: string) => {
     await updateEveryData((data) => {
-      data.favorites = data.favorites.map((item) => remapPath(item, key, nextKey));
-      data.progress = Object.fromEntries(Object.entries(progressOf(data)).map(([progressKey, value]) => {
+      data.favorites = [...new Set(data.favorites.map((item) => remapPath(item, key, nextKey)))];
+      const progress = progressOf(data);
+      const moved: typeof progress = {};
+      for (const [progressKey, value] of Object.entries(progress)) {
         const filePath = progressKey.startsWith("file:") ? progressKey.slice(5) : undefined;
         const nextProgressKey = filePath ? `file:${remapPath(filePath, key, nextKey)}` : progressKey;
         const nextPath = value.path ? remapPath(value.path, key, nextKey) : value.path;
-        return [nextProgressKey, { ...value, path: nextPath }];
-      }));
+        const candidate = { ...value, path: nextPath };
+        const current = moved[nextProgressKey];
+        const candidateIsTarget = progress[nextProgressKey] === value;
+        if (!current || (candidateIsTarget ? candidate.updatedAt >= current.updatedAt : candidate.updatedAt > current.updatedAt)) {
+          moved[nextProgressKey] = candidate;
+        }
+      }
+      data.progress = moved;
     });
   };
 
@@ -333,6 +344,24 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     return moved;
   };
 
+  const carryHandMove = async (fromKey: string, toKey: string, folder: boolean, files?: string[]) => {
+    const parsedFrom = parseLibraryPath(fromKey);
+    const parsedTo = parseLibraryPath(toKey);
+    if (!parsedFrom?.relative || !parsedTo?.relative) return;
+    const targetFiles = folder ? files ?? (await libraryFiles()).map((file) => file.relative) : [];
+    const carried = folder
+      ? [fromKey, ...targetFiles
+          .filter((item) => item !== toKey && isPathWithin(item, toKey))
+          .map((item) => fromKey + item.slice(toKey.length))]
+      : [fromKey];
+    await relocateArtwork(carried, fromKey, toKey);
+    const target = metaStore.qualifiedMeta()[toKey];
+    const manualTarget = Boolean(target && !isAutomaticRecord(target));
+    if (metaStore.holds(fromKey) && !manualTarget) await metaStore.relocate(fromKey, toKey, true);
+    await remapPersonalState(fromKey, toKey);
+    seen.move(parsedFrom.libraryId, parsedFrom.relative, parsedTo.libraryId, parsedTo.relative);
+  };
+
   /** The `published` record is a shortcut for the next start, not a condition for finishing:
    *  the bytes have moved, so a failed write is logged and the metadata half still runs. The
    *  next start would read the `moving` record against the disk and land in the same place. */
@@ -492,6 +521,6 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
   return {
     forgetLibraryPath, clearGeneratedArt, remapPersonalState, relocateLibraryPath, relocateArtwork, duplicateArtwork,
     carryCoveringArtwork, pruneEmptiedFolders, deleteLibraryItem, assertMoveType, pathPresent,
-    finishTransfer, recordPublished, resumeTransfer, transferLibraryItem, rerootItem,
+    finishTransfer, carryHandMove, recordPublished, resumeTransfer, transferLibraryItem, rerootItem,
   };
 }
