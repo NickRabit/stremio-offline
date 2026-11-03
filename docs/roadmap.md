@@ -329,7 +329,7 @@ feature can now build on this storage.
 Majors are done by hand, one PR each, in this order; Dependabot keeps minor
 and patch updates. Checked against `main` on 2026-10-30.
 
-1. **Node 22 → 26** — done in 0.7.22: the image builds on `node:26-trixie-slim`, the runtime installs `libatomic1` (the Node 26 binary needs it), every workflow uses 26, and CI keeps a `check` run on Node 24 for the desktop. Original notes: (Active LTS since 2026-10-28; Node 22 is in maintenance
+1. **Node 22 → 26** — done: the image builds on `node:26-trixie-slim`, the runtime installs `libatomic1` (the Node 26 binary needs it), every workflow uses 26, and CI keeps a `check` run on Node 24 for the desktop. Original notes: (Active LTS since 2026-10-28; Node 22 is in maintenance
    until April 2027, so this is not urgent). Change the build stage in the
    `Dockerfile` and `node-version` in every workflow. The runtime stage is
    `ubuntu:24.04` with only the `node` binary copied in, so check whether

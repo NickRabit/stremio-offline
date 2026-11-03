@@ -13,7 +13,7 @@ step where the command differs.
 
 | Tool | Why | Install (macOS) | Check |
 | --- | --- | --- | --- |
-| Node.js 26 | server and web build, unit tests (CI also checks 24; 22.12 is the floor) | `brew install node@26` | `node --version` → `v26.x` |
+| Node.js 26 | server and web build, unit tests (CI also checks 24) | `brew install node@26` | `node --version` → `v26.x` |
 | Docker | local deployment and e2e (`npm run test:e2e:docker`) | Docker Desktop | `docker compose version` |
 | GitHub CLI | pull requests, workflow runs | `brew install gh`, then `gh auth login` | `gh auth status` |
 | JDK 17 | Android Gradle Plugin | `brew install --cask temurin@17` | `/usr/libexec/java_home -v 17` |
