@@ -3,7 +3,7 @@ import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
   folderMosaicUnits, knownEntryForUnit, knownTitleOf, knownTitleForUnit, lookupSkipped, mosaicSkipped, matchKeyFor, mosaicIdentities, needsReevaluation, parseUnit, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss, unitFor,
-  scannedRecently, scanSkipReason, scoreHit, normalizeTitle, dropAutomaticInside, staleSuggestionKeys, staleScanRecordKeys, suggestionFor, suggestionForUnit, titlePartConflict, titleUnits, unmatchAt, viewMeta, withSkipFlag,
+  scannedRecently, scanSkipReason, scoreHit, normalizeTitle, dropAutomaticInside, staleSuggestionKeys, staleScanRecordKeys, suggestionFor, suggestionForUnit, titlePartConflict, titleUnits, unmatchAt, viewMeta, withSkipFlag, parsedFromRemoteItem,
   MATCH_RULE_VERSION, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { fileMayUseFolderArtwork } from "./artwork.js";
@@ -245,6 +245,20 @@ test("an ampersand reads as the word 'and' in a title", () => {
   assert.equal(normalizeTitle("Lilo & Stitch"), normalizeTitle("Lilo & Stitch"));
   const hit = scoreHit(parseMediaPath("Rizzoli and Isles"), meta("Rizzoli & Isles", 2010, "series", "tt1"), "series");
   assert.equal(hit.titleSimilarity, 1);
+});
+
+test("a remote item becomes the parsed media the strict title matcher accepts", () => {
+  const parsed = parsedFromRemoteItem({ name: "Jiste pane ministře", originalTitle: "Yes Minister", year: 1980 });
+  assert.equal(parsed.title, "Jiste pane ministře");
+  assert.equal(parsed.query, "Yes Minister");
+  assert.equal(parsed.year, 1980);
+  assert.equal(normalizeTitle("Jiste pane ministře"), normalizeTitle("Jistě, pane ministře"));
+
+  const exact = scoreHit(parsed, meta("Jistě, pane ministře", 1980, "series", "tt0080297"), "series");
+  assert.equal(autoAccept([exact])?.item.id, "tt0080297");
+
+  const sequel = scoreHit(parsed, meta("Jistě, pane premiére", 1980, "series", "tt0088555"), "series");
+  assert.equal(autoAccept([sequel]), undefined);
 });
 
 test("a typed library keeps the boundaries and changes only the kind", () => {

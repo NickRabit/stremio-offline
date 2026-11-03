@@ -68,6 +68,7 @@ data class RemoteItemDto(
   val season: Int? = null,
   val episode: Int? = null,
   val providerIds: RemoteProviderIdsDto = RemoteProviderIdsDto(),
+  val providerIdsMatched: Boolean = false,
   val durationTicks: Long? = null,
   /** The provider's release year, when it reports one; a movie copy carries it into its media. */
   val year: Int? = null,

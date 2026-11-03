@@ -103,6 +103,7 @@ describe("NativeLibrarySaveDialog", () => {
     await click(primary());
     expect(downloadCalls).toHaveLength(1);
     expect(downloadCalls[0]!.sourceId).toBe("source-v1");
+    expect((downloadCalls[0]!.media as Record<string, unknown>).id).toBe("tt0113277");
     expect(onQueued).toHaveBeenCalledTimes(1);
   });
 
@@ -211,6 +212,27 @@ describe("NativeLibrarySaveDialog", () => {
     await click(primary());
     const media = downloadCalls[0]!.media as Record<string, unknown>;
     expect(media).toMatchObject({ kind: "episode", title: "The Show", season: 1, episode: 2, episodeTitle: "Pilot", id: "tt5000", metaType: "series" });
+  });
+
+  it("sends no catalogue id for an item whose id was matched by name", async () => {
+    await render({ item: movie({ providerIdsMatched: true }), knownSources: [stream("v2", "1080p", 1, true, "lib_1")] });
+    await click(primary());
+    const media = downloadCalls[0]!.media as Record<string, unknown>;
+    expect(media.id).toBeUndefined();
+    expect(media.metaType).toBeUndefined();
+  });
+
+  it("sends no catalogue id inherited from a matched episode series", async () => {
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).endsWith("/items/s1")
+        ? Promise.resolve(json({ item: series({ providerIdsMatched: true }) }))
+        : originalFetch(input, init)));
+    await render({ item: episode(), knownSources: [stream("v2", "1080p", 1, true, "lib_1")] });
+    await click(primary());
+    const media = downloadCalls[0]!.media as Record<string, unknown>;
+    expect(media.id).toBeUndefined();
+    expect(media.metaType).toBeUndefined();
   });
 
   it("never lists or reads a title for an unnumbered episode clip", async () => {

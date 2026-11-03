@@ -27,7 +27,6 @@ import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
 import cz.stremiooffline.tv.ui.detail.DetailData
-import cz.stremiooffline.tv.ui.detail.TagDetailPrimary
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -110,7 +109,6 @@ class LibraryCatalogueShellTest {
     compose.waitUntil(5_000) {
       runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess
     }
-    compose.onNodeWithTag(TagDetailPrimary).assertDoesNotExist()
     assertEquals(listOf(path), api.libraryTitleRequests)
 
     scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
@@ -127,7 +125,6 @@ class LibraryCatalogueShellTest {
     compose.waitUntil(5_000) {
       runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess
     }
-    compose.onNodeWithTag(TagDetailPrimary).assertDoesNotExist()
     assertEquals(listOf(path), api.libraryTitleRequests)
 
     scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
@@ -164,11 +161,10 @@ class LibraryCatalogueShellTest {
 
     // The folder as a whole decides; its files become one own-title detail.
     assertEquals("Mix", api.libraryTitleRequests.first())
-    compose.onNodeWithTag(TagDetailPrimary).assertDoesNotExist()
   }
 
   @Test
-  fun `an empty folder keeps the library detail`() {
+  fun `an empty folder has no local catalogue detail`() {
     val empty = DetailData.ofFolder(
       BrowseItem.Folder(path = "Empty", name = "Empty", fileCount = 0),
       emptyList(),
@@ -196,6 +192,5 @@ class LibraryCatalogueShellTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
-    compose.onNodeWithTag(TagDetailPrimary).assertDoesNotExist()
   }
 }

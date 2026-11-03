@@ -218,11 +218,7 @@ const rankFor = (
   tie: number,
 ): number[] => {
   const tiers = preferredTier(candidate, snapshot);
-  const viewerOrder = snapshot.policy.criteria.some((criterion) =>
-    criterion.kind === "providerOrder" && "from" in criterion);
-  const localFirst = viewerOrder && candidate.providerKey !== "local" ? 1 : 0;
   const rank = [
-    localFirst,
     status === "meets" ? 0 : status === "unverified" ? 1 : 2,
   ];
   for (const criterion of snapshot.policy.criteria) {
