@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
+import { isPathWithin } from "../library.js";
 import { libraryPath, parseLibraryPath, type LibraryRecord } from "../libraries.js";
-import { LibrarySeenStore } from "../library-seen.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { MediaServerManager, MediaServerShufflePool } from "../media-server-manager.js";
 import { roleMiddleware } from "../roles.js";
@@ -36,18 +33,18 @@ interface Harness {
   base: string;
   libraries: LibraryRecord[];
   available: Set<string>;
-  seen: LibrarySeenStore;
+  files: Set<string>;
+  carveOuts: Set<string>;
   remotePool: MediaServerShufflePool;
   remoteCurrent: boolean;
   close(): Promise<void>;
 }
 
 const mount = async (): Promise<Harness> => {
-  const seenDir = await mkdtemp(path.join(tmpdir(), "shuffle-seen-"));
-  const seen = new LibrarySeenStore(seenDir);
-  await seen.load();
   const libraries = [library()];
   const available = new Set<string>();
+  const files = new Set<string>();
+  const carveOuts = new Set<string>();
   const state: { remotePool: MediaServerShufflePool; remoteCurrent: boolean } = {
     remotePool: { items: [], capped: false },
     remoteCurrent: true,
@@ -78,8 +75,9 @@ const mount = async (): Promise<Harness> => {
       shufflePool: async () => state.remotePool,
       shuffleStillCurrent: () => state.remoteCurrent,
     } as unknown as MediaServerManager,
-    seen,
     metaStore: { qualifiedMeta: () => ({}), episodes: () => ({}) } as unknown as LibraryMetaStore,
+    localFiles: async (_libraryId, relativePrefix) =>
+      [...files].filter((relative) => relativePrefix === "" || isPathWithin(relative, relativePrefix)),
     describeLibraryPath: async (key) => {
       const parsed = parseLibraryPath(key);
       return parsed ? {
@@ -94,6 +92,10 @@ const mount = async (): Promise<Harness> => {
       return parsed?.libraryId === LIBRARY_ID ? parsed.relative : key;
     },
     fileAvailable: async (key) => available.has(key),
+    isCarvedOut: (key) => {
+      const parsed = parseLibraryPath(key);
+      return Boolean(parsed && [...carveOuts].some((folder) => isPathWithin(parsed.relative, folder)));
+    },
   };
   const app = express();
   app.use(express.json());
@@ -117,7 +119,8 @@ const mount = async (): Promise<Harness> => {
     base: `http://127.0.0.1:${port}`,
     libraries,
     available,
-    seen,
+    files,
+    carveOuts,
     get remotePool() { return state.remotePool; },
     set remotePool(value) { state.remotePool = value; },
     get remoteCurrent() { return state.remoteCurrent; },
@@ -125,7 +128,6 @@ const mount = async (): Promise<Harness> => {
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await rm(seenDir, { recursive: true, force: true });
     },
   };
 };
@@ -145,10 +147,10 @@ type Item = { path: string; title: string };
 type Step = { item: Item | null; exhausted?: true };
 
 const seed = (harness: Harness, files: string[]) => {
-  harness.seen.observe(LIBRARY_ID, files.map((relative) => ({
-    relative, size: 1, modified: "2026-01-01T00:00:00.000Z",
-  })), new Date("2026-01-02T00:00:00.000Z"));
-  for (const relative of files) harness.available.add(libraryPath(LIBRARY_ID, relative));
+  for (const relative of files) {
+    harness.files.add(relative);
+    harness.available.add(libraryPath(LIBRARY_ID, relative));
+  }
 };
 
 test("start in a nested folder includes only that folder and its subfolders", async (t) => {
@@ -207,6 +209,33 @@ test("a deleted file is skipped and does not count as played", async (t) => {
 
   const next = await api(harness.base, `/api/shuffle/${id}/next`, { method: "POST" });
   assert.deepEqual(await next.json(), { item: null, exhausted: true });
+});
+
+test("a file found by the walk is playable before the seen sweep records it", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  seed(harness, ["Hand-copied.mkv"]);
+  const started = await api(harness.base, "/api/shuffle", { method: "POST", body: { path: "" } });
+  assert.equal(started.status, 200);
+  assert.equal((await started.json() as { item: Item }).item.path, "Hand-copied.mkv");
+});
+
+test("a nested library carve-out is never shuffled through its parent", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  seed(harness, ["Visible.mkv", "Nested/Secret.mkv"]);
+  harness.carveOuts.add("Nested");
+
+  const started = await api(harness.base, "/api/shuffle", { method: "POST", body: { path: "" } });
+  const first = await started.json() as { id: string; item: Item };
+  const paths = [first.item.path];
+  for (;;) {
+    const next = await api(harness.base, `/api/shuffle/${first.id}/next`, { method: "POST" });
+    const step = await next.json() as Step;
+    if (!step.item) break;
+    paths.push(step.item.path);
+  }
+  assert.deepEqual(paths, ["Visible.mkv"]);
 });
 
 test("an ordinary user may start a random run", async (t) => {

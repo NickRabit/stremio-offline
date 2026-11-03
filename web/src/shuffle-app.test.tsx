@@ -44,6 +44,7 @@ let root: Root;
 let host: HTMLDivElement;
 let sourceBodies: Array<{ path: string }>;
 let playbackBodies: Array<Record<string, unknown>>;
+let progressBodies: Array<Record<string, unknown>>;
 let shuffleDeletes: string[];
 let shuffleStarts: Array<{ path: string }>;
 
@@ -54,6 +55,7 @@ beforeEach(() => {
   localStorage.clear();
   sourceBodies = [];
   playbackBodies = [];
+  progressBodies = [];
   shuffleDeletes = [];
   shuffleStarts = [];
   vi.stubGlobal("matchMedia", () => ({
@@ -138,6 +140,7 @@ beforeEach(() => {
       return json({ path: "Loose.mkv", key: "Loose.mkv", kind: "movie", file: true, label: "Loose.mkv", parsed: { title: "Loose", query: "Loose" }, match: "unmatched" });
     }
     if (path.startsWith("/api/progress")) {
+      if (method === "POST") progressBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       if (method === "POST" || method === "DELETE") return new Response(null, { status: 204 });
       return json(null);
     }
@@ -232,5 +235,33 @@ describe("Play random", () => {
     await act(async () => { host.querySelector<HTMLButtonElement>(".library-local-detail button.primary")!.click(); });
     await until(() => shuffleDeletes.length > 0);
     expect(shuffleDeletes).toEqual(["/api/shuffle/shuffle_one"]);
+  });
+
+  it("keeps shuffle on every progress write while advancing from the outgoing item", async () => {
+    await openLibrary();
+    await startRandom();
+    const video = await (async () => {
+      await until(() => host.querySelector<HTMLVideoElement>(".player-overlay video") !== null);
+      return host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    })();
+    Object.defineProperty(video, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 99 });
+    await act(async () => {
+      video.dispatchEvent(new Event("durationchange"));
+      video.dispatchEvent(new Event("timeupdate"));
+    });
+    await flush();
+
+    const next = await (async () => {
+      await until(() => host.querySelector<HTMLButtonElement>(".next-episode") !== null);
+      return host.querySelector<HTMLButtonElement>(".next-episode")!;
+    })();
+    await act(async () => { next.click(); });
+    await until(() => sourceBodies.some((body) => body.path === "Films/Second.mkv"));
+    await until(() => progressBodies.some((body) => body.path === "Films/First.mkv" && body.final === true));
+
+    const outgoing = progressBodies.filter((body) => body.path === "Films/First.mkv");
+    expect(outgoing.length).toBeGreaterThan(0);
+    expect(outgoing.every((body) => body.shuffle === true)).toBe(true);
   });
 });

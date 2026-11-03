@@ -784,7 +784,6 @@ export function App() {
   const [localStream, setLocalStream] = useState<Stream | null>(null); const [localTitle, setLocalTitle] = useState("");
   const [shuffleState, setShuffleState] = useState<{ id: string; upcoming?: { title: string }; hasPrevious: boolean; previousTitle?: string } | null>(null);
   const shuffleStateRef = useRef<{ id: string; upcoming?: { title: string }; hasPrevious: boolean; previousTitle?: string } | null>(null);
-  const shufflePathRef = useRef<string | null>(null);
   shuffleStateRef.current = shuffleState;
   /** Whether the local film now opening must ignore its saved position and start at zero. */
   const [localFromBeginning, setLocalFromBeginning] = useState(false);
@@ -1938,7 +1937,6 @@ export function App() {
   const endShuffle = () => {
     const id = shuffleStateRef.current?.id;
     shuffleStateRef.current = null;
-    shufflePathRef.current = null;
     setShuffleState(null);
     if (id) void api.deleteShuffle(id).catch(() => undefined);
   };
@@ -1948,7 +1946,6 @@ export function App() {
   ) => {
     if (!item.path) return false;
     shuffleStateRef.current = state;
-    shufflePathRef.current = item.path;
     setShuffleState(state);
     const played = await playLocal(item.title, item.path, undefined, item.season !== undefined, undefined, true, undefined, undefined, true);
     if (!played) endShuffle();
@@ -2068,7 +2065,7 @@ export function App() {
       setLocalPoster(poster);
       setLocalTitle(title);
       setLocalEpisode(episode);
-      setLocalStream({ ...source, localPath: path });
+      setLocalStream({ ...source, localPath: path, ...(shufflePlay ? { shuffle: true as const } : {}) });
       setLocalFromBeginning(fromBeginning);
       setPlayerSourcesOpen(false);
       playbackReturn.current = returning;
@@ -3653,7 +3650,7 @@ export function App() {
   // The row the main player is on: the file of the library, the row the shared detail started, or
   // the row a catalogue tile played. It leads the player's chooser under its own class's name.
   const playingStream = localStream ?? detailPlaying?.stream ?? selectedStream;
-  const shuffleActive = Boolean(shuffleState && localStream?.localPath === shufflePathRef.current);
+  const shuffleActive = localStream?.shuffle === true;
   const playerNextTitle = shuffleActive
     ? shuffleState?.upcoming?.title
     : localStream ? nextFile?.title : detailPlaying ? (nextDetailEpisode ? episodeLabel(nextDetailEpisode) : undefined) : catalogueNext ? episodeLabel(catalogueNext) : undefined;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { LibraryMetaRecord } from "./library-match.js";
-import { SHUFFLE_ACCOUNT_LIMIT, SHUFFLE_POOL_LIMIT, SHUFFLE_TTL_MS, ShuffleSessions, shuffleUnits, type ShuffleUnit } from "./shuffle.js";
+import { SHUFFLE_ACCOUNT_LIMIT, SHUFFLE_POOL_LIMIT, SHUFFLE_SKIP_LIMIT, SHUFFLE_TTL_MS, ShuffleSessions, shuffleUnits, type ShuffleUnit } from "./shuffle.js";
 
 const owner = { userId: "usr_00000001", sid: "sid_one" };
 const chooseAvailable = (available: Set<string>) => async (unit: ShuffleUnit) =>
@@ -70,6 +70,70 @@ test("previous and next walk the played titles", async () => {
   const next = await sessions.next(owner, started.id, chooseAvailable(available));
   assert.ok(next?.item);
   assert.equal(next.item.title, second.item.title);
+});
+
+test("previous never rewinds the highest cursor used by next", async () => {
+  const sessions = new ShuffleSessions({ randomInt: (max) => max - 1 });
+  const units: ShuffleUnit[] = ["f1", "f2", "f3", "f4", "f5", "f6"].map((title) => ({
+    title,
+    files: [`${title}.mkv`],
+  }));
+  const available = new Set(units.flatMap((unit) => unit.files));
+  const started = await sessions.start(owner, units, chooseAvailable(available));
+  assert.ok(started);
+  const titles = [started.item.title];
+  for (const action of ["next", "next", "previous", "next", "next", "next", "next"] as const) {
+    const answer = action === "next"
+      ? await sessions.next(owner, started.id, chooseAvailable(available))
+      : await sessions.previous(owner, started.id, chooseAvailable(available));
+    assert.ok(answer?.item);
+    titles.push(answer.item.title);
+  }
+  assert.deepEqual(titles, ["f1", "f2", "f3", "f2", "f3", "f4", "f5", "f6"]);
+});
+
+test("concurrent next calls advance one session serially", async () => {
+  const sessions = new ShuffleSessions({ randomInt: (max) => max - 1 });
+  const units: ShuffleUnit[] = ["f1", "f2", "f3", "f4"].map((title) => ({ title, files: [`${title}.mkv`] }));
+  const choose = async (unit: ShuffleUnit) => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return unit.files[0];
+  };
+  const started = await sessions.start(owner, units, choose);
+  assert.ok(started);
+  const [first, second] = await Promise.all([
+    sessions.next(owner, started.id, choose),
+    sessions.next(owner, started.id, choose),
+  ]);
+  assert.ok(first?.item);
+  assert.ok(second?.item);
+  assert.notEqual(first.item.title, second.item.title);
+  const rest = await collect(sessions, started.id, new Set(units.flatMap((unit) => unit.files)));
+  const played = [started.item.title, first.item.title, second.item.title, ...rest];
+  assert.equal(new Set(played).size, units.length);
+});
+
+test("a call skips at most the missing-file budget and does not recheck dropped units", async () => {
+  const sessions = new ShuffleSessions({ randomInt: (max) => max - 1 });
+  const units: ShuffleUnit[] = Array.from({ length: 201 }, (_, index) => ({
+    title: `f${index}`,
+    files: [`f${index}.mkv`],
+  }));
+  const available = new Set(["f0.mkv", "f200.mkv"]);
+  const checked: string[] = [];
+  const choose = async (unit: ShuffleUnit) => {
+    checked.push(unit.title);
+    return available.has(unit.files[0]!) ? unit.files[0] : undefined;
+  };
+  const started = await sessions.start(owner, units, choose);
+  assert.ok(started);
+  assert.equal(started.item.title, "f0");
+  assert.equal(checked.length, SHUFFLE_SKIP_LIMIT + 1);
+
+  const before = checked.length;
+  assert.deepEqual(await sessions.next(owner, started.id, choose), { item: null, exhausted: true });
+  assert.equal(checked.length - before, SHUFFLE_SKIP_LIMIT);
+  assert.equal(new Set(checked).size, checked.length);
 });
 
 test("a pool larger than the cap keeps a randomised prefix", async () => {

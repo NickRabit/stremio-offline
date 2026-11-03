@@ -2884,8 +2884,15 @@ const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryC
 
 registerShuffleRoutes(app, {
   ...routeContext,
-  seen,
   metaStore,
+  localFiles: async (libraryId, relativePrefix) => {
+    const library = libraryFor(store.libraries(), libraryId);
+    if (!library) return [];
+    return filesOf(await libraryFiles(), library)
+      .map((file) => relativeKeyIn(library.id, file.relative))
+      .filter((relative): relative is string => relative !== undefined
+        && (relativePrefix === "" || isPathWithin(relative, relativePrefix)));
+  },
   describeLibraryPath,
   libraryKey,
   wirePath,
@@ -2894,6 +2901,13 @@ registerShuffleRoutes(app, {
   fileAvailable: async (key, viewer) => {
     const target = await libraryTarget(key, viewer).catch(() => undefined);
     return Boolean(target && (await stat(target).catch(() => undefined))?.isFile());
+  },
+  isCarvedOut: (key) => {
+    const parsed = parseLibraryPath(key);
+    if (!parsed) return false;
+    const library = libraryFor(store.libraries(), parsed.libraryId);
+    if (!library) return false;
+    return [...carveOutsOf(library)].some((carveOut) => isPathWithin(parsed.relative, carveOut));
   },
 });
 
