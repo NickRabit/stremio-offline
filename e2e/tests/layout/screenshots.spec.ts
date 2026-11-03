@@ -68,6 +68,11 @@ test.describe("screenshots", () => {
     await settle(page);
     await localSource.click();
     await expect(localSource).toHaveAttribute("aria-pressed", "true");
+    await settle(page);
+    // The portrait phone baseline starts at the first source; probing can shift it during the click.
+    if (test.info().project.name === "mobile") {
+      await detail.locator(".stream-list").evaluate((list) => { list.scrollTop = 0; });
+    }
 
     await expect(page).toHaveScreenshot("title-detail.png", {
       fullPage: true,
