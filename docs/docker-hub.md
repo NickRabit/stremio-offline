@@ -12,7 +12,14 @@ This is an independent project, not affiliated with Stremio or Smart Code Ltd.
 No media content is included. Connect only sources and accounts you have the
 right to use.
 
-![A film's detail in Stremio Offline](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.6/detail.jpg)
+## Video tour
+
+[![Watch the Stremio Offline video tour](https://i.ytimg.com/vi/2WjzoIp16c4/hqdefault.jpg)](https://www.youtube.com/watch?v=2WjzoIp16c4)
+
+[Watch the 77-second tour on YouTube](https://www.youtube.com/watch?v=2WjzoIp16c4): browse an addon catalog,
+save a film to the server, and play it from the local library. The tour also
+shows the responsive phone interface. It uses CC BY Blender Foundation open
+movies; no media or demo addon is included with the app.
 
 ## Features
 
