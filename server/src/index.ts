@@ -1369,8 +1369,12 @@ const maintenance = createMaintenance({
           await artworkSweep();
           if (signal.aborted) return;
           const walkedIds = new Set(walks.map((walk) => walk.libraryId));
-          const complete = walkableLibraries().every((library) => walkedIds.has(library.id));
-          const pairs = await fingerprints.reconcile(walks, { busy: sweepDeps.busy, complete });
+          const complete = store.libraries().filter((library) => library.enabled).every((library) => walkedIds.has(library.id));
+          const hashBusy = () => sweepDeps.busy()
+            || playbackBusy()
+            || queue.list().some((job) => job.status === "checking" || job.status === "downloading");
+          const pairs = await fingerprints.reconcile(walks, { busy: hashBusy, complete });
+          const fingerprintedWalks = walks.filter((walk) => !fingerprints.lastSkippedWalks.has(walk.libraryId));
           const result = await carryMovePairs(
             pairs,
             async (pair) => {
@@ -1394,7 +1398,7 @@ const maintenance = createMaintenance({
             async () => {
               if (fingerprints.lastDeferred) return;
               const observedAt = new Date();
-              for (const walk of walks) seen.observe(walk.libraryId, walk.files, observedAt);
+              for (const walk of fingerprintedWalks) seen.observe(walk.libraryId, walk.files, observedAt);
             },
           );
           const carried = result.carried;
@@ -1403,8 +1407,8 @@ const maintenance = createMaintenance({
             invalidateLibrary();
             await metaStore.flush();
           }
-          const roots = new Map(walks.map((walk) => [walk.libraryId, walk.root]));
-          const hashed = await fingerprints.hashPending(roots, sweepDeps.busy);
+          const roots = new Map(fingerprintedWalks.map((walk) => [walk.libraryId, walk.root]));
+          const hashed = await fingerprints.hashPending(roots, hashBusy);
           await fingerprints.flush();
           log("INFO", "Library file fingerprints checked", {
             carried,

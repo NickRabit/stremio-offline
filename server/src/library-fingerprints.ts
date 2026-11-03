@@ -7,6 +7,7 @@ import { TrackedMap } from "./storage/tracked-map.js";
 export const STILL_WRITING_MS = 10 * 60_000;
 export const HASH_BUDGET_FILES = 500;
 export const HASH_BUDGET_MS = 10 * 60_000;
+export const INCOMPLETE_KEEP_PASSES = 4;
 const HASH_CHUNK = 1024 * 1024;
 
 export interface FingerprintWalkFile {
@@ -282,6 +283,9 @@ export class LibraryFingerprints {
   private ambiguous = 0;
   private deferred = false;
   private hashPass?: HashPass;
+  private readonly emptyWalkLibraries = new Set<string>();
+  private readonly skippedWalks = new Set<string>();
+  private readonly incompleteKeeps = new Map<string, number>();
 
   constructor(options: { now?: () => number; open?: OpenFile } = {}) {
     this.now = options.now ?? Date.now;
@@ -290,6 +294,7 @@ export class LibraryFingerprints {
 
   get lastAmbiguous(): number { return this.ambiguous; }
   get lastDeferred(): boolean { return this.deferred; }
+  get lastSkippedWalks(): ReadonlySet<string> { return this.skippedWalks; }
 
   attachDatabase(database: AppDatabase): void {
     if (this.loaded) throw new Error("The library fingerprints database must be attached before load.");
@@ -321,29 +326,55 @@ export class LibraryFingerprints {
   ): Promise<FingerprintPair[]> {
     this.ambiguous = 0;
     this.deferred = false;
+    this.skippedWalks.clear();
     this.pending = new Map();
     if (!this.database || !this.loaded) return [];
+    const rowsAtStart = [...this.rows.values()];
+    const effectiveWalks: Walk[] = [];
+    let emptyWalkDeferred = false;
+    for (const walk of walks) {
+      if (walk.files.length > 0) {
+        this.emptyWalkLibraries.delete(walk.libraryId);
+        effectiveWalks.push(walk);
+        continue;
+      }
+      const hadRows = rowsAtStart.some((row) => row.libraryId === walk.libraryId);
+      if (hadRows && !this.emptyWalkLibraries.has(walk.libraryId)) {
+        this.emptyWalkLibraries.add(walk.libraryId);
+        emptyWalkDeferred = true;
+        this.skippedWalks.add(walk.libraryId);
+        continue;
+      }
+      this.emptyWalkLibraries.add(walk.libraryId);
+      effectiveWalks.push(walk);
+    }
+    const complete = (options.complete ?? true) && !emptyWalkDeferred;
     const now = this.now();
     this.beginHashPass(options.busy ?? (() => false));
-    const candidates = await this.hashMoveCandidates(walks, now);
-    const pairing = pairMoves([...this.rows.values()], walks, { now, newHashes: candidates.hashes });
+    const candidates = await this.hashMoveCandidates(effectiveWalks, now);
+    const pairing = pairMoves([...this.rows.values()], effectiveWalks, { now, newHashes: candidates.hashes });
     this.ambiguous = pairing.ambiguous;
-    const walkedIds = new Set(walks.map((walk) => walk.libraryId));
+    const walkedIds = new Set(effectiveWalks.map((walk) => walk.libraryId));
+    // Only a pass that missed a library has to wait for it: on a complete pass the rows of a
+    // library outside it (a disabled one keeps its rows) cannot be where a new file came from.
+    const unseenSizes = new Set(complete ? [] : rowsAtStart
+      .filter((row) => !walkedIds.has(row.libraryId))
+      .map((row) => row.size));
     const freshKeys = new Set(pairing.fresh.map((file) => pathKey(file.libraryId, file.relative)));
     const skippedSizes = new Set<number>();
-    for (const walk of walks) {
+    for (const walk of effectiveWalks) {
       for (const file of walk.files) {
         if (this.rows.has(pathKey(walk.libraryId, file.relative)) || freshKeys.has(pathKey(walk.libraryId, file.relative))) continue;
         skippedSizes.add(file.size);
       }
     }
 
-    const absent = await this.absentSourceFolders(pairing.vanished, walks);
+    const absent = await this.absentSourceFolders(pairing.vanished, effectiveWalks);
     const occupied = (libraryId: string, folder: string) =>
       [...this.rows.values()].some((row) =>
         row.libraryId === libraryId && isPathWithin(row.relative, folder));
     const pairs = liftFolders(pairing.pairs, pairing.vanished, absent, occupied);
-    const walkFiles = new Map(walks.flatMap((walk) =>
+    const walkFiles = new Map(effectiveWalks.flatMap((walk) =>
       walk.files.map((file) => [pathKey(walk.libraryId, file.relative), file] as const)));
     for (const pair of pairs) {
       const sources = [...this.rows.values()].filter((row) =>
@@ -376,7 +407,7 @@ export class LibraryFingerprints {
     const next = new Map(this.rows);
     for (const [key, row] of this.rows) if (walkedIds.has(row.libraryId)) next.delete(key);
 
-    for (const walk of walks) {
+    for (const walk of effectiveWalks) {
       for (const file of walk.files) {
         const key = pathKey(walk.libraryId, file.relative);
         const existing = this.rows.get(key);
@@ -393,7 +424,10 @@ export class LibraryFingerprints {
         }
         if (pairedTargets.has(key)) continue;
         const fresh = freshByKey.get(key);
-        if (fresh && !candidates.deferredSizes.has(fresh.size) && !skippedSizes.has(fresh.size)) {
+        if (fresh
+          && !candidates.deferredSizes.has(fresh.size)
+          && !skippedSizes.has(fresh.size)
+          && !unseenSizes.has(fresh.size)) {
           next.set(key, {
             libraryId: fresh.libraryId,
             relative: fresh.relative,
@@ -408,16 +442,27 @@ export class LibraryFingerprints {
       for (const item of items) next.set(pathKey(item.source.libraryId, item.source.relative), item.source);
     }
     for (const row of pairing.vanished) {
-      if (pairedSources.has(pathKey(row.libraryId, row.relative))) continue;
+      const key = pathKey(row.libraryId, row.relative);
+      if (pairedSources.has(key)) continue;
       if (candidates.deferredSizes.has(row.size) || skippedSizes.has(row.size)) {
-        next.set(pathKey(row.libraryId, row.relative), row);
+        next.set(key, row);
         this.deferred = true;
-      } else if (options.complete === false) {
+      } else if (!complete) {
         // A library missing from this pass may be where the file went, so the row waits for a
         // pass that saw them all. It does not hold back first-seen stamping: a share that stays
         // off for days must not stop new files being stamped in every other library.
-        next.set(pathKey(row.libraryId, row.relative), row);
+        const kept = (this.incompleteKeeps.get(key) ?? 0) + 1;
+        if (kept > INCOMPLETE_KEEP_PASSES) this.incompleteKeeps.delete(key);
+        else {
+          next.set(key, row);
+          this.incompleteKeeps.set(key, kept);
+        }
       }
+    }
+    const presentKeys = new Set(effectiveWalks.flatMap((walk) =>
+      walk.files.map((file) => pathKey(walk.libraryId, file.relative))));
+    for (const key of this.incompleteKeeps.keys()) {
+      if (!next.has(key) || presentKeys.has(key) || pairedSources.has(key)) this.incompleteKeeps.delete(key);
     }
 
     const keys = new Set([...this.rows.keys(), ...next.keys()]);
@@ -497,9 +542,11 @@ export class LibraryFingerprints {
 
   async forget(libraryId: string): Promise<void> {
     if (!this.database || !this.loaded) return;
+    this.emptyWalkLibraries.delete(libraryId);
     for (const [key, row] of this.rows) {
       if (row.libraryId !== libraryId) continue;
       this.rows.delete(key);
+      this.incompleteKeeps.delete(key);
       this.dirty.set(key, undefined);
     }
     await this.flush();
@@ -579,10 +626,7 @@ export class LibraryFingerprints {
           continue;
         }
         const absolute = resolveInside(root, file.relative);
-        if (!absolute) {
-          deferredSizes.add(file.size);
-          continue;
-        }
+        if (!absolute) continue;
         let handle: Awaited<ReturnType<OpenFile>> | undefined;
         try {
           handle = await this.open(absolute, "r");
@@ -594,7 +638,7 @@ export class LibraryFingerprints {
           hashes.set(qualified(walk.libraryId, file.relative), await contentHash(handle, info.size));
           this.hashPass!.hashed += 1;
         } catch {
-          deferredSizes.add(file.size);
+          // An unreadable candidate is not evidence of a move in this pass.
         } finally {
           await handle?.close().catch(() => undefined);
         }
