@@ -180,12 +180,13 @@ fun LibraryRoute(
     scope.launch {
       try {
         val answer = api.startShuffle(target.path)
+        val path = answer.item.path ?: return@launch
         onPlay(
           PlayTarget(
-            key = Progress.libraryKey(answer.item.path),
+            key = Progress.libraryKey(path),
             title = answer.item.title,
             resume = false,
-            path = answer.item.path,
+            path = path,
             shuffle = ShuffleRun(answer.id, answer.upcoming?.title),
           ),
         )
@@ -526,6 +527,7 @@ fun LibraryRoute(
           imageUrl = { path -> path?.let(api::url) },
           segment = segment,
           onOpenItem = onOpenRemoteItem,
+          onPlay = onPlay,
           onBackToFiles = { segment = LibrarySegment.Files },
           onBackToAll = if (enteredFromAll != null) ({ segment = LibrarySegment.All }) else null,
           modifier = Modifier.weight(1f),

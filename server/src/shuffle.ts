@@ -9,7 +9,8 @@ export const SHUFFLE_ACCOUNT_LIMIT = 3;
 export const SHUFFLE_TOTAL_LIMIT = 200;
 
 export interface ShuffleItem {
-  path: string;
+  path?: string;
+  remote?: { libraryId: string; itemId: string };
   title: string;
   season?: number;
   episode?: number;
@@ -17,6 +18,7 @@ export interface ShuffleItem {
 
 export interface ShuffleUnit {
   files: string[];
+  remote?: { libraryId: string; itemId: string; generation: number };
   title: string;
   season?: number;
   episode?: number;
@@ -47,7 +49,7 @@ export interface ShuffleStepAnswer {
 export type ShuffleNextAnswer = ShuffleStepAnswer | { item: null; exhausted: true };
 export type ShufflePreviousAnswer = ShuffleStepAnswer | { item: null };
 
-type ChooseFile = (unit: ShuffleUnit) => Promise<string | undefined>;
+type ChooseItem = (unit: ShuffleUnit) => Promise<string | ShuffleItem | undefined>;
 
 interface Session {
   id: string;
@@ -121,11 +123,11 @@ export class ShuffleSessions {
     this.random = options.randomInt ?? ((maxExclusive) => randomInt(maxExclusive));
   }
 
-  async start(owner: ShuffleOwner, units: ShuffleUnit[], choose: ChooseFile): Promise<ShuffleStartAnswer | undefined> {
+  async start(owner: ShuffleOwner, units: ShuffleUnit[], choose: ChooseItem, options: { capped?: boolean } = {}): Promise<ShuffleStartAnswer | undefined> {
     const now = this.now();
     this.cleanup(now);
     const shuffled = shuffle(units, this.random);
-    const capped = shuffled.length > SHUFFLE_POOL_LIMIT;
+    const capped = options.capped === true || shuffled.length > SHUFFLE_POOL_LIMIT;
     const session: Session = {
       id: randomBytes(18).toString("base64url"),
       owner,
@@ -160,7 +162,7 @@ export class ShuffleSessions {
     };
   }
 
-  async next(owner: ShuffleOwner, id: string, choose: ChooseFile): Promise<ShuffleNextAnswer | undefined> {
+  async next(owner: ShuffleOwner, id: string, choose: ChooseItem): Promise<ShuffleNextAnswer | undefined> {
     const session = this.session(owner, id);
     if (!session) return undefined;
     session.lastUsed = this.now();
@@ -183,7 +185,7 @@ export class ShuffleSessions {
     return this.stepAnswer(session, item, choose);
   }
 
-  async previous(owner: ShuffleOwner, id: string, choose: ChooseFile): Promise<ShufflePreviousAnswer | undefined> {
+  async previous(owner: ShuffleOwner, id: string, choose: ChooseItem): Promise<ShufflePreviousAnswer | undefined> {
     const session = this.session(owner, id);
     if (!session) return undefined;
     session.lastUsed = this.now();
@@ -236,26 +238,27 @@ export class ShuffleSessions {
     if (oldest) this.sessions.delete(oldest.id);
   }
 
-  private async firstPlayable(session: Session, from: number, choose: ChooseFile): Promise<number | undefined> {
+  private async firstPlayable(session: Session, from: number, choose: ChooseItem): Promise<number | undefined> {
     for (let index = Math.max(0, from); index < session.order.length; index += 1) {
       if (await this.itemAt(session, index, choose)) return index;
     }
     return undefined;
   }
 
-  private async itemAt(session: Session, index: number, choose: ChooseFile): Promise<ShuffleItem | undefined> {
+  private async itemAt(session: Session, index: number, choose: ChooseItem): Promise<ShuffleItem | undefined> {
     const unit = session.order[index];
     if (!unit) return undefined;
-    const path = await choose(unit);
-    return path ? {
-      path,
+    const selected = await choose(unit);
+    if (!selected) return undefined;
+    return typeof selected === "string" ? {
+      path: selected,
       title: unit.title,
       ...(unit.season !== undefined ? { season: unit.season } : {}),
       ...(unit.episode !== undefined ? { episode: unit.episode } : {}),
-    } : undefined;
+    } : selected;
   }
 
-  private async peekNext(session: Session, choose: ChooseFile): Promise<ShuffleItem | undefined> {
+  private async peekNext(session: Session, choose: ChooseItem): Promise<ShuffleItem | undefined> {
     for (let cursor = session.historyCursor + 1; cursor < session.history.length; cursor += 1) {
       const item = await this.itemAt(session, session.history[cursor]!, choose);
       if (item) return item;
@@ -269,7 +272,7 @@ export class ShuffleSessions {
     return undefined;
   }
 
-  private async stepAnswer(session: Session, item: ShuffleItem, choose: ChooseFile): Promise<ShuffleStepAnswer> {
+  private async stepAnswer(session: Session, item: ShuffleItem, choose: ChooseItem): Promise<ShuffleStepAnswer> {
     const upcoming = await this.peekNext(session, choose);
     let hasPrevious = false;
     for (let cursor = session.historyCursor - 1; cursor >= 0; cursor -= 1) {

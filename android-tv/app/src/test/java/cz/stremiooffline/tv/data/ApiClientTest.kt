@@ -166,6 +166,22 @@ class ApiClientTest {
   }
 
   @Test
+  fun `remote shuffle names its library and optional folder`() = runTest {
+    val api = client(start())
+    val answer = """{"id":"run1","item":{"remote":{"libraryId":"rlibA","itemId":"m1"},"title":"One"},"total":1,"hasNext":false,"hasPrevious":false}"""
+    server.enqueue(MockResponse().setBody(answer))
+    assertEquals("m1", api.startRemoteShuffle("rlibA").item.remote?.itemId)
+    val root = server.takeRequest().body.readUtf8()
+    assertTrue(root, root.contains("\"libraryId\":\"rlibA\""))
+    assertTrue(root, !root.contains("parentId"))
+
+    server.enqueue(MockResponse().setBody(answer))
+    api.startRemoteShuffle("rlibA", "folder1")
+    val folder = server.takeRequest().body.readUtf8()
+    assertTrue(folder, folder.contains("\"parentId\":\"folder1\""))
+  }
+
+  @Test
   fun `favourite posts the path and the wanted state`() = runTest {
     server.enqueue(MockResponse().setBody("""{"path":"lib_1/Films/It.mkv","favorite":true}"""))
     val result = client(start()).setFavorite("lib_1/Films/It.mkv", true)

@@ -408,6 +408,12 @@ class ApiClient(
       .decode<ShuffleStartDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  override suspend fun startRemoteShuffle(libraryId: String, parentId: String?): ShuffleStartDto {
+    val payload = json.encodeToString(RemoteShuffleBody.serializer(), RemoteShuffleBody(ShuffleRemoteRequest(libraryId, parentId)))
+    return request(Request.Builder().url(address.resolve("/api/shuffle")).post(payload.toRequestBody(mediaType)).build())
+      .decode<ShuffleStartDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
   override suspend fun shuffleNext(id: String): ShuffleNextDto =
     request(
       Request.Builder()
@@ -947,6 +953,12 @@ private data class TimeRequest(val time: Double)
 
 @Serializable
 private data class ShuffleBody(val path: String)
+
+@Serializable
+private data class ShuffleRemoteRequest(val libraryId: String, val parentId: String? = null)
+
+@Serializable
+private data class RemoteShuffleBody(val remote: ShuffleRemoteRequest)
 
 @Serializable
 private data class PlaybackStartRequest(

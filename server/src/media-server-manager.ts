@@ -36,6 +36,7 @@ import {
   type RemoteAccountPolicy,
   PROVIDER_ORDERS,
   PROVIDER_SORTS,
+  SHUFFLE_ITEM_TYPES,
 } from "./media-server-provider.js";
 import {
   MEDIA_SERVER_RATE_LIMIT_COOLDOWN_MS,
@@ -117,6 +118,20 @@ export interface MediaServerBrowsePage {
 export interface MediaServerDetail {
   item: PublicRemoteItem;
   capabilities: RemoteCapabilities;
+}
+
+export interface MediaServerShuffleItem {
+  libraryId: string;
+  itemId: string;
+  title: string;
+  generation: number;
+  season?: number;
+  episode?: number;
+}
+
+export interface MediaServerShufflePool {
+  items: MediaServerShuffleItem[];
+  capped: boolean;
 }
 
 /** One playable item with every ordinary file version behind it, plus the verified identity
@@ -303,6 +318,12 @@ const parseType = (value: string | undefined): ProviderItemType | undefined => {
   if (value === undefined || value === "") return undefined;
   if (!ITEM_TYPES.includes(value as ProviderItemType)) throw invalid("The media-server item type is not supported.");
   return value as ProviderItemType;
+};
+
+const shuffleItemTitle = (item: ProviderItem): string => {
+  if (item.type !== "episode") return item.name;
+  const episode = `S${item.season ?? 0}E${item.episode ?? 0} ${item.name}`.trim();
+  return item.seriesName ? `${item.seriesName} · ${episode}` : episode;
 };
 
 const parseBrowseMode = (value: string | undefined): RemoteBrowseMode | undefined => {
@@ -1462,6 +1483,65 @@ export class MediaServerManager {
       });
     }
     return result;
+  }
+
+  /** The playable item pool for one authorized library or folder. Paging follows the same
+   *  session, parent proof and content re-checks as browseDirectory, but deliberately keeps the
+   *  provider's own order: the shuffle is performed by the server-held run. */
+  async shufflePool(authority: MediaServerAuthority, libraryId: unknown, parentId: unknown, signal?: AbortSignal): Promise<MediaServerShufflePool> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    const requestedParent = parseParentId(typeof parentId === "string" ? parentId : undefined);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    if (requestedParent !== undefined) {
+      await this.proveParent(authority, request, library, connection, session, requestedParent);
+    }
+    const parent = requestedParent ?? library.remoteId;
+    const seen = new Map<string, MediaServerShuffleItem>();
+    let cursor: string | undefined;
+    let total = 0;
+    for (let pageIndex = 0; pageIndex < 25 && seen.size < 5000; pageIndex += 1) {
+      const page = await this.upstream(connection, request, () => session.provider.pageItems(
+        session.token,
+        connection.accountId,
+        parent,
+        { limit: 200, includeItemTypes: SHUFFLE_ITEM_TYPES, ...(cursor === undefined ? {} : { cursor }) },
+        request,
+      ));
+      this.recheckContent(authority, request, library.id, connection);
+      total = page.total;
+      for (const item of page.items) this.putProof(this.proofOf(user, library, connection, item));
+      for (const item of page.items) {
+        if ((item.type !== "movie" && item.type !== "episode") || seen.has(item.id)) continue;
+        seen.set(item.id, {
+          libraryId: library.id,
+          itemId: item.id,
+          title: shuffleItemTitle(item),
+          generation: connection.generation,
+          ...(item.season === undefined ? {} : { season: item.season }),
+          ...(item.episode === undefined ? {} : { episode: item.episode }),
+        });
+        if (seen.size >= 5000) break;
+      }
+      cursor = page.cursor;
+      if (cursor === undefined) break;
+    }
+    this.recheckContent(authority, request, library.id, connection);
+    return { items: [...seen.values()], capped: total > 5000 || seen.size >= 5000 && cursor !== undefined };
+  }
+
+  /** Local-only re-check for a remote shuffle cursor; it deliberately makes no upstream call. */
+  shuffleStillCurrent(authority: MediaServerAuthority, libraryId: string, generation: number): boolean {
+    try {
+      const user = this.currentActor(authority);
+      const library = this.requireVisibleLibrary(user, libraryId);
+      const connection = this.requireConnection(library.connectionId);
+      return connection.generation === generation;
+    } catch {
+      return false;
+    }
   }
 
   /** The connection generation a search should bind at discovery. Reading it separately keeps

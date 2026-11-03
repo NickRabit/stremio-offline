@@ -10,6 +10,7 @@ import { messageKeyOf } from "../errors.js";
 import { libraryPath, parseLibraryPath, type LibraryRecord } from "../libraries.js";
 import { LibrarySeenStore } from "../library-seen.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
+import type { MediaServerManager, MediaServerShufflePool } from "../media-server-manager.js";
 import { roleMiddleware } from "../roles.js";
 import type { Store } from "../store.js";
 import type { UserRecord } from "../users.js";
@@ -36,6 +37,8 @@ interface Harness {
   libraries: LibraryRecord[];
   available: Set<string>;
   seen: LibrarySeenStore;
+  remotePool: MediaServerShufflePool;
+  remoteCurrent: boolean;
   close(): Promise<void>;
 }
 
@@ -45,6 +48,10 @@ const mount = async (): Promise<Harness> => {
   await seen.load();
   const libraries = [library()];
   const available = new Set<string>();
+  const state: { remotePool: MediaServerShufflePool; remoteCurrent: boolean } = {
+    remotePool: { items: [], capped: false },
+    remoteCurrent: true,
+  };
   const userOf = (req?: express.Request): UserRecord | undefined => {
     const id = req?.header("x-user");
     if (id !== ALICE && id !== BOB) return undefined;
@@ -66,6 +73,11 @@ const mount = async (): Promise<Harness> => {
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
+    authorityOf: () => ({ actor: { id: ALICE, secret: "secret" }, assertCurrent: () => undefined }),
+    mediaServers: {
+      shufflePool: async () => state.remotePool,
+      shuffleStillCurrent: () => state.remoteCurrent,
+    } as unknown as MediaServerManager,
     seen,
     metaStore: { qualifiedMeta: () => ({}), episodes: () => ({}) } as unknown as LibraryMetaStore,
     describeLibraryPath: async (key) => {
@@ -106,6 +118,10 @@ const mount = async (): Promise<Harness> => {
     libraries,
     available,
     seen,
+    get remotePool() { return state.remotePool; },
+    set remotePool(value) { state.remotePool = value; },
+    get remoteCurrent() { return state.remoteCurrent; },
+    set remoteCurrent(value) { state.remoteCurrent = value; },
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -199,4 +215,29 @@ test("an ordinary user may start a random run", async (t) => {
   seed(harness, ["One.mkv"]);
   const started = await api(harness.base, "/api/shuffle", { method: "POST", body: { path: "" } });
   assert.equal(started.status, 200);
+});
+
+test("a remote run answers remote items and ends when its connection changes", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.remotePool = {
+    capped: true,
+    items: [
+      { libraryId: "rlib_00000000000000000000000000000001", itemId: "movie-1", title: "One", generation: 4 },
+      { libraryId: "rlib_00000000000000000000000000000001", itemId: "episode-1", title: "Show · S1E1 Pilot", season: 1, episode: 1, generation: 4 },
+    ],
+  };
+  const started = await api(harness.base, "/api/shuffle", {
+    method: "POST",
+    body: { remote: { libraryId: "rlib_00000000000000000000000000000001", parentId: "folder-1" } },
+  });
+  assert.equal(started.status, 200);
+  const first = await started.json() as { id: string; item: { path?: string; remote?: { libraryId: string; itemId: string } }; capped?: true };
+  assert.equal(first.capped, true);
+  assert.equal(first.item.path, undefined);
+  assert.deepEqual(first.item.remote, { libraryId: "rlib_00000000000000000000000000000001", itemId: first.item.remote?.itemId });
+
+  harness.remoteCurrent = false;
+  const next = await api(harness.base, `/api/shuffle/${first.id}/next`, { method: "POST" });
+  assert.deepEqual(await next.json(), { item: null, exhausted: true });
 });

@@ -238,6 +238,9 @@ interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, C
   /** Starts a random run for one visible library folder or root. */
   suspend fun startShuffle(path: String): ShuffleStartDto
 
+  /** Starts a random run for one visible media-server library or folder. */
+  suspend fun startRemoteShuffle(libraryId: String, parentId: String? = null): ShuffleStartDto
+
   /** Advances one random run; an exhausted answer has no item. */
   suspend fun shuffleNext(id: String): ShuffleNextDto
 

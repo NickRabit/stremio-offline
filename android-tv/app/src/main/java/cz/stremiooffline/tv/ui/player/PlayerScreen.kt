@@ -320,13 +320,29 @@ fun PlayerScreen(
         delaySeconds = 0.0
         cues = emptyList()
         title = item.title
-        val nextTarget = PlayTarget(
-          key = Progress.libraryKey(item.path),
-          title = item.title,
-          resume = false,
-          path = item.path,
-          shuffle = ShuffleRun(run.id, answer.upcoming?.title),
-        )
+        val nextTarget = if (item.remote != null) {
+          val streams = runCatching { api.remoteSources(item.remote.libraryId, item.remote.itemId) }.getOrNull().orEmpty()
+          val stream = streams.firstOrNull { it.playable } ?: return@launch
+          val remote = stream.remoteItem ?: return@launch
+          PlayTarget(
+            key = remote.progressKey,
+            title = item.title,
+            resume = false,
+            sourceId = stream.sourceId,
+            stableKey = stream.stableKey,
+            remoteItem = remote,
+            shuffle = ShuffleRun(run.id, answer.upcoming?.title),
+          )
+        } else {
+          val path = item.path ?: return@launch
+          PlayTarget(
+            key = Progress.libraryKey(path),
+            title = item.title,
+            resume = false,
+            path = path,
+            shuffle = ShuffleRun(run.id, answer.upcoming?.title),
+          )
+        }
         currentTarget = nextTarget
         nextEpisode = answer.upcoming?.title?.let { NextEpisode("", it) }
         controller.playNext(
@@ -334,8 +350,13 @@ fun PlayerScreen(
           title = nextTarget.title,
           path = nextTarget.path,
           resume = false,
-          shuffle = true,
-        ) { runCatching { api.librarySource(item.path) }.getOrNull()?.sourceId }
+          shuffle = nextTarget.remoteItem == null,
+          sourceId = nextTarget.sourceId,
+          remoteItem = nextTarget.remoteItem,
+          stableKey = nextTarget.stableKey,
+        ) {
+          nextTarget.path?.let { path -> runCatching { api.librarySource(path) }.getOrNull()?.sourceId }
+        }
         nextSubtitlesFor = nextTarget
       }
       return
@@ -496,7 +517,7 @@ fun PlayerScreen(
         mint = target.path?.let { path -> { runCatching { api.librarySource(path) }.getOrNull()?.sourceId?.takeIf { it.isNotBlank() } } },
         remoteItem = target.remoteItem,
         stableKey = target.stableKey,
-        shuffle = target.shuffle != null,
+        shuffle = target.shuffle != null && target.remoteItem == null,
       )
     }
   }
@@ -551,7 +572,7 @@ fun PlayerScreen(
       subtitlePreference = settings.subtitleLanguage,
       remoteItem = episode.remoteItem,
       stableKey = episode.stableKey,
-      shuffle = episode.shuffle != null,
+      shuffle = episode.shuffle != null && episode.remoteItem == null,
     )
   }
 

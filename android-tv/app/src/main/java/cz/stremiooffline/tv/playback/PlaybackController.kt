@@ -376,11 +376,30 @@ class PlaybackController(
     resume: Boolean,
     poster: String? = null,
     shuffle: Boolean = false,
-    mint: suspend () -> String?,
+    sourceId: String? = null,
+    remoteItem: RemoteItemContext? = null,
+    stableKey: String? = null,
+    mint: suspend () -> String? = { null },
   ) {
     if (released) return
     val current = plan ?: return
-    begin(startPlan(null, key, title, path, null, resume, poster, current.addonKey, emptyList(), current.audioPreference, current.subtitlePreference, mint = mint, shuffle = shuffle))
+    begin(startPlan(
+      sourceId,
+      key,
+      title,
+      path,
+      null,
+      resume,
+      poster,
+      current.addonKey,
+      emptyList(),
+      current.audioPreference,
+      current.subtitlePreference,
+      stableKey = stableKey,
+      mint = mint,
+      remote = remoteItem,
+      shuffle = shuffle,
+    ))
   }
 
   /**

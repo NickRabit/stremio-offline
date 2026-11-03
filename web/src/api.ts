@@ -36,7 +36,13 @@ export interface ProgressPayload {
   shuffle?: true;
 }
 
-export interface ShuffleItem { path: string; title: string; season?: number; episode?: number }
+export interface ShuffleItem {
+  path?: string;
+  remote?: { libraryId: string; itemId: string };
+  title: string;
+  season?: number;
+  episode?: number;
+}
 export interface ShuffleStep { item: ShuffleItem; hasNext: boolean; hasPrevious: boolean; upcoming?: { title: string } }
 export interface ShuffleStart extends ShuffleStep { id: string; total: number; capped?: true }
 
@@ -227,7 +233,8 @@ export const api = {
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
   nextLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/next/${encodeURIComponent(sourceId)}`),
   previousLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/previous/${encodeURIComponent(sourceId)}`),
-  startShuffle: (path: string) => request<ShuffleStart>("/api/shuffle", { method: "POST", body: JSON.stringify({ path }) }),
+  startShuffle: (target: { path: string } | { remote: { libraryId: string; parentId?: string } }) =>
+    request<ShuffleStart>("/api/shuffle", { method: "POST", body: JSON.stringify(target) }),
   nextShuffle: (id: string) => request<ShuffleStep | { item: null; exhausted: true }>(`/api/shuffle/${encodeURIComponent(id)}/next`, { method: "POST" }),
   previousShuffle: (id: string) => request<ShuffleStep | { item: null }>(`/api/shuffle/${encodeURIComponent(id)}/previous`, { method: "POST" }),
   deleteShuffle: (id: string) => request<void>(`/api/shuffle/${encodeURIComponent(id)}`, { method: "DELETE" }),

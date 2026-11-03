@@ -1943,9 +1943,10 @@ export function App() {
     if (id) void api.deleteShuffle(id).catch(() => undefined);
   };
   const playShuffleItem = async (
-    item: { path: string; title: string; season?: number },
+    item: { path?: string; title: string; season?: number },
     state: { id: string; upcoming?: { title: string }; hasPrevious: boolean; previousTitle?: string },
   ) => {
+    if (!item.path) return false;
     shuffleStateRef.current = state;
     shufflePathRef.current = item.path;
     setShuffleState(state);
@@ -1957,7 +1958,7 @@ export function App() {
     setMenuFor(null);
     endShuffle();
     try {
-      const answer = await api.startShuffle(path);
+      const answer = await api.startShuffle({ path });
       await playShuffleItem(answer.item, {
         id: answer.id,
         ...(answer.upcoming ? { upcoming: answer.upcoming } : {}),

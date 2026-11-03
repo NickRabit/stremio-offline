@@ -929,6 +929,7 @@ open class FakeTvApi : TvApi {
   var shuffleStartValue: ShuffleStartDto? = null
   var shuffleStartFailure: ApiFailure? = null
   val shuffleStarts: MutableList<String> = mutableListOf()
+  val remoteShuffleStarts: MutableList<Pair<String, String?>> = mutableListOf()
   var shuffleNextValue: ShuffleNextDto = ShuffleNextDto()
   var shuffleNextFailure: ApiFailure? = null
   val shuffleNextRequests: MutableList<String> = mutableListOf()
@@ -936,6 +937,12 @@ open class FakeTvApi : TvApi {
 
   override suspend fun startShuffle(path: String): ShuffleStartDto {
     shuffleStarts += path
+    shuffleStartFailure?.let { throw ApiError(it) }
+    return shuffleStartValue ?: throw ApiError(ApiFailure.NotFound)
+  }
+
+  override suspend fun startRemoteShuffle(libraryId: String, parentId: String?): ShuffleStartDto {
+    remoteShuffleStarts += libraryId to parentId
     shuffleStartFailure?.let { throw ApiError(it) }
     return shuffleStartValue ?: throw ApiError(ApiFailure.NotFound)
   }

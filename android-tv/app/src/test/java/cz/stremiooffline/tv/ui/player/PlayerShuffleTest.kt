@@ -14,8 +14,11 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import cz.stremiooffline.tv.data.NextFileDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
+import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.ShuffleItemDto
 import cz.stremiooffline.tv.data.ShuffleNextDto
+import cz.stremiooffline.tv.data.ShuffleRemoteDto
+import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
@@ -115,6 +118,62 @@ class PlayerShuffleTest {
     pressNext()
     compose.waitUntil(5_000) { api.shuffleNextRequests.isNotEmpty() }
     compose.onNodeWithTag(TAG_OSD_NEXT).assertDoesNotExist()
+  }
+
+  @Test
+  fun `remote shuffle plays the next item from its own sources without a shuffle progress flag`() {
+    val api = api().apply {
+      shuffleNextValue = ShuffleNextDto(
+        item = ShuffleItemDto(
+          title = "Next",
+          remote = ShuffleRemoteDto(libraryId = "rlibA", itemId = "m2"),
+        ),
+      )
+      remoteSourcesValue = listOf(
+        StreamDto(
+          sourceId = "src:m2",
+          kind = "remote",
+          playable = true,
+          remoteItem = RemoteItemContext(
+            libraryId = "rlibA",
+            itemId = "m2",
+            mediaSourceId = "version-2",
+            progressKey = "remote:m2",
+          ),
+        ),
+      )
+    }
+    mount(
+      api,
+      PlayTarget(
+        key = "remote:m1",
+        title = "First",
+        resume = false,
+        sourceId = "src:m1",
+        remoteItem = RemoteItemContext(
+          libraryId = "rlibA",
+          itemId = "m1",
+          mediaSourceId = "version-1",
+          progressKey = "remote:m1",
+        ),
+        shuffle = ShuffleRun("run3", "Next"),
+      ),
+    )
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag(TAG_OSD_NEXT).fetchSemanticsNodes().isNotEmpty() }
+    assertTrue(api.libraryNextRequests.isEmpty())
+
+    pressNext()
+    compose.waitUntil(5_000) { api.startedSources.size == 2 }
+    assertEquals(listOf("run3"), api.shuffleNextRequests)
+    assertEquals(listOf("rlibA" to "m2"), api.remoteSourcesRequests)
+    assertEquals("src:m2", api.startedSources[1])
+    assertEquals(0.0, api.startedTimes[1], 0.0)
+
+    compose.onNodeWithTag(TAG_OSD_SEEK_FORWARD).performSemanticsAction(SemanticsActions.OnClick) { it() }
+    compose.waitUntil(5_000) { api.remoteStatePatchRequests.isNotEmpty() }
+    close()
+    compose.waitUntil(5_000) { api.deletedShuffleIds.isNotEmpty() }
+    assertFalse(api.progressSaves.any { it.shuffle })
   }
 
   @Test

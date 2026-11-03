@@ -2889,6 +2889,8 @@ registerShuffleRoutes(app, {
   describeLibraryPath,
   libraryKey,
   wirePath,
+  mediaServers,
+  authorityOf,
   fileAvailable: async (key, viewer) => {
     const target = await libraryTarget(key, viewer).catch(() => undefined);
     return Boolean(target && (await stat(target).catch(() => undefined))?.isFile());

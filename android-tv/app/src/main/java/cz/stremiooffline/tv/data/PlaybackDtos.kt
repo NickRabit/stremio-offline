@@ -45,11 +45,15 @@ data class NextFileDto(val path: String = "", val title: String = "")
 
 @Serializable
 data class ShuffleItemDto(
-  val path: String = "",
+  val path: String? = null,
   val title: String = "",
   val season: Int? = null,
   val episode: Int? = null,
+  val remote: ShuffleRemoteDto? = null,
 )
+
+@Serializable
+data class ShuffleRemoteDto(val libraryId: String = "", val itemId: String = "")
 
 @Serializable
 data class ShuffleUpcomingDto(val title: String = "")
