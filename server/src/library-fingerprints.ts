@@ -462,7 +462,9 @@ export class LibraryFingerprints {
       try {
         handle = await this.open(file, "r");
         const info = await handle.stat();
-        if (info.size !== row.size || Math.trunc(info.mtimeMs) !== row.mtimeMs) continue;
+        // The same reading of the time as the walk's (`mtime.toISOString()`), which rounds to the
+        // millisecond: a truncated `mtimeMs` differs for about half the files on ext4 or btrfs.
+        if (info.size !== row.size || mtimeOf(info.mtime.toISOString()) !== row.mtimeMs) continue;
         const hash = await contentHash(handle, row.size);
         this.rows.set(pathKey(row.libraryId, row.relative), {
           ...row,

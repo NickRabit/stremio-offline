@@ -219,11 +219,12 @@ test("a pair can be prepared again until its carry is committed", async (t) => {
 test("hashPending keeps the walk mtime so a fractional file mtime is not hashed again", async (t) => {
   const { database, root } = await fixture(t);
   const filePath = path.join(root, "fractional.mkv");
-  const seconds = 1_767_225_600.123456;
+  // .7006 s: the fraction of the millisecond is above one half, so a time that is cut off and
+  // the walk's rounded one disagree.
+  const seconds = 1_767_225_600.7006;
   await writeFile(filePath, "fractional");
   await utimes(filePath, seconds, seconds);
-  const wholeMtime = Math.trunc(seconds * 1000);
-  const modified = new Date(wholeMtime).toISOString();
+  const modified = (await stat(filePath)).mtime.toISOString();
   const batches: Statement[][] = [];
   const store = new LibraryFingerprints({ now: () => NOW });
   store.attachDatabase(observingBatch(database, batches));
@@ -241,7 +242,7 @@ test("hashPending keeps the walk mtime so a fractional file mtime is not hashed 
     "SELECT mtime_ms, hash FROM file_fingerprints",
   );
   assert.equal(rows.length, 1);
-  assert.equal(rows[0]!.mtime_ms, wholeMtime);
+  assert.equal(rows[0]!.mtime_ms, Date.parse(modified));
   assert.match(rows[0]!.hash ?? "", /^[0-9a-f]{64}$/);
 });
 
