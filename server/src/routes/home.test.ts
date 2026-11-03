@@ -138,7 +138,12 @@ const folderItem = (relative: string): BrowseItem => ({
   fileCount: 0, size: 0, modified: "2024-01-01T00:00:00.000Z",
 });
 
-const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number; now?: number } = {}): Promise<Harness> => {
+const mount = async (options: {
+  libraries?: LibraryRecord[]; deadlineMs?: number; now?: number;
+  /** What TMDB would answer for a `type:tmdbId` pair; the harness learns it on the first ask. */
+  tmdbPairs?: Record<string, string>; tmdbAsks?: string[];
+} = {}): Promise<Harness> => {
+  const knownPairs = new Map<string, string | null>();
   const libraries = options.libraries ?? [];
   const addons: AddonRecord[] = [];
   const records: Record<string, MetaRecord> = {};
@@ -317,6 +322,13 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     },
     now: () => state.now,
     homeLookupDeadlineMs: options.deadlineMs,
+    ...(options.tmdbPairs ? {
+      imdbOfTmdb: (type: "movie" | "series", tmdbId: number) => knownPairs.get(`${type}:${tmdbId}`),
+      learnImdbOfTmdb: async (type: "movie" | "series", tmdbId: number) => {
+        options.tmdbAsks?.push(`${type}:${tmdbId}`);
+        knownPairs.set(`${type}:${tmdbId}`, options.tmdbPairs?.[`${type}:${tmdbId}`] ?? null);
+      },
+    } : {}),
   };
   registerHomeRoutes(app, homeDeps);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -725,6 +737,29 @@ test("a library film and a stored catalogue row for it merge into a single card"
   assert.equal(rows.resume!.items.length, 1);
   assert.equal(rows.resume!.items[0]!.kind, "resume-file");
   assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["file:Films/Film/Film.mkv", "movie:tt9"]);
+});
+
+test("a film file bound through TMDB and its IMDb catalogue row are one card, the pair asked for once", async (t) => {
+  const asks: string[] = [];
+  const harness = await mount({
+    libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })],
+    tmdbPairs: { "movie:322240": "tt4383594" },
+    tmdbAsks: asks,
+  });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Kocour"] = { type: "movie", id: "tmdb:322240", name: "Já, kocour" };
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Kocour/Kocour.mkv": { position: 348, duration: 5210, title: "Já, kocour", path: "lib_00000001/Films/Kocour/Kocour.mkv", updatedAt: "2024-01-03T00:00:00.000Z" },
+    "movie:tt4383594": { position: 4875, duration: 5210, title: "Já, kocour", updatedAt: "2024-01-02T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.resume!.items.length, 1);
+  assert.equal(rows.resume!.items[0]!.kind, "resume-file");
+  assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["file:Films/Kocour/Kocour.mkv", "movie:tt4383594"]);
+
+  await allRows(harness, ALICE);
+  assert.deepEqual(asks, ["movie:322240"], "a pair once learned is not asked for again");
 });
 
 test("a title row a bound file wrote is the file's own card, and the library lists it", async (t) => {

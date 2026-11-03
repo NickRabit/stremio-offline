@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,6 +63,7 @@ import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.android.awaitFrame
+import kotlinx.coroutines.launch
 
 const val TagSourcesPanel = "catalog_sources_panel"
 const val TagSourcesEmpty = "catalog_sources_empty"
@@ -141,6 +143,8 @@ fun SourcesPanel(
   var restoreFilterKey by remember { mutableStateOf<String?>(null) }
   val chipFocuses = remember(filters.map { it.key }) { filters.map { FocusRequester() } }
   val optionFocus = remember { FocusRequester() }
+  val firstRowFocus = remember { FocusRequester() }
+  val scope = rememberCoroutineScope()
 
   fun leaveFilter() {
     restoreFilterKey = openFilterKey
@@ -195,7 +199,21 @@ fun SourcesPanel(
         countText = countText,
         chipFocuses = chipFocuses,
         onOpen = { index -> openFilterKey = filters[index].key },
-        downFocus = initialFocus,
+        // DOWN is the way back from UP on the first row: the list returns to its top and that row
+        // takes the remote. The preselected row may be scrolled out of view, and a row the lazy
+        // list has not composed cannot take focus.
+        onDown = if (streams.isEmpty() || failed) {
+          initialFocus?.let { target -> { runCatching { target.requestFocus() }.isSuccess } }
+        } else {
+          {
+            scope.launch {
+              runCatching { listState.scrollToItem(0) }
+              awaitFrame()
+              runCatching { firstRowFocus.requestFocus() }
+            }
+            true
+          }
+        },
       )
       Spacer(Modifier.height(8.dp))
     }
@@ -255,6 +273,7 @@ fun SourcesPanel(
                     }
                   },
                 )
+                .then(if (index == 0) Modifier.focusRequester(firstRowFocus) else Modifier)
                 .then(if (initialFocus != null && index == entry) Modifier.focusRequester(initialFocus) else Modifier),
               onSave = save?.let { callback -> { callback(stream) } },
               saveText = saveText,
@@ -312,7 +331,7 @@ private fun SourceFilterBar(
   countText: String?,
   chipFocuses: List<FocusRequester>,
   onOpen: (Int) -> Unit,
-  downFocus: FocusRequester?,
+  onDown: (() -> Boolean)?,
 ) {
   Row(
     modifier = Modifier
@@ -320,8 +339,8 @@ private fun SourceFilterBar(
       .testTag(TagSourcesFilters)
       .onPreviewKeyEvent { event ->
         // DOWN leaves the chips for the list; the remaining directions stay on the row.
-        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && downFocus != null) {
-          runCatching { downFocus.requestFocus() }.isSuccess
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && onDown != null) {
+          onDown()
         } else {
           false
         }
