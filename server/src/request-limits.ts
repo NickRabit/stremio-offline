@@ -2,7 +2,7 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { ipKeyGenerator, MemoryStore, rateLimit, type Options, type RateLimitInfo } from "express-rate-limit";
 
 const MINUTE_MS = 60_000;
-const API_REQUESTS_PER_MINUTE = 600;
+const API_REQUESTS_PER_MINUTE = 3000;
 const AUTH_REQUESTS_PER_MINUTE = 20;
 const PAGE_REQUESTS_PER_MINUTE = 180;
 const MAX_STORE_KEYS = 4096;
