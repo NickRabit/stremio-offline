@@ -11,6 +11,8 @@ import type { MediaServerPersonal, RemoteCards } from "../media-server-personal.
 import { readPlaybackReport, type MediaServerPlaybackReporter } from "../media-server-playing.js";
 import type { MediaServerSources } from "../media-server-sources.js";
 import type { ResourceOwner } from "../media-resources.js";
+import type { LibraryCandidateSource } from "../library-candidates.js";
+import { RemoteItemMatcher } from "../remote-item-match.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
 export interface MediaServersDeps extends RouteContext {
@@ -21,6 +23,9 @@ export interface MediaServersDeps extends RouteContext {
   remotePersonal: MediaServerPersonal;
   playbackReports: MediaServerPlaybackReporter;
   ownerOf(req: express.Request): ResourceOwner;
+  libraryCandidates: LibraryCandidateSource;
+  language(): string;
+  remoteMatchTimeoutMs?: number;
 }
 
 /** Fixed English text for every mapped failure. The internal message is never forwarded: a
@@ -205,6 +210,7 @@ const streamName = (req: express.Request): string | undefined => {
 
 export function registerMediaServerRoutes(app: express.Application, deps: MediaServersDeps): void {
   const { mediaServers, mosaics, mediaSources, remotePersonal, playbackReports, ownerOf, currentUser, requireAccess } = deps;
+  const remoteItems = new RemoteItemMatcher(deps.libraryCandidates, { timeoutMs: deps.remoteMatchTimeoutMs });
 
   /** The one request guard: the acting account, the captured library and connection, the abort
    *  wiring, and every re-check the response boundary repeats before a byte or a JSON value
@@ -505,7 +511,8 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
   app.get("/api/remote-libraries/:id/items/:itemId", handle(async (req, authority, signal) => {
     assertNoBody(req);
     assertNoQuery(req.query);
-    return mediaServers.itemDetail(authority, req.params.id, req.params.itemId, signal);
+    const detail = await mediaServers.itemDetail(authority, req.params.id, req.params.itemId, signal);
+    return { ...detail, item: await remoteItems.enrich(String(req.params.id), detail.item, deps.language()) };
   }, 200, true));
   app.get("/api/remote-libraries/:id/items", handle(async (req, authority, signal) => {
     assertNoBody(req);

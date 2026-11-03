@@ -2812,7 +2812,17 @@ registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerSta
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache, publicAddonView });
 const introSegments = new IntroSegmentsCache();
 registerIntroSegmentRoutes(app, { ...routeContext, introSegments });
-registerMediaServerRoutes(app, { ...routeContext, mediaServers, mosaics, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, playbackReports, ownerOf });
+registerMediaServerRoutes(app, {
+  ...routeContext,
+  mediaServers,
+  mosaics,
+  mediaSources: mediaServerSources,
+  remotePersonal: mediaServerPersonal,
+  playbackReports,
+  ownerOf,
+  libraryCandidates,
+  language: () => prefsOf().uiLanguage,
+});
 registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
 if (searchSessions !== undefined && catalogSearchSessions !== undefined) {
   registerSearchEverywhereRoutes(app, {

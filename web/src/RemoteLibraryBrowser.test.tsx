@@ -946,6 +946,30 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     expect(calls.title).toContain("/api/trailer/movie/tt5000");
   });
 
+  it("uses a matched catalogue identity from a detail when its listing row had none", async () => {
+    const unnamed: RemoteItem = { ...movie("m1", "One"), providerIds: {} };
+    browse = () => json(page([unnamed]));
+    item = () => json({ item: { ...unnamed, providerIds: { imdb: "tt5000" }, providerIdsMatched: true }, capabilities });
+    sources = () => json({ streams: [] });
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+    expect(calls.title).toContain("/api/meta/movie/tt5000");
+    expect(calls.title).toContain("/api/links/movie/tt5000");
+  });
+
+  it("keeps a listing row's own catalogue identity when the detail answers with another", async () => {
+    const listed: RemoteItem = { ...movie("m1", "One"), providerIds: { imdb: "tt4000" } };
+    browse = () => json(page([listed]));
+    item = () => json({ item: { ...listed, providerIds: { imdb: "tt5000" }, providerIdsMatched: true }, capabilities });
+    sources = () => json({ streams: [] });
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+    expect(calls.title).toContain("/api/meta/movie/tt4000");
+    expect(calls.title.some((path) => path.includes("tt5000"))).toBe(false);
+  });
+
   it("asks an episode's links through its series, never the episode's own ids", async () => {
     const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: { imdb: "tt7000" } };
     const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, providerIds: { imdb: "tt9999" } };

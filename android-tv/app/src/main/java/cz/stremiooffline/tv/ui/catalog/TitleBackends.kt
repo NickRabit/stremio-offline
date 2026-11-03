@@ -125,6 +125,7 @@ internal class RemoteBackend(
   private val resume: List<HomeCard.Remote> = emptyList(),
   val seriesName: String? = item.seriesName ?: item.name.takeIf { item.type == "series" },
   val seriesIds: RemoteProviderIdsDto? = item.providerIds.takeIf { catalogueIdentity("series", it) != null },
+  private val seriesProviderIdsMatched: Boolean = item.providerIdsMatched,
 ) : TitleBackend {
   override val catalogue = false
 
@@ -226,6 +227,7 @@ internal class RemoteBackend(
           item = item,
           seriesName = seriesName,
           seriesIds = seriesIds,
+          seriesProviderIdsMatched = seriesProviderIdsMatched,
           sources = listOf(it),
         )
       }
@@ -240,6 +242,7 @@ internal class RemoteBackend(
             item = it,
             seriesName = seriesName,
             seriesIds = seriesIds,
+            seriesProviderIdsMatched = seriesProviderIdsMatched,
             sources = null,
           )
         },
@@ -281,6 +284,7 @@ sealed interface LibraryCopy {
     val item: RemoteItemDto,
     val seriesName: String?,
     val seriesIds: RemoteProviderIdsDto?,
+    val seriesProviderIdsMatched: Boolean = false,
     val sources: List<StreamDto>?,
   ) : LibraryCopy
 
@@ -365,6 +369,7 @@ internal suspend fun resolveLibraryCopy(api: TvApi, copy: LibraryCopy.Native): N
     item = copy.item,
     seriesName = copy.seriesName,
     seriesIds = copy.seriesIds,
+    seriesProviderIdsMatched = copy.seriesProviderIdsMatched,
     sources = copy.sources,
     loadDestinations = api::libraries,
   )
