@@ -151,6 +151,19 @@ test("recent is newest first, ties go by path, and the limit bounds it", async (
   });
 });
 
+test("filesUnder matches whole path segments and keeps only videos", async () => {
+  await withStore(async (store) => {
+    store.observe("lib_a", [
+      file("Films/A/One.mkv", 1, "2026-01-01T00:00:00.000Z"),
+      file("Films/A/Sub/Two.mp4", 1, "2026-01-01T00:00:00.000Z"),
+      file("Films/AB/Other.mkv", 1, "2026-01-01T00:00:00.000Z"),
+      file("Films/A/notes.txt", 1, "2026-01-01T00:00:00.000Z"),
+    ], new Date("2026-01-01T00:00:00.000Z"));
+
+    assert.deepEqual(store.filesUnder("lib_a", "Films/A").sort(), ["Films/A/One.mkv", "Films/A/Sub/Two.mp4"]);
+  });
+});
+
 test("forget drops one library's data and leaves the others", async () => {
   await withStore(async (store) => {
     store.observe("lib_a", [], new Date("2026-01-01T00:00:00.000Z"));

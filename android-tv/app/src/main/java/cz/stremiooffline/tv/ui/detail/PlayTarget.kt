@@ -3,6 +3,8 @@ package cz.stremiooffline.tv.ui.detail
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.StreamDto
 
+data class ShuffleRun(val id: String, val upcomingTitle: String?)
+
 /**
  * What to play: the progress key and title, and either a library [path] to mint a source from or
  * a catalogue [sourceId] the server already handed out. The player skips `librarySource()` when a
@@ -43,4 +45,6 @@ data class PlayTarget(
    *  snapshot the player offers as its own sources. Nonnull means the player must not discover
    *  any other addon or library, and it is never set by a catalogue or library play. */
   val initialSources: List<StreamDto>? = null,
+  /** The random run this play belongs to, when a library card started it. */
+  val shuffle: ShuffleRun? = null,
 )

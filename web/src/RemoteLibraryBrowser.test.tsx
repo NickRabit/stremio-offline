@@ -47,6 +47,9 @@ let localCopies: Handler;
 let remoteLibraryStreams: Handler;
 let forgetReply: Handler | undefined;
 let playback: Handler;
+let shuffleStart: Handler;
+let shuffleNext: Handler;
+const shuffleCalls = { start: [] as URL[], starts: [] as Array<Record<string, unknown>>, next: [] as string[], deleted: [] as string[] };
 const calls = { browse: [] as URL[], personal: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[], title: [] as string[] };
 const downloadCalls: Array<Record<string, unknown>> = [];
 const deviceCalls: Array<Record<string, unknown>> = [];
@@ -83,6 +86,22 @@ const saveElsewhere = () => host.querySelector<HTMLButtonElement>(".library-deta
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: false, media: query, onchange: null,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  }));
+  Object.defineProperty(HTMLMediaElement.prototype, "textTracks", {
+    configurable: true,
+    get: () => ({ length: 0, addEventListener() {}, removeEventListener() {}, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }),
+  });
+  Object.defineProperty(HTMLTrackElement.prototype, "track", {
+    configurable: true,
+    get: () => ({ mode: "disabled", activeCues: null, addEventListener() {}, removeEventListener() {} }),
+  });
+  HTMLMediaElement.prototype.play = () => Promise.resolve();
+  HTMLMediaElement.prototype.pause = () => undefined;
+  HTMLMediaElement.prototype.load = () => undefined;
   setLocale("en");
   clearTitleEnrichment();
   clearTitleExtras();
@@ -113,6 +132,20 @@ beforeEach(() => {
     id: "sess1", mode: "direct", url: "/api/stream/sess1", offset: 0, duration: 3600, hardware: false, acceleration: false,
     audioTracks: [], subtitleTracks: [], audioTrack: 0, subtitleTrack: null, quality: null,
   });
+  shuffleStart = () => json({
+    id: "run1",
+    item: { remote: { libraryId: "rlib_a", itemId: "m1" }, title: "One" },
+    total: 2,
+    hasNext: true,
+    hasPrevious: false,
+    upcoming: { title: "Two" },
+  });
+  shuffleNext = () => json({
+    item: { remote: { libraryId: "rlib_a", itemId: "m2" }, title: "Two" },
+    hasNext: false,
+    hasPrevious: true,
+  });
+  shuffleCalls.start = []; shuffleCalls.starts = []; shuffleCalls.next = []; shuffleCalls.deleted = [];
   state = (url, init) => {
     if (init?.method === "PATCH") return json({ key: "k", position: 0, duration: 0, favorite: true, watched: false });
     return json({ key: "k", position: 0, duration: 0, favorite: false, watched: false });
@@ -138,6 +171,19 @@ beforeEach(() => {
     if (path === "/api/playback" && init?.method === "POST") {
       playbackCalls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       return Promise.resolve(playback(url, init));
+    }
+    if (path === "/api/shuffle" && init?.method === "POST") {
+      shuffleCalls.start.push(url);
+      shuffleCalls.starts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return Promise.resolve(shuffleStart(url, init));
+    }
+    if (/^\/api\/shuffle\/[^/]+\/next$/.test(path) && init?.method === "POST") {
+      shuffleCalls.next.push(path);
+      return Promise.resolve(shuffleNext(url, init));
+    }
+    if (/^\/api\/shuffle\/[^/]+$/.test(path) && init?.method === "DELETE") {
+      shuffleCalls.deleted.push(path);
+      return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (/^\/api\/playback\/[^/]+$/.test(path)) return Promise.resolve(new Response(null, { status: 204 }));
     if (path.startsWith("/api/stream-sources/")) { addonCalls.sources.push(url); return Promise.resolve(addonProviders(url, init)); }
@@ -185,6 +231,10 @@ afterEach(() => {
 });
 
 const flush = () => act(async () => { await new Promise((done) => setTimeout(done, 0)); });
+const untilBrowser = async (ready: () => unknown) => {
+  for (let step = 0; step < 40 && !ready(); step += 1) await flush();
+  expect(ready()).toBeTruthy();
+};
 const tileButtons = () => [...host.querySelectorAll<HTMLButtonElement>(".browse-panel button.library-open")];
 const click = async (element: Element) => { await act(async () => { (element as HTMLElement).click(); }); await flush(); };
 const byText = (selector: string, text: string) =>
@@ -215,6 +265,38 @@ const openRootLibrary = async (which = 0) => {
 };
 
 describe("RemoteLibraryBrowser listing", () => {
+  it("shuffles the current remote folder and hands the next random title to the player", async () => {
+    const remoteStream = (itemId: string, sourceId: string): Stream => ({
+      sourceId, kind: "remote", playable: true, provider: "jellyfin",
+      remoteItem: { libraryId: "rlib_a", itemId, mediaSourceId: sourceId, progressKey: `remote:${itemId}` },
+    });
+    browse = (url) => url.searchParams.get("parentId") === "f1"
+      ? json(page([movie("m1", "One")]))
+      : json(page([folder("f1", "Folder")]));
+    sources = (url) => json({ streams: [remoteStream(url.pathname.includes("/m2/") ? "m2" : "m1", url.pathname.includes("/m2/") ? "ms2" : "ms1")] });
+    await openRootLibrary();
+    await untilBrowser(() => host.querySelector<HTMLElement>('[data-remote-id="f1"] .library-open') !== null);
+    await click(host.querySelector<HTMLElement>('[data-remote-id="f1"] .library-open')!);
+
+    const random = host.querySelector<HTMLButtonElement>('button[aria-label="Play random"]')!;
+    await click(random);
+    await untilBrowser(() => playbackCalls.length === 1);
+    expect(shuffleCalls.starts[0]).toEqual({ remote: { libraryId: "rlib_a", parentId: "f1" } });
+    expect(playbackCalls[0]).toEqual(expect.objectContaining({ sourceId: "ms1", time: 0 }));
+
+    await untilBrowser(() => host.querySelector<HTMLButtonElement>('.player-overlay button[aria-label="Next episode"]'));
+    const next = host.querySelector<HTMLButtonElement>('.player-overlay button[aria-label="Next episode"]')!;
+    expect(next.title).toBe("Next episode: Two");
+    await click(next);
+    await untilBrowser(() => playbackCalls.length === 2);
+    expect(shuffleCalls.next).toEqual(["/api/shuffle/run1/next"]);
+    expect(playbackCalls[1]).toEqual(expect.objectContaining({ sourceId: "ms2", time: 0 }));
+
+    await click(host.querySelector<HTMLElement>('[data-remote-id="m1"] .library-open')!);
+    await flush();
+    expect(shuffleCalls.deleted).toContain("/api/shuffle/run1");
+  });
+
   it("filters inside a library and a folder, and offers no field on the list of libraries", async () => {
     browse = (url) => {
       if (url.searchParams.get("parentId") === "f1") return json(page([movie("m1", "One")]));

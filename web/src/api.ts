@@ -32,7 +32,19 @@ export interface ProgressPayload {
   stableKey?: string;
   /** The media-server version this position was played from, so the detail can say which one. */
   remote?: { libraryId: string; itemId: string; mediaSourceId: string };
+  /** This was a random-run play, so the server leaves the series marker alone. */
+  shuffle?: true;
 }
+
+export interface ShuffleItem {
+  path?: string;
+  remote?: { libraryId: string; itemId: string };
+  title: string;
+  season?: number;
+  episode?: number;
+}
+export interface ShuffleStep { item: ShuffleItem; hasNext: boolean; hasPrevious: boolean; upcoming?: { title: string } }
+export interface ShuffleStart extends ShuffleStep { id: string; total: number; capped?: true }
 
 /** Every call gets a deadline. A stalled connection would otherwise be held until the
  * operating system gives up, which takes minutes, and six of those exhaust the browser's
@@ -221,6 +233,11 @@ export const api = {
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
   nextLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/next/${encodeURIComponent(sourceId)}`),
   previousLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/previous/${encodeURIComponent(sourceId)}`),
+  startShuffle: (target: { path: string } | { remote: { libraryId: string; parentId?: string } }) =>
+    request<ShuffleStart>("/api/shuffle", { method: "POST", body: JSON.stringify(target) }),
+  nextShuffle: (id: string) => request<ShuffleStep | { item: null; exhausted: true }>(`/api/shuffle/${encodeURIComponent(id)}/next`, { method: "POST" }),
+  previousShuffle: (id: string) => request<ShuffleStep | { item: null }>(`/api/shuffle/${encodeURIComponent(id)}/previous`, { method: "POST" }),
+  deleteShuffle: (id: string) => request<void>(`/api/shuffle/${encodeURIComponent(id)}`, { method: "DELETE" }),
   librarySource: (path: string, signal?: AbortSignal) => request<Stream>("/api/library/source", { method: "POST", body: JSON.stringify({ path }), signal }),
   library: () => request<LibrarySummary[]>("/api/library"),
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),

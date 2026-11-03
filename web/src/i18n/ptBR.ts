@@ -966,6 +966,8 @@ export const ptBR: Catalog = {
   "library.continue": "Continuar",
   "library.thisFile": "Este arquivo",
   "library.tools": "Ferramentas de biblioteca",
+  "library.playRandom": "Reproduzir aleatoriamente",
+  "library.playRandomEmpty": "Não há nada para reproduzir aqui.",
   "library.scan": "Biblioteca de digitalização",
   "library.scanHint": "Algumas pastas ainda não possuem pôster. Digitalize a biblioteca para encontrar títulos de seus catálogos.",
   "library.scanProgress": "{done} de {total} · {matched} correspondido",

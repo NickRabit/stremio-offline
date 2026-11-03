@@ -431,6 +431,11 @@ fun Shell(
         Section.Library -> LibraryRoute(
           api = api,
           onOpenDetail = ::openLibraryDetail,
+          onPlay = { target ->
+            playerSources = OfferedSources()
+            playedSourceId = null
+            player = target
+          },
           onOpenRemoteItem = { libraryId, libraryName, provider, item ->
             openRemoteDetail(RemoteDetailData(libraryId = libraryId, libraryName = libraryName, provider = provider, item = item))
           },

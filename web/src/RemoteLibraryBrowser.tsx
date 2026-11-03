@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useCrumbsAtEnd } from "./crumbs";
-import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, SlidersHorizontal, Star } from "lucide-react";
-import { ApiError, api, describeError, saveToDevice } from "./api";
+import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, Shuffle, SlidersHorizontal, Star } from "lucide-react";
+import { ApiError, api, describeError, saveToDevice, type ShuffleItem } from "./api";
 import { relativeAge } from "./home-cards";
 import { localeTag, t, useI18n } from "./i18n";
 import { LibraryItem, LibraryItemMenu } from "./library-item";
@@ -117,6 +117,14 @@ type Playing = {
   scope: string;
   /** Addon subtitles of the catalogue title a library copy or a file stands for. */
   subtitles?: Subtitle[];
+};
+type RemoteShuffleRun = {
+  id: string;
+  libraryId: string;
+  itemId: string;
+  upcoming?: { title: string };
+  hasPrevious: boolean;
+  previousTitle?: string;
 };
 /** The addon save the viewer opened: the exact stream, subject and labels captured at the click,
  *  so no later state change can alter what is submitted. `title` labels the episode, while
@@ -275,6 +283,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   sourcesRef.current = sources;
   const [detailNonce, setDetailNonce] = useState(0);
   const [playing, setPlaying] = useState<Playing | null>(null);
+  const [shuffleRun, setShuffleRun] = useState<RemoteShuffleRun | null>(null);
+  const shuffleRunRef = useRef<RemoteShuffleRun | null>(null);
+  const shuffleAbort = useRef<AbortController | null>(null);
   /** The source the title's stored position names, read for the row the detail has selected. */
   const [resumeStableKey, setResumeStableKey] = useState<string | undefined>(undefined);
   /** The item a Continue watching card asked to play, until its detail can. */
@@ -359,6 +370,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   selectedRef.current = selected;
   detailRef.current = detail;
   playingRef.current = playing;
+  shuffleRunRef.current = shuffleRun;
   detailStreamRef.current = detailStream;
   listingRef.current = listing;
 
@@ -387,6 +399,14 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     handoffAbort.current?.abort();
     handoffAbort.current = null;
     setNextBusy(false);
+  };
+  const endShuffle = () => {
+    const id = shuffleRunRef.current?.id;
+    shuffleAbort.current?.abort();
+    shuffleAbort.current = null;
+    shuffleRunRef.current = null;
+    setShuffleRun(null);
+    if (id) void api.deleteShuffle(id).catch(() => undefined);
   };
   const rememberState = (libraryId: string, itemId: string, value: RemoteItemState) => {
     itemStatesRef.current = { ...itemStatesRef.current, [stateKey(libraryId, itemId)]: value };
@@ -725,6 +745,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (scrollRef.current) scrollRef.current.scrollTop = restore.offset;
   }, [listing, navKey]);
   useEffect(() => () => {
+    endShuffle();
     cancelItemsMore();
     cancelEpisodesMore();
     handoffAbort.current?.abort();
@@ -845,6 +866,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   useEffect(() => { closeMenu(); }, [selected, parentId, mode, query, sort, desc, nonce, detail]);
 
   const openLibrary = (library: RemoteLibrary) => {
+    endShuffle();
     closeMenu();
     cancelItemsMore();
     cancelEpisodesMore();
@@ -905,6 +927,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     closeLibrary();
   };
   const openItem = (item: RemoteItem) => {
+    endShuffle();
     closeMenu();
     setSources(null); setSourceError(""); setState(null); setStateError("");
     cancelItemsMore();
@@ -946,6 +969,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setDetail(item);
   };
   const openEpisode = (episode: RemoteItem) => {
+    endShuffle();
     closeMenu();
     setSources(null); setSourceError(""); setState(null); setStateError("");
     cancelEpisodesMore();
@@ -1171,6 +1195,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     const library = selectedRef.current;
     const current = playingRef.current;
     if (!library || !current) return false;
+    endShuffle();
     const epoch = ++handoffEpoch.current;
     handoffAbort.current?.abort();
     const controller = new AbortController();
@@ -1340,6 +1365,12 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
 
   if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
 
+  const shuffleActive = Boolean(
+    shuffleRun
+    && playing
+    && playing.libraryId === shuffleRun.libraryId
+    && playing.item.id === shuffleRun.itemId,
+  );
   const previewKey = { libraryId: selected?.id ?? "", generation: nonce };
 
   /** One kind pill and the sites, in the same row the catalogue draws: no provider, library or
@@ -1446,6 +1477,38 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       .catch(() => undefined);
   };
 
+  const startRemoteRow = (
+    stream: Stream,
+    item: RemoteItem,
+    title: string,
+    originLibraryId: string,
+    favorite: boolean,
+    fromBeginning: boolean | undefined,
+    identity: CatalogueRef | null,
+    scope: string,
+    poster: string | undefined,
+    at?: number,
+  ): boolean => {
+    const owner = sourceProgressOwner(stream, identity);
+    if (!owner) return false;
+    const foreign = stream.remoteItem && stream.remoteItem.libraryId !== originLibraryId ? stream.remoteItem : null;
+    const position = at !== undefined ? { at } : {};
+    setPlaying({
+      stream,
+      libraryId: foreign?.libraryId ?? originLibraryId,
+      item,
+      title,
+      favorite: foreign ? false : favorite,
+      fromBeginning,
+      owner,
+      scope,
+      ...(foreign ? { foreign: true } : {}),
+      ...(poster ? { poster } : {}),
+      ...position,
+    });
+    return true;
+  };
+
   /** Play from the detail: a version of this detail's own library keeps the provider's path and
    *  its favorite and hand-off, while a row of the viewer's own files, a copy from another library
    *  and an addon answer play on their own terms -- the file under its path, the copy under its own
@@ -1453,6 +1516,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
    *  history. */
   const playDetailStream = (stream: Stream, fromBeginning?: boolean, at?: number): boolean => {
     if (!detail || !selected) return false;
+    endShuffle();
     const owner = sourceProgressOwner(stream, addonIdentity);
     if (!owner) return false;
     // A switch hands over the position the row on screen reached; a play from the detail resumes
@@ -1460,15 +1524,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     const position = at !== undefined ? { at } : {};
     const poster = playbackPoster(detail);
     if (isRemoteStream(stream)) {
-      // A copy that reports its own remote identity and belongs elsewhere is another library's
-      // item: it plays under that identity, never under the item this detail was opened on.
-      const foreign = stream.remoteItem && stream.remoteItem.libraryId !== selected.id ? stream.remoteItem : null;
-      if (foreign) {
-        setPlaying({ stream, libraryId: foreign.libraryId, item: detail, title: detailTitle(detail), favorite: false, fromBeginning, foreign: true, owner, scope: titleScope, ...(poster ? { poster } : {}), ...position });
-        return true;
-      }
-      setPlaying({ stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: state?.favorite ?? false, fromBeginning, owner, scope: titleScope, ...(poster ? { poster } : {}), ...position });
-      return true;
+      return startRemoteRow(stream, detail, detailTitle(detail), selected.id, state?.favorite ?? false, fromBeginning, addonIdentity, titleScope, poster, at);
     }
     // The viewer's own copy of the title is a file on this server's disk: it plays and reports
     // under its own path, never under the catalogue key of the title it was listed beside, and
@@ -1491,6 +1547,116 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     });
     loadAddonSubtitles(ref, stream);
     return true;
+  };
+
+  const shuffleItemRecord = (item: ShuffleItem): RemoteItem => ({
+    id: item.remote!.itemId,
+    name: item.title,
+    type: item.season !== undefined || item.episode !== undefined ? "episode" : "movie",
+    providerIds: {},
+    ...(item.season === undefined ? {} : { season: item.season }),
+    ...(item.episode === undefined ? {} : { episode: item.episode }),
+  });
+
+  const playShuffleItem = async (library: RemoteLibrary, item: ShuffleItem, run: RemoteShuffleRun): Promise<boolean> => {
+    if (!item.remote) return false;
+    const controller = new AbortController();
+    shuffleAbort.current?.abort();
+    shuffleAbort.current = controller;
+    try {
+      const streams = await api.remoteSources(item.remote.libraryId, item.remote.itemId, controller.signal);
+      if (controller.signal.aborted || selectedRef.current?.id !== library.id) return false;
+      const stream = defaultSource(streams);
+      if (!stream) {
+        onError(new Error(t("mediaServer.itemUnavailable")));
+        return false;
+      }
+      shuffleRunRef.current = run;
+      setShuffleRun(run);
+      const scope = `${accountScope}\u0000${library.id}\u0000${item.remote.itemId}\u0000`;
+      return startRemoteRow(stream, shuffleItemRecord(item), item.title, library.id, false, true, null, scope, undefined);
+    } catch (error) {
+      if (!aborted(error)) onError(error);
+      return false;
+    } finally {
+      if (shuffleAbort.current === controller) shuffleAbort.current = null;
+    }
+  };
+
+  const startRandom = async () => {
+    const library = selectedRef.current;
+    if (!library) return;
+    endShuffle();
+    try {
+      const answer = await api.startShuffle({ remote: { libraryId: library.id, ...(parentId === undefined ? {} : { parentId }) } });
+      const run: RemoteShuffleRun = {
+        id: answer.id,
+        libraryId: library.id,
+        itemId: answer.item.remote?.itemId ?? "",
+        ...(answer.upcoming ? { upcoming: answer.upcoming } : {}),
+        hasPrevious: false,
+      };
+      const played = await playShuffleItem(library, answer.item, run);
+      if (!played) endShuffle();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) onNotify?.(t("library.playRandomEmpty"));
+      else onError(error);
+    }
+  };
+
+  const nextRandom = async (): Promise<boolean> => {
+    const current = shuffleRunRef.current;
+    const library = selectedRef.current;
+    if (!current || !library || nextBusy) return false;
+    setNextBusy(true);
+    try {
+      const answer = await api.nextShuffle(current.id);
+      if (!answer.item) {
+        const exhausted = { ...current, upcoming: undefined };
+        shuffleRunRef.current = exhausted;
+        setShuffleRun(exhausted);
+        return false;
+      }
+      return await playShuffleItem(library, answer.item, {
+        ...current,
+        itemId: answer.item.remote?.itemId ?? "",
+        ...(answer.upcoming ? { upcoming: answer.upcoming } : { upcoming: undefined }),
+        hasPrevious: answer.hasPrevious,
+        ...(playingRef.current ? { previousTitle: playingRef.current.title } : {}),
+      });
+    } catch (error) {
+      onError(error);
+      return false;
+    } finally {
+      setNextBusy(false);
+    }
+  };
+
+  const previousRandom = async (): Promise<boolean> => {
+    const current = shuffleRunRef.current;
+    const library = selectedRef.current;
+    if (!current || !library || nextBusy) return false;
+    setNextBusy(true);
+    try {
+      const answer = await api.previousShuffle(current.id);
+      if (!answer.item) {
+        const first = { ...current, hasPrevious: false };
+        shuffleRunRef.current = first;
+        setShuffleRun(first);
+        return false;
+      }
+      return await playShuffleItem(library, answer.item, {
+        ...current,
+        itemId: answer.item.remote?.itemId ?? "",
+        ...(answer.upcoming ? { upcoming: answer.upcoming } : { upcoming: undefined }),
+        hasPrevious: answer.hasPrevious,
+      });
+    } catch (error) {
+      onError(error);
+      return false;
+    } finally {
+      setNextBusy(false);
+    }
   };
 
   /** A switch starts the chosen row through the very path the detail's Play uses, at the position
@@ -1741,6 +1907,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
               </select>}
               {!detail && <button title={t(desc ? "common.descending" : "common.ascending")} aria-label={t(desc ? "common.descending" : "common.ascending")} aria-pressed={desc}
                 onClick={() => { const next = !desc; setDesc(next); persistPrefs({ order: next ? "desc" : "asc" }); }}>{desc ? <ArrowDown/> : <ArrowUp/>}</button>}
+              {!detail && <button title={t("library.playRandom")} aria-label={t("library.playRandom")} onClick={() => void startRandom()}><Shuffle/></button>}
               {!detail && <button title={t(view === "grid" ? "library.viewRows" : "library.viewTiles")} aria-label={t(view === "grid" ? "library.viewRows" : "library.viewTiles")} aria-pressed={view === "list"}
                 onClick={changeView}>{view === "grid" ? <List/> : <LayoutGrid/>}</button>}
             </div></div>
@@ -1865,11 +2032,11 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         subtitles={addon?.subtitles ?? playing.subtitles ?? []}
         subtitleLanguage={subtitleLanguage}
         audioLanguage={audioLanguage}
-        previousTitle={away ? undefined : playPrevious ? episodeTitle(playPrevious) : undefined}
-        onPrevious={away ? undefined : playPrevious ? () => changeEpisode(playPrevious) : undefined}
-        nextTitle={away ? undefined : playNext ? episodeTitle(playNext) : undefined}
-        onNext={away ? undefined : playNext ? () => changeEpisode(playNext) : undefined}
-        autoNext={false}
+        previousTitle={shuffleActive ? (shuffleRun?.hasPrevious ? shuffleRun.previousTitle : undefined) : away ? undefined : playPrevious ? episodeTitle(playPrevious) : undefined}
+        onPrevious={shuffleActive ? (shuffleRun?.hasPrevious ? previousRandom : undefined) : away ? undefined : playPrevious ? () => changeEpisode(playPrevious) : undefined}
+        nextTitle={shuffleActive ? shuffleRun?.upcoming?.title : away ? undefined : playNext ? episodeTitle(playNext) : undefined}
+        onNext={shuffleActive ? (shuffleRun?.upcoming ? nextRandom : undefined) : away ? undefined : playNext ? () => changeEpisode(playNext) : undefined}
+        autoNext={shuffleActive || false}
         nextBusy={nextBusy}
         favorite={away ? undefined : playing.favorite}
         fromBeginning={playing.fromBeginning}
@@ -1911,7 +2078,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         {...(defaultSort ? { defaultSort } : {})}
         {...(playing.at !== undefined ? { startAtSeconds: playing.at } : {})}
         onClose={() => {
-          cancelHandoff(); addonSubtitleAbort.current?.abort(); setPlayerSourcesOpen(false); setPlaying(null);
+          endShuffle(); cancelHandoff(); addonSubtitleAbort.current?.abort(); setPlayerSourcesOpen(false); setPlaying(null);
         }}/>;
     })()}
     {addonSave && <SaveTargetDialog
