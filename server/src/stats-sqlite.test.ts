@@ -109,7 +109,9 @@ test("traffic JSON imports once and a restart gives the same summary", async (t)
   const saved = [
     event(now - 3 * HOUR, 300),
     event(now - 2 * HOUR, 200, { source: "catalog", provider: "cdn.dva.cz" }),
-    { ...event(now - HOUR, 100), items: 0 },
+    // A minute inside the last hour: exactly one hour back sits on the window's edge, and the
+    // summaries taken a few milliseconds apart would disagree about it.
+    { ...event(now - HOUR + 60_000, 100), items: 0 },
   ];
   await writeFile(file, JSON.stringify(saved));
   const expected = summarize(saved, 24);

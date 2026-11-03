@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/desktop",
   "private": true,
-  "version": "0.7.34",
+  "version": "0.7.35",
   "description": "Desktop client for connecting to Stremio Offline servers",
   "homepage": "https://github.com/NickRabit/stremio-offline",
   "author": "Stremio Offline contributors",
@@ -32,7 +32,7 @@
     "electron": "44.9.1",
     "electron-builder": "26.18.0",
     "tsx": "4.23.15",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   },
   "build": {
     "appId": "com.stremiooffline.desktop",
