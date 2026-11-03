@@ -33,6 +33,15 @@ test("a copy with a new modification time pairs when both stored hashes match", 
   assert.deepEqual(result.pairs.map((pair) => pair.to), ["New/movie.mkv"]);
 });
 
+test("a hashed vanished file never pairs on size and mtime alone", () => {
+  const result = pairMoves(
+    [row(A, "Old/movie.mkv", 10, Date.parse(OLD), "source-hash")],
+    [walk(A, [file("New/movie.mkv", 10)])],
+    { now: NOW, newHashes: new Map([[`${A}/New/movie.mkv`, "different-hash"]]) },
+  );
+  assert.deepEqual(result.pairs, []);
+});
+
 test("equal size with different time and no hash does not pair", () => {
   const modified = new Date(NOW - 20 * 60_000).toISOString();
   const result = pairMoves([row(A, "Old/movie.mkv", 10, Date.parse(OLD))], [walk(A, [file("New/movie.mkv", 10, modified)])], { now: NOW });

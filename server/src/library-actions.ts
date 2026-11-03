@@ -56,7 +56,7 @@ export interface LibraryActions {
   assertMoveType(key: string, destination: LibraryRecord, confirmed?: boolean): Promise<void>;
   pathPresent(target: string): Promise<boolean>;
   finishTransfer(step: TransferStep, sourceLeft?: string, replay?: boolean): Promise<string>;
-  carryHandMove(fromKey: string, toKey: string, folder: boolean): Promise<void>;
+  carryHandMove(fromKey: string, toKey: string, folder: boolean, files?: string[]): Promise<void>;
   recordPublished(step: { from: string; to: string }, journal?: OpsJournal): Promise<void>;
   resumeTransfer(step: TransferStep, journal?: OpsJournal): Promise<string | undefined>;
   transferLibraryItem(relative: string, folder: string, copy?: boolean, progress?: TransferProgress, confirmTypeMismatch?: boolean, journal?: OpsJournal): Promise<string>;
@@ -124,13 +124,21 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
    *  the remap is idempotent. */
   const remapPersonalState = async (key: string, nextKey: string) => {
     await updateEveryData((data) => {
-      data.favorites = data.favorites.map((item) => remapPath(item, key, nextKey));
-      data.progress = Object.fromEntries(Object.entries(progressOf(data)).map(([progressKey, value]) => {
+      data.favorites = [...new Set(data.favorites.map((item) => remapPath(item, key, nextKey)))];
+      const progress = progressOf(data);
+      const moved: typeof progress = {};
+      for (const [progressKey, value] of Object.entries(progress)) {
         const filePath = progressKey.startsWith("file:") ? progressKey.slice(5) : undefined;
         const nextProgressKey = filePath ? `file:${remapPath(filePath, key, nextKey)}` : progressKey;
         const nextPath = value.path ? remapPath(value.path, key, nextKey) : value.path;
-        return [nextProgressKey, { ...value, path: nextPath }];
-      }));
+        const candidate = { ...value, path: nextPath };
+        const current = moved[nextProgressKey];
+        const candidateIsTarget = progress[nextProgressKey] === value;
+        if (!current || (candidateIsTarget ? candidate.updatedAt >= current.updatedAt : candidate.updatedAt > current.updatedAt)) {
+          moved[nextProgressKey] = candidate;
+        }
+      }
+      data.progress = moved;
     });
   };
 
@@ -336,13 +344,13 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     return moved;
   };
 
-  const carryHandMove = async (fromKey: string, toKey: string, folder: boolean) => {
+  const carryHandMove = async (fromKey: string, toKey: string, folder: boolean, files?: string[]) => {
     const parsedFrom = parseLibraryPath(fromKey);
     const parsedTo = parseLibraryPath(toKey);
     if (!parsedFrom?.relative || !parsedTo?.relative) return;
+    const targetFiles = folder ? files ?? (await libraryFiles()).map((file) => file.relative) : [];
     const carried = folder
-      ? [fromKey, ...(await libraryFiles())
-          .map((file) => file.relative)
+      ? [fromKey, ...targetFiles
           .filter((item) => item !== toKey && isPathWithin(item, toKey))
           .map((item) => fromKey + item.slice(toKey.length))]
       : [fromKey];

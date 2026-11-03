@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { createLibraryActions, type LibraryActionDeps, type TransferStep } from "./library-actions.js";
+import { carryMovePairs, type FingerprintPair } from "./library-fingerprints.js";
 import type { FoundFile } from "./library.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import type { LibraryMetaRecord } from "./library-match.js";
@@ -36,6 +37,7 @@ const harness = (options: {
     invalidated: 0,
     cleared: [] as string[],
     seenMoves: [] as Array<{ libraryId: string; from: string; toLibraryId: string; to: string }>,
+    libraryFilesReads: 0,
   };
   const holds = options.holds ?? (() => false);
   const deps: LibraryActionDeps = {
@@ -52,7 +54,10 @@ const harness = (options: {
       moveKey: async (from: string) => { calls.moved.push(from); return { carried: true as const }; },
       copyKey: async () => ({ carried: true as const }),
     },
-    libraryFiles: async () => (options.files ?? []) as FoundFile[],
+    libraryFiles: async () => {
+      calls.libraryFilesReads += 1;
+      return (options.files ?? []) as FoundFile[];
+    },
     libraryUnits: async () => [],
     carveOutsOf: () => new Set<string>(),
     healthOf: (entry) => ({ unreachable: false, readOnly: false, realRoot: entry.root, caseInsensitive: false }),
@@ -238,6 +243,103 @@ test("carryHandMove carries a folder's binding, directory and episode artwork, a
       "Show 2/S1/e2.mkv",
     ]);
   }, sourceFiles);
+});
+
+test("carryHandMove uses the pass files without reading libraryFiles again", async () => {
+  const from = `${LIBRARY_ID}/Show`;
+  const to = `${LIBRARY_ID}/Show 2`;
+  const files = [`${to}/S1/e1.mkv`];
+  const { actions, calls } = harness({ files: files.map((relative) => ({ relative })) });
+  await actions.carryHandMove(from, to, true, files);
+  assert.equal(calls.libraryFilesReads, 0);
+  assert.ok(calls.moved.some((key) => key.includes(`${from}/S1/e1.mkv`)));
+});
+
+test("a failed carry leaves personal state for the next pass and still lets first-seen stamping run", async () => {
+  const from = `${LIBRARY_ID}/Old/movie.mkv`;
+  const to = `${LIBRARY_ID}/New/movie.mkv`;
+  const pair: FingerprintPair = { libraryId: LIBRARY_ID, from: "Old/movie.mkv", toLibraryId: LIBRARY_ID, to: "New/movie.mkv", folder: false };
+  await withCarry({
+    "Old/movie.mkv": { type: "movie", id: "tt-source", source: "user", locked: true },
+  }, ["Old/movie.mkv"], async (_root, actions, _calls, metaStore, seen, data) => {
+    let attempt = 0;
+    let observed = 0;
+    const first = await carryMovePairs(
+      [pair],
+      async () => {
+        attempt += 1;
+        await metaStore.relocate(from, to, true);
+        throw new Error("carry stopped");
+      },
+      async () => undefined,
+      async () => { observed += 1; },
+    );
+    assert.deepEqual(first, { carried: 0, failed: 1 });
+    assert.equal(attempt, 1);
+    assert.equal(observed, 1, "a failed pair must not hold back first-seen stamping");
+    assert.deepEqual(data.favorites, [from]);
+    assert.deepEqual(seen.recent([LIBRARY_ID], 10).map((entry) => entry.relative), ["Old/movie.mkv"]);
+
+    const second = await carryMovePairs(
+      [pair],
+      async () => { await actions.carryHandMove(from, to, false, [to]); },
+      async () => undefined,
+      async () => {
+        seen.observe(LIBRARY_ID, [{ relative: "New/movie.mkv", size: 1, modified: "2026-01-02T00:00:00.000Z" }],
+          new Date("2026-03-01T00:00:00.000Z"));
+      },
+    );
+    assert.deepEqual(second, { carried: 1, failed: 0 });
+    assert.deepEqual(data.favorites, [to]);
+    assert.deepEqual(seen.recent([LIBRARY_ID], 10), [{
+      libraryId: LIBRARY_ID, relative: "New/movie.mkv", at: "2026-02-01T00:00:00.000Z",
+    }]);
+  });
+});
+
+test("remapPersonalState keeps the later progress row and deduplicates favourites", async () => {
+  const from = `${LIBRARY_ID}/Old/movie.mkv`;
+  const to = `${LIBRARY_ID}/New/movie.mkv`;
+  const updatedAt = "2026-02-01T00:00:00.000Z";
+  const targetNewer = {
+    favorites: [from, to, to],
+    progress: {
+      [`file:${from}`]: { position: 10, duration: 100, title: "Test", path: from, updatedAt: "2026-01-01T00:00:00.000Z" },
+      [`file:${to}`]: { position: 90, duration: 100, title: "Test", path: to, updatedAt },
+    },
+  } as unknown as UserData;
+  await harness({
+    progressOf: (value) => value.progress as ReturnType<LibraryActionDeps["progressOf"]>,
+    updateEveryData: async (mutate) => { mutate(targetNewer); },
+  }).actions.remapPersonalState(from, to);
+  assert.equal((targetNewer.progress as Record<string, { position: number }>)[`file:${to}`]?.position, 90);
+  assert.deepEqual(targetNewer.favorites, [to]);
+
+  const sourceNewer = {
+    favorites: [to],
+    progress: {
+      [`file:${from}`]: { position: 90, duration: 100, title: "Test", path: from, updatedAt: "2026-03-01T00:00:00.000Z" },
+      [`file:${to}`]: { position: 10, duration: 100, title: "Test", path: to, updatedAt },
+    },
+  } as unknown as UserData;
+  await harness({
+    progressOf: (value) => value.progress as ReturnType<LibraryActionDeps["progressOf"]>,
+    updateEveryData: async (mutate) => { mutate(sourceNewer); },
+  }).actions.remapPersonalState(from, to);
+  assert.equal((sourceNewer.progress as Record<string, { position: number }>)[`file:${to}`]?.position, 90);
+
+  const tied = {
+    favorites: [to],
+    progress: {
+      [`file:${from}`]: { position: 10, duration: 100, title: "Test", path: from, updatedAt: "2026-03-01T00:00:00.000Z" },
+      [`file:${to}`]: { position: 90, duration: 100, title: "Test", path: to, updatedAt: "2026-03-01T00:00:00.000Z" },
+    },
+  } as unknown as UserData;
+  await harness({
+    progressOf: (value) => value.progress as ReturnType<LibraryActionDeps["progressOf"]>,
+    updateEveryData: async (mutate) => { mutate(tied); },
+  }).actions.remapPersonalState(from, to);
+  assert.equal((tied.progress as Record<string, { position: number }>)[`file:${to}`]?.position, 90);
 });
 
 test("carryHandMove replaces an automatic target row and keeps a manual one", async () => {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, open as openFile } from "node:fs/promises";
-import { resolveInside } from "./library.js";
+import { isPathWithin, resolveInside } from "./library.js";
 import type { AppDatabase, Statement } from "./storage/app-database.js";
 import { TrackedMap } from "./storage/tracked-map.js";
 
@@ -40,6 +40,8 @@ export interface FingerprintPairing {
 
 type Walk = { libraryId: string; root: string; files: FingerprintWalkFile[] };
 type OpenFile = typeof import("node:fs/promises").open;
+type CommitItem = { source: FingerprintRow; target: FingerprintRow };
+type HashPass = { started: number; hashed: number; busy: () => boolean };
 
 const pathKey = (libraryId: string, relative: string) => JSON.stringify([libraryId, relative]);
 const qualified = (libraryId: string, relative: string) => `${libraryId}/${relative}`;
@@ -113,11 +115,12 @@ export function pairMoves(
   }
   for (const from of vanished) {
     const candidates = new Map<string, FingerprintRow>();
-    for (const to of freshByTime.get(`${from.size}\0${from.mtimeMs}`) ?? []) {
-      candidates.set(pathKey(to.libraryId, to.relative), to);
-    }
     if (from.hash) {
       for (const to of freshByHash.get(`${from.size}\0${from.hash}`) ?? []) {
+        candidates.set(pathKey(to.libraryId, to.relative), to);
+      }
+    } else {
+      for (const to of freshByTime.get(`${from.size}\0${from.mtimeMs}`) ?? []) {
         candidates.set(pathKey(to.libraryId, to.relative), to);
       }
     }
@@ -239,6 +242,31 @@ export function liftFolders(
   return [...folders, ...files];
 }
 
+/** Carries each pair and commits its fingerprint rows only after the carry succeeded, so a
+ *  failed pair is found again by the next pass. `afterCarries` runs once every pair has been
+ *  tried, failed ones included: first-seen stamping pairs a move by size and time on its own,
+ *  and one pair that keeps failing must not stop new files being stamped for good. */
+export async function carryMovePairs(
+  pairs: readonly FingerprintPair[],
+  carry: (pair: FingerprintPair) => Promise<void>,
+  commit: (pair: FingerprintPair) => Promise<void>,
+  afterCarries: () => void | Promise<void>,
+): Promise<{ carried: number; failed: number }> {
+  let carried = 0;
+  let failed = 0;
+  for (const pair of pairs) {
+    try {
+      await carry(pair);
+      await commit(pair);
+      carried += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  await afterCarries();
+  return { carried, failed };
+}
+
 export class LibraryFingerprints {
   private readonly now: () => number;
   private readonly open: OpenFile;
@@ -246,8 +274,11 @@ export class LibraryFingerprints {
   private loaded = false;
   private rows = new Map<string, FingerprintRow>();
   private readonly dirty = new TrackedMap<string, FingerprintRow | undefined>();
+  private pending = new Map<string, CommitItem[]>();
   private chain: Promise<void> = Promise.resolve();
   private ambiguous = 0;
+  private deferred = false;
+  private hashPass?: HashPass;
 
   constructor(options: { now?: () => number; open?: OpenFile } = {}) {
     this.now = options.now ?? Date.now;
@@ -255,6 +286,7 @@ export class LibraryFingerprints {
   }
 
   get lastAmbiguous(): number { return this.ambiguous; }
+  get lastDeferred(): boolean { return this.deferred; }
 
   attachDatabase(database: AppDatabase): void {
     if (this.loaded) throw new Error("The library fingerprints database must be attached before load.");
@@ -280,18 +312,62 @@ export class LibraryFingerprints {
     this.loaded = true;
   }
 
-  async reconcile(walks: Array<{ libraryId: string; root: string; files: FingerprintWalkFile[] }>): Promise<FingerprintPair[]> {
+  async reconcile(
+    walks: Array<{ libraryId: string; root: string; files: FingerprintWalkFile[] }>,
+    busy: () => boolean = () => false,
+  ): Promise<FingerprintPair[]> {
     this.ambiguous = 0;
+    this.deferred = false;
+    this.pending = new Map();
     if (!this.database || !this.loaded) return [];
     const now = this.now();
-    const newHashes = await this.hashMoveCandidates(walks, now);
-    const pairing = pairMoves([...this.rows.values()], walks, { now, newHashes });
+    this.beginHashPass(busy);
+    const candidates = await this.hashMoveCandidates(walks, now);
+    const pairing = pairMoves([...this.rows.values()], walks, { now, newHashes: candidates.hashes });
     this.ambiguous = pairing.ambiguous;
-    const pairedByTarget = new Map<string, FingerprintPair>();
-    for (const pair of pairing.pairs) pairedByTarget.set(pathKey(pair.toLibraryId, pair.to), pair);
+    const walkedIds = new Set(walks.map((walk) => walk.libraryId));
+    const freshKeys = new Set(pairing.fresh.map((file) => pathKey(file.libraryId, file.relative)));
+    const skippedSizes = new Set<number>();
+    for (const walk of walks) {
+      for (const file of walk.files) {
+        if (this.rows.has(pathKey(walk.libraryId, file.relative)) || freshKeys.has(pathKey(walk.libraryId, file.relative))) continue;
+        skippedSizes.add(file.size);
+      }
+    }
+
+    const absent = await this.absentSourceFolders(pairing.vanished, walks);
+    const pairs = liftFolders(pairing.pairs, pairing.vanished, absent);
+    const walkFiles = new Map(walks.flatMap((walk) =>
+      walk.files.map((file) => [pathKey(walk.libraryId, file.relative), file] as const)));
+    for (const pair of pairs) {
+      const sources = [...this.rows.values()].filter((row) =>
+        row.libraryId === pair.libraryId
+        && (pair.folder ? isPathWithin(row.relative, pair.from) : row.relative === pair.from));
+      const items: CommitItem[] = [];
+      for (const source of sources) {
+        const relative = pair.folder ? pair.to + source.relative.slice(pair.from.length) : pair.to;
+        const file = walkFiles.get(pathKey(pair.toLibraryId, relative));
+        if (!file) continue;
+        const hash = candidates.hashes.get(qualified(pair.toLibraryId, relative));
+        items.push({
+          source,
+          target: {
+            libraryId: pair.toLibraryId,
+            relative,
+            size: file.size,
+            mtimeMs: mtimeOf(file.modified),
+            ...(hash ? { hash } : {}),
+          },
+        });
+      }
+      this.pending.set(this.pairKey(pair), items);
+    }
+    const pairedSources = new Set([...this.pending.values()].flatMap((items) =>
+      items.map((item) => pathKey(item.source.libraryId, item.source.relative))));
+    const pairedTargets = new Set([...this.pending.values()].flatMap((items) =>
+      items.map((item) => pathKey(item.target.libraryId, item.target.relative))));
     const freshByKey = new Map(pairing.fresh.map((file) => [pathKey(file.libraryId, file.relative), file]));
     const next = new Map(this.rows);
-    const walkedIds = new Set(walks.map((walk) => walk.libraryId));
     for (const [key, row] of this.rows) if (walkedIds.has(row.libraryId)) next.delete(key);
 
     for (const walk of walks) {
@@ -309,29 +385,27 @@ export class LibraryFingerprints {
           });
           continue;
         }
-        const paired = pairedByTarget.get(key);
-        if (paired) {
-          const source = this.rows.get(pathKey(paired.libraryId, paired.from));
-          if (source) {
-            next.set(key, {
-              libraryId: walk.libraryId,
-              relative: file.relative,
-              size: file.size,
-              mtimeMs: mtimeOf(file.modified),
-              ...(source.hash ? { hash: source.hash } : {}),
-            });
-          }
-          continue;
-        }
+        if (pairedTargets.has(key)) continue;
         const fresh = freshByKey.get(key);
-        if (fresh) {
+        if (fresh && !candidates.deferredSizes.has(fresh.size) && !skippedSizes.has(fresh.size)) {
           next.set(key, {
             libraryId: fresh.libraryId,
             relative: fresh.relative,
             size: fresh.size,
             mtimeMs: fresh.mtimeMs,
+            ...(fresh.hash ? { hash: fresh.hash } : {}),
           });
         }
+      }
+    }
+    for (const items of this.pending.values()) {
+      for (const item of items) next.set(pathKey(item.source.libraryId, item.source.relative), item.source);
+    }
+    for (const row of pairing.vanished) {
+      if (pairedSources.has(pathKey(row.libraryId, row.relative))) continue;
+      if (candidates.deferredSizes.has(row.size) || skippedSizes.has(row.size)) {
+        next.set(pathKey(row.libraryId, row.relative), row);
+        this.deferred = true;
       }
     }
 
@@ -343,21 +417,32 @@ export class LibraryFingerprints {
     }
     this.rows = next;
     await this.flush();
+    return pairs;
+  }
 
-    const absent = await this.absentSourceFolders(pairing.vanished, walks);
-    return liftFolders(pairing.pairs, pairing.vanished, absent);
+  async commitPair(pair: FingerprintPair): Promise<void> {
+    if (!this.database || !this.loaded) return;
+    const items = this.pending.get(this.pairKey(pair));
+    if (!items) return;
+    for (const item of items) {
+      this.rows.delete(pathKey(item.source.libraryId, item.source.relative));
+      this.rows.set(pathKey(item.target.libraryId, item.target.relative), item.target);
+      this.dirty.set(pathKey(item.source.libraryId, item.source.relative), undefined);
+      this.dirty.set(pathKey(item.target.libraryId, item.target.relative), item.target);
+    }
+    await this.flush();
+    this.pending.delete(this.pairKey(pair));
   }
 
   async hashPending(roots: Map<string, string>, busy: () => boolean): Promise<number> {
     if (!this.database || !this.loaded) return 0;
-    const started = this.now();
-    let hashed = 0;
+    if (!this.hashPass) this.beginHashPass(busy);
     const pending = [...this.rows.values()]
       .filter((row) => !row.hash && roots.has(row.libraryId))
       .sort((left, right) =>
         left.libraryId.localeCompare(right.libraryId) || left.relative.localeCompare(right.relative));
     for (const row of pending) {
-      if (hashed >= HASH_BUDGET_FILES || this.now() - started >= HASH_BUDGET_MS || busy()) break;
+      if (!this.canHash()) break;
       const root = roots.get(row.libraryId);
       if (!root) continue;
       const file = resolveInside(root, row.relative);
@@ -375,7 +460,7 @@ export class LibraryFingerprints {
           hash,
         });
         this.dirty.set(pathKey(row.libraryId, row.relative), this.rows.get(pathKey(row.libraryId, row.relative)));
-        hashed += 1;
+        this.hashPass!.hashed += 1;
       } catch {
         // A file that vanished or became unreadable waits for the next complete walk.
       } finally {
@@ -383,7 +468,20 @@ export class LibraryFingerprints {
       }
     }
     await this.flush();
+    const hashed = this.hashPass?.hashed ?? 0;
+    this.hashPass = undefined;
     return hashed;
+  }
+
+  trackedKeys(libraryId: string): string[] {
+    return [...this.rows.values()]
+      .filter((row) => row.libraryId === libraryId)
+      .map((row) => row.relative)
+      .sort();
+  }
+
+  has(libraryId: string, relative: string): boolean {
+    return this.rows.has(pathKey(libraryId, relative));
   }
 
   async forget(libraryId: string): Promise<void> {
@@ -424,19 +522,36 @@ export class LibraryFingerprints {
     this.dirty.release(snapshot);
   }
 
-  private async hashMoveCandidates(walks: readonly Walk[], now: number): Promise<Map<string, string>> {
+  private beginHashPass(busy: () => boolean): void {
+    this.hashPass = { started: this.now(), hashed: 0, busy };
+  }
+
+  private canHash(): boolean {
+    const pass = this.hashPass;
+    return Boolean(pass)
+      && pass!.hashed < HASH_BUDGET_FILES
+      && this.now() - pass!.started < HASH_BUDGET_MS
+      && !pass!.busy();
+  }
+
+  private pairKey(pair: FingerprintPair): string {
+    return JSON.stringify([pair.libraryId, pair.from, pair.toLibraryId, pair.to, pair.folder]);
+  }
+
+  private async hashMoveCandidates(
+    walks: readonly Walk[],
+    now: number,
+  ): Promise<{ hashes: Map<string, string>; deferredSizes: Set<number> }> {
     const hashes = new Map<string, string>();
+    const deferredSizes = new Set<number>();
     const roots = new Map(walks.map((walk) => [walk.libraryId, walk.root]));
     const walkedIds = new Set(walks.map((walk) => walk.libraryId));
     const present = new Set(walks.flatMap((walk) =>
       walk.files.map((file) => pathKey(walk.libraryId, file.relative))));
     const vanished = [...this.rows.values()].filter((row) =>
       walkedIds.has(row.libraryId) && !present.has(pathKey(row.libraryId, row.relative)));
-    const vanishedBySize = new Map<number, FingerprintRow[]>();
     const hashedBySize = new Map<number, FingerprintRow[]>();
     for (const row of vanished) {
-      const all = vanishedBySize.get(row.size);
-      if (all) all.push(row); else vanishedBySize.set(row.size, [row]);
       if (!row.hash) continue;
       const hashed = hashedBySize.get(row.size);
       if (hashed) hashed.push(row); else hashedBySize.set(row.size, [row]);
@@ -447,25 +562,34 @@ export class LibraryFingerprints {
       if (!root) continue;
       for (const file of walk.files) {
         if (this.rows.has(pathKey(walk.libraryId, file.relative)) || !isFreshFile(file, now)) continue;
-        const mtimeMs = mtimeOf(file.modified);
         if (!hashedBySize.has(file.size)) continue;
-        if ((vanishedBySize.get(file.size) ?? []).some((row) => row.mtimeMs === mtimeMs)) continue;
+        if (!this.canHash()) {
+          deferredSizes.add(file.size);
+          continue;
+        }
         const absolute = resolveInside(root, file.relative);
-        if (!absolute) continue;
+        if (!absolute) {
+          deferredSizes.add(file.size);
+          continue;
+        }
         let handle: Awaited<ReturnType<OpenFile>> | undefined;
         try {
           handle = await this.open(absolute, "r");
           const info = await handle.stat();
-          if (info.size !== file.size) continue;
+          if (info.size !== file.size) {
+            deferredSizes.add(file.size);
+            continue;
+          }
           hashes.set(qualified(walk.libraryId, file.relative), await contentHash(handle, info.size));
+          this.hashPass!.hashed += 1;
         } catch {
-          // An unreadable candidate waits for a later pass.
+          deferredSizes.add(file.size);
         } finally {
           await handle?.close().catch(() => undefined);
         }
       }
     }
-    return hashes;
+    return { hashes, deferredSizes };
   }
 
   private async absentSourceFolders(vanished: readonly FingerprintRow[], walks: readonly Walk[]): Promise<Set<string>> {

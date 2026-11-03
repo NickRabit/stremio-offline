@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -10,6 +10,7 @@ const A = "lib_aaaaaaaa";
 const B = "lib_bbbbbbbb";
 const OLD = "2026-01-01T00:00:00.000Z";
 const NEWER = "2026-01-02T00:00:00.000Z";
+const NOW = Date.parse("2026-03-01T00:00:00.000Z");
 
 async function fixture(t: TestContext) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "library-fingerprints-sqlite-"));
@@ -50,7 +51,7 @@ const file = (relative: string, size: number, modified = OLD): FingerprintWalkFi
 const walk = (libraryId: string, root: string, files: FingerprintWalkFile[]) => ({ libraryId, root, files });
 
 async function fingerprints(database: AppDatabase) {
-  const store = new LibraryFingerprints({ now: () => Date.parse("2026-03-01T00:00:00.000Z") });
+  const store = new LibraryFingerprints({ now: () => NOW });
   store.attachDatabase(database);
   await store.load();
   return store;
@@ -60,7 +61,7 @@ test("the first walk records rows, a rename moves one, and an unchanged walk wri
   const { database, root } = await fixture(t);
   await mkdir(path.join(root, "Old"));
   const batches: Statement[][] = [];
-  const store = new LibraryFingerprints({ now: () => Date.parse("2026-03-01T00:00:00.000Z") });
+  const store = new LibraryFingerprints({ now: () => NOW });
   store.attachDatabase(observingBatch(database, batches));
   await store.load();
 
@@ -70,9 +71,14 @@ test("the first walk records rows, a rename moves one, and an unchanged walk wri
   }]);
   batches.length = 0;
 
-  assert.deepEqual(await store.reconcile([walk(A, root, [file("Old/Renamed.mkv", 10)])]), [{
+  const pairs = await store.reconcile([walk(A, root, [file("Old/Renamed.mkv", 10)])]);
+  assert.deepEqual(pairs, [{
     libraryId: A, from: "Old/movie.mkv", toLibraryId: A, to: "Old/Renamed.mkv", folder: false,
   }]);
+  assert.deepEqual(await database.all("SELECT library_id, path FROM file_fingerprints"), [
+    { library_id: A, path: "Old/movie.mkv" },
+  ], "the source row waits for the carry");
+  await store.commitPair(pairs[0]!);
   assert.deepEqual(await database.all("SELECT library_id, path FROM file_fingerprints"), [
     { library_id: A, path: "Old/Renamed.mkv" },
   ]);
@@ -119,10 +125,85 @@ test("a copy with a different mtime is paired by hashing the new candidate durin
 
   await rm(path.join(root, "A.mkv"));
   await writeFile(path.join(root, "B.mkv"), bytes);
-  assert.deepEqual(await store.reconcile([walk(A, root, [file("B.mkv", bytes.length, NEWER)])]), [{
+  const pairs = await store.reconcile([walk(A, root, [file("B.mkv", bytes.length, NEWER)])]);
+  assert.deepEqual(pairs, [{
     libraryId: A, from: "A.mkv", toLibraryId: A, to: "B.mkv", folder: false,
   }]);
+  await store.commitPair(pairs[0]!);
   assert.deepEqual(await database.all("SELECT path FROM file_fingerprints"), [{ path: "B.mkv" }]);
+});
+
+test("a time-matched copy with different bytes is rejected after hashing both files", async (t) => {
+  const { database, root } = await fixture(t);
+  const source = Buffer.from("source bytes");
+  await writeFile(path.join(root, "A.mkv"), source);
+  const modified = new Date(Date.now() - 20 * 60_000).toISOString();
+  const when = new Date(modified);
+  await utimes(path.join(root, "A.mkv"), when, when);
+  const store = new LibraryFingerprints({ now: () => Date.now() });
+  store.attachDatabase(database);
+  await store.load();
+  await store.reconcile([walk(A, root, [file("A.mkv", source.length, modified)])]);
+  assert.equal(await store.hashPending(new Map([[A, root]]), () => false), 1);
+
+  await rm(path.join(root, "A.mkv"));
+  await writeFile(path.join(root, "B.mkv"), Buffer.from("other bytes!"));
+  assert.deepEqual(await store.reconcile([walk(A, root, [file("B.mkv", source.length, modified)])]), []);
+});
+
+test("a still-writing target leaves the vanished row for the next pass", async (t) => {
+  const { database, root } = await fixture(t);
+  const bytes = Buffer.from("same bytes");
+  await writeFile(path.join(root, "A.mkv"), bytes);
+  const store = await fingerprints(database);
+  await store.reconcile([walk(A, root, [file("A.mkv", bytes.length)])]);
+  await store.hashPending(new Map([[A, root]]), () => false);
+
+  await rm(path.join(root, "A.mkv"));
+  await writeFile(path.join(root, "B.mkv"), bytes);
+  const writing = new Date(NOW - 60_000).toISOString();
+  assert.deepEqual(await store.reconcile([walk(A, root, [file("B.mkv", bytes.length, writing)])]), []);
+  assert.deepEqual(await database.all("SELECT path FROM file_fingerprints"), [{ path: "A.mkv" }]);
+
+  const pairs = await store.reconcile([walk(A, root, [file("B.mkv", bytes.length, NEWER)])]);
+  assert.deepEqual(pairs.map((pair) => pair.to), ["B.mkv"]);
+});
+
+test("busy prevents inline reads and keeps the vanished row", async (t) => {
+  const { database, root } = await fixture(t);
+  const bytes = Buffer.from("same bytes");
+  await writeFile(path.join(root, "A.mkv"), bytes);
+  const seeding = await fingerprints(database);
+  await seeding.reconcile([walk(A, root, [file("A.mkv", bytes.length)])]);
+  await seeding.hashPending(new Map([[A, root]]), () => false);
+
+  await rm(path.join(root, "A.mkv"));
+  await writeFile(path.join(root, "B.mkv"), bytes);
+  let opened = 0;
+  const store = new LibraryFingerprints({
+    now: () => NOW,
+    open: async (...args) => {
+      opened += 1;
+      return await open(...args);
+    },
+  });
+  store.attachDatabase(database);
+  await store.load();
+  assert.deepEqual(await store.reconcile([walk(A, root, [file("B.mkv", bytes.length, NEWER)])], () => true), []);
+  assert.equal(opened, 0);
+  assert.deepEqual(await database.all("SELECT path FROM file_fingerprints"), [{ path: "A.mkv" }]);
+  assert.deepEqual((await store.reconcile([walk(A, root, [file("B.mkv", bytes.length, NEWER)])])).map((pair) => pair.to), ["B.mkv"]);
+});
+
+test("a pair can be prepared again until its carry is committed", async (t) => {
+  const { database, root } = await fixture(t);
+  const store = await fingerprints(database);
+  await store.reconcile([walk(A, root, [file("A.mkv", 10)])]);
+  const first = await store.reconcile([walk(A, root, [file("B.mkv", 10)])]);
+  assert.equal(first.length, 1);
+  assert.deepEqual(await database.all("SELECT path FROM file_fingerprints"), [{ path: "A.mkv" }]);
+  const second = await store.reconcile([walk(A, root, [file("B.mkv", 10)])]);
+  assert.deepEqual(second, first);
 });
 
 test("hashPending stops before opening when playback or downloads are busy", async (t) => {

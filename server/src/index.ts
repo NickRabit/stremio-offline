@@ -82,7 +82,7 @@ import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { LibrarySeenStore } from "./library-seen.js";
-import { LibraryFingerprints } from "./library-fingerprints.js";
+import { carryMovePairs, LibraryFingerprints } from "./library-fingerprints.js";
 import { localCopies, localTitleIds } from "./local-sources.js";
 import {
   findAdequateExistingLocalCopy,
@@ -1326,10 +1326,7 @@ const sweepDeps: SweepDeps = {
     const walk = await listVideosChecked(library.root, library.exclude);
     // Only a complete walk speaks for the tree: a folder that could not be read must not read
     // as files that just arrived, nor let the walk's absence drop ones that are still there.
-    if (walk.complete) {
-      seen.observe(library.id, walk.files, new Date());
-      fingerprintWalks?.push({ libraryId: library.id, root: library.root, files: walk.files });
-    }
+    if (walk.complete) fingerprintWalks?.push({ libraryId: library.id, root: library.root, files: walk.files });
     return walk;
   },
   // The poster is saved when the job is queued, while the source does not exist yet.
@@ -1338,6 +1335,11 @@ const sweepDeps: SweepDeps = {
     const key = queuedArtworkKey(job);
     return key ? [key] : [];
   }),
+  trackedKeys: (libraryId) => fingerprints.trackedKeys(libraryId),
+  keep: (key) => {
+    const parsed = parseLibraryPath(key);
+    return Boolean(parsed && fingerprints.has(parsed.libraryId, parsed.relative));
+  },
   artNames: (key) => ART_VARIANTS.flatMap((variant) => {
     const file = storeArt(key, variant);
     return file ? [path.basename(file)] : [];
@@ -1366,20 +1368,33 @@ const maintenance = createMaintenance({
         try {
           await artworkSweep();
           if (signal.aborted) return;
-          const pairs = await fingerprints.reconcile(walks);
-          let carried = 0;
-          for (const pair of pairs) {
-            try {
+          const pairs = await fingerprints.reconcile(walks, sweepDeps.busy);
+          const result = await carryMovePairs(
+            pairs,
+            async (pair) => {
+              const targetFiles = pair.folder
+                ? walks.flatMap((walk) => walk.libraryId === pair.toLibraryId
+                  ? walk.files
+                    .filter((file) => isPathWithin(file.relative, pair.to))
+                    .map((file) => libraryPath(walk.libraryId, file.relative))
+                  : [])
+                : undefined;
               await carryHandMove(
                 libraryPath(pair.libraryId, pair.from),
                 libraryPath(pair.toLibraryId, pair.to),
                 pair.folder,
+                targetFiles,
               );
-              carried += 1;
-            } catch {
-              log("WARN", "A library item moved outside the app could not have its records carried");
-            }
-          }
+            },
+            (pair) => fingerprints.commitPair(pair),
+            async () => {
+              if (fingerprints.lastDeferred) return;
+              const observedAt = new Date();
+              for (const walk of walks) seen.observe(walk.libraryId, walk.files, observedAt);
+            },
+          );
+          const carried = result.carried;
+          if (result.failed) log("WARN", "A library item moved outside the app could not have its records carried");
           if (carried) {
             invalidateLibrary();
             await metaStore.flush();
