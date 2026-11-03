@@ -48,7 +48,6 @@ shows how an Android TV on the home network and a phone browser connected throug
 your own VPN browse the same library. The server fetches addon catalogs and serves
 video from supported addons, Jellyfin, Emby and local files. Streaming away from
 home needs enough home upload and mobile bandwidth for the chosen quality.
-For a trip without coverage, use **To device** to save the file before leaving.
 
 ## What it does
 
