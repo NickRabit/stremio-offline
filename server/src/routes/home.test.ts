@@ -86,6 +86,8 @@ interface Harness {
   metaAnswer: MetaItem | null;
   /** A metadata provider that fails instead of answering. */
   metaThrows: boolean;
+  /** Notified whenever a metadata lookup starts. */
+  metaCall?: () => void;
   /** Every metadata request, including the artwork flag and the viewer it was scoped to. */
   metaCalls: Array<{ id: string; viewer: string | undefined; artwork: boolean }>;
   /** The cancellation signal each metadata request received. */
@@ -185,6 +187,7 @@ const mount = async (options: {
     cachedMeta: async (_type, id, _language, viewer, opts) => {
       state.lookups.push(id);
       state.metaCalls.push({ id, viewer: viewer?.id, artwork: opts?.artwork === true });
+      state.metaCall?.();
       state.events.push(`meta:${id}`);
       state.metaSignals.push(opts?.signal);
       if (state.metaDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.metaDelayMs));
@@ -1054,6 +1057,7 @@ test("an episode-specific series file never borrows its file gallery as title ar
 test("a stalled resume page spends one metadata deadline instead of starting a new wave", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })], deadlineMs: 5 });
   t.after(harness.close);
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   harness.metaDelayMs = 60;
   harness.metaAnswer = { id: "tt1", type: "movie", name: "Film", poster: "https://images.example/film.jpg" } as MetaItem;
   harness.records["lib_00000001/Shows/Show"] = { type: "series", id: "tt99", name: "Show" };
@@ -1074,7 +1078,18 @@ test("a stalled resume page spends one metadata deadline instead of starting a n
     updatedAt: new Date(Date.UTC(2024, 0, 1, 0, 10 - index)).toISOString(),
   }));
 
-  const page = await resumePageOf(harness, "?limit=20");
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  let rejectSecondWave!: (error: Error) => void;
+  const noSecondWave = new Promise<never>((_, reject) => { rejectSecondWave = reject; });
+  harness.metaCall = () => {
+    if (harness.metaCalls.length === 4) resolveStarted();
+    if (harness.metaCalls.length > 4) rejectSecondWave(new Error("metadata lookups started a second wave"));
+  };
+  const pendingPage = resumePageOf(harness, "?limit=20");
+  await started;
+  t.mock.timers.tick(5);
+  const page = await Promise.race([pendingPage, noSecondWave]);
 
   assert.equal(page.items.length, 11);
   assert.equal(harness.metaCalls.length, 4, "only the first four workers may start during the shared budget");

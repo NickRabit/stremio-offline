@@ -534,6 +534,8 @@ test("a blocked body times out, cancels, and releases the next waiter", async ()
       (response, signal) => readLimitedBody(response, 1024, signal),
       { deadlineMs: 30 },
     );
+    const firstRejection = assert.rejects(first, (error: unknown) =>
+      error instanceof OutboundError && error.code === "timeout");
     await tick();
 
     let followingCalled = false;
@@ -549,8 +551,7 @@ test("a blocked body times out, cancels, and releases the next waiter", async ()
     await tick();
     assert.equal(followingCalled, false);
 
-    await assert.rejects(first, (error: unknown) =>
-      error instanceof OutboundError && error.code === "timeout");
+    await firstRejection;
     assert.deepEqual([...await following], [4]);
     assert.equal(blocked.cancelled(), true);
   } finally {
