@@ -124,6 +124,27 @@ test("a vanished tracked file keeps its thumbnail until the hand move carries it
   });
 });
 
+test("a folder renamed by hand keeps the title's own poster until the carry moves it", async () => {
+  await withSweep(async ({ cache, dataDir }) => {
+    const root = path.join(dataDir, "media");
+    // A series keeps its catalogue poster under the entry key, which is neither a file nor a
+    // `dir:` folder key, and the sweep runs before the carry in the same pass.
+    const entryArt = await put(cache, "lib_aaaaaaaa/Show");
+    const folderArt = await put(cache, "dir:lib_aaaaaaaa/Show");
+    const fileArt = await put(cache, "lib_aaaaaaaa/Show/S01/e1.mkv");
+    const sweep = makeSweep({
+      cache,
+      libraries: [library(root)],
+      scan: async () => ({ files: [{ relative: "Show 2/S01/e1.mkv", size: 1, modified: new Date(0).toISOString() }], complete: true }),
+      trackedKeys: () => ["Show/S01/e1.mkv"],
+      keep: () => true,
+    });
+
+    await sweep();
+    for (const file of [entryArt, folderArt, fileArt]) assert.ok(await exists(file), `${file} survives the sweep`);
+  });
+});
+
 test("an empty library is only cleaned when it was empty on the previous pass too", async () => {
   await withSweep(async ({ cache, dataDir }) => {
     const lib = library(path.join(dataDir, "media"));

@@ -1368,6 +1368,11 @@ const maintenance = createMaintenance({
         try {
           await artworkSweep();
           if (signal.aborted) return;
+          // The walks took minutes; a library forgotten meanwhile must not come back as rows.
+          const configured = new Set(store.libraries().map((library) => library.id));
+          for (let index = walks.length - 1; index >= 0; index -= 1) {
+            if (!configured.has(walks[index]!.libraryId)) walks.splice(index, 1);
+          }
           const walkedIds = new Set(walks.map((walk) => walk.libraryId));
           const complete = store.libraries().filter((library) => library.enabled).every((library) => walkedIds.has(library.id));
           const hashBusy = () => sweepDeps.busy()

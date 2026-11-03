@@ -98,9 +98,13 @@ export function createArtworkSweep(deps: SweepDeps): () => Promise<{ removed: nu
           rememberArt(libraryPath(library.id, entry.key));
           for (const file of entry.files) remember(libraryPath(library.id, file.path));
         }
-        for (const relative of deps.trackedKeys(library.id)) {
-          const key = libraryPath(library.id, relative);
-          if (deps.keep(key)) remember(key);
+        // A tracked file may be the source of a hand move that is carried after this sweep, so
+        // its thumbnails stay: the file's, its folders', and the title's own entry key, where a
+        // series or a film in a folder keeps its catalogue poster.
+        const tracked = deps.trackedKeys(library.id).filter((relative) => deps.keep(libraryPath(library.id, relative)));
+        for (const relative of tracked) remember(libraryPath(library.id, relative));
+        for (const entry of buildLibrary(tracked.map((relative) => ({ relative, size: 0, modified: "" })))) {
+          rememberArt(libraryPath(library.id, entry.key));
         }
         for (const key of queued) if (parseLibraryPath(key)?.libraryId === library.id) remember(key);
 
