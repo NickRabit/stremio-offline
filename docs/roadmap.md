@@ -351,8 +351,10 @@ The remaining majors after these, one PR each:
   the test run; it brings its own copy of undici, apart from the server's.
 - **undici 7 → 8** for the server's outgoing requests. It needs Node 22.19 or
   newer, so the Node 24 inside Electron still runs it.
-- **lucide-react 0.x → 1** for the icons; compare the screens, since icons can
-  be renamed.
+- **lucide-react 0.x → 1** — done: every icon the apps use still exists under
+  the same name. Version 1 marks an icon without its own label `aria-hidden`,
+  so screen readers skip decorative icons; an icon given `aria-*`, `role` or
+  `title` stays announced.
 - **`@types/node` 22 → 24**, the lowest Node the server runs on (Electron's).
 
 Ubuntu base image majors stay manual as well (24.04 on purpose since #634).
