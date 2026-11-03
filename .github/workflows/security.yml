@@ -1,0 +1,95 @@
+name: Security scan
+
+on:
+  schedule:
+    # Weekly, away from the top-of-hour scheduler traffic.
+    - cron: "23 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime-image:
+    name: Runtime image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set build metadata
+        run: echo "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build final runtime image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          pull: true
+          tags: stremio-offline:security-scan
+          build-args: |
+            BUILD_TIME=${{ env.BUILD_TIME }}
+            GIT_COMMIT=${{ github.sha }}
+          # Reuse the same platform cache as the release image build.
+          cache-from: type=gha,scope=linux-amd64
+
+      - name: Record scanned image
+        run: |
+          set -euo pipefail
+          image_id="$(docker image inspect --format '{{.Id}}' stremio-offline:security-scan)"
+          {
+            echo "### Runtime image scan"
+            echo
+            echo "- commit: \`${GITHUB_SHA}\`"
+            echo "- image: \`${image_id}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: stremio-offline:security-scan
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          limit-severities-for-sarif: true
+          format: sarif
+          output: trivy-results.sarif
+          # The next step applies the policy after the report is uploaded.
+          exit-code: "0"
+          hide-progress: true
+          timeout: 15m
+          version: v0.70.0
+
+      - name: Record scanner and database metadata
+        run: trivy --cache-dir "$GITHUB_WORKSPACE/.cache/trivy" version >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload scan report
+        if: ${{ !cancelled() && hashFiles('trivy-results.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-runtime-image
+
+      - name: Enforce vulnerability policy
+        if: ${{ success() }}
+        run: |
+          set -euo pipefail
+          count="$(jq '[.runs[]?.results[]?] | length' trivy-results.sarif)"
+          if [ "$count" -ne 0 ]; then
+            echo "::error::Trivy found $count fixable HIGH/CRITICAL vulnerabilities; review Security -> Code scanning."
+            exit 1
+          fi

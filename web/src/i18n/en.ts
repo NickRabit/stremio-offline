@@ -1589,6 +1589,7 @@ export const en = {
   "err.setupLocalOnly": "Create the first account on the computer that runs the app.",
   "err.badCredentials": "Wrong username or password.",
   "err.tooManyAttempts": "Too many failed attempts. Try again in {seconds} s.",
+  "err.tooManyRequests": "Too many requests. Try again in {seconds} s.",
   "err.hostUnavailable": "{host} is not answering. Try again in {seconds} s.",
   "err.searchInvalidRequest": "The search request is not valid.",
   "err.searchNotFound": "This search no longer exists. Search again.",

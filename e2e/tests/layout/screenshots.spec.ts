@@ -68,6 +68,17 @@ test.describe("screenshots", () => {
     await settle(page);
     await localSource.click();
     await expect(localSource).toHaveAttribute("aria-pressed", "true");
+    await settle(page);
+    // Resetting the portrait list also restores its header, independently of click/probe timing.
+    if (test.info().project.name === "mobile") {
+      await expect.poll(async () => {
+        await detail.locator(".stream-list").evaluate((list) => {
+          list.scrollTop = 0;
+          list.dispatchEvent(new Event("scroll"));
+        });
+        return detail.locator(".hero").isVisible();
+      }).toBe(true);
+    }
 
     await expect(page).toHaveScreenshot("title-detail.png", {
       fullPage: true,

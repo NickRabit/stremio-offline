@@ -34,7 +34,14 @@ the Home Screen.
 > from addons and libraries the user connects. Use only sources and accounts
 > you have the right to access; what you add and download is your responsibility.
 
-![A film's detail: ratings, the source that will play, cast and crew with photos, and its trailer](docs/images/v0.6/detail.jpg)
+## Video tour
+
+[![Watch the Stremio Offline video tour](https://i.ytimg.com/vi/2WjzoIp16c4/hqdefault.jpg)](https://www.youtube.com/watch?v=2WjzoIp16c4)
+
+[Watch the 77-second tour on YouTube](https://www.youtube.com/watch?v=2WjzoIp16c4): browse an addon catalog,
+save a film to the server, and play it from the local library. The tour also
+shows the responsive phone interface. It uses CC BY Blender Foundation open
+movies; no media or demo addon is included with the app.
 
 ## What it does
 

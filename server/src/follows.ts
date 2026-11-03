@@ -122,6 +122,10 @@ export interface Follow {
   episodes: Record<string, FollowEpisode>;
 }
 
+/** Episode keys arrive from routes and the queue, so inherited names never count as rows. */
+export const followEpisodeAt = (follow: Follow | undefined, episodeKey: string): FollowEpisode | undefined =>
+  follow && Object.hasOwn(follow.episodes, episodeKey) ? follow.episodes[episodeKey] : undefined;
+
 export interface FollowFile { version: 1; follows: Follow[] }
 
 /** An episode as the metadata read hands it over, before the store stamps `firstSeenAt`. */
@@ -1101,7 +1105,7 @@ export class FollowStore {
     const at = new Date(result.now).toISOString();
     if ("episodes" in result) {
       for (const episode of result.episodes) {
-        const existing = follow.episodes[episode.key];
+        const existing = followEpisodeAt(follow, episode.key);
         if (!existing) {
           follow.episodes[episode.key] = episode;
           continue;
@@ -1443,7 +1447,7 @@ export class FollowService {
 
   private async setDownload(followId: string, episodeKey: string, download: EpisodeDownload): Promise<void> {
     await this.deps.store.update(followId, (current) => {
-      const episode = current.episodes[episodeKey];
+      const episode = followEpisodeAt(current, episodeKey);
       if (!episode) return;
       episode.download = { ...download, updatedAt: new Date(this.deps.now()).toISOString() };
     });
@@ -1508,7 +1512,7 @@ export class FollowService {
     for (const episode of ordered) {
       follow = this.admittable(followId, revision);
       if (!follow) return;
-      const current = follow.episodes[episode.key];
+      const current = followEpisodeAt(follow, episode.key);
       if (!current) continue;
       const verdict = downloadEligibility(follow, current, this.deps.now(), this.watchedFor(follow));
       if (verdict === "attention-ambiguous" || verdict === "attention-no-date") {
@@ -1545,7 +1549,7 @@ export class FollowService {
     reuse?: AdmissionReuse,
   ): Promise<void> {
     const before = this.admittable(followId, revision);
-    const episode = before?.episodes[episodeKey];
+    const episode = followEpisodeAt(before, episodeKey);
     if (!before || !episode) return;
     const intent = this.intentOf(followId, episodeKey, generation);
     const sourceProfile = before.autoDownload!.sourceProfile;
@@ -1636,8 +1640,9 @@ export class FollowService {
   /** Records a job's own verdict on the episode it was queued for. */
   private async linkLocked(followId: string, revision: number, episodeKey: string, job: FollowJob, now: number): Promise<void> {
     const follow = this.fresh(followId, revision);
-    const download = follow?.episodes[episodeKey]?.download;
-    if (!follow || !download) return;
+    const episode = followEpisodeAt(follow, episodeKey);
+    const download = episode?.download;
+    if (!follow || !episode || !download) return;
     if (job.status === "completed") {
       await this.setDownload(followId, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", jobId: job.id, reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
     } else if (job.status === "failed") {
@@ -1650,7 +1655,7 @@ export class FollowService {
   private async setWaiting(followId: string, episodeKey: string, download: EpisodeDownload, job: FollowJob, now: number): Promise<void> {
     const attempts = download.attempts + 1;
     const follow = this.deps.store.get(followId);
-    const episode = follow?.episodes[episodeKey];
+    const episode = followEpisodeAt(follow, episodeKey);
     const ruleGrace = download.sourceAdmission?.profile.template === "rules"
       && rulesAudioMode(download.sourceAdmission.policy) === "prefer";
     const window = episode && ruleGrace
@@ -1691,7 +1696,9 @@ export class FollowService {
       for (const episodeKey of Object.keys(snapshot.episodes)) {
         const follow = this.fresh(snapshot.id, revision);
         if (!follow) break;
-        const download = follow.episodes[episodeKey]?.download;
+        const episode = followEpisodeAt(follow, episodeKey);
+        if (!episode) continue;
+        const download = episode.download;
         if (!download) continue;
         if (download.state === "reserved") {
           const job = jobs.get(download.intent);
@@ -1709,18 +1716,18 @@ export class FollowService {
         if (!download.nextAttemptAt || Date.parse(download.nextAttemptAt) > now) continue;
         // An episode whose date moved into the future (a corrected placeholder) is not looked
         // for again before it airs.
-        const airs = follow.episodes[episodeKey]?.released;
+        const airs = episode.released;
         if (airs && Date.parse(airs) > now) continue;
         if (!follow.enabled || !this.mayQueue(follow)) continue;
         const job = jobs.get(download.intent);
         if (job && job.status === "failed") {
           const selection = !follow.autoDownload!.sourceProfile && download.legacyRule
-            ? effectiveLegacySelection(download.legacyRule, follow.episodes[episodeKey], now)
-            : effectiveSelection(follow.autoDownload!, follow.episodes[episodeKey], now);
+            ? effectiveLegacySelection(download.legacyRule, episode, now)
+            : effectiveSelection(follow.autoDownload!, episode, now);
           const retryAdmission = download.sourceAdmission?.profile.template === "rules"
             ? effectiveRulesAdmission(
               download.sourceAdmission,
-              follow.episodes[episodeKey],
+              episode,
               now,
               download.sourceGraceDays,
             )
@@ -1882,7 +1889,7 @@ export class FollowService {
   async skipEpisode(followId: string, ownerUserId: string, episodeKey: string): Promise<void> {
     const running = await this.locked(async () => {
       const follow = this.requireOwn(followId, ownerUserId);
-      const download = follow.episodes[episodeKey]?.download;
+      const download = followEpisodeAt(follow, episodeKey)?.download;
       if (!download) return undefined;
       const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
       if (job && job.status !== "completed" && job.status !== "failed") return job.id;
@@ -1897,8 +1904,9 @@ export class FollowService {
     return this.locked(async () => {
       const follow = this.requireOwn(followId, ownerUserId);
       const revision = follow.revision;
-      const download = follow.episodes[episodeKey]?.download;
-      if (!download) return;
+      const episode = followEpisodeAt(follow, episodeKey);
+      const download = episode?.download;
+      if (!episode || !download) return;
       if (!["waiting", "attention", "skipped"].includes(download.state)) return;
       const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
       if (job && job.status === "failed") {
@@ -1906,14 +1914,14 @@ export class FollowService {
         const retryAdmission = download.sourceAdmission?.profile.template === "rules"
           ? effectiveRulesAdmission(
             download.sourceAdmission,
-            follow.episodes[episodeKey],
+            episode,
             now,
             download.sourceGraceDays,
           )
           : undefined;
         await this.deps.queue.retry(
           job.id,
-          follow.autoDownload ? effectiveSelection(follow.autoDownload, follow.episodes[episodeKey], now) : undefined,
+          follow.autoDownload ? effectiveSelection(follow.autoDownload, episode, now) : undefined,
           retryAdmission,
         );
         if (!this.fresh(followId, revision)) return;
@@ -1940,7 +1948,7 @@ export class FollowService {
   jobCompleted(job: Readonly<FollowJob>): Promise<void> {
     return this.locked(async () => {
       const ref = job.follow;
-      const download = ref ? this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download : undefined;
+      const download = ref ? followEpisodeAt(this.deps.store.get(ref.followId), ref.episodeKey)?.download : undefined;
       if (!ref || !download || download.intent !== ref.intent || download.state === "completed") return;
       await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
     });
@@ -1950,7 +1958,7 @@ export class FollowService {
     return this.locked(async () => {
       const ref = job.follow;
       if (reason !== "user" || !ref) return;
-      const download = this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download;
+      const download = followEpisodeAt(this.deps.store.get(ref.followId), ref.episodeKey)?.download;
       if (!download || download.intent !== ref.intent) return;
       // A skip the person already chose stands; removing the job afterwards only tidies the queue.
       if (download.state === "skipped") return;
@@ -1979,7 +1987,7 @@ export class FollowService {
       for (const job of jobs) {
         const ref = job.follow;
         if (!ref || job.status !== "completed") continue;
-        const download = this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download;
+        const download = followEpisodeAt(this.deps.store.get(ref.followId), ref.episodeKey)?.download;
         if (!download || download.intent !== ref.intent || download.state === "completed") continue;
         await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
       }

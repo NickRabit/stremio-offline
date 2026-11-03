@@ -1530,6 +1530,7 @@ export const ru: Catalog = {
   "err.setupLocalOnly": "Создайте первую учетную запись на компьютере, на котором запущено приложение.",
   "err.badCredentials": "Неверное имя пользователя или пароль.",
   "err.tooManyAttempts": "Слишком много неудачных попыток. Повторите попытку через {seconds} сек.",
+  "err.tooManyRequests": "Слишком много запросов. Повторите попытку через {seconds} сек.",
   "err.hostUnavailable": "{host} не отвечает. Повторите попытку через {seconds} сек.",
   "err.searchInvalidRequest": "Поисковый запрос недействителен.",
   "err.searchNotFound": "Этого поиска больше нет. Выполните поиск снова.",

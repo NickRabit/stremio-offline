@@ -1583,6 +1583,7 @@ export const cs: Catalog = {
   "err.setupLocalOnly": "První účet vytvořte na počítači, na kterém aplikace běží.",
   "err.badCredentials": "Nesprávné jméno nebo heslo.",
   "err.tooManyAttempts": "Příliš mnoho neúspěšných pokusů. Zkuste to za {seconds} s.",
+  "err.tooManyRequests": "Příliš mnoho požadavků. Zkuste to za {seconds} s.",
   "err.hostUnavailable": "{host} neodpovídá. Zkuste to za {seconds} s.",
   "err.searchInvalidRequest": "Požadavek na hledání není platný.",
   "err.searchNotFound": "Toto hledání už neexistuje. Hledejte znovu.",

@@ -27,7 +27,7 @@ metadata store, or scheduler for each platform.
 | 4 | Queue controls | Night-only window first, then an aggregate speed limit and a completion notice; current download limits cover concurrency, not these controls. |
 | Implemented | Library file fingerprint | Re-associates metadata, favourites, resume positions, artwork and first-seen dates when a file is moved outside the app, using size, modification time and a partial content hash. [Libraries](libraries.md#files-moved-outside-the-app). |
 | 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
-| Alongside | Major dependency updates | Node 26 for the server image and CI, then Vite 8 with its React plugin, then TypeScript 7; Electron waits for a reason. See [Major dependency updates](#major-dependency-updates). |
+| Implemented | Major dependency updates | Node 26 for the server image and CI, Vite 8 with its React plugin and TypeScript 7 (0.7.33 to 0.7.35); test and library majors follow one PR each, Electron waits for a reason. See [Major dependency updates](#major-dependency-updates). |
 | Then | Search by cast and crew | A person in the title detail opens what that person made, not a text search for the name: TMDB filmography when a key is set, the owned copies first. See [Search by cast and crew](#search-by-cast-and-crew). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
@@ -343,6 +343,20 @@ and patch updates. Checked against `main` on 2026-10-30.
 4. **Electron**: stays put until a security fix, a needed feature or
    electron-builder asks for it. Its Node version decides the floor for the
    server (see 1).
+
+The remaining majors after these, one PR each:
+
+- **Vitest 4 → 5 with jsdom 26 → 30** — done: the web tests pass unchanged on
+  both. jsdom 30 needs Node 22.22.2 or 24.15 and newer, which only concerns
+  the test run; it brings its own copy of undici, apart from the server's.
+- **undici 7 → 8** — done: the server's outgoing requests. It needs Node 22.19
+  or newer (the floor in `engines`), so the Node 24 inside Electron still runs
+  it. undici 8 negotiates HTTP/2 by default; the checked transports keep
+  HTTP/1.1 (`allowH2: false`), and turning HTTP/2 on is a change of its own.
+  undici 8 sits in `server/node_modules`, which the image now copies.
+- **lucide-react 0.x → 1** for the icons; compare the screens, since icons can
+  be renamed.
+- **`@types/node` 22 → 24**, the lowest Node the server runs on (Electron's).
 
 Ubuntu base image majors stay manual as well (24.04 on purpose since #634).
 
