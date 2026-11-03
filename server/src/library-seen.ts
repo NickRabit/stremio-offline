@@ -246,6 +246,29 @@ export class LibrarySeenStore {
     this.markDirty();
   }
 
+  move(libraryId: string, from: string, toLibraryId: string, to: string): void {
+    if (!libraryId || !from || !toLibraryId || !to || (libraryId === toLibraryId && from === to)) return;
+    const source = this.state.libraries[libraryId];
+    if (!source) return;
+    const moving = Object.entries(source.files).filter(([relative]) =>
+      relative === from || relative.startsWith(`${from}/`));
+    if (!moving.length) return;
+    let destination = this.state.libraries[toLibraryId];
+    if (!destination) {
+      destination = { baselineAt: source.baselineAt, files: {} };
+      this.state.libraries[toLibraryId] = destination;
+      if (this.database) this.dirtyLibraries.set(toLibraryId, destination.baselineAt);
+    }
+    for (const [relative, file] of moving) {
+      delete source.files[relative];
+      const next = to + relative.slice(from.length);
+      destination.files[next] = file;
+      this.markFileChanged(libraryId, relative);
+      this.markFileChanged(toLibraryId, next);
+    }
+    this.markDirty();
+  }
+
   /** The non-baseline entries of the named libraries, newest first, then by path. */
   recent(libraryIds: string[], limit: number): RecentSeen[] {
     const wanted = new Set(libraryIds);

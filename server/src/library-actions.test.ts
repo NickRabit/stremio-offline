@@ -5,7 +5,11 @@ import path from "node:path";
 import { test } from "node:test";
 import { createLibraryActions, type LibraryActionDeps, type TransferStep } from "./library-actions.js";
 import type { FoundFile } from "./library.js";
+import { LibraryMetaStore } from "./library-meta-store.js";
+import type { LibraryMetaRecord } from "./library-match.js";
+import { LibrarySeenStore } from "./library-seen.js";
 import type { LibraryRecord } from "./libraries.js";
+import type { UserData } from "./users.js";
 
 /** The operations are exercised through the factory with fakes: no server boot, and the only
  *  thing that touches a disk is the placeholder probe, which is a real file system call. */
@@ -17,17 +21,26 @@ const library: LibraryRecord = {
 
 const exists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
 
-const harness = (options: { holds?: (key: string) => boolean; libraries?: () => LibraryRecord[]; files?: Array<{ relative: string }> } = {}) => {
+const harness = (options: {
+  holds?: (key: string) => boolean;
+  libraries?: () => LibraryRecord[];
+  files?: Array<{ relative: string }>;
+  metaStore?: LibraryActionDeps["metaStore"];
+  seen?: LibraryActionDeps["seen"];
+  updateEveryData?: LibraryActionDeps["updateEveryData"];
+  progressOf?: LibraryActionDeps["progressOf"];
+} = {}) => {
   const calls = {
     relocate: [] as Array<{ from: string; to: string; pin: boolean }>,
     moved: [] as string[],
     invalidated: 0,
     cleared: [] as string[],
+    seenMoves: [] as Array<{ libraryId: string; from: string; toLibraryId: string; to: string }>,
   };
   const holds = options.holds ?? (() => false);
   const deps: LibraryActionDeps = {
     store: { libraries: options.libraries ?? (() => [library]) },
-    metaStore: {
+    metaStore: options.metaStore ?? {
       qualifiedMeta: () => ({}),
       update: async () => undefined,
       relocate: async (from: string, to: string, pin = false) => { calls.relocate.push({ from, to, pin }); },
@@ -50,10 +63,15 @@ const harness = (options: { holds?: (key: string) => boolean; libraries?: () => 
     isFileKey: (key) => key.endsWith(".mkv"),
     removeGeneratedArt: async (key) => { calls.cleared.push(key); },
     ownRecord: () => undefined,
-    progressOf: () => ({}),
+    progressOf: options.progressOf ?? (() => ({})),
     watchlistOf: () => ({}),
-    updateEveryData: async () => undefined,
+    updateEveryData: options.updateEveryData ?? (async () => undefined),
     invalidateLibrary: () => { calls.invalidated += 1; },
+    seen: options.seen ?? {
+      move: (libraryId: string, from: string, toLibraryId: string, to: string) => {
+        calls.seenMoves.push({ libraryId, from, toLibraryId, to });
+      },
+    },
     setLibraryOpsWriting: () => undefined,
   };
   return { actions: createLibraryActions(deps), calls };
@@ -137,15 +155,139 @@ test("a replayed finishTransfer leaves the destination's carried rows unpinned",
   assert.deepEqual(fresh.calls.relocate, [{ from: step.from, to: step.to, pin: true }]);
 });
 
-const withRoot = async (files: string[], run: (root: string, actions: ReturnType<typeof createLibraryActions>) => Promise<void>) => {
+const withCarry = async (
+  records: Record<string, LibraryMetaRecord>,
+  files: string[],
+  run: (
+    root: string,
+    actions: ReturnType<typeof createLibraryActions>,
+    calls: ReturnType<typeof harness>["calls"],
+    metaStore: LibraryMetaStore,
+    seen: LibrarySeenStore,
+    data: UserData,
+  ) => Promise<void>,
+  seenFiles = files,
+) => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "library-carry-"));
+  try {
+    const metaStore = new LibraryMetaStore(dataDir);
+    await metaStore.load();
+    await metaStore.update(LIBRARY_ID, (file) => { file.meta = records; });
+    const seen = new LibrarySeenStore(dataDir);
+    await seen.load();
+    seen.observe(LIBRARY_ID, [], new Date("2026-01-01T00:00:00.000Z"));
+    seen.observe(LIBRARY_ID, seenFiles.map((relative) => ({ relative, size: 1, modified: "2026-01-02T00:00:00.000Z" })),
+      new Date("2026-02-01T00:00:00.000Z"));
+    const data = {
+      favorites: [`${LIBRARY_ID}/${seenFiles[0]}`],
+      progress: {
+        [`file:${LIBRARY_ID}/${seenFiles[0]}`]: {
+          position: 10, duration: 100, title: "Test", path: `${LIBRARY_ID}/${seenFiles[0]}`, updatedAt: "2026-02-01T00:00:00.000Z",
+        },
+      },
+      watchlist: {},
+    } as UserData;
+    await withRoot(files, (root, actions, calls) => run(root, actions, calls, metaStore, seen, data), {
+      metaStore,
+      seen,
+      progressOf: (value) => value.progress as ReturnType<LibraryActionDeps["progressOf"]>,
+      updateEveryData: async (mutate) => { mutate(data); },
+    });
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+};
+
+test("carryHandMove carries a file's match, favourite, progress, artwork and first-seen date", async () => {
+  const from = `${LIBRARY_ID}/Old/movie.mkv`;
+  const to = `${LIBRARY_ID}/New/movie.mkv`;
+  await withCarry({
+    "Old/movie.mkv": { type: "movie", id: "tt-source", source: "user", locked: true },
+  }, ["Old/movie.mkv"], async (_root, actions, calls, metaStore, seen, data) => {
+    await actions.carryHandMove(from, to, false);
+    await Promise.all([metaStore.flush(), seen.flush()]);
+    assert.equal(metaStore.qualifiedMeta()[to]?.id, "tt-source");
+    assert.deepEqual(data.favorites, [to]);
+    assert.deepEqual(Object.keys(data.progress as Record<string, unknown>), [`file:${to}`]);
+    assert.ok(calls.moved.some((key) => key.includes(from)), "the file artwork was moved");
+    assert.deepEqual(seen.recent([LIBRARY_ID], 10), [{
+      libraryId: LIBRARY_ID, relative: "New/movie.mkv", at: "2026-02-01T00:00:00.000Z",
+    }]);
+  });
+});
+
+test("carryHandMove carries a folder's binding, directory and episode artwork, and every file record", async () => {
+  const from = `${LIBRARY_ID}/Show`;
+  const to = `${LIBRARY_ID}/Show 2`;
+  const sourceFiles = ["Show/S1/e1.mkv", "Show/S1/e2.mkv"];
+  const movedFiles = ["Show 2/S1/e1.mkv", "Show 2/S1/e2.mkv"];
+  await withCarry({
+    Show: { type: "series", id: "tt-show", source: "user", locked: true },
+  }, movedFiles, async (_root, actions, calls, metaStore, seen, data) => {
+    await actions.carryHandMove(from, to, true);
+    await Promise.all([metaStore.flush(), seen.flush()]);
+    assert.equal(metaStore.qualifiedMeta()[to]?.id, "tt-show");
+    assert.deepEqual(data.favorites, [`${LIBRARY_ID}/Show 2/S1/e1.mkv`]);
+    assert.deepEqual(Object.keys(data.progress as Record<string, unknown>), [`file:${LIBRARY_ID}/Show 2/S1/e1.mkv`]);
+    assert.ok(calls.moved.some((key) => key.includes(`lib_ab12cd34/Show`)), "the folder and its files supplied artwork keys");
+    assert.ok(calls.moved.some((key) => key.includes(`${from}/S1/e1.mkv`)), "the episode artwork uses its old source key");
+    assert.ok(calls.moved.some((key) => key.includes(`dir:${from}`)), "the folder artwork is carried too");
+    assert.equal(calls.moved.some((key) => key.includes("Show 2")), false, "sources are what the cache is asked to move");
+    assert.deepEqual(seen.recent([LIBRARY_ID], 10).map((entry) => entry.relative), [
+      "Show 2/S1/e1.mkv",
+      "Show 2/S1/e2.mkv",
+    ]);
+  }, sourceFiles);
+});
+
+test("carryHandMove replaces an automatic target row and keeps a manual one", async () => {
+  const from = `${LIBRARY_ID}/Old/movie.mkv`;
+  const to = `${LIBRARY_ID}/New/movie.mkv`;
+  await withCarry({
+    "Old/movie.mkv": { type: "movie", id: "tt-source", source: "user", locked: true },
+    "New/movie.mkv": { type: "movie", id: "tt-auto", source: "scan", locked: false },
+  }, ["Old/movie.mkv"], async (_root, actions, _calls, metaStore) => {
+    await actions.carryHandMove(from, to, false);
+    await metaStore.flush();
+    assert.equal(metaStore.qualifiedMeta()[to]?.id, "tt-source");
+  });
+
+  await withCarry({
+    "Old/movie.mkv": { type: "movie", id: "tt-source", source: "user", locked: true },
+    "New/movie.mkv": { type: "movie", id: "tt-auto", locked: false },
+  }, ["Old/movie.mkv"], async (_root, actions, _calls, metaStore) => {
+    await actions.carryHandMove(from, to, false);
+    await metaStore.flush();
+    assert.equal(metaStore.qualifiedMeta()[to]?.id, "tt-source");
+  });
+
+  await withCarry({
+    "Old/movie.mkv": { type: "movie", id: "tt-source", source: "user", locked: true },
+    "New/movie.mkv": { type: "movie", id: "tt-manual", source: "user", locked: true },
+  }, ["Old/movie.mkv"], async (_root, actions, _calls, metaStore) => {
+    await actions.carryHandMove(from, to, false);
+    await metaStore.flush();
+    assert.equal(metaStore.qualifiedMeta()[to]?.id, "tt-manual");
+  });
+});
+
+const withRoot = async (
+  files: string[],
+  run: (root: string, actions: ReturnType<typeof createLibraryActions>, calls: ReturnType<typeof harness>["calls"]) => Promise<void>,
+  options: Parameters<typeof harness>[0] = {},
+) => {
   const root = await mkdtemp(path.join(tmpdir(), "library-actions-"));
   try {
     for (const file of files) {
       await mkdir(path.dirname(path.join(root, file)), { recursive: true });
       await writeFile(path.join(root, file), file);
     }
-    const { actions } = harness({ libraries: () => [{ ...library, root }] });
-    await run(root, actions);
+    const { actions, calls } = harness({
+      ...options,
+      libraries: () => [{ ...library, root }],
+      files: files.map((relative) => ({ relative: `${LIBRARY_ID}/${relative}` })),
+    });
+    await run(root, actions, calls);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

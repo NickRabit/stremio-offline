@@ -124,6 +124,20 @@ the item counts as moved with its source left behind, the same as when the
 source cannot be deleted. When they are in neither, the item fails and nothing
 is changed.
 
+## Files moved outside the app
+
+The next maintenance walk, normally within six hours, recognizes a file renamed or
+moved by hand. It carries the manual match, favourites, resume positions,
+thumbnails and first-seen date to the new path, including moves between libraries.
+A completely moved folder carries its folder match and folder artwork once instead
+of carrying every file separately.
+
+A new path matches a vanished file only when their sizes are equal and their
+modification times or stored content hashes are equal. The match must be unique in
+both directions. Ambiguous matches, and files still being written in the last ten
+minutes or named with a `.part` suffix, are left alone. Fingerprints and content
+hashes use SQLite; when the database is unavailable this feature is off.
+
 ## When a root is away or read-only
 
 A pulled disk, an unmounted share and a revoked grant are ordinary states, not

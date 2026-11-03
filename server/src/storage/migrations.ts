@@ -71,4 +71,10 @@ export const MIGRATIONS: readonly Migration[] = [
       "CREATE TABLE external_ids (imdb TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT, WITHOUT ROWID",
     ],
   },
+  {
+    version: 11,
+    statements: [
+      "CREATE TABLE file_fingerprints (library_id TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL, mtime_ms REAL NOT NULL, hash TEXT, PRIMARY KEY (library_id, path)) STRICT, WITHOUT ROWID",
+    ],
+  },
 ];

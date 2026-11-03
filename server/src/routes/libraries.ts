@@ -15,6 +15,7 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth, LibraryProbe } from "../library-probe.js";
 import type { LibrarySeenStore } from "../library-seen.js";
+import type { LibraryFingerprints } from "../library-fingerprints.js";
 import { log } from "../logger.js";
 import { assertStillAdmin } from "../roles.js";
 import type { State } from "../store.js";
@@ -38,13 +39,14 @@ export interface LibrariesDeps extends RouteContext {
   metaStore: LibraryMetaStore;
   /** The first-seen index, dropped when a library is forgotten and kept when it is only removed. */
   seen: LibrarySeenStore;
+  fingerprints: Pick<LibraryFingerprints, "forget">;
   libraryOps: LibraryOps;
 }
 
 const runUnlocked = <T,>(work: () => Promise<T>): Promise<T> => work();
 
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
-  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, libraryOps, stopContentAccess } = deps;
+  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps, stopContentAccess } = deps;
 
   /** The same check the module makes, raised as the failure the interface renders. */
   async function requireLibraryRoot(value: unknown, opts: { create?: boolean; exceptId?: string } = {}): Promise<string> {
@@ -453,6 +455,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (forget) {
       await metaStore.forget(target.id);
       await seen.forget(target.id);
+      await fingerprints.forget(target.id);
       await rm(artworks.dirOf(target.id), { recursive: true, force: true });
       await artworks.removedTree(artworks.dirOf(target.id));
     }
