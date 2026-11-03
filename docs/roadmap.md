@@ -354,8 +354,10 @@ The remaining majors after these, one PR each:
   it. undici 8 negotiates HTTP/2 by default; the checked transports keep
   HTTP/1.1 (`allowH2: false`), and turning HTTP/2 on is a change of its own.
   undici 8 sits in `server/node_modules`, which the image now copies.
-- **lucide-react 0.x → 1** for the icons; compare the screens, since icons can
-  be renamed.
+- **lucide-react 0.x → 1** — done: all 90 icons the apps use still exist under
+  the same names and render the same markup, size and classes; only
+  `CircleCheck` and `CalendarClock` are slightly redrawn. Icons without a
+  label stay `aria-hidden` as in 0.577.
 - **`@types/node` 22 → 24**, the lowest Node the server runs on (Electron's).
 
 Ubuntu base image majors stay manual as well (24.04 on purpose since #634).
