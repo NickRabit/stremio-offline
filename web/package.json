@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/web",
   "private": true,
-  "version": "0.7.33",
+  "version": "0.7.34",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -21,10 +21,10 @@
   "devDependencies": {
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "@vitejs/plugin-react": "4.5.2",
+    "@vitejs/plugin-react": "6.2.1",
     "jsdom": "26.1.0",
     "typescript": "5.9.3",
-    "vite": "6.4.5",
+    "vite": "8.3.5",
     "vitest": "4.1.12"
   }
 }
