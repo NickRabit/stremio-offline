@@ -359,7 +359,7 @@ The remaining majors after these, one PR each:
   label stay `aria-hidden` as in 0.577.
 - **Node floor 24 with `@types/node` 24** — done: nothing shipped runs on
   Node 22 (the image runs 26, Electron 44 runs 24.22, CI runs 24 and 26), so
-  `engines` now says 24 and the types match it. Server, desktop, web and e2e
+  `engines` now says 24.15 (jsdom 30 needs it on the 24 line) and the types match. Server, desktop, web and e2e
   type-check unchanged.
 
 Ubuntu base image majors stay manual as well (24.04 on purpose since #634).

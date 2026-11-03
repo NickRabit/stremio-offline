@@ -337,7 +337,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Contributing
 
-Issues and pull requests are welcome. Node.js 24 or newer, then:
+Issues and pull requests are welcome. Node.js 24.15 or newer, then:
 
 ```bash
 npm ci
