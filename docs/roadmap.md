@@ -343,7 +343,7 @@ and patch updates. Checked against `main` on 2026-10-30.
    renderer, not only that the build passes. It does not need Node 26.
    Vitest is already on 4; Vitest 5 accepts Vite 6–8 and can follow in its
    own PR. Dependabot ignores Vitest majors but not Vite's.
-3. **TypeScript 5.9 → 7** — done in 0.7.24 (7.0.2 in every workspace): the code type-checks unchanged; the web only needed `src/vite-env.d.ts` for Vite's client types, because TypeScript 7 checks side-effect imports such as `import "./style.css"`. The server type check runs in about 1.2 s instead of 6.1 s. Original notes: (7.0 is released, a native compiler). The server
+3. **TypeScript 5.9 → 7** — done (7.0.2 in every workspace): the code type-checks unchanged; the web only needed `src/vite-env.d.ts` for Vite's client types, because TypeScript 7 checks side-effect imports such as `import "./style.css"`. The server type check runs in about 1.2 s instead of 6.1 s. Original notes: (7.0 is released, a native compiler). The server
    and tests run through `tsx`, which does not use `tsc`, so the risk is in
    type checking and editor tooling; move all workspaces together.
 4. **Electron**: stays put until a security fix, a needed feature or
