@@ -1530,6 +1530,7 @@ export const ptBR: Catalog = {
   "err.setupLocalOnly": "Crie a primeira conta no computador que executa o aplicativo.",
   "err.badCredentials": "Nome de usuário ou senha incorretos.",
   "err.tooManyAttempts": "Muitas tentativas fracassadas. Tente novamente em {seconds} segundos.",
+  "err.tooManyRequests": "Muitas solicitações. Tente novamente em {seconds} segundos.",
   "err.hostUnavailable": "{host} não está respondendo. Tente novamente em {seconds} segundos.",
   "err.searchInvalidRequest": "A solicitação de busca não é válida.",
   "err.searchNotFound": "Esta busca não existe mais. Busque novamente.",

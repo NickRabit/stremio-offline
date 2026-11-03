@@ -53,6 +53,7 @@ import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenanc
 import { resolveListenTarget, startServer, utilityParentPort } from "./server-start.js";
 import { loopbackHostCheck } from "./host-check.js";
 import { InFlight } from "./in-flight.js";
+import { apiRequestLimiter, authRequestLimiter, isMediaTransferRequest, pageRequestLimiter } from "./request-limits.js";
 import { WalkCache } from "./walk-cache.js";
 import { FreshValueCache } from "./value-cache.js";
 import { killRunningMedia } from "./media-tools.js";
@@ -878,6 +879,13 @@ app.use("/api", (req, res, next) => {
   }
   next();
 });
+const userForLimit = (req: express.Request) => currentUser(req)?.id;
+const authLimit = authRequestLimiter({ userId: userForLimit });
+app.use(["/api/auth/setup", "/api/auth/login", "/api/auth/password"], authLimit);
+app.use("/api", apiRequestLimiter({
+  userId: userForLimit,
+  skip: (req) => internalMediaRequest(req) || Boolean(airplayRequest(req)) || isMediaTransferRequest(req),
+}));
 // Roles and restricted mode are independent gates; both must pass. The role gate only
 // decides whether the path is one an ordinary user may reach at all.
 app.use("/api", roleMiddleware({
@@ -2936,8 +2944,15 @@ app.get("/calendar/:token.ics", calendarFeedHandler({
   followsOf: (id) => followStore.listForOwner(id),
   languageOf: (id) => store.prefs(id).uiLanguage,
 }));
+const pageLimit = pageRequestLimiter();
+const sendPage = (_req: express.Request, res: express.Response) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.sendFile("index.html", { root: webRoot });
+};
+app.get("/", pageLimit, sendPage);
+app.get("/index.html", pageLimit, sendPage);
 app.use(express.static(webRoot, { setHeaders: (res, file) => { if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store"); } }));
-app.get("/{*path}", (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.sendFile(path.join(webRoot, "index.html")); });
+app.get("/{*path}", pageLimit, sendPage);
 app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   // The 400 default is deliberate: the interface treats anything but a 401 the same way,
   // and changing that now would be a behaviour change, not a diagnostic one.
