@@ -350,18 +350,17 @@ The remaining majors after these, one PR each:
   both. jsdom 30 needs Node 22.22.2 or 24.15 and newer, which only concerns
   the test run; it brings its own copy of undici, apart from the server's.
 - **undici 7 → 8** — done: the server's outgoing requests. It needs Node 22.19
-  or newer (the floor in `engines`), so the Node 24 inside Electron still runs
-  it. undici 8 negotiates HTTP/2 by default; the checked transports keep
+  or newer, so the Node 24 inside Electron runs it. undici 8 negotiates HTTP/2 by default; the checked transports keep
   HTTP/1.1 (`allowH2: false`), and turning HTTP/2 on is a change of its own.
   undici 8 sits in `server/node_modules`, which the image now copies.
 - **lucide-react 0.x → 1** — done: all 90 icons the apps use still exist under
   the same names and render the same markup, size and classes; only
   `CircleCheck` and `CalendarClock` are slightly redrawn. Icons without a
   label stay `aria-hidden` as in 0.577.
-- **`@types/node`** stays on the 22 line (22.20.5), the floor in `engines`: types
-  for a newer Node would accept APIs that Node 22 lacks, and CI only runs 24
-  and 26, so nothing would catch them. Move to 24 together with raising the
-  floor to 24, at the latest when Node 22 leaves maintenance in April 2027.
+- **Node floor 24 with `@types/node` 24** — done: nothing shipped runs on
+  Node 22 (the image runs 26, Electron 44 runs 24.22, CI runs 24 and 26), so
+  `engines` now says 24 and the types match it. Server, desktop, web and e2e
+  type-check unchanged.
 
 Ubuntu base image majors stay manual as well (24.04 on purpose since #634).
 
