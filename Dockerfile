@@ -16,7 +16,7 @@ RUN npm run build \
     && mkdir -p server/node_modules \
     && npm cache clean --force
 
-FROM ubuntu:24.04 AS runtime
+FROM ubuntu:26.04 AS runtime
 # Stamped by the build script and by CI so a running server can say which image it is.
 ARG BUILD_TIME=""
 ARG GIT_COMMIT=""
