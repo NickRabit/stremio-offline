@@ -1,4 +1,4 @@
-FROM node:22-trixie-slim AS build
+FROM node:26-trixie-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/source-selection/package.json packages/source-selection/package.json
@@ -23,7 +23,8 @@ WORKDIR /app
 # Architecture comes from dpkg, not ARG TARGETARCH: only BuildKit fills that in, and
 # the classic builder (Container Manager on Synology) leaves it empty, so the drivers
 # would be skipped silently and QuickSync would never run on the NAS.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libva-drm2 vainfo util-linux \
+# libatomic1: the Node 26 binary copied in below links against it, and ubuntu:24.04 does not ship it.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libva-drm2 vainfo util-linux libatomic1 \
     && if [ "$(dpkg --print-architecture)" = "amd64" ]; then apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver; fi \
     && useradd --uid 1001 --create-home node \
     && rm -rf /var/lib/apt/lists/*

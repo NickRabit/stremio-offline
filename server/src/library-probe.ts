@@ -51,8 +51,8 @@ const flipCase = (value: string) =>
  *  Pure, so both halves can be driven from a test on a runner whose own volume folds
  *  neither way. */
 export const sameVolumeEntry = (
-  own: { ino: number; dev: number } | undefined,
-  flipped: { ino: number; dev: number } | undefined,
+  own: { ino: number | bigint; dev: number | bigint } | undefined,
+  flipped: { ino: number | bigint; dev: number | bigint } | undefined,
 ): boolean => Boolean(own && flipped && own.ino === flipped.ino && own.dev === flipped.dev);
 
 /** One write answers both questions the health holds: probing by writing tells apart a
@@ -64,7 +64,8 @@ async function probeVolume(root: string): Promise<{ caseInsensitive: boolean } |
   const flipped = path.join(root, flipCase(path.basename(file)));
   try {
     await writeFile(file, "");
-    const [own, other] = await Promise.all([stat(file), stat(flipped).catch(() => undefined)]);
+    // bigint: a Windows file id passes 2^53, and as numbers two files could compare equal.
+    const [own, other] = await Promise.all([stat(file, { bigint: true }), stat(flipped, { bigint: true }).catch(() => undefined)]);
     await unlink(file);
     return { caseInsensitive: sameVolumeEntry(own, other) };
   } catch {
