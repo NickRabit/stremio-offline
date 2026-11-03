@@ -966,6 +966,8 @@ export const it: Catalog = {
   "library.continue": "Continua",
   "library.thisFile": "Questo fascicolo",
   "library.tools": "Strumenti della biblioteca",
+  "library.playRandom": "Riproduci casualmente",
+  "library.playRandomEmpty": "Qui non c'è nulla da riprodurre.",
   "library.scan": "Scansione libreria",
   "library.scanHint": "Alcune cartelle non hanno ancora un poster. Scansiona la libreria per abbinare i titoli dei tuoi cataloghi.",
   "library.scanProgress": "{done} di {total} · {matched} corrispondente",

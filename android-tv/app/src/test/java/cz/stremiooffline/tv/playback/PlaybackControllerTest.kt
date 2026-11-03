@@ -123,6 +123,7 @@ class PlaybackControllerTest {
       remote: RemoteItemContext?,
       stableKey: String?,
       final: Boolean,
+      shuffle: Boolean,
     ) {
       if (failSave) throw IllegalStateException("the server said no")
       calls += "save"

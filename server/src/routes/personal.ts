@@ -19,7 +19,7 @@ import { stableKeyOfFile, stableKeyOfRemote } from "../media-resources.js";
 import { artworkBindingKey, knownTitleEntry, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryFor, libraryPath, libraryPathVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { remoteLibraryVisibleTo } from "../media-server-access.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
@@ -340,12 +340,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
    *  visible sends it on to be described, and the describing falls back to whichever library
    *  is left -- so the row comes back showing a file from a library this account may never
    *  have been granted. */
-  const pathVisible = (key: string, viewer: Viewer, libraries: LibraryRecord[]) => {
-    const parsed = parseLibraryPath(key);
-    if (!parsed) return true;
-    const library = libraryFor(libraries, parsed.libraryId);
-    return Boolean(library) && libraryVisible(library!, viewer);
-  };
+  const pathVisible = (key: string, viewer: Viewer, libraries: LibraryRecord[]) =>
+    libraryPathVisible(key, viewer, libraries);
 
   // Starred catalogue titles. The key is type and id, because no file has to exist for them.
   app.get("/api/watchlist", (req, res) => {
@@ -626,6 +622,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const sent = storedProgressKey(String(req.body.key ?? "").trim());
     const position = Number(req.body.position) || 0;
     const duration = Number(req.body.duration) || 0;
+    const shuffle = req.body.shuffle === true;
     // The source the position was played from, when the player named one it was handed.
     const stableKey = typeof req.body.stableKey === "string" && STABLE_SOURCE_KEY.test(req.body.stableKey) ? req.body.stableKey : undefined;
     if (!sent) throw new AppError("Missing title key.", "err.missingTitleKey");
@@ -677,13 +674,13 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       const markers = { ...markersOf(data) };
       // Any report beats the marker of the show it belongs to, so the next episode of a
       // finished one never stands beside the episode being watched now.
-      if (series) delete markers[series.id];
+      if (series && !shuffle) delete markers[series.id];
       // Neither an almost-finished title nor the very beginning is worth keeping. A finished
       // episode leaves the show's next one behind instead of nothing at all.
       const finished = duration > 0 && position / duration > PROGRESS_DONE;
       if (finished || (duration > 0 && position < 30)) {
         delete all[key];
-        if (finished && series) markers[series.id] = {
+        if (finished && series && !shuffle) markers[series.id] = {
           name: series.name, poster: record.poster, addonKey: record.addonKey,
           season: series.season, episode: series.episode, updatedAt: record.updatedAt,
         };

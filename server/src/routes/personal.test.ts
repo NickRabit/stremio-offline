@@ -804,6 +804,30 @@ test("a bound episode file writes the show's episode row and leaves the catalogu
   );
 });
 
+test("a finished shuffle episode leaves the watched marker untouched", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  const file = "lib_00000001/Shows/Dark/S01/Dark.S01E10.mkv";
+  harness.records["lib_00000001/Shows/Dark"] = { type: "series", id: "tt5", name: "Dark" };
+  harness.units.push({ key: "lib_00000001/Shows/Dark", kind: "series", relative: "Shows/Dark", sampleFiles: [file] });
+  const marker = { name: "Dark", season: 1, episode: 3, updatedAt: "2024-01-04T00:00:00.000Z" };
+  harness.data(ALICE).watchedSeries = { tt5: marker };
+
+  const shuffled = await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE,
+    body: { key: `file:${file}`, path: file, title: "Dark · Ten", position: 95, duration: 100, shuffle: true },
+  });
+  assert.equal(shuffled.status, 204);
+  assert.deepEqual(harness.data(ALICE).watchedSeries, { tt5: marker });
+
+  const ordinary = await api(harness.base, "/api/progress", {
+    method: "POST", user: BOB,
+    body: { key: `file:${file}`, path: file, title: "Dark · Ten", position: 95, duration: 100 },
+  });
+  assert.equal(ordinary.status, 204);
+  assert.equal((harness.data(BOB).watchedSeries?.tt5 as WatchedMarker | undefined)?.episode, 10);
+});
+
 test("an unbound file keeps its own file key", async (t) => {
   const harness = await mount([filmLibrary]);
   t.after(harness.close);

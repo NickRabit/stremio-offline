@@ -1002,6 +1002,8 @@ export const cs: Catalog = {
   "library.continue": "Pokračovat",
   "library.thisFile": "Tento soubor",
   "library.tools": "Nástroje knihovny",
+  "library.playRandom": "Přehrát náhodně",
+  "library.playRandomEmpty": "Tady není co přehrát.",
   "library.scan": "Prohledat knihovnu",
   "library.scanHint": "Některé složky ještě nemají plakát. Prohledejte knihovnu a přiřaďte tituly z katalogů.",
   "library.scanProgress": "{done} z {total} · {matched} spárováno",

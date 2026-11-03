@@ -41,6 +41,8 @@
   <string name="tv_library_type_panel">Typ</string>
   <string name="tv_library_empty">Na razie nic tu nie ma. Pobrane pliki pojawią się w tej bibliotece.</string>
   <string name="tv_library_files">Pliki: %1$s</string>
+  <string name="library_play_random">Odtwórz losowo</string>
+  <string name="library_play_random_empty">Nie ma tu nic do odtworzenia.</string>
   <string name="tv_detail_eyebrow_library">W twojej bibliotece</string>
   <string name="tv_detail_watched">Obejrzano %1$s %%</string>
   <string name="tv_play">Odtwórz</string>

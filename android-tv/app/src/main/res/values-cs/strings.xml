@@ -41,6 +41,8 @@
   <string name="tv_library_type_panel">Typ</string>
   <string name="tv_library_empty">Zatím tu nic není. Stažené soubory se objeví v této knihovně.</string>
   <string name="tv_library_files">Souborů: %1$s</string>
+  <string name="library_play_random">Přehrát náhodně</string>
+  <string name="library_play_random_empty">Tady není co přehrát.</string>
   <string name="tv_detail_eyebrow_library">Ve vaší knihovně</string>
   <string name="tv_detail_watched">Zhlédnuto %1$s %%</string>
   <string name="tv_play">Přehrát</string>

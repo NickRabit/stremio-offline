@@ -90,6 +90,7 @@ class RemotePlaybackReportTest {
       remote: RemoteItemContext?,
       stableKey: String?,
       final: Boolean,
+      shuffle: Boolean,
     ) {
       saves += key
     }

@@ -41,6 +41,8 @@
   <string name="tv_library_type_panel">Тип</string>
   <string name="tv_library_empty">Здесь пока ничего нет. Скачанные файлы появятся в этой библиотеке.</string>
   <string name="tv_library_files">Файлов: %1$s</string>
+  <string name="library_play_random">Воспроизвести случайно</string>
+  <string name="library_play_random_empty">Здесь нечего воспроизводить.</string>
   <string name="tv_detail_eyebrow_library">В вашей библиотеке</string>
   <string name="tv_detail_watched">Просмотрено %1$s %%</string>
   <string name="tv_play">Воспроизвести</string>

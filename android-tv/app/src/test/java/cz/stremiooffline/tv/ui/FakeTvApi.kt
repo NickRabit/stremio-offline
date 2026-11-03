@@ -62,6 +62,8 @@ import cz.stremiooffline.tv.data.SearchResultDto
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.ShuffleNextDto
+import cz.stremiooffline.tv.data.ShuffleStartDto
 import cz.stremiooffline.tv.data.SidecarFetch
 import cz.stremiooffline.tv.data.SourceDto
 import cz.stremiooffline.tv.data.SourceProfileDto
@@ -924,6 +926,37 @@ open class FakeTvApi : TvApi {
   var libraryNextValue: NextFileDto? = null
   val libraryNextRequests: MutableList<String> = mutableListOf()
 
+  var shuffleStartValue: ShuffleStartDto? = null
+  var shuffleStartFailure: ApiFailure? = null
+  val shuffleStarts: MutableList<String> = mutableListOf()
+  val remoteShuffleStarts: MutableList<Pair<String, String?>> = mutableListOf()
+  var shuffleNextValue: ShuffleNextDto = ShuffleNextDto()
+  var shuffleNextFailure: ApiFailure? = null
+  val shuffleNextRequests: MutableList<String> = mutableListOf()
+  val deletedShuffleIds: MutableList<String> = mutableListOf()
+
+  override suspend fun startShuffle(path: String): ShuffleStartDto {
+    shuffleStarts += path
+    shuffleStartFailure?.let { throw ApiError(it) }
+    return shuffleStartValue ?: throw ApiError(ApiFailure.NotFound)
+  }
+
+  override suspend fun startRemoteShuffle(libraryId: String, parentId: String?): ShuffleStartDto {
+    remoteShuffleStarts += libraryId to parentId
+    shuffleStartFailure?.let { throw ApiError(it) }
+    return shuffleStartValue ?: throw ApiError(ApiFailure.NotFound)
+  }
+
+  override suspend fun shuffleNext(id: String): ShuffleNextDto {
+    shuffleNextRequests += id
+    shuffleNextFailure?.let { throw ApiError(it) }
+    return shuffleNextValue
+  }
+
+  override suspend fun deleteShuffle(id: String) {
+    deletedShuffleIds += id
+  }
+
   var introSegmentsValue: IntroSegmentsDto = IntroSegmentsDto()
   val introSegmentRequests: MutableList<cz.stremiooffline.tv.playback.IntroQuery> = mutableListOf()
   var introSegmentsFailure: ApiFailure? = null
@@ -982,9 +1015,10 @@ open class FakeTvApi : TvApi {
     remote: RemoteItemContext?,
     stableKey: String?,
     final: Boolean,
+    shuffle: Boolean,
   ) {
     progressSaveFailure?.let { throw ApiError(it) }
-    progressSaves += ProgressSave(key, position, duration, title, path, poster, addonKey, remote, stableKey, final)
+    progressSaves += ProgressSave(key, position, duration, title, path, poster, addonKey, remote, stableKey, final, shuffle)
   }
 
   var progressSaveFailure: ApiFailure? = null
@@ -1004,6 +1038,7 @@ data class ProgressSave(
   val remote: RemoteItemContext?,
   val stableKey: String?,
   val final: Boolean,
+  val shuffle: Boolean,
 )
 
 data class CatalogRequest(val addonKey: String, val type: String, val id: String, val skip: Int, val genre: String?)

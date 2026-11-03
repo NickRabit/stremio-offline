@@ -247,7 +247,9 @@ test("a series opens the full detail on the episode the catalogue had and lets a
   const panel = page.locator(".detail-panel");
   await expect(panel.getByRole("heading", { name: "Epizody" })).toBeVisible();
   await panel.getByRole("button", { name: /První díl/ }).click();
-  await expect(panel.locator(".stream-list button").first()).toBeVisible();
+  const sourceRows = panel.locator(".stream-list button");
+  await expect(sourceRows).toHaveCount(3);
+  await expect(panel.locator(".stream-list button.selected strong")).toHaveText("E2E 1080p");
   // The episode's own row travels the same way: the detail opens on the version the panel picked.
   const pickedRow = (await panel.locator(".stream-list button.selected strong").textContent())!.trim();
 

@@ -60,11 +60,15 @@ import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
+import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
+import cz.stremiooffline.tv.ui.catalog.PanelOption
+import cz.stremiooffline.tv.ui.catalog.SidePanel
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
@@ -77,6 +81,8 @@ import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.components.WideCard
+import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.ShuffleRun
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
 import cz.stremiooffline.tv.ui.search.LibrarySearchScope
@@ -88,6 +94,72 @@ import kotlinx.coroutines.launch
 const val TagLibrarySegments = "library_segments"
 const val TagRemoteLoadMore = "remote_load_more"
 const val TagRemoteBreadcrumb = "remote_breadcrumb"
+
+data class RemoteShuffleTarget(val libraryId: String, val parentId: String?, val title: String)
+
+internal suspend fun playRemoteShuffle(
+  api: TvApi,
+  target: RemoteShuffleTarget,
+  emptyText: String,
+  errorText: String,
+  onNotice: (String?) -> Unit,
+  onPlay: (PlayTarget) -> Unit,
+) {
+  onNotice(null)
+  try {
+    val answer = api.startRemoteShuffle(target.libraryId, target.parentId)
+    val shuffled = answer.item.remote
+    if (shuffled == null) {
+      onNotice(errorText)
+      return
+    }
+    val stream = api.remoteSources(shuffled.libraryId, shuffled.itemId).firstOrNull { it.playable }
+    val remote = stream?.remoteItem
+    if (stream == null || remote == null) {
+      onNotice(errorText)
+      return
+    }
+    onPlay(
+      PlayTarget(
+        key = remote.progressKey,
+        title = answer.item.title,
+        resume = false,
+        sourceId = stream.sourceId,
+        stableKey = stream.stableKey,
+        remoteItem = remote,
+        shuffle = ShuffleRun(answer.id, answer.upcoming?.title),
+      ),
+    )
+  } catch (error: ApiError) {
+    onNotice(if (error.failure == ApiFailure.NotFound) emptyText else errorText)
+  } catch (error: CancellationException) {
+    throw error
+  } catch (_: Exception) {
+    onNotice(errorText)
+  }
+}
+
+@Composable
+internal fun RemoteShufflePanel(
+  title: String,
+  entry: FocusRequester,
+  text: String,
+  onClose: () -> Unit,
+  onStart: () -> Unit,
+) {
+  SidePanel(
+    title = title,
+    onClose = onClose,
+    modifier = Modifier.testTag(TagLibraryShufflePanel),
+    initialFocus = entry,
+  ) {
+    PanelOption(
+      text = text,
+      onClick = onStart,
+      modifier = Modifier.testTag(TagLibraryShuffleAction).focusRequester(entry),
+    )
+  }
+}
 
 fun remoteLibraryTag(id: String): String = "remote_library_$id"
 fun remoteItemTag(id: String): String = "remote_item_$id"
@@ -103,6 +175,8 @@ fun RemoteLibraryRoute(
   imageUrl: (String?) -> String? = { null },
   segment: LibrarySegment,
   onOpenItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit,
+  onPlay: (PlayTarget) -> Unit = {},
+  onShuffle: ((RemoteShuffleTarget) -> Unit)? = null,
   /** Back at the library picker hands the remote to Files; a deeper level pops its own stack. */
   onBackToFiles: () -> Unit = {},
   /** Set when the half was opened from the All grid: Back at the top level returns to All instead
@@ -202,6 +276,28 @@ fun RemoteLibraryRoute(
   val copyScope = rememberCoroutineScope()
   val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
   val destinationsFailedText = stringResource(R.string.media_server_error)
+  val playRandomText = stringResource(R.string.library_play_random)
+  val playRandomEmptyText = stringResource(R.string.library_play_random_empty)
+  var shuffleTarget by remember { mutableStateOf<RemoteShuffleTarget?>(null) }
+  var shuffleNotice by remember { mutableStateOf<String?>(null) }
+  val shuffleEntry = remember { FocusRequester() }
+
+  fun openShuffle(libraryId: String, parentId: String?, title: String) {
+    val target = RemoteShuffleTarget(libraryId, parentId, title)
+    if (onShuffle != null) {
+      onShuffle(target)
+      return
+    }
+    shuffleNotice = null
+    shuffleTarget = target
+  }
+
+  fun startShuffle(target: RemoteShuffleTarget) {
+    shuffleTarget = null
+    copyScope.launch {
+      playRemoteShuffle(api, target, playRandomEmptyText, destinationsFailedText, { shuffleNotice = it }, onPlay)
+    }
+  }
 
   fun openCardCopy(libraryId: String, item: RemoteItemDto) {
     val load = loadDestinations ?: return
@@ -335,6 +431,7 @@ fun RemoteLibraryRoute(
       if (copyNotice != null && copyRequest == null) {
         Text(copyNotice!!, color = Tokens.Red, fontSize = 11.sp, modifier = Modifier.padding(bottom = 6.dp))
       }
+      shuffleNotice?.let { Text(it, color = Tokens.Red, fontSize = 11.sp, modifier = Modifier.padding(bottom = 6.dp)) }
       // One line for the whole path, so a nested folder is never a dead end on screen and the level's
       // own title is not repeated beside it.
       if (level != null) {
@@ -373,7 +470,10 @@ fun RemoteLibraryRoute(
       }
       Box(Modifier.weight(1f).fillMaxWidth()) {
         if (level == null) {
-          LibraryPicker(state, viewModel, imageUrl, requesters, gridFocus, errorFocus)
+          LibraryPicker(
+            state, viewModel, imageUrl, requesters, gridFocus, errorFocus,
+            onShuffle = { library -> openShuffle(library.id, null, library.name) },
+          )
         } else {
           ItemBrowser(
             level = level,
@@ -387,6 +487,7 @@ fun RemoteLibraryRoute(
             errorFocus = errorFocus,
             firstRowUp = searchAction.takeIf { searchAvailable },
             onMenu = if (loadDestinations != null) { item -> openCardCopy(level.libraryId, item) } else null,
+            onShuffle = { item -> openShuffle(level.libraryId, item.id, item.name) },
             onOpenItem = onOpenItem,
           )
         }
@@ -396,6 +497,18 @@ fun RemoteLibraryRoute(
     val typeNow = directory?.state?.type
     if (typePanel && typeNow != null) {
       LibraryTypePanel(filter = typeNow, onFilter = { viewModel.filter(it) }, onClose = { typePanel = false })
+    }
+
+    if (onShuffle == null) {
+      shuffleTarget?.let { target ->
+        RemoteShufflePanel(
+          title = target.title,
+          entry = shuffleEntry,
+          text = playRandomText,
+          onClose = { shuffleTarget = null },
+          onStart = { startShuffle(target) },
+        )
+      }
     }
 
     val cardRequest = copyRequest
@@ -478,6 +591,7 @@ private fun LibraryPicker(
   requesters: MutableMap<String, FocusRequester>,
   gridFocus: FocusRequester,
   errorFocus: FocusRequester,
+  onShuffle: (RemoteLibraryDto) -> Unit,
 ) {
   // The picker is the root of the servers half: the section's own heading already names the page, so
   // the library cards start straight away rather than under a second large heading.
@@ -514,8 +628,15 @@ private fun LibraryPicker(
                 cardTag = remoteLibraryTag(library.id),
                 caption = libraryCaption(library.provider),
                 onClick = { viewModel.openLibrary(library) },
+                onLongClick = { onShuffle(library) },
                 modifier = Modifier
                   .focusRequester(requester)
+                  .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && (event.key == Key.Menu || event.key == Key.Info)) {
+                      onShuffle(library)
+                      true
+                    } else false
+                  }
                   .onFocusChanged { if (it.isFocused) viewModel.select(REMOTE_PICKER_KEY, key) },
               )
             }
@@ -545,6 +666,7 @@ internal fun RemoteArtTile(
   modifier: Modifier = Modifier,
   poster: String? = null,
   wide: String? = null,
+  onLongClick: (() -> Unit)? = null,
 ) {
   val key = RemoteLibraryViewModel.previewKey(libraryId, parentId)
   val childrenArtwork = parentId == null && mosaic
@@ -575,6 +697,7 @@ internal fun RemoteArtTile(
       },
       cardTag = cardTag,
       onClick = onClick,
+      onLongClick = onLongClick,
       modifier = modifier,
     )
   } else {
@@ -588,6 +711,7 @@ internal fun RemoteArtTile(
       mosaic = art,
       imageBeforeMosaic = composed != null || (childrenArtwork && ownPoster != null),
       onClick = onClick,
+      onLongClick = onLongClick,
       modifier = modifier,
     )
     if (container && art.isEmpty() && poster == null && wide == null && composed == null) {
@@ -612,6 +736,7 @@ private fun ItemBrowser(
   errorFocus: FocusRequester,
   firstRowUp: FocusRequester? = null,
   onMenu: ((RemoteItemDto) -> Unit)? = null,
+  onShuffle: ((RemoteItemDto) -> Unit)? = null,
   onDownFromLastRow: (() -> Boolean)? = null,
   onOpenItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit,
 ) {
@@ -665,6 +790,7 @@ private fun ItemBrowser(
               loadMoreFocus = loadMoreFocus,
               firstRowUp = firstRowUp,
               onMenu = onMenu,
+              onShuffle = onShuffle,
               onDownFromLastRow = onDownFromLastRow,
               onOpen = { item ->
                 // A folder opens one directory level deeper; it is never playable, so it never
@@ -692,6 +818,7 @@ private fun ItemGrid(
   firstRowUp: FocusRequester? = null,
   /** Invoked for a playable card when the viewer presses Menu or Info on it; null disables it. */
   onMenu: ((RemoteItemDto) -> Unit)? = null,
+  onShuffle: ((RemoteItemDto) -> Unit)? = null,
   onDownFromLastRow: (() -> Boolean)? = null,
   onOpen: (RemoteItemDto) -> Unit,
 ) {
@@ -728,13 +855,20 @@ private fun ItemGrid(
               if (index >= items.size - columns) viewModel.loadMore()
             }
           }
-          // A playable item's copy action lives behind Menu/Info, the way a TV remote offers a
-          // context action without a long press; a folder or a series has nothing to copy.
           .then(
             if (onMenu != null && item.type != "folder" && item.type != "season" && item.type != "series") {
               Modifier.onPreviewKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown && (event.key == Key.Menu || event.key == Key.Info)) {
                   onMenu(item)
+                  true
+                } else {
+                  false
+                }
+              }
+            } else if (onShuffle != null && item.type == "folder") {
+              Modifier.onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && (event.key == Key.Menu || event.key == Key.Info)) {
+                  onShuffle(item)
                   true
                 } else {
                   false
@@ -783,6 +917,7 @@ private fun ItemGrid(
             wide = item.wide,
             caption = stringResource(R.string.media_server_read_only),
             onClick = { onOpen(item) },
+            onLongClick = if (onShuffle != null && item.type == "folder") ({ onShuffle(item) }) else null,
             modifier = focus,
           )
         } else if (isEpisodes) {

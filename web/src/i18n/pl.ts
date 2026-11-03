@@ -966,6 +966,8 @@ export const pl: Catalog = {
   "library.continue": "Kontynuuj",
   "library.thisFile": "Ten plik",
   "library.tools": "Narzędzia biblioteczne",
+  "library.playRandom": "Odtwórz losowo",
+  "library.playRandomEmpty": "Nie ma tu nic do odtworzenia.",
   "library.scan": "Skanuj bibliotekę",
   "library.scanHint": "Niektóre foldery nie mają jeszcze plakatu. Przeskanuj bibliotekę, aby dopasować tytuły ze swoich katalogów.",
   "library.scanProgress": "{done} z {total} · {matched} dopasowane",

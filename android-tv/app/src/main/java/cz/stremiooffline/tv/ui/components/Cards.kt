@@ -72,6 +72,7 @@ fun PosterCard(
   imageUrl: String?,
   progress: Float?,
   onClick: () -> Unit,
+  onLongClick: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
   caption: String? = null,
   cardTag: String? = null,
@@ -88,6 +89,7 @@ fun PosterCard(
   Column(modifier) {
     Surface(
       onClick = onClick,
+      onLongClick = onLongClick,
       modifier = Modifier
         .size(110.dp, 165.dp)
         .then(if (cardTag != null) Modifier.testTag(cardTag) else Modifier)
@@ -174,6 +176,7 @@ fun LibraryRootCard(
   name: String,
   caption: String?,
   onClick: () -> Unit,
+  onLongClick: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
   cardTag: String? = null,
   poster: String? = null,
@@ -190,6 +193,7 @@ fun LibraryRootCard(
   val shape = RoundedCornerShape(11.dp)
   Surface(
     onClick = onClick,
+    onLongClick = onLongClick,
     modifier = modifier
       .fillMaxWidth()
       .height(164.dp)

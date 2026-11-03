@@ -1007,6 +1007,8 @@ export const en = {
   "library.continue": "Continue",
   "library.thisFile": "This file",
   "library.tools": "Library tools",
+  "library.playRandom": "Play random",
+  "library.playRandomEmpty": "Nothing to play here.",
   "library.scan": "Scan library",
   "library.scanHint": "Some folders have no poster yet. Scan the library to match titles from your catalogs.",
   "library.scanProgress": "{done} of {total} · {matched} matched",

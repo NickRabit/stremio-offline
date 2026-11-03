@@ -14,7 +14,7 @@ import {
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
   type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeIdentity, type ResumeSources,
 } from "../home.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryFor, libraryPath, libraryPathOpen, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, isVideo, type BrowseItem } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { artworkBindingKey, knownTitleEntry } from "../library-match.js";
@@ -151,12 +151,8 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
   /** A key the caller may open now: its library is still configured, switched on and granted.
    *  `pathVisible` covers the removed and the lost-grant case; the enabled switch is Home's.
    *  A key with no library id is the single-library pass-through and stays visible. */
-  const pathOpen = (key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean => {
-    if (!personal.pathVisible(key, viewer, libraries)) return false;
-    const parsed = parseLibraryPath(key);
-    if (!parsed) return true;
-    return libraryFor(libraries, parsed.libraryId)?.enabled === true;
-  };
+  const pathOpen = (key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean =>
+    libraryPathOpen(key, viewer, libraries);
 
   /** A key whose owning library can still be shown on Home: switched on and reachable. A key
    *  no library claims -- an unqualified one, or one whose library is gone -- is left to the

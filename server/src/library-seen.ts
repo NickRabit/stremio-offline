@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
+import { isVideo } from "./library.js";
 import { log } from "./logger.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 import type { AppDatabase, Statement } from "./storage/app-database.js";
@@ -283,6 +284,18 @@ export class LibrarySeenStore {
     entries.sort((left, right) =>
       right.at.localeCompare(left.at) || left.relative.localeCompare(right.relative) || left.libraryId.localeCompare(right.libraryId));
     return entries.slice(0, Math.max(0, limit));
+  }
+
+  /** Video files in one library at or below a whole path prefix. */
+  filesUnder(libraryId: string, relativePrefix: string): string[] {
+    const library = this.state.libraries[libraryId];
+    if (!library) return [];
+    const prefix = relativePrefix.replace(/^\/+|\/+$/g, "");
+    const nested = prefix ? `${prefix}/` : "";
+    return Object.keys(library.files).filter((relative) =>
+      isVideo(relative.slice(relative.lastIndexOf("/") + 1))
+      && (!prefix || relative === prefix || relative.startsWith(nested)),
+    );
   }
 
   /** Only an explicit forget reaches here. Removing without forgetting keeps the data, the way

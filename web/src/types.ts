@@ -232,6 +232,8 @@ export interface AudioFacts {
 }
 export interface Stream {
   sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; libraryName?: string; name?: string; title?: string; description?: string;
+  /** A local play opened by Play random, so every progress write for it keeps shuffle semantics. */
+  shuffle?: true;
   subtitles?: Subtitle[]; audioLanguages?: string[]; subtitleLanguages?: string[]; audioLanguagesGuessed?: boolean; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number; bingeGroup?: string };
   /** The same source's handle in every session, minted by the server: a position stored with it

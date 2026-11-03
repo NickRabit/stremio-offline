@@ -54,6 +54,31 @@ export const libraryVisible = (library: LibraryRecord, viewer: Viewer): boolean 
 export const visibleLibraries = (libraries: LibraryRecord[], viewer: Viewer): LibraryRecord[] =>
   libraries.filter((library) => libraryVisible(library, viewer));
 
+/** A stored key the viewer may still read. A path with no library id is the single-library
+ *  pass-through; a path that names a missing library is not visible. */
+export function libraryPathVisible(
+  key: string,
+  viewer: Viewer,
+  libraries: LibraryRecord[],
+): boolean {
+  const parsed = parseLibraryPath(key);
+  if (!parsed) return true;
+  const library = libraryFor(libraries, parsed.libraryId);
+  return Boolean(library) && libraryVisible(library!, viewer);
+}
+
+/** A stored key the viewer may open now: visible, enabled, and owned by a configured library. */
+export function libraryPathOpen(
+  key: string,
+  viewer: Viewer,
+  libraries: LibraryRecord[],
+): boolean {
+  if (!libraryPathVisible(key, viewer, libraries)) return false;
+  const parsed = parseLibraryPath(key);
+  if (!parsed) return true;
+  return libraryFor(libraries, parsed.libraryId)?.enabled === true;
+}
+
 /** May an automatic scan look up catalogue metadata here? Only an explicit off opts out,
  *  so a record written before the switch keeps taking part. */
 export const automaticMetadataEnabled = (library: LibraryRecord): boolean => library.autoScanMetadata !== false;

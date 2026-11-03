@@ -41,6 +41,8 @@
   <string name="tv_library_type_panel">Tipo</string>
   <string name="tv_library_empty">Ainda não há nada aqui. Os arquivos baixados aparecem nesta biblioteca.</string>
   <string name="tv_library_files">%1$s arquivos</string>
+  <string name="library_play_random">Reproduzir aleatoriamente</string>
+  <string name="library_play_random_empty">Não há nada para reproduzir aqui.</string>
   <string name="tv_detail_eyebrow_library">Na sua biblioteca</string>
   <string name="tv_detail_watched">%1$s %% assistido</string>
   <string name="tv_play">Reproduzir</string>

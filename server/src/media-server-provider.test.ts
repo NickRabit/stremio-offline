@@ -212,6 +212,21 @@ test("pageItems builds a bounded cursor and rejects mismatch, bad totals and ove
   await assert.rejects(oversized.provider.pageItems("tok", "user-1", "lib-1", { limit: 1 }), { code: "invalid-response" });
 });
 
+test("pageItems admits only the closed playable type set for a shuffle pool", async () => {
+  let lastArgs: Record<string, unknown> = {};
+  const { provider } = fixture((operation, args) => {
+    lastArgs = args;
+    return operation === "items" ? { Items: [], TotalRecordCount: 0 } : {};
+  });
+  await provider.pageItems("tok", "user-1", "folder-1", { limit: 200, includeItemTypes: "Movie,Episode,MusicVideo" });
+  assert.equal(lastArgs.includeItemTypes, "Movie,Episode,MusicVideo");
+  assert.equal(lastArgs.parentId, "folder-1");
+  await assert.rejects(
+    provider.pageItems("tok", "user-1", "folder-1", { includeItemTypes: "Movie,Series" as never }),
+    { code: "invalid-input" },
+  );
+});
+
 test("paging boundaries never emit an unusable cursor or silently truncate inconsistent totals", async () => {
   const cursor = (offset: number) => Buffer.from(JSON.stringify({ o: offset, a: "user-1", l: "lib-1", s: "" })).toString("base64url");
   const item = { Id: "last", Name: "Last", Type: "Movie" };
