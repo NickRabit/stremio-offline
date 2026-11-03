@@ -1,6 +1,9 @@
 import nodeDns, { type LookupOptions } from "node:dns";
 import net from "node:net";
 import { Agent, fetch as undiciFetch } from "undici";
+// undici 8 negotiates HTTP/2 by default. The checked transports stay on HTTP/1.1, as they were
+// with undici 7: streams and ranges through addons and media servers are proven on it, and
+// HTTP/2 is a change of its own, not part of a version update.
 import { addressRefusal, type AddressPolicy } from "./address-policy.js";
 import {
   MediaServerError,
@@ -1163,7 +1166,7 @@ export function createMediaServerTransport(
   const ensureImageAgent = (): Agent | undefined => {
     if (seams.fetch) return undefined;
     if (!imageAgent) {
-      imageAgent = new Agent({ connect: { ...seams.connectOptions, lookup: imageLookup as unknown as import("node:net").LookupFunction } });
+      imageAgent = new Agent({ allowH2: false, connect: { ...seams.connectOptions, lookup: imageLookup as unknown as import("node:net").LookupFunction } });
       agents.add(imageAgent);
     }
     return imageAgent;
@@ -1259,7 +1262,7 @@ export function createMediaServerTransport(
       try {
         // A socket lookup belongs to this request, even while other requests remain live.
         if (!seams.fetch) {
-          agent = new Agent({ connect: { ...seams.connectOptions, lookup: createLookup(controller.signal, isTimedOut) as unknown as import("node:net").LookupFunction } });
+          agent = new Agent({ allowH2: false, connect: { ...seams.connectOptions, lookup: createLookup(controller.signal, isTimedOut) as unknown as import("node:net").LookupFunction } });
           agents.add(agent);
         }
         const sendFetch: MediaServerFetch = seams.fetch ?? ((url, options) =>
@@ -1418,7 +1421,7 @@ export function createMediaServerTransport(
       const init: RequestInit = { method: request.method, headers, redirect: "error" };
 
       if (!seams.fetch) {
-        agent = new Agent({ connect: { ...seams.connectOptions, lookup: createLookup(controller.signal, isTimedOut) as unknown as import("node:net").LookupFunction } });
+        agent = new Agent({ allowH2: false, connect: { ...seams.connectOptions, lookup: createLookup(controller.signal, isTimedOut) as unknown as import("node:net").LookupFunction } });
         agents.add(agent);
       }
       const sendFetch: MediaServerFetch = seams.fetch ?? ((target, options) =>
@@ -1817,7 +1820,7 @@ export function createMediaServerTransport(
       const init: RequestInit = { method: "GET", headers, redirect: "error" };
 
       if (!seams.fetch) {
-        agent = new Agent({ connect: { ...seams.connectOptions, lookup: createLookup(controller.signal, isTimedOut) as unknown as import("node:net").LookupFunction } });
+        agent = new Agent({ allowH2: false, connect: { ...seams.connectOptions, lookup: createLookup(controller.signal, isTimedOut) as unknown as import("node:net").LookupFunction } });
         agents.add(agent);
       }
       const sendFetch: MediaServerFetch = seams.fetch ?? ((target, options) =>
