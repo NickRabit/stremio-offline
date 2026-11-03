@@ -60,8 +60,6 @@ import cz.stremiooffline.tv.ui.components.LibraryRootCard
 import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
-import cz.stremiooffline.tv.ui.catalog.PanelOption
-import cz.stremiooffline.tv.ui.catalog.SidePanel
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.ShuffleRun
@@ -160,12 +158,15 @@ fun LibraryRoute(
   val playRandomText = stringResource(R.string.library_play_random)
   val playRandomEmptyText = stringResource(R.string.library_play_random_empty)
   val loadErrorText = stringResource(R.string.tv_load_error)
+  val remoteLoadErrorText = stringResource(R.string.media_server_error)
   val shuffleEntry = remember { FocusRequester() }
   var shuffleTarget by remember { mutableStateOf<LibraryShuffleTarget?>(null) }
+  var remoteShuffleTarget by remember { mutableStateOf<RemoteShuffleTarget?>(null) }
   var shuffleNotice by remember { mutableStateOf<String?>(null) }
 
   fun openShuffle(item: BrowseItem) {
     shuffleNotice = null
+    remoteShuffleTarget = null
     shuffleTarget = when (item) {
       is BrowseItem.Library, is BrowseItem.Folder -> LibraryShuffleTarget(item.path, item.title)
       is BrowseItem.File -> LibraryShuffleTarget(
@@ -173,6 +174,12 @@ fun LibraryRoute(
         title = state.current?.title?.ifBlank { fallbackTitle } ?: fallbackTitle,
       )
     }
+  }
+
+  fun openRemoteShuffle(target: RemoteShuffleTarget) {
+    shuffleNotice = null
+    shuffleTarget = null
+    remoteShuffleTarget = target
   }
 
   fun startShuffle(target: LibraryShuffleTarget) {
@@ -195,6 +202,13 @@ fun LibraryRoute(
       } catch (_: Exception) {
         shuffleNotice = loadErrorText
       }
+    }
+  }
+
+  fun startRemoteShuffle(target: RemoteShuffleTarget) {
+    remoteShuffleTarget = null
+    scope.launch {
+      playRemoteShuffle(api, target, playRandomEmptyText, remoteLoadErrorText, { shuffleNotice = it }, onPlay)
     }
   }
   // The flag-off fallback still narrows the level in place, so it keeps its editor text and the
@@ -418,12 +432,24 @@ fun LibraryRoute(
                     imageUrl = { path -> path?.let(api::url) },
                     cardTag = allRemoteTag(library.id),
                     caption = libraryCaption(library.provider),
+                    onLongClick = {
+                      openRemoteShuffle(RemoteShuffleTarget(library.id, null, library.name))
+                    },
                     onClick = {
                       enteredFromAll = key
                       segment = LibrarySegment.Servers
                       remoteViewModel.openLibrary(library)
                     },
-                    modifier = Modifier.focusRequester(requester),
+                    modifier = Modifier
+                      .focusRequester(requester)
+                      .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && (event.key == Key.Menu || event.key == Key.Info)) {
+                          openRemoteShuffle(RemoteShuffleTarget(library.id, null, library.name))
+                          true
+                        } else {
+                          false
+                        }
+                      },
                   )
                 }
               }
@@ -528,6 +554,7 @@ fun LibraryRoute(
           segment = segment,
           onOpenItem = onOpenRemoteItem,
           onPlay = onPlay,
+          onShuffle = ::openRemoteShuffle,
           onBackToFiles = { segment = LibrarySegment.Files },
           onBackToAll = if (enteredFromAll != null) ({ segment = LibrarySegment.All }) else null,
           modifier = Modifier.weight(1f),
@@ -544,18 +571,22 @@ fun LibraryRoute(
       }
     }
     shuffleTarget?.let { target ->
-      SidePanel(
+      RemoteShufflePanel(
         title = target.title,
+        entry = shuffleEntry,
+        text = playRandomText,
         onClose = { shuffleTarget = null },
-        modifier = Modifier.testTag(TagLibraryShufflePanel),
-        initialFocus = shuffleEntry,
-      ) {
-        PanelOption(
-          text = playRandomText,
-          onClick = { startShuffle(target) },
-          modifier = Modifier.testTag(TagLibraryShuffleAction).focusRequester(shuffleEntry),
-        )
-      }
+        onStart = { startShuffle(target) },
+      )
+    }
+    remoteShuffleTarget?.let { target ->
+      RemoteShufflePanel(
+        title = target.title,
+        entry = shuffleEntry,
+        text = playRandomText,
+        onClose = { remoteShuffleTarget = null },
+        onStart = { startRemoteShuffle(target) },
+      )
     }
   }
 }

@@ -95,7 +95,71 @@ const val TagLibrarySegments = "library_segments"
 const val TagRemoteLoadMore = "remote_load_more"
 const val TagRemoteBreadcrumb = "remote_breadcrumb"
 
-private data class RemoteShuffleTarget(val libraryId: String, val parentId: String?, val title: String)
+data class RemoteShuffleTarget(val libraryId: String, val parentId: String?, val title: String)
+
+internal suspend fun playRemoteShuffle(
+  api: TvApi,
+  target: RemoteShuffleTarget,
+  emptyText: String,
+  errorText: String,
+  onNotice: (String?) -> Unit,
+  onPlay: (PlayTarget) -> Unit,
+) {
+  onNotice(null)
+  try {
+    val answer = api.startRemoteShuffle(target.libraryId, target.parentId)
+    val shuffled = answer.item.remote
+    if (shuffled == null) {
+      onNotice(errorText)
+      return
+    }
+    val stream = api.remoteSources(shuffled.libraryId, shuffled.itemId).firstOrNull { it.playable }
+    val remote = stream?.remoteItem
+    if (stream == null || remote == null) {
+      onNotice(errorText)
+      return
+    }
+    onPlay(
+      PlayTarget(
+        key = remote.progressKey,
+        title = answer.item.title,
+        resume = false,
+        sourceId = stream.sourceId,
+        stableKey = stream.stableKey,
+        remoteItem = remote,
+        shuffle = ShuffleRun(answer.id, answer.upcoming?.title),
+      ),
+    )
+  } catch (error: ApiError) {
+    onNotice(if (error.failure == ApiFailure.NotFound) emptyText else errorText)
+  } catch (error: CancellationException) {
+    throw error
+  } catch (_: Exception) {
+    onNotice(errorText)
+  }
+}
+
+@Composable
+internal fun RemoteShufflePanel(
+  title: String,
+  entry: FocusRequester,
+  text: String,
+  onClose: () -> Unit,
+  onStart: () -> Unit,
+) {
+  SidePanel(
+    title = title,
+    onClose = onClose,
+    modifier = Modifier.testTag(TagLibraryShufflePanel),
+    initialFocus = entry,
+  ) {
+    PanelOption(
+      text = text,
+      onClick = onStart,
+      modifier = Modifier.testTag(TagLibraryShuffleAction).focusRequester(entry),
+    )
+  }
+}
 
 fun remoteLibraryTag(id: String): String = "remote_library_$id"
 fun remoteItemTag(id: String): String = "remote_item_$id"
@@ -112,6 +176,7 @@ fun RemoteLibraryRoute(
   segment: LibrarySegment,
   onOpenItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit,
   onPlay: (PlayTarget) -> Unit = {},
+  onShuffle: ((RemoteShuffleTarget) -> Unit)? = null,
   /** Back at the library picker hands the remote to Files; a deeper level pops its own stack. */
   onBackToFiles: () -> Unit = {},
   /** Set when the half was opened from the All grid: Back at the top level returns to All instead
@@ -218,34 +283,19 @@ fun RemoteLibraryRoute(
   val shuffleEntry = remember { FocusRequester() }
 
   fun openShuffle(libraryId: String, parentId: String?, title: String) {
+    val target = RemoteShuffleTarget(libraryId, parentId, title)
+    if (onShuffle != null) {
+      onShuffle(target)
+      return
+    }
     shuffleNotice = null
-    shuffleTarget = RemoteShuffleTarget(libraryId, parentId, title)
+    shuffleTarget = target
   }
 
   fun startShuffle(target: RemoteShuffleTarget) {
     shuffleTarget = null
     copyScope.launch {
-      try {
-        val answer = api.startRemoteShuffle(target.libraryId, target.parentId)
-        val shuffled = answer.item.remote ?: return@launch
-        val stream = api.remoteSources(shuffled.libraryId, shuffled.itemId).firstOrNull { it.playable } ?: return@launch
-        val remote = stream.remoteItem ?: return@launch
-        onPlay(
-          PlayTarget(
-            key = remote.progressKey,
-            title = answer.item.title,
-            resume = false,
-            sourceId = stream.sourceId,
-            stableKey = stream.stableKey,
-            remoteItem = remote,
-            shuffle = ShuffleRun(answer.id, answer.upcoming?.title),
-          ),
-        )
-      } catch (error: ApiError) {
-        shuffleNotice = if (error.failure == ApiFailure.NotFound) playRandomEmptyText else destinationsFailedText
-      } catch (_: Exception) {
-        shuffleNotice = destinationsFailedText
-      }
+      playRemoteShuffle(api, target, playRandomEmptyText, destinationsFailedText, { shuffleNotice = it }, onPlay)
     }
   }
 
@@ -449,17 +499,14 @@ fun RemoteLibraryRoute(
       LibraryTypePanel(filter = typeNow, onFilter = { viewModel.filter(it) }, onClose = { typePanel = false })
     }
 
-    shuffleTarget?.let { target ->
-      SidePanel(
-        title = target.title,
-        onClose = { shuffleTarget = null },
-        modifier = Modifier.testTag(TagLibraryShufflePanel),
-        initialFocus = shuffleEntry,
-      ) {
-        PanelOption(
+    if (onShuffle == null) {
+      shuffleTarget?.let { target ->
+        RemoteShufflePanel(
+          title = target.title,
+          entry = shuffleEntry,
           text = playRandomText,
-          onClick = { startShuffle(target) },
-          modifier = Modifier.testTag(TagLibraryShuffleAction).focusRequester(shuffleEntry),
+          onClose = { shuffleTarget = null },
+          onStart = { startShuffle(target) },
         )
       }
     }

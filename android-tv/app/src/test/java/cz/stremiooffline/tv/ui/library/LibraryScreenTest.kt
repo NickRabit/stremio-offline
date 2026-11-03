@@ -42,8 +42,11 @@ import cz.stremiooffline.tv.data.ShuffleUpcomingDto
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.ShuffleRemoteDto
+import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.components.TagPosterMosaic
 import cz.stremiooffline.tv.ui.components.libraryRootCountTag
 import cz.stremiooffline.tv.ui.BrowseRequest
@@ -743,6 +746,52 @@ class LibraryScreenTest {
 
     compose.onNodeWithTag("all_local:Films").assertExists()
     compose.onNodeWithTag("all_remote:rlibA").assertExists()
+  }
+
+  @Test
+  fun `Menu on a remote All card opens Play random and starts the library root`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", emptyList(), 0, false)
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby"))
+    api.shuffleStartValue = ShuffleStartDto(
+      id = "run-remote",
+      item = ShuffleItemDto(
+        title = "Random",
+        remote = ShuffleRemoteDto(libraryId = "rlibA", itemId = "m1"),
+      ),
+      total = 1,
+    )
+    api.remoteSourcesValue = listOf(
+      StreamDto(
+        sourceId = "remote-source",
+        kind = "remote",
+        playable = true,
+        remoteItem = RemoteItemContext(
+          libraryId = "rlibA",
+          itemId = "m1",
+          mediaSourceId = "version-1",
+          progressKey = "remote:m1",
+        ),
+      ),
+    )
+    val played = mutableListOf<PlayTarget>()
+    mount(api, onPlay = { played += it })
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    focusOn("all_remote:rlibA")
+    compose.onNodeWithTag("all_remote:rlibA").performKeyInput { pressKey(Key.Menu) }
+    compose.onNodeWithTag(TagLibraryShufflePanel).assertExists()
+    focusOn(TagLibraryShuffleAction)
+    press(Key.DirectionCenter)
+
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+    assertEquals(listOf("rlibA" to null), api.remoteShuffleStarts)
+    assertEquals("remote-source", played.single().sourceId)
+    assertEquals(false, played.single().resume)
+    assertEquals("run-remote", played.single().shuffle?.id)
   }
 
   @Test
