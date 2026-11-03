@@ -2945,10 +2945,14 @@ app.get("/calendar/:token.ics", calendarFeedHandler({
   languageOf: (id) => store.prefs(id).uiLanguage,
 }));
 const pageLimit = pageRequestLimiter();
-app.get("/", pageLimit, (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.sendFile(path.join(webRoot, "index.html")); });
-app.get("/index.html", pageLimit, (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.sendFile(path.join(webRoot, "index.html")); });
+const sendPage = (_req: express.Request, res: express.Response) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.sendFile("index.html", { root: webRoot });
+};
+app.get("/", pageLimit, sendPage);
+app.get("/index.html", pageLimit, sendPage);
 app.use(express.static(webRoot, { setHeaders: (res, file) => { if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store"); } }));
-app.get("/{*path}", pageLimit, (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.sendFile(path.join(webRoot, "index.html")); });
+app.get("/{*path}", pageLimit, sendPage);
 app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   // The 400 default is deliberate: the interface treats anything but a 401 the same way,
   // and changing that now would be a behaviour change, not a diagnostic one.
