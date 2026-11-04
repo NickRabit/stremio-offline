@@ -29,6 +29,7 @@ import {
   type ProviderItem,
   type ProviderItemType,
   type ProviderLibrary,
+  type ProviderPage,
   type ProviderPlaybackInfo,
   type ProviderPlaybackReport,
   type ProviderSort,
@@ -716,6 +717,11 @@ export { remoteLibraryVisibleTo };
  *  after each awaited step, and repeats the mandated checks inside the synchronous state
  *  mutator that lands the write, so a revocation during an awaited call cannot publish or
  *  write anything under an authority that has since gone away. */
+/** A Play random pool: at most this many items, read in pages of this size, this many at once. */
+const SHUFFLE_POOL = 5000;
+const SHUFFLE_PAGE = 200;
+const SHUFFLE_PAGE_READS = 4;
+
 export class MediaServerManager {
   private readonly runtimes = new Map<string, CachedRuntime>();
   private readonly statuses = new Map<string, StatusRecord>();
@@ -1499,22 +1505,36 @@ export class MediaServerManager {
       await this.proveParent(authority, request, library, connection, session, requestedParent);
     }
     const parent = requestedParent ?? library.remoteId;
-    const seen = new Map<string, MediaServerShuffleItem>();
-    let cursor: string | undefined;
-    let total = 0;
-    for (let pageIndex = 0; pageIndex < 25 && seen.size < 5000; pageIndex += 1) {
-      const page = await this.upstream(connection, request, () => session.provider.pageItems(
-        session.token,
-        connection.accountId,
-        parent,
-        { limit: 200, includeItemTypes: SHUFFLE_ITEM_TYPES, ...(cursor === undefined ? {} : { cursor }) },
-        request,
-      ));
+    const readPage = (offset: number) => this.upstream(connection, request, () => session.provider.pageItems(
+      session.token,
+      connection.accountId,
+      parent,
+      { limit: SHUFFLE_PAGE, includeItemTypes: SHUFFLE_ITEM_TYPES, offset },
+      request,
+    )).then((page) => {
       this.recheckContent(authority, request, library.id, connection);
-      total = page.total;
+      return page;
+    });
+    // The first page says how many there are; the rest are read side by side (the manager's own
+    // pacing still spaces the requests), instead of one round trip after another.
+    const first = await readPage(0);
+    const wanted = Math.min(first.total, SHUFFLE_POOL);
+    const offsets: number[] = [];
+    for (let offset = SHUFFLE_PAGE; offset < wanted; offset += SHUFFLE_PAGE) offsets.push(offset);
+    const rest: ProviderPage[] = new Array(offsets.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(SHUFFLE_PAGE_READS, offsets.length) }, async () => {
+      while (next < offsets.length) {
+        const index = next++;
+        rest[index] = await readPage(offsets[index]!);
+      }
+    }));
+    const seen = new Map<string, MediaServerShuffleItem>();
+    for (const page of [first, ...rest]) {
       for (const item of page.items) this.putProof(this.proofOf(user, library, connection, item));
       for (const item of page.items) {
         if ((item.type !== "movie" && item.type !== "episode") || seen.has(item.id)) continue;
+        if (seen.size >= SHUFFLE_POOL) break;
         seen.set(item.id, {
           libraryId: library.id,
           itemId: item.id,
@@ -1523,13 +1543,10 @@ export class MediaServerManager {
           ...(item.season === undefined ? {} : { season: item.season }),
           ...(item.episode === undefined ? {} : { episode: item.episode }),
         });
-        if (seen.size >= 5000) break;
       }
-      cursor = page.cursor;
-      if (cursor === undefined) break;
     }
     this.recheckContent(authority, request, library.id, connection);
-    return { items: [...seen.values()], capped: total > 5000 || seen.size >= 5000 && cursor !== undefined };
+    return { items: [...seen.values()], capped: first.total > SHUFFLE_POOL };
   }
 
   /** Local-only re-check for a remote shuffle cursor; it deliberately makes no upstream call. */

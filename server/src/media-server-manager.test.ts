@@ -101,7 +101,7 @@ class FakeServer {
   logoutErrorFor: ((token: string) => unknown) | undefined;
   logoutWait: Promise<void> | undefined;
   nudge: Nudge | undefined;
-  pageOverride: ((options: { cursor?: string; limit?: number }) => FakePage) | undefined;
+  pageOverride: ((options: { cursor?: string; offset?: number; limit?: number }) => FakePage | Promise<FakePage>) | undefined;
   closed = 0;
   /** Provider operations live at once, and the high-water mark across a test. */
   activeOps = 0;
@@ -147,7 +147,7 @@ const stubProvider = (server: FakeServer): MediaServerProvider => ({
     await server.run("items");
     if (server.pageOverride) return server.pageOverride(options ?? {});
     const all = server.items[libraryId] ?? [];
-    const offset = options?.cursor ? Number(Buffer.from(options.cursor, "base64url").toString("utf8")) : 0;
+    const offset = options?.offset ?? (options?.cursor ? Number(Buffer.from(options.cursor, "base64url").toString("utf8")) : 0);
     const limit = options?.limit ?? 100;
     const slice = all.slice(offset, offset + limit);
     const next = offset + slice.length < all.length ? Buffer.from(String(offset + slice.length), "utf8").toString("base64url") : undefined;
@@ -3144,6 +3144,32 @@ test("shufflePool caps a large folder at 5000 playable titles", async () => {
     assert.equal(pool.items.length, 5000);
     assert.equal(pool.capped, true);
     assert.equal(harness.server.calls.filter((call) => call === "items").length, 25, "the pool never exceeds its page budget");
+  });
+});
+
+test("shufflePool reads the pages after the first side by side, at most four at a time", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    const all = Array.from({ length: 1874 }, (_, index) => movie(`bulk-${index}`, `Bulk ${index}`));
+    let inFlight = 0;
+    let most = 0;
+    const offsets: number[] = [];
+    harness.server.pageOverride = async (options) => {
+      const offset = options.offset ?? 0;
+      offsets.push(offset);
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return { items: clone(all.slice(offset, offset + (options.limit ?? 100))), total: all.length };
+    };
+
+    const pool = await harness.manager.shufflePool(harness.admin, library.id, undefined);
+
+    assert.equal(pool.items.length, 1874);
+    assert.equal(new Set(pool.items.map((item) => item.itemId)).size, 1874);
+    assert.deepEqual([...offsets].sort((a, b) => a - b), [0, 200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800]);
+    assert.equal(most, 4);
   });
 });
 

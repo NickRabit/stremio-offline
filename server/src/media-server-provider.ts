@@ -164,7 +164,7 @@ export interface MediaServerProvider {
   logout(token: string, signal?: AbortSignal): Promise<void>;
   currentAccount(token: string, accountId: string, signal?: AbortSignal): Promise<{ accountId: string; policy: RemoteAccountPolicy }>;
   listLibraries(token: string, accountId: string, signal?: AbortSignal): Promise<ProviderLibrary[]>;
-  pageItems(token: string, accountId: string, libraryId: string, options?: { cursor?: string; limit?: number; search?: string; includeItemTypes?: typeof SHUFFLE_ITEM_TYPES }, signal?: AbortSignal): Promise<ProviderPage>;
+  pageItems(token: string, accountId: string, libraryId: string, options?: { cursor?: string; offset?: number; limit?: number; search?: string; includeItemTypes?: typeof SHUFFLE_ITEM_TYPES }, signal?: AbortSignal): Promise<ProviderPage>;
   /** One native browse page of `parentId`: a folder's children or a library's titles. The
    *  options map strictly onto the fixed transport operation; one page per request, no scan. */
   pageDirectory(token: string, accountId: string, parentId: string, options: ProviderDirectoryOptions, signal?: AbortSignal): Promise<ProviderPage>;
@@ -773,7 +773,9 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     token: string,
     accountId: string,
     libraryId: string,
-    options: { cursor?: string; limit?: number; search?: string; includeItemTypes?: typeof SHUFFLE_ITEM_TYPES } = {},
+    /** `offset` reads a page at a known position without a cursor, so a caller that already knows
+     *  the total can read the remaining pages side by side. It never comes with a cursor. */
+    options: { cursor?: string; offset?: number; limit?: number; search?: string; includeItemTypes?: typeof SHUFFLE_ITEM_TYPES } = {},
     signal?: AbortSignal,
   ): Promise<ProviderPage> {
     const limit = options.limit ?? 100;
@@ -785,6 +787,12 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       throw invalid("The media-server item types are not allowed.");
     }
     let offset = 0;
+    if (options.offset !== undefined) {
+      if (options.cursor !== undefined || !Number.isSafeInteger(options.offset) || options.offset < 0 || options.offset > CURSOR_OFFSET_MAX) {
+        throw invalid("The media-server page offset is out of range.");
+      }
+      offset = options.offset;
+    }
     if (options.cursor !== undefined) {
       const decoded = decodeCursor(options.cursor);
       if (decoded.accountId !== accountId || decoded.libraryId !== libraryId || decoded.search !== (search ?? "")) {

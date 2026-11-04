@@ -1,7 +1,6 @@
 import type express from "express";
 import { AppError } from "../errors.js";
 import { libraryFor, libraryPathOpen, parseLibraryPath, type Viewer } from "../libraries.js";
-import type { BrowseItem } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { MediaServerAuthority, MediaServerManager } from "../media-server-manager.js";
 import { ShuffleSessions, shuffleUnits, type ShuffleOwner, type ShuffleUnit } from "../shuffle.js";
@@ -10,7 +9,8 @@ import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "
 export interface ShuffleDeps extends RouteContext {
   metaStore: LibraryMetaStore;
   localFiles(libraryId: string, relativePrefix: string): Promise<string[]>;
-  describeLibraryPath(key: string, read?: { stale?: boolean }): Promise<BrowseItem | undefined>;
+  /** Whether the key is a folder the viewer may open, read with one stat. */
+  folderAvailable(key: string, viewer: Viewer): Promise<boolean>;
   libraryKey(value: string): string;
   wirePath(key: string): string;
   fileAvailable(key: string, viewer: Viewer): Promise<boolean>;
@@ -22,7 +22,7 @@ export interface ShuffleDeps extends RouteContext {
 const notFound = () => new AppError("The item was not found.", "err.itemNotFound", 404);
 
 export function registerShuffleRoutes(app: express.Application, deps: ShuffleDeps): void {
-  const { store, currentSession, currentUser, metaStore, localFiles, describeLibraryPath, libraryKey, wirePath, fileAvailable, isCarvedOut, mediaServers, authorityOf } = deps;
+  const { store, currentSession, currentUser, metaStore, localFiles, folderAvailable, libraryKey, wirePath, fileAvailable, isCarvedOut, mediaServers, authorityOf } = deps;
   const sessions = new ShuffleSessions();
 
   const ownerOf = (req: express.Request): ShuffleOwner => {
@@ -89,9 +89,10 @@ export function registerShuffleRoutes(app: express.Application, deps: ShuffleDep
       throw notFound();
     }
     if (!libraryPathOpen(key, viewer, store.libraries())) throw notFound();
-    const item = await describeLibraryPath(key, { stale: true }).catch(() => undefined);
+    // One stat says the folder is there. Describing it would count and size every file under it,
+    // which on a large library is a walk of the whole tree from the disk on every press.
     const parsed = parseLibraryPath(key);
-    if (item?.kind !== "folder" || !parsed) throw notFound();
+    if (!parsed || isCarvedOut(key) || !(await folderAvailable(key, viewer))) throw notFound();
     const library = libraryFor(store.libraries(), parsed.libraryId);
     if (!library) throw notFound();
     const units = shuffleUnits(

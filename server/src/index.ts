@@ -2888,12 +2888,13 @@ registerShuffleRoutes(app, {
   localFiles: async (libraryId, relativePrefix) => {
     const library = libraryFor(store.libraries(), libraryId);
     if (!library) return [];
-    return filesOf(await libraryFiles(), library)
+    // A held walk answers at once and is refreshed behind the answer: every pick is checked on
+    // the disk before it plays, so a file that went away since is skipped, never played.
+    return filesOf(await libraryFiles({ stale: true }), library)
       .map((file) => relativeKeyIn(library.id, file.relative))
       .filter((relative): relative is string => relative !== undefined
         && (relativePrefix === "" || isPathWithin(relative, relativePrefix)));
   },
-  describeLibraryPath,
   libraryKey,
   wirePath,
   mediaServers,
@@ -2901,6 +2902,10 @@ registerShuffleRoutes(app, {
   fileAvailable: async (key, viewer) => {
     const target = await libraryTarget(key, viewer).catch(() => undefined);
     return Boolean(target && (await stat(target).catch(() => undefined))?.isFile());
+  },
+  folderAvailable: async (key, viewer) => {
+    const target = await libraryTarget(key, viewer).catch(() => undefined);
+    return Boolean(target && (await stat(target).catch(() => undefined))?.isDirectory());
   },
   isCarvedOut: (key) => {
     const parsed = parseLibraryPath(key);

@@ -37,6 +37,7 @@ interface Harness {
   carveOuts: Set<string>;
   remotePool: MediaServerShufflePool;
   remoteCurrent: boolean;
+  state: { folderChecks: string[]; missingFolders: Set<string> };
   close(): Promise<void>;
 }
 
@@ -45,9 +46,11 @@ const mount = async (): Promise<Harness> => {
   const available = new Set<string>();
   const files = new Set<string>();
   const carveOuts = new Set<string>();
-  const state: { remotePool: MediaServerShufflePool; remoteCurrent: boolean } = {
+  const state: { remotePool: MediaServerShufflePool; remoteCurrent: boolean; folderChecks: string[]; missingFolders: Set<string> } = {
     remotePool: { items: [], capped: false },
     remoteCurrent: true,
+    folderChecks: [],
+    missingFolders: new Set(),
   };
   const userOf = (req?: express.Request): UserRecord | undefined => {
     const id = req?.header("x-user");
@@ -78,13 +81,9 @@ const mount = async (): Promise<Harness> => {
     metaStore: { qualifiedMeta: () => ({}), episodes: () => ({}) } as unknown as LibraryMetaStore,
     localFiles: async (_libraryId, relativePrefix) =>
       [...files].filter((relative) => relativePrefix === "" || isPathWithin(relative, relativePrefix)),
-    describeLibraryPath: async (key) => {
-      const parsed = parseLibraryPath(key);
-      return parsed ? {
-        kind: "folder", path: parsed.relative,
-        name: parsed.relative.slice(parsed.relative.lastIndexOf("/") + 1),
-        fileCount: 0, size: 0, modified: "2026-01-01T00:00:00.000Z",
-      } : undefined;
+    folderAvailable: async (key) => {
+      state.folderChecks.push(key);
+      return parseLibraryPath(key) !== undefined && !state.missingFolders.has(key);
     },
     libraryKey: (value) => parseLibraryPath(value) ? value : libraryPath(LIBRARY_ID, value),
     wirePath: (key) => {
@@ -121,6 +120,7 @@ const mount = async (): Promise<Harness> => {
     available,
     files,
     carveOuts,
+    state,
     get remotePool() { return state.remotePool; },
     set remotePool(value) { state.remotePool = value; },
     get remoteCurrent() { return state.remoteCurrent; },
@@ -269,4 +269,18 @@ test("a remote run answers remote items and ends when its connection changes", a
   harness.remoteCurrent = false;
   const next = await api(harness.base, `/api/shuffle/${first.id}/next`, { method: "POST" });
   assert.deepEqual(await next.json(), { item: null, exhausted: true });
+});
+
+test("a local start checks the folder with one look instead of describing the whole tree", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  seed(harness, ["Shows/A/S01E01.mkv", "Shows/A/S01E02.mkv"]);
+
+  const started = await api(harness.base, "/api/shuffle", { method: "POST", body: { path: "Shows" } });
+  assert.equal(started.status, 200);
+  assert.deepEqual(harness.state.folderChecks, [libraryPath(LIBRARY_ID, "Shows")]);
+
+  harness.state.missingFolders.add(libraryPath(LIBRARY_ID, "Gone"));
+  const missing = await api(harness.base, "/api/shuffle", { method: "POST", body: { path: "Gone" } });
+  assert.equal(missing.status, 404);
 });
