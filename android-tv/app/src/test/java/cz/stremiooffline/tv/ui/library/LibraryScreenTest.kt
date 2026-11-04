@@ -214,6 +214,37 @@ class LibraryScreenTest {
   }
 
   @Test
+  fun `the toolbar shuffle icon plays the folder on screen and is absent on the libraries list`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(folder("yyy", "yyy")), 1, false)
+    api.pages["yyy"] = BrowseResult("yyy", listOf(folder("yyy/xxx", "xxx", fileCount = 2)), 1, false)
+    api.pages["yyy/xxx"] = BrowseResult("yyy/xxx", listOf(file("yyy/xxx/A.mkv"), folder("yyy/xxx/sub", "sub")), 2, false)
+    api.shuffleStartValue = ShuffleStartDto(id = "run-icon", item = ShuffleItemDto("yyy/xxx/A.mkv", "A"))
+    val played = mutableListOf<PlayTarget>()
+    mount(api, onPlay = { played += it })
+    switchTo("Files")
+    compose.onNodeWithTag(TagLibraryShuffleIcon).assertDoesNotExist()
+    for (tag in listOf("yyy", "yyy/xxx")) {
+      compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+      focusOn(tag)
+      press(Key.DirectionCenter)
+      compose.waitForIdle()
+      compose.mainClock.advanceTimeBy(150)
+      compose.waitForIdle()
+    }
+
+    compose.waitUntil(5_000) { api.browseCalls.any { it.first == "yyy/xxx" } }
+    compose.mainClock.advanceTimeBy(150)
+    compose.waitForIdle()
+    focusOn(TagLibraryShuffleIcon)
+    press(Key.DirectionCenter)
+
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+    assertEquals(listOf("yyy/xxx"), api.shuffleStarts)
+    assertEquals(false, played.single().resume)
+  }
+
+  @Test
   fun `long OK on a folder opens the same Play random panel`() {
     val api = FakeTvApi()
     api.pages[null] = BrowseResult("", listOf(folder("Shows", "Shows")), 1, false)

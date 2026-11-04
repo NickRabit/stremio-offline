@@ -26,3 +26,12 @@ fun outlineIcon(name: String, builder: PathBuilder.() -> Unit): ImageVector =
       pathBuilder = builder,
     )
   }.build()
+
+/** Play random: two crossing arrows. */
+val ShuffleIcon: ImageVector = outlineIcon("Shuffle") {
+  moveTo(16f, 3f); lineTo(21f, 3f); lineTo(21f, 8f)
+  moveTo(4f, 20f); lineTo(21f, 3f)
+  moveTo(21f, 16f); lineTo(21f, 21f); lineTo(16f, 21f)
+  moveTo(15f, 15f); lineTo(21f, 21f)
+  moveTo(4f, 4f); lineTo(9f, 9f)
+}
