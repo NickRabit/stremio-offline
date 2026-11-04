@@ -831,6 +831,7 @@ export class DownloadQueue {
   private readonly libraryWaitMs: number;
   private readonly libraryRetryMs: number;
   private libraryWatch?: NodeJS.Timeout;
+  private libraryWaking = false;
   private readonly now: () => number;
   private readonly freeSpace: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   private readonly createWriteStream: (file: string, options: { flags: string }) => NodeJS.WritableStream;
@@ -1380,7 +1381,11 @@ export class DownloadQueue {
    *  when it returns. Nothing else in the queue is held up by them. */
   private watchLibraries() {
     if (this.libraryWatch) return;
-    this.libraryWatch = setInterval(() => { void this.wakeLibraries(); }, this.libraryRetryMs);
+    this.libraryWatch = setInterval(() => {
+      if (this.libraryWaking) return;
+      this.libraryWaking = true;
+      void this.wakeLibraries().finally(() => { this.libraryWaking = false; });
+    }, this.libraryRetryMs);
     this.libraryWatch.unref();
   }
 

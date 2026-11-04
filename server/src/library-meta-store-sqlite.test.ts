@@ -41,6 +41,7 @@ const episode = (name: string): LibraryEpisodeRecord => ({
 async function fixture(t: TestContext) {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "library-meta-sqlite-"));
   const databases: AppDatabase[] = [];
+  const stores: LibraryMetaStore[] = [];
   let database = await openAppDatabase({ dataDir });
   databases.push(database);
   let closed = false;
@@ -48,6 +49,7 @@ async function fixture(t: TestContext) {
   const close = async () => {
     if (closed) return;
     closed = true;
+    for (const store of stores.reverse()) await store.flush();
     for (const opened of databases.reverse()) {
       try {
         await opened.close();
@@ -71,6 +73,7 @@ async function fixture(t: TestContext) {
     store(attached: AppDatabase = database) {
       const store = new LibraryMetaStore(dataDir);
       store.attachDatabase(attached);
+      stores.push(store);
       return store;
     },
     async seedLibrary(id: string, meta: Record<string, LibraryMetaRecord>, suggestions: Record<string, LibrarySuggestion> = {}) {

@@ -91,6 +91,12 @@ docker compose logs --tail=50 stremio-offline
 The app listens on `http://localhost:${STREMIO_OFFLINE_PORT:-8090}`, health
 endpoint `/api/status`, which must return `{"status":"ok",…}`.
 
+### Tests
+
+A test that failed in CI and passed on a rerun is a bug to fix the same day, not
+to rerun; `scripts/test-stress.mjs` is how to reproduce it. Fix the underlying
+race by synchronising on events, never by adding a longer timeout or a retry.
+
 ## Useful commands
 
 | Command | What it does |

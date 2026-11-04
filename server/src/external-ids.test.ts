@@ -6,8 +6,24 @@ import path from "node:path";
 import type { FetchLike } from "./debrid.js";
 
 process.env.WIKIDATA_GUARD = "0";
-const { ExternalIdStore, siteLinks } = await import("./external-ids.js");
+const { ExternalIdStore: ExternalIdStoreClass, siteLinks } = await import("./external-ids.js");
+type ExternalIdStoreHooks = import("./external-ids.js").ExternalIdStoreHooks;
 type ExternalIds = import("./external-ids.js").ExternalIds;
+
+const storesByDir = new Map<string, Array<InstanceType<typeof ExternalIdStoreClass>>>();
+class ExternalIdStore extends ExternalIdStoreClass {
+  constructor(dataDir: string, fetchImpl?: FetchLike, hooks?: ExternalIdStoreHooks) {
+    super(dataDir, fetchImpl, hooks);
+    const stores = storesByDir.get(dataDir) ?? [];
+    stores.push(this);
+    storesByDir.set(dataDir, stores);
+  }
+}
+
+const cleanup = (t: { after(fn: () => Promise<void>): void }, dir: string) => t.after(async () => {
+  for (const store of storesByDir.get(dir) ?? []) await store.flush();
+  await rm(dir, { recursive: true, force: true });
+});
 
 const bindings = (rows: Array<Record<string, { value: string }>>) =>
   new Response(JSON.stringify({ results: { bindings: rows } }), { status: 200, headers: { "content-type": "application/sparql-results+json" } });
@@ -67,7 +83,7 @@ const heldBody = () => {
 
 test("the query carries the format, the escaped SPARQL with the id and a descriptive agent", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const fetchImpl: FetchLike = async (url, init) => {
     calls.push({ url, init });
@@ -98,7 +114,7 @@ test("the query carries the format, the escaped SPARQL with the id and a descrip
 
 test("a movie answer maps to the film ids and a series answer to the TV id", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   const fetchImpl: FetchLike = async () => bindings([{ csfd: { value: "6672" }, tmdbMovie: { value: "31410" } }]);
   const store = new ExternalIdStore(dir, fetchImpl);
   await store.load();
@@ -106,7 +122,7 @@ test("a movie answer maps to the film ids and a series answer to the TV id", asy
   assert.deepEqual(await store.ids("tt0090257"), { csfd: "6672", tmdbMovie: "31410" });
 
   const seriesDir = await tempDir();
-  t.after(() => rm(seriesDir, { recursive: true, force: true }));
+  cleanup(t, seriesDir);
   const seriesStore = new ExternalIdStore(seriesDir, async () => bindings([{ tmdbTv: { value: "1396" } }]));
   await seriesStore.load();
 
@@ -115,7 +131,7 @@ test("a movie answer maps to the film ids and a series answer to the TV id", asy
 
 test("a second lookup of the same id asks Wikidata nothing", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   let calls = 0;
   const store = new ExternalIdStore(dir, async () => { calls += 1; return bindings([{ tmdbMovie: { value: "31410" } }]); });
   await store.load();
@@ -128,7 +144,7 @@ test("a second lookup of the same id asks Wikidata nothing", async (t) => {
 
 test("two concurrent lookups of one id share a single query", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   let calls = 0;
   const store = new ExternalIdStore(dir, async () => {
     calls += 1;
@@ -150,7 +166,7 @@ test("two concurrent lookups of one id share a single query", async (t) => {
 
 test("one caller leaving keeps the shared query and its remaining caller alive", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   const entered = deferred();
   const answer = deferred<Response>();
   let calls = 0;
@@ -179,7 +195,7 @@ test("one caller leaving keeps the shared query and its remaining caller alive",
 
 test("the last caller leaving cancels the body, writes nothing, and a retry asks again", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   const source = heldBody();
   let calls = 0;
   let transport: AbortSignal | undefined;
@@ -216,7 +232,7 @@ test("the last caller leaving cancels the body, writes nothing, and a retry asks
 
 test("a caller without a signal keeps a shared lookup alive after the first caller leaves", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   const entered = deferred();
   const answer = deferred<Response>();
   let cancelling: AbortSignal | undefined;
@@ -243,7 +259,7 @@ test("a caller without a signal keeps a shared lookup alive after the first call
 
 test("a lookup that throws answers null and writes no cache file", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   const store = new ExternalIdStore(dir, async () => { throw new Error("The operation was aborted due to timeout"); });
   await store.load();
 
@@ -253,7 +269,7 @@ test("a lookup that throws answers null and writes no cache file", async (t) => 
 
 test("a malformed answer returns null and writes no cache file", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   const store = new ExternalIdStore(dir, async () =>
     new Response("<html>", { headers: { "content-type": "application/sparql-results+json" } }));
   await store.load();
@@ -264,7 +280,7 @@ test("a malformed answer returns null and writes no cache file", async (t) => {
 
 test("an oversized chunked answer is cancelled before the whole body is read", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   const source = chunkedBody(256 * 1024, 64);
   const store = new ExternalIdStore(dir, async () => new Response(source.body));
   await store.load();
@@ -277,7 +293,7 @@ test("an oversized chunked answer is cancelled before the whole body is read", a
 
 test("a throttled lookup answers null, caches nothing and is tried again", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   let calls = 0;
   const store = new ExternalIdStore(dir, async () => {
     calls += 1;
@@ -296,7 +312,7 @@ test("a throttled lookup answers null, caches nothing and is tried again", async
 
 test("the answer is written to disk and a fresh store reads it back without a call", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   let calls = 0;
   const fetchImpl: FetchLike = async () => { calls += 1; return bindings([{ csfd: { value: "6672" }, tmdbMovie: { value: "31410" } }]); };
   const store = new ExternalIdStore(dir, fetchImpl);
@@ -318,7 +334,7 @@ test("the answer is written to disk and a fresh store reads it back without a ca
 
 test("an answer with no ids is kept for 30 days and asked again after that", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   let calls = 0;
   const store = new ExternalIdStore(dir, async () => { calls += 1; return bindings([]); });
   await store.load();
@@ -340,7 +356,7 @@ test("an answer with no ids is kept for 30 days and asked again after that", asy
 
 test("ten lookups within the debounce window produce one write", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   let writes = 0;
   const store = new ExternalIdStore(
     dir,
@@ -365,7 +381,7 @@ test("ten lookups within the debounce window produce one write", async (t) => {
 
 test("a refused lookup answers null, caches nothing and is tried again", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   let calls = 0;
   const store = new ExternalIdStore(dir, async () => {
     calls += 1;
@@ -382,7 +398,7 @@ test("a refused lookup answers null, caches nothing and is tried again", async (
 
 test("an id that is not an IMDb id answers null without a call", async (t) => {
   const dir = await tempDir();
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  cleanup(t, dir);
   let calls = 0;
   const store = new ExternalIdStore(dir, async () => { calls += 1; return bindings([]); });
   await store.load();
