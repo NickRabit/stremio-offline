@@ -82,6 +82,13 @@ export interface DownloadResolution {
   subtitleStatus?: "ready" | "missing";
 }
 
+export interface DownloadOrigin {
+  addon?: string;
+  remote?: "jellyfin" | "emby";
+  debrid?: true;
+  localCopy?: true;
+}
+
 export interface QueueHalt {
   reason: "storage";
   at: string;
@@ -123,6 +130,9 @@ export interface PublicDownload {
   completedAt?: string;
   /** The completed job points at a file that was already in a library. */
   reusedLocalCopy?: true;
+  /** Where the file really comes from, as names only: never an address or a token. Absent on a
+   *  lazy job that has not picked its source yet. */
+  origin?: DownloadOrigin;
   /** A lazy job whose source is picked only when the queue reaches it. */
   pending: boolean;
   debridProgress?: number;

@@ -1122,6 +1122,8 @@ export const pl: Catalog = {
   "downloads.showInLibrary": "Pokaż w bibliotece",
   "downloads.segments": { one: "Pobrano przez 1 połączenie", other: "Pobrano przez {count} połączeń", few: "Pobrano przez {count} połączenia", many: "Pobrano przez {count} połączeń" },
   "downloads.sourcePickedLater": "Źródło jest wybierane w momencie pobierania",
+  "downloads.source": "Źródło: {source}",
+  "downloads.sourceLocalCopy": "istniejąca kopia w bibliotece",
   "downloads.moveUp": "Przesuń się w górę",
   "downloads.moveDown": "Przesuń w dół",
   "downloads.retry": "Spróbuj ponownie",

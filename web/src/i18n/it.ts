@@ -1122,6 +1122,8 @@ export const it: Catalog = {
   "downloads.showInLibrary": "Mostra in biblioteca",
   "downloads.segments": { one: "Scaricato su 1 connessione", other: "Scaricato su {count} connessioni" },
   "downloads.sourcePickedLater": "La sorgente viene scelta al momento del download",
+  "downloads.source": "Fonte: {source}",
+  "downloads.sourceLocalCopy": "copia già presente nella libreria",
   "downloads.moveUp": "Vai su",
   "downloads.moveDown": "Spostati giù",
   "downloads.retry": "Riprova",

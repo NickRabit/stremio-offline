@@ -1162,6 +1162,8 @@ export const cs: Catalog = {
   "downloads.showInLibrary": "Zobrazit v knihovně",
   "downloads.segments": { one: "Stahuje se 1 spojením", few: "Stahuje se {count} spojeními", other: "Stahuje se {count} spojeními" },
   "downloads.sourcePickedLater": "Zdroj se vybere při stahování",
+  "downloads.source": "Zdroj: {source}",
+  "downloads.sourceLocalCopy": "existující kopie v knihovně",
   "downloads.moveUp": "Nahoru",
   "downloads.moveDown": "Dolů",
   "downloads.retry": "Zkusit znovu",

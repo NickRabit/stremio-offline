@@ -1122,6 +1122,8 @@ export const sk: Catalog = {
   "downloads.showInLibrary": "Zobraziť v knižnici",
   "downloads.segments": { one: "Stiahnuté cez 1 pripojenie", other: "Stiahnuté cez {count} pripojení", few: "Stiahnuté cez {count} pripojenia" },
   "downloads.sourcePickedLater": "Zdroj sa vyberie v čase sťahovania",
+  "downloads.source": "Zdroj: {source}",
+  "downloads.sourceLocalCopy": "existujúca kópia v knižnici",
   "downloads.moveUp": "Posunúť sa hore",
   "downloads.moveDown": "Presuňte sa nadol",
   "downloads.retry": "Skúste to znova",

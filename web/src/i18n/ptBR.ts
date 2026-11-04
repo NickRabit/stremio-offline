@@ -1122,6 +1122,8 @@ export const ptBR: Catalog = {
   "downloads.showInLibrary": "Mostrar na biblioteca",
   "downloads.segments": { one: "Baixado em 1 conexão", other: "Baixado em {count} conexões" },
   "downloads.sourcePickedLater": "A fonte é escolhida no momento do download",
+  "downloads.source": "Fonte: {source}",
+  "downloads.sourceLocalCopy": "cópia já existente na biblioteca",
   "downloads.moveUp": "Subir",
   "downloads.moveDown": "Mover para baixo",
   "downloads.retry": "Tente novamente",
