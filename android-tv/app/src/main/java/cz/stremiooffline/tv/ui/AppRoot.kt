@@ -48,7 +48,6 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import coil3.ImageLoader
 import coil3.annotation.ExperimentalCoilApi
-import coil3.disk.DiskCache
 import coil3.network.cachecontrol.CacheControlCacheStrategy
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import cz.stremiooffline.tv.R
@@ -70,7 +69,6 @@ import cz.stremiooffline.tv.ui.signin.SignInViewModel
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
 import kotlinx.coroutines.launch
-import okio.Path.Companion.toOkioPath
 
 sealed interface SessionState {
   data object Loading : SessionState
@@ -182,14 +180,6 @@ private fun AppContent() {
   val context = LocalContext.current
   val store = remember { SessionStore(context.applicationContext) }
   val session = viewModel<SessionViewModel>(factory = SessionViewModel.factory(store))
-  val imageDiskCache = remember(context.applicationContext) {
-    DiskCache.Builder()
-      .directory(context.cacheDir.resolve("coil3_images").toOkioPath())
-      .maxSizeBytes(IMAGE_CACHE_MAX_BYTES)
-      .build()
-  }
-  DisposableEffect(imageDiskCache) { onDispose { imageDiskCache.shutdown() } }
-
   when (val state = session.state) {
     SessionState.Loading -> Box(Modifier.fillMaxSize().appBackground())
 
@@ -203,6 +193,10 @@ private fun AppContent() {
       // The account's interface language from /api/auth/me is the app's locale from the first
       // frame, and every later pick goes through the session too.
       SessionLocale(session)
+      val imageDiskCache = remember(state.api.serverAddress, state.username) {
+        sessionImageDiskCache(context.applicationContext, state.api.serverAddress, state.username)
+      }
+      DisposableEffect(imageDiskCache) { onDispose { imageDiskCache.shutdown() } }
       val imageLoader = remember(state.api, imageDiskCache) {
         ImageLoader.Builder(context.applicationContext)
           .diskCache(imageDiskCache)
@@ -238,8 +232,6 @@ private fun AppContent() {
     )
   }
 }
-
-private const val IMAGE_CACHE_MAX_BYTES = 100L * 1024 * 1024
 
 /**
  * Applies the signed-in session's language whenever it changes; [apply] is the platform call, so a

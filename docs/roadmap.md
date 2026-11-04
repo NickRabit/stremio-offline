@@ -360,14 +360,39 @@ The remaining majors after these, one PR each:
   the same names and render the same markup, size and classes; only
   `CircleCheck` and `CalendarClock` are slightly redrawn. Icons without a
   label stay `aria-hidden` as in 0.577.
+- **Android TV build** — done (AGP 9.5, Gradle 9.8, Media3 1.11): the debug and
+  release APKs, unit tests and lint pass with the current toolchain, and
+  `minSdk` stays 24. The debug APK was also run on an Android 12 TV emulator and
+  an Android 9 emulator (the owner's Philips 43PUS8505 launched with Android 9):
+  sign-in, the home screen and playing a local file work on both.
 - **Node floor 24 with `@types/node` 24** — done: nothing shipped runs on
   Node 22 (the image runs 26, Electron 44 runs 24.22, CI runs 24 and 26), so
   `engines` now says 24.15 (jsdom 30 needs it on the 24 line) and the types match. Server, desktop, web and e2e
   type-check unchanged.
 - **OkHttp 4 → 5 and Coil 2 → 3** — done: Android TV uses OkHttp 5.5.1 and
-  Coil 3.6.3; `minSdk` stays 24.
+  Coil 3.6.3; `minSdk` stays 24. Coil 3 no longer reads its loader from a
+  `CompositionLocal`, so every `AsyncImage` passes the signed-in session's loader
+  (a unit test fails when one does not). The loader keeps a 100 MB disk cache that
+  follows the server's cache headers and belongs to one account: the folders of
+  other accounts are deleted, because the server decides who may see artwork.
+  Emulator check on Android 12 TV: a restarted app fetched 45 kB for Home instead
+  of 979 kB. Core library desugaring covers `java.time` for the cache-control
+  module on Android 7 and 8; that path was not run on an emulator.
 
-Ubuntu base image majors stay manual as well (24.04 on purpose since #634).
+**Ubuntu runtime image: stays on 24.04 for now.** 24.04 was chosen on purpose
+in #634 (0 CRITICAL and 0 HIGH findings in Trivy). 26.04 LTS was tried on
+2026-11-04 and is **not safe for the arm64 image yet**: libx264 from its
+FFmpeg 8.0.1 stops with "Illegal instruction" in the Docker Desktop VM on
+Apple silicon, because the VM advertises SVE2 and I8MM, which the chip cannot
+run, and x264 picks those assembly paths; `-x264-params asm=0` avoids it. That
+would break software transcoding on the owner's Mac Docker (port 8090). The
+amd64 image for the NAS built, started, passed the SQLite check and had 0
+CRITICAL and 0 HIGH findings; hardware transcoding was not tested.
+Revisit when Ubuntu's x264 or FFmpeg package changes: rerun the check
+`docker run --platform linux/arm64 ubuntu:26.04` + `ffmpeg -f lavfi -i
+testsrc=duration=2 -c:v libx264 -f null -` on an Apple-silicon Docker, then
+move the runtime stage, `docs/licensing.md` and `libatomic1` (26.04 does not
+ship it either).
 
 ### Android TV
 
