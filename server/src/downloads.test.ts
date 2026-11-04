@@ -485,6 +485,10 @@ test("a job waits for a removed library and finishes there once it is added agai
       return removed ? undefined : (libraryId === archive.id ? archive : undefined);
     },
   });
+  // The transfer is real I/O: on a slow disk it takes longer than any fixed number of event-loop turns, so the
+  // test waits for the queue's own completion callback, which runs after the completion is persisted.
+  const completedOnce = deferred();
+  queue.onCompleted = async () => { completedOnce.release(); };
   await queue.load();
   try {
     const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` }, undefined, { subfolder: "", layout: "structured", libraryId: archive.id });
@@ -507,9 +511,7 @@ test("a job waits for a removed library and finishes there once it is added agai
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(libraryLookups, lookupsBeforeReturn + 1, "a second retry tick does not overlap the first");
     releaseGatedLookup.release();
-    for (let attempt = 0; attempt < 1000 && queue.list()[0]?.status !== "completed"; attempt += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+    await completedOnce.promise;
     assert.equal(queue.list()[0]?.status, "completed");
     assert.equal(queue.list()[0]!.target, "lib_12345678/Film/Film.mp4");
     assert.equal((await stat(path.join(archiveRoot, "Film", "Film.mp4"))).size, size);
