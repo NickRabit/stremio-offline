@@ -433,6 +433,27 @@ Screenshot baselines are refreshed through a separate manually triggered
 workflow that regenerates them in the container and pushes the result to the
 pull request branch, so updating them is not a local-environment chore.
 
+### Android and release scheduling
+
+Android CI runs packaging (`assembleDebug assembleRelease`, including R8) beside
+unit tests and lint (`testDebugUnitTest lintDebug`). The final `build` check keeps
+the existing required-check name and fails if either matrix job fails, is cancelled,
+or is skipped. The partial-signing-configuration check remains in the packaging job.
+
+Gradle task output caching is enabled. `gradle/actions/setup-gradle` persists the
+Gradle User Home, including the local build cache, with separate matrix cache keys.
+Its default policy writes caches on the default branch and only reads them on PRs
+and release tags. The first run is cold; compare subsequent runs before judging
+cache effectiveness. Configuration caching is not enabled.
+
+Release packages build alongside the Docker image after version validation. Each
+package job verifies its output before uploading a run-local artifact, including
+the corresponding FFmpeg sources. Only the publishing job has release write access;
+it waits for the image workflow and all package jobs. Missing Android signing secrets
+still omit the APK without failing the release. GitHub Release publication waits for
+all package checks; Docker publication retains its existing CI and image checks.
+Existing release assets are never overwritten on a rerun.
+
 ## Complexity report
 
 `npm run complexity` (plain Node, no dependencies) prints a short Markdown

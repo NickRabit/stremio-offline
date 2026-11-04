@@ -1389,6 +1389,42 @@ class CatalogDetailTest {
   }
 
   @Test
+  fun `a series whose active source is a media-server copy still offers season and series downloads`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.remoteLibrariesValue = listOf(cz.stremiooffline.tv.data.RemoteLibraryDto(id = "rlibA", name = "Serialy", provider = "jellyfin"))
+    val remote = StreamDto(
+      sourceId = "r1",
+      kind = "remote",
+      playable = true,
+      name = "r1",
+      provider = "jellyfin",
+      libraryName = "Serialy",
+      capabilities = RemoteCapabilitiesDto(downloadToLibrary = true),
+      remoteItem = RemoteItemContext(libraryId = "rlibA", itemId = "iA", mediaSourceId = "r1", progressKey = "remote:rlibA:iA"),
+    )
+    api.remoteMatchValues["rlibA|series|tt1"] = listOf(remote)
+    api.remoteMatchValues["rlibA|series|tt1:1:1"] = listOf(remote)
+    api.remoteMatchValues["rlibA|series|tt1:1:2"] = listOf(remote)
+    api.metaValues["series:tt1"] = MetaDto(
+      id = "tt1",
+      type = "series",
+      name = "Show",
+      videos = listOf(
+        VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1),
+        VideoDto(id = "tt1:1:2", title = "Two", season = 1, episode = 2),
+      ),
+    )
+    mount(api, CatalogDetailArgs(MetaDto(id = "tt1", type = "series", name = "Show"), "Cinemeta", "series", preferRemote = true))
+    compose.waitUntil(5_000) { api.remoteMatchRequests.any { it.startsWith("rlibA|series|") } }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogToLibrary).performSemanticsAction(SemanticsActions.OnClick)
+    compose.onNodeWithTag(TagSeriesDownloadPanel).assertExists()
+    compose.onNodeWithTag(TagTitleDownloadPanel).assertDoesNotExist()
+  }
+
+  @Test
   fun `a film has no series bulk action`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
