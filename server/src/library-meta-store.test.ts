@@ -11,8 +11,12 @@ const libraryFile = (dataDir: string, id: string) => path.join(dataDir, "library
 
 async function withStore(run: (store: LibraryMetaStore, dataDir: string) => Promise<void>) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "meta-store-"));
-  try { await run(new LibraryMetaStore(dataDir), dataDir); }
-  finally { await rm(dataDir, { recursive: true, force: true }); }
+  const store = new LibraryMetaStore(dataDir);
+  try { await run(store, dataDir); }
+  finally {
+    await store.flush();
+    await rm(dataDir, { recursive: true, force: true });
+  }
 }
 
 async function seed(dataDir: string, id: string, meta: Record<string, unknown>, suggestions: Record<string, unknown> = {}) {
@@ -121,14 +125,17 @@ test("a move into another library writes both files and pins the inherited title
 
 test("copy duplicates metadata without changing the source", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-meta-"));
+  const store = new LibraryMetaStore(dataDir);
   try {
-    const store = new LibraryMetaStore(dataDir);
     await store.load();
     await store.update("lib_11111111", (file) => { file.meta.Title = record("tt1"); });
     await store.copy("lib_11111111/Title", "lib_22222222/Title copy");
     assert.equal(store.meta("lib_11111111").Title?.id, "tt1");
     assert.equal(store.meta("lib_22222222")["Title copy"]?.id, "tt1");
-  } finally { await rm(dataDir, { recursive: true, force: true }); }
+  } finally {
+    await store.flush();
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("a move into the same folder name in another library still pins the inherited title", async () => {

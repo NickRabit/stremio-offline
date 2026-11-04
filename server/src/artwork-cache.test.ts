@@ -24,8 +24,12 @@ const listed = async (dir: string): Promise<string[]> => {
 async function withCache(cap: number, run: (cache: ArtworkCache, dir: string, dataDir: string) => Promise<void>) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "artwork-cache-"));
   const dir = path.join(dataDir, "artwork");
-  try { await run(new ArtworkCache(dir, cap), dir, dataDir); }
-  finally { await rm(dataDir, { recursive: true, force: true }); }
+  const cache = new ArtworkCache(dir, cap);
+  try { await run(cache, dir, dataDir); }
+  finally {
+    await cache.flush();
+    await rm(dataDir, { recursive: true, force: true });
+  }
 }
 
 const put = async (cache: ArtworkCache, key: string, bytes: number) => {

@@ -50,6 +50,7 @@ interface Harness {
   playback: Record<string, any>;
   useSource(stream: StreamItem): void;
   seedRemote(): string;
+  waitForMediaClose(resourceId: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -64,6 +65,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
   const userOf = (req: express.Request) => (req.header("x-user") === "bob" ? "bob" : "ada");
   const ownerOf = (req: express.Request) => sessions[userOf(req)];
   const playbackOwners = new Map([[ID, { owner: ADA, resourceId: RESOURCE }]]);
+  const mediaCloses = new Map<string, { seen: number; waiters: Array<() => void> }>();
   const resources = new MediaResources();
   const mediaSources = new MediaServerSources(
     { users: () => [], mediaConnections: () => [], remoteLibraries: () => [] } as unknown as Store,
@@ -125,7 +127,15 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     sourceIsQuiet: () => false,
     stats: { complete: () => undefined, activity: { record: () => undefined } } as unknown as StatsLog,
     subtitleDelay: () => 0,
-    trackMedia: () => undefined,
+    trackMedia: (_owner, res, resourceId) => {
+      if (!resourceId) return;
+      res.once("close", () => {
+        const state = mediaCloses.get(resourceId);
+        const waiter = state?.waiters.shift();
+        if (waiter) waiter();
+        else mediaCloses.set(resourceId, { seen: (state?.seen ?? 0) + 1, waiters: state?.waiters ?? [] });
+      });
+    },
     SOURCE_ATTEMPTS: 3,
     SOURCE_RETRY_MS: 400,
     SOURCE_RESUMES: 5,
@@ -155,6 +165,18 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     playback,
     useSource: (stream: StreamItem) => { source = stream; },
     seedRemote: () => registry.mediaStream({ url: sealedRemote() } as StreamItem, ADA).resourceId,
+    waitForMediaClose: (resourceId: string) => {
+      const state = mediaCloses.get(resourceId);
+      if (state?.seen) {
+        state.seen -= 1;
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        const next = state ?? { seen: 0, waiters: [] };
+        next.waiters.push(resolve);
+        mediaCloses.set(resourceId, next);
+      });
+    },
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -374,9 +396,16 @@ const rangedOriginal = (harness: Harness, size: number) => {
 };
 
 /** What FFmpeg does on every jump: asks from an offset to the end, reads a little, hangs up. */
-const readSome = async (base: string, resourceId: string, from: number, bytes: number): Promise<Buffer> => {
+const readSome = async (
+  harness: Harness,
+  resourceId: string,
+  from: number,
+  bytes: number,
+  afterClose?: () => void,
+): Promise<Buffer> => {
   const controller = new AbortController();
-  const response = await fetch(`${base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: `bytes=${from}-` }, signal: controller.signal });
+  const closed = harness.waitForMediaClose(resourceId);
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: `bytes=${from}-` }, signal: controller.signal });
   assert.equal(response.status, 206);
   const reader = response.body!.getReader();
   const parts: Buffer[] = [];
@@ -389,6 +418,8 @@ const readSome = async (base: string, resourceId: string, from: number, bytes: n
   }
   controller.abort();
   await reader.cancel().catch(() => undefined);
+  await closed;
+  afterClose?.();
   return Buffer.concat(parts).subarray(0, bytes);
 };
 
@@ -424,19 +455,19 @@ test("an OpenDML probe jumping between the super index and the index chunks cost
   const resourceId = harness.seedRemote();
   const indexAt = size - 3 * 1024 * 1024;
 
-  assert.deepEqual(await readSome(harness.base, resourceId, 0, 4096), file.subarray(0, 4096));
+  assert.deepEqual(await readSome(harness, resourceId, 0, 4096), file.subarray(0, 4096));
   for (let entry = 0; entry < 40; entry += 1) {
     const header = 260 + entry * 16;
-    assert.deepEqual(await readSome(harness.base, resourceId, header, 16), file.subarray(header, header + 16));
+    assert.deepEqual(await readSome(harness, resourceId, header, 16), file.subarray(header, header + 16));
     const chunk = indexAt + entry * 65_536;
-    assert.deepEqual(await readSome(harness.base, resourceId, chunk, 32_768), file.subarray(chunk, chunk + 32_768));
+    assert.deepEqual(await readSome(harness, resourceId, chunk, 32_768), file.subarray(chunk, chunk + 32_768));
   }
 
   assert.ok(opens.length <= 5, `80 jumps asked the media server ${opens.length} times: ${opens.join(", ")}`);
   assert.ok(opens.every((range) => /^bytes=\d+-\d+$/.test(range)), `a reader that hung up was handed the rest of the film: ${opens.join(", ")}`);
   // A conversion opening the same film again reads what the probe already holds.
   const before = opens.length;
-  assert.deepEqual(await readSome(harness.base, resourceId, 0, 4096), file.subarray(0, 4096));
+  assert.deepEqual(await readSome(harness, resourceId, 0, 4096), file.subarray(0, 4096));
   assert.equal(opens.length, before);
 });
 
@@ -483,7 +514,7 @@ test("a held block is still refused to an owner whose access was withdrawn", asy
   t.after(harness.close);
   const { opens, sources } = rangedOriginal(harness, 2 * 1024 * 1024);
   const resourceId = harness.seedRemote();
-  await readSome(harness.base, resourceId, 0, 100);
+  await readSome(harness, resourceId, 0, 100);
   // The first reader may already have started the next block before it hung up.
   await new Promise((resolve) => setTimeout(resolve, 100));
   const before = opens.length;
@@ -495,9 +526,15 @@ test("a held block is still refused to an owner whose access was withdrawn", asy
 });
 
 /** An addon host on this machine that answers ranges, counting every request it is asked. */
-const addonHost = async (t: { after(fn: () => unknown): unknown }, body: Buffer, contentType = "video/x-msvideo") => {
+const addonHost = async (
+  t: { after(fn: () => unknown): unknown },
+  body: Buffer,
+  contentType = "video/x-msvideo",
+  holdAfterBytes?: number,
+) => {
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   const ranges: string[] = [];
+  const held: Array<() => void> = [];
   const server = http.createServer((req, res) => {
     ranges.push(String(req.headers.range ?? ""));
     const match = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? ""));
@@ -505,12 +542,19 @@ const addonHost = async (t: { after(fn: () => unknown): unknown }, body: Buffer,
     const start = Number(match[1]);
     const end = Math.min(match[2] ? Number(match[2]) : body.length - 1, body.length - 1);
     res.writeHead(206, { "content-type": contentType, "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${body.length}`, "accept-ranges": "bytes" });
-    res.end(body.subarray(start, end + 1));
+    const heldEnd = holdAfterBytes === undefined ? end : Math.min(end, start + holdAfterBytes - 1);
+    res.write(body.subarray(start, heldEnd + 1));
+    if (heldEnd === end) return void res.end();
+    held.push(() => { if (!res.destroyed) res.end(body.subarray(heldEnd + 1, end + 1)); });
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; server.closeAllConnections(); server.close(); });
-  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/film.avi`, ranges };
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/film.avi`,
+    ranges,
+    releaseHeld: () => held.shift()?.(),
+  };
 };
 
 const filmBytes = (size: number) => {
@@ -539,16 +583,16 @@ test("an addon film probed by jumping between its header and its index asks the 
   t.after(harness.close);
   const size = 6 * 1024 * 1024;
   const file = filmBytes(size);
-  const host = await addonHost(t, file);
+  const host = await addonHost(t, file, "video/x-msvideo", 64 * 1024);
   const resourceId = registry.mediaStream({ url: host.url } as StreamItem, ADA).resourceId;
   const indexAt = size - 3 * 1024 * 1024;
 
-  assert.deepEqual(await readSome(harness.base, resourceId, 0, 4096), file.subarray(0, 4096));
+  assert.deepEqual(await readSome(harness, resourceId, 0, 4096, host.releaseHeld), file.subarray(0, 4096));
   for (let entry = 0; entry < 40; entry += 1) {
     const header = 260 + entry * 16;
-    assert.deepEqual(await readSome(harness.base, resourceId, header, 16), file.subarray(header, header + 16));
+    assert.deepEqual(await readSome(harness, resourceId, header, 16, host.releaseHeld), file.subarray(header, header + 16));
     const chunk = indexAt + entry * 65_536;
-    assert.deepEqual(await readSome(harness.base, resourceId, chunk, 32_768), file.subarray(chunk, chunk + 32_768));
+    assert.deepEqual(await readSome(harness, resourceId, chunk, 32_768, host.releaseHeld), file.subarray(chunk, chunk + 32_768));
   }
 
   assert.ok(host.ranges.length <= 5, `80 jumps asked the host ${host.ranges.length} times: ${host.ranges.join(", ")}`);

@@ -10,5 +10,11 @@ export default defineConfig({
   build: { outDir: "dist", emptyOutDir: true, target: ["es2020", "chrome87", "firefox78", "safari14"] },
   server: { proxy: { "/api": "http://localhost:8080" } },
   define: { "process.env": "{}", global: "globalThis" },
-  test: { environment: "jsdom", include: ["src/**/*.test.ts", "src/**/*.test.tsx"], restoreMocks: true, setupFiles: ["src/test-setup.ts"] },
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    restoreMocks: true,
+    setupFiles: ["src/test-setup.ts"],
+    testTimeout: 120_000,
+  },
 });

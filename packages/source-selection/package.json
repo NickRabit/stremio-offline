@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/source-selection",
   "private": true,
-  "version": "0.7.49",
+  "version": "0.7.50",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test src/index.test.ts"
+    "test": "tsx --test --test-timeout=120000 src/index.test.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

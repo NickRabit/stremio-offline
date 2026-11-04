@@ -3718,35 +3718,44 @@ test("a rules ranged source outside the real size stops at the range probe", asy
 });
 
 test("a 10 GB rules source under a 20 GB limit is not stopped by the real-size check", async () => {
-  const { directory, data, downloads } = await setup();
-  const source = await declaredSizeServer(10_000_000_000);
-  let resolutions = 0;
-  const queue = openQueue(data, downloads);
-  queue.setRulesResolver(async () => {
-    resolutions += 1;
-    return selectedRules(source.url, null);
-  });
-  await queue.load();
-  try {
-    const added = await queue.addPending(
-      "Film",
-      { type: "movie", videoId: "tt-rules-real-size-inside", selection: selection("queue-private-token") },
-      { kind: "movie", title: "Film" },
-      QUEUE_OWNER,
-      undefined,
-      rulesSnapshot(rulesWithMaximum("movie", 20)),
-    );
-    assert.ok(added);
-    await source.entered;
-    await waitFor(queue, () => (queue.get(added.id)?.received ?? 0) > 0);
-    assert.equal(resolutions, 1);
-    assert.deepEqual(internalJobs(queue)[0]?.source?.tried, []);
-    assert.equal(queue.get(added.id)?.status, "downloading");
-  } finally {
-    await queue.stop();
-    source.server.closeAllConnections();
-    source.server.close();
-    await rm(directory, { recursive: true, force: true });
+  for (const freeBytes of [0, 1_000_000_000_000]) {
+    const { directory, data, downloads } = await setup();
+    const source = await declaredSizeServer(10_000_000_000);
+    let resolutions = 0;
+    const queue = openQueue(data, downloads, {
+      freeSpace: async () => ({ freeBytes, totalBytes: 2_000_000_000_000 }),
+    });
+    queue.setRulesResolver(async () => {
+      resolutions += 1;
+      return selectedRules(source.url, null);
+    });
+    await queue.load();
+    try {
+      const added = await queue.addPending(
+        "Film",
+        { type: "movie", videoId: "tt-rules-real-size-inside", selection: selection("queue-private-token") },
+        { kind: "movie", title: "Film" },
+        QUEUE_OWNER,
+        undefined,
+        rulesSnapshot(rulesWithMaximum("movie", 20)),
+      );
+      assert.ok(added);
+      await source.entered;
+      if (freeBytes === 0) {
+        await waitFor(queue, () => queue.haltInfo()?.reason === "storage");
+        assert.equal(queue.get(added.id)?.pauseReason, "storage");
+      } else {
+        await waitFor(queue, () => (queue.get(added.id)?.received ?? 0) > 0);
+        assert.equal(queue.get(added.id)?.status, "downloading");
+      }
+      assert.equal(resolutions, 1);
+      assert.deepEqual(internalJobs(queue)[0]?.source?.tried, []);
+    } finally {
+      await queue.stop();
+      source.server.closeAllConnections();
+      source.server.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 });
 
