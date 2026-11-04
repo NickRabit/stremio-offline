@@ -28,6 +28,8 @@ const TILE_WIDTH = 640;
 const DETAIL_WIDTH = 1920;
 const FFMPEG_TIMEOUT_MS = 15_000;
 const SAVE_MS = 2000;
+const FAILURE_WARN_MS = 6 * 60 * 60_000;
+const FAILURE_WARN_IDS = 2000;
 /** A link handed out again only moves its retirement, which is months away. An open page
  *  re-reads the same posters every few seconds, and rewriting an index of many megabytes each
  *  time kept a NAS busy while nobody was doing anything. */
@@ -546,6 +548,18 @@ export class ImageProxy {
 
   private path(id: string, ext: string) { return path.join(this.dir, `${id}.${ext}`); }
 
+  private warned = new Map<string, number>();
+
+  private warnable(id: string): boolean {
+    const now = this.now();
+    const last = this.warned.get(id);
+    if (last !== undefined && now - last < FAILURE_WARN_MS) return false;
+    this.warned.delete(id);
+    this.warned.set(id, now);
+    if (this.warned.size > FAILURE_WARN_IDS) this.warned.delete(this.warned.keys().next().value!);
+    return true;
+  }
+
   /** Fewer bytes on disk: the fetched picture is re-encoded once, or comes back as it was.
    *  A picture already at or under the target width is never scaled up. */
   private async downscale(data: Buffer, ext: string, width: number = TILE_WIDTH, signal?: AbortSignal): Promise<Buffer> {
@@ -712,7 +726,11 @@ export class ImageProxy {
 
   private async download(id: string, entry: Entry, signal: AbortSignal): Promise<Entry | undefined> {
     const rejected = (reason: string) => {
-      log("DEBUG", "The image was not cached", { host: hostOf(entry.url), reason });
+      // A visitor who left is no failure. Anything else is a hidden picture on someone's screen,
+      // so it is a warning, once per picture per window: a dead address is asked for again on
+      // every page, and a log line per request would only wear the disk.
+      const warn = !signal.aborted && this.warnable(id);
+      log(warn ? "WARN" : "DEBUG", "The image was not cached", { id, host: hostOf(entry.url), reason });
       return undefined;
     };
     try {
