@@ -117,3 +117,37 @@ test.describe("phone Home loading", () => {
     }
   });
 });
+
+test("a phone never breaks a detail action's label inside a word", async ({ page, request }) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  expect((await seedFilm(request)).ok()).toBe(true);
+  // A trailer adds the fifth button, the row the owner saw break "Zhlédnuto" on a 375 px phone.
+  await page.route("**/api/meta/movie/*/extras*", async (route) => {
+    const response = await route.fetch();
+    const extras = await response.json() as Record<string, unknown>;
+    await route.fulfill({ response, json: { ...extras, videos: [{ kind: "trailer", key: "e2e-trailer", name: "Trailer", language: "cs" }] } });
+  });
+  await page.goto("/");
+  await goToView(page, "Domů");
+  const shelf = page.locator(".home-row", { has: page.getByRole("heading", { name: "Pokračovat ve sledování" }) });
+  await shelf.locator(".browse-item", { hasText: "Zkušební film" }).getByRole("button").first().click();
+  // A title with a saved position carries the fullest row: from the start, watched, device, favourite.
+  const actions = page.locator(".catalogue-title-detail .detail-secondary .detail-icon");
+  await expect.poll(() => actions.count()).toBeGreaterThanOrEqual(5);
+  const broken = await actions.evaluateAll((buttons) => buttons.flatMap((button) => {
+    const words: string[] = [];
+    const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.textContent ?? "";
+      for (const match of text.matchAll(/\S+/g)) {
+        const range = document.createRange();
+        range.setStart(node, match.index!);
+        range.setEnd(node, match.index! + match[0].length);
+        const lines = new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)));
+        if (lines.size > 1) words.push(match[0]);
+      }
+    }
+    return words;
+  }));
+  expect(broken).toEqual([]);
+});
