@@ -26,6 +26,11 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # Ubuntu 26.04's libx264 crashes on arm64 VMs that advertise SVE2; see the
+      # Ubuntu paragraph in docs/roadmap.md. Remove this when it is fixed.
+      - dependency-name: ubuntu
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
