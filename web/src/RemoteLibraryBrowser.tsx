@@ -118,6 +118,14 @@ type Playing = {
   /** Addon subtitles of the catalogue title a library copy or a file stands for. */
   subtitles?: Subtitle[];
 };
+type DetailPlaybackContext = {
+  detail: RemoteItem;
+  series: RemoteItem | null;
+  favorite: boolean;
+  identity: CatalogueRef | null;
+  scope: string;
+  poster?: string;
+};
 type RemoteShuffleRun = {
   id: string;
   libraryId: string;
@@ -286,6 +294,16 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [shuffleRun, setShuffleRun] = useState<RemoteShuffleRun | null>(null);
   const shuffleRunRef = useRef<RemoteShuffleRun | null>(null);
   const shuffleAbort = useRef<AbortController | null>(null);
+  const shuffleReturn = useRef<{
+    detail: RemoteItem | null;
+    series: RemoteItem | null;
+    sources: Stream[] | null;
+    state: RemoteItemState | null;
+    detailStream: Stream | null;
+    decidedSources: Stream[] | null;
+    sourceError: string;
+    stateError: string;
+  } | null>(null);
   /** The source the title's stored position names, read for the row the detail has selected. */
   const [resumeStableKey, setResumeStableKey] = useState<string | undefined>(undefined);
   /** The item a Continue watching card asked to play, until its detail can. */
@@ -406,6 +424,18 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     shuffleAbort.current = null;
     shuffleRunRef.current = null;
     setShuffleRun(null);
+    const previous = shuffleReturn.current;
+    if (previous) {
+      shuffleReturn.current = null;
+      setDetail(previous.detail);
+      setSeries(previous.series);
+      setSources(previous.sources);
+      setState(previous.state);
+      setDetailStream(previous.detailStream);
+      setDecidedSources(previous.decidedSources);
+      setSourceError(previous.sourceError);
+      setStateError(previous.stateError);
+    }
     if (id) void api.deleteShuffle(id).catch(() => undefined);
   };
   const rememberState = (libraryId: string, itemId: string, value: RemoteItemState) => {
@@ -1434,8 +1464,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     item.type === "episode" ? `${t("mediaServer.episodeLabel", { season: item.season ?? 0, episode: item.episode ?? 0 })} · ${item.name}` : item.name;
 
   /** The title line a detail's playback and saves are labelled with. */
-  const detailTitle = (item: RemoteItem) =>
-    item.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(item)}` : item.name;
+  const detailTitle = (item: RemoteItem, parent = series) =>
+    item.type === "episode" ? `${parent ? `${parent.name} · ` : ""}${episodeTitle(item)}` : item.name;
   const catalogueDownloadDetail = (item: RemoteItem, title: string): CatalogueDetailTarget | null => {
     if (item.type === "movie") {
       const ref = catalogueRef("movie", item.providerIds);
@@ -1514,34 +1544,44 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
    *  and an addon answer play on their own terms -- the file under its path, the copy under its own
    *  remote identity, the addon under the catalogue key -- and none of them borrows this item's
    *  history. */
-  const playDetailStream = (stream: Stream, fromBeginning?: boolean, at?: number): boolean => {
-    if (!detail || !selected) return false;
-    endShuffle();
-    const owner = sourceProgressOwner(stream, addonIdentity);
+  const playDetailStream = (
+    stream: Stream,
+    fromBeginning?: boolean,
+    at?: number,
+    options: { shuffle?: boolean; context?: DetailPlaybackContext } = {},
+  ): boolean => {
+    const subject = options.context?.detail ?? detail;
+    const parent = options.context ? options.context.series : series;
+    const identity = options.context ? options.context.identity : addonIdentity;
+    const scope = options.context?.scope ?? titleScope;
+    const favorite = options.context?.favorite ?? state?.favorite ?? false;
+    if (!subject || !selected) return false;
+    if (!options.shuffle) endShuffle();
+    const owner = sourceProgressOwner(stream, identity);
     if (!owner) return false;
     // A switch hands over the position the row on screen reached; a play from the detail resumes
     // from the store instead.
     const position = at !== undefined ? { at } : {};
-    const poster = playbackPoster(detail);
+    const poster = options.context ? options.context.poster : playbackPoster(subject);
     if (isRemoteStream(stream)) {
-      return startRemoteRow(stream, detail, detailTitle(detail), selected.id, state?.favorite ?? false, fromBeginning, addonIdentity, titleScope, poster, at);
+      return startRemoteRow(stream, subject, detailTitle(subject, parent), selected.id, favorite, fromBeginning, identity, scope, poster, at);
     }
     // The viewer's own copy of the title is a file on this server's disk: it plays and reports
     // under its own path, never under the catalogue key of the title it was listed beside, and
     // the catalogue is asked for no subtitles for it. Like a copy from another library it is not
     // this item's own version, so it borrows neither its favorite nor its hand-off.
     if (owner.kind === "file") {
-      setPlaying({ stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: false, fromBeginning, owner, scope: titleScope, foreign: true, ...(poster ? { poster } : {}), ...position });
+      setPlaying({ stream, libraryId: selected.id, item: subject, title: detailTitle(subject, parent), favorite: false, fromBeginning, owner, scope, foreign: true, ...(poster ? { poster } : {}), ...position });
       return true;
     }
-    const ref = addonIdentity;
+    const ref = identity;
     if (!ref) return false;
     const addonPoster = enrichment.meta?.poster;
     setPlaying({
-      stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: false, fromBeginning,
-      owner, scope: titleScope, ...(poster ? { poster } : {}), ...position,
+      stream, libraryId: selected.id, item: subject, title: detailTitle(subject, parent), favorite: false, fromBeginning,
+      owner, scope, ...(poster ? { poster } : {}), ...position,
       addon: {
-        identity: ref, progressKey: genericProgressKey(ref), scope: titleScope, media: addonMediaSubject(detail, series, addonArtwork()),
+        identity: ref, progressKey: genericProgressKey(ref), scope, media: addonMediaSubject(subject, parent, addonArtwork()),
         subtitles: [], ...(addonPoster ? { poster: addonPoster } : {}),
       },
     });
@@ -1549,32 +1589,60 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     return true;
   };
 
-  const shuffleItemRecord = (item: ShuffleItem): RemoteItem => ({
-    id: item.remote!.itemId,
-    name: item.title,
-    type: item.season !== undefined || item.episode !== undefined ? "episode" : "movie",
-    providerIds: {},
-    ...(item.season === undefined ? {} : { season: item.season }),
-    ...(item.episode === undefined ? {} : { episode: item.episode }),
-  });
-
   const playShuffleItem = async (library: RemoteLibrary, item: ShuffleItem, run: RemoteShuffleRun): Promise<boolean> => {
     if (!item.remote) return false;
     const controller = new AbortController();
     shuffleAbort.current?.abort();
     shuffleAbort.current = controller;
     try {
-      const streams = await api.remoteSources(item.remote.libraryId, item.remote.itemId, controller.signal);
+      const [{ item: full }, streams, remoteState] = await Promise.all([
+        api.remoteItem(item.remote.libraryId, item.remote.itemId, controller.signal),
+        api.remoteSources(item.remote.libraryId, item.remote.itemId, controller.signal),
+        api.remoteState(item.remote.libraryId, item.remote.itemId, controller.signal),
+      ]);
+      const parent = full.type === "episode" && full.seriesId
+        ? await api.remoteItem(library.id, full.seriesId, controller.signal).then(({ item: found }) => found.type === "series" ? found : null).catch(() => null)
+        : null;
       if (controller.signal.aborted || selectedRef.current?.id !== library.id) return false;
       const stream = defaultSource(streams);
       if (!stream) {
         onError(new Error(t("mediaServer.itemUnavailable")));
         return false;
       }
+      const identity = supplementaryIdentity(full, parent);
+      const scope = `${accountScope}\u0000${library.id}\u0000${full.id}\u0000${identity ? `${identity.type}:${identity.id}` : ""}`;
+      if (!shuffleReturn.current) {
+        shuffleReturn.current = { detail, series, sources, state, detailStream, decidedSources, sourceError, stateError };
+      }
       shuffleRunRef.current = run;
       setShuffleRun(run);
-      const scope = `${accountScope}\u0000${library.id}\u0000${item.remote.itemId}\u0000`;
-      return startRemoteRow(stream, shuffleItemRecord(item), item.title, library.id, false, true, null, scope, undefined);
+      handoffStreams.current = { itemId: full.id, streams };
+      detailStateRead.current = { libraryId: library.id, itemId: full.id, read: Promise.resolve(remoteState) };
+      needsDetailMeta.current = false;
+      needsSeriesMeta.current = false;
+      setDetail(full);
+      setSeries(parent);
+      setSources(streams);
+      setSourceError("");
+      setState(remoteState);
+      setStateError("");
+      rememberState(library.id, full.id, remoteState);
+      setDetailStream(null);
+      setAlternativeProgress(null);
+      setChooserOpen(false);
+      setPlayerSourcesOpen(false);
+      const poster = full.poster ?? parent?.poster;
+      return playDetailStream(stream, true, undefined, {
+        shuffle: true,
+        context: {
+          detail: full,
+          series: parent,
+          favorite: remoteState.favorite,
+          identity,
+          scope,
+          ...(poster ? { poster } : {}),
+        },
+      });
     } catch (error) {
       if (!aborted(error)) onError(error);
       return false;
@@ -2055,10 +2123,12 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         onDeviceDownload={addon
           ? () => saveAddonToDevice({ stream: playing.stream, media: addon.media, title: playing.title })
           : async () => {
-            // A file of the viewer's own library is pulled down from the path it already has; a
-            // copy another media server owns is never taken to the device from here.
+            // A file of the viewer's own library is pulled down from the path it already has;
+            // every other row the server offered for the device travels through its proxy.
             const path = playing.owner.kind === "file" ? playing.stream.localPath : undefined;
-            return path ? saveLibraryFileToDevice(path) : false;
+            return path
+              ? saveLibraryFileToDevice(path)
+              : saveAddonToDevice({ stream: playing.stream, media: addonMediaSubject(playing.item, series, addonArtwork()), title: playing.title });
           }}
         // The final write names its own version: another source's completion never redraws this
         // panel, and the refresh waits for the write itself rather than for a guessed delay.

@@ -60,6 +60,7 @@ import cz.stremiooffline.tv.ui.components.LibraryRootCard
 import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
+import cz.stremiooffline.tv.ui.catalog.localShufflePlayTarget
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.ShuffleRun
@@ -188,15 +189,13 @@ fun LibraryRoute(
       try {
         val answer = api.startShuffle(target.path)
         val path = answer.item.path ?: return@launch
-        onPlay(
-          PlayTarget(
-            key = Progress.libraryKey(path),
-            title = answer.item.title,
-            resume = false,
-            path = path,
-            shuffle = ShuffleRun(answer.id, answer.upcoming?.title),
-          ),
-        )
+        val poster = state.pages
+          .flatMap { it.items }
+          .filterIsInstance<BrowseItem.File>()
+          .firstOrNull { it.path == path }
+          ?.poster
+        localShufflePlayTarget(api, answer.item, ShuffleRun(answer.id, answer.upcoming?.title), poster)
+          ?.let(onPlay)
       } catch (error: ApiError) {
         shuffleNotice = if (error.failure == ApiFailure.NotFound) playRandomEmptyText else loadErrorText
       } catch (_: Exception) {
