@@ -467,11 +467,15 @@ fun LibraryRoute(
         // real directory stays searchable while it loads, answers nothing or fails, so a committed
         // query can always be reopened and cleared.
         val searchable = state.current?.searchable == true
+        // The root of the files half lists the libraries; any real folder below it can be shuffled.
+        val currentShuffle = state.current?.takeIf { it.path.isNotEmpty() }
+          ?.let { LibraryShuffleTarget(it.path, it.title.ifBlank { fallbackTitle }) }
         if (searchEverywhereEnabled) {
           LibraryToolbar(
             onSearch = { openLibrarySearch() },
             available = searchAvailable,
             openFocus = searchAction,
+            onShuffle = currentShuffle?.let { target -> { startShuffle(target) } },
           )
         } else {
           LibrarySearchFallback(
@@ -484,6 +488,7 @@ fun LibraryRoute(
             available = searchable,
             openFocus = searchAction,
             fieldFocus = searchField,
+            onShuffle = currentShuffle?.let { target -> { startShuffle(target) } },
           )
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {

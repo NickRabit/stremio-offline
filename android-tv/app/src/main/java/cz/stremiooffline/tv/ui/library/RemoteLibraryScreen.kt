@@ -437,6 +437,7 @@ fun RemoteLibraryRoute(
           typeFilter = directory?.state?.type,
           typeFocus = typeFocus,
           onOpenType = { typePanel = true },
+          onShuffle = directory?.let { current -> { startShuffle(RemoteShuffleTarget(current.libraryId, current.parentId, current.title)) } },
         )
       } else {
         LibrarySearchFallback(
@@ -456,6 +457,7 @@ fun RemoteLibraryRoute(
           typeFilter = directory?.state?.type,
           typeFocus = typeFocus,
           onOpenType = { typePanel = true },
+          onShuffle = directory?.let { current -> { startShuffle(RemoteShuffleTarget(current.libraryId, current.parentId, current.title)) } },
         )
       }
       Box(Modifier.weight(1f).fillMaxWidth()) {

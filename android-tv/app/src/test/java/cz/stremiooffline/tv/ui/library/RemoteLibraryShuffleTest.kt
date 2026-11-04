@@ -146,6 +146,28 @@ class RemoteLibraryShuffleTest {
   }
 
   @Test
+  fun `the toolbar shuffle icon plays the remote folder on screen`() {
+    val api = shuffleApi()
+    api.remoteBrowsePages["rlibA||"] = RemoteItemsPageDto(
+      items = listOf(RemoteItemDto(id = "folder-1", name = "Folder", type = "folder")),
+      total = 1,
+    )
+    val played = mutableListOf<PlayTarget>()
+    mount(api) { played += it }
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+    compose.onNodeWithTag(remoteLibraryTag("rlibA")).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagLibraryShuffleIcon).requestFocus()
+    compose.onNodeWithTag(TagLibraryShuffleIcon).performKeyInput { pressKey(Key.DirectionCenter) }
+
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+    assertEquals(listOf("rlibA" to null), api.remoteShuffleStarts)
+  }
+
+  @Test
   fun `Menu on a remote folder starts that folder`() {
     val api = shuffleApi()
     api.remoteBrowsePages["rlibA||"] = RemoteItemsPageDto(
