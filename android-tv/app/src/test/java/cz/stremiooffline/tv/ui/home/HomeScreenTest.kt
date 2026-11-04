@@ -7,11 +7,13 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -629,14 +631,13 @@ class HomeScreenTest {
   }
 
   @Test
-  fun `the downloads strip counts the jobs, marks attention and answers OK with a hint`() {
+  fun `the downloads strip counts the jobs, marks attention and opens the queue panel`() {
     val api = FakeTvApi()
     serve(api, emptyList(), emptyMap())
     api.downloadsValue = DownloadsResponseDto(
       listOf(DownloadDto(id = "j", title = "It", status = "failed", order = 0, mine = true)),
     )
-    var hint: String? = null
-    mount(api, onHint = { hint = it })
+    mount(api)
     compose.waitForIdle()
 
     compose.onNodeWithText(context.resources.getQuantityString(R.plurals.home_downloads_summary, 1, 1)).assertExists()
@@ -644,7 +645,15 @@ class HomeScreenTest {
     compose.onNodeWithTag(TagDownloadsStrip).performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
 
-    assertEquals(context.getString(R.string.tv_downloads_later), hint)
+    compose.onAllNodesWithText(context.getString(R.string.home_downloads)).assertCountEquals(2)
+    compose.onNodeWithText("It").assertExists()
+    compose.onNodeWithText(context.getString(R.string.tv_queue_empty)).assertDoesNotExist()
+
+    compose.onRoot().performKeyInput { pressKey(Key.Back) }
+    compose.waitForIdle()
+    compose.onNodeWithText("It").assertDoesNotExist()
+    compose.onAllNodesWithText(context.getString(R.string.home_downloads)).assertCountEquals(1)
+    compose.onNodeWithTag(TagDownloadsStrip).assertIsFocused()
   }
 
   @Test

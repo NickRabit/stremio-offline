@@ -154,6 +154,13 @@
   <string name="tv_diagnostics_failed">Não foi possível enviar o diagnóstico.</string>
   <string name="tv_crash_hint">Uma falha da execução anterior foi registrada. Envie o diagnóstico nos ajustes.</string>
   <string name="tv_downloads_later">A fila de downloads abre na web por enquanto.</string>
+  <string name="downloads_status_queued">Na fila</string>
+  <string name="downloads_status_waiting">Esperando pelo Real-Debrid</string>
+  <string name="downloads_status_checking">Verificando fontes</string>
+  <string name="downloads_status_downloading">Baixando</string>
+  <string name="downloads_status_paused">Pausado</string>
+  <string name="downloads_status_failed">Erro</string>
+  <string name="tv_queue_empty">Nada está sendo baixado.</string>
   <string name="catalog_type_movie">filme</string>
   <string name="catalog_type_series">série</string>
   <string name="favorites_title">Favoritos</string>

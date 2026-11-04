@@ -1890,6 +1890,7 @@ export const es: Catalog = {
   "tv.diagnosticsFailed": "No se pudo enviar el diagnóstico.",
   "tv.crashHint": "Se registró un fallo de la ejecución anterior. Envíe el diagnóstico desde Ajustes.",
   "tv.downloadsLater": "La cola de descargas se abre por ahora en la web.",
+  "tv.queueEmpty": "No se está descargando nada.",
   "tv.back": "Atrás",
   "tv.detailEyebrowMovie": "Película · {addon}",
   "tv.detailEyebrowSeries": "Serie · {addon}",

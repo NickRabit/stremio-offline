@@ -158,6 +158,13 @@
   <string name="tv_diagnostics_failed">Diagnostiku se nepodařilo odeslat.</string>
   <string name="tv_crash_hint">Pád z předchozího spuštění byl zaznamenán. Odešlete diagnostiku v nastavení.</string>
   <string name="tv_downloads_later">Fronta stahování se zatím otevírá na webu.</string>
+  <string name="downloads_status_queued">Ve frontě</string>
+  <string name="downloads_status_waiting">Čeká na Real-Debrid</string>
+  <string name="downloads_status_checking">Ověřuji zdroje</string>
+  <string name="downloads_status_downloading">Stahuji</string>
+  <string name="downloads_status_paused">Pozastaveno</string>
+  <string name="downloads_status_failed">Chyba</string>
+  <string name="tv_queue_empty">Nic se nestahuje.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">seriál</string>
   <string name="favorites_title">Oblíbené</string>

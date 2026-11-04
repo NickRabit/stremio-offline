@@ -1,6 +1,10 @@
 package cz.stremiooffline.tv.ui.home
 
+import androidx.annotation.StringRes
+import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.DownloadDto
+import cz.stremiooffline.tv.ui.catalog.formatSize
+import kotlin.math.floor
 
 enum class QueueGroup { Attention, Paused, Active, Waiting, Queued }
 
@@ -37,3 +41,29 @@ fun homeQueue(jobs: List<DownloadDto>): List<DownloadDto> {
 /** The jobs the row marks red: failed, or blocked outside the account's control. */
 fun attentionCount(jobs: List<DownloadDto>): Int =
   homeQueue(jobs).count { queueGroup(it) == QueueGroup.Attention }
+
+/** The status word of one job; a blocked pause counts as paused. */
+@StringRes fun queueStatusRes(job: DownloadDto): Int = when (job.status) {
+  "waiting" -> R.string.downloads_status_waiting
+  "checking" -> R.string.downloads_status_checking
+  "downloading" -> R.string.downloads_status_downloading
+  "paused" -> R.string.downloads_status_paused
+  "failed" -> R.string.downloads_status_failed
+  else -> R.string.downloads_status_queued
+}
+
+/** The status word, percentage, total size and, while downloading, speed. */
+fun queueLine(job: DownloadDto, status: String): String {
+  val parts = mutableListOf(status)
+  val total = job.total
+  if (total != null && total > 0) {
+    val percent = floor((job.received ?: 0.0) / total * 100).toInt().coerceIn(0, 100)
+    parts += "$percent %"
+    formatSize(total)?.let(parts::add)
+  }
+  val speed = job.speed
+  if (job.status == "downloading" && speed != null && speed > 0) {
+    formatSize(speed)?.let { parts += "$it/s" }
+  }
+  return parts.joinToString(" · ")
+}

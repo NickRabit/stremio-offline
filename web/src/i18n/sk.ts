@@ -1890,6 +1890,7 @@ export const sk: Catalog = {
   "tv.diagnosticsFailed": "Diagnostiku sa nepodarilo odoslať.",
   "tv.crashHint": "Pád z predchádzajúceho spustenia bol zaznamenaný. Odošlite diagnostiku v nastaveniach.",
   "tv.downloadsLater": "Fronta sťahovania sa zatiaľ otvára na webe.",
+  "tv.queueEmpty": "Nič sa nesťahuje.",
   "tv.back": "Späť",
   "tv.detailEyebrowMovie": "Film · {addon}",
   "tv.detailEyebrowSeries": "Seriál · {addon}",

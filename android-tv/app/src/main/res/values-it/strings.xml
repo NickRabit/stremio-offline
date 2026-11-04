@@ -154,6 +154,13 @@
   <string name="tv_diagnostics_failed">Impossibile inviare la diagnostica.</string>
   <string name="tv_crash_hint">Un arresto anomalo dell\'esecuzione precedente è stato registrato. Invia la diagnostica dalle impostazioni.</string>
   <string name="tv_downloads_later">La coda dei download si apre per ora sul web.</string>
+  <string name="downloads_status_queued">In coda</string>
+  <string name="downloads_status_waiting">Aspettando Real-Debrid</string>
+  <string name="downloads_status_checking">Controllo delle fonti</string>
+  <string name="downloads_status_downloading">Download in corso</string>
+  <string name="downloads_status_paused">In pausa</string>
+  <string name="downloads_status_failed">Errore</string>
+  <string name="tv_queue_empty">Non c\'è alcun download in corso.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">serie</string>
   <string name="favorites_title">Preferiti</string>

@@ -1890,6 +1890,7 @@ export const de: Catalog = {
   "tv.diagnosticsFailed": "Diagnose konnte nicht gesendet werden.",
   "tv.crashHint": "Ein Absturz aus dem letzten Lauf wurde erfasst. Senden Sie die Diagnose in den Einstellungen.",
   "tv.downloadsLater": "Die Download-Warteschlange öffnet sich vorerst im Web.",
+  "tv.queueEmpty": "Es werden keine Downloads ausgeführt.",
   "tv.back": "Zurück",
   "tv.detailEyebrowMovie": "Film · {addon}",
   "tv.detailEyebrowSeries": "Serie · {addon}",

@@ -1890,6 +1890,7 @@ export const ptBR: Catalog = {
   "tv.diagnosticsFailed": "Não foi possível enviar o diagnóstico.",
   "tv.crashHint": "Uma falha da execução anterior foi registrada. Envie o diagnóstico nos ajustes.",
   "tv.downloadsLater": "A fila de downloads abre na web por enquanto.",
+  "tv.queueEmpty": "Nada está sendo baixado.",
   "tv.back": "Voltar",
   "tv.detailEyebrowMovie": "Filme · {addon}",
   "tv.detailEyebrowSeries": "Série · {addon}",
