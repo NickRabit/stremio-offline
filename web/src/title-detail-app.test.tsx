@@ -89,6 +89,15 @@ let remoteLibraries: Array<typeof jellyLibrary>;
 let downloadMode: "idle" | "downloading" | "completed" | "unauthorized";
 let extrasCalls: string[];
 let remoteStreamCalls: string[];
+let watchlistItems: Array<Record<string, unknown>>;
+let watchlistPosts: Array<Record<string, unknown>>;
+let downloadPosts: Array<Record<string, unknown>>;
+let devicePosts: Array<Record<string, unknown>>;
+let progressPosts: Array<Record<string, unknown>>;
+let streamCalls: URL[];
+let subtitleCalls: URL[];
+let playbackStarts: Array<Record<string, unknown>>;
+let configuredAddons: Array<Record<string, unknown>>;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -105,12 +114,33 @@ beforeEach(() => {
   downloadMode = "idle";
   extrasCalls = [];
   remoteStreamCalls = [];
+  watchlistItems = [];
+  watchlistPosts = [];
+  downloadPosts = [];
+  devicePosts = [];
+  progressPosts = [];
+  streamCalls = [];
+  subtitleCalls = [];
+  playbackStarts = [];
+  configuredAddons = [];
   vi.stubGlobal("matchMedia", () => ({
     matches: false, media: "", onchange: null,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
     addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
   }));
   vi.stubGlobal("scrollTo", vi.fn());
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  Object.defineProperty(HTMLMediaElement.prototype, "textTracks", {
+    configurable: true,
+    get: () => ({ length: 0, addEventListener() {}, removeEventListener() {}, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }),
+  });
+  Object.defineProperty(HTMLTrackElement.prototype, "track", {
+    configurable: true,
+    get: () => ({ mode: "disabled", activeCues: null, addEventListener() {}, removeEventListener() {} }),
+  });
+  HTMLMediaElement.prototype.play = () => Promise.resolve();
+  HTMLMediaElement.prototype.pause = () => undefined;
+  HTMLMediaElement.prototype.load = () => undefined;
   Element.prototype.scrollTo = () => undefined;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://test");
@@ -119,23 +149,55 @@ beforeEach(() => {
     if (path === "/api/status") return json({ status: "ok", version: "test", searchEverywhere });
     if (path === "/api/auth/me") return json({ username: "alice", role: "admin", language: "en" });
     if (path === "/api/auth/login" && method === "POST") return json({ username: "bob", role: "admin", language: "en" });
-    if (path === "/api/addons" || path === "/api/searchable" || path === "/api/languages") return json([]);
+    if (path === "/api/addons") return json(configuredAddons);
+    if (path === "/api/searchable" || path === "/api/languages") return json([]);
     if (path === "/api/catalogs") return json([{ addonKey: "cinemeta", addonName: "Cinemeta", type: "movie", id: "top", name: "Top" }]);
     if (path === "/api/catalog") return json(catalogItems);
     if (path === "/api/libraries") return json([]);
     if (path === "/api/views") return json(emptyViews());
     if (path === "/api/settings") return json(settings);
-    if (path === "/api/downloads") {
+    if (path === "/api/downloads" && method === "GET") {
       if (downloadMode === "unauthorized") return json({ error: "signed out" }, 401);
       if (downloadMode === "idle") return json({ jobs: [], halt: null, deviceTransfers: [] });
       return json({ jobs: [downloadJob(downloadMode)], halt: null, deviceTransfers: [] });
     }
+    if (path === "/api/downloads" && method === "POST") {
+      downloadPosts.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return json({ id: "queued", status: "queued" });
+    }
+    if (path === "/api/device-download" && method === "POST") {
+      devicePosts.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return json({ url: "/api/device-download/ticket/1", filename: "episode.mkv" });
+    }
+    if (path === "/api/progress" && method === "POST") {
+      progressPosts.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(null, { status: 204 });
+    }
+    if (path === "/api/playback" && method === "POST") {
+      playbackStarts.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return json({
+        id: `play-${playbackStarts.length}`, mode: "direct", url: `/api/stream/play-${playbackStarts.length}`,
+        offset: 0, duration: 600, hardware: false, acceleration: false,
+        audioTracks: [], subtitleTracks: [], audioTrack: 0, subtitleTrack: null, quality: null,
+      });
+    }
+    if (path === "/api/inspect" && method === "POST") {
+      return json({ audioTracks: [], subtitleTracks: [], container: "mkv" });
+    }
+    if (/^\/api\/playback\/[^/]+$/.test(path) && method === "DELETE") return new Response(null, { status: 204 });
     if (path === "/api/follows") return json({ follows: [] });
     if (path === "/api/follows/new-episodes") return json({ items: [] });
     if (path === "/api/search/state") return json({ saveHistory: false, liveSearch: false, defaultOrder: "source", recent: [] });
     if (path === "/api/search/preferences") return json({ liveSearch: false });
     if (path === "/api/source-profiles") return json({ profiles: [] });
-    if (path === "/api/watchlist" || path === "/api/progress") return json([]);
+    if (path === "/api/watchlist" && method === "POST") {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      watchlistPosts.push(body);
+      watchlistItems = body.favorite ? [{ key: `${body.type}:${body.id}`, ...body }] : [];
+      return json(body);
+    }
+    if (path === "/api/watchlist") return json(watchlistItems);
+    if (path === "/api/progress") return json([]);
     if (path === "/api/remote-libraries") return json({ libraries: remoteLibraries });
     if (/^\/api\/remote-libraries\/[^/]+\/browse$/.test(path)) {
       return json({ items: [jelly], total: 1, asOf: "2026-01-01T00:00:00Z", stale: false, capabilities: remoteCapabilities });
@@ -184,7 +246,25 @@ beforeEach(() => {
     if (path.startsWith("/api/links/")) return json({ links: [] });
     if (path.startsWith("/api/trailer/")) return json({ trailer: null });
     if (path.startsWith("/api/follows/by-meta/")) return json({ follow: null });
-    if (path.startsWith("/api/stream-sources/") || path.startsWith("/api/streams/") || path.startsWith("/api/subtitles/") || path.startsWith("/api/local-streams/")) return json([]);
+    if (path.startsWith("/api/stream-sources/")) return json([{ key: "alpha", name: "Alpha" }]);
+    if (path.startsWith("/api/streams/")) {
+      if (!path.startsWith("/api/streams/series/")) return json([]);
+      streamCalls.push(url);
+      const id = decodeURIComponent(path.slice("/api/streams/series/".length));
+      const episode = id.endsWith(":2") ? 2 : 1;
+      return json([{
+        sourceId: `episode-${episode}`, kind: "remote", playable: true, name: `Episode ${episode}`,
+        addonKey: "alpha", addonName: "Alpha",
+        capabilities: { ...remoteCapabilities, downloadToLibrary: true, downloadToDevice: true },
+        downloadTarget: { subfolder: "", layout: "structured", libraryId: "lib-target" },
+        subtitles: [{ subtitleId: `sidecar-${episode}`, lang: "en" }],
+      }]);
+    }
+    if (path.startsWith("/api/subtitles/")) {
+      subtitleCalls.push(url);
+      return json([{ subtitleId: `addon-${decodeURIComponent(path.split("/").pop() ?? "subtitle")}`, lang: "en", addonName: "Subtitles" }]);
+    }
+    if (path.startsWith("/api/local-streams/")) return json([]);
     if (path === "/api/search" && method === "GET") {
       searchQueries.push(url.searchParams.get("query") ?? "");
       return json({ items: [], cursor: "", hasMore: false, sources: 0 });
@@ -331,6 +411,79 @@ describe("title detail from the catalogue", () => {
     await until(() => detailTitle() === "The Show");
     expect(top).toBe(180);
     expect(host.querySelector(".view-title-detail .episode-current")?.textContent).toContain("Second");
+  });
+
+  it("moves the shared catalogue player to the next episode's full context", async () => {
+    catalogItems = [show];
+    configuredAddons = [{
+      key: "alpha", role: "source", enabled: true, globalSearch: false,
+      manifest: { id: "alpha", name: "Alpha", version: "1.0.0" },
+    }];
+    await openCatalog();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".poster-card")!.click(); });
+    await until(() => host.querySelectorAll(".detail-panel .episode-list button").length === 2);
+    await act(async () => {
+      host.querySelectorAll<HTMLButtonElement>(".detail-panel .episode-list button")[0]!.click();
+    });
+    await until(() => host.querySelector(".detail-panel .episode-current")?.textContent?.includes("Pilot") === true);
+    await act(async () => { host.querySelector<HTMLButtonElement>(".detail-info")!.click(); });
+    await flush();
+    expect(streamCalls.length).toBeGreaterThan(0);
+    await until(() => {
+      const button = host.querySelector<HTMLButtonElement>(".view-title-detail .library-detail-play button.primary");
+      return button !== null && !button.disabled;
+    });
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>(".view-title-detail .library-detail-play button.primary")!.click();
+    });
+    await until(() => playbackStarts.length === 1);
+    expect(playbackStarts[0]).toEqual(expect.objectContaining({ sourceId: "episode-1" }));
+    await until(() => subtitleCalls.some((url) => url.pathname === "/api/subtitles/series/tt9%3A1%3A1"));
+    await until(() => host.querySelector(".next-episode") !== null);
+
+    await act(async () => { host.querySelector<HTMLButtonElement>(".next-episode")!.click(); });
+    await until(() => playbackStarts.length === 2);
+    expect(playbackStarts[1]).toEqual(expect.objectContaining({ sourceId: "episode-2" }));
+    await until(() => subtitleCalls.some((url) => url.pathname === "/api/subtitles/series/tt9%3A1%3A2"));
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-sources-toggle")!.click(); });
+    await until(() => host.querySelector("#player-sources") !== null);
+    const rows = [...host.querySelectorAll<HTMLElement>("#player-sources .player-source-list button")]
+      .map((row) => row.textContent ?? "");
+    expect(rows.some((row) => row.includes("Episode 2"))).toBe(true);
+    expect(rows.some((row) => row.includes("Episode 1"))).toBe(false);
+
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-star")!.click(); });
+    await until(() => watchlistPosts.length === 1);
+    expect(watchlistPosts[0]).toMatchObject({ id: "tt9", type: "series", favorite: true });
+
+    if (!host.querySelector("#player-settings")) {
+      await act(async () => { host.querySelector<HTMLButtonElement>(".player-settings-toggle")!.click(); });
+    }
+    const optionLabels = [...host.querySelectorAll<HTMLOptionElement>("#player-settings select option")]
+      .map((option) => option.textContent ?? "");
+    expect(optionLabels.some((label) => label.endsWith("EN"))).toBe(true);
+    const actions = [...host.querySelectorAll<HTMLButtonElement>(".player-action")];
+    await act(async () => { actions.find((button) => button.textContent?.includes("To device"))!.click(); });
+    await until(() => devicePosts.length === 1);
+    expect(devicePosts[0]).toEqual(expect.objectContaining({ sourceId: "episode-2" }));
+    expect(devicePosts[0]!.media).toMatchObject({ kind: "episode", season: 1, episode: 2 });
+    await act(async () => {
+      [...host.querySelectorAll<HTMLButtonElement>(".player-action")]
+        .find((button) => button.textContent?.includes("To library"))!.click();
+    });
+    await until(() => downloadPosts.length === 1);
+    expect(downloadPosts[0]).toEqual(expect.objectContaining({ sourceId: "episode-2" }));
+    expect(downloadPosts[0]!.media).toMatchObject({ kind: "episode", season: 1, episode: 2 });
+
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => {
+      Object.defineProperty(video, "duration", { configurable: true, value: 600 });
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 30 });
+      video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+    });
+    await flush();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-head button.icon-button")!.click(); });
+    await until(() => progressPosts.some((body) => body.key === "series:tt9:1:2"));
   });
 
   it("returns from a similar title to the local file it was opened from", async () => {

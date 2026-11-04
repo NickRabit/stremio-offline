@@ -25,7 +25,10 @@ const library = {
   titles: 1, files: 1, bytes: 1,
 };
 const source = (path: string): Stream => ({
-  sourceId: path.endsWith("Second.mkv") ? "source_second" : path.endsWith("Loose.mkv") ? "source_loose" : "source_first",
+  sourceId: path.endsWith("Second.mkv") ? "source_second"
+    : path.endsWith("B.mkv") ? "source_b"
+      : path.endsWith("A.mkv") ? "source_a"
+      : path.endsWith("Loose.mkv") ? "source_loose" : "source_first",
   kind: "library",
   playable: true,
   localPath: path,
@@ -47,6 +50,16 @@ let playbackBodies: Array<Record<string, unknown>>;
 let progressBodies: Array<Record<string, unknown>>;
 let shuffleDeletes: string[];
 let shuffleStarts: Array<{ path: string }>;
+let shuffleNextCalls: string[];
+let shuffleStartItem: { path?: string; title: string; season?: number };
+let shuffleNextItems: Array<{ path?: string; title: string; season?: number }>;
+let identities: Record<string, { type: "movie" | "series"; id: string }>;
+let favoriteCalls: Array<{ path: string; favorite: boolean }>;
+let subtitleCalls: URL[];
+let rootBrowseItems: Array<Record<string, unknown>>;
+let filmsBrowseItems: Array<Record<string, unknown>>;
+let nextFileBySource: Record<string, { path: string; title: string } | null>;
+let nextFileCalls: string[];
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -58,6 +71,22 @@ beforeEach(() => {
   progressBodies = [];
   shuffleDeletes = [];
   shuffleStarts = [];
+  shuffleNextCalls = [];
+  shuffleStartItem = { path: "Films/First.mkv", title: "First" };
+  shuffleNextItems = [{ path: "Films/Second.mkv", title: "Second" }];
+  identities = {};
+  favoriteCalls = [];
+  subtitleCalls = [];
+  rootBrowseItems = [
+    { kind: "folder", path: "Films", name: "Films", fileCount: 2, size: 2, match: "unmatched" },
+    {
+      kind: "file", path: "Loose.mkv", label: "Loose.mkv", season: null, episode: null,
+      size: 1, modified: "2026-01-01T00:00:00.000Z", match: "unmatched", favorite: false,
+    },
+  ];
+  filmsBrowseItems = [rootBrowseItems[1]!];
+  nextFileBySource = {};
+  nextFileCalls = [];
   vi.stubGlobal("matchMedia", () => ({
     matches: false, media: "", onchange: null,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -97,23 +126,16 @@ beforeEach(() => {
     if (path === "/api/library/scan") return json({ status: "idle", total: 0, done: 0, matched: 0, skipped: 0, failed: 0 });
     if (path === "/api/library/suggestions") return json({ items: [], total: 0 });
     if (path === "/api/library/ops") return json({ jobs: [] });
-    if (path === "/api/library/browse") return json({
-      path: url.searchParams.get("path") ?? "",
-      items: [
-        { kind: "folder", path: "Films", name: "Films", fileCount: 2, size: 2, match: "unmatched" },
-        {
-          kind: "file", path: "Loose.mkv", label: "Loose.mkv", season: null, episode: null,
-          size: 1, modified: "2026-01-01T00:00:00.000Z", match: "unmatched",
-        },
-      ],
-      total: 2,
-      pending: false,
-    });
+    if (path === "/api/library/browse") {
+      const browsePath = url.searchParams.get("path") ?? "";
+      const items = browsePath === "Films" ? filmsBrowseItems : rootBrowseItems;
+      return json({ path: browsePath, items, total: items.length, pending: false });
+    }
     if (path === "/api/shuffle" && method === "POST") {
       shuffleStarts.push(JSON.parse(String(init?.body)) as { path: string });
       return json({
         id: "shuffle_one",
-        item: { path: "Films/First.mkv", title: "First" },
+        item: shuffleStartItem,
         total: 2,
         hasNext: true,
         hasPrevious: false,
@@ -121,8 +143,9 @@ beforeEach(() => {
       });
     }
     if (path === "/api/shuffle/shuffle_one/next" && method === "POST") {
+      shuffleNextCalls.push(path);
       return json({
-        item: { path: "Films/Second.mkv", title: "Second" },
+        item: shuffleNextItems.shift() ?? { path: "Films/Second.mkv", title: "Second" },
         hasNext: false,
         hasPrevious: true,
       });
@@ -136,8 +159,22 @@ beforeEach(() => {
       sourceBodies.push(body);
       return json(source(body.path));
     }
+    if (path.startsWith("/api/library/next/")) {
+      const sourceId = decodeURIComponent(path.slice("/api/library/next/".length));
+      nextFileCalls.push(sourceId);
+      return json(nextFileBySource[sourceId] ?? null);
+    }
     if (path === "/api/library/identity") {
-      return json({ path: "Loose.mkv", key: "Loose.mkv", kind: "movie", file: true, label: "Loose.mkv", parsed: { title: "Loose", query: "Loose" }, match: "unmatched" });
+      const wanted = url.searchParams.get("path") ?? "";
+      const identity = identities[wanted];
+      return json(identity
+        ? { path: wanted, key: wanted, kind: identity.type, id: identity.id, file: true, label: wanted.split("/").pop(), parsed: { title: wanted, query: wanted }, match: "matched", bound: identity }
+        : { path: wanted, key: wanted, kind: "movie", file: true, label: wanted.split("/").pop(), parsed: { title: wanted, query: wanted }, match: "unmatched" });
+    }
+    if (path === "/api/library/favorite" && method === "POST") {
+      const body = JSON.parse(String(init?.body)) as { path: string; favorite: boolean };
+      favoriteCalls.push(body);
+      return json(body);
     }
     if (path.startsWith("/api/progress")) {
       if (method === "POST") progressBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -149,7 +186,27 @@ beforeEach(() => {
       return json(playbackSession);
     }
     if (path.startsWith("/api/playback/")) return method === "DELETE" ? new Response(null, { status: 204 }) : json({});
-    if (path.startsWith("/api/local-streams/") || path.startsWith("/api/streams/") || path.startsWith("/api/stream-sources/") || path.startsWith("/api/subtitles/")) return json([]);
+    if (path.startsWith("/api/subtitles/")) {
+      subtitleCalls.push(url);
+      return json([{ id: "subtitle-bound", lang: "en", url: "/subtitle-bound.vtt" }]);
+    }
+    if (path.startsWith("/api/stream-sources/")) {
+      if (path.includes("tt1")) return json([{ key: "alpha", name: "Alpha" }]);
+      if (path.includes("tt2")) return json([{ key: "beta", name: "Beta" }]);
+      return json([]);
+    }
+    if (path.startsWith("/api/streams/")) {
+      if (path.includes("tt1")) return json([{
+        sourceId: "bound-addon", kind: "remote", playable: true, name: "Bound addon",
+        addonKey: "alpha", addonName: "Alpha",
+      }]);
+      if (path.includes("tt2")) return json([{
+        sourceId: "next-addon", kind: "remote", playable: true, name: "Next addon",
+        addonKey: "beta", addonName: "Beta",
+      }]);
+      return json([]);
+    }
+    if (path.startsWith("/api/local-streams/")) return json([]);
     if (path.startsWith("/api/meta/") || path.startsWith("/api/links/") || path.startsWith("/api/trailer/")) return json({});
     return json({}, 404);
   }));
@@ -263,5 +320,185 @@ describe("Play random", () => {
     const outgoing = progressBodies.filter((body) => body.path === "Films/First.mkv");
     expect(outgoing.length).toBeGreaterThan(0);
     expect(outgoing.every((body) => body.shuffle === true)).toBe(true);
+  });
+
+  it("uses the shuffled file's own title groups and actions after a bound file and an unbound file", async () => {
+    identities["Films/Bound.mkv"] = { type: "movie", id: "tt1" };
+    shuffleStartItem = { path: "Films/Bound.mkv", title: "Bound" };
+    shuffleNextItems = [{ path: "Films/Loose.mkv", title: "Loose" }];
+    await openLibrary();
+
+    const menu = host.querySelector<HTMLButtonElement>("[data-path='Films'] .browse-menu")!;
+    await act(async () => { menu.click(); });
+    const random = [...host.querySelectorAll<HTMLButtonElement>(".browse-actions button")]
+      .find((button) => button.textContent?.trim() === "Play random")!;
+    await act(async () => { random.click(); });
+    await until(() => playbackBodies.some((body) => body.sourceId === "source_first"));
+    expect(playbackBodies.find((body) => body.sourceId === "source_first")).toEqual(expect.objectContaining({ time: 0 }));
+    await until(() => subtitleCalls.some((url) => url.pathname === "/api/subtitles/movie/tt1"));
+
+    const openSources = async () => {
+      await act(async () => { host.querySelector<HTMLButtonElement>(".player-sources-toggle")!.click(); });
+      await flush();
+      await flush();
+    };
+    const sourceRows = () => [...host.querySelectorAll<HTMLElement>("#player-sources .player-source-list button")]
+      .map((row) => row.textContent ?? "");
+    const openSettings = async () => {
+      if (!host.querySelector("#player-settings")) {
+        await act(async () => { host.querySelector<HTMLButtonElement>(".player-settings-toggle")!.click(); });
+      }
+    };
+    await openSources();
+    expect(sourceRows().some((row) => row.includes("Bound addon"))).toBe(true);
+
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-star")!.click(); });
+    await until(() => favoriteCalls.length === 1);
+    expect(favoriteCalls[0]).toEqual({ path: "Films/Bound.mkv", favorite: true });
+
+    await openSettings();
+    const device = [...host.querySelectorAll<HTMLButtonElement>(".player-action")]
+      .find((button) => button.textContent?.includes("To device"))!;
+    await act(async () => { device.click(); });
+    await flush();
+    expect(sourceBodies.at(-1)).toEqual({ path: "Films/Bound.mkv" });
+    expect(playbackBodies.length).toBe(1);
+
+    await act(async () => { host.querySelector<HTMLButtonElement>(".next-episode")!.click(); });
+    await until(() => playbackBodies.some((body) => body.sourceId === "source_loose"));
+    expect(playbackBodies.find((body) => body.sourceId === "source_loose")).toEqual(expect.objectContaining({ time: 0 }));
+    const subtitlesBeforeUnbound = subtitleCalls.length;
+    await openSources();
+    expect(sourceRows().some((row) => row.includes("Loose.mkv"))).toBe(true);
+    expect(sourceRows().some((row) => row.includes("Bound addon"))).toBe(false);
+    expect(subtitleCalls).toHaveLength(subtitlesBeforeUnbound);
+
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-star")!.click(); });
+    await until(() => favoriteCalls.length === 2);
+    expect(favoriteCalls[1]).toEqual({ path: "Films/Loose.mkv", favorite: true });
+
+    await openSettings();
+    const looseDevice = [...host.querySelectorAll<HTMLButtonElement>(".player-action")]
+      .find((button) => button.textContent?.includes("To device"))!;
+    await act(async () => { looseDevice.click(); });
+    await flush();
+    expect(sourceBodies.at(-1)).toEqual({ path: "Films/Loose.mkv" });
+  });
+
+  it("moves every player action and source group to the next library file", async () => {
+    const fileItem = (path: string, label: string) => ({
+      kind: "file", path, label, season: 1, episode: path.endsWith("A.mkv") ? 1 : 2,
+      size: 1, modified: "2026-01-01T00:00:00.000Z", match: "matched", favorite: true,
+    });
+    filmsBrowseItems = [fileItem("Films/A.mkv", "A"), fileItem("Films/B.mkv", "B")];
+    identities["Films/A.mkv"] = { type: "movie", id: "tt1" };
+    identities["Films/B.mkv"] = { type: "movie", id: "tt2" };
+    nextFileBySource = { source_a: { path: "Films/B.mkv", title: "B" } };
+
+    await openLibrary();
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-path='Films'] .library-open")!.click();
+    });
+    await until(() => host.querySelector("[data-path='Films/A.mkv'] .library-open") !== null);
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-path='Films/A.mkv'] .library-open")!.click();
+    });
+    await until(() => host.querySelector(".library-local-detail button.primary") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>(".library-local-detail button.primary")!.click(); });
+    await until(() => playbackBodies.some((body) => body.sourceId === "source_a"));
+    await until(() => subtitleCalls.some((url) => url.pathname === "/api/subtitles/movie/tt1"));
+
+    const openSources = async () => {
+      await act(async () => { host.querySelector<HTMLButtonElement>(".player-sources-toggle")!.click(); });
+      await flush();
+      await flush();
+    };
+    const openSettings = async () => {
+      if (!host.querySelector("#player-settings")) {
+        await act(async () => { host.querySelector<HTMLButtonElement>(".player-settings-toggle")!.click(); });
+      }
+    };
+    const sourceRows = () => [...host.querySelectorAll<HTMLElement>("#player-sources .player-source-list button")]
+      .map((row) => row.textContent ?? "");
+
+    await openSources();
+    expect(sourceRows().some((row) => row.includes("Bound addon"))).toBe(true);
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-star")!.click(); });
+    await until(() => favoriteCalls.length === 1);
+    expect(favoriteCalls[0]).toEqual({ path: "Films/A.mkv", favorite: false });
+
+    await openSettings();
+    await act(async () => {
+      [...host.querySelectorAll<HTMLButtonElement>(".player-action")]
+        .find((button) => button.textContent?.includes("To device"))!.click();
+    });
+    await flush();
+    expect(sourceBodies.at(-1)).toEqual({ path: "Films/A.mkv" });
+
+    await act(async () => { host.querySelector<HTMLButtonElement>(".next-episode")!.click(); });
+    await until(() => playbackBodies.some((body) => body.sourceId === "source_b"));
+    await until(() => subtitleCalls.some((url) => url.pathname === "/api/subtitles/movie/tt2"));
+    await openSources();
+    expect(sourceRows().some((row) => row.includes("Next addon"))).toBe(true);
+    expect(sourceRows().some((row) => row.includes("Bound addon"))).toBe(false);
+
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-star")!.click(); });
+    await until(() => favoriteCalls.length === 2);
+    expect(favoriteCalls[1]).toEqual({ path: "Films/B.mkv", favorite: false });
+
+    await openSettings();
+    await act(async () => {
+      [...host.querySelectorAll<HTMLButtonElement>(".player-action")]
+        .find((button) => button.textContent?.includes("To device"))!.click();
+    });
+    await flush();
+    expect(sourceBodies.at(-1)).toEqual({ path: "Films/B.mkv" });
+
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => {
+      Object.defineProperty(video, "duration", { configurable: true, value: 100 });
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 20 });
+      video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+    });
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-head button.icon-button")!.click(); });
+    await until(() => progressBodies.some((body) => body.path === "Films/B.mkv" && body.final === true));
+    expect(progressBodies.filter((body) => body.path === "Films/B.mkv" && body.final === true)[0]!.key)
+      .toBe("file:Films/B.mkv");
+  });
+
+  it("keeps the random run and its progress flag when the player switches source", async () => {
+    identities["Films/Bound.mkv"] = { type: "movie", id: "tt1" };
+    shuffleStartItem = { path: "Films/Bound.mkv", title: "Bound" };
+    await openLibrary();
+    const menu = host.querySelector<HTMLButtonElement>("[data-path='Films'] .browse-menu")!;
+    await act(async () => { menu.click(); });
+    await act(async () => {
+      [...host.querySelectorAll<HTMLButtonElement>(".browse-actions button")]
+        .find((button) => button.textContent?.trim() === "Play random")!.click();
+    });
+    await until(() => playbackBodies.some((body) => body.sourceId === "source_first"));
+
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-sources-toggle")!.click(); });
+    await until(() => [...host.querySelectorAll<HTMLElement>("#player-sources .player-source-list button")]
+      .some((row) => row.textContent?.includes("Bound addon")));
+    await act(async () => {
+      [...host.querySelectorAll<HTMLButtonElement>("#player-sources .player-source-list button")]
+        .find((row) => row.textContent?.includes("Bound addon"))!.click();
+    });
+    await until(() => playbackBodies.some((body) => body.sourceId === "bound-addon"));
+    expect(host.querySelector<HTMLButtonElement>(".next-episode")?.title).toBe("Next episode: Second");
+    expect(shuffleDeletes).toEqual([]);
+
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => {
+      Object.defineProperty(video, "duration", { configurable: true, value: 600 });
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 35 });
+      video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+    });
+    await act(async () => { host.querySelector<HTMLButtonElement>(".next-episode")!.click(); });
+    await until(() => shuffleNextCalls.length === 1);
+    await until(() => progressBodies.some((body) =>
+      body.key === "movie:tt1" && body.shuffle === true));
+    expect(shuffleDeletes).toEqual([]);
   });
 });

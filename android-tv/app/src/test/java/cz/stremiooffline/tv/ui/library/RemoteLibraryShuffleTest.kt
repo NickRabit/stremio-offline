@@ -15,10 +15,14 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import cz.stremiooffline.tv.data.DownloadTargetSettingsDto
+import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.RemoteItemDetailDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.ShuffleItemDto
 import cz.stremiooffline.tv.data.ShuffleRemoteDto
 import cz.stremiooffline.tv.data.ShuffleStartDto
@@ -71,6 +75,15 @@ class RemoteLibraryShuffleTest {
 
   private fun shuffleApi(itemId: String = "movie-1"): FakeTvApi = FakeTvApi().apply {
     remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby", type = "mixed"))
+    remoteItemValues["rlibA:$itemId"] = RemoteItemDetailDto(
+      item = RemoteItemDto(
+        id = itemId,
+        name = "Random",
+        type = "movie",
+        providerIds = RemoteProviderIdsDto(imdb = "tt42"),
+        poster = "/poster/random.jpg",
+      ),
+    )
     shuffleStartValue = ShuffleStartDto(
       id = "run1",
       item = ShuffleItemDto(
@@ -93,6 +106,8 @@ class RemoteLibraryShuffleTest {
           progressKey = "remote:$itemId",
         ),
         stableKey = "stable-$itemId",
+        capabilities = RemoteCapabilitiesDto(downloadToLibrary = true),
+        downloadTarget = DownloadTargetSettingsDto(libraryId = "lib-target", layout = "structured"),
       ),
     )
   }
@@ -119,8 +134,37 @@ class RemoteLibraryShuffleTest {
     assertEquals(listOf("rlibA" to "movie-1"), api.remoteSourcesRequests)
     assertEquals("remote-source", played.single().sourceId)
     assertEquals(false, played.single().resume)
-    assertEquals("remote:movie-1", played.single().key)
+    assertEquals("movie:tt42", played.single().key)
+    assertEquals("Random", played.single().title)
+    assertEquals("/poster/random.jpg", played.single().poster)
+    assertEquals("movie", played.single().subtitleType)
+    assertEquals("tt42", played.single().subtitleTarget)
+    assertEquals("stable-movie-1", played.single().stableKey)
+    assertEquals("remote-source", played.single().remoteSources.single().sourceId)
+    assertEquals("lib-target", played.single().remoteSources.single().downloadTarget?.libraryId)
     assertEquals("Next", played.single().shuffle?.upcomingTitle)
+  }
+
+  @Test
+  fun `the toolbar shuffle icon plays the remote folder on screen`() {
+    val api = shuffleApi()
+    api.remoteBrowsePages["rlibA||"] = RemoteItemsPageDto(
+      items = listOf(RemoteItemDto(id = "folder-1", name = "Folder", type = "folder")),
+      total = 1,
+    )
+    val played = mutableListOf<PlayTarget>()
+    mount(api) { played += it }
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+    compose.onNodeWithTag(remoteLibraryTag("rlibA")).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagLibraryShuffleIcon).requestFocus()
+    compose.onNodeWithTag(TagLibraryShuffleIcon).performKeyInput { pressKey(Key.DirectionCenter) }
+
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+    assertEquals(listOf("rlibA" to null), api.remoteShuffleStarts)
   }
 
   @Test
