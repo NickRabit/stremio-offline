@@ -1250,10 +1250,12 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       }
       // The hand-off stays a version of this library's own item, so the owner is the copy's own
       // remote context: the next episode reports its position under its own identity.
-      const owner = sourceProgressOwner(pick, addonIdentity);
+      const identity = supplementaryIdentity(episode, series);
+      const owner = sourceProgressOwner(pick, identity);
       if (!owner) return false;
       const poster = playbackPoster(episode);
-      setPlaying({ stream: pick, libraryId: library.id, item: episode, title: episodeTitle(episode), favorite: false, owner, scope: titleScope, ...(poster ? { poster } : {}) });
+      const scope = `${accountScope}\u0000${library.id}\u0000${episode.id}\u0000${identity ? `${identity.type}:${identity.id}` : ""}`;
+      setPlaying({ stream: pick, libraryId: library.id, item: episode, title: episodeTitle(episode), favorite: false, owner, scope, ...(poster ? { poster } : {}) });
       needsDetailMeta.current = true;
       setDetail(episode);
       return true;

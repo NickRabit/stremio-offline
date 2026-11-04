@@ -1969,6 +1969,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await flush();
     await click(playButton());
     await flush();
+    await flush();
     const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
     await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
     await click(host.querySelector(".player-head button.icon-button")!);
@@ -2890,6 +2891,93 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await untilBrowser(() => downloadCalls.length === 2);
     expect(downloadCalls[1]).toEqual(expect.objectContaining({ sourceId: "src-ms3" }));
     expect(downloadCalls[1]!.media).toMatchObject({ id: "tt3", title: "Three" });
+  });
+
+  it("moves a native series hand-off to the next episode's own player context", async () => {
+    const show: RemoteItem = { id: "show", name: "Show", type: "series", providerIds: { imdb: "tt7" }, poster: "/show.jpg" };
+    const episodeOne: RemoteItem = {
+      id: "e1", name: "First", type: "episode", season: 1, episode: 1, seriesId: "show", providerIds: {},
+    };
+    const episodeTwo: RemoteItem = {
+      id: "e2", name: "Second", type: "episode", season: 1, episode: 2, seriesId: "show", providerIds: {},
+    };
+    const episodeStream = (item: RemoteItem, mediaSourceId: string, label: string): Stream => ({
+      sourceId: `src-${mediaSourceId}`, kind: "remote", playable: true, name: label, provider: "jellyfin",
+      remoteItem: { libraryId: "rlib_a", itemId: item.id, mediaSourceId, progressKey: `remote:${item.id}` },
+      capabilities: { ...capabilities, downloadToLibrary: true, downloadToDevice: true },
+      downloadTarget: { subfolder: "", layout: "structured", libraryId: "lib_1" },
+      behaviorHints: { videoSize: 2_000_000_000 },
+      subtitles: [{ subtitleId: `own-${item.id}`, lang: "en" }],
+    });
+
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episodeOne, episodeTwo] : [show]));
+    item = (url) => json({
+      item: url.pathname.endsWith("/e2") ? episodeTwo : url.pathname.endsWith("/e1") ? episodeOne : show,
+      capabilities,
+    });
+    sources = (url) => json({
+      streams: [url.pathname.includes("/e2/")
+        ? episodeStream(episodeTwo, "ms2", "1080p")
+        : episodeStream(episodeOne, "ms1", "1080p")],
+    });
+    state = (url, init) => {
+      if (init?.method === "PATCH") {
+        const favorite = (JSON.parse(String(init.body)) as { favorite: boolean }).favorite;
+        return json({ key: "k", position: 0, duration: 0, favorite, watched: false });
+      }
+      return json({ key: "k", position: 0, duration: 0, favorite: url.pathname.includes("/e1/"), watched: false });
+    };
+    addonProviders = () => json([{ key: "alpha", name: "Alpha" }]);
+    addonStreams = (url) => json([addonRow(
+      url.pathname.includes("tt7%3A1%3A2") ? "next-addon" : "first-addon",
+      url.pathname.includes("tt7%3A1%3A2") ? "Next addon" : "First addon",
+    )]);
+
+    await render({ addons: [addonWithRule()], downloadLibraries: [saveView()] });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await untilBrowser(() => host.querySelector(".episode-current")?.textContent?.includes("First") === true);
+    await click(playButton());
+    await untilBrowser(() => playbackCalls.length === 1);
+    await untilBrowser(() => addonCalls.subtitles.some((url) => url.pathname === "/api/subtitles/series/tt7%3A1%3A1"));
+    await untilBrowser(() => host.querySelector(".next-episode") !== null);
+
+    await click(host.querySelector(".next-episode")!);
+    await untilBrowser(() => playbackCalls.length === 2);
+    expect(playbackCalls[1]).toEqual(expect.objectContaining({ sourceId: "src-ms2" }));
+    await untilBrowser(() => addonCalls.subtitles.some((url) => url.pathname === "/api/subtitles/series/tt7%3A1%3A2"));
+    await click(host.querySelector(".player-sources-toggle")!);
+    await untilBrowser(() => addonCalls.streams.some((url) => url.pathname === "/api/streams/series/tt7%3A1%3A2"));
+    const rows = () => [...host.querySelectorAll<HTMLElement>("#player-sources .player-source-list button")]
+      .map((row) => row.textContent ?? "");
+    expect(rows().some((row) => row.includes("1080p"))).toBe(true);
+    expect(rows().some((row) => row.includes("Next addon"))).toBe(true);
+    expect(rows().some((row) => row.includes("First addon"))).toBe(false);
+
+    await click(host.querySelector(".player-star")!);
+    expect(calls.stateUrls.at(-1)).toBe("/api/remote-libraries/rlib_a/items/e2/state");
+    expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { favorite: true } });
+    if (!host.querySelector("#player-settings")) await click(host.querySelector(".player-settings-toggle")!);
+    await click(byText(".player-action", "To device")!);
+    expect(deviceCalls.at(-1)).toEqual(expect.objectContaining({ sourceId: "src-ms2" }));
+    expect(deviceCalls.at(-1)!.media).toMatchObject({ kind: "episode", season: 1, episode: 2 });
+    await click(byText(".player-action", "To library")!);
+    await untilBrowser(() => downloadCalls.length === 1);
+    expect(downloadCalls[0]).toEqual(expect.objectContaining({ sourceId: "src-ms2" }));
+    expect(downloadCalls[0]!.media).toMatchObject({ kind: "episode", season: 1, episode: 2 });
+
+    await flush();
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => {
+      Object.defineProperty(video, "duration", { configurable: true, value: 600 });
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 42 });
+      video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+    });
+    await flush();
+    await click(host.querySelector(".player-head button.icon-button")!);
+    await flush();
+    expect(addonCalls.progress.filter((call) => call.method === "POST").map((call) => call.body))
+      .toContainEqual(expect.objectContaining({ key: "series:tt7:1:2" }));
   });
 
   it("opens on the source the stored record names, once the group that holds it has answered", async () => {
