@@ -9,7 +9,7 @@ test.afterEach(async ({ request }) => {
   await request.get(new URL("/proxy-control?mode=video", addonManifest).href);
 });
 
-test("player keeps its picture stable and its overlay controls reachable", async ({ page, request }) => {
+test("player keeps its picture stable and its overlay controls reachable", async ({ page, request }, testInfo) => {
   await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
@@ -59,10 +59,46 @@ test("player keeps its picture stable and its overlay controls reachable", async
   const viewBoxes = await Promise.all(viewItems.map((button) => button.boundingBox()));
   expect(viewBoxes.map((box) => box!.x)).toEqual(viewBoxes.map((box) => box!.x).sort((a, b) => a - b));
 
+  if (testInfo.project.name === "mobile") {
+    const controls = overlay.locator(".player-controls");
+    const checkRows = async () => {
+      const controlsBox = (await controls.boundingBox())!;
+      const transportBoxes = await Promise.all((await overlay.locator(".transport-controls button").all()).map((button) => button.boundingBox()));
+      const rowTwoBoxes = await Promise.all([
+        ...(await controls.locator(":scope > button").all()).map((button) => button.boundingBox()),
+        ...(await overlay.locator(".player-view-controls button").all()).map((button) => button.boundingBox()),
+      ]);
+      const rowTwo = rowTwoBoxes.filter((box) => box !== null).sort((a, b) => a.x - b.x);
+      const gaps = rowTwo.slice(1).map((box, index) => box.x - rowTwo[index]!.x - rowTwo[index]!.width);
+      const transportLeft = Math.min(...transportBoxes.map((box) => box!.x));
+      const transportRight = Math.max(...transportBoxes.map((box) => box!.x + box!.width));
+
+      expect(new Set(transportBoxes.map((box) => Math.round(box!.y))).size).toBe(1);
+      expect(Math.abs((transportLeft + transportRight) / 2 - (controlsBox.x + controlsBox.width / 2))).toBeLessThanOrEqual(1);
+      expect(new Set(rowTwo.map((box) => Math.round(box.y))).size).toBe(1);
+      expect(rowTwo[0]!.x - controlsBox.x).toBeLessThanOrEqual(44);
+      expect(controlsBox.x + controlsBox.width - rowTwo.at(-1)!.x - rowTwo.at(-1)!.width).toBeLessThanOrEqual(44);
+      expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(1);
+      expect(await controls.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
+    };
+
+    await checkRows();
+    const viewport = page.viewportSize()!;
+    await page.setViewportSize({ width: 320, height: viewport.height });
+    await checkRows();
+    for (const button of await overlay.locator(".player-controls button").all()) {
+      const box = await button.boundingBox();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(320);
+    }
+    await page.setViewportSize(viewport);
+  }
+
   for (const button of await overlay.locator(".player-controls button").all()) {
     const box = await button.boundingBox();
     expect(box!.width).toBeGreaterThanOrEqual(44);
     expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
   }
   await overlay.getByRole("button", { name: "Zavřít nastavení přehrávání" }).click();
