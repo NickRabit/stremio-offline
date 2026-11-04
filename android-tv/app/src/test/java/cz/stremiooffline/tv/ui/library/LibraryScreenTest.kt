@@ -36,6 +36,7 @@ import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
+import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.ShuffleItemDto
 import cz.stremiooffline.tv.data.ShuffleStartDto
 import cz.stremiooffline.tv.data.ShuffleUpcomingDto
@@ -164,6 +165,12 @@ class LibraryScreenTest {
       hasNext = true,
       upcoming = ShuffleUpcomingDto("Second"),
     )
+    api.libraryTitleValues["Shows/First.mkv"] = LibraryTitleDto(
+      type = "series", id = "tt5", videoId = "tt5:1:2", name = "Show",
+    )
+    api.browseQueries["Shows|First.mkv"] = BrowseResult(
+      "Shows", listOf(file("Shows/First.mkv").copy(poster = "/poster/first.jpg")), 1, false,
+    )
     val played = mutableListOf<PlayTarget>()
     mount(api, onPlay = { played += it })
     switchTo("Files")
@@ -178,6 +185,11 @@ class LibraryScreenTest {
     assertEquals(listOf("Shows"), api.shuffleStarts)
     assertEquals("Shows/First.mkv", played.single().path)
     assertEquals(false, played.single().resume)
+    assertEquals("file:Shows/First.mkv", played.single().key)
+    assertEquals("series", played.single().subtitleType)
+    assertEquals("tt5:1:2", played.single().subtitleTarget)
+    assertEquals("/poster/first.jpg", played.single().poster)
+    assertEquals("Shows/First.mkv", played.single().initialSources!!.single().localPath)
     assertEquals("Second", played.single().shuffle?.upcomingTitle)
   }
 
@@ -211,6 +223,37 @@ class LibraryScreenTest {
 
     compose.waitUntil(5_000) { played.isNotEmpty() }
     assertEquals(listOf("yyy/xxx/zzz"), api.shuffleStarts)
+  }
+
+  @Test
+  fun `the toolbar shuffle icon plays the folder on screen and is absent on the libraries list`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(folder("yyy", "yyy")), 1, false)
+    api.pages["yyy"] = BrowseResult("yyy", listOf(folder("yyy/xxx", "xxx", fileCount = 2)), 1, false)
+    api.pages["yyy/xxx"] = BrowseResult("yyy/xxx", listOf(file("yyy/xxx/A.mkv"), folder("yyy/xxx/sub", "sub")), 2, false)
+    api.shuffleStartValue = ShuffleStartDto(id = "run-icon", item = ShuffleItemDto("yyy/xxx/A.mkv", "A"))
+    val played = mutableListOf<PlayTarget>()
+    mount(api, onPlay = { played += it })
+    switchTo("Files")
+    compose.onNodeWithTag(TagLibraryShuffleIcon).assertDoesNotExist()
+    for (tag in listOf("yyy", "yyy/xxx")) {
+      compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+      focusOn(tag)
+      press(Key.DirectionCenter)
+      compose.waitForIdle()
+      compose.mainClock.advanceTimeBy(150)
+      compose.waitForIdle()
+    }
+
+    compose.waitUntil(5_000) { api.browseCalls.any { it.first == "yyy/xxx" } }
+    compose.mainClock.advanceTimeBy(150)
+    compose.waitForIdle()
+    focusOn(TagLibraryShuffleIcon)
+    press(Key.DirectionCenter)
+
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+    assertEquals(listOf("yyy/xxx"), api.shuffleStarts)
+    assertEquals(false, played.single().resume)
   }
 
   @Test

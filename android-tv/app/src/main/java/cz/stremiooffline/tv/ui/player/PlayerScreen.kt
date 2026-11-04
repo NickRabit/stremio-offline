@@ -100,8 +100,11 @@ import cz.stremiooffline.tv.playback.sidecarRefresh
 import cz.stremiooffline.tv.playback.upNextPoint
 import cz.stremiooffline.tv.ui.catalog.SourcesPanel
 import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
+import cz.stremiooffline.tv.ui.catalog.OfferedSources
 import cz.stremiooffline.tv.ui.catalog.SourceFilterState
 import cz.stremiooffline.tv.ui.catalog.libraryAddonIdentity
+import cz.stremiooffline.tv.ui.catalog.localShufflePlayTarget
+import cz.stremiooffline.tv.ui.catalog.remoteShufflePlayTarget
 import cz.stremiooffline.tv.ui.catalog.RemoteSourcesFailure
 import cz.stremiooffline.tv.ui.catalog.sourceFilterChips
 import cz.stremiooffline.tv.ui.detail.PlayTarget
@@ -208,6 +211,9 @@ fun PlayerScreen(
   // A next episode replaces the file the caller's list was gathered for, so its addon rows name
   // the episode that just ended. The list is dropped with it rather than offered for the new file.
   var fileReplaced by remember { mutableStateOf(false) }
+  var replacementSources by remember { mutableStateOf<OfferedSources?>(null) }
+  var replacementSourcesLoading by remember { mutableStateOf(false) }
+  var replacementSourcesEpoch by remember { mutableIntStateOf(0) }
   // The correction lives with this playback, not beyond it.
   var delaySeconds by remember(target.key) { mutableDoubleStateOf(0.0) }
   var cues by remember { mutableStateOf<List<VttCue>>(emptyList()) }
@@ -220,6 +226,20 @@ fun PlayerScreen(
   val currentState by rememberUpdatedState(state)
   val currentNext by rememberUpdatedState(nextEpisode)
   val closedShuffle = remember { mutableSetOf<String>() }
+
+  fun loadReplacementSources(target: PlayTarget) {
+    val epoch = ++replacementSourcesEpoch
+    replacementSources = OfferedSources(Streams.deduped(target.initialSources ?: target.remoteSources))
+    replacementSourcesLoading = true
+    scope.launch {
+      LibraryPlaySources(api).load(target) {
+        if (epoch != replacementSourcesEpoch) return@load
+        replacementSources = it
+        replacementSourcesLoading = it.loading
+      }
+      if (epoch == replacementSourcesEpoch) replacementSourcesLoading = false
+    }
+  }
 
   fun closeShuffle() {
     val id = currentTarget.shuffle?.id ?: return
@@ -320,29 +340,12 @@ fun PlayerScreen(
         delaySeconds = 0.0
         cues = emptyList()
         title = item.title
+        val shuffle = ShuffleRun(run.id, answer.upcoming?.title)
         val nextTarget = if (item.remote != null) {
-          val streams = runCatching { api.remoteSources(item.remote.libraryId, item.remote.itemId) }.getOrNull().orEmpty()
-          val stream = streams.firstOrNull { it.playable } ?: return@launch
-          val remote = stream.remoteItem ?: return@launch
-          PlayTarget(
-            key = remote.progressKey,
-            title = item.title,
-            resume = false,
-            sourceId = stream.sourceId,
-            stableKey = stream.stableKey,
-            remoteItem = remote,
-            shuffle = ShuffleRun(run.id, answer.upcoming?.title),
-          )
+          remoteShufflePlayTarget(api, item, shuffle)
         } else {
-          val path = item.path ?: return@launch
-          PlayTarget(
-            key = Progress.libraryKey(path),
-            title = item.title,
-            resume = false,
-            path = path,
-            shuffle = ShuffleRun(run.id, answer.upcoming?.title),
-          )
-        }
+          localShufflePlayTarget(api, item, shuffle)
+        } ?: return@launch
         currentTarget = nextTarget
         nextEpisode = answer.upcoming?.title?.let { NextEpisode("", it) }
         controller.playNext(
@@ -357,6 +360,7 @@ fun PlayerScreen(
         ) {
           nextTarget.path?.let { path -> runCatching { api.librarySource(path) }.getOrNull()?.sourceId }
         }
+        loadReplacementSources(nextTarget)
         nextSubtitlesFor = nextTarget
       }
       return
@@ -365,7 +369,20 @@ fun PlayerScreen(
     delaySeconds = 0.0
     cues = emptyList()
     title = next.title
-    val nextTarget = PlayTarget(key = Progress.libraryKey(next.path), title = next.title, resume = false, path = next.path)
+    val nextTarget = PlayTarget(
+      key = Progress.libraryKey(next.path),
+      title = next.title,
+      resume = false,
+      path = next.path,
+      initialSources = listOf(
+        StreamDto(
+          sourceId = Progress.libraryKey(next.path),
+          kind = "library",
+          playable = true,
+          localPath = next.path,
+        ),
+      ),
+    )
     currentTarget = nextTarget
     // The source is minted inside the controller, after the outgoing session is saved and deleted.
     controller.playNext(
@@ -374,6 +391,7 @@ fun PlayerScreen(
       path = next.path,
       resume = false,
     ) { runCatching { api.librarySource(next.path) }.getOrNull()?.sourceId }
+    loadReplacementSources(nextTarget)
     nextSubtitlesFor = nextTarget
   }
 
@@ -384,6 +402,9 @@ fun PlayerScreen(
     nextEpisode = null
     nextCard = false
     fileReplaced = false
+    replacementSources = null
+    replacementSourcesLoading = false
+    replacementSourcesEpoch += 1
     tracksOpen = false
     diagnosticsOpen = false
     sourcesOpen = false
@@ -461,8 +482,8 @@ fun PlayerScreen(
   // The sources the caller offers in its own order; an addon's notice is not a source. A play the
   // catalogue never started has none, so both the button and the panel stay away. A next episode
   // replaces the file those sources belong to, and they go with it.
-  val offeredSources = Streams.offeredStreams(if (fileReplaced) emptyList() else sources)
-  val sourcesAsking = sourcesLoading && !fileReplaced
+  val offeredSources = Streams.offeredStreams(if (fileReplaced) replacementSources?.streams.orEmpty() else sources)
+  val sourcesAsking = if (fileReplaced) replacementSourcesLoading else sourcesLoading
   // The row the session plays: an addon one by its source id, a library copy by the path it plays.
   // A blank source id names no source, so it marks no row; a source id match wins over a path one,
   // because an addon source chosen over a library file leaves that file's path on the session.
@@ -838,7 +859,10 @@ fun PlayerScreen(
   }
   val subtitleText = activeCue(cues, position)?.takeIf { it.isNotBlank() }
   val sourcesTitle = stringResource(R.string.sources_heading)
-  val remoteFailureNote = sourcesRemoteFailure?.let { failure ->
+  val currentRemoteFailure = if (fileReplaced) replacementSources?.remoteFailure else sourcesRemoteFailure
+  val currentRuleNoteProfileId = if (fileReplaced) replacementSources?.ruleNoteProfileId else ruleNoteProfileId
+  val retrySources = if (fileReplaced) ({ loadReplacementSources(currentTarget) }) else onSourcesRetry
+  val remoteFailureNote = currentRemoteFailure?.let { failure ->
     if (failure.discovery) stringResource(R.string.media_server_error)
     else stringResource(R.string.media_server_group_failed, failure.labels.joinToString(", "))
   }
@@ -972,7 +996,7 @@ fun PlayerScreen(
           emptyText = stringResource(R.string.sources_none),
           failureText = stringResource(R.string.tv_load_error),
           remoteNote = remoteFailureNote,
-          ruleNoteProfileId = sourceFilters.noteProfileId(settings.streamSort) ?: ruleNoteProfileId,
+          ruleNoteProfileId = sourceFilters.noteProfileId(settings.streamSort) ?: currentRuleNoteProfileId,
           filters = if (offeredSources.size > 1) chips else emptyList(),
           onFilterSelect = sourceFilters::select,
           countText = if (offeredSources.size > 1) {
@@ -980,8 +1004,8 @@ fun PlayerScreen(
           } else {
             null
           },
-          onRetry = if (sourcesRemoteFailure != null) onSourcesRetry else null,
-          retryTag = if (sourcesRemoteFailure != null) TagRemoteSourcesRetry else null,
+          onRetry = if (currentRemoteFailure != null) retrySources else null,
+          retryTag = if (currentRemoteFailure != null) TagRemoteSourcesRetry else null,
           initialFocus = sourcesEntry,
         )
       }

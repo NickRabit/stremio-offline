@@ -60,6 +60,7 @@ import cz.stremiooffline.tv.ui.components.LibraryRootCard
 import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
+import cz.stremiooffline.tv.ui.catalog.localShufflePlayTarget
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.ShuffleRun
@@ -188,15 +189,13 @@ fun LibraryRoute(
       try {
         val answer = api.startShuffle(target.path)
         val path = answer.item.path ?: return@launch
-        onPlay(
-          PlayTarget(
-            key = Progress.libraryKey(path),
-            title = answer.item.title,
-            resume = false,
-            path = path,
-            shuffle = ShuffleRun(answer.id, answer.upcoming?.title),
-          ),
-        )
+        val poster = state.pages
+          .flatMap { it.items }
+          .filterIsInstance<BrowseItem.File>()
+          .firstOrNull { it.path == path }
+          ?.poster
+        localShufflePlayTarget(api, answer.item, ShuffleRun(answer.id, answer.upcoming?.title), poster)
+          ?.let(onPlay)
       } catch (error: ApiError) {
         shuffleNotice = if (error.failure == ApiFailure.NotFound) playRandomEmptyText else loadErrorText
       } catch (_: Exception) {
@@ -468,11 +467,15 @@ fun LibraryRoute(
         // real directory stays searchable while it loads, answers nothing or fails, so a committed
         // query can always be reopened and cleared.
         val searchable = state.current?.searchable == true
+        // The root of the files half lists the libraries; any real folder below it can be shuffled.
+        val currentShuffle = state.current?.takeIf { it.path.isNotEmpty() }
+          ?.let { LibraryShuffleTarget(it.path, it.title.ifBlank { fallbackTitle }) }
         if (searchEverywhereEnabled) {
           LibraryToolbar(
             onSearch = { openLibrarySearch() },
             available = searchAvailable,
             openFocus = searchAction,
+            onShuffle = currentShuffle?.let { target -> { startShuffle(target) } },
           )
         } else {
           LibrarySearchFallback(
@@ -485,6 +488,7 @@ fun LibraryRoute(
             available = searchable,
             openFocus = searchAction,
             fieldFocus = searchField,
+            onShuffle = currentShuffle?.let { target -> { startShuffle(target) } },
           )
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {

@@ -30,6 +30,10 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.catalog.CatalogSearchChip
 import cz.stremiooffline.tv.ui.components.FocusButton
+import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.components.ShuffleIcon
+import androidx.tv.material3.Icon
+import androidx.compose.foundation.layout.size
 import cz.stremiooffline.tv.ui.components.TvTextField
 import cz.stremiooffline.tv.ui.theme.Tokens
 import androidx.compose.ui.text.input.ImeAction
@@ -37,6 +41,7 @@ import kotlinx.coroutines.android.awaitFrame
 
 const val TagLibraryToolbar = "library_toolbar"
 const val TagLibrarySearchAction = "library_search_action"
+const val TagLibraryShuffleIcon = "library_shuffle_icon"
 const val TagLibrarySearchField = "library_search_field"
 const val TagLibrarySearchInput = "library_search_input"
 const val TagLibrarySearchSubmit = "library_search_submit"
@@ -104,6 +109,8 @@ internal fun LibraryToolbar(
   typeFilter: RemoteTypeFilter? = null,
   typeFocus: FocusRequester = remember { FocusRequester() },
   onOpenType: () -> Unit = {},
+  /** Plays the level on screen and every folder under it in random order; null hides the icon. */
+  onShuffle: (() -> Unit)? = null,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth().testTag(TagLibraryToolbar),
@@ -119,6 +126,7 @@ internal fun LibraryToolbar(
     if (available && typeFilter != null) {
       LibraryTypeChip(filter = typeFilter, onClick = onOpenType, modifier = Modifier.focusRequester(typeFocus).leftToNeighbour(openFocus))
     }
+    onShuffle?.let { LibraryShuffleButton(onClick = it) }
   }
 }
 
@@ -140,6 +148,7 @@ internal fun LibrarySearchFallback(
   typeFilter: RemoteTypeFilter? = null,
   typeFocus: FocusRequester = remember { FocusRequester() },
   onOpenType: () -> Unit = {},
+  onShuffle: (() -> Unit)? = null,
 ) {
   BackHandler(enabled = open) { onClose() }
   var wasOpen by remember { mutableStateOf(false) }
@@ -189,7 +198,21 @@ internal fun LibrarySearchFallback(
     if (available && typeFilter != null && !open) {
       LibraryTypeChip(filter = typeFilter, onClick = onOpenType, modifier = Modifier.focusRequester(typeFocus).leftToNeighbour(openFocus))
     }
+    if (!open) onShuffle?.let { LibraryShuffleButton(onClick = it) }
   }
+}
+
+/** Play random: an icon beside the toolbar's chips, the TV's counterpart of the web toolbar icon. */
+@Composable
+private fun LibraryShuffleButton(onClick: () -> Unit) {
+  FocusButton(
+    text = "",
+    onClick = onClick,
+    kind = FocusButtonKind.Icon,
+    leading = { Icon(ShuffleIcon, contentDescription = null, modifier = Modifier.size(18.dp)) },
+    contentDescription = stringResource(R.string.library_play_random),
+    modifier = Modifier.testTag(TagLibraryShuffleIcon),
+  )
 }
 
 /** The type chip: the same button the Catalog's chips are, naming the current choice. */
