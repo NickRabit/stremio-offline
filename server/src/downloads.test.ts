@@ -46,7 +46,20 @@ const send = async (res: NodeJS.WritableStream, bytes: number) => {
   for (let sent = 0; sent < bytes; ) {
     const size = Math.min(chunk.length, bytes - sent);
     const piece = size === chunk.length ? chunk : chunk.subarray(0, size);
-    if (!res.write(piece)) await new Promise((resolve) => res.once("drain", resolve));
+    if (!res.write(piece)) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          res.off("drain", done);
+          res.off("close", done);
+          res.off("error", done);
+          resolve();
+        };
+        res.once("drain", done);
+        res.once("close", done);
+        res.once("error", done);
+      });
+      if ((res as NodeJS.WritableStream & { destroyed?: boolean }).destroyed) return;
+    }
     sent += size;
   }
 };
@@ -441,13 +454,19 @@ test("a rule whose library is away waits for it instead of landing somewhere els
   }
 });
 
-test("a job waits for a removed library and finishes there once it is added again", async () => {
+test("a job waits for a removed library and finishes there once it is added again", async (t) => {
+  // The retry is an interval: it has to be mocked too, or it fires on real time and the ticks below drive nothing.
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const downloadDir = path.join(directory, "downloads");
   const archiveRoot = path.join(directory, "archive");
   const archive = { id: "lib_12345678", name: "Archive", type: "movie" as const, root: archiveRoot, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true };
   // Removed, not broken: the record is gone from the list until somebody adds the folder back.
   let removed = true;
+  let gateNextLookup = false;
+  const gatedLookupEntered = deferred();
+  const releaseGatedLookup = deferred();
+  let libraryLookups = 0;
   const size = 4096;
   const { server, port } = await listen((_req, res) => {
     res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
@@ -456,24 +475,47 @@ test("a job waits for a removed library and finishes there once it is added agai
   const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
     stallInitialMs: 5_000, stallTransferMs: 5_000, libraryRetryMs: 20, libraryWaitMs: 60_000,
     libraries: () => removed ? [] : [archive],
-    libraryState: async (libraryId) => removed ? undefined : (libraryId === archive.id ? archive : undefined),
+    libraryState: async (libraryId) => {
+      libraryLookups += 1;
+      if (gateNextLookup) {
+        gateNextLookup = false;
+        gatedLookupEntered.release();
+        await releaseGatedLookup.promise;
+      }
+      return removed ? undefined : (libraryId === archive.id ? archive : undefined);
+    },
   });
   await queue.load();
   try {
     const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` }, undefined, { subfolder: "", layout: "structured", libraryId: archive.id });
     assert.equal(job.status, "paused", "a removed library is waited for, not worked around");
     assert.equal(job.target, "", "and no name is chosen meanwhile");
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    for (let retry = 0; retry < 4; retry += 1) {
+      t.mock.timers.tick(20);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     assert.equal(queue.list()[0]!.status, "paused", "the patience is minutes, not ticks");
 
     // Adding the folder again gives the library its id back (state.departed), and the job
     // continues into it rather than into the default.
+    const lookupsBeforeReturn = libraryLookups;
     removed = false;
-    await waitFor(queue, () => queue.list()[0]?.status === "completed");
+    gateNextLookup = true;
+    t.mock.timers.tick(20);
+    await gatedLookupEntered.promise;
+    t.mock.timers.tick(20);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(libraryLookups, lookupsBeforeReturn + 1, "a second retry tick does not overlap the first");
+    releaseGatedLookup.release();
+    for (let attempt = 0; attempt < 1000 && queue.list()[0]?.status !== "completed"; attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.equal(queue.list()[0]?.status, "completed");
     assert.equal(queue.list()[0]!.target, "lib_12345678/Film/Film.mp4");
     assert.equal((await stat(path.join(archiveRoot, "Film", "Film.mp4"))).size, size);
     await assert.rejects(stat(path.join(downloadDir, "Film", "Film.mp4")), "nothing landed in the download directory");
   } finally {
+    releaseGatedLookup.release();
     await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
@@ -3259,6 +3301,7 @@ test("a queued profile job completes by reference from a copy that appeared afte
   });
   const relative = `${LIBRARY_ID}/Film/Existing.mkv`;
   const completed: Readonly<DownloadJob>[] = [];
+  const completedOnce = deferred();
   let admissionLookups = 0;
   let resolverCalls = 0;
   let progressBytes = 0;
@@ -3288,7 +3331,7 @@ test("a queued profile job completes by reference from a copy that appeared afte
     };
   });
   queue.onProgress = (_job, bytes) => { progressBytes += bytes; };
-  queue.onCompleted = async (job) => { completed.push(job); };
+  queue.onCompleted = async (job) => { completed.push(job); completedOnce.release(); };
   try {
     const follow = { followId: "follow-1", episodeKey: "1:1", intent: "follow-1:1:1" };
     const queued = await queue.addPending(
@@ -3323,6 +3366,7 @@ test("a queued profile job completes by reference from a copy that appeared afte
     assert.equal(Object.hasOwn(queue.list()[0]!, "source"), false);
     assert.equal(Object.hasOwn(queue.list()[0]!, "sourceAdmission"), false);
     assert.deepEqual(queue.history(), [], "a reused row is not download statistics");
+    await completedOnce.promise;
     assert.equal(completed.length, 1);
     assert.equal(completed[0]?.media?.id, "tt-existing");
     assert.deepEqual(completed[0]?.follow, follow);

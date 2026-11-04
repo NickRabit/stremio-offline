@@ -33,6 +33,12 @@ The HTTP layer lives in `server/src/routes/`, one area per file, behind the
 second pattern; a further directory under `server/src` needs its own pattern, as
 `sh` does not expand `**` recursively.
 
+A test that failed once and passed on a rerun can be stressed with
+`node scripts/test-stress.mjs server/src/example.test.ts --pattern "test name" --runs 30 --parallel 6 --load 4`.
+The script runs from the owning workspace and can keep CPU load processes alive
+to make scheduling races more likely. Fix the synchronization such a run exposes;
+do not raise the timeout or add a retry.
+
 ### L1 -- client unit and component tests
 
 Runner: **Vitest** with the `jsdom` environment, sharing Vite's existing

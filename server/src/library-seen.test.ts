@@ -10,11 +10,12 @@ const seenFile = (dataDir: string) => path.join(dataDir, "library-seen.json");
 
 async function withStore(run: (store: LibrarySeenStore, dataDir: string) => Promise<void>) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "seen-store-"));
+  const store = new LibrarySeenStore(dataDir);
   try {
-    const store = new LibrarySeenStore(dataDir);
     await store.load();
     await run(store, dataDir);
   } finally {
+    await store.flush();
     await rm(dataDir, { recursive: true, force: true });
   }
 }

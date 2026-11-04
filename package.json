@@ -30,7 +30,7 @@
     "dev:desktop": "npm run dev -w desktop",
     "complexity": "node scripts/complexity-report.mjs",
     "android:strings": "node scripts/android-strings.mjs",
-    "test:media-client": "node --test scripts/media-client-verification.test.mjs"
+    "test:media-client": "node --test --test-timeout=120000 scripts/media-client-verification.test.mjs"
   },
   "engines": {
     "node": ">=24.15"

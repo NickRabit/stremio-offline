@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test src/index.test.ts"
+    "test": "tsx --test --test-timeout=120000 src/index.test.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

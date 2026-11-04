@@ -707,7 +707,7 @@ test("updateLater changes memory at once and coalesces many calls into one write
     assert.equal(store.settings().logLevel, "DEBUG", "the change is readable before the write");
     await store.updateLater((state) => { state.settings.addonRefreshHours = 6; }, 20);
     await store.updateLater((state) => { state.settings.concurrentDownloads = 3; }, 20);
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await store.flush();
     assert.equal(writes, 1, "the changes share the first deadline");
 
     const reloaded = new Store(directory);
@@ -769,7 +769,7 @@ test("an update between deferred calls writes and clears their debt", async () =
     await store.updateLater((state) => { state.settings.logLevel = "DEBUG"; }, 20);
     await store.update((state) => { state.settings.addonRefreshHours = 6; });
     assert.equal(writes, 1, "the ordinary update carries the deferred change");
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await store.flush();
     assert.equal(writes, 1, "the cleared debt does not write again");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
