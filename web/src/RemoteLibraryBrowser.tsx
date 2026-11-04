@@ -1732,7 +1732,20 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   /** A switch starts the chosen row through the very path the detail's Play uses, at the position
    *  the row on screen was left at. The player stays mounted, so its track choices stand. */
   const switchDetailSource = (stream: Stream, positionSeconds: number) => {
-    if (!playDetailStream(stream, false, positionSeconds)) throw new Error(t("player.noOtherSource"));
+    const current = playingRef.current;
+    const run = shuffleRunRef.current;
+    const keepShuffle = Boolean(current && run && current.libraryId === run.libraryId && current.item.id === run.itemId);
+    const context = keepShuffle && current ? {
+      detail: current.item,
+      series,
+      favorite: current.favorite,
+      identity: supplementaryIdentity(current.item, series),
+      scope: current.scope,
+      ...(current.poster ? { poster: current.poster } : {}),
+    } : undefined;
+    if (!playDetailStream(stream, false, positionSeconds, keepShuffle ? { shuffle: true, ...(context ? { context } : {}) } : {})) {
+      throw new Error(t("player.noOtherSource"));
+    }
   };
 
   /** The exact subject and labels one addon row is saved under: the media identity keeps the
@@ -2107,6 +2120,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         nextTitle={shuffleActive ? shuffleRun?.upcoming?.title : away ? undefined : playNext ? episodeTitle(playNext) : undefined}
         onNext={shuffleActive ? (shuffleRun?.upcoming ? nextRandom : undefined) : away ? undefined : playNext ? () => changeEpisode(playNext) : undefined}
         autoNext={shuffleActive || false}
+        shuffle={shuffleActive}
         nextBusy={nextBusy}
         favorite={away ? undefined : playing.favorite}
         fromBeginning={playing.fromBeginning}

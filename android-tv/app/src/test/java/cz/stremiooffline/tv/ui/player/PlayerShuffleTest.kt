@@ -52,9 +52,9 @@ class PlayerShuffleTest {
     libraryNextValue = NextFileDto(path = "Films/Wrong.mkv", title = "Wrong")
   }
 
-  private fun mount(api: FakeTvApi, target: PlayTarget) {
+  private fun mount(api: FakeTvApi, target: PlayTarget, sources: List<StreamDto> = emptyList()) {
     compose.setContent {
-      PlayerScreen(api = api, target = target, onExit = {})
+      PlayerScreen(api = api, target = target, sources = sources, onExit = {})
     }
     compose.waitForIdle()
   }
@@ -243,6 +243,57 @@ class PlayerShuffleTest {
     compose.waitForIdle()
     compose.onNodeWithTag(TagSourcesPanel).assertExists()
     compose.onNodeWithTag(sourceRowTag(0)).assertExists()
+  }
+
+  @Test
+  fun `a source switch keeps shuffle progress and next on the same run`() {
+    val api = api().apply {
+      shuffleNextValue = ShuffleNextDto(
+        item = ShuffleItemDto(path = "Films/Next.mkv", title = "Next"),
+        hasPrevious = true,
+      )
+    }
+    val libraryRow = StreamDto(
+      sourceId = "src:Films/First.mkv",
+      kind = "library",
+      playable = true,
+      localPath = "Films/First.mkv",
+    )
+    val addonRow = StreamDto(
+      sourceId = "addon-switch",
+      kind = "remote",
+      playable = true,
+      name = "Switch source",
+      addonKey = "alpha",
+    )
+    mount(
+      api,
+      PlayTarget(
+        key = Progress.libraryKey("Films/First.mkv"),
+        title = "First",
+        resume = false,
+        path = "Films/First.mkv",
+        shuffle = ShuffleRun("run-switch", "Next"),
+      ),
+      listOf(libraryRow, addonRow),
+    )
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag(TAG_OSD_NEXT).fetchSemanticsNodes().isNotEmpty() }
+
+    compose.onNodeWithTag(TAG_OSD_SOURCES).requestFocus()
+    compose.onNodeWithTag(TAG_OSD_SOURCES).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(sourceRowTag(1)).requestFocus()
+    compose.onNodeWithTag(sourceRowTag(1)).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.startedSources.size == 2 }
+    assertEquals("addon-switch", api.startedSources[1])
+    compose.onNodeWithTag(TAG_OSD_NEXT).assertExists()
+
+    val savesBeforeSwitch = api.progressSaves.size
+    compose.onNodeWithTag(TAG_OSD_SEEK_FORWARD).performSemanticsAction(SemanticsActions.OnClick) { it() }
+    compose.waitUntil(5_000) { api.progressSaves.drop(savesBeforeSwitch).any { it.shuffle } }
+    pressNext()
+    compose.waitUntil(5_000) { api.shuffleNextRequests.isNotEmpty() }
+    assertEquals(listOf("run-switch"), api.shuffleNextRequests)
   }
 
   @Test

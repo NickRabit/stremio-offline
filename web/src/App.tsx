@@ -3494,7 +3494,6 @@ export function App() {
   /** Handing the player another source of the same title: it starts through the ordinary play
    *  path at the position it was chosen at, and the title's own progress is left untouched. */
   const switchPlaybackSource = async (stream: Stream, positionSeconds: number): Promise<void> => {
-    endShuffle();
     const ref = playbackCatalogueRef();
     if (!ref) throw new Error(t("player.noOtherSource"));
     playbackReturn.current = capturePlaybackReturn({ kind: "catalog", key: `${ref.type}:${ref.id}` });
@@ -3650,7 +3649,7 @@ export function App() {
   // The row the main player is on: the file of the library, the row the shared detail started, or
   // the row a catalogue tile played. It leads the player's chooser under its own class's name.
   const playingStream = localStream ?? detailPlaying?.stream ?? selectedStream;
-  const shuffleActive = localStream?.shuffle === true;
+  const shuffleActive = shuffleState !== null;
   const playerNextTitle = shuffleActive
     ? shuffleState?.upcoming?.title
     : localStream ? nextFile?.title : detailPlaying ? (nextDetailEpisode ? episodeLabel(nextDetailEpisode) : undefined) : catalogueNext ? episodeLabel(catalogueNext) : undefined;

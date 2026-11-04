@@ -2893,6 +2893,69 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(downloadCalls[1]!.media).toMatchObject({ id: "tt3", title: "Three" });
   });
 
+  it("keeps the random run when its player switches source", async () => {
+    const one: RemoteItem = { ...movie("1", "One"), providerIds: { imdb: "tt1" } };
+    const two: RemoteItem = { ...movie("2", "Two"), providerIds: { imdb: "tt2" } };
+    const three: RemoteItem = { ...movie("3", "Three"), providerIds: { imdb: "tt3" } };
+    const version: Stream = {
+      sourceId: "src-ms2", kind: "remote", playable: true, name: "1080p", provider: "jellyfin",
+      remoteItem: { libraryId: "rlib_a", itemId: "2", mediaSourceId: "ms2", progressKey: "remote:2" },
+    };
+    browse = () => json(page([one, two]));
+    item = (url) => json({
+      item: url.pathname.endsWith("/2") ? two : url.pathname.endsWith("/3") ? three : one,
+      capabilities,
+    });
+    sources = () => json({ streams: [version] });
+    state = () => json({ key: "k", position: 0, duration: 0, favorite: false, watched: false });
+    addonProviders = () => json([{ key: "alpha", name: "Alpha" }]);
+    addonStreams = (url) => json([addonRow(
+      url.pathname.includes("tt2") ? "addon-two" : "addon-three",
+      url.pathname.includes("tt2") ? "Two addon" : "Three addon",
+    )]);
+    shuffleStart = () => json({
+      id: "run-switch",
+      item: { remote: { libraryId: "rlib_a", itemId: "2" }, title: "Two" },
+      total: 2,
+      hasNext: true,
+      hasPrevious: false,
+      upcoming: { title: "Three" },
+    });
+    shuffleNext = () => json({
+      item: { remote: { libraryId: "rlib_a", itemId: "3" }, title: "Three" },
+      hasNext: false,
+      hasPrevious: true,
+    });
+
+    await render({ addons: [addonWithRule()] });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await untilBrowser(() => tileButtons().length === 2);
+    await click(host.querySelector('button[aria-label="Play random"]')!);
+    await untilBrowser(() => playbackCalls.length === 1);
+    await click(host.querySelector(".player-sources-toggle")!);
+    await untilBrowser(() => [...host.querySelectorAll<HTMLElement>("#player-sources .player-source-list button")]
+      .some((row) => row.textContent?.includes("Two addon")));
+    await click([...host.querySelectorAll<HTMLButtonElement>("#player-sources .player-source-list button")]
+      .find((row) => row.textContent?.includes("Two addon"))!);
+    await untilBrowser(() => playbackCalls.length === 2);
+    expect(playbackCalls[1]).toEqual(expect.objectContaining({ sourceId: "addon-two" }));
+    expect(host.querySelector<HTMLButtonElement>(".next-episode")?.title).toBe("Next episode: Three");
+    expect(shuffleCalls.deleted).toEqual([]);
+
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => {
+      Object.defineProperty(video, "duration", { configurable: true, value: 600 });
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 44 });
+      video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+    });
+    await click(host.querySelector(".next-episode")!);
+    await untilBrowser(() => shuffleCalls.next.includes("/api/shuffle/run-switch/next"));
+    await flush();
+    expect(addonCalls.progress.filter((call) => call.method === "POST").map((call) => call.body))
+      .toContainEqual(expect.objectContaining({ key: "movie:tt2", shuffle: true }));
+    expect(shuffleCalls.deleted).toEqual([]);
+  });
+
   it("moves a native series hand-off to the next episode's own player context", async () => {
     const show: RemoteItem = { id: "show", name: "Show", type: "series", providerIds: { imdb: "tt7" }, poster: "/show.jpg" };
     const episodeOne: RemoteItem = {

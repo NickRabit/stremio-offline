@@ -50,6 +50,7 @@ let playbackBodies: Array<Record<string, unknown>>;
 let progressBodies: Array<Record<string, unknown>>;
 let shuffleDeletes: string[];
 let shuffleStarts: Array<{ path: string }>;
+let shuffleNextCalls: string[];
 let shuffleStartItem: { path?: string; title: string; season?: number };
 let shuffleNextItems: Array<{ path?: string; title: string; season?: number }>;
 let identities: Record<string, { type: "movie" | "series"; id: string }>;
@@ -70,6 +71,7 @@ beforeEach(() => {
   progressBodies = [];
   shuffleDeletes = [];
   shuffleStarts = [];
+  shuffleNextCalls = [];
   shuffleStartItem = { path: "Films/First.mkv", title: "First" };
   shuffleNextItems = [{ path: "Films/Second.mkv", title: "Second" }];
   identities = {};
@@ -141,6 +143,7 @@ beforeEach(() => {
       });
     }
     if (path === "/api/shuffle/shuffle_one/next" && method === "POST") {
+      shuffleNextCalls.push(path);
       return json({
         item: shuffleNextItems.shift() ?? { path: "Films/Second.mkv", title: "Second" },
         hasNext: false,
@@ -461,5 +464,41 @@ describe("Play random", () => {
     await until(() => progressBodies.some((body) => body.path === "Films/B.mkv" && body.final === true));
     expect(progressBodies.filter((body) => body.path === "Films/B.mkv" && body.final === true)[0]!.key)
       .toBe("file:Films/B.mkv");
+  });
+
+  it("keeps the random run and its progress flag when the player switches source", async () => {
+    identities["Films/Bound.mkv"] = { type: "movie", id: "tt1" };
+    shuffleStartItem = { path: "Films/Bound.mkv", title: "Bound" };
+    await openLibrary();
+    const menu = host.querySelector<HTMLButtonElement>("[data-path='Films'] .browse-menu")!;
+    await act(async () => { menu.click(); });
+    await act(async () => {
+      [...host.querySelectorAll<HTMLButtonElement>(".browse-actions button")]
+        .find((button) => button.textContent?.trim() === "Play random")!.click();
+    });
+    await until(() => playbackBodies.some((body) => body.sourceId === "source_first"));
+
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-sources-toggle")!.click(); });
+    await until(() => [...host.querySelectorAll<HTMLElement>("#player-sources .player-source-list button")]
+      .some((row) => row.textContent?.includes("Bound addon")));
+    await act(async () => {
+      [...host.querySelectorAll<HTMLButtonElement>("#player-sources .player-source-list button")]
+        .find((row) => row.textContent?.includes("Bound addon"))!.click();
+    });
+    await until(() => playbackBodies.some((body) => body.sourceId === "bound-addon"));
+    expect(host.querySelector<HTMLButtonElement>(".next-episode")?.title).toBe("Next episode: Second");
+    expect(shuffleDeletes).toEqual([]);
+
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => {
+      Object.defineProperty(video, "duration", { configurable: true, value: 600 });
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 35 });
+      video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+    });
+    await act(async () => { host.querySelector<HTMLButtonElement>(".next-episode")!.click(); });
+    await until(() => shuffleNextCalls.length === 1);
+    await until(() => progressBodies.some((body) =>
+      body.key === "movie:tt1" && body.shuffle === true));
+    expect(shuffleDeletes).toEqual([]);
   });
 });
