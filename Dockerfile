@@ -28,7 +28,8 @@ WORKDIR /app
 # the classic builder (Container Manager on Synology) leaves it empty, so the drivers
 # would be skipped silently and QuickSync would never run on the NAS.
 # libatomic1: the Node 26 binary copied in below links against it, and ubuntu:24.04 does not ship it.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libva-drm2 vainfo util-linux libatomic1 \
+# Upgrade first: the ubuntu:24.04 base lags behind security updates (e.g. pcre2).
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ffmpeg libva-drm2 vainfo util-linux libatomic1 \
     && if [ "$(dpkg --print-architecture)" = "amd64" ]; then apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver; fi \
     && useradd --uid 1001 --create-home node \
     && rm -rf /var/lib/apt/lists/*
