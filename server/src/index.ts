@@ -33,6 +33,7 @@ import { withProxiedArtwork } from "./addon-view.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { passwordChangeMiddleware, roleMiddleware } from "./roles.js";
 import { GuardRejection, outbound } from "./outbound.js";
+import { deadArtwork } from "./dead-artwork.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProgress, type WatchedMarker } from "./store.js";
@@ -1229,7 +1230,7 @@ const cachedMeta = async (
   // what the providers say now without leaving the next reader to ask again.
   const hit = opts.fresh ? undefined : metaCache.get(key);
   if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
-  const value = await metadata(
+  const found = await metadata(
     sources, type, id, language,
     opts.artwork ? tmdbArtworkProvider(language) : tmdbProvider(language),
     opts.interactive ?? viewer !== undefined,
@@ -1237,6 +1238,7 @@ const cachedMeta = async (
     opts.signal,
   ).catch(() => null);
   if (opts.signal?.aborted) return null;
+  const value = found ? await deadArtwork.prune(found, opts.signal) : found;
   if (metaCache.size > 300) metaCache.clear();
   // A failed lookup is not an answer: caching it would hold a title empty for six hours.
   if (value) metaCache.set(key, { value, at: Date.now() });
