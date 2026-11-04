@@ -27,10 +27,12 @@ updates:
           - minor
           - patch
     ignore:
-      # Ubuntu 26.04's libx264 crashes on arm64 VMs that advertise SVE2; see the
-      # Ubuntu paragraph in docs/roadmap.md. Remove this when it is fixed.
+      # Ubuntu tags are YY.MM, so Dependabot reads 24.04 -> 24.10 as a minor update. 24.10 is an
+      # interim release, not an LTS, and 26.04's libx264 crashes on arm64 VMs that advertise SVE2
+      # (see the Ubuntu paragraph in docs/roadmap.md). Only patch updates of the tag are wanted.
+      # Remove the major rule when 26.04 is fixed.
       - dependency-name: ubuntu
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: github-actions
     directory: /
