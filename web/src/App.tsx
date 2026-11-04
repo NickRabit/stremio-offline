@@ -3838,7 +3838,9 @@ export function App() {
                 const postup = catalogProgress(item);
                 const vSeznamu = inWatchlist(item.type, item.id);
                 const metadata = [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
-                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => { if (submittedQuery) actOnSearch(submittedQuery); void openMeta(item); }}>
+                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""} ${menuFor === klic ? "menu-open" : ""}`} aria-haspopup="menu" aria-expanded={menuFor === klic} onClick={() => { if (submittedQuery) actOnSearch(submittedQuery); void openMeta(item); }}
+                  // The tile is the button, so its menu cannot be one; the keyboard opens it the way a desktop opens any context menu.
+                  onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); setMenuFor(menuFor === klic ? null : klic); } }}>
                   <span className="poster-wrap">
                     <TileArt shape={settings.catalogTileShape} poster={item.poster} wide={item.background} fallback={<div className="poster-fallback"><Film/></div>}/>
                     {vSeznamu && <i className="fav-mark"><Star/></i>}
