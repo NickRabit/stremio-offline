@@ -226,7 +226,7 @@ jobs:
       # The runtime stage copies only the node binary into ubuntu:24.04, so a shared library a
       # new Node release needs (libatomic for Node 26) would ship missing without failing the
       # build. Start node, and the database driver the server needs, on both architectures.
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
       - name: Start node in both images
         run: |
           IMAGE="${{ needs.manifest.outputs.image }}"
