@@ -76,9 +76,13 @@ test("player keeps its picture stable and its overlay controls reachable", async
       expect(new Set(transportBoxes.map((box) => Math.round(box!.y))).size).toBe(1);
       expect(Math.abs((transportLeft + transportRight) / 2 - (controlsBox.x + controlsBox.width / 2))).toBeLessThanOrEqual(1);
       expect(new Set(rowTwo.map((box) => Math.round(box.y))).size).toBe(1);
-      expect(rowTwo[0]!.x - controlsBox.x).toBeLessThanOrEqual(44);
-      expect(controlsBox.x + controlsBox.width - rowTwo.at(-1)!.x - rowTwo.at(-1)!.width).toBeLessThanOrEqual(44);
+      // Spread evenly across the full width: the space at each edge is the space between buttons,
+      // however many buttons the row holds (a file without subtitles has no subtitles button).
+      const leftEdge = rowTwo[0]!.x - controlsBox.x;
+      const rightEdge = controlsBox.x + controlsBox.width - rowTwo.at(-1)!.x - rowTwo.at(-1)!.width;
       expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(1);
+      expect(Math.abs(leftEdge - gaps[0]!)).toBeLessThanOrEqual(1);
+      expect(Math.abs(rightEdge - gaps[0]!)).toBeLessThanOrEqual(1);
       expect(await controls.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
     };
 
