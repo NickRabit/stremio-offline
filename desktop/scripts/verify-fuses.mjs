@@ -23,6 +23,7 @@ const REVIEWED_FUSES = {
   OnlyLoadAppFromAsar: true,
   LoadBrowserProcessSpecificV8Snapshot: false,
   GrantFileProtocolExtraPrivileges: true,
+  WasmTrapHandlers: true,
 };
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
