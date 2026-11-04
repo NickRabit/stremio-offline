@@ -69,6 +69,7 @@ import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
 import cz.stremiooffline.tv.ui.catalog.PanelOption
 import cz.stremiooffline.tv.ui.catalog.SidePanel
+import cz.stremiooffline.tv.ui.catalog.remoteShufflePlayTarget
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
@@ -113,23 +114,12 @@ internal suspend fun playRemoteShuffle(
       onNotice(errorText)
       return
     }
-    val stream = api.remoteSources(shuffled.libraryId, shuffled.itemId).firstOrNull { it.playable }
-    val remote = stream?.remoteItem
-    if (stream == null || remote == null) {
+    val target = remoteShufflePlayTarget(api, answer.item, ShuffleRun(answer.id, answer.upcoming?.title))
+    if (target == null) {
       onNotice(errorText)
       return
     }
-    onPlay(
-      PlayTarget(
-        key = remote.progressKey,
-        title = answer.item.title,
-        resume = false,
-        sourceId = stream.sourceId,
-        stableKey = stream.stableKey,
-        remoteItem = remote,
-        shuffle = ShuffleRun(answer.id, answer.upcoming?.title),
-      ),
-    )
+    onPlay(target)
   } catch (error: ApiError) {
     onNotice(if (error.failure == ApiFailure.NotFound) emptyText else errorText)
   } catch (error: CancellationException) {
@@ -447,6 +437,7 @@ fun RemoteLibraryRoute(
           typeFilter = directory?.state?.type,
           typeFocus = typeFocus,
           onOpenType = { typePanel = true },
+          onShuffle = directory?.let { current -> { startShuffle(RemoteShuffleTarget(current.libraryId, current.parentId, current.title)) } },
         )
       } else {
         LibrarySearchFallback(
@@ -466,6 +457,7 @@ fun RemoteLibraryRoute(
           typeFilter = directory?.state?.type,
           typeFocus = typeFocus,
           onOpenType = { typePanel = true },
+          onShuffle = directory?.let { current -> { startShuffle(RemoteShuffleTarget(current.libraryId, current.parentId, current.title)) } },
         )
       }
       Box(Modifier.weight(1f).fillMaxWidth()) {

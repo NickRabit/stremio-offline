@@ -28,10 +28,14 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.mutableIntStateOf
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.DownloadTargetSettingsDto
+import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
+import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
@@ -405,12 +409,26 @@ class CatalogDetailTest {
     val v1 = VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1)
     val v2 = VideoDto(id = "tt1:1:2", title = "Two", season = 1, episode = 2)
     val v3 = VideoDto(id = "tt1:1:3", title = "Three", season = 1, episode = 3)
-    api.metaValues["series:tt1"] = MetaDto(id = "tt1", type = "series", name = "Show", description = "A show", videos = listOf(v1, v2, v3))
+    api.metaValues["series:tt1"] = MetaDto(
+      id = "tt1", type = "series", name = "Show", description = "A show", poster = "show.jpg",
+      videos = listOf(v1, v2, v3),
+    )
     api.progressEntries = listOf(
       ProgressEntryDto(key = "series:tt1:1:1", position = 600.0, duration = 600.0, title = "Show · One", series = ProgressEntryDto.Series("tt1", "Show", 1, 1)),
     )
     api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "Episode 2"))
-    api.streamsValues["series:tt1:1:3"] = listOf(stream("s3", name = "Episode 3"))
+    api.streamsValues["series:tt1:1:3"] = listOf(
+      StreamDto(
+        sourceId = "s3",
+        kind = "remote",
+        playable = true,
+        name = "Episode 3",
+        stableKey = "stable-3",
+        capabilities = RemoteCapabilitiesDto(downloadToLibrary = true),
+        downloadTarget = DownloadTargetSettingsDto(libraryId = "lib-target", layout = "structured"),
+        remoteItem = RemoteItemContext("rlibA", "ep3", "ms3", "remote:ep3"),
+      ),
+    )
     mount(api, CatalogDetailArgs(MetaDto(id = "tt1", type = "series", name = "Show"), "Cinemeta", "series"))
     compose.waitForIdle()
 
@@ -428,6 +446,18 @@ class CatalogDetailTest {
     press(Key.DirectionCenter)
     assertTrue(api.streamsRequests.contains("series:tt1:1:3"))
     compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Episode 3", substring = true)
+
+    compose.onNodeWithTag(TagCatalogPrimary).requestFocus()
+    press(Key.DirectionCenter)
+    val target = played.single()
+    assertEquals("series:tt1:1:3", target.key)
+    assertEquals("series", target.subtitleType)
+    assertEquals("tt1:1:3", target.subtitleTarget)
+    assertEquals("show.jpg", target.poster)
+    assertEquals("stable-3", target.stableKey)
+    assertEquals("ep3", target.remoteItem?.itemId)
+    assertEquals("s3", target.remoteSources.single().sourceId)
+    assertEquals("lib-target", target.remoteSources.single().downloadTarget?.libraryId)
   }
 
   // --- ATV-12: choosing a source, series sources, DOWN in the panel ---------------------------

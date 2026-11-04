@@ -4,18 +4,26 @@ package cz.stremiooffline.tv.ui.player
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import cz.stremiooffline.tv.data.AddonSubtitleDto
+import cz.stremiooffline.tv.data.DownloadTargetSettingsDto
 import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.NextFileDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
+import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
+import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
+import cz.stremiooffline.tv.ui.catalog.sourceRowTag
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -90,5 +98,51 @@ class PlayerScreenNextTest {
 
     assertEquals(listOf("series" to "tt9:1:1", "series" to "tt9:1:2"), api.subtitlesRequests)
     assertEquals(emptyList<String>(), api.startedSubtitleIds.last())
+  }
+
+  @Test
+  fun `the local next episode offers its sources and saves under its own file key`() {
+    api.libraryTitleValues["Films/A.mkv"] = LibraryTitleDto(type = "series", id = "tt9", videoId = "tt9:1:1")
+    api.libraryTitleValues["Films/B.mkv"] = LibraryTitleDto(type = "series", id = "tt9", videoId = "tt9:1:2")
+    api.streamSourcesValues["series:tt9:1:2"] = listOf(StreamSourceDto("alpha", "Alpha"))
+    api.addonStreams["series:tt9:1:2|alpha"] = listOf(
+      StreamDto(
+        sourceId = "next-addon",
+        kind = "remote",
+        playable = true,
+        name = "Next addon",
+        addonKey = "alpha",
+        capabilities = RemoteCapabilitiesDto(downloadToLibrary = true),
+        downloadTarget = DownloadTargetSettingsDto(libraryId = "lib-target", layout = "structured"),
+      ),
+    )
+    compose.setContent {
+      PlayerScreen(
+        api = api,
+        target = PlayTarget(
+          key = Progress.libraryKey("Films/A.mkv"),
+          title = "A · S1 · E1",
+          resume = false,
+          path = "Films/A.mkv",
+        ),
+        onExit = {},
+      )
+    }
+    compose.waitUntil(5_000) { api.libraryNextRequests.isNotEmpty() }
+
+    compose.onNodeWithTag(TAG_OSD_NEXT).requestFocus()
+    compose.onNodeWithTag(TAG_OSD_NEXT).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.startedSources.size == 2 }
+    compose.waitUntil(5_000) { api.streamSourcesRequests.contains("series:tt9:1:2") }
+    compose.onNodeWithTag(TAG_OSD_SOURCES).requestFocus()
+    compose.onNodeWithTag(TAG_OSD_SOURCES).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagSourcesPanel).assertExists()
+    compose.onNodeWithTag(sourceRowTag(1)).assertExists()
+    compose.onNodeWithTag(sourceRowTag(0)).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TAG_OSD_SEEK_FORWARD).performSemanticsAction(SemanticsActions.OnClick) { it() }
+    compose.waitUntil(5_000) { api.progressSaves.any { it.key == "file:Films/B.mkv" } }
   }
 }

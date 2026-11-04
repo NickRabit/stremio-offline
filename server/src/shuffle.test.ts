@@ -176,3 +176,27 @@ test("an account keeps at most three sessions", async () => {
   assert.equal(sessions.size, SHUFFLE_ACCOUNT_LIMIT);
   assert.equal(sessions.delete(owner, started[0]!.id), false);
 });
+
+test("titles mixed into a running shuffle play once each and never before what already played", async () => {
+  let draw = 7;
+  const sessions = new ShuffleSessions({ randomInt: (max) => { draw = (draw * 31 + 3) % 1009; return draw % max; } });
+  const unit = (title: string): ShuffleUnit => ({ title, files: [`Films/${title}.mkv`] });
+  const first = ["A", "B", "C"].map(unit);
+  const later = ["D", "E", "F", "G"].map(unit);
+  const available = new Set([...first, ...later].flatMap((entry) => entry.files));
+  const started = await sessions.start(owner, first, chooseAvailable(available));
+  assert.ok(started);
+  const played = [started.item.title];
+  const step = await sessions.next(owner, started.id, chooseAvailable(available));
+  played.push(step!.item!.title);
+
+  await sessions.extend(started.id, later);
+  played.push(...await collect(sessions, started.id, available));
+
+  assert.deepEqual([...played].sort(), ["A", "B", "C", "D", "E", "F", "G"]);
+  assert.equal(new Set(played).size, played.length, "nothing repeats");
+  assert.ok(sessions.has(started.id));
+  sessions.delete(owner, started.id);
+  assert.equal(sessions.has(started.id), false);
+  await sessions.extend(started.id, [unit("H")]);
+});

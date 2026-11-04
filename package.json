@@ -1,7 +1,7 @@
 {
   "name": "stremio-offline",
   "private": true,
-  "version": "0.7.40",
+  "version": "0.7.41",
   "description": "Self-hosted web client for Stremio addons",
   "license": "MIT",
   "repository": {
@@ -33,7 +33,7 @@
     "test:media-client": "node --test scripts/media-client-verification.test.mjs"
   },
   "engines": {
-    "node": ">=22.19"
+    "node": ">=24.15"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

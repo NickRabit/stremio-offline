@@ -1,16 +1,16 @@
 import type express from "express";
 import { AppError } from "../errors.js";
 import { libraryFor, libraryPathOpen, parseLibraryPath, type Viewer } from "../libraries.js";
-import type { BrowseItem } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
-import type { MediaServerAuthority, MediaServerManager } from "../media-server-manager.js";
+import type { MediaServerAuthority, MediaServerManager, MediaServerShuffleItem } from "../media-server-manager.js";
 import { ShuffleSessions, shuffleUnits, type ShuffleOwner, type ShuffleUnit } from "../shuffle.js";
 import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "./context.js";
 
 export interface ShuffleDeps extends RouteContext {
   metaStore: LibraryMetaStore;
   localFiles(libraryId: string, relativePrefix: string): Promise<string[]>;
-  describeLibraryPath(key: string, read?: { stale?: boolean }): Promise<BrowseItem | undefined>;
+  /** Whether the key is a folder the viewer may open, read with one stat. */
+  folderAvailable(key: string, viewer: Viewer): Promise<boolean>;
   libraryKey(value: string): string;
   wirePath(key: string): string;
   fileAvailable(key: string, viewer: Viewer): Promise<boolean>;
@@ -22,7 +22,7 @@ export interface ShuffleDeps extends RouteContext {
 const notFound = () => new AppError("The item was not found.", "err.itemNotFound", 404);
 
 export function registerShuffleRoutes(app: express.Application, deps: ShuffleDeps): void {
-  const { store, currentSession, currentUser, metaStore, localFiles, describeLibraryPath, libraryKey, wirePath, fileAvailable, isCarvedOut, mediaServers, authorityOf } = deps;
+  const { store, currentSession, currentUser, metaStore, localFiles, folderAvailable, libraryKey, wirePath, fileAvailable, isCarvedOut, mediaServers, authorityOf } = deps;
   const sessions = new ShuffleSessions();
 
   const ownerOf = (req: express.Request): ShuffleOwner => {
@@ -65,17 +65,32 @@ export function registerShuffleRoutes(app: express.Application, deps: ShuffleDep
       if (typeof libraryId !== "string" || (parentId !== undefined && typeof parentId !== "string")) throw notFound();
       const disconnect = routeDisconnectSignal(req, res);
       try {
-        const pool = await mediaServers.shufflePool(authorityOf(req), libraryId, parentId, disconnect.signal).catch(() => undefined);
-        if (!pool) throw notFound();
-        const units: ShuffleUnit[] = pool.items.map((unit) => ({
+        const unitsOf = (items: MediaServerShuffleItem[]): ShuffleUnit[] => items.map((unit) => ({
           files: [],
           remote: { libraryId: unit.libraryId, itemId: unit.itemId, generation: unit.generation },
           title: unit.title,
           ...(unit.season === undefined ? {} : { season: unit.season }),
           ...(unit.episode === undefined ? {} : { episode: unit.episode }),
         }));
-        const answer = await sessions.start(owner, units, chooser(req), { capped: pool.capped });
+        // The run starts on the first page; the rest of the pool arrives behind the answer and is
+        // mixed into the titles not played yet. Pages that land before the run exists wait here.
+        let runId: string | undefined;
+        let settled = false;
+        const early: ShuffleUnit[][] = [];
+        const pool = await mediaServers.shufflePool(authorityOf(req), libraryId, parentId, disconnect.signal, {
+          more: (items) => {
+            const units = unitsOf(items);
+            if (runId) void sessions.extend(runId, units);
+            else if (!settled) early.push(units);
+          },
+          wanted: () => (runId ? sessions.has(runId) : !settled),
+        }).catch(() => undefined);
+        if (!pool) throw notFound();
+        const answer = await sessions.start(owner, unitsOf(pool.items), chooser(req), { capped: pool.capped, total: pool.total })
+          .finally(() => { settled = true; });
         if (!answer) throw notFound();
+        runId = answer.id;
+        for (const units of early.splice(0)) void sessions.extend(runId, units);
         return void res.setHeader("cache-control", "private, no-store").json(answer);
       } finally {
         disconnect.dispose();
@@ -89,9 +104,10 @@ export function registerShuffleRoutes(app: express.Application, deps: ShuffleDep
       throw notFound();
     }
     if (!libraryPathOpen(key, viewer, store.libraries())) throw notFound();
-    const item = await describeLibraryPath(key, { stale: true }).catch(() => undefined);
+    // One stat says the folder is there. Describing it would count and size every file under it,
+    // which on a large library is a walk of the whole tree from the disk on every press.
     const parsed = parseLibraryPath(key);
-    if (item?.kind !== "folder" || !parsed) throw notFound();
+    if (!parsed || isCarvedOut(key) || !(await folderAvailable(key, viewer))) throw notFound();
     const library = libraryFor(store.libraries(), parsed.libraryId);
     if (!library) throw notFound();
     const units = shuffleUnits(

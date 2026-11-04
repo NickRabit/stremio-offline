@@ -912,7 +912,7 @@ fun CatalogDetailScreen(
           subtitleTarget = streamVideoId.takeIf { args.backend.catalogue },
           catalogue = true,
           remoteItem = remoteItem,
-          remoteSources = Streams.remoteVersionsOf(remoteItem, remoteStreams),
+          remoteSources = Streams.remoteVersionsOf(remoteItem, remoteStreams).ifEmpty { listOf(stream) },
         ),
       )
     }
@@ -1072,7 +1072,7 @@ fun CatalogDetailScreen(
             subtitleTarget = streamVideoId.takeIf { args.backend.catalogue },
             catalogue = true,
             remoteItem = remoteItem,
-            remoteSources = Streams.remoteVersionsOf(remoteItem, remoteStreams),
+            remoteSources = Streams.remoteVersionsOf(remoteItem, remoteStreams).ifEmpty { listOf(stream) },
           ),
         )
       }

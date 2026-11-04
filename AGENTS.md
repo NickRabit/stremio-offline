@@ -20,8 +20,18 @@ The single set of rules for any coding agent working in this repository.
 
 ## Dependencies
 
-- Add a dependency at the latest stable version compatible with the supported
-  Node and browser targets. Do not copy an older version from another workspace.
+- Add or bump a dependency at the latest stable version compatible with the
+  supported Node and browser targets, and look that version up in the registry
+  at the time of the change -- `npm view <pkg> version`, the artifact's
+  `maven-metadata.xml` on Google Maven or Maven Central, Docker Hub tags,
+  `gh api repos/<owner>/<repo>/releases/latest` for an action. Never write a
+  version from memory: a model's knowledge lags the registries, and this
+  project once shipped two-month-old code on majors that were already behind.
+  Do not copy an older version from another workspace.
+- Take majors, do not park them: one PR per major with its release notes read,
+  and no Dependabot `ignore` rule for majors. Holding a major back needs a
+  concrete reason written in the roadmap (a runtime floor, a blocked platform),
+  not "until there is a reason".
 - For a major upgrade, check the release notes and account for breaking changes
   in the same change.
 - Update `package-lock.json` with the manifest and run `npm ci` before handing

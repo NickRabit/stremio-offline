@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/source-selection",
   "private": true,
-  "version": "0.7.40",
+  "version": "0.7.41",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -20,7 +20,7 @@
     "test": "tsx --test src/index.test.ts"
   },
   "devDependencies": {
-    "@types/node": "22.20.5",
+    "@types/node": "24.19.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
   }

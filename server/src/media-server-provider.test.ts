@@ -206,6 +206,14 @@ test("pageItems builds a bounded cursor and rejects mismatch, bad totals and ove
   await assert.rejects(provider.pageItems("tok", "user-1", "lib-1", { limit: 0 }), { code: "invalid-input" });
   await assert.rejects(provider.pageItems("tok", "user-1", "lib-1", { limit: 201 }), { code: "invalid-input" });
 
+  // A known position reads its page directly, never together with a cursor and never out of range.
+  const atOffset = await provider.pageItems("tok", "user-1", "lib-1", { limit: 2, offset: 2 });
+  assert.equal(lastArgs.startIndex, 2);
+  assert.equal(atOffset.items.length, 1);
+  await assert.rejects(provider.pageItems("tok", "user-1", "lib-1", { offset: 2, cursor: first.cursor }), { code: "invalid-input" });
+  await assert.rejects(provider.pageItems("tok", "user-1", "lib-1", { offset: -1 }), { code: "invalid-input" });
+  await assert.rejects(provider.pageItems("tok", "user-1", "lib-1", { offset: 1.5 }), { code: "invalid-input" });
+
   const badTotal = fixture(() => ({ Items: [], TotalRecordCount: -1 }));
   await assert.rejects(badTotal.provider.pageItems("tok", "user-1", "lib-1"), { code: "invalid-response" });
   const oversized = fixture(() => ({ Items: [{ Id: "a", Name: "a", Type: "Movie" }, { Id: "b", Name: "b", Type: "Movie" }], TotalRecordCount: 9 }));

@@ -969,6 +969,11 @@ img.broken{visibility:hidden}
 
 .transport-controls{display:contents}
 @media(max-width:700px){.player-overlay .player-controls{flex-wrap:wrap}.player-overlay .transport-controls{display:flex;flex:0 0 auto;flex-wrap:nowrap;gap:inherit}.player-controls .seek-step{padding:6px;gap:2px;font-size:10px}.player-controls .seek-step svg{width:20px}}
+@media(max-width:700px) and (orientation:portrait){
+  .player-overlay .player-controls{justify-content:space-evenly;overflow:visible}
+  .player-overlay .transport-controls{flex:0 0 100%;justify-content:center}
+  .player-overlay .player-view-controls{display:contents}
+}
 
 .player-overlay.cursor-hidden,.player-overlay.cursor-hidden *{cursor:none!important}
 .fullscreen-notice{position:absolute;z-index:13;bottom:calc(var(--player-bottom-height,120px) + 16px);left:16px;right:16px;text-align:center;padding:8px;border-radius:8px;background:#141922ed;font-size:12px;pointer-events:none}
