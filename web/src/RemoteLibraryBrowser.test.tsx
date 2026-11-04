@@ -211,6 +211,10 @@ beforeEach(() => {
     }
     if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+$/.test(path)) { calls.item.push(url); return Promise.resolve(item(url, init)); }
     if (path.endsWith("/extras")) return Promise.resolve(extrasReply(url, init));
+    if (path.startsWith("/api/meta/") && url.searchParams.get("gallery") === "1") return Promise.resolve(json({ images: [
+      { url: "/catalogue-still-1.jpg", kind: "still", shape: "wide" },
+      { url: "/catalogue-still-2.jpg", kind: "still", shape: "wide" },
+    ] }));
     if (path.startsWith("/api/meta/") || path.startsWith("/api/links/") || path.startsWith("/api/trailer/")) {
       calls.title.push(path);
       if (path.startsWith("/api/links/")) return Promise.resolve(json({ links: [{ site: "imdb", url: "https://www.imdb.com/title/tt5000" }] }));
@@ -1289,6 +1293,22 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     await click(corner);
     expect(onGallery).toHaveBeenCalled();
     expect(onGallery.mock.calls[0]![0][0].url).toBe("/series-poster.jpg");
+  });
+
+  it("counts the catalogue's stills in the corner before it is clicked", async () => {
+    const onGallery = vi.fn();
+    const identified: RemoteItem = { ...movie("m1", "One"), providerIds: { imdb: "tt5000" }, poster: "/one-poster.jpg" };
+    browse = () => json(page([identified]));
+    await render({ onGallery });
+    await click(host.querySelectorAll<HTMLButtonElement>(".remote-libraries button.library-open")[0]!);
+    await click(tileButtons()[0]!);
+    await flush();
+    const corner = host.querySelector<HTMLButtonElement>(".remote-detail .gallery-open")!;
+    // The item's poster, the catalogue backdrop and the two catalogue stills.
+    expect(corner.textContent).toContain("4");
+    await click(corner);
+    expect(onGallery.mock.calls[0]![0].map((image: { url: string }) => image.url))
+      .toEqual(expect.arrayContaining(["/catalogue-still-1.jpg", "/catalogue-still-2.jpg"]));
   });
 
   it("opens the item a remote card from Home points at", async () => {

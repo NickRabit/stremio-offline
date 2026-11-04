@@ -8,6 +8,7 @@ import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { galleryPayload, gridArt } from "./meta";
 import { synopsisOf, TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
+import { useCatalogueStills } from "./title-enrichment";
 import { useLibrarySources } from "./library-sources";
 import { titleLanguage } from "./languages";
 import { arrangeStreams, catalogSourceRows, compareRuleRank, isLocalStream, pickDefaultStream, resolveStreamSort, sortRuleId } from "./streams";
@@ -319,6 +320,9 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     const listed: GalleryImage[] = snapshot?.poster || !target.poster ? [] : [{ url: target.poster, label: galleryLabel("poster"), shape: "poster", kind: "poster" }];
     return mergeGallery(listed, own);
   }, [snapshot, target.poster]);
+  // The metadata holds only the poster, backdrop and logo; the corner also counts the stills.
+  const catalogueStills = useCatalogueStills({ type, id }, locale, Boolean(onGallery));
+  const cornerGallery = useMemo(() => mergeGallery(gallery, catalogueStills), [gallery, catalogueStills]);
   const backdrops = useMemo(() => [snapshot?.background, snapshot?.poster, target.poster], [snapshot, target.poster]);
   const factText = snapshot
     ? [String(snapshot.releaseInfo ?? snapshot.year ?? ""), ...(snapshot.genres ?? []).slice(0, 3)]
@@ -392,7 +396,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
         ? { subtitle: t("mediaServer.episodeLabel", { season: episode.season, episode: episode.episode }) } : {})}
       {...(snapshot?.poster ?? target.poster ? { poster: snapshot?.poster ?? target.poster } : {})}
       backdrops={backdrops}
-      gallery={gallery}
+      gallery={cornerGallery}
       {...(onGallery ? { onGallery: (images: GalleryImage[]) => onGallery(images, effective) } : {})}
       {...(factText ? { facts: factText } : {})}
       originalLine={pieces.originalLine}

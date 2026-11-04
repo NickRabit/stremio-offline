@@ -95,3 +95,22 @@ export function loadTitleGallery(ref: CatalogueRef, language: string): Promise<G
   if (galleryCache.size > 128) galleryCache.delete(galleryCache.keys().next().value!);
   return result;
 }
+
+/** The catalogue's stills for a detail's corner, read when the detail opens, so the corner counts
+ *  what the gallery will show. The opened overlay asks `loadTitleGallery` again and gets the same
+ *  cached answer. Nothing is read while `enabled` is false. */
+export function useCatalogueStills(ref: CatalogueRef | null, language: string, enabled = true): GalleryImage[] {
+  const [stills, setStills] = useState<{ key: string; images: GalleryImage[] }>({ key: "", images: [] });
+  const key = ref && enabled ? `${ref.type}:${ref.id}@${language}` : "";
+  const latest = useRef(ref);
+  latest.current = ref;
+  useEffect(() => {
+    const current = latest.current;
+    if (!key || !current) return;
+    let live = true;
+    void loadTitleGallery(current, language).then((images) => { if (live) setStills({ key, images }); });
+    return () => { live = false; };
+  }, [key, language]);
+  return stills.key === key ? stills.images : EMPTY_GALLERY;
+}
+const EMPTY_GALLERY: GalleryImage[] = [];

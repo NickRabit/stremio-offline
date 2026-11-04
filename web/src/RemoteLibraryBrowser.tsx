@@ -29,7 +29,7 @@ import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes } from "./settings-ui";
-import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
+import { catalogueRef, useCatalogueStills, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
 import { TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
 import type { SaveTarget } from "./save-target";
@@ -1283,7 +1283,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const detailBackdrops: Array<string | undefined> = detail
     ? [enrichment.meta?.background, heroItem?.fanart, detail.type === "episode" ? detail.fanart : undefined, detailPreview]
     : [];
-  const seriesGallery: GalleryImage[] = mergeGallery(posterAndWide(detailPreview, heroItem?.wide), catalogueGalleryImages(enrichment.meta));
+  // The corner counts the catalogue's stills too, which the opened gallery adds.
+  const catalogueStills = useCatalogueStills(catalogue, uiLanguage, Boolean(onGallery));
+  const seriesGallery: GalleryImage[] = mergeGallery(posterAndWide(detailPreview, heroItem?.wide), catalogueGalleryImages(enrichment.meta), catalogueStills);
   // The supplementary identity of the title on screen: the exact key its addons, the viewer's own
   // copies of it and the other libraries are asked by. Nothing is read until the chooser opens.
   const addonIdentity = supplementaryIdentity(detail, series);

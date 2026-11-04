@@ -8,9 +8,9 @@ import { orderSources, sourceIdentity } from "./library-detail-sources";
 import { useLibrarySources } from "./library-sources";
 import { sourceProgressOwner, versionSavedRow } from "./source-progress";
 import { TitleChips } from "./TitleChips";
-import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
+import { catalogueGalleryImages, localGalleryImage, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { canQueue, isLocalStream } from "./streams";
-import { useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
+import { useCatalogueStills, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
 import { synopsisOf, TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
 import { genericProgressKey } from "./native-addon-sources";
@@ -109,6 +109,18 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   // The identity the source resolution already found: the film, or the exact episode of its show.
   // Nothing is asked about a title without one, and a loose number never stands in for a season.
   const bound = boundRef(identity);
+  const catalogueStills = useCatalogueStills(bound, uiLanguage, Boolean(onGallery));
+  const [stored, setStored] = useState<{ path: string; images: GalleryImage[] }>({ path: "", images: [] });
+  const galleryWanted = Boolean(onGallery);
+  useEffect(() => {
+    if (!galleryWanted) return;
+    let live = true;
+    api.libraryGallery(item.path)
+      .then((answer) => { if (live) setStored({ path: item.path, images: answer.images.map(localGalleryImage) }); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [item.path, galleryWanted]);
+  const storedGallery = stored.path === item.path ? stored.images : undefined;
   const catalogue = identity ? sourceRef(identity, item) : null;
   const folderSource = !isFile && sources?.length
     ? orderSources(sources.filter((stream) => stream.localPath?.startsWith(`${item.path}/`)))[0]
@@ -312,9 +324,9 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   const scores = ratingsFrom(titleExtras.extras, enrichment.meta);
   // Prefer full-resolution backdrops; unmatched files can still use their existing preview.
   const backdrops = [enrichment.meta?.background, item.wide, item.poster];
-  // The file's own poster and wide artwork merge with the exact catalogue pictures; the saved
-  // downloads are read only when the corner image is clicked.
-  const gallery = mergeGallery(posterAndWide(item.poster, item.wide), catalogueGalleryImages(enrichment.meta));
+  // The corner counts what the opened gallery shows: the file's own artwork, the catalogue's
+  // pictures and stills, and the pictures saved with the download.
+  const gallery = mergeGallery(posterAndWide(item.poster, item.wide), catalogueGalleryImages(enrichment.meta), storedGallery, catalogueStills);
 
   return <div className="library-local-detail" data-path={item.path} tabIndex={-1}><LibraryTitleDetail
     identityKey={item.path}
