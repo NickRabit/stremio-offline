@@ -125,7 +125,7 @@ export class ShuffleSessions {
     this.random = options.randomInt ?? ((maxExclusive) => randomInt(maxExclusive));
   }
 
-  async start(owner: ShuffleOwner, units: ShuffleUnit[], choose: ChooseItem, options: { capped?: boolean } = {}): Promise<ShuffleStartAnswer | undefined> {
+  async start(owner: ShuffleOwner, units: ShuffleUnit[], choose: ChooseItem, options: { capped?: boolean; total?: number } = {}): Promise<ShuffleStartAnswer | undefined> {
     const now = this.now();
     this.cleanup(now);
     const shuffled = shuffle(units, this.random);
@@ -152,7 +152,7 @@ export class ShuffleSessions {
     return {
       id: session.id,
       item: picked.item,
-      total: session.order.length,
+      total: Math.max(session.order.length, Math.min(options.total ?? 0, SHUFFLE_POOL_LIMIT)),
       ...(capped ? { capped: true as const } : {}),
       hasNext: Boolean(next),
       hasPrevious: false,
@@ -197,6 +197,30 @@ export class ShuffleSessions {
         session.history.splice(session.historyCursor, 1);
       }
       return { item: null };
+    });
+  }
+
+  /** Whether a run is still there to take more titles; a run that was deleted or aged out is not. */
+  has(id: string): boolean {
+    this.cleanup(this.now());
+    return this.sessions.has(id);
+  }
+
+  /** Mixes titles that arrived after the run started into the part not played yet. Each lands at a
+   *  random place among the titles still to come, which is the same as having shuffled them in from
+   *  the start; nothing already played moves, and the run never grows past its limit. */
+  extend(id: string, units: ShuffleUnit[]): Promise<void> {
+    return this.serialized(id, async () => {
+      const session = this.sessions.get(id);
+      if (!session) return;
+      for (const unit of units) {
+        if (session.order.length >= SHUFFLE_POOL_LIMIT) return;
+        const from = session.cursor + 1;
+        const at = from + this.random(session.order.length - from + 1);
+        // The cursor is the highest index ever handed out, so every history entry sits at or before
+        // it and no insertion after it moves a title already played.
+        session.order.splice(at, 0, unit);
+      }
     });
   }
 

@@ -1494,7 +1494,16 @@ export class MediaServerManager {
   /** The playable item pool for one authorized library or folder. Paging follows the same
    *  session, parent proof and content re-checks as browseDirectory, but deliberately keeps the
    *  provider's own order: the shuffle is performed by the server-held run. */
-  async shufflePool(authority: MediaServerAuthority, libraryId: unknown, parentId: unknown, signal?: AbortSignal): Promise<MediaServerShufflePool> {
+  /** The playable items of a library or folder for Play random. Given `progressive`, it answers with
+   *  the first page and reads the rest behind the answer, handing each page to `more` while
+   *  `wanted()` holds -- so a run starts after one round trip instead of after the whole pool. */
+  async shufflePool(
+    authority: MediaServerAuthority,
+    libraryId: unknown,
+    parentId: unknown,
+    signal?: AbortSignal,
+    progressive?: { more: (items: MediaServerShuffleItem[]) => void; wanted: () => boolean },
+  ): Promise<MediaServerShufflePool & { total: number; rest?: Promise<void> }> {
     const request = this.requestSignal(signal);
     const user = this.currentActor(authority, request);
     const library = this.requireVisibleLibrary(user, libraryId);
@@ -1505,37 +1514,24 @@ export class MediaServerManager {
       await this.proveParent(authority, request, library, connection, session, requestedParent);
     }
     const parent = requestedParent ?? library.remoteId;
-    const readPage = (offset: number) => this.upstream(connection, request, () => session.provider.pageItems(
+    const readPage = (offset: number, lane: AbortSignal) => this.upstream(connection, lane, () => session.provider.pageItems(
       session.token,
       connection.accountId,
       parent,
       { limit: SHUFFLE_PAGE, includeItemTypes: SHUFFLE_ITEM_TYPES, offset },
-      request,
+      lane,
     )).then((page) => {
-      this.recheckContent(authority, request, library.id, connection);
+      this.recheckContent(authority, lane, library.id, connection);
       return page;
     });
-    // The first page says how many there are; the rest are read side by side (the manager's own
-    // pacing still spaces the requests), instead of one round trip after another.
-    const first = await readPage(0);
-    const wanted = Math.min(first.total, SHUFFLE_POOL);
-    const offsets: number[] = [];
-    for (let offset = SHUFFLE_PAGE; offset < wanted; offset += SHUFFLE_PAGE) offsets.push(offset);
-    const rest: ProviderPage[] = new Array(offsets.length);
-    let next = 0;
-    await Promise.all(Array.from({ length: Math.min(SHUFFLE_PAGE_READS, offsets.length) }, async () => {
-      while (next < offsets.length) {
-        const index = next++;
-        rest[index] = await readPage(offsets[index]!);
-      }
-    }));
-    const seen = new Map<string, MediaServerShuffleItem>();
-    for (const page of [first, ...rest]) {
+    const seen = new Set<string>();
+    const itemsOf = (page: ProviderPage): MediaServerShuffleItem[] => {
+      const items: MediaServerShuffleItem[] = [];
       for (const item of page.items) this.putProof(this.proofOf(user, library, connection, item));
       for (const item of page.items) {
-        if ((item.type !== "movie" && item.type !== "episode") || seen.has(item.id)) continue;
-        if (seen.size >= SHUFFLE_POOL) break;
-        seen.set(item.id, {
+        if ((item.type !== "movie" && item.type !== "episode") || seen.has(item.id) || seen.size >= SHUFFLE_POOL) continue;
+        seen.add(item.id);
+        items.push({
           libraryId: library.id,
           itemId: item.id,
           title: shuffleItemTitle(item),
@@ -1544,9 +1540,35 @@ export class MediaServerManager {
           ...(item.episode === undefined ? {} : { episode: item.episode }),
         });
       }
+      return items;
+    };
+    // The first page says how many there are. The rest are read side by side; the connection's own
+    // pacing still spaces the requests, so this saves the round trips, not the spacing.
+    const first = await readPage(0, request);
+    const firstItems = itemsOf(first);
+    const wanted = Math.min(first.total, SHUFFLE_POOL);
+    const offsets: number[] = [];
+    for (let offset = SHUFFLE_PAGE; offset < wanted; offset += SHUFFLE_PAGE) offsets.push(offset);
+    const readRest = async (lane: AbortSignal, take: (items: MediaServerShuffleItem[]) => void, keepGoing: () => boolean) => {
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(SHUFFLE_PAGE_READS, offsets.length) }, async () => {
+        while (next < offsets.length && keepGoing()) {
+          const offset = offsets[next++]!;
+          take(itemsOf(await readPage(offset, lane)));
+        }
+      }));
+    };
+    const capped = first.total > SHUFFLE_POOL;
+    if (progressive) {
+      // Behind the answer the request is over, so the rest runs on the manager's own lifetime.
+      const lane = this.requestSignal(undefined);
+      const rest = readRest(lane, progressive.more, progressive.wanted).catch(() => undefined);
+      return { items: firstItems, capped, total: wanted, rest };
     }
+    const all = [...firstItems];
+    await readRest(request, (items) => { all.push(...items); }, () => true);
     this.recheckContent(authority, request, library.id, connection);
-    return { items: [...seen.values()], capped: first.total > SHUFFLE_POOL };
+    return { items: all, capped, total: wanted };
   }
 
   /** Local-only re-check for a remote shuffle cursor; it deliberately makes no upstream call. */

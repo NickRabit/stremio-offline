@@ -3173,6 +3173,36 @@ test("shufflePool reads the pages after the first side by side, at most four at 
   });
 });
 
+test("a progressive shufflePool answers with the first page and hands the rest over behind it", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.items["music"] = Array.from({ length: 650 }, (_, index) => movie(`bulk-${index}`, `Bulk ${index}`));
+    const more: string[] = [];
+    let wanted = true;
+
+    const pool = await harness.manager.shufflePool(harness.admin, library.id, undefined, undefined, {
+      more: (items) => { more.push(...items.map((item) => item.itemId)); },
+      wanted: () => wanted,
+    });
+
+    assert.equal(pool.items.length, 200, "the answer waits for one page only");
+    assert.equal(pool.total, 650);
+    await pool.rest;
+    assert.equal(more.length, 450);
+    assert.equal(new Set([...pool.items.map((item) => item.itemId), ...more]).size, 650);
+
+    // A run that is gone stops the reading.
+    more.length = 0;
+    wanted = false;
+    const stopped = await harness.manager.shufflePool(harness.admin, library.id, undefined, undefined, {
+      more: (items) => { more.push(...items.map((item) => item.itemId)); },
+      wanted: () => wanted,
+    });
+    await stopped.rest;
+    assert.equal(more.length, 0);
+  });
+});
+
 test("a remote shuffle cursor stops when the library grant or connection generation changes", async () => {
   await withHarness(async (harness) => {
     const library = await directoryLibrary(harness, "music");

@@ -37,7 +37,10 @@ interface Harness {
   carveOuts: Set<string>;
   remotePool: MediaServerShufflePool;
   remoteCurrent: boolean;
-  state: { folderChecks: string[]; missingFolders: Set<string> };
+  state: {
+    folderChecks: string[]; missingFolders: Set<string>;
+    remoteEarly: MediaServerShufflePool["items"]; remoteLate: MediaServerShufflePool["items"]; remoteRest?: Promise<void>;
+  };
   close(): Promise<void>;
 }
 
@@ -46,7 +49,12 @@ const mount = async (): Promise<Harness> => {
   const available = new Set<string>();
   const files = new Set<string>();
   const carveOuts = new Set<string>();
-  const state: { remotePool: MediaServerShufflePool; remoteCurrent: boolean; folderChecks: string[]; missingFolders: Set<string> } = {
+  const state: {
+    remotePool: MediaServerShufflePool; remoteCurrent: boolean; folderChecks: string[]; missingFolders: Set<string>;
+    remoteEarly: MediaServerShufflePool["items"]; remoteLate: MediaServerShufflePool["items"]; remoteRest?: Promise<void>;
+  } = {
+    remoteEarly: [],
+    remoteLate: [],
     remotePool: { items: [], capped: false },
     remoteCurrent: true,
     folderChecks: [],
@@ -75,7 +83,16 @@ const mount = async (): Promise<Harness> => {
     stopContentAccess: async () => undefined,
     authorityOf: () => ({ actor: { id: ALICE, secret: "secret" }, assertCurrent: () => undefined }),
     mediaServers: {
-      shufflePool: async () => state.remotePool,
+      shufflePool: async (_authority: unknown, _library: unknown, _parent: unknown, _signal: unknown,
+        progressive?: { more: (items: MediaServerShufflePool["items"]) => void; wanted: () => boolean }) => {
+        // Pages that arrive while the run is being built, then pages that arrive after it.
+        if (progressive && state.remoteEarly.length) progressive.more(state.remoteEarly);
+        const rest = progressive && state.remoteLate.length
+          ? new Promise<void>((resolve) => setTimeout(() => { if (progressive.wanted()) progressive.more(state.remoteLate); resolve(); }, 20))
+          : undefined;
+        state.remoteRest = rest;
+        return { ...state.remotePool, total: state.remotePool.items.length + state.remoteEarly.length + state.remoteLate.length, ...(rest ? { rest } : {}) };
+      },
       shuffleStillCurrent: () => state.remoteCurrent,
     } as unknown as MediaServerManager,
     metaStore: { qualifiedMeta: () => ({}), episodes: () => ({}) } as unknown as LibraryMetaStore,
@@ -283,4 +300,30 @@ test("a local start checks the folder with one look instead of describing the wh
   harness.state.missingFolders.add(libraryPath(LIBRARY_ID, "Gone"));
   const missing = await api(harness.base, "/api/shuffle", { method: "POST", body: { path: "Gone" } });
   assert.equal(missing.status, 404);
+});
+
+test("a remote run starts on the first page and takes the rest of the pool as it arrives", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const item = (id: string) => ({ libraryId: "rlib_00000000000000000000000000000001", itemId: id, title: id, generation: 4 });
+  harness.remotePool = { capped: false, items: [item("first-1"), item("first-2")] };
+  harness.state.remoteEarly = [item("early-1")];
+  harness.state.remoteLate = [item("late-1"), item("late-2")];
+
+  const started = await api(harness.base, "/api/shuffle", {
+    method: "POST",
+    body: { remote: { libraryId: "rlib_00000000000000000000000000000001" } },
+  });
+  assert.equal(started.status, 200);
+  const first = await started.json() as { id: string; total: number; item: { remote: { itemId: string } } };
+  assert.equal(first.total, 5);
+  await harness.state.remoteRest;
+  const seen = [first.item.remote.itemId];
+  for (;;) {
+    const next = await api(harness.base, `/api/shuffle/${first.id}/next`, { method: "POST" });
+    const step = await next.json() as { item: { remote: { itemId: string } } | null };
+    if (!step.item) break;
+    seen.push(step.item.remote.itemId);
+  }
+  assert.deepEqual([...seen].sort(), ["early-1", "first-1", "first-2", "late-1", "late-2"]);
 });

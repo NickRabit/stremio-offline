@@ -2,7 +2,7 @@ import type express from "express";
 import { AppError } from "../errors.js";
 import { libraryFor, libraryPathOpen, parseLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
-import type { MediaServerAuthority, MediaServerManager } from "../media-server-manager.js";
+import type { MediaServerAuthority, MediaServerManager, MediaServerShuffleItem } from "../media-server-manager.js";
 import { ShuffleSessions, shuffleUnits, type ShuffleOwner, type ShuffleUnit } from "../shuffle.js";
 import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "./context.js";
 
@@ -65,17 +65,32 @@ export function registerShuffleRoutes(app: express.Application, deps: ShuffleDep
       if (typeof libraryId !== "string" || (parentId !== undefined && typeof parentId !== "string")) throw notFound();
       const disconnect = routeDisconnectSignal(req, res);
       try {
-        const pool = await mediaServers.shufflePool(authorityOf(req), libraryId, parentId, disconnect.signal).catch(() => undefined);
-        if (!pool) throw notFound();
-        const units: ShuffleUnit[] = pool.items.map((unit) => ({
+        const unitsOf = (items: MediaServerShuffleItem[]): ShuffleUnit[] => items.map((unit) => ({
           files: [],
           remote: { libraryId: unit.libraryId, itemId: unit.itemId, generation: unit.generation },
           title: unit.title,
           ...(unit.season === undefined ? {} : { season: unit.season }),
           ...(unit.episode === undefined ? {} : { episode: unit.episode }),
         }));
-        const answer = await sessions.start(owner, units, chooser(req), { capped: pool.capped });
+        // The run starts on the first page; the rest of the pool arrives behind the answer and is
+        // mixed into the titles not played yet. Pages that land before the run exists wait here.
+        let runId: string | undefined;
+        let settled = false;
+        const early: ShuffleUnit[][] = [];
+        const pool = await mediaServers.shufflePool(authorityOf(req), libraryId, parentId, disconnect.signal, {
+          more: (items) => {
+            const units = unitsOf(items);
+            if (runId) void sessions.extend(runId, units);
+            else if (!settled) early.push(units);
+          },
+          wanted: () => (runId ? sessions.has(runId) : !settled),
+        }).catch(() => undefined);
+        if (!pool) throw notFound();
+        const answer = await sessions.start(owner, unitsOf(pool.items), chooser(req), { capped: pool.capped, total: pool.total })
+          .finally(() => { settled = true; });
         if (!answer) throw notFound();
+        runId = answer.id;
+        for (const units of early.splice(0)) void sessions.extend(runId, units);
         return void res.setHeader("cache-control", "private, no-store").json(answer);
       } finally {
         disconnect.dispose();
