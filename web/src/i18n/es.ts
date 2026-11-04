@@ -1122,6 +1122,8 @@ export const es: Catalog = {
   "downloads.showInLibrary": "Mostrar en la biblioteca",
   "downloads.segments": { one: "Descargado a través de 1 conexión", other: "Descargado a través de {count} conexiones" },
   "downloads.sourcePickedLater": "La fuente se elige en el momento de la descarga.",
+  "downloads.source": "Fuente: {source}",
+  "downloads.sourceLocalCopy": "copia existente de la biblioteca",
   "downloads.moveUp": "Subir",
   "downloads.moveDown": "Bajar",
   "downloads.retry": "Inténtalo de nuevo",

@@ -1122,6 +1122,8 @@ export const de: Catalog = {
   "downloads.showInLibrary": "In der Bibliothek anzeigen",
   "downloads.segments": { one: "Über 1 Verbindung heruntergeladen", other: "Über {count} Verbindungen heruntergeladen" },
   "downloads.sourcePickedLater": "Die Quelle wird zum Zeitpunkt des Downloads ausgewählt",
+  "downloads.source": "Quelle: {source}",
+  "downloads.sourceLocalCopy": "vorhandene Kopie in der Bibliothek",
   "downloads.moveUp": "Bewegen Sie sich nach oben",
   "downloads.moveDown": "Bewegen Sie sich nach unten",
   "downloads.retry": "Versuchen Sie es erneut",

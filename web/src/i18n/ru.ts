@@ -1122,6 +1122,8 @@ export const ru: Catalog = {
   "downloads.showInLibrary": "Показать в библиотеке",
   "downloads.segments": { one: "Скачано за 1 подключение", other: "Скачано более {count} подключений", few: "Скачано более {count} подключений", many: "Скачано более {count} подключений" },
   "downloads.sourcePickedLater": "Источник выбирается во время загрузки",
+  "downloads.source": "Источник: {source}",
+  "downloads.sourceLocalCopy": "существующая копия в библиотеке",
   "downloads.moveUp": "Вверх",
   "downloads.moveDown": "Двигаться вниз",
   "downloads.retry": "Попробуйте еще раз",
