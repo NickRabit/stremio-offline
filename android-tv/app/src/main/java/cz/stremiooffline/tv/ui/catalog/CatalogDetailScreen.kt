@@ -867,7 +867,7 @@ fun CatalogDetailScreen(
   // Closing the bulk panel, whether it queued or the viewer backed out, returns the remote to
   // the button that opened it.
   LaunchedEffect(ui.series.open) {
-    if (ui.series.open && activeStream?.let(Streams::isRemoteStream) != true && Streams.remoteFilterLibrary(filters.addon) == null) {
+    if (ui.series.open && Streams.remoteFilterLibrary(filters.addon) == null) {
       ui.series.wasOpen = true
     } else if (ui.series.wasOpen) {
       ui.series.wasOpen = false
@@ -1386,7 +1386,7 @@ fun CatalogDetailScreen(
               }
             }
           }
-          canQueueActive || seriesBulkAvailable(isSeries, meta.videos, activeStream) -> catalogAction(
+          canQueueActive || seriesBulkAvailable(isSeries, meta.videos) -> catalogAction(
             TagCatalogToLibrary,
             if (queued) texts.queued else texts.toLibrary,
             if (queued) CheckIcon else DownloadIcon,
@@ -1396,7 +1396,7 @@ fun CatalogDetailScreen(
               .focusRequester(ui.series.focus)
               .onFocusChanged { focus.toLibraryFocused = it.isFocused },
           ) {
-            if (seriesBulkAvailable(isSeries, meta.videos, activeStream)) {
+            if (seriesBulkAvailable(isSeries, meta.videos)) {
               cancelPendingPlay()
               ui.series.open = true
             } else {
@@ -1953,9 +1953,9 @@ private class ForgetState {
   var done by mutableStateOf(false)
 }
 
-/** A catalogue series offers season and whole-show downloads unless the pick is native. */
-private fun seriesBulkAvailable(isSeries: Boolean, videos: List<VideoDto>?, active: StreamDto?): Boolean =
-  isSeries && !videos.isNullOrEmpty() && active?.let(Streams::isRemoteStream) != true
+/** A catalogue series offers season and whole-show downloads whichever source is active. */
+private fun seriesBulkAvailable(isSeries: Boolean, videos: List<VideoDto>?): Boolean =
+  isSeries && !videos.isNullOrEmpty()
 
 /** The series-download panel's flags and its opener's focus, in one object: this screen is one
  *  composable close to the limit ART can verify, so every extra local risks a VerifyError. */
