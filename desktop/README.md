@@ -245,7 +245,11 @@ injection or the inspector CLI switches:
 | `onlyLoadAppFromAsar` | on | Electron loads only `app.asar`; a stray `app/` directory next to it cannot shadow the packaged code. |
 | `loadBrowserProcessSpecificV8Snapshot` | off | The shell does not ship a browser-process-specific V8 snapshot. |
 | `grantFileProtocolExtraPrivileges` | on | The shell's own pages load over `file://` from `renderer/`, which needs Electron's file-to-file privileges. |
+| `wasmTrapHandlers` | on | Electron's default keeps V8's signal-handler path for WebAssembly memory traps. |
 | `enableCookieEncryption` | off | Deferred, see below. |
+
+electron-builder 26.18.0 has no setting for `wasmTrapHandlers`, so packaging
+retains Electron's enabled default; the verifier checks that it remains on.
 
 Flipping the fuses rewrites the Electron Framework binary, which invalidates the
 linker's ad-hoc signature it shipped with, and Apple Silicon refuses to run a

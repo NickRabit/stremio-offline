@@ -329,8 +329,8 @@ and patch updates. Checked against `main` on 2026-10-30.
    `ubuntu:24.04` with only the `node` binary copied in, so check whether
    Node 26 needs a library that image lacks (for example `libatomic1`), and
    rerun Trivy on the runtime image. **The desktop apps run the same server
-   inside Electron's own Node** (`utilityProcess`, Node 24 in Electron 44), so
-   the server must keep working on Node 24: do not raise `engines` to
+   inside Electron's own Node** (`utilityProcess`, Node 24.22.1 in Electron
+   45), so the server must keep working on Node 24: do not raise `engines` to
    `>=26`, do not use Node 26-only APIs, and keep a CI run on Node 24.
 2. **Vite 6 → 8** — done (Vite 8.3.5, `@vitejs/plugin-react` 6.2.1): the web and desktop builds keep the same chunks and come out 2–3 % smaller; the desktop renderer builds about six times faster. Original notes: with `@vitejs/plugin-react` 6, which requires Vite 8. Vite
    8 builds with Rolldown, so compare the production bundle and the desktop
@@ -340,9 +340,12 @@ and patch updates. Checked against `main` on 2026-10-30.
 3. **TypeScript 5.9 → 7** — done (7.0.2 in every workspace): the code type-checks unchanged; the web only needed `src/vite-env.d.ts` for Vite's client types, because TypeScript 7 checks side-effect imports such as `import "./style.css"`. The server type check runs in about 1.2 s instead of 6.1 s. Original notes: (7.0 is released, a native compiler). The server
    and tests run through `tsx`, which does not use `tsc`, so the risk is in
    type checking and editor tooling; move all workspaces together.
-4. **Electron**: stays put until a security fix, a needed feature or
-   electron-builder asks for it. Its Node version decides the floor for the
-   server (see 1).
+4. **Electron 44 → 45 and `@electron/fuses` 1 → 2** — done (Electron 45.2.1,
+   `@electron/fuses` 2.1.3): the desktop preloads use only the remaining
+   sandbox APIs, window-opening and capture permissions keep their behaviour,
+   ASAR reads need no raw file descriptors, and the fuse verifier covers the
+   new `wasmTrapHandlers` entry. Electron's Node version decides the floor for
+   the server (see 1; now Node 24.22.1).
 
 The remaining majors after these, one PR each:
 
