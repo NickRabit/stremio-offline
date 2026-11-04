@@ -1167,6 +1167,8 @@ export const en = {
   "downloads.showInLibrary": "Show in library",
   "downloads.segments": { one: "Downloaded over 1 connection", other: "Downloaded over {count} connections" },
   "downloads.sourcePickedLater": "Source is picked at download time",
+  "downloads.source": "Source: {source}",
+  "downloads.sourceLocalCopy": "existing library copy",
   "downloads.moveUp": "Move up",
   "downloads.moveDown": "Move down",
   "downloads.retry": "Try again",

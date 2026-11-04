@@ -40,7 +40,7 @@ import {
 import { readMediaBytes } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 import { subtitleVtt } from "./subtitle-text.js";
-import type { DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
+import type { DownloadOrigin, DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
 import type {
   ExistingLocalCopyLookupResult,
   ExistingLocalCopyReference,
@@ -176,6 +176,18 @@ export interface DownloadJob {
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
   /** Set only when a queued profile job finishes by pointing at an adequate existing file. */
   reusedLocalCopy?: true;
+}
+
+/** The names a viewer may see for where a job's file comes from. */
+export function downloadOrigin(job: Pick<DownloadJob, "stream" | "remoteDownload" | "reusedLocalCopy">): DownloadOrigin | undefined {
+  if (job.reusedLocalCopy) return { localCopy: true };
+  if (job.remoteDownload) return { remote: job.remoteDownload.provider };
+  const { stream } = job;
+  if (!stream) return undefined;
+  const addon = stream.addonName?.trim();
+  const debrid = !stream.url && Boolean(stream.infoHash);
+  if (!addon && !debrid) return undefined;
+  return { ...(addon ? { addon } : {}), ...(debrid ? { debrid: true as const } : {}) };
 }
 
 /** Queueing onto the NAS is a right an administrator hands out. The role is what grants an
@@ -2268,8 +2280,10 @@ export class DownloadQueue {
       travelTemporaryFailures: _travelTemporaryFailures, travelBudgetAttempts: _travelBudgetAttempts,
       rulesTemporaryFailures: _rulesTemporaryFailures, rulesBudgetAttempts: _rulesBudgetAttempts, ...rest
     } = job;
+    const origin = downloadOrigin(job);
     return {
       ...rest,
+      ...(origin ? { origin } : {}),
       ownerUserId: this.ownerOf(job),
       pending: job.status !== "completed" && !stream && Boolean(source),
       debridProgress: debrid?.progress,
