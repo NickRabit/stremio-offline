@@ -358,6 +358,9 @@ The remaining majors after these, one PR each:
   the same names and render the same markup, size and classes; only
   `CircleCheck` and `CalendarClock` are slightly redrawn. Icons without a
   label stay `aria-hidden` as in 0.577.
+- **Android TV build** — done (AGP 9.5, Gradle 9.8, Media3 1.11): the debug and
+  release APKs, unit tests and lint pass with the current toolchain, and
+  `minSdk` stays 24.
 - **`@types/node`** stays on the 22 line (22.20.5), the floor in `engines`: types
   for a newer Node would accept APIs that Node 22 lacks, and CI only runs 24
   and 26, so nothing would catch them. Move to 24 together with raising the
