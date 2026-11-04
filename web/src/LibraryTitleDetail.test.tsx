@@ -166,6 +166,15 @@ describe("LibraryTitleDetail sources", () => {
     expect(host.querySelector(".library-detail-synopsis")!.textContent).toBe("A quiet film.");
   });
 
+  it("holds a known saved position's row and its from-start action until the position is confirmed", () => {
+    render({ sources: null, progressPending: true });
+    expect(host.querySelector(".library-detail-progress.detail-skeleton")).not.toBeNull();
+    const fromStart = [...host.querySelectorAll<HTMLButtonElement>(".detail-secondary button")].find((button) => button.textContent === "From start");
+    expect(fromStart?.disabled).toBe(true);
+    render({ progressPending: false });
+    expect(host.querySelector(".library-detail-progress.detail-skeleton")).toBeNull();
+  });
+
   it("keeps the synopsis in place while the metadata is still on its way", () => {
     render({ sources: null, descriptionLoading: true });
     expect(host.querySelector(".library-detail-synopsis.detail-skeleton")).not.toBeNull();

@@ -2109,7 +2109,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 /* Everything drawn on that wash stands above it. The episode picker the catalogue brings is one of
    those: left out of this list it was painted under the gradient, which read as greyed out. */
 .library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-progress,.library-title-detail>.library-detail-actions,.library-title-detail>.detail-tech,.library-title-detail>.detail-tech-skeleton,.library-title-detail>.catalogue-episodes,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
-.library-detail-progress{display:flex;flex-wrap:wrap;align-items:center;gap:10px;max-width:680px;margin-top:2px}
+.library-detail-progress{display:flex;flex-wrap:wrap;align-items:center;gap:10px;max-width:680px;margin-top:2px}.library-detail-progress.detail-skeleton{min-height:44px}.library-detail-progress.detail-skeleton>i{width:min(280px,60%)}
 .library-detail-progress .progress{flex:1 1 80px;max-width:280px;margin:0}
 .library-detail-progress>span{font-size:11px;color:var(--muted);white-space:nowrap}
 .library-detail-progress .icon-button{width:44px;min-width:44px;height:44px;padding:0}

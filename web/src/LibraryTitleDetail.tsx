@@ -117,6 +117,9 @@ export interface LibraryTitleDetailProps {
   copyPending?: boolean;
   /** True while the trailer is still unknown: a disabled stand-in keeps the action row in place. */
   trailerPending?: boolean;
+  /** True while a saved position the caller already knows of is still being confirmed: its row
+   *  and the from-start action hold their place instead of arriving later. */
+  progressPending?: boolean;
   /** The caller's own block under the hero: an episode's picker or the episode now on screen. */
   episodes?: ReactNode;
   /** The saved position of the selected source, keyed by its identity so another version's
@@ -168,7 +171,7 @@ const videoLine = (facts: VideoFacts | undefined): { height: string; tags: Array
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
 const TECH_SKELETON_ROWS = ["detail.tech.source", "detail.tech.video", "detail.tech.audio", "detail.tech.file"] as const;
 
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, originalLine, ratings, heroExtra, people, trailer, onTrailer, secureMode, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, ownFallback = false, preferLocalCopy = false, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, copyPending = false, trailerPending = false, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, originalLine, ratings, heroExtra, people, trailer, onTrailer, secureMode, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, ownFallback = false, preferLocalCopy = false, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, copyPending = false, trailerPending = false, progressPending = false, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -354,7 +357,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   // does a trailer not known yet: the row keeps its buttons where they will be.
   const deviceStandIn = sources === null && Boolean(onDownloadToDevice) && !canDownloadToDevice;
   const trailerStandIn = trailerPending && !trailer;
-  const hasSecondary = Boolean(trailer || trailerStandIn || savedPosition || onToggleWatched || canDownloadToDevice || deviceStandIn || onToggleFavorite || onOpenFolder);
+  const hasSecondary = Boolean(trailer || trailerStandIn || savedPosition || progressPending || onToggleWatched || canDownloadToDevice || deviceStandIn || onToggleFavorite || onOpenFolder);
 
   // The chips are the hero's own row rather than the first line of the copy: the corner art sits
   // beside that row, and a row it narrows is a row that wraps on a phone. The star lives with the
@@ -403,6 +406,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
       // The row a picked source will fill, at its own height: nothing below it moves when it lands.
       ? null : placeholder)
       : !pickable.length ? (placeholder === undefined ? <><p className="identify-hint">{t("mediaServer.noSources")}</p><p className="identify-hint">{t("mediaServer.noSourcesHint")}</p></> : placeholder) : null}
+    {!savedPosition && progressPending && <div className="library-detail-progress detail-skeleton" aria-hidden="true"><i/></div>}
     {savedPosition && <div className="library-detail-progress">
       {fullDuration && <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={t("player.position")}>
         <i style={{ width: `${percent}%` }}/>
@@ -435,6 +439,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         {trailerStandIn
           ? <DetailIcon icon={<Play/>} label={t("detail.action.trailer")} disabled aria-label={t("common.loading")}/>
           : <DetailTrailerButton trailer={trailer} secureMode={secureMode} onTrailer={onTrailer}/>}
+        {!savedPosition && progressPending && <DetailIcon icon={<ListRestart/>} label={t("detail.action.fromStart")} disabled aria-label={t("common.loading")}/>}
         {savedPosition && <DetailIcon icon={<ListRestart/>} label={t("detail.action.fromStart")} aria-label={t("player.playFromStart")} title={t("player.playFromStart")}
           onClick={() => playOrChoose(true)}/>}
         {onToggleWatched && <DetailIcon icon={watched === undefined ? <RotateCcw/> : <Check/>} label={t("detail.action.watched")}

@@ -351,6 +351,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     secureMode={secureMode}
     extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
     copyPending={copyPending}
+    progressPending={Boolean(progress && progress.position > 0) && saved === null}
     trailerPending={trailerPending}
     {...(synopsisOf(item.description, titleExtras.extras) ? { description: synopsisOf(item.description, titleExtras.extras) } : {})}
     chips={chips}
