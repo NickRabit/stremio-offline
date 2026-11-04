@@ -31,7 +31,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  checks:
+    name: Android ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: packages
+            tasks: assembleDebug assembleRelease
+          - name: tests-lint
+            tasks: testDebugUnitTest lintDebug
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -40,7 +49,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
+      - uses: gradle/actions/setup-gradle@v6.4.1
       - uses: android-actions/setup-android@v4
         with:
           # The default list still names the retired `tools` package, which sdkmanager now refuses.
@@ -50,9 +59,22 @@ jobs:
           node-version: "26"
       - run: node scripts/android-strings.mjs --check
       # assembleRelease also runs R8, so the minified build is proven on every change.
-      - run: ./gradlew assembleDebug assembleRelease testDebugUnitTest lintDebug --no-daemon
+      - run: ./gradlew $GRADLE_TASKS --no-daemon
+        env:
+          GRADLE_TASKS: ${{ matrix.tasks }}
         working-directory: android-tv
       # One of the four signing variables on its own must not break the build: the signing config
       # is created only when all four are set, so this still produces the unsigned APK.
-      - run: ANDROID_KEYSTORE="$RUNNER_TEMP/absent.keystore" ./gradlew :app:assembleRelease --no-daemon
+      - if: matrix.name == 'packages'
+        run: ANDROID_KEYSTORE="$RUNNER_TEMP/absent.keystore" ./gradlew :app:assembleRelease --no-daemon
         working-directory: android-tv
+
+  build:
+    needs: checks
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every Android check
+        env:
+          RESULT: ${{ needs.checks.result }}
+        run: test "$RESULT" = success
