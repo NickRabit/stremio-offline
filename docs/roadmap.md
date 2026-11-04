@@ -360,6 +360,11 @@ The remaining majors after these, one PR each:
   the same names and render the same markup, size and classes; only
   `CircleCheck` and `CalendarClock` are slightly redrawn. Icons without a
   label stay `aria-hidden` as in 0.577.
+- **Android TV build** — done (AGP 9.5, Gradle 9.8, Media3 1.11): the debug and
+  release APKs, unit tests and lint pass with the current toolchain, and
+  `minSdk` stays 24. The debug APK was also run on an Android 12 TV emulator and
+  an Android 9 emulator (the owner's Philips 43PUS8505 launched with Android 9):
+  sign-in, the home screen and playing a local file work on both.
 - **Node floor 24 with `@types/node` 24** — done: nothing shipped runs on
   Node 22 (the image runs 26, Electron 44 runs 24.22, CI runs 24 and 26), so
   `engines` now says 24.15 (jsdom 30 needs it on the 24 line) and the types match. Server, desktop, web and e2e

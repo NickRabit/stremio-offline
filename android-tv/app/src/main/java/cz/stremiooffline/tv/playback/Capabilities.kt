@@ -6,6 +6,7 @@ import android.content.Context
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import androidx.annotation.OptIn
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.audio.AudioCapabilities
@@ -107,7 +108,7 @@ fun detectCapabilities(context: Context): ClientCapabilitiesDto {
     }
   }
 
-  val audio = AudioCapabilities.getCapabilities(context)
+  val audio = AudioCapabilities.getCapabilities(context, AudioAttributes.DEFAULT, null, emptyList())
   val passthrough = buildSet {
     if (audio.supportsEncoding(C.ENCODING_AC3)) add("ac3")
     if (audio.supportsEncoding(C.ENCODING_E_AC3)) add("eac3")
