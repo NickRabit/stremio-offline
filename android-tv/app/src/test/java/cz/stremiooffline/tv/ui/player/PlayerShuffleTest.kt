@@ -12,15 +12,24 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
+import cz.stremiooffline.tv.data.DownloadTargetSettingsDto
+import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.NextFileDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
+import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.RemoteItemDetailDto
+import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.ShuffleItemDto
 import cz.stremiooffline.tv.data.ShuffleNextDto
 import cz.stremiooffline.tv.data.ShuffleRemoteDto
+import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
+import cz.stremiooffline.tv.ui.catalog.sourceRowTag
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.ShuffleRun
 import org.junit.Assert.assertEquals
@@ -43,9 +52,9 @@ class PlayerShuffleTest {
     libraryNextValue = NextFileDto(path = "Films/Wrong.mkv", title = "Wrong")
   }
 
-  private fun mount(api: FakeTvApi, target: PlayTarget) {
+  private fun mount(api: FakeTvApi, target: PlayTarget, sources: List<StreamDto> = emptyList()) {
     compose.setContent {
-      PlayerScreen(api = api, target = target, onExit = {})
+      PlayerScreen(api = api, target = target, sources = sources, onExit = {})
     }
     compose.waitForIdle()
   }
@@ -129,6 +138,15 @@ class PlayerShuffleTest {
           remote = ShuffleRemoteDto(libraryId = "rlibA", itemId = "m2"),
         ),
       )
+      remoteItemValues["rlibA:m2"] = RemoteItemDetailDto(
+        item = RemoteItemDto(
+          id = "m2",
+          name = "Next",
+          type = "movie",
+          providerIds = RemoteProviderIdsDto(imdb = "tt22"),
+          poster = "/poster/next.jpg",
+        ),
+      )
       remoteSourcesValue = listOf(
         StreamDto(
           sourceId = "src:m2",
@@ -140,6 +158,9 @@ class PlayerShuffleTest {
             mediaSourceId = "version-2",
             progressKey = "remote:m2",
           ),
+          stableKey = "stable-m2",
+          capabilities = RemoteCapabilitiesDto(downloadToLibrary = true),
+          downloadTarget = DownloadTargetSettingsDto(libraryId = "lib-target", layout = "structured"),
         ),
       )
     }
@@ -156,6 +177,8 @@ class PlayerShuffleTest {
           mediaSourceId = "version-1",
           progressKey = "remote:m1",
         ),
+        subtitleType = "movie",
+        subtitleTarget = "tt11",
         shuffle = ShuffleRun("run3", "Next"),
       ),
     )
@@ -168,12 +191,109 @@ class PlayerShuffleTest {
     assertEquals(listOf("rlibA" to "m2"), api.remoteSourcesRequests)
     assertEquals("src:m2", api.startedSources[1])
     assertEquals(0.0, api.startedTimes[1], 0.0)
+    compose.waitUntil(5_000) { api.remoteItemRequests.contains("rlibA" to "m2") }
+    compose.waitUntil(5_000) { api.subtitlesRequests.contains("movie" to "tt22") }
+    compose.onNodeWithTag(TAG_OSD_SOURCES).requestFocus()
+    compose.onNodeWithTag(TAG_OSD_SOURCES).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagSourcesPanel).assertExists()
+    compose.onNodeWithTag(sourceRowTag(0)).assertExists()
+    compose.onNodeWithTag(sourceRowTag(0)).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
 
     compose.onNodeWithTag(TAG_OSD_SEEK_FORWARD).performSemanticsAction(SemanticsActions.OnClick) { it() }
-    compose.waitUntil(5_000) { api.remoteStatePatchRequests.isNotEmpty() }
+    compose.waitUntil(5_000) { api.progressSaves.any { it.key == "movie:tt22" } }
     close()
     compose.waitUntil(5_000) { api.deletedShuffleIds.isNotEmpty() }
     assertFalse(api.progressSaves.any { it.shuffle })
+  }
+
+  @Test
+  fun `local shuffle next carries the next file's binding into its player sources`() {
+    val api = api().apply {
+      shuffleNextValue = ShuffleNextDto(
+        item = ShuffleItemDto(path = "Films/Next.mkv", title = "Next"),
+        hasPrevious = true,
+      )
+      libraryTitleValues["Films/Next.mkv"] = LibraryTitleDto("movie", "tt9", name = "Next")
+      streamSourcesValues["movie:tt9"] = listOf(StreamSourceDto("alpha", "Alpha"))
+    }
+    mount(
+      api,
+      PlayTarget(
+        key = Progress.libraryKey("Films/First.mkv"),
+        title = "First",
+        resume = false,
+        path = "Films/First.mkv",
+        subtitleType = "movie",
+        subtitleTarget = "tt1",
+        shuffle = ShuffleRun("run-local", "Next"),
+      ),
+    )
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag(TAG_OSD_NEXT).fetchSemanticsNodes().isNotEmpty() }
+
+    pressNext()
+    compose.waitUntil(5_000) { api.startedSources.size == 2 }
+    assertEquals("src:Films/Next.mkv", api.startedSources[1])
+    assertEquals(0.0, api.startedTimes[1], 0.0)
+    compose.waitUntil(5_000) { api.libraryTitleRequests.contains("Films/Next.mkv") }
+    compose.onNodeWithTag(TAG_OSD_SOURCES).requestFocus()
+    compose.onNodeWithTag(TAG_OSD_SOURCES).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagSourcesPanel).assertExists()
+    compose.onNodeWithTag(sourceRowTag(0)).assertExists()
+  }
+
+  @Test
+  fun `a source switch keeps shuffle progress and next on the same run`() {
+    val api = api().apply {
+      shuffleNextValue = ShuffleNextDto(
+        item = ShuffleItemDto(path = "Films/Next.mkv", title = "Next"),
+        hasPrevious = true,
+      )
+    }
+    val libraryRow = StreamDto(
+      sourceId = "src:Films/First.mkv",
+      kind = "library",
+      playable = true,
+      localPath = "Films/First.mkv",
+    )
+    val addonRow = StreamDto(
+      sourceId = "addon-switch",
+      kind = "remote",
+      playable = true,
+      name = "Switch source",
+      addonKey = "alpha",
+    )
+    mount(
+      api,
+      PlayTarget(
+        key = Progress.libraryKey("Films/First.mkv"),
+        title = "First",
+        resume = false,
+        path = "Films/First.mkv",
+        shuffle = ShuffleRun("run-switch", "Next"),
+      ),
+      listOf(libraryRow, addonRow),
+    )
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag(TAG_OSD_NEXT).fetchSemanticsNodes().isNotEmpty() }
+
+    compose.onNodeWithTag(TAG_OSD_SOURCES).requestFocus()
+    compose.onNodeWithTag(TAG_OSD_SOURCES).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(sourceRowTag(1)).requestFocus()
+    compose.onNodeWithTag(sourceRowTag(1)).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.startedSources.size == 2 }
+    assertEquals("addon-switch", api.startedSources[1])
+    compose.onNodeWithTag(TAG_OSD_NEXT).assertExists()
+
+    val savesBeforeSwitch = api.progressSaves.size
+    compose.onNodeWithTag(TAG_OSD_SEEK_FORWARD).performSemanticsAction(SemanticsActions.OnClick) { it() }
+    compose.waitUntil(5_000) { api.progressSaves.drop(savesBeforeSwitch).any { it.shuffle } }
+    pressNext()
+    compose.waitUntil(5_000) { api.shuffleNextRequests.isNotEmpty() }
+    assertEquals(listOf("run-switch"), api.shuffleNextRequests)
   }
 
   @Test

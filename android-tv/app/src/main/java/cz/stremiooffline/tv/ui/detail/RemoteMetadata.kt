@@ -13,6 +13,7 @@ internal data class RemoteMetadata(
   val item: RemoteItemDto,
   val seriesName: String? = null,
   val seriesIds: RemoteProviderIdsDto? = null,
+  val seriesPoster: String? = null,
 )
 
 internal fun remoteMetadataNeedsItem(item: RemoteItemDto): Boolean = when (item.type) {
@@ -42,6 +43,7 @@ internal suspend fun resolveRemoteMetadata(
   val hintedSeriesIds = data.seriesIds?.takeIf { catalogueIdentity("series", it) != null }
   var seriesName = hintedSeriesName ?: item.seriesName?.takeIf { it.isNotBlank() }
   var seriesIds = hintedSeriesIds
+  var seriesPoster: String? = null
 
   if (remoteMetadataNeedsItem(item)) item = readItem(api, data.libraryId, item.id) ?: item
 
@@ -59,6 +61,7 @@ internal suspend fun resolveRemoteMetadata(
         if (parent?.type == "series") {
           seriesName = parent.name.takeIf { it.isNotBlank() } ?: seriesName
           seriesIds = parent.providerIds.takeIf { catalogueIdentity("series", it) != null } ?: hintedSeriesIds
+          seriesPoster = parent.poster
         } else if (parent != null) {
           seriesIds = null
           seriesName = item.seriesName?.takeIf { it.isNotBlank() }
@@ -69,7 +72,7 @@ internal suspend fun resolveRemoteMetadata(
       }
     }
   }
-  return RemoteMetadata(item, seriesName, seriesIds)
+  return RemoteMetadata(item, seriesName, seriesIds, seriesPoster)
 }
 
 private suspend fun readItem(api: RemoteLibraryApi, libraryId: String, itemId: String): RemoteItemDto? =

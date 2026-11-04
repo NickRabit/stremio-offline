@@ -56,7 +56,7 @@ The app contains:
   `Contents/Resources/ffmpeg`, built by `desktop/scripts/build-ffmpeg.sh`. The
   build is made without `--enable-gpl`, so it contains no x264 or other GPL
   part. H.264 is encoded by VideoToolbox.
-  - It is statically linked with **OpenSSL 3.5.8** (Apache-2.0) for https
+  - It is statically linked with **OpenSSL 3.5.9** (Apache-2.0) for https
     sources. FFmpeg accepts OpenSSL only with `--enable-version3`, so the
     binaries are licensed **LGPL-3.0-or-later**.
   - These sit beside the binaries:
@@ -109,7 +109,7 @@ the binaries need glibc 2.35 or newer. It is the same LGPL build as on the
 other platforms — made without `--enable-gpl`, so it contains no x264 — and
 H.264 is encoded by **VAAPI** on Intel and AMD GPUs or by **NVENC** on NVIDIA,
 so the binaries are licensed **LGPL-3.0-or-later**. TLS uses a statically
-linked **OpenSSL 3.5.8** (Apache-2.0), whose licence and notice ship beside the
+linked **OpenSSL 3.5.9** (Apache-2.0), whose licence and notice ship beside the
 binaries as on macOS. **libva** and **libdrm** are linked dynamically from the
 system, because they have to match the installed GPU driver, and NVIDIA's
 encoder interface is loaded at run time from the driver, so nothing links to

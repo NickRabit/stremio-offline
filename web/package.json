@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/web",
   "private": true,
-  "version": "0.7.40",
+  "version": "0.7.45",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@stremio-offline/source-selection": "*",
-    "hls.js": "1.7.3",
+    "hls.js": "1.7.4",
     "lucide-react": "1.67.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"

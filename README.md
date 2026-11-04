@@ -34,7 +34,7 @@ the Home Screen.
 > from addons and libraries the user connects. Use only sources and accounts
 > you have the right to access; what you add and download is your responsibility.
 
-## Video tour
+## Video tours
 
 [![Watch the Stremio Offline video tour](https://i.ytimg.com/vi/2WjzoIp16c4/hqdefault.jpg)](https://www.youtube.com/watch?v=2WjzoIp16c4)
 
@@ -42,6 +42,13 @@ the Home Screen.
 save a film to the server, and play it from the local library. The tour also
 shows the responsive phone interface. It uses CC BY Blender Foundation open
 movies; no media or demo addon is included with the app.
+
+[![One Film, Three Screens](https://i.ytimg.com/vi/3A4JtWVIZDg/hqdefault.jpg)](https://www.youtube.com/watch?v=3A4JtWVIZDg)
+
+[One Film, Three Screens (2:18)](https://www.youtube.com/watch?v=3A4JtWVIZDg)
+follows a search, a poster and a stream through the home server. See how a TV can
+play the original file, a phone can receive a hardware-encoded stream over VPN,
+and a laptop can queue a download into the NAS library.
 
 ## What it does
 
@@ -337,7 +344,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Contributing
 
-Issues and pull requests are welcome. Node.js 22.19 or newer, then:
+Issues and pull requests are welcome. Node.js 24.15 or newer, then:
 
 ```bash
 npm ci
