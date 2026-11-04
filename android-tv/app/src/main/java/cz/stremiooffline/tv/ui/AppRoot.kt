@@ -46,6 +46,10 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
+import coil3.ImageLoader
+import coil3.annotation.ExperimentalCoilApi
+import coil3.network.cachecontrol.CacheControlCacheStrategy
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.ApiClient
 import cz.stremiooffline.tv.data.ApiError
@@ -64,8 +68,6 @@ import cz.stremiooffline.tv.ui.signin.SignInScreen
 import cz.stremiooffline.tv.ui.signin.SignInViewModel
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
-import coil.ImageLoader
-import coil.compose.LocalImageLoader
 import kotlinx.coroutines.launch
 
 sealed interface SessionState {
@@ -173,11 +175,11 @@ fun AppRoot() {
 
 @Composable
 @Suppress("DEPRECATION")
+@OptIn(ExperimentalCoilApi::class)
 private fun AppContent() {
   val context = LocalContext.current
   val store = remember { SessionStore(context.applicationContext) }
   val session = viewModel<SessionViewModel>(factory = SessionViewModel.factory(store))
-
   when (val state = session.state) {
     SessionState.Loading -> Box(Modifier.fillMaxSize().appBackground())
 
@@ -191,9 +193,26 @@ private fun AppContent() {
       // The account's interface language from /api/auth/me is the app's locale from the first
       // frame, and every later pick goes through the session too.
       SessionLocale(session)
-      val imageLoader = remember(state.api) { ImageLoader.Builder(context).okHttpClient(state.api.http).build() }
+      val imageDiskCache = remember(state.api.serverAddress, state.username) {
+        sessionImageDiskCache(context.applicationContext, state.api.serverAddress, state.username)
+      }
+      DisposableEffect(imageDiskCache) { onDispose { imageDiskCache.shutdown() } }
+      val imageLoader = remember(state.api, imageDiskCache) {
+        ImageLoader.Builder(context.applicationContext)
+          .diskCache(imageDiskCache)
+          .components {
+            add(
+              OkHttpNetworkFetcherFactory(
+                callFactory = { state.api.http },
+                cacheStrategy = { CacheControlCacheStrategy() },
+              ),
+            )
+          }
+          .build()
+      }
+      DisposableEffect(imageLoader) { onDispose { imageLoader.shutdown() } }
       val hostActivity = context.hostActivity()
-      CompositionLocalProvider(LocalImageLoader provides imageLoader) {
+      CompositionLocalProvider(LocalSessionImageLoader provides imageLoader) {
         SessionShell(
           api = state.api,
           start = state.start,

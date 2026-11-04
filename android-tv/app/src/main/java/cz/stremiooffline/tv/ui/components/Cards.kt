@@ -57,8 +57,9 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 /** Room a focused card's scale and glow need inside a scrolling viewport, so the first one is
@@ -118,6 +119,7 @@ fun PosterCard(
           AsyncImage(
             model = art,
             contentDescription = null,
+            imageLoader = sessionImageLoader(),
             contentScale = ContentScale.Crop,
             onError = { artIndex += 1 },
             modifier = Modifier.fillMaxSize(),
@@ -218,6 +220,7 @@ fun LibraryRootCard(
           LibraryRootArtPhase.Composed -> AsyncImage(
             model = composedMosaic,
             contentDescription = null,
+            imageLoader = sessionImageLoader(),
             contentScale = ContentScale.Crop,
             onError = { artIndex++ },
             modifier = Modifier.fillMaxSize(),
@@ -230,6 +233,7 @@ fun LibraryRootCard(
           LibraryRootArtPhase.SinglePoster -> AsyncImage(
             model = posters.firstOrNull(),
             contentDescription = null,
+            imageLoader = sessionImageLoader(),
             contentScale = ContentScale.Crop,
             onError = { artIndex++ },
             modifier = Modifier.fillMaxSize(),
@@ -237,6 +241,7 @@ fun LibraryRootCard(
           LibraryRootArtPhase.OwnPoster -> AsyncImage(
             model = poster,
             contentDescription = null,
+            imageLoader = sessionImageLoader(),
             contentScale = ContentScale.Crop,
             onError = { artIndex++ },
             modifier = Modifier.fillMaxSize(),
@@ -334,6 +339,7 @@ fun WideCard(
           AsyncImage(
             model = art,
             contentDescription = null,
+            imageLoader = sessionImageLoader(),
             contentScale = ContentScale.Crop,
             onError = { artIndex += 1 },
             modifier = Modifier.fillMaxSize(),
@@ -505,6 +511,7 @@ fun PosterMosaic(
         model = url,
         onError = { broken.add(index) },
         contentDescription = null,
+        imageLoader = sessionImageLoader(),
         contentScale = ContentScale.Crop,
         modifier = Modifier
           .offset(x = maxWidth * slot.x, y = maxHeight * slot.y)

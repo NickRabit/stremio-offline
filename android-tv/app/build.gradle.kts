@@ -48,7 +48,7 @@ android {
   buildTypes {
     release {
       isMinifyEnabled = true
-      // Media3, OkHttp and kotlinx-serialization ship their own consumer rules, and Coil 2 needs
+      // Media3, OkHttp and kotlinx-serialization ship their own consumer rules, and Coil 3 needs
       // none. This file holds only what a minified build proves necessary: `assembleRelease`
       // proves the build minifies, not that a reflective path survives at runtime.
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -79,6 +79,7 @@ android {
   }
 
   compileOptions {
+    isCoreLibraryDesugaringEnabled = true
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
   }
@@ -106,6 +107,9 @@ dependencies {
   implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.media3.session)
   implementation(libs.coil.compose)
+  implementation(libs.coil.network.okhttp)
+  implementation(libs.coil.network.cache.control)
+  coreLibraryDesugaring(libs.desugar.jdk.libs)
 
   debugImplementation(libs.androidx.compose.ui.test.manifest)
 

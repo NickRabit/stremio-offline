@@ -369,6 +369,15 @@ The remaining majors after these, one PR each:
   Node 22 (the image runs 26, Electron 44 runs 24.22, CI runs 24 and 26), so
   `engines` now says 24.15 (jsdom 30 needs it on the 24 line) and the types match. Server, desktop, web and e2e
   type-check unchanged.
+- **OkHttp 4 → 5 and Coil 2 → 3** — done: Android TV uses OkHttp 5.5.1 and
+  Coil 3.6.3; `minSdk` stays 24. Coil 3 no longer reads its loader from a
+  `CompositionLocal`, so every `AsyncImage` passes the signed-in session's loader
+  (a unit test fails when one does not). The loader keeps a 100 MB disk cache that
+  follows the server's cache headers and belongs to one account: the folders of
+  other accounts are deleted, because the server decides who may see artwork.
+  Emulator check on Android 12 TV: a restarted app fetched 45 kB for Home instead
+  of 979 kB. Core library desugaring covers `java.time` for the cache-control
+  module on Android 7 and 8; that path was not run on an emulator.
 
 **Ubuntu runtime image: stays on 24.04 for now.** 24.04 was chosen on purpose
 in #634 (0 CRITICAL and 0 HIGH findings in Trivy). 26.04 LTS was tried on

@@ -66,7 +66,7 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.DownloadDto
 import cz.stremiooffline.tv.data.ApiFailure
@@ -87,6 +87,7 @@ import cz.stremiooffline.tv.ui.components.ShimmerLine
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.settings.feedTypeOf
 import cz.stremiooffline.tv.ui.settings.typeTag
+import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -399,7 +400,13 @@ private fun Backdrop(row: HomeRowSlot?, card: HomeCard, meta: MetaDto?, loading:
     ) { art ->
       Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Tokens.Panel2, Tokens.Bg)))) {
         if (art != null) {
-          AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+          AsyncImage(
+            model = art,
+            contentDescription = null,
+            imageLoader = sessionImageLoader(),
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+          )
         }
       }
     }

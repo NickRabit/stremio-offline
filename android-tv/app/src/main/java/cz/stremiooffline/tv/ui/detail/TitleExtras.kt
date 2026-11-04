@@ -69,7 +69,7 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.catalog.Streams
@@ -85,6 +85,7 @@ import cz.stremiooffline.tv.episodeCode
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.catalog.formatSize
 import cz.stremiooffline.tv.ui.catalog.sourceGroupName
+import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.text.DateFormat
 import java.text.NumberFormat
@@ -895,6 +896,7 @@ private fun VideoCard(
           AsyncImage(
             model = imageUrl,
             contentDescription = null,
+            imageLoader = sessionImageLoader(),
             contentScale = ContentScale.Crop,
             onError = { failed = true },
             modifier = Modifier.fillMaxSize(),
@@ -988,6 +990,7 @@ private fun PersonCard(
           AsyncImage(
             model = imageUrl,
             contentDescription = null,
+            imageLoader = sessionImageLoader(),
             contentScale = ContentScale.Crop,
             onError = { failed = true },
             modifier = Modifier.fillMaxSize(),
@@ -1071,6 +1074,7 @@ private fun RelatedCard(
           AsyncImage(
             model = imageUrl,
             contentDescription = null,
+            imageLoader = sessionImageLoader(),
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
           )
