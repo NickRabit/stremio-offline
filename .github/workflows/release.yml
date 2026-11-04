@@ -39,10 +39,9 @@ jobs:
     with:
       tags: "${{ needs.version.outputs.version }} ${{ needs.version.outputs.minor }}"
 
-  # The GitHub Release is created only after a successful build, so the
-  # releases list never shows a version whose image failed to build.
+  # Only publish packages after the image gate and every package check succeeds.
   release:
-    needs: image
+    needs: [image, android, desktop, desktop-windows, desktop-linux]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -50,24 +49,29 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Create GitHub Release with generated notes
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release-assets
+      - name: Create GitHub Release and attach verified packages
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" --generate-notes --title "${{ github.ref_name }}"
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --generate-notes --title "$GITHUB_REF_NAME"
+          fi
+          bash scripts/attach-release-assets.sh release-assets/*/*
 
   # The Android TV APK, signed with the project's release key from the
   # ANDROID_KEYSTORE_BASE64 secret. A missing secret is not a failure: the image
   # and the desktop packages must ship anyway, and an unsigned or differently
-  # signed APK would fail as an update on every television. The job only uploads
-  # an asset -- it never edits the release notes -- so it can run beside the
-  # desktop jobs.
+  # signed APK would fail as an update on every television.
   android:
-    needs: [version, release]
+    needs: version
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - name: Check for the signing key
@@ -87,13 +91,14 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
+      - if: steps.key.outputs.signed == 'true'
+        uses: gradle/actions/setup-gradle@v6.4.1
       - if: steps.key.outputs.signed == 'true'
         uses: android-actions/setup-android@v4
         with:
           # The default list still names the retired `tools` package, which sdkmanager now refuses.
           packages: platform-tools platforms;android-37.0 build-tools;37.0.0
-      - name: Build, verify and attach the signed APK
+      - name: Build and verify the signed APK
         if: steps.key.outputs.signed == 'true'
         env:
           ANDROID_KEYSTORE: ${{ runner.temp }}/release.keystore
@@ -110,6 +115,7 @@ jobs:
           set -euo pipefail
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ANDROID_KEYSTORE"
           chmod 600 "$ANDROID_KEYSTORE"
+          trap 'rm -f "$ANDROID_KEYSTORE"' EXIT
           ( cd android-tv && ./gradlew assembleRelease --no-daemon )
           apk="android-tv/app/build/outputs/apk/release/app-release.apk"
           # `apksigner` sits in build-tools, which setup-android does not put on PATH.
@@ -123,27 +129,26 @@ jobs:
           else
             echo "::warning title=Unpinned TV certificate::ANDROID_CERT_SHA256 is not set, so the APK's certificate was not compared against a pinned one. Pin it with: gh variable set ANDROID_CERT_SHA256"
           fi
-          cp "$apk" "stremio-offline-tv-${VERSION}.apk"
-          # `gh release upload` fails on an asset name that is already there, so a
-          # rerun never replaces what was published.
-          present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
-          if printf '%s\n' "$present" | grep -qxF -e "stremio-offline-tv-${VERSION}.apk"; then
-            echo "::warning title=TV APK already attached::the release already carries stremio-offline-tv-${VERSION}.apk; the upload never replaces what is published, so a wrong or truncated asset has to be deleted by hand before a rerun."
-          else
-            gh release upload "${GITHUB_REF_NAME}" "stremio-offline-tv-${VERSION}.apk"
-          fi
-          rm -f "$ANDROID_KEYSTORE"
+          mkdir -p release-assets
+          cp "$apk" "release-assets/stremio-offline-tv-${VERSION}.apk"
+      - uses: actions/upload-artifact@v7
+        if: steps.key.outputs.signed == 'true'
+        with:
+          name: release-android
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
   # The macOS app goes onto the same release, unsigned: there is no Developer ID
   # yet, so the bundle is ad-hoc signed as in "Desktop package" and the asset
-  # names say so. It runs after the release exists, and a failure here leaves
-  # the release and its image as they are.
+  # names say so. Build beside the image; publication waits for both.
   desktop:
-    needs: release
+    needs: version
     # Apple Silicon, so the arm64 build runs natively.
     runs-on: macos-15
     permissions:
-      contents: write
+      contents: read
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
@@ -177,21 +182,22 @@ jobs:
             mv "$file" "${file%.*}-unsigned.${file##*.}"
           done
           ls -l ./*-unsigned.*
-      - name: Attach the app to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/attach-release-assets.sh desktop/release/*-unsigned.dmg desktop/release/*-unsigned.zip
-      # The app carries an LGPL FFmpeg statically linked with OpenSSL, so the exact source
-      # archives it was built from travel with the same release (see docs/licensing.md). The
-      # Windows and Linux jobs attach archives of the same names at the same time.
-      - name: Attach the FFmpeg sources
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/attach-release-assets.sh desktop/ffmpeg/sources/*
+      - name: Stage packages and corresponding FFmpeg sources
+        run: |
+          mkdir -p release-assets
+          cp desktop/release/*-unsigned.dmg desktop/release/*-unsigned.zip desktop/ffmpeg/sources/* release-assets/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
   # The LGPL FFmpeg the Windows app carries, cross-built with mingw-w64 exactly as the
   # pull-request check builds it.
   ffmpeg-windows:
-    needs: release
+    needs: version
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -215,10 +221,10 @@ jobs:
   # distinct asset names, so they run beside each other; "release-notes" is the
   # only job that edits the release body.
   desktop-windows:
-    needs: [release, ffmpeg-windows]
+    needs: ffmpeg-windows
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     # Git Bash is the shell the runner has that behaves like the macOS job's.
@@ -258,34 +264,22 @@ jobs:
             mv "$file" "${file%.zip}-unsigned.zip"
           done
           ls -l ./*-unsigned*
-      # `gh release upload` fails on an asset name that is already there, so a rerun never
-      # replaces what was published.
-      - name: Attach the app to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        # A rerun after a later step failed finds the app attached already; that is done, not an error.
+      - name: Stage packages and corresponding FFmpeg sources
         run: |
-          set -euo pipefail
-          present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
-          files=()
-          for file in desktop/release/*-unsigned-setup.exe desktop/release/*-unsigned.zip; do
-            if printf '%s\n' "$present" | grep -qxF -e "$(basename "$file")"; then
-              echo "the release already carries $(basename "$file")"
-              continue
-            fi
-            files+=("$file")
-          done
-          if [ ${#files[@]} -gt 0 ]; then gh release upload "${GITHUB_REF_NAME}" "${files[@]}"; fi
-      # The Windows sources share names with the other desktop jobs' archives, attached at the
-      # same time, so the script skips and tolerates names another job attached first.
-      - name: Attach the FFmpeg sources
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/attach-release-assets.sh desktop/ffmpeg-win/sources/*
+          mkdir -p release-assets
+          cp desktop/release/*-unsigned-setup.exe desktop/release/*-unsigned.zip desktop/ffmpeg-win/sources/* release-assets/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-windows
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
   # The LGPL FFmpeg the Linux app carries, built in the same pinned ubuntu:22.04 container as the
   # pull-request check builds it.
   ffmpeg-linux:
-    needs: release
+    needs: version
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -308,10 +302,10 @@ jobs:
   # upload distinct asset names, so they run beside each other; "release-notes" is the only job
   # that edits the release body.
   desktop-linux:
-    needs: [release, ffmpeg-linux]
+    needs: ffmpeg-linux
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -357,36 +351,23 @@ jobs:
             mv "$file" "desktop/release/stremio-offline_${version}_amd64-unsigned.deb"
           done
           ls -l desktop/release/*-unsigned*
-      # `gh release upload` fails on an asset name that is already there, so a rerun never
-      # replaces what was published.
-      - name: Attach the app to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        # A rerun after a later step failed finds the app attached already; that is done, not an error.
+      - name: Stage packages and corresponding FFmpeg sources
         run: |
-          set -euo pipefail
-          present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
-          files=()
-          for file in desktop/release/*-unsigned.AppImage desktop/release/*-unsigned.deb; do
-            if printf '%s\n' "$present" | grep -qxF -e "$(basename "$file")"; then
-              echo "the release already carries $(basename "$file")"
-              continue
-            fi
-            files+=("$file")
-          done
-          if [ ${#files[@]} -gt 0 ]; then gh release upload "${GITHUB_REF_NAME}" "${files[@]}"; fi
-      # The Linux sources share names with the other desktop jobs' archives, attached at the
-      # same time, so the script skips and tolerates names another job attached first.
-      - name: Attach the FFmpeg sources
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/attach-release-assets.sh desktop/ffmpeg-linux/sources/*
+          mkdir -p release-assets
+          cp desktop/release/*-unsigned.AppImage desktop/release/*-unsigned.deb desktop/ffmpeg-linux/sources/* release-assets/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
   # The only job that edits the release body. The three sections are appended in
   # macOS, Windows, Linux order, because each step adds to whatever the release
   # already carries.
   release-notes:
-    needs: [desktop, desktop-windows, desktop-linux]
+    needs: release
     runs-on: ubuntu-24.04
     permissions:
       contents: write
