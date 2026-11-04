@@ -442,6 +442,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         {!savedPosition && progressPending && <DetailIcon icon={<ListRestart/>} label={t("detail.action.fromStart")} disabled aria-label={t("common.loading")}/>}
         {savedPosition && <DetailIcon icon={<ListRestart/>} label={t("detail.action.fromStart")} aria-label={t("player.playFromStart")} title={t("player.playFromStart")}
           onClick={() => playOrChoose(true)}/>}
+        {!onToggleWatched && progressPending && <DetailIcon icon={<Check/>} label={t("detail.action.watched")} disabled aria-label={t("common.loading")}/>}
         {onToggleWatched && <DetailIcon icon={watched === undefined ? <RotateCcw/> : <Check/>} label={t("detail.action.watched")}
           aria-pressed={watched} disabled={watchedDisabled ?? false} aria-label={watchedName} title={watchedName} onClick={() => onToggleWatched()}/>}
         {canDownloadToDevice && <DetailIcon icon={<Download/>} label={t("detail.action.device")} aria-label={t("library.downloadToDevice")} title={t("library.downloadToDevice")}

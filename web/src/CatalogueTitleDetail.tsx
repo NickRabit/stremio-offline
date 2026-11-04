@@ -77,6 +77,8 @@ export interface CatalogueTitleDetailProps {
   onRead?: (state: { meta: Meta | null; target: CatalogueDetailTarget; pending: boolean; playable: boolean }) => void;
   /** The saved position of the source this detail has selected, keyed by its identity. */
   progress?: { position: number; duration: number; sourceKey: string };
+  /** True while a saved position the caller knows of waits for the chosen row to be confirmed. */
+  progressPending?: boolean;
   /** The stable key of the source the title was last played from, preselected when listed. */
   resumeStableKey?: string;
   /** Told whenever the selected version changes, so the caller can read that version's own state. */
@@ -429,6 +431,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       sourceProfiles={sourceProfiles}
       defaultSort={defaultSort}
       {...(progress ? { progress } : {})}
+      progressPending={props.progressPending ?? false}
       {...(onSourceChange ? { onSourceChange } : {})}
       {...(onClearProgress ? { onClearProgress } : {})}
       {...(onToggleWatched ? { watched: watched ?? false, onToggleWatched } : {})}

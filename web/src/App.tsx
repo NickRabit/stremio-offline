@@ -3721,6 +3721,7 @@ export function App() {
             onToggleFavorite={() => void toggleWatchlist({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}) }, detailAddonKey)}
             onSourceChange={(stream, explicitlyPicked) => { setDetailSource(stream); setDetailSourcePicked(explicitlyPicked); }}
             {...(detailProgress ? { progress: detailProgress } : {})}
+            progressPending={!detailProgress && resume.some((entry) => entry.key === `${catalogueDetail.type}:${catalogueStreamId(catalogueDetail)}`)}
             {...(detailResumeStableKey ? { resumeStableKey: detailResumeStableKey } : {})}
             onClearProgress={() => clearDetailProgress()}
             // The same pair a library detail draws: the position it holds for the episode on screen,
