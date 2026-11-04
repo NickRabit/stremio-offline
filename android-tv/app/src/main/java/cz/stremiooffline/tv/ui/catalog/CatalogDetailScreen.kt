@@ -867,7 +867,7 @@ fun CatalogDetailScreen(
   // Closing the bulk panel, whether it queued or the viewer backed out, returns the remote to
   // the button that opened it.
   LaunchedEffect(ui.series.open) {
-    if (ui.series.open && Streams.remoteFilterLibrary(filters.addon) == null) {
+    if (ui.series.open) {
       ui.series.wasOpen = true
     } else if (ui.series.wasOpen) {
       ui.series.wasOpen = false
@@ -1349,7 +1349,6 @@ fun CatalogDetailScreen(
           )
         },
         // A series opens one panel for this episode's chosen source, a season or the whole show.
-        // A native pick still has no bulk: the batch would queue addons the viewer never chose.
         toLibrary = when {
           !args.backend.catalogue -> args.backend.toLibrary(activeStream)?.let { copy ->
             catalogAction(
