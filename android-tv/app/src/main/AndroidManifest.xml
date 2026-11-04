@@ -45,7 +45,19 @@
         <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data
+            android:scheme="stremiooffline"
+            android:host="watchnext" />
+      </intent-filter>
     </activity>
+
+    <provider
+        android:name=".watchnext.WatchNextArtProvider"
+        android:authorities="${applicationId}.watchnextart"
+        android:exported="true" />
 
     <!-- Below API 33 AppCompat stores the per-app interface locale here so it survives a
          restart; from API 33 the platform LocaleManager owns it. -->
