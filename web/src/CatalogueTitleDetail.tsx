@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, describeError } from "./api";
 import { catalogueGalleryImages, galleryLabel, mergeGallery, type GalleryImage } from "./gallery-images";
-import { DetailRatings, ratingsFrom } from "./detail-copy";
+import { DetailRatings, ratingsFrom, useCopyPending } from "./detail-copy";
 import { EpisodePicker } from "./EpisodePicker";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
@@ -121,6 +121,9 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const [snapshot, setSnapshot] = useState<Meta | null>(target.initialMeta ?? null);
   const [metaError, setMetaError] = useState("");
   const [metaNonce, setMetaNonce] = useState(0);
+  // The lines under the title come from two answers and appear together, never later than the wait.
+  const copyPending = useCopyPending(`${type}:${id}`, !metaError && (snapshot === null || titleExtras.loading));
+  const trailerPending = useCopyPending(`${type}:${id}`, titleExtras.loading);
   const [pickedEpisode, setPickedEpisode] = useState<Video | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSeason, setPickerSeason] = useState<number | null>(null);
@@ -409,6 +412,8 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
       {...(synopsisOf(snapshot?.description, titleExtras.extras) ? { description: synopsisOf(snapshot?.description, titleExtras.extras) } : {})}
       descriptionLoading={snapshot === null && !metaError}
+      copyPending={copyPending}
+      trailerPending={trailerPending}
       {...(chips ? { chips } : {})}
       {...(onToggleFavorite ? { favorite: favorite ?? false, onToggleFavorite, favoriteDisabled, ...(favoriteAriaLabel ? { favoriteAriaLabel } : {}), ...(favoriteTitle ? { favoriteTitle } : {}) } : {})}
       sources={detailSources}

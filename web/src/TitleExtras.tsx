@@ -192,11 +192,15 @@ export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer
   if (loading) return <section className="title-extras" aria-busy="true">
     <div className="extras-row extras-skeleton">
       <h3>{translate("detail.people")} <small>{translate("detail.peopleHint")}</small></h3>
-      <div className="extras-strip">{SKELETONS.map((index) => <div className="person" key={index}><span className="person-face"/></div>)}</div>
+      <div className="extras-strip">{SKELETONS.map((index) => <div className="person" key={index}><span className="person-face"/><i/><i/></div>)}</div>
+    </div>
+    <div className="extras-row extras-skeleton">
+      <h3>{translate("detail.videos")}</h3>
+      <div className="extras-strip">{SKELETONS.slice(0, 4).map((index) => <div className="detail-video" key={index}><span className="thumb"/><i/><i/></div>)}</div>
     </div>
     <div className="extras-row extras-skeleton">
       <h3>{translate("detail.related")}</h3>
-      <div className="extras-strip">{SKELETONS.map((index) => <div className="related" key={index}><span className="related-art"/></div>)}</div>
+      <div className="extras-strip">{SKELETONS.map((index) => <div className="related" key={index}><span className="related-art"/><i/><i/></div>)}</div>
     </div>
   </section>;
   const people = extras?.people ?? [];
