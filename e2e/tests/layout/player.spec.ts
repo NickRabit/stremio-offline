@@ -81,8 +81,10 @@ test("player keeps its picture stable and its overlay controls reachable", async
       const leftEdge = rowTwo[0]!.x - controlsBox.x;
       const rightEdge = controlsBox.x + controlsBox.width - rowTwo.at(-1)!.x - rowTwo.at(-1)!.width;
       expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(1);
-      expect(Math.abs(leftEdge - gaps[0]!)).toBeLessThanOrEqual(1);
-      expect(Math.abs(rightEdge - gaps[0]!)).toBeLessThanOrEqual(1);
+      // The row's own CSS gap sits only between buttons, on top of the even share.
+      const columnGap = await controls.evaluate((element) => Number.parseFloat(getComputedStyle(element).columnGap) || 0);
+      expect(Math.abs(leftEdge + columnGap - gaps[0]!)).toBeLessThanOrEqual(1);
+      expect(Math.abs(rightEdge + columnGap - gaps[0]!)).toBeLessThanOrEqual(1);
       expect(await controls.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
     };
 
