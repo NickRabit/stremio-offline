@@ -151,7 +151,9 @@ test("a local detail opens the shared gallery and loads alternative artwork once
   await openDetail(page);
   const trigger = page.locator(".library-title-detail .gallery-open");
   await expect(trigger).toBeVisible();
-  expect(galleryRequests).toBe(0);
+  // The detail reads the gallery once on opening, so the corner already counts the alternate.
+  await expect(trigger).toContainText("3");
+  expect(galleryRequests).toBe(1);
   await trigger.click();
   const gallery = page.getByRole("dialog", { name: "Galerie obrázků" });
   await expect(gallery.locator(".gallery-thumbnails button")).toHaveCount(3);

@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget, type CatalogueTitleDetailProps } from "./CatalogueTitleDetail";
 import { setLocale } from "./i18n";
 import { clearTitleExtras } from "./title-extras";
+import { clearTitleEnrichment } from "./title-enrichment";
 import type { Meta, RemoteLibrary, SourceRuleVerdict, Stream, Video } from "./types";
 
 const json = (body: unknown, status = 200) =>
@@ -56,9 +57,10 @@ let providerReply: Handler;
 let streamReply: Handler;
 let localReply: Handler;
 let remoteReply: Handler;
+let galleryReply: Handler;
 const calls = {
   meta: [] as URL[], extras: [] as URL[], providers: [] as URL[], streams: [] as URL[],
-  libraries: [] as URL[], remoteStreams: [] as URL[],
+  libraries: [] as URL[], remoteStreams: [] as URL[], gallery: [] as URL[],
 };
 
 let root: Root;
@@ -68,6 +70,9 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   clearTitleExtras();
+  clearTitleEnrichment();
+  calls.gallery = [];
+  galleryReply = () => json({ images: [] });
   calls.meta = []; calls.extras = []; calls.providers = []; calls.streams = []; calls.libraries = []; calls.remoteStreams = [];
   metaReply = () => json(film());
   extrasReply = () => json({ people: [], related: [], source: "addon" });
@@ -79,6 +84,7 @@ beforeEach(() => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
     if (path.endsWith("/extras")) { calls.extras.push(url); return Promise.resolve(extrasReply(url)); }
+    if (path.startsWith("/api/meta/") && url.searchParams.get("gallery") === "1") { calls.gallery.push(url); return Promise.resolve(galleryReply(url)); }
     if (path.startsWith("/api/meta/")) { calls.meta.push(url); return Promise.resolve(metaReply(url)); }
     if (path.startsWith("/api/stream-sources/")) { calls.providers.push(url); return Promise.resolve(providerReply(url)); }
     if (path.startsWith("/api/streams/")) { calls.streams.push(url); return Promise.resolve(streamReply(url)); }
@@ -459,6 +465,29 @@ describe("CatalogueTitleDetail series", () => {
       expect.objectContaining({ season: 1, episode: 2, videoId: "tt-series:1:2" }), false);
     await click(host.querySelector<HTMLButtonElement>(".library-detail-actions button[aria-label='To library']"));
     expect(onSaveToLibrary).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Show S01E02.mkv" }), expect.objectContaining({ episode: 2 }));
+  });
+
+  it("counts the catalogue's stills in the corner before the gallery is opened", async () => {
+    galleryReply = () => json({ images: [
+      { url: "/poster.jpg", kind: "poster", shape: "poster" },
+      { url: "/still-1.jpg", kind: "still", shape: "wide" },
+      { url: "/still-2.jpg", kind: "still", shape: "wide" },
+    ] });
+    const onGallery = vi.fn();
+    await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() }, onGallery });
+    expect(calls.gallery).toHaveLength(1);
+    expect(calls.gallery[0]!.pathname).toBe("/api/meta/movie/tt-film");
+    // The poster and the backdrop from the metadata, plus the two stills; the repeated poster once.
+    expect(host.querySelector(".gallery-open span")!.textContent).toContain("4");
+    expect(host.querySelector(".gallery-open img")!.getAttribute("src")).toBe("/poster.jpg");
+    await click(host.querySelector(".gallery-open"));
+    expect(onGallery.mock.calls[0]![0].map((image: { url: string }) => image.url)).toEqual(["/poster.jpg", "/wide.jpg", "/still-1.jpg", "/still-2.jpg"]);
+  });
+
+  it("keeps the metadata's pictures in the corner when the catalogue gallery fails", async () => {
+    galleryReply = () => new Response(null, { status: 500 });
+    await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() }, onGallery: vi.fn() });
+    expect(host.querySelector(".gallery-open span")!.textContent).toContain("2");
   });
 
   it("opens the gallery over the episode's own pictures and target", async () => {

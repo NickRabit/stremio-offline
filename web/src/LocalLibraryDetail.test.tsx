@@ -29,6 +29,7 @@ let copies: Handler;
 let links: Handler;
 let trailer: Handler;
 let gallery: Handler;
+let catalogueGallery: Handler;
 let meta: Handler;
 let extras: Handler;
 let progressOf: Handler;
@@ -37,7 +38,7 @@ let addonStreams: Handler;
 let remoteLibraries: Handler;
 let remoteMatches: Handler;
 let remoteState: Handler;
-const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], extras: [] as URL[], links: [] as URL[], trailer: [] as URL[], gallery: [] as URL[], progress: [] as URL[], providers: [] as URL[], addon: [] as URL[], libraries: [] as URL[], remote: [] as URL[], remoteState: [] as URL[], remoteWrites: [] as Record<string, unknown>[] };
+const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], extras: [] as URL[], links: [] as URL[], trailer: [] as URL[], gallery: [] as URL[], catalogueGallery: [] as URL[], progress: [] as URL[], providers: [] as URL[], addon: [] as URL[], libraries: [] as URL[], remote: [] as URL[], remoteState: [] as URL[], remoteWrites: [] as Record<string, unknown>[] };
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -56,7 +57,7 @@ beforeEach(() => {
   setLocale("en");
   clearTitleEnrichment();
   clearTitleExtras();
-  calls.source = []; calls.identity = []; calls.localStreams = []; calls.meta = []; calls.extras = []; calls.links = []; calls.trailer = []; calls.gallery = []; calls.progress = [];
+  calls.source = []; calls.identity = []; calls.localStreams = []; calls.meta = []; calls.extras = []; calls.links = []; calls.trailer = []; calls.gallery = []; calls.catalogueGallery = []; calls.progress = [];
   calls.providers = []; calls.addon = []; calls.libraries = []; calls.remote = []; calls.remoteState = []; calls.remoteWrites = [];
   source = () => json({ sourceId: "exact", kind: "library", playable: true, behaviorHints: { filename: "Heat.mkv" } });
   identityHandler = () => json(identity());
@@ -64,6 +65,7 @@ beforeEach(() => {
   links = () => json({ links: [] });
   trailer = () => json({ trailer: null });
   gallery = () => json({ images: [] });
+  catalogueGallery = () => json({ images: [] });
   meta = () => json({ id: "x", type: "movie", name: "X", background: "/catalogue-backdrop.jpg" });
   extras = () => json({ people: [], related: [], source: "addon" });
   progressOf = () => json(null);
@@ -82,6 +84,7 @@ beforeEach(() => {
     if (path === "/api/library/trailer") { calls.trailer.push(url); return Promise.resolve(trailer(url, init)); }
     if (path === "/api/library/gallery") { calls.gallery.push(url); return Promise.resolve(gallery(url, init)); }
     if (path.endsWith("/extras")) { calls.extras.push(url); return Promise.resolve(extras(url, init)); }
+    if (path.startsWith("/api/meta/") && url.searchParams.get("gallery") === "1") { calls.catalogueGallery.push(url); return Promise.resolve(catalogueGallery(url, init)); }
     if (path.startsWith("/api/meta/")) { calls.meta.push(url); return Promise.resolve(meta(url, init)); }
     if (/^\/api\/local-streams\/[^/]+\/[^/]+$/.test(path)) { calls.localStreams.push(url); return Promise.resolve(copies(url, init)); }
     if (path.startsWith("/api/stream-sources/")) { calls.providers.push(url); return Promise.resolve(providers(url, init)); }
@@ -290,8 +293,7 @@ describe("LocalLibraryDetail gallery", () => {
     await render(file({ poster: "/poster.jpg", wide: "/wide.jpg" }), { onGallery });
     const corner = host.querySelector(".gallery-open")!;
     expect(corner.querySelector("img")?.getAttribute("src")).toBe("/poster.jpg");
-    // No saved pictures are read until the app opens the overlay, so the click only hands over the
-    // metadata it already had: the file's poster and wide artwork, then the catalogue's.
+    // The file's poster and wide artwork lead, then the catalogue's pictures.
     await click(corner);
     const [images] = onGallery.mock.calls[0]!;
     expect(images[0].url).toBe("/poster.jpg");
@@ -299,7 +301,25 @@ describe("LocalLibraryDetail gallery", () => {
     expect(images[2].url).toBe("/catalogue-backdrop.jpg");
     expect(images).toHaveLength(18);
     expect(new Set(images.map((image: { url: string }) => image.url)).size).toBe(18);
-    expect(calls.gallery).toHaveLength(0);
+  });
+
+  it("counts the saved pictures and the catalogue's stills in the corner before it is clicked", async () => {
+    const onGallery = vi.fn();
+    identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    gallery = () => json({ images: [{ url: "/saved-fanart.jpg", kind: "background", shape: "wide" }] });
+    catalogueGallery = () => json({ images: [
+      { url: "/poster.jpg", kind: "poster", shape: "poster" },
+      { url: "/still-1.jpg", kind: "still", shape: "wide" },
+    ] });
+    await render(file({ poster: "/poster.jpg" }), { onGallery });
+    await flush();
+    expect(calls.gallery.map((url) => url.searchParams.get("path"))).toEqual(["Films/Heat.mkv"]);
+    expect(calls.catalogueGallery.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt1"]);
+    // The poster, the catalogue backdrop, the saved fanart and one still; the repeated poster once.
+    expect(host.querySelector(".gallery-open span")!.textContent).toContain("4");
+    await click(host.querySelector(".gallery-open"));
+    expect(onGallery.mock.calls[0]![0].map((image: { url: string }) => image.url))
+      .toEqual(["/poster.jpg", "/catalogue-backdrop.jpg", "/saved-fanart.jpg", "/still-1.jpg"]);
   });
 
   it("falls back to the catalogue's backdrop when the file has no wide artwork", async () => {
