@@ -862,7 +862,7 @@ class ApiClient(
     val call = client.newCall(request)
     continuation.invokeOnCancellation { call.cancel() }
     call.enqueue(object : okhttp3.Callback {
-      override fun onFailure(call: okhttp3.Call, error: IOException) {
+      override fun onFailure(call: okhttp3.Call, e: IOException) {
         if (!continuation.isActive) return
         AppLog.apiFailure(request.method, request.url.encodedPath, null, System.currentTimeMillis() - started)
         continuation.resumeWithException(ApiError(ApiFailure.Unreachable))
@@ -891,7 +891,7 @@ class ApiClient(
   private suspend fun readBody(response: Response, log: Boolean = true): String = withContext(Dispatchers.IO) {
     val started = System.currentTimeMillis()
     try {
-      response.body?.string().orEmpty()
+      response.body.string()
     } catch (error: IOException) {
       if (log) {
         AppLog.apiFailure(response.request.method, response.request.url.encodedPath, null, System.currentTimeMillis() - started)

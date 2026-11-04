@@ -45,7 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.catalog.ProgressKey
@@ -87,6 +87,7 @@ import cz.stremiooffline.tv.ui.detail.TitleTechBlock
 import cz.stremiooffline.tv.ui.detail.downIntoExtras
 import cz.stremiooffline.tv.ui.detail.scrollToTopOnFocus
 import cz.stremiooffline.tv.ui.library.RemoteSeriesBulkHost
+import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.text.ParsePosition
 import java.text.SimpleDateFormat
@@ -1240,6 +1241,7 @@ fun CatalogDetailScreen(
     AsyncImage(
       model = imageUrl(meta.background ?: meta.poster),
       contentDescription = null,
+      imageLoader = sessionImageLoader(),
       contentScale = ContentScale.Crop,
       modifier = Modifier.fillMaxSize(),
     )

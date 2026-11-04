@@ -10,13 +10,13 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.core.app.ApplicationProvider
-import coil.ImageLoader
-import coil.compose.LocalImageLoader
-import coil.intercept.Interceptor
-import coil.request.ErrorResult
-import coil.request.ImageRequest
-import coil.request.ImageResult
-import coil.request.SuccessResult
+import coil3.ImageLoader
+import coil3.asImage
+import coil3.intercept.Interceptor
+import coil3.request.ErrorResult
+import coil3.request.ImageResult
+import coil3.request.SuccessResult
+import cz.stremiooffline.tv.ui.LocalSessionImageLoader
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -43,9 +43,9 @@ class CardsTest {
       val data = chain.request.data.toString()
       requested += data
       return if (loads(data)) {
-        SuccessResult(ColorDrawable(android.graphics.Color.RED), chain.request, isSampled = false, dataSource = coil.decode.DataSource.MEMORY)
+        SuccessResult(ColorDrawable(android.graphics.Color.RED).asImage(), chain.request, isSampled = false, dataSource = coil3.decode.DataSource.MEMORY)
       } else {
-        ErrorResult(ColorDrawable(android.graphics.Color.GRAY), chain.request, throwable = IllegalStateException("no image"))
+        ErrorResult(ColorDrawable(android.graphics.Color.GRAY).asImage(), chain.request, throwable = IllegalStateException("no image"))
       }
     }
   }
@@ -59,7 +59,7 @@ class CardsTest {
   fun `a library root tries the server mosaic before its collage`() {
     val requested = mutableListOf<String>()
     compose.setContent {
-      CompositionLocalProvider(LocalImageLoader provides loader(requested)) {
+      CompositionLocalProvider(LocalSessionImageLoader provides loader(requested)) {
         LibraryRootCard(
           name = "Films",
           caption = null,
@@ -80,7 +80,7 @@ class CardsTest {
     val requested = mutableListOf<String>()
     val imageLoader = loader(requested) { it != "http://server/wide.jpg" }
     compose.setContent {
-      CompositionLocalProvider(LocalImageLoader provides imageLoader) {
+      CompositionLocalProvider(LocalSessionImageLoader provides imageLoader) {
         WideCard(
           label = "It",
           imageUrl = "http://server/wide.jpg",
@@ -101,7 +101,7 @@ class CardsTest {
   fun `a wide card only draws its title over the gradient`() {
     val requested = mutableListOf<String>()
     compose.setContent {
-      CompositionLocalProvider(LocalImageLoader provides loader(requested)) {
+      CompositionLocalProvider(LocalSessionImageLoader provides loader(requested)) {
         WideCard(label = "It", imageUrl = "http://server/wide.jpg", progress = null, completed = false, onClick = {})
       }
     }
@@ -117,7 +117,7 @@ class CardsTest {
     val requested = mutableListOf<String>()
     val imageLoader = loader(requested) { it != "http://server/poster.jpg" }
     compose.setContent {
-      CompositionLocalProvider(LocalImageLoader provides imageLoader) {
+      CompositionLocalProvider(LocalSessionImageLoader provides imageLoader) {
         PosterCard(
           name = "It",
           imageUrl = "http://server/poster.jpg",
@@ -135,7 +135,7 @@ class CardsTest {
   fun `a library without its own cover shows the collage of the covers inside it`() {
     val requested = mutableListOf<String>()
     compose.setContent {
-      CompositionLocalProvider(LocalImageLoader provides loader(requested)) {
+      CompositionLocalProvider(LocalSessionImageLoader provides loader(requested)) {
         PosterCard(
           name = "TV test",
           imageUrl = null,
@@ -156,7 +156,7 @@ class CardsTest {
   @Test
   fun `a single cover is not a collage`() {
     compose.setContent {
-      CompositionLocalProvider(LocalImageLoader provides loader(mutableListOf())) {
+      CompositionLocalProvider(LocalSessionImageLoader provides loader(mutableListOf())) {
         PosterCard(name = "One", imageUrl = null, progress = null, onClick = {}, mosaic = listOf("http://server/a.jpg"))
       }
     }
@@ -170,7 +170,7 @@ class CardsTest {
   fun `the collage wins over a folder's own cover, as on the web`() {
     val requested = mutableListOf<String>()
     compose.setContent {
-      CompositionLocalProvider(LocalImageLoader provides loader(requested)) {
+      CompositionLocalProvider(LocalSessionImageLoader provides loader(requested)) {
         PosterCard(
           name = "Show",
           imageUrl = "http://server/own.jpg",
@@ -192,7 +192,7 @@ class CardsTest {
     val requested = mutableListOf<String>()
     compose.setContent {
       CompositionLocalProvider(
-        LocalImageLoader provides loader(requested) { !it.contains("/mosaic") },
+        LocalSessionImageLoader provides loader(requested) { !it.contains("/mosaic") },
       ) {
         PosterCard(
           name = "Show",
@@ -214,7 +214,7 @@ class CardsTest {
   fun `a loading composed mosaic does not draw the fallback collage`() {
     val requested = mutableListOf<String>()
     compose.setContent {
-      CompositionLocalProvider(LocalImageLoader provides loader(requested)) {
+      CompositionLocalProvider(LocalSessionImageLoader provides loader(requested)) {
         PosterCard(
           name = "Show",
           imageUrl = "http://server/api/library/mosaic?v=1",
@@ -237,7 +237,7 @@ class CardsTest {
     val requested = mutableListOf<String>()
     compose.setContent {
       CompositionLocalProvider(
-        LocalImageLoader provides loader(requested) { it.contains("/a.jpg") || it.contains("/b.jpg") },
+        LocalSessionImageLoader provides loader(requested) { it.contains("/a.jpg") || it.contains("/b.jpg") },
       ) {
         PosterCard(
           name = "Server",

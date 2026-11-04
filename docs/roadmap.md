@@ -361,6 +361,8 @@ The remaining majors after these, one PR each:
   Node 22 (the image runs 26, Electron 44 runs 24.22, CI runs 24 and 26), so
   `engines` now says 24.15 (jsdom 30 needs it on the 24 line) and the types match. Server, desktop, web and e2e
   type-check unchanged.
+- **OkHttp 4 → 5 and Coil 2 → 3** — done: Android TV uses OkHttp 5.5.1 and
+  Coil 3.6.3; `minSdk` stays 24.
 
 Ubuntu base image majors stay manual as well (24.04 on purpose since #634).
 
