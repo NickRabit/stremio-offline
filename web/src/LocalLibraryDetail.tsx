@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, describeError } from "./api";
-import { DetailRatings, ratingsFrom } from "./detail-copy";
+import { DetailRatings, ratingsFrom, useCopyPending } from "./detail-copy";
 import { bytes } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
@@ -281,6 +281,10 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   // film itself. Its metadata supplies a backdrop and never replaces the file's own synopsis.
   const enrichment = useTitleEnrichment({ kind: "local", path: item.path }, bound, uiLanguage);
   const titleExtras = useTitleExtras(bound?.type, bound?.id);
+  // The binding and the title's extras arrive one after the other; the lines under the title wait
+  // for both, never longer than the shared wait.
+  const copyPending = useCopyPending(item.path, identity === null || titleExtras.loading);
+  const trailerPending = useCopyPending(item.path, identity === null || titleExtras.loading);
   const episode = isFile && item.season != null;
   const title = episode
     ? item.series?.name || (identity?.bound?.type === "series" ? identity.bound.name : "") || item.catalogName || item.label
@@ -346,6 +350,9 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     onTrailer={onTrailer}
     secureMode={secureMode}
     extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
+    copyPending={copyPending}
+    progressPending={Boolean(progress && progress.position > 0) && saved === null}
+    trailerPending={trailerPending}
     {...(synopsisOf(item.description, titleExtras.extras) ? { description: synopsisOf(item.description, titleExtras.extras) } : {})}
     chips={chips}
     favorite={favorite}

@@ -128,3 +128,18 @@ export function DetailFavoriteButton({ favorite, disabled, onToggle, ariaLabel, 
     <span><Star/></span>{t("detail.action.favorite")}
   </button>;
 }
+
+/** How long the lines under a title wait for their second answer before showing what they have. */
+const COPY_WAIT_MS = 1200;
+
+/** True while [pending] holds and the wait for [key] has not run out: a detail shows its stand-in
+ *  until both of its answers are in, but a slow one never keeps the rest from appearing. */
+export function useCopyPending(key: string, pending: boolean): boolean {
+  const [over, setOver] = useState(false);
+  useEffect(() => {
+    setOver(false);
+    const timer = window.setTimeout(() => setOver(true), COPY_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [key]);
+  return pending && !over;
+}

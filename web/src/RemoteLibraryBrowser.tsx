@@ -20,7 +20,7 @@ import { addonMediaSubject, genericProgressKey, supplementaryIdentity } from "./
 import { sourceProgressOwner, versionSavedRow, type SourceProgressOwner } from "./source-progress";
 import { canQueue, isLocalStream, isRemoteStream } from "./streams";
 import { sourceTargetRule } from "./save-target";
-import { DetailRatings, ratingsFrom } from "./detail-copy";
+import { DetailRatings, ratingsFrom, useCopyPending } from "./detail-copy";
 import type { CatalogueDetailTarget } from "./CatalogueTitleDetail";
 import { seriesEntry } from "./resume-target";
 import { remoteDetailArtwork } from "./remote-artwork";
@@ -1278,6 +1278,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const playbackPoster = (item: RemoteItem): string | undefined =>
     enrichment.meta?.poster ?? (item.type === "episode" ? series?.poster ?? item.poster : item.poster);
   const titleExtras = useTitleExtras(catalogue?.type, catalogue?.id);
+  const copyPending = useCopyPending(`${detail?.id ?? ""}`, titleExtras.loading);
   const heroItem = detail?.type === "episode" && series ? series : detail;
   const detailDescription = detail?.overview || (detail?.type === "episode" ? series?.overview : undefined);
   const detailPreview = remoteDetailArtwork(heroItem?.poster);
@@ -2036,6 +2037,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             onTrailer={onTrailer}
             secureMode={secureMode}
             extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} remoteFirst/>}
+            copyPending={copyPending}
+            trailerPending={copyPending}
             {...(detailDescription ? { description: detailDescription } : {})}
             {...(heroItem ? { chips: detailChips(heroItem) } : {})}
             favorite={state?.favorite ?? false}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { genreLabel } from "./genres";
 import { api, describeError } from "./api";
 import { catalogueGalleryImages, galleryLabel, mergeGallery, type GalleryImage } from "./gallery-images";
-import { DetailRatings, ratingsFrom } from "./detail-copy";
+import { DetailRatings, ratingsFrom, useCopyPending } from "./detail-copy";
 import { EpisodePicker } from "./EpisodePicker";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
@@ -78,6 +78,8 @@ export interface CatalogueTitleDetailProps {
   onRead?: (state: { meta: Meta | null; target: CatalogueDetailTarget; pending: boolean; playable: boolean }) => void;
   /** The saved position of the source this detail has selected, keyed by its identity. */
   progress?: { position: number; duration: number; sourceKey: string };
+  /** True while a saved position the caller knows of waits for the chosen row to be confirmed. */
+  progressPending?: boolean;
   /** The stable key of the source the title was last played from, preselected when listed. */
   resumeStableKey?: string;
   /** Told whenever the selected version changes, so the caller can read that version's own state. */
@@ -122,6 +124,9 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const [snapshot, setSnapshot] = useState<Meta | null>(target.initialMeta ?? null);
   const [metaError, setMetaError] = useState("");
   const [metaNonce, setMetaNonce] = useState(0);
+  // The lines under the title come from two answers and appear together, never later than the wait.
+  const copyPending = useCopyPending(`${type}:${id}`, !metaError && (snapshot === null || titleExtras.loading));
+  const trailerPending = useCopyPending(`${type}:${id}`, titleExtras.loading);
   const [pickedEpisode, setPickedEpisode] = useState<Video | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSeason, setPickerSeason] = useState<number | null>(null);
@@ -410,6 +415,8 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
       {...(synopsisOf(snapshot?.description, titleExtras.extras) ? { description: synopsisOf(snapshot?.description, titleExtras.extras) } : {})}
       descriptionLoading={snapshot === null && !metaError}
+      copyPending={copyPending}
+      trailerPending={trailerPending}
       {...(chips ? { chips } : {})}
       {...(onToggleFavorite ? { favorite: favorite ?? false, onToggleFavorite, favoriteDisabled, ...(favoriteAriaLabel ? { favoriteAriaLabel } : {}), ...(favoriteTitle ? { favoriteTitle } : {}) } : {})}
       sources={detailSources}
@@ -425,6 +432,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       sourceProfiles={sourceProfiles}
       defaultSort={defaultSort}
       {...(progress ? { progress } : {})}
+      progressPending={props.progressPending ?? false}
       {...(onSourceChange ? { onSourceChange } : {})}
       {...(onClearProgress ? { onClearProgress } : {})}
       {...(onToggleWatched ? { watched: watched ?? false, onToggleWatched } : {})}

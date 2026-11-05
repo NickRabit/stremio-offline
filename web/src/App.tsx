@@ -367,6 +367,7 @@ export function App() {
   // Preserve the favorites breadcrumb when entering a folder from favorites.
   const [fromFavorites, setFromFavorites] = useState(false);
   const [resume, setResume] = useState<ProgressEntry[]>([]);
+  const resumeRead = useRef(false);
   const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
   const [follows, setFollows] = useState<FollowView[]>([]);
   const [newEpisodes, setNewEpisodes] = useState<NewEpisode[]>([]);
@@ -1636,13 +1637,17 @@ export function App() {
     if (!ready) return;
     // After the player closes the last position is still on its way, so we wait a moment.
     // Both the catalogue and the library need the list; only the library needs the folder listing.
+    // The first read is not held back: a view changed within the wait would push it out again,
+    // and a detail opened meanwhile would learn of its saved position only after it had drawn.
+    const first = !resumeRead.current;
     const timer = setTimeout(() => {
+      resumeRead.current = true;
       api.progressList().then((entries) => {
         setResume(entries);
         if (!playerOpen) setLocalProgressRevision((value) => value + 1);
       }).catch(() => undefined);
       if (!playerOpen && view === "library") void refreshBrowse(browse?.items.length ?? 60);
-    }, playerOpen ? 0 : 900);
+    }, playerOpen || first ? 0 : 900);
     return () => clearTimeout(timer);
   }, [ready, view, playerOpen]);
   // While the user is somewhere other than the library, idle time goes into the root listing
@@ -3728,6 +3733,7 @@ export function App() {
             onToggleFavorite={() => void toggleWatchlist({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}) }, detailAddonKey)}
             onSourceChange={(stream, explicitlyPicked) => { setDetailSource(stream); setDetailSourcePicked(explicitlyPicked); }}
             {...(detailProgress ? { progress: detailProgress } : {})}
+            progressPending={!detailProgress && resume.some((entry) => entry.key === `${catalogueDetail.type}:${catalogueStreamId(catalogueDetail)}`)}
             {...(detailResumeStableKey ? { resumeStableKey: detailResumeStableKey } : {})}
             onClearProgress={() => clearDetailProgress()}
             // The same pair a library detail draws: the position it holds for the episode on screen,

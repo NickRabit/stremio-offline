@@ -131,6 +131,50 @@ describe("LibraryTitleDetail sources", () => {
     expect(host.querySelector(".library-title-detail .loading")).toBeNull();
   });
 
+  it("holds the source's rows below the actions, in their shape, until the sources land", () => {
+    render({ sources: null, onDownloadToDevice: vi.fn(), onToggleFavorite: vi.fn() });
+    const skeleton = host.querySelector(".detail-tech-skeleton[role=status]")!;
+    expect(skeleton).not.toBeNull();
+    // After the actions, exactly where the chosen source's rows will be drawn.
+    const actions = host.querySelector(".library-detail-actions")!;
+    expect(actions.compareDocumentPosition(skeleton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect([...skeleton.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Source", "Video", "Audio", "File"]);
+    // The device action waits disabled, so the row does not gain a button when the sources arrive.
+    const device = host.querySelector<HTMLButtonElement>(".detail-secondary button[aria-label='Loading…']");
+    expect(device?.disabled).toBe(true);
+    rerender({ sources: [remote("s1", "1080p", 2_000_000_000)], onDownloadToDevice: vi.fn(), onToggleFavorite: vi.fn() });
+    expect(host.querySelector(".detail-tech-skeleton")).toBeNull();
+    expect(host.querySelector(".detail-tech")).not.toBeNull();
+  });
+
+  it("shows the lines under the title together, after one stand-in, and a pending trailer disabled", () => {
+    const lines = { facts: "2026 · Drama", originalLine: <p className="original">Original</p>, ratings: <div className="detail-ratings">IMDb 7</div>,
+      description: "A quiet film.", people: [{ name: "Ada", role: "director" as const }] };
+    render({ ...lines, copyPending: true, trailerPending: true });
+    expect(host.querySelector(".detail-copy-skeleton")).not.toBeNull();
+    expect(host.querySelector(".detail-crew-skeleton")).not.toBeNull();
+    expect(host.querySelector(".library-detail-synopsis.detail-skeleton")).not.toBeNull();
+    expect(host.querySelector(".original")).toBeNull();
+    expect(host.querySelector(".detail-ratings")).toBeNull();
+    expect(host.querySelector(".hero")!.textContent).not.toContain("2026 · Drama");
+    const trailer = [...host.querySelectorAll<HTMLButtonElement>(".detail-secondary button")].find((button) => button.textContent === "Trailer");
+    expect(trailer?.disabled).toBe(true);
+    render({ ...lines, copyPending: false, trailerPending: false });
+    expect(host.querySelector(".detail-copy-skeleton")).toBeNull();
+    expect(host.querySelector(".original")!.textContent).toBe("Original");
+    expect(host.querySelector(".hero")!.textContent).toContain("2026 · Drama");
+    expect(host.querySelector(".library-detail-synopsis")!.textContent).toBe("A quiet film.");
+  });
+
+  it("holds a known saved position's row and its from-start action until the position is confirmed", () => {
+    render({ sources: null, progressPending: true });
+    expect(host.querySelector(".library-detail-progress.detail-skeleton")).not.toBeNull();
+    const fromStart = [...host.querySelectorAll<HTMLButtonElement>(".detail-secondary button")].find((button) => button.textContent === "From start");
+    expect(fromStart?.disabled).toBe(true);
+    render({ progressPending: false });
+    expect(host.querySelector(".library-detail-progress.detail-skeleton")).toBeNull();
+  });
+
   it("keeps the synopsis in place while the metadata is still on its way", () => {
     render({ sources: null, descriptionLoading: true });
     expect(host.querySelector(".library-detail-synopsis.detail-skeleton")).not.toBeNull();

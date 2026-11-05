@@ -2108,8 +2108,8 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-detail-synopsis{margin:9px 0 0;max-width:680px;font-size:13px;line-height:1.6;color:#dce3ed}
 /* Everything drawn on that wash stands above it. The episode picker the catalogue brings is one of
    those: left out of this list it was painted under the gradient, which read as greyed out. */
-.library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-progress,.library-title-detail>.library-detail-actions,.library-title-detail>.detail-tech,.library-title-detail>.catalogue-episodes,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
-.library-detail-progress{display:flex;flex-wrap:wrap;align-items:center;gap:10px;max-width:680px;margin-top:2px}
+.library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-progress,.library-title-detail>.library-detail-actions,.library-title-detail>.detail-tech,.library-title-detail>.detail-tech-skeleton,.library-title-detail>.catalogue-episodes,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
+.library-detail-progress{display:flex;flex-wrap:wrap;align-items:center;gap:10px;max-width:680px;margin-top:2px}.library-detail-progress.detail-skeleton{min-height:44px}.library-detail-progress.detail-skeleton>i{width:min(280px,60%)}
 .library-detail-progress .progress{flex:1 1 80px;max-width:280px;margin:0}
 .library-detail-progress>span{font-size:11px;color:var(--muted);white-space:nowrap}
 .library-detail-progress .icon-button{width:44px;min-width:44px;height:44px;padding:0}
@@ -2120,9 +2120,9 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .detail-skeleton>i{display:block;height:10px;border-radius:99px;background:#ffffff1c;animation:detail-pulse 1.1s ease-in-out infinite alternate}
 .library-detail-synopsis.detail-skeleton{display:grid;gap:8px;max-width:640px;padding:3px 0}
 .library-detail-synopsis.detail-skeleton>i:nth-child(2){width:88%}.library-detail-synopsis.detail-skeleton>i:nth-child(3){width:62%}
-.library-detail-source.detail-skeleton{min-height:18px}.library-detail-source.detail-skeleton>i{width:min(260px,70%)}
+.detail-copy-skeleton{display:grid;gap:9px;margin:4px 0 2px}.detail-copy-skeleton>i{width:min(220px,50%)}.detail-copy-skeleton>i:nth-child(2){width:min(300px,70%)}.detail-copy-skeleton>b{display:block;width:min(240px,60%);height:26px;border-radius:7px;background:#ffffff14;animation:detail-pulse 1.1s ease-in-out infinite alternate}.detail-crew-skeleton{margin-top:8px}.detail-crew-skeleton>i{width:min(260px,60%)}.library-detail-source.detail-skeleton{min-height:18px}.library-detail-source.detail-skeleton>i{width:min(260px,70%)}
 @keyframes detail-pulse{from{opacity:.4}to{opacity:1}}
-@media(prefers-reduced-motion:reduce){.detail-skeleton>i{animation:none}}
+@media(prefers-reduced-motion:reduce){.detail-copy-skeleton>b{animation:none}.detail-skeleton>i{animation:none}}
 .library-detail-source>i{font-style:normal;font-size:9px;font-weight:800;color:var(--green);text-transform:uppercase}
 .library-detail-source>i.remote{color:var(--accent2)}
 /* A file name has no spaces to break at: kept on one line it widened the whole detail past a phone's
@@ -2337,9 +2337,9 @@ p.next-episode b{color:var(--accent2)}
 .related strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .related small{font-size:12px;color:#aab4c2}
 .related .in-library{color:var(--green)}
-.extras-skeleton .person-face,.extras-skeleton .related-art{background:linear-gradient(90deg,#1b222d,#232b38,#1b222d);background-size:200% 100%;animation:extras-shimmer 1.4s infinite linear;border-color:transparent}
+.extras-skeleton .person>i,.extras-skeleton .related>i,.extras-skeleton .detail-video>i{display:block;height:10px;margin-top:9px;border-radius:99px;background:#ffffff14;width:80%}.extras-skeleton .person>i{margin-inline:auto}.extras-skeleton .person>i+i,.extras-skeleton .related>i+i,.extras-skeleton .detail-video>i+i{margin-top:7px;width:50%}.extras-skeleton .person-face,.extras-skeleton .related-art,.extras-skeleton .detail-video .thumb{background:linear-gradient(90deg,#1b222d,#232b38,#1b222d);background-size:200% 100%;animation:extras-shimmer 1.4s infinite linear;border-color:transparent}
 @keyframes extras-shimmer{to{background-position:-200% 0}}
-@media(prefers-reduced-motion:reduce){.extras-skeleton .person-face,.extras-skeleton .related-art{animation:none}}
+@media(prefers-reduced-motion:reduce){.extras-skeleton .person-face,.extras-skeleton .related-art,.extras-skeleton .detail-video .thumb{animation:none}}
 .library-detail-source:not(.detail-skeleton){position:relative;z-index:1;width:max-content;max-width:min(760px,100%);min-width:0;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:#0f131acc;gap:6px 10px}
 .library-detail-source>small{color:#c3ccd8;font-size:12px}
 .source-will-play{font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent2)}
@@ -2365,9 +2365,9 @@ p.next-episode b{color:var(--accent2)}
 .detail-icon.on>span{color:#f0d089;border-color:#f0d08966}
 .detail-icon.watch-star.on svg{fill:#f0d089}
 .detail-icon:disabled{opacity:.45}
-.detail-tech{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 22px;margin:0;padding:14px 16px;border-radius:8px;background:#0d111788;border:1px solid var(--line);width:100%;min-width:0;font-size:13px}
-.detail-tech dt{color:var(--muted);font-weight:600}
-.detail-tech dd{margin:0;color:var(--text);display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.detail-tech,.detail-tech-skeleton{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 22px;margin:0;padding:14px 16px;border-radius:8px;background:#0d111788;border:1px solid var(--line);width:100%;min-width:0;font-size:13px}
+.detail-tech dt,.detail-tech-skeleton dt{color:var(--muted);font-weight:600}
+.detail-tech-skeleton dd{margin:0;display:flex;align-items:center;min-height:19px}.detail-tech-skeleton dd>i{width:min(220px,60%)}.detail-tech-skeleton dd:nth-of-type(4)>i{width:min(320px,80%)}.detail-tech dd{margin:0;color:var(--text);display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
 .detail-versions{border:0;background:none;padding:0;min-height:0;color:var(--accent2);font-weight:700;display:inline-flex;align-items:center;gap:3px}
 .detail-versions svg{width:14px;height:14px}
 .detail-tech .tag{font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px;background:#ffffff12;color:#dfe5ee}
@@ -2422,5 +2422,5 @@ p.next-episode b{color:var(--accent2)}
   .library-title-detail .library-detail-hero.has-chips.has-gallery>.gallery-open span{font-size:12px;color:var(--text)}
   /* Equal columns, so a label never takes its neighbour's room or breaks inside a word. */
   .library-title-detail .detail-icon{width:auto;flex:1 1 0;min-width:0;overflow-wrap:normal}
-  .library-title-detail .detail-tech{grid-template-columns:72px 1fr;gap:8px 12px;max-width:none}
+  .library-title-detail .detail-tech,.library-title-detail .detail-tech-skeleton{grid-template-columns:72px 1fr;gap:8px 12px;max-width:none}
 }
