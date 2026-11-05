@@ -1,4 +1,5 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { genreLabel } from "./genres";
 import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
@@ -3635,7 +3636,7 @@ export function App() {
   // render a shell whose every request comes back refused with nothing to explain it.
   if (session?.mustChangePassword) return <PasswordChangeRequired session={session} onSession={setSession}/>;
   const selectedRating = imdbRating(selected);
-  const selectedFactText = [selected?.releaseInfo || selected?.year, ...(selected?.genres || []).slice(0, 3)].filter(Boolean).join(" · ");
+  const selectedFactText = [selected?.releaseInfo || selected?.year, ...(selected?.genres || []).slice(0, 3).map(genreLabel)].filter(Boolean).join(" · ");
   const panelAge = TitleExtraFacts({ extras: panelExtras.extras, language: settings.uiLanguage, name: selected?.name }).ageBadge;
 
   // Favourites, Following, Addons, Settings and Statistics are the destinations the compact
@@ -3809,7 +3810,7 @@ export function App() {
                   <label className="catalog-filter"><span>{t("catalog.browse")}</span><select className="catalog-select" aria-label={t("catalog.browse")} value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
                     {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalogTypeTag(catalog.type)})</option>)}
                   </select></label>
-                  {genreOptions.length > 0 && <label><span>{t("catalog.genre")}</span><select aria-label={t("catalog.genre")} value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">{t("catalog.allGenres")}</option>{genreOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>}
+                  {genreOptions.length > 0 && <label><span>{t("catalog.genre")}</span><select aria-label={t("catalog.genre")} value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">{t("catalog.allGenres")}</option>{genreOptions.map((option) => <option key={option} value={option}>{genreLabel(option)}</option>)}</select></label>}
                 </>}
             <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={activeSort} onChange={(e) => (submittedQuery ? setSearchSort(e.target.value) : setSort(e.target.value))}><option value="default">{t("catalog.sortAddon")}</option>{submittedQuery && <option value="titleMatch">{t("catalog.sortTitleMatch")}</option>}<option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
             {activeSort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}

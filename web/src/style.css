@@ -2420,6 +2420,7 @@ p.next-episode b{color:var(--accent2)}
   .library-title-detail .library-detail-hero.has-chips.has-gallery>.gallery-open{position:static;justify-self:center;margin:4px auto 0;display:inline-flex;align-items:center;gap:6px;width:auto;padding:6px 12px;border-radius:99px}
   .library-title-detail .library-detail-hero.has-chips.has-gallery>.gallery-open img{display:none}
   .library-title-detail .library-detail-hero.has-chips.has-gallery>.gallery-open span{font-size:12px;color:var(--text)}
-  .library-title-detail .detail-icon{width:auto;flex:1}
+  /* Equal columns, so a label never takes its neighbour's room or breaks inside a word. */
+  .library-title-detail .detail-icon{width:auto;flex:1 1 0;min-width:0;overflow-wrap:normal}
   .library-title-detail .detail-tech{grid-template-columns:72px 1fr;gap:8px 12px;max-width:none}
 }
