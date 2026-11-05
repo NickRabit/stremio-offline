@@ -1890,6 +1890,7 @@ export const ru: Catalog = {
   "tv.diagnosticsFailed": "Не удалось отправить диагностику.",
   "tv.crashHint": "Сбой предыдущего запуска был записан. Отправьте диагностику в настройках.",
   "tv.downloadsLater": "Очередь загрузок пока открывается в веб-интерфейсе.",
+  "tv.queueEmpty": "Ничего не скачивается.",
   "tv.back": "Назад",
   "tv.detailEyebrowMovie": "Фильм · {addon}",
   "tv.detailEyebrowSeries": "Сериал · {addon}",

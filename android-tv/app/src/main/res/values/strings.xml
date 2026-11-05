@@ -154,6 +154,13 @@
   <string name="tv_diagnostics_failed">Diagnostics could not be sent.</string>
   <string name="tv_crash_hint">A crash from the previous run was recorded. Send diagnostics from Settings.</string>
   <string name="tv_downloads_later">The download queue opens on the web for now.</string>
+  <string name="downloads_status_queued">Queued</string>
+  <string name="downloads_status_waiting">Waiting for Real-Debrid</string>
+  <string name="downloads_status_checking">Checking sources</string>
+  <string name="downloads_status_downloading">Downloading</string>
+  <string name="downloads_status_paused">Paused</string>
+  <string name="downloads_status_failed">Error</string>
+  <string name="tv_queue_empty">Nothing is downloading.</string>
   <string name="catalog_type_movie">movie</string>
   <string name="catalog_type_series">series</string>
   <string name="favorites_title">Favourites</string>

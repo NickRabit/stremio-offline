@@ -158,6 +158,13 @@
   <string name="tv_diagnostics_failed">Nie udało się wysłać diagnostyki.</string>
   <string name="tv_crash_hint">Zapisano awarię z poprzedniego uruchomienia. Wyślij diagnostykę w ustawieniach.</string>
   <string name="tv_downloads_later">Kolejka pobierania otwiera się na razie w przeglądarce.</string>
+  <string name="downloads_status_queued">W kolejce</string>
+  <string name="downloads_status_waiting">Czekam na Real-Debrid</string>
+  <string name="downloads_status_checking">Sprawdzanie źródeł</string>
+  <string name="downloads_status_downloading">Pobieranie</string>
+  <string name="downloads_status_paused">Wstrzymano</string>
+  <string name="downloads_status_failed">Błąd</string>
+  <string name="tv_queue_empty">Nic się nie pobiera.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">seria</string>
   <string name="favorites_title">Ulubione</string>

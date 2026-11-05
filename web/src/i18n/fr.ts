@@ -1890,6 +1890,7 @@ export const fr: Catalog = {
   "tv.diagnosticsFailed": "Les diagnostics n'ont pas pu être envoyés.",
   "tv.crashHint": "Un plantage de l'exécution précédente a été enregistré. Envoyez les diagnostics depuis les réglages.",
   "tv.downloadsLater": "La file de téléchargements s'ouvre pour l'instant sur le web.",
+  "tv.queueEmpty": "Aucun téléchargement en cours.",
   "tv.back": "Retour",
   "tv.detailEyebrowMovie": "Film · {addon}",
   "tv.detailEyebrowSeries": "Série · {addon}",

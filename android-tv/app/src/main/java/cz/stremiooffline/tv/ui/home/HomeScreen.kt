@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,7 +92,9 @@ import cz.stremiooffline.tv.ui.settings.typeTag
 import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlin.math.roundToInt
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 const val TagDownloadsStrip = "home_downloads_strip"
 const val TagBackdropTitle = "home_backdrop_title"
@@ -137,7 +140,17 @@ fun HomeScreen(
   LaunchedEffect(refreshToken) { if (refreshToken > 0) viewModel.refresh() }
   val state = viewModel.state
   val imageUrl = remember(api) { { path: String? -> path?.let(api::url) } }
-  val downloadsLater = stringResource(R.string.tv_downloads_later)
+  var queueOpen by remember { mutableStateOf(false) }
+  val downloadsFocus = remember { FocusRequester() }
+  val scope = rememberCoroutineScope()
+
+  fun closeQueue() {
+    queueOpen = false
+    scope.launch {
+      awaitFrame()
+      runCatching { downloadsFocus.requestFocus() }
+    }
+  }
 
   // A catalogue row that came back before the addon answered is asked again, three times.
   state.rows.forEach { slot ->
@@ -167,8 +180,12 @@ fun HomeScreen(
         onReveal = viewModel::reveal,
         onRetry = viewModel::retry,
         onHeroMeta = viewModel::heroMeta,
-        onDownloads = { onHint(downloadsLater) },
+        downloadsFocus = downloadsFocus,
+        onDownloads = { queueOpen = true },
       )
+    }
+    if (queueOpen) {
+      QueuePanel(api, state.downloads, onClose = ::closeQueue)
     }
   }
 }
@@ -235,6 +252,7 @@ private fun HomeBody(
   onReveal: (String) -> Unit,
   onRetry: (String) -> Unit,
   onHeroMeta: (String, String) -> Unit,
+  downloadsFocus: FocusRequester,
   onDownloads: () -> Unit,
 ) {
   val slots = state.rows.filter { drawnContent(it.content) }
@@ -373,13 +391,12 @@ private fun HomeBody(
           )
         }
         if (downloads.isNotEmpty()) {
-          val stripRequester = remember { FocusRequester() }
           DownloadsStrip(
             jobs = downloads,
             attention = attention,
             onSize = { rowHeights[StripId] = it },
             onClick = onDownloads,
-            requester = stripRequester.also { requesters[StripId to "index:0"] = it },
+            requester = downloadsFocus.also { requesters[StripId to "index:0"] = it },
             onFocus = {
               focusedRowId = StripId
               focusedCardIndex = 0

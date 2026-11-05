@@ -1949,6 +1949,7 @@ export const en = {
   "tv.diagnosticsFailed": "Diagnostics could not be sent.",
   "tv.crashHint": "A crash from the previous run was recorded. Send diagnostics from Settings.",
   "tv.downloadsLater": "The download queue opens on the web for now.",
+  "tv.queueEmpty": "Nothing is downloading.",
   "tv.back": "Back",
   "tv.detailEyebrowMovie": "Movie · {addon}",
   "tv.detailEyebrowSeries": "Series · {addon}",

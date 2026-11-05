@@ -147,6 +147,13 @@ tv.diagnosticsSent
 tv.diagnosticsFailed
 tv.crashHint
 tv.downloadsLater
+downloads.status.queued
+downloads.status.waiting
+downloads.status.checking
+downloads.status.downloading
+downloads.status.paused
+downloads.status.failed
+tv.queueEmpty
 catalog.typeMovie
 catalog.typeSeries
 favorites.title

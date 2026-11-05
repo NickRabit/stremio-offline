@@ -1943,6 +1943,7 @@ export const cs: Catalog = {
   "tv.diagnosticsFailed": "Diagnostiku se nepodařilo odeslat.",
   "tv.crashHint": "Pád z předchozího spuštění byl zaznamenán. Odešlete diagnostiku v nastavení.",
   "tv.downloadsLater": "Fronta stahování se zatím otevírá na webu.",
+  "tv.queueEmpty": "Nic se nestahuje.",
   "tv.back": "Zpět",
   "tv.detailEyebrowMovie": "Film · {addon}",
   "tv.detailEyebrowSeries": "Seriál · {addon}",

@@ -158,6 +158,13 @@
   <string name="tv_diagnostics_failed">Не удалось отправить диагностику.</string>
   <string name="tv_crash_hint">Сбой предыдущего запуска был записан. Отправьте диагностику в настройках.</string>
   <string name="tv_downloads_later">Очередь загрузок пока открывается в веб-интерфейсе.</string>
+  <string name="downloads_status_queued">В очереди</string>
+  <string name="downloads_status_waiting">В ожидании Реал-Дебрид</string>
+  <string name="downloads_status_checking">Проверка источников</string>
+  <string name="downloads_status_downloading">Загрузка</string>
+  <string name="downloads_status_paused">Приостановлено</string>
+  <string name="downloads_status_failed">Ошибка</string>
+  <string name="tv_queue_empty">Ничего не скачивается.</string>
   <string name="catalog_type_movie">фильм</string>
   <string name="catalog_type_series">серия</string>
   <string name="favorites_title">Избранное</string>

@@ -1890,6 +1890,7 @@ export const it: Catalog = {
   "tv.diagnosticsFailed": "Impossibile inviare la diagnostica.",
   "tv.crashHint": "Un arresto anomalo dell'esecuzione precedente è stato registrato. Invia la diagnostica dalle impostazioni.",
   "tv.downloadsLater": "La coda dei download si apre per ora sul web.",
+  "tv.queueEmpty": "Non c'è alcun download in corso.",
   "tv.back": "Indietro",
   "tv.detailEyebrowMovie": "Film · {addon}",
   "tv.detailEyebrowSeries": "Serie · {addon}",

@@ -154,6 +154,13 @@
   <string name="tv_diagnostics_failed">Les diagnostics n\'ont pas pu être envoyés.</string>
   <string name="tv_crash_hint">Un plantage de l\'exécution précédente a été enregistré. Envoyez les diagnostics depuis les réglages.</string>
   <string name="tv_downloads_later">La file de téléchargements s\'ouvre pour l\'instant sur le web.</string>
+  <string name="downloads_status_queued">En file d\'attente</string>
+  <string name="downloads_status_waiting">En attendant Real-Debrid</string>
+  <string name="downloads_status_checking">Vérification des sources</string>
+  <string name="downloads_status_downloading">Téléchargement</string>
+  <string name="downloads_status_paused">En pause</string>
+  <string name="downloads_status_failed">Erreur</string>
+  <string name="tv_queue_empty">Aucun téléchargement en cours.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">série</string>
   <string name="favorites_title">Favoris</string>

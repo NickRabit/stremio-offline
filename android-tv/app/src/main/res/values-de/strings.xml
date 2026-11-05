@@ -154,6 +154,13 @@
   <string name="tv_diagnostics_failed">Diagnose konnte nicht gesendet werden.</string>
   <string name="tv_crash_hint">Ein Absturz aus dem letzten Lauf wurde erfasst. Senden Sie die Diagnose in den Einstellungen.</string>
   <string name="tv_downloads_later">Die Download-Warteschlange öffnet sich vorerst im Web.</string>
+  <string name="downloads_status_queued">In der Warteschlange</string>
+  <string name="downloads_status_waiting">Warten auf Real-Debrid</string>
+  <string name="downloads_status_checking">Quellen prüfen</string>
+  <string name="downloads_status_downloading">Herunterladen</string>
+  <string name="downloads_status_paused">Angehalten</string>
+  <string name="downloads_status_failed">Fehler</string>
+  <string name="tv_queue_empty">Es werden keine Downloads ausgeführt.</string>
   <string name="catalog_type_movie">Film</string>
   <string name="catalog_type_series">Serie</string>
   <string name="favorites_title">Favoriten</string>

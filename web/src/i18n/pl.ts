@@ -1890,6 +1890,7 @@ export const pl: Catalog = {
   "tv.diagnosticsFailed": "Nie udało się wysłać diagnostyki.",
   "tv.crashHint": "Zapisano awarię z poprzedniego uruchomienia. Wyślij diagnostykę w ustawieniach.",
   "tv.downloadsLater": "Kolejka pobierania otwiera się na razie w przeglądarce.",
+  "tv.queueEmpty": "Nic się nie pobiera.",
   "tv.back": "Wstecz",
   "tv.detailEyebrowMovie": "Film · {addon}",
   "tv.detailEyebrowSeries": "Serial · {addon}",
