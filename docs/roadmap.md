@@ -9,11 +9,15 @@ needs VAAPI. See [Hardware acceleration](hardware-acceleration.md) for the setup
 
 ## Direction and delivery order
 
-Rechecked against `origin/main` at `d3549e44` (0.7.14) on 2026-11-02.
+Rechecked against `origin/main` at `891cd436` (0.7.59) on 2026-11-05.
 The delivery order was set by the owner on 2026-10-30; shipped work has been
 removed from the remaining priorities without changing their relative order.
-The dated engineering audit later in this file is retained as a historical
-record, not a description of today's stores, probes or file counts.
+The rows marked **Proposed** come from a comparison with Plex, Jellyfin, Emby,
+Stremio and Nuvio on 2026-11-05 (see
+[Ideas from comparable apps](#ideas-from-comparable-apps)); they have no order
+until the owner sets one. The dated engineering audit later in this file is
+retained as a historical record, not a description of today's stores, probes
+or file counts.
 
 The core product is now broad: following and automatic episode downloads,
 Home, enhanced search, and desktop apps for macOS, Windows, and Linux have
@@ -25,12 +29,23 @@ metadata store, or scheduler for each platform.
 | Order | Current opportunity | What remains |
 | --- | --- | --- |
 | 4 | Queue controls | Night-only window first, then an aggregate speed limit and a completion notice; current download limits cover concurrency, not these controls. |
-| Implemented | Library file fingerprint | Re-associates metadata, favourites, resume positions, artwork and first-seen dates when a file is moved outside the app, using size, modification time and a partial content hash. [Libraries](libraries.md#files-moved-outside-the-app). |
-| 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
-| Implemented | Major dependency updates | Node 26 for the server image and CI, Vite 8 with its React plugin and TypeScript 7 (0.7.33 to 0.7.35); test and library majors follow one PR each, Electron waits for a reason. See [Major dependency updates](#major-dependency-updates). |
+| 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. Quick switching between household members with a PIN, as Plex Home does, belongs to the same design. |
 | Then | Search by cast and crew | A person in the title detail opens what that person made, not a text search for the name: TMDB filmography when a key is set, the owned copies first. See [Search by cast and crew](#search-by-cast-and-crew). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
+| Proposed | Android TV sign-in by code | The TV shows a short code; an account already signed in on a phone or computer confirms it. No password typed with the remote. See [Sign-in by code](#sign-in-by-code-on-the-television). |
+| Proposed | Trakt and Simkl | Send what was watched, read the watchlist and history, so people coming from Stremio or Nuvio bring theirs along. See [Trakt and Simkl](#trakt-and-simkl). |
+| Proposed | Notifications | A new episode, a finished or failed download and a full disk reach the household through ntfy, Telegram or browser push. Extends the queue's completion notice. See [Notifications](#notifications). |
+| Proposed | Player extras on the web | Picture in picture, playback speed, dialogue boost and loudness levelling, and a bitrate cap for viewers outside the home network. See [Player extras](#player-extras). |
+| Proposed | Collections and shared lists | Film series from TMDB and hand-made lists an account can share with others in the household. See [Collections and lists](#collections-and-lists). |
+| Proposed | Library metadata in NFO files | Read and write `.nfo` files beside the media, so a library survives a reinstall and agrees with Jellyfin or Emby on the same NAS. See [NFO files](#nfo-files). |
+| Proposed | More ratings | Rotten Tomatoes, Metacritic and Letterboxd beside IMDb and TMDB, through MDBList with a key in Settings → Services. |
+| Proposed, later | Send to the television; watch together | Pick a title on the phone and play it on the TV app with the phone as a remote; two devices playing in step. Larger work, after the items above. |
+| Implemented | Play random | Shuffle a local, Jellyfin or Emby library or folder on the web, desktop and Android TV; the player moves on to the next random title with its own sources and subtitles. |
+| Implemented | Android TV launcher and queue | Continue watching appears in the launcher's Play Next row (Android 8 and newer), and the download queue opens on the television. |
+| Implemented | API rate limiting and security scanning | Bursts of API requests are limited per client, and CodeQL with a triaged baseline runs in CI. |
+| Implemented | Library file fingerprint | Re-associates metadata, favourites, resume positions, artwork and first-seen dates when a file is moved outside the app, using size, modification time and a partial content hash. [Libraries](libraries.md#files-moved-outside-the-app). |
+| Implemented | Major dependency updates | Node 26, Vite 8, TypeScript 7, Electron 45, Vitest 5, undici 8, lucide-react 1 and the Android TV toolchain, one PR each. See [Major dependency updates](#major-dependency-updates). |
 | Implemented | Selective SQLite storage | Image links, statistics, activity, file facts, TMDB id mappings, downloads, follows and library metadata now use changed-row writes in one embedded database (#679, 0.7.7). Accounts and settings stay in JSON. [Storage](#storage), [decision record](adr/0001-sqlite-storage.md). |
 | Implemented | Player chapters and badges | Chapter marks, the current chapter and a chapter list; badges for what is playing (resolution, HDR, audio), on the web, desktop and Android TV. [Playback](playback.md#what-is-playing-chapters-intro-and-credits). |
 | Implemented | Intro skip and next-episode threshold | Skip intro, recap and credits from IntroDB (server-side, secure mode included) with optional auto-skip; Up next at a chosen point or where the credits start. Web, desktop and Android TV. |
@@ -87,6 +102,11 @@ Shipped in `main`; implementation details live in the linked guides.
   through `PLAYBACK_DIR` (#683); bounded conversion buffering remains separate
   work, not a property of that setting. AirPlay is disabled.
   [Playback](playback.md), [Troubleshooting](troubleshooting.md).
+- **Play random**: shuffle a local library or folder, or a Jellyfin/Emby
+  library, from the library toolbar on the web and from Menu or a long OK on
+  Android TV. A large library starts at once from its first page, and each
+  shuffled title opens with the sources, subtitles and favourite of a normal
+  open.
 - **Following**: follow a series or a film for its releases, on a Following
   page with an overview, a release calendar and download activity, with
   opt-in automatic downloads that queue each episode once, retry a missing
@@ -154,7 +174,9 @@ Shipped in `main`; implementation details live in the linked guides.
   activity history, grouped errors and redacted logs.
   [Activity history](users.md#activity-history), [Diagnostics](troubleshooting.md).
 - **Security and distribution**: secure-mode artwork proxying, restricted mode,
-  configuration export/import, GHCR images and unsigned desktop releases.
+  configuration export/import, GHCR images and unsigned desktop releases. API
+  requests are rate limited per client, and CodeQL runs in CI against a
+  triaged baseline.
   [README](../README.md), [Configuration backup](downloads.md#backing-up-the-configuration).
 
 ## Next (daily friction)
@@ -295,8 +317,8 @@ new location; ambiguous cases stay untouched.
 
 Optional: a night-only window, an aggregate speed limit, and a notice when the
 queue drains. Existing concurrency settings limit simultaneous jobs; they do
-not provide a time window or bandwidth cap. Push notifications outside the
-browser are a separate later idea.
+not provide a time window or bandwidth cap. Notices outside the browser are
+proposed under [Notifications](#notifications).
 
 ### Storage
 
@@ -410,12 +432,16 @@ section with Forget progress, and the unified Favourites. Chapters, playing
 badges, segment skipping and configurable Up next shipped in 0.7.4. Library
 files/folders and media-server Continue watching cards now open the unified
 title detail (#688, #690); next-episode playback requests that episode's addon
-subtitles (#687).
+subtitles (#687). Play random runs from the library toolbar or a long OK on a
+folder. Continue watching also appears in the launcher's own Play Next row on
+Android 8 and newer (#759), and the download queue opens on the television
+(#760).
 
 Still open on the television:
 
 - **Following a series** (automatic new episodes) from the TV, in the same panel
   style as the series download.
+- **Sign-in by code**; see [below](#sign-in-by-code-on-the-television).
 
 ### Desktop
 
@@ -426,6 +452,87 @@ There is no Intel Mac build. Update checks announce a release and open its page;
 they do not install updates. Keep clean-install and upgrade evidence current on
 real systems using [the Windows checklist](testing-windows.md) and the Mac and
 Linux install guides.
+
+## Ideas from comparable apps
+
+Compared on 2026-11-05 with Plex, Jellyfin 10.11, Emby 4.9, Stremio 5 and
+Nuvio (Mobile 1.4, TV 0.6, Web 0.2). Much of what they advertise is already
+here: intro skipping, chapters, timeline previews, following with a calendar,
+Jellyfin/Emby libraries, search everywhere and a per-account Home. Nothing
+below is scheduled; each item names the app it comes from so its behaviour can
+be checked there first.
+
+### Sign-in by code on the television
+
+Jellyfin's Quick Connect and Plex's link page. The TV app asks the server for a
+short-lived code and shows it with the server address; a signed-in account on
+another device enters it under Settings and confirms which account the TV gets.
+The TV then receives an ordinary session. Contracts to settle: a code lives a
+few minutes and works once, attempts are rate limited, an administrator can
+turn the feature off, and the confirming account can only hand over itself.
+The new routes must go into `USER_ALLOWED` in `roles.ts`. D-pad test: the code
+screen is reachable from the sign-in screen, and Back returns to it.
+
+### Trakt and Simkl
+
+Stremio and Nuvio both sync with Trakt. Per account, opt in, with the
+service's device-code sign-in (no password typed here):
+
+- send finished films and episodes (scrobble) from every client through the
+  server, never from the client directly;
+- import history and watched markers once, then keep them in step;
+- show the Trakt watchlist as a Home row and merge it with Favourites only if
+  the owner wants that.
+
+Simkl has the same shape and suits people who use it for anime. Keep the
+service's tokens server-side, per account, out of logs and the configuration
+export.
+
+### Notifications
+
+Plex and Emby notify about new media and server events. Proposed channels:
+ntfy (self-hosted, fits a NAS), Telegram and Web Push for an installed web
+app. Events: a new episode of a followed series is ready, a download finished
+or failed, the disk is full, and the queue drained (the completion notice under
+[Queue controls](#queue-controls)). Administrators configure channels; each
+account chooses its own events. Never put a title or a path in a notification
+the account may not see.
+
+### Player extras
+
+- **Picture in picture** and **playback speed** in the web player (Emby added
+  speed to its controls, Nuvio added picture in picture). Both are browser
+  features; check that HLS playback and the subtitle overlay survive them.
+- **Dialogue boost and loudness levelling** (on Plex's roadmap), as an FFmpeg
+  audio filter chosen per account. It turns direct play into a remux or an
+  audio transcode, so the player must say so and keep it off by default.
+- **A bitrate cap outside the home network** (Emby 4.9.3's automatic remote
+  quality): a limit per account or per connection, used only when the request
+  does not come from the LAN. It depends on telling LAN from remote reliably,
+  which is also the configurable LAN address under
+  [Access and multi-instance](#access-and-multi-instance).
+
+### Collections and lists
+
+Jellyfin box sets and Plex's shared lists. A film that belongs to a TMDB
+collection shows the rest of the series in its detail and as a group in the
+library. Separately, an account can make named lists of catalogue and library
+titles and share one with other accounts as read-only. Favourites stay what
+they are.
+
+### NFO files
+
+Jellyfin and Emby read and write Kodi-style `.nfo` files; Plex has them on its
+roadmap. Read an `.nfo` as a strong hint during identification, and optionally
+write one after a confirmed match. Writing is off by default and respects
+read-only libraries and the owner's wish to avoid needless writes on the NAS:
+write only when the file is missing or its content would change.
+
+### Considered and declined
+
+- Live TV and a programme guide (Stremio, Plex, Emby): a different product.
+- Music, audiobooks and e-books (Emby, Jellyfin, Plexamp).
+- A public social network of lists, reactions and follows (Plex 2026).
 
 ## Engineering health
 
