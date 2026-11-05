@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
@@ -7,12 +8,15 @@ import cz.stremiooffline.tv.diagnostics.AppLog
 import cz.stremiooffline.tv.ui.AppRoot
 import cz.stremiooffline.tv.ui.player.PlayerLeave
 import cz.stremiooffline.tv.ui.theme.StremioTheme
+import cz.stremiooffline.tv.watchnext.WatchNextLaunch
+import cz.stremiooffline.tv.watchnext.watchNextKey
 
 /** An AppCompatActivity so `AppCompatDelegate.setApplicationLocales` can carry the per-app
  *  interface language on every API level, not only from Android 13 up. */
 class MainActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    WatchNextLaunch.pendingKey = watchNextKey(intent?.dataString)
     // The crash of a run that dies is written before the process goes, for the next start to send.
     AppLog.installCrashHandler(AppLog.crashFile(filesDir))
     setContent {
@@ -20,6 +24,12 @@ class MainActivity : AppCompatActivity() {
         AppRoot()
       }
     }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    WatchNextLaunch.pendingKey = watchNextKey(intent.dataString)
   }
 
   override fun onStart() {

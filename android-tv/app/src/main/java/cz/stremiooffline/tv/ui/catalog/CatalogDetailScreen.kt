@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.catalog
 
+import cz.stremiooffline.tv.ui.genreLabeler
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -1276,7 +1277,7 @@ fun CatalogDetailScreen(
       TitleExtraFacts(
         state = ui.extras,
         name = meta.name,
-        metaLine = metaLine(meta),
+        metaLine = metaLine(meta, genreLabeler()),
         uiLanguage = settings.uiLanguage,
         imdbFallback = meta.ratingText,
       )
@@ -1825,10 +1826,10 @@ internal fun formatSize(size: Double?): String? = when {
   else -> null
 }
 
-internal fun metaLine(meta: MetaDto): String {
+internal fun metaLine(meta: MetaDto, genre: (String) -> String = { it }): String {
   val parts = mutableListOf<String>()
   meta.yearText?.let(parts::add)
-  meta.genres?.take(3)?.let { parts.addAll(it) }
+  meta.genres?.take(3)?.let { genres -> parts.addAll(genres.map(genre)) }
   meta.runtime?.takeIf { it.isNotBlank() }?.let(parts::add)
   meta.ratingText?.let { parts.add("★ $it") }
   return parts.joinToString(" · ")

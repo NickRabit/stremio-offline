@@ -68,7 +68,13 @@ import cz.stremiooffline.tv.ui.signin.SignInScreen
 import cz.stremiooffline.tv.ui.signin.SignInViewModel
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
+import cz.stremiooffline.tv.watchnext.WatchNextPublisher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 sealed interface SessionState {
   data object Loading : SessionState
@@ -178,6 +184,10 @@ fun AppRoot() {
 @OptIn(ExperimentalCoilApi::class)
 private fun AppContent() {
   val context = LocalContext.current
+  val watchNextClearScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+  DisposableEffect(watchNextClearScope) {
+    onDispose { watchNextClearScope.cancel() }
+  }
   val store = remember { SessionStore(context.applicationContext) }
   val session = viewModel<SessionViewModel>(factory = SessionViewModel.factory(store))
   when (val state = session.state) {
@@ -218,7 +228,12 @@ private fun AppContent() {
           start = state.start,
           username = state.username,
           address = state.api.serverAddress,
-          onSignOut = session::signOut,
+          onSignOut = {
+            watchNextClearScope.launch {
+              WatchNextPublisher.clear(context.applicationContext)
+              withContext(Dispatchers.Main) { session.signOut() }
+            }
+          },
           onExitApp = { hostActivity?.finish() },
           onLocale = session::setLanguage,
         )

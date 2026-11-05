@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { genreLabel } from "./genres";
 import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, Shuffle, SlidersHorizontal, Star } from "lucide-react";
 import { ApiError, api, describeError, saveToDevice, type ShuffleItem } from "./api";
@@ -1417,7 +1418,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       links={enrichment.links} onTrailer={onTrailer} secureMode={secureMode}/>;
   /** The metadata line: what the provider normalized, plus the genres it gave. */
   const detailFacts = (item: RemoteItem): string =>
-    [itemFacts(item), (item.genres ?? []).join(" · ")].filter(Boolean).join(" · ");
+    [itemFacts(item), (item.genres ?? []).map(genreLabel).join(" · ")].filter(Boolean).join(" · ");
   const detailPieces = TitleExtraFacts({ extras: titleExtras.extras, language: uiLanguage, name: heroItem?.name });
   const detailScores = ratingsFrom(titleExtras.extras, enrichment.meta);
   const pickerEpisodes = detail?.type === "episode" && !episodes.items.some((episode) => episode.id === detail.id)

@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.catalog
 
+import cz.stremiooffline.tv.ui.genreLabeler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -101,6 +102,7 @@ fun CatalogScreen(
   val searchFocus = remember { FocusRequester() }
   val catalogFocus = remember { FocusRequester() }
   val genreFocus = remember { FocusRequester() }
+  val genreLabel = genreLabeler()
   val gridFocus = remember { FocusRequester() }
 
   var panel by remember { mutableStateOf<CatalogPanel?>(null) }
@@ -166,7 +168,7 @@ fun CatalogScreen(
         )
         if (state.genres.isNotEmpty()) {
           FocusButton(
-            text = state.genre.ifEmpty { stringResource(R.string.catalog_all_genres) },
+            text = if (state.genre.isEmpty()) stringResource(R.string.catalog_all_genres) else genreLabel(state.genre),
             onClick = { panelOpener = genreFocus; panel = CatalogPanel.Genres },
             modifier = Modifier
               .focusRequester(genreFocus)
@@ -251,7 +253,7 @@ fun CatalogScreen(
           )
           state.genres.forEachIndexed { index, genre ->
             PanelOption(
-              text = genre,
+              text = genreLabel(genre),
               selected = genre == state.genre,
               onClick = { viewModel.setGenre(genre); closePanel() },
               modifier = Modifier

@@ -139,6 +139,6 @@ class ResumeNavigationTest {
 
     compose.onNodeWithTag(second).assertDoesNotExist()
     compose.onNodeWithTag(first).assertIsFocused()
-    assertEquals(listOf(ResumeFilter.All, ResumeFilter.All), api.resumeRequests)
+    assertEquals(listOf(ResumeFilter.All, ResumeFilter.All, ResumeFilter.All), api.resumeRequests)
   }
 }
