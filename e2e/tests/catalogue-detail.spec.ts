@@ -35,3 +35,25 @@ test("a show played from the full detail carries its own episode and plays the n
   await player.locator(".next-episode").click();
   await expect(player.locator(".player-head strong")).toHaveText("Zkušební seriál · 01×02");
 });
+
+test("the browse panel's corner counts every picture its gallery opens with", async ({ page }) => {
+  await page.route("**/api/meta/**", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("gallery") !== "1") return route.fallback();
+    const response = await route.fetch();
+    const meta = await response.json() as Record<string, unknown>;
+    return route.fulfill({ response, json: { ...meta, images: [
+      { url: "/e2e-still-1.svg", kind: "still", shape: "wide" },
+      { url: "/e2e-still-2.svg", kind: "still", shape: "wide" },
+    ] } });
+  });
+  await openCatalogue(page, /Filmy/);
+  await page.getByRole("button", { name: /Zkušební film/ }).click();
+  const corner = page.locator(".detail-panel .gallery-open:visible");
+  await corner.click();
+  const gallery = page.getByRole("dialog", { name: "Galerie obrázků" });
+  await expect(gallery.locator('.gallery-thumbnails img[src="/e2e-still-2.svg"]')).toHaveCount(1);
+  const shown = await gallery.locator(".gallery-thumbnails button").count();
+  await page.keyboard.press("Escape");
+  await expect(gallery).toHaveCount(0);
+  await expect(corner).toContainText(`${shown} náhled`);
+});
