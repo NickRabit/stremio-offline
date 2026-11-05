@@ -17,9 +17,24 @@ export function SettingControl({ title, text, children }: { title: string; text:
   return <label className="setting-control"><span><strong>{title}</strong>{text && <small>{text}</small>}</span>{children}</label>;
 }
 
+/** How long a failed picture waits before it is asked for once more. */
+export const BROKEN_RETRY_MS = 2000;
+
 /** Artwork comes through the server; when a provider does not deliver, leave the
- *  placeholder underneath rather than a broken image icon. */
-export const hideBroken = (event: SyntheticEvent<HTMLImageElement>) => event.currentTarget.classList.add("broken");
+ *  placeholder underneath rather than a broken image icon. A first failure is often a slow or
+ *  briefly unreachable provider, so the picture is asked for once more and shows if it arrives. */
+export const hideBroken = (event: SyntheticEvent<HTMLImageElement>) => {
+  const image = event.currentTarget;
+  image.classList.add("broken");
+  const source = image.getAttribute("src");
+  if (!source || image.dataset.retried === source) return;
+  image.dataset.retried = source;
+  window.setTimeout(() => {
+    if (!image.isConnected || image.getAttribute("src") !== source) return;
+    image.addEventListener("load", () => image.classList.remove("broken"), { once: true });
+    image.src = source;
+  }, BROKEN_RETRY_MS);
+};
 
 export function Heading({ eyebrow, title }: { eyebrow: string; title: string }) {
   return <div className="heading"><small>{eyebrow}</small><h2>{title}</h2></div>;
