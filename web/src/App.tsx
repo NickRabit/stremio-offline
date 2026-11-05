@@ -1,4 +1,5 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { genreLabel } from "./genres";
 import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
@@ -68,7 +69,7 @@ import { parseHomeCatalogRowId } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { MediaGallery } from "./MediaGallery";
 import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage } from "./gallery-images";
-import { loadTitleGallery, type CatalogueRef } from "./title-enrichment";
+import { loadTitleGallery, useCatalogueStills, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
 import { useLibrarySources } from "./library-sources";
@@ -142,6 +143,8 @@ const orderedVideos = (videos: Video[]) => videos.map((video, index) => ({ video
 export function App() {
   const { t } = useI18n();
   const [view, setView] = useState<View>("catalog"); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
+  // Until the first answer, an empty list means "not read yet", not "no addon installed".
+  const [catalogsKnown, setCatalogsKnown] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem("sidebar-collapsed") === "1"; } catch { return false; }
   });
@@ -898,6 +901,10 @@ export function App() {
     ? <div className="episode-current"><small>{t("episodes.chosen")}</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : t("episodes.part")}</b><span>{selectedVideo.title || selectedVideo.name || t("episodes.one")}</span><button onClick={() => setEpisodesOpen(true)}>{t("episodes.change")}</button></div>
     : null;
   const galleryImages = useMemo(() => catalogueGalleryImages(selected), [selected]);
+  // The panel's corner counts the catalogue's stills too, as the opened gallery shows them.
+  const panelRef: CatalogueRef | null = selected && (selected.type === "movie" || selected.type === "series") ? { type: selected.type, id: selected.id } : null;
+  const panelStills = useCatalogueStills(panelRef, settings.uiLanguage);
+  const panelGallery = useMemo(() => mergeGallery(galleryImages, panelStills), [galleryImages, panelStills]);
   const shownGallery = storedGallery ?? galleryImages;
   const closeGallery = () => {
     galleryRequest.current += 1;
@@ -1321,7 +1328,7 @@ export function App() {
   const signOut = async () => { try { clearHomeCache(); await api.logout(); } finally { location.reload(); } };
 
   const refresh = async (selectFirst = false) => {
-    const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs);
+    const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs); setCatalogsKnown(true);
     if ((selectFirst || !selectedCatalog) && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
     return nextCatalogs;
   };
@@ -3629,7 +3636,7 @@ export function App() {
   // render a shell whose every request comes back refused with nothing to explain it.
   if (session?.mustChangePassword) return <PasswordChangeRequired session={session} onSession={setSession}/>;
   const selectedRating = imdbRating(selected);
-  const selectedFactText = [selected?.releaseInfo || selected?.year, ...(selected?.genres || []).slice(0, 3)].filter(Boolean).join(" · ");
+  const selectedFactText = [selected?.releaseInfo || selected?.year, ...(selected?.genres || []).slice(0, 3).map(genreLabel)].filter(Boolean).join(" · ");
   const panelAge = TitleExtraFacts({ extras: panelExtras.extras, language: settings.uiLanguage, name: selected?.name }).ageBadge;
 
   // Favourites, Following, Addons, Settings and Statistics are the destinations the compact
@@ -3689,7 +3696,7 @@ export function App() {
           error. */}
       {session!.role === "admin" && <Nav secondary icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>}
       <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSignOut={signOut}/>
-    </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
+    </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{catalogsKnown ? addons.filter((a) => a.enabled).length : "–"}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}${catalogueDetail ? " view-title-detail" : ""}`}>
       {/* The shared catalogue detail is hosted over the page that opened it, so closing it simply
           puts that page back: Home is never turned into an unfiltered catalogue on the way. Its
@@ -3746,7 +3753,7 @@ export function App() {
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
-        {!catalogs.length ? (restricted || session!.role !== "admin"
+        {!catalogs.length && !catalogsKnown ? <div className="loading" role="status">{t("common.loading")}</div> : !catalogs.length ? (restricted || session!.role !== "admin"
           // An ordinary account seeing no catalogue has not been granted an addon, and
           // cannot add one: the invitation would lead to a screen it may not use.
           ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t(restricted ? "restricted.notice" : "onboarding.noneGranted")}/>
@@ -3803,7 +3810,7 @@ export function App() {
                   <label className="catalog-filter"><span>{t("catalog.browse")}</span><select className="catalog-select" aria-label={t("catalog.browse")} value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
                     {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalogTypeTag(catalog.type)})</option>)}
                   </select></label>
-                  {genreOptions.length > 0 && <label><span>{t("catalog.genre")}</span><select aria-label={t("catalog.genre")} value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">{t("catalog.allGenres")}</option>{genreOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>}
+                  {genreOptions.length > 0 && <label><span>{t("catalog.genre")}</span><select aria-label={t("catalog.genre")} value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">{t("catalog.allGenres")}</option>{genreOptions.map((option) => <option key={option} value={option}>{genreLabel(option)}</option>)}</select></label>}
                 </>}
             <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={activeSort} onChange={(e) => (submittedQuery ? setSearchSort(e.target.value) : setSort(e.target.value))}><option value="default">{t("catalog.sortAddon")}</option>{submittedQuery && <option value="titleMatch">{t("catalog.sortTitleMatch")}</option>}<option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
             {activeSort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}
@@ -3838,7 +3845,9 @@ export function App() {
                 const postup = catalogProgress(item);
                 const vSeznamu = inWatchlist(item.type, item.id);
                 const metadata = [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
-                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => { if (submittedQuery) actOnSearch(submittedQuery); void openMeta(item); }}>
+                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""} ${menuFor === klic ? "menu-open" : ""}`} aria-haspopup="menu" aria-expanded={menuFor === klic} onClick={() => { if (submittedQuery) actOnSearch(submittedQuery); void openMeta(item); }}
+                  // The tile is the button, so its menu cannot be one; the keyboard opens it the way a desktop opens any context menu.
+                  onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); setMenuFor(menuFor === klic ? null : klic); } }}>
                   <span className="poster-wrap">
                     <TileArt shape={settings.catalogTileShape} poster={item.poster} wide={item.background} fallback={<div className="poster-fallback"><Film/></div>}/>
                     {vSeznamu && <i className="fav-mark"><Star/></i>}
@@ -3866,7 +3875,7 @@ export function App() {
               {(selected.type === "movie" || selected.type === "series") && <button type="button" className="detail-info detail-info-head" aria-label={t("catalog.openDetail")} title={t("catalog.openDetail")} onClick={openSelectedDetail}><Info/></button>}
             </div>
             <div className="detail-primary"><DetailHero className={selected.videos?.length ? "series-hero" : ""} background={selected.background}
-              gallery={galleryImages.length > 0 ? <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => presentGallery(galleryImages, selected.type === "movie" || selected.type === "series" ? { type: selected.type, id: selected.id } : null)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button> : undefined}
+              gallery={panelGallery.length > 0 ? <button className={`gallery-open ${panelGallery[0].shape}`} onClick={() => presentGallery(panelGallery, panelRef)} title={t("gallery.openHint")}><img src={panelGallery[0].url} alt="" onError={hideBroken}/><span><Images/> {panelGallery.length > 1 ? t("gallery.stillCount", { count: panelGallery.length }) : t("gallery.enlarge")}</span></button> : undefined}
               chips={<TitleChips leading={<><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
                 onClick={() => void toggleWatchlist(selected, panelAddonKey(selectedStream?.addonKey))}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" aria-label={t("follow.following")} title={t("follow.following")} onClick={() => setFollowDialogOpen(true)}><BellRing/><span className="follow-chip-label">{t("follow.following")}</span>{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => { const addonKey = panelAddonKey(selectedStream?.addonKey); setFollowStart(addonKey ? { ...selected, addonKey } : selected); }} aria-label={t("follow.follow")} title={t("follow.follow")}><Bell/><span className="follow-chip-label">{t("follow.follow")}</span></button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
                 {...(selected.type === "movie" || selected.type === "series" ? { trailing: <button type="button" className="detail-info" aria-label={t("catalog.openDetail")} title={t("catalog.openDetail")} onClick={openSelectedDetail}><Info/></button> } : {})}/>}
