@@ -117,3 +117,17 @@ test.describe("phone Home loading", () => {
     }
   });
 });
+
+test("a slow catalogue list never invites the owner to add a first addon", async ({ page }) => {
+  let release!: () => void;
+  const held = new Promise<void>((done) => { release = done; });
+  await page.route("**/api/catalogs", async (route) => { await held; await route.fallback(); });
+  await page.goto("/");
+  await expect(page.getByRole("status").filter({ hasText: "Načítám" }).first()).toBeVisible();
+  await expect(page.getByText("Přidejte první Stremio doplněk")).toHaveCount(0);
+  // Nor does the sidebar claim that no addon is active before it has asked.
+  await expect(page.locator(".sidebar-bottom strong")).toHaveText("–");
+  release();
+  await expect(page.locator(".sidebar-bottom strong")).not.toHaveText("–");
+  await expect(page.getByText("Přidejte první Stremio doplněk")).toHaveCount(0);
+});
