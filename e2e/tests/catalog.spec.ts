@@ -195,3 +195,19 @@ test.describe("catalog", () => {
     await expect(sources.first()).toContainText("E2E 720p");
   });
 });
+
+test("a catalogue tile's menu shows on hover and opens from the keyboard", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Katalog", exact: true }).click();
+  const tile = page.locator(".poster-card").first();
+  await expect(tile).toBeVisible();
+  const menu = tile.locator(".browse-menu");
+  await tile.hover();
+  await expect(menu).toHaveCSS("opacity", "1");
+  await page.mouse.move(0, 0);
+  await tile.focus();
+  await page.keyboard.press("Shift+F10");
+  await expect(tile).toHaveAttribute("aria-expanded", "true");
+  await expect(tile.locator(".browse-actions")).toBeVisible();
+  await expect(menu).toHaveCSS("opacity", "1");
+});

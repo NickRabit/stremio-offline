@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.home
 
+import cz.stremiooffline.tv.ui.genreLabeler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -473,7 +474,7 @@ private fun Backdrop(row: HomeRowSlot?, card: HomeCard, meta: MetaDto?, loading:
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.testTag(TagBackdropTitle),
       )
-      if (loading) HeroMetaPlaceholder() else HeroCopy(line = heroMetaLine(card, meta), description = heroDescription(card, meta))
+      if (loading) HeroMetaPlaceholder() else HeroCopy(line = heroMetaLine(card, meta, genreLabeler()), description = heroDescription(card, meta))
       card.progressFraction?.let { fraction ->
         val percent = (fraction * 100).roundToInt()
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {

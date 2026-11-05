@@ -6,10 +6,11 @@ import test from "node:test";
 import { ImageProxy, imageId, narrowArtwork, type SaveTimers } from "./images.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { configureSecureMode } from "./secure.js";
-import { initLogger } from "./logger.js";
+import { flushLog, initLogger } from "./logger.js";
 
 process.env.LOG_STDOUT = "0";
-await initLogger(await mkdtemp(path.join(os.tmpdir(), "stremio-images-log-")));
+const logDir = await mkdtemp(path.join(os.tmpdir(), "stremio-images-log-"));
+await initLogger(logDir);
 
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
 const MiB = 1024 * 1024;
@@ -1033,4 +1034,25 @@ test("a locked index file still gets written while the index schedule is driven 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("a failed download is a warning once per picture per window, without the address", async () => {
+  let clock = Date.UTC(2026, 10, 4);
+  const { proxy } = await harness(async () => imageResponse(PNG, "image/png", 503), undefined, undefined, undefined, () => clock);
+  const id = proxy.proxied(`${REMOTE}&warned=1`)!.split("/").pop()!;
+  const warnings = async () => {
+    await flushLog();
+    const lines = (await readFile(path.join(logDir, "app.log"), "utf8")).split("\n");
+    return lines.filter((line) => line.includes(" WARN ") && line.includes(id));
+  };
+  assert.equal(await proxy.fetch(id), undefined);
+  assert.equal(await proxy.fetch(id), undefined);
+  const first = await warnings();
+  assert.equal(first.length, 1);
+  assert.match(first[0]!, /"reason":"HTTP 503"/);
+  assert.match(first[0]!, /"host":"images.example"/);
+  assert.equal(first[0]!.includes("secret"), false);
+  clock += 7 * 60 * 60_000;
+  assert.equal(await proxy.fetch(id), undefined);
+  assert.equal((await warnings()).length, 2);
 });

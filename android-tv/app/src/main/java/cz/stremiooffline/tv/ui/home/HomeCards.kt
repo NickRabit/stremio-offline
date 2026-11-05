@@ -114,12 +114,12 @@ fun HomeCard.heroMetaRef(): Pair<String, String>? = when (this) {
 
 /** The hero's line under the title: the catalogue's year, the card's episode code, genres, runtime
  *  and rating once the title has answered, or the card's year and episode code while it has not. */
-fun heroMetaLine(card: HomeCard, meta: MetaDto?): String {
+fun heroMetaLine(card: HomeCard, meta: MetaDto?, genre: (String) -> String = { it }): String {
   if (meta != null && card !is HomeCard.Episode) {
     val line = listOfNotNull(
       meta.yearText ?: card.yearText,
       card.episodeCodeText,
-      *meta.genres.orEmpty().take(3).toTypedArray(),
+      *meta.genres.orEmpty().take(3).map(genre).toTypedArray(),
       meta.runtime?.takeIf { it.isNotBlank() },
       meta.ratingText?.let { "★ $it" },
     ).joinToString(" · ")

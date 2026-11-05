@@ -95,6 +95,7 @@ import cz.stremiooffline.tv.ui.search.toPreset
 import cz.stremiooffline.tv.ui.settings.SettingsRoute
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
+import cz.stremiooffline.tv.watchnext.WatchNextEffects
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -366,6 +367,28 @@ fun Shell(
       }
     }
   }
+  fun onHomeAction(action: HomeAction) {
+    when (action) {
+      is HomeAction.Play -> {
+        playerSources = OfferedSources()
+        playedSourceId = null
+        player = action.target
+      }
+      is HomeAction.OpenLibrary -> {
+        libraryPush = action.path
+        shellState.pick(Section.Library)
+      }
+      is HomeAction.OpenDetail -> openLibraryDetail(action.detail)
+      is HomeAction.OpenCatalog -> openCatalog(action.args)
+      is HomeAction.OpenRemote -> openRemoteDetail(action.data)
+    }
+  }
+  WatchNextEffects(
+    api = api,
+    playerOpen = player != null,
+    onAction = ::onHomeAction,
+    onMissing = { shellState.pick(Section.Home) },
+  )
   fun openPersonSearch(name: String) {
     catalogDetail = null
     clearCatalogHistory()
@@ -543,22 +566,7 @@ fun Shell(
           api = api,
           refreshToken = homeRefreshToken + returnToken,
           onHint = ::showHint,
-          onAction = { action ->
-            when (action) {
-              is HomeAction.Play -> {
-                playerSources = OfferedSources()
-                playedSourceId = null
-                player = action.target
-              }
-              is HomeAction.OpenLibrary -> {
-                libraryPush = action.path
-                shellState.pick(Section.Library)
-              }
-              is HomeAction.OpenDetail -> openLibraryDetail(action.detail)
-              is HomeAction.OpenCatalog -> openCatalog(action.args)
-              is HomeAction.OpenRemote -> openRemoteDetail(action.data)
-            }
-          },
+          onAction = ::onHomeAction,
         )
         Section.Account -> SettingsRoute(
           api = api,
