@@ -34,6 +34,10 @@ test("a show played from the full detail carries its own episode and plays the n
 
   await player.locator(".next-episode").click();
   await expect(player.locator(".player-head strong")).toHaveText("Zkušební seriál · 01×02");
+  await player.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
+  await expect(player).toHaveCount(0);
+  await expect(main.locator(".episode-current")).toContainText("01×02");
+  await expect(main.locator(".episode-current")).toContainText("Druhý díl");
 });
 
 test("the full detail settles in one step while its extras and sources are still on their way", async ({ page }) => {

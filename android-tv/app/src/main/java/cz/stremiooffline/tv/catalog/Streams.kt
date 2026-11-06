@@ -3,6 +3,8 @@ package cz.stremiooffline.tv.catalog
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.AddonDto
+import kotlin.math.abs
+import kotlin.math.ln
 import kotlin.math.roundToLong
 
 /** The web's `web/src/streams.ts`, ported without the browser-only helpers. */
@@ -218,6 +220,38 @@ object Streams {
     return playable.firstOrNull { it.rules[ruleId]?.status == "meets" }
       ?: playable.firstOrNull { it.rules[ruleId]?.status == "unverified" }
       ?: playable.firstOrNull { isLocalStream(it) }
+  }
+
+  /** The row of [current]'s addon among [rows] for the next episode, the web's keepProvider pick:
+   *  playable rows of the same addon (addonKey, else addonName), audio language [preferredLanguage]
+   *  first, then the size closest to [current]'s (log distance), then [rows] order. Null when the addon has none. */
+  fun nextEpisodeRow(current: StreamDto, rows: List<StreamDto>, preferredLanguage: String, titleLanguage: String?): StreamDto? {
+    val candidates = rows.mapIndexedNotNull { index, row ->
+      val sameAddon =
+        (current.addonKey?.isNotBlank() == true && row.addonKey == current.addonKey) ||
+          (current.addonName?.isNotBlank() == true && row.addonName == current.addonName)
+      row.takeIf {
+        it.playable && sameAddon && !isLocalStream(it) && !isRemoteStream(it)
+      }?.let { it to index }
+    }
+    if (candidates.isEmpty()) return null
+    val currentSize = streamSize(current)
+    return candidates.sortedWith(Comparator { left, right ->
+      val preferred = compareValues(
+        !streamLanguages(left.first, titleLanguage).contains(preferredLanguage),
+        !streamLanguages(right.first, titleLanguage).contains(preferredLanguage),
+      )
+      if (preferred != 0) return@Comparator preferred
+      if (currentSize != null) {
+        val leftSize = streamSize(left.first)
+        val rightSize = streamSize(right.first)
+        val leftDistance = leftSize?.let { abs(ln(it / currentSize)) } ?: Double.POSITIVE_INFINITY
+        val rightDistance = rightSize?.let { abs(ln(it / currentSize)) } ?: Double.POSITIVE_INFINITY
+        val distance = java.lang.Double.compare(leftDistance, rightDistance)
+        if (distance != 0) return@Comparator distance
+      }
+      left.second - right.second
+    }).first().first
   }
 
   /** The row Play acts on. An explicit pick wins. A remembered automatic row that breaks [ruleId]

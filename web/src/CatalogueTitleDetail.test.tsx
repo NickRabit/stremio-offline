@@ -454,6 +454,25 @@ describe("CatalogueTitleDetail series", () => {
     expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "large" }), expect.objectContaining({ season: 1, episode: 1, videoId: "tt-series:1:1" }), false);
   });
 
+  it("follows the episode that is playing without overriding a later manual choice", async () => {
+    const meta = series(videos);
+    const target = { type: "series" as const, id: "tt-series", name: "A show", season: 1, episode: 1, videoId: "tt-series:1:1", initialMeta: meta };
+    const { onPlay } = await render({ target, playingEpisode: { season: 1, episode: 1, videoId: "tt-series:1:1" } });
+    expect(host.querySelector(".catalogue-episodes .episode-current")!.textContent).toContain("01×01");
+
+    await rerender({ target, playingEpisode: { season: 1, episode: 2, videoId: "tt-series:1:2" } });
+    expect(host.querySelector(".catalogue-episodes .episode-current")!.textContent).toContain("01×02");
+    expect(host.querySelector(".catalogue-episodes .episode-current")!.textContent).toContain("The second one");
+    expect(calls.streams.at(-1)!.pathname).toBe("/api/streams/series/tt-series%3A1%3A2");
+    expect(onPlay).not.toHaveBeenCalled();
+
+    await click(host.querySelector(".catalogue-episodes .episode-current button"));
+    await click(episodeRows()[0]!);
+    expect(host.querySelector(".catalogue-episodes .episode-current")!.textContent).toContain("01×01");
+    await rerender({ target, playingEpisode: { season: 1, episode: 2, videoId: "tt-series:1:2" } });
+    expect(host.querySelector(".catalogue-episodes .episode-current")!.textContent).toContain("01×01");
+  });
+
   it("plays and queues a local copy of the chosen episode through its effective target", async () => {
     const picked = local("Films/Show S01E02.mkv", "Show S01E02.mkv", 500);
     const { onPlay, onSaveToLibrary } = await render({

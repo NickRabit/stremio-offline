@@ -84,6 +84,7 @@ class PlayerSourcesPanelTest {
     subtitleType: String? = null,
     subtitleTarget: String? = null,
     resume: Boolean = false,
+    onSourceChosen: (StreamDto) -> Unit = {},
   ) {
     compose.setContent {
       PlayerScreen(
@@ -99,6 +100,7 @@ class PlayerSourcesPanelTest {
         onExit = {},
         sources = sources,
         sourcesLoading = loading,
+        onSourceChosen = onSourceChosen,
       )
     }
     compose.waitForIdle()
@@ -246,6 +248,19 @@ class PlayerSourcesPanelTest {
 
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
     assertEquals(listOf("srcB"), api.startedSources)
+  }
+
+  @Test
+  fun `choosing a source reports it to the caller`() {
+    val chosen = mutableListOf<StreamDto>()
+    mount(FakeTvApi(), listOf(alpha, beta), sourceId = "srcB", onSourceChosen = { chosen += it })
+
+    focusSources()
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf(alpha), chosen)
   }
 
   // The owner's TV report: a play that started from a library copy of a catalogue title had no

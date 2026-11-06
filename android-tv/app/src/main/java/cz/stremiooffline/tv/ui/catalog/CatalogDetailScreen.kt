@@ -879,6 +879,7 @@ fun CatalogDetailScreen(
   }
 
   fun play(stream: StreamDto) {
+    nextBridge?.played(stream, pick.chosenInPanel)
     pick.pickedStream = true
     pick.selectedStream = stream
     closeSources()
@@ -996,7 +997,12 @@ fun CatalogDetailScreen(
 
   fun resolvePendingPlay() {
     cancelPendingPlay()
-    val stream = preferredStream
+    val carried = nextBridge?.carriedRow(rows, titleLanguage, settings.audioLanguage)
+    if (carried != null) {
+      pick.selectedStream = carried
+      pick.chosenInPanel = true
+    }
+    val stream = carried ?: preferredStream
     if (stream?.playable != true) nextBridge?.fail()
     if (stream?.playable == true) {
       play(stream)
@@ -1046,6 +1052,7 @@ fun CatalogDetailScreen(
       stream != null && Streams.isLocalStream(stream) && path != null -> {
         pick.pickedStream = true
         pick.selectedStream = stream
+        nextBridge?.played(stream, pick.chosenInPanel)
         onPlay(
           PlayTarget(
             key = Progress.libraryKey(path),
@@ -1064,6 +1071,7 @@ fun CatalogDetailScreen(
         pick.pickedStream = true
         pick.selectedStream = stream
         val remoteItem = stream.remoteItem
+        nextBridge?.played(stream, pick.chosenInPanel)
         onPlay(
           PlayTarget(
             key = activeRemoteItem?.progressKey?.takeIf { !args.backend.catalogue } ?: progressKey,
@@ -1197,7 +1205,8 @@ fun CatalogDetailScreen(
     // A series opened to play has asked for nothing until its episode is chosen: the wait holds
     // until that episode's own sources answer. Read inside the effect, so the screen grows no local.
     if (args.autoPlay && isSeries && pick.selectedVideo == null) return@LaunchedEffect
-    val playable = preferredStream?.playable == true
+    val playable =
+      (nextBridge?.carriedRow(rows, titleLanguage, settings.audioLanguage) ?: preferredStream)?.playable == true
     if (anyAsking && !(playTimeoutReached && playable)) return@LaunchedEffect
     resolvePendingPlay()
   }

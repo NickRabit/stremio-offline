@@ -103,6 +103,9 @@ export interface CatalogueTitleDetailProps {
   showTorrents?: boolean;
   sourceProfiles?: SourceProfile[] | null;
   defaultSort?: string;
+  /** The episode the player opened from this detail is playing now. When it changes -- the player
+   *  moved on to the next episode -- the detail selects it, so closing the player lands on it. */
+  playingEpisode?: { season?: number; episode?: number; videoId?: string };
 }
 
 /** One provider's answer: its rows, or the failure that kept them away. A provider that failed
@@ -116,7 +119,7 @@ const dedupe = (streams: Stream[]): Stream[] => {
 };
 
 export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
-  const { target, initialSources, libraryFirst = false, remoteFirst = false, onGallery, chips, trailer, onTrailer, secureMode, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, onBulkDownload, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended" } = props;
+  const { target, initialSources, libraryFirst = false, remoteFirst = false, onGallery, chips, trailer, onTrailer, secureMode, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, onBulkDownload, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended", playingEpisode } = props;
   const { locale } = useI18n();
   const { type, id, name } = target;
   const titleExtras = useTitleExtras(type, id);
@@ -181,6 +184,34 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
         ...(episode?.id != null ? { videoId: String(episode.id) } : {}),
       })
     : id;
+  const streamIdRef = useRef(streamId);
+  streamIdRef.current = streamId;
+  const playingKey = playingEpisode ? catalogueStreamId({ id, ...playingEpisode }) : null;
+  const followedKey = useRef<string | null>(null);
+  // Follows the player once per episode it moves to; an episode the viewer picks afterwards stays.
+  // Metadata that lands later only fills in the episode it already followed.
+  useEffect(() => {
+    if (type !== "series" || playingKey === null || !playingEpisode) return;
+    const listed = (playingEpisode.videoId
+      ? videos.find((video) => video.id != null && String(video.id) === String(playingEpisode.videoId))
+      : undefined)
+      ?? videos.find((video) => playingEpisode.season != null && playingEpisode.episode != null
+        && video.season === playingEpisode.season && video.episode === playingEpisode.episode);
+    if (followedKey.current === playingKey) {
+      if (listed) setPickedEpisode((current) => current && !current.title && !current.name && current.id === playingEpisode.videoId ? listed : current);
+      return;
+    }
+    followedKey.current = playingKey;
+    if (playingKey === streamIdRef.current) return;
+    const video: Video = listed ?? {
+      ...(playingEpisode.videoId ? { id: playingEpisode.videoId } : {}),
+      ...(playingEpisode.season != null ? { season: playingEpisode.season } : {}),
+      ...(playingEpisode.episode != null ? { episode: playingEpisode.episode } : {}),
+    };
+    setPickedEpisode(video);
+    setPickerSeason(video.season ?? null);
+    setPickerOpen(false);
+  }, [playingKey, snapshot]);
   const effective: CatalogueDetailTarget = {
     type, id, name,
     ...(target.poster ? { poster: target.poster } : {}),
