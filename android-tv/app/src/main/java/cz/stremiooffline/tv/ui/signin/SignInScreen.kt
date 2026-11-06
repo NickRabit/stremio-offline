@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,8 +72,12 @@ fun SignInScreen(viewModel: SignInActions, prefillAddress: String, modifier: Mod
   LaunchedEffect(Unit) {
     if (prefillAddress == DefaultAddress) addressFocus.requestFocus() else signInFocus.requestFocus()
   }
-  LaunchedEffect(state.pairing::class) {
-    if (state.pairing !is PairingState.Idle) pairingCancelFocus.requestFocus()
+  val pairingShown = state.pairing !is PairingState.Idle
+  val wasPairing = remember { mutableStateOf(false) }
+  LaunchedEffect(pairingShown) {
+    if (pairingShown) pairingCancelFocus.requestFocus()
+    else if (wasPairing.value) phoneFocus.requestFocus()
+    wasPairing.value = pairingShown
   }
   DisposableEffect(Unit) {
     onDispose { viewModel.onScreenLeave() }

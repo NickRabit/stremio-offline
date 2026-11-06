@@ -2,16 +2,18 @@
 
 package cz.stremiooffline.tv.ui.signin
 
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertTextContains
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,10 +24,10 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-xhdpi")
 class SignInScreenTest {
 
-  @get:Rule val compose = createComposeRule()
+  @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
   private class FakeActions(initial: SignInState) : SignInActions {
-    override var state: SignInState = initial
+    override var state: SignInState by mutableStateOf(initial)
     val changed = mutableListOf<Pair<String, String>>()
 
     override fun onServerChange(value: String) {
@@ -88,8 +90,9 @@ class SignInScreenTest {
   @Test
   fun `down from password sign in reaches the phone action`() {
     mount()
-    compose.onNodeWithTag(TagPassword).performKeyInput { pressKey(Key.DirectionDown) }
-    compose.onNodeWithTag(TagSignIn).performKeyInput { pressKey(Key.DirectionDown) }
+    for (tag in listOf(TagAddress, TagUsername, TagPassword, TagSignIn)) {
+      compose.onNodeWithTag(tag).performKeyInput { pressKey(Key.DirectionDown) }
+    }
     compose.onNodeWithTag(TagPhone).assertIsFocused()
   }
 
@@ -122,9 +125,26 @@ class SignInScreenTest {
     val actions = FakeActions(SignInState(pairing = PairingState.Waiting("ABCDEF23", 300, 5)))
     mount(actions)
 
-    compose.onNodeWithTag(TagPairCancel).performClick()
-    compose.onNodeWithTag(TagPassword).assertIsNotFocused()
+    compose.onNodeWithTag(TagPairCancel).performKeyInput { pressKey(Key.DirectionCenter) }
     compose.onNodeWithTag(TagPairCode).assertDoesNotExist()
+    compose.onNodeWithTag(TagPhone).assertIsFocused()
+    assert(actions.state.pairing == PairingState.Idle)
+  }
+
+  @Test
+  fun `ok on the phone action shows the code and back returns to sign in`() {
+    val actions = FakeActions(SignInState())
+    mount(actions)
+    for (tag in listOf(TagAddress, TagUsername, TagPassword, TagSignIn)) {
+      compose.onNodeWithTag(tag).performKeyInput { pressKey(Key.DirectionDown) }
+    }
+    compose.onNodeWithTag(TagPhone).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.onNodeWithTag(TagPairCode).assertTextContains("ABCD EF23")
+    compose.onNodeWithTag(TagPairCancel).assertIsFocused()
+
+    compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+    compose.onNodeWithTag(TagPairCode).assertDoesNotExist()
+    compose.onNodeWithTag(TagPhone).assertIsFocused()
     assert(actions.state.pairing == PairingState.Idle)
   }
 }

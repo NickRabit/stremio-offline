@@ -30,9 +30,11 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class SignInViewModelTest {
   private val dispatcher = StandardTestDispatcher()
   private val context: Context = ApplicationProvider.getApplicationContext()
@@ -81,7 +83,7 @@ class SignInViewModelTest {
   fun `polling stops at the original TTL instead of spinning`() = runTest(dispatcher) {
     val store = MemoryStore(context)
     val transport = FakeTransport(
-      expiresIn = 5,
+      expiresIn = 12,
       polls = ArrayDeque(List(20) { PairingPollOutcome.Pending }),
     )
     var now = 1_000L
@@ -100,7 +102,7 @@ class SignInViewModelTest {
 
     val failed = viewModel.state.pairing as PairingState.Failed
     assertEquals(PairingFailure.Expired, failed.error.failure)
-    assertEquals(1, transport.pollCalls)
+    assertEquals(2, transport.pollCalls)
   }
 
   @Test
@@ -129,7 +131,7 @@ class SignInViewModelTest {
     advanceUntilIdle()
 
     assertEquals(listOf(5_000L, 10_000L, 5_000L), waits.take(3))
-  })
+  }
 
   @Test
   fun `a late approval cannot persist or call back after cancellation`() = runTest(dispatcher) {

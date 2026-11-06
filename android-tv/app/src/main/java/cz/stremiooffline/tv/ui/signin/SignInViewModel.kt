@@ -203,7 +203,10 @@ class SignInViewModel(
         state = state.copy(check = ServerCheck.Found(api.status().version))
         when (val me = runCatching { api.me() }.getOrNull()) {
           MeResult.Setup -> return@launch fail(ApiFailure.NeedsSetup)
-          is MeResult.SignedIn -> return@launch succeed(address, me.username, me.language, api)
+          is MeResult.SignedIn -> {
+            succeed(address, me.username, me.language, api)
+            return@launch
+          }
           null -> Unit
         }
         val login = api.login(username, password)
