@@ -7,6 +7,8 @@ import { useDialogViewport } from "./dialog-viewport";
 import { t, useI18n } from "./i18n";
 import type { PairingInspection, Session } from "./types";
 
+const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+
 /** The code a TV put in its QR link (`?pair=`), if this page was opened from one. */
 export const pairLinkCode = (search = location.search): string | null => {
   const value = new URLSearchParams(search).get("pair")?.trim();
@@ -38,6 +40,7 @@ export function PairDeviceDialog({ session, onClose, onNotify, initialCode }: {
   const [code, setCode] = useState(initialCode ?? "");
   const [preview, setPreview] = useState<PairingInspection | null>(null);
   const [busy, setBusy] = useState(false);
+  const [remaining, setRemaining] = useState(0);
   const [error, setError] = useState("");
   const [terminal, setTerminal] = useState(false);
   useDialogFocus(overlay);
@@ -68,6 +71,23 @@ export function PairDeviceDialog({ session, onClose, onNotify, initialCode }: {
   useEffect(() => {
     if (initialCode) inspect();
   }, []);
+  useEffect(() => {
+    if (!preview) return;
+    const deadline = Date.now() + preview.expiresIn * 1000;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setRemaining(left);
+      if (left > 0) return;
+      cancelRequest();
+      setPreview(null);
+      setBusy(false);
+      setTerminal(true);
+      setError(t("err.pairInvalid"));
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [preview]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
@@ -183,15 +203,18 @@ export function PairDeviceDialog({ session, onClose, onNotify, initialCode }: {
             />
           </label>
         </> : <>
-          <p className="pair-confirm">{t("pair.confirm", { device: preview.deviceLabel, username: preview.username })}</p>
           <code className="pair-device-code">{`${preview.code.slice(0, 4)} ${preview.code.slice(4)}`}</code>
-          <p className="identify-hint">{t("pair.warning")}</p>
-          <p className="identify-hint">{t("pair.expires", { seconds: preview.expiresIn })}</p>
+          <dl className="pair-facts">
+            <dt>{t("pair.device")}</dt><dd>{preview.deviceLabel}</dd>
+            <dt>{t("pair.account")}</dt><dd>{preview.username}</dd>
+            <dt>{t("pair.validFor")}</dt><dd>{clock(remaining)}</dd>
+          </dl>
         </>}
       </div>
       <footer className="dialog-foot">
+        {preview && !error && <p className="identify-hint">{t("pair.warning")}</p>}
         {error && <p className="login-error" role="alert">{error}</p>}
-        <button type="button" onClick={close}>{t("common.cancel")}</button>
+        {!preview && <button type="button" onClick={close}>{t("common.cancel")}</button>}
         {preview ? <>
           <button type="button" disabled={busy} onClick={deny}>{t("pair.deny")}</button>
           <button type="button" className="primary" disabled={busy} onClick={approve}>{t("pair.approve")}</button>

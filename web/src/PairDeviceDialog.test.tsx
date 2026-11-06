@@ -179,4 +179,20 @@ describe("PairDeviceDialog", () => {
     expect(pairLinkCode("?other=1")).toBeNull();
     expect(pairLinkCode(`?pair=${"A".repeat(40)}`)).toBeNull();
   });
+  it("counts the confirmation down and leaves it when the code runs out", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation(() => Promise.resolve(json({ ...preview, expiresIn: 2 })));
+      await mount();
+      await changeCode("ABCD2345");
+      await act(async () => { button("Continue")!.click(); await Promise.resolve(); await Promise.resolve(); });
+      expect(document.body.textContent).toContain("0:02");
+      expect(button("Cancel")).toBeUndefined();
+      await act(async () => { vi.advanceTimersByTime(2000); });
+      expect(button("Sign in this device")).toBeUndefined();
+      expect(button("Try again")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

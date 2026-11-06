@@ -662,7 +662,9 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .dialog-foot{flex:0 0 auto;display:grid;gap:10px;padding:14px 22px 22px;border-top:1px solid var(--line);background:#121721f5}
 .identify-hint{margin:0;font-size:12px;color:var(--muted);line-height:1.45}
 .pair-device-card{width:min(560px,100%)}
-.pair-confirm{margin:0;font-size:15px;line-height:1.5}
+.pair-facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 16px;margin:0;font-size:14px;line-height:1.4}
+.pair-facts dt{color:var(--muted)}
+.pair-facts dd{margin:0;min-width:0;overflow-wrap:anywhere;font-weight:600}
 .pair-device-code{display:block;text-align:center;padding:16px 12px;border:1px solid var(--line);border-radius:10px;background:#0b1018;color:var(--text);font-size:clamp(22px,7vw,34px);font-weight:800;letter-spacing:.16em}
 .identify-row{display:grid;grid-template-columns:90px minmax(0,1fr);gap:10px;align-items:end}
 .identify-type{border:0;padding:0;margin:0;display:flex;gap:6px;min-width:0}
