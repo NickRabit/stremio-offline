@@ -757,6 +757,33 @@ describe("Player chapters, segments and next episode", () => {
     expect(card).not.toBeNull();
   });
 
+  const endVideo = () => act(async () => {
+    host.querySelector("video")!.dispatchEvent(new Event("ended"));
+  });
+
+  it("closes at the end of a film even when another file sits beside it", async () => {
+    const value = await render({ onNext: vi.fn(async () => true), autoNext: false });
+    await startPlaying();
+    await endVideo();
+    expect(value.onClose).toHaveBeenCalledTimes(1);
+    expect(value.onNext).not.toHaveBeenCalled();
+  });
+
+  it("closes at the end when nothing follows", async () => {
+    const value = await render({});
+    await startPlaying();
+    await endVideo();
+    expect(value.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the next episode at the end instead of closing", async () => {
+    const value = await render({ onNext: vi.fn(async () => true), autoNext: true, upNextAt: "end" });
+    await startPlaying();
+    await endVideo();
+    expect(host.querySelector(".player-up-next")).not.toBeNull();
+    expect(value.onClose).not.toHaveBeenCalled();
+  });
+
   it("keeps the end setting for onEnded only", async () => {
     await render({ onNext: vi.fn(async () => true), autoNext: true, upNextAt: "end" });
     await startPlaying();

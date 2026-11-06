@@ -1414,10 +1414,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           cancelNext();
         }} onPause={() => setPaused(true)} onSeeking={cancelNext} onSeeked={reportSeek}
         onEnded={() => {
-          // Nothing follows, so the film is over: the player steps aside and leaves the
-          // detail view on screen instead of sitting on the last frame.
-          if (!onNext) return closePlayer();
-          if (!autoNext) return;
+          // Nothing plays on by itself, so the film is over: the player steps aside and leaves
+          // the detail view on screen instead of sitting on the last frame. A film with another
+          // file beside it offers that file on the transport, but never plays it on its own.
+          if (!onNext || !autoNext) return closePlayer();
           setSettingsOpen(false); setUpNextSeconds(5); setUpNext(true); revealControls();
         }}
         onTimeUpdate={(event) => {
