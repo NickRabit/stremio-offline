@@ -9,7 +9,7 @@
   <string name="auth_signed_in_as">Iniciaste sesión como %1$s</string>
   <string name="pair_phone">Iniciar sesión con el teléfono</string>
   <string name="pair_expires">Este código caduca en %1$s segundos.</string>
-  <string name="pair_instructions">En el teléfono, abre Ajustes → Cuenta → Emparejar un dispositivo e introduce este código.</string>
+  <string name="pair_instructions">Escanea el código QR con el teléfono o abre Ajustes → Cuenta → Emparejar un dispositivo e introduce este código.</string>
   <string name="pair_unsupported">Este servidor no admite el emparejamiento de dispositivos. Inicia sesión con tu contraseña o actualiza el servidor.</string>
   <string name="pair_expired">Este código caducó o fue denegado. Empieza de nuevo en el televisor.</string>
   <string name="common_loading">Cargando…</string>

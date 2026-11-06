@@ -119,10 +119,13 @@ keep the household out as effectively as an attacker.
 ### Signing a TV in with a code
 
 The Android TV app can request a short code instead of having a password typed
-with the remote. Select **Sign in with phone** on the TV after entering the
-server address. On a phone or computer that is already signed in, open
-**Settings → Account → Pair a device**, enter the code shown on the TV, check the
-device name and account, and select **Sign in this device**. The TV receives an
+with the remote. Enter the server address on the TV — the other fields and
+buttons stay closed until the server answers — and select **Sign in with
+phone**. Scan the QR code beside the code with a phone: it opens this server's
+web interface with the code filled in, after a sign-in if the phone has none.
+Or, on a phone or computer that is already signed in, open **Settings → Account
+→ Pair a device** and enter the code by hand. Either way, check the device name
+and account and select **Sign in this device**. The TV receives an
 ordinary remembered session only after that explicit approval.
 
 The code expires after five minutes and can be used once. The TV keeps its own
@@ -134,9 +137,11 @@ disables pairing.
 
 The confirmation shows the server-reported username and the device label sent by
 the TV. Treat that label as untrusted text, and approve only a code displayed on
-a device you intend to sign in. This first version supports manual code entry
-only; it does not render a QR code, discover servers, or maintain a device
-inventory.
+a device you intend to sign in, and a link from anyone else is no reason to:
+the QR link only fills in the code, and the approval is still yours to give.
+When typing, O counts as 0 and I or L as 1. The QR link uses the address the TV
+was given, so a phone that reaches the server under another name has to enter
+the code by hand. There is no server discovery or device inventory yet.
 
 ## Disabling and deleting
 

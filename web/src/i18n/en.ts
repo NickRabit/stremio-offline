@@ -75,7 +75,7 @@ export const en = {
   "pair.success": "Device approved. Finish signing in on the TV.",
   "pair.expires": "This code expires in {seconds} seconds.",
   "pair.phone": "Sign in with phone",
-  "pair.instructions": "On your phone, open Settings → Account → Pair a device and enter this code.",
+  "pair.instructions": "Scan the QR code with your phone, or open Settings → Account → Pair a device and enter this code.",
   "pair.expired": "This code expired or was denied. Start again on the TV.",
   "pair.unsupported": "This server does not support device pairing. Sign in with your password or update the server.",
 

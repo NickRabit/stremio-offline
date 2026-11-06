@@ -9,7 +9,7 @@
   <string name="auth_signed_in_as">Выполнен вход как %1$s</string>
   <string name="pair_phone">Войти с телефона</string>
   <string name="pair_expires">Код истекает через %1$s с.</string>
-  <string name="pair_instructions">На телефоне откройте Настройки → Аккаунт → Подключить устройство и введите этот код.</string>
+  <string name="pair_instructions">Отсканируйте QR-код телефоном или откройте на нём Настройки → Аккаунт → Подключить устройство и введите этот код.</string>
   <string name="pair_unsupported">Этот сервер не поддерживает подключение устройств. Войдите с паролем или обновите сервер.</string>
   <string name="pair_expired">Код истёк или был отклонён. Начните снова на телевизоре.</string>
   <string name="common_loading">Загрузка…</string>

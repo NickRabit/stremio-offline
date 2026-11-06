@@ -183,12 +183,15 @@ text comes from the `AppError` `messageKey`.
   stored with Android Keystore protection; the password is never stored.
 - Cleartext HTTP is allowed only for the address the user typed (network
   security config), never by downgrading HTTPS or skipping certificate checks.
-- **Manual-code sign-in is implemented.** After the user enters the server
-  address, **Sign in with phone** requests an eight-character code from
+- **Sign-in by code is implemented.** The username, password and both sign-in
+  buttons (side by side) take focus only once the server answered `/api/status`;
+  until then the D-pad stays on the address. **Sign in with phone** requests an eight-character code from
   `POST /api/auth/pair/start`. The TV polls every five seconds with the private
   poll token, stops after the five-minute deadline, and treats expiry, denial,
   restricted mode and an older server as terminal states with a clear retry or
-  password fallback. The signed-in phone or computer opens Settings → Account →
+  password fallback. Beside the code a QR code links to `<server>/?pair=<code>`,
+  which opens the web confirmation with the code looked up (after a sign-in if
+  needed). Otherwise the signed-in phone or computer opens Settings → Account →
   Pair a device, inspects the account and device label, then explicitly approves
   the code. The approval creates a separate ordinary 30-day TV session; it does
   not reuse the approver's session identifier or cookie.
@@ -196,8 +199,8 @@ text comes from the `AppError` `messageKey`.
   `ServerAddress.display`. The session cookie is received into an isolated
   staging jar and only adopted after the approval and settings bootstrap are
   still current; a cancelled or superseded request cannot sign the TV in.
-- QR rendering, URL/hash entry, server discovery, public URL configuration,
-  Cloudflare Access changes and device inventory remain deferred.
+- Server discovery, public URL configuration, Cloudflare Access changes and
+  device inventory remain deferred.
 
 ## Playback: the server work comes first
 

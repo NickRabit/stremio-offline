@@ -222,6 +222,13 @@ class SignInViewModelTest {
     assertEquals(address.display, store.serverUrl)
   }
 
+  @Test
+  fun `the qr link keeps a reverse proxy prefix and carries the code`() {
+    val prefixed = ServerAddress.parse("https://nas.example/stremio/")!!
+    assertEquals("https://nas.example/stremio/?pair=ABCDEF23", pairingLink(prefixed, "ABCDEF23"))
+    assertEquals("http://10.0.2.2:8090/?pair=ABCDEF23", pairingLink(ServerAddress.parse("10.0.2.2:8090")!!, "ABCDEF23"))
+  }
+
   private fun viewModel(
     store: MemoryStore,
     transport: FakeTransport,

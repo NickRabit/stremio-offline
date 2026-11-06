@@ -2228,7 +2228,7 @@ export const de: Catalog = {
   "pair.success": "Gerät bestätigt. Schließen Sie die Anmeldung am Fernseher ab.",
   "pair.expires": "Dieser Code läuft in {seconds} Sekunden ab.",
   "pair.phone": "Mit Telefon anmelden",
-  "pair.instructions": "Öffnen Sie auf dem Telefon Einstellungen → Konto → Gerät koppeln und geben Sie diesen Code ein.",
+  "pair.instructions": "Scannen Sie den QR-Code mit dem Telefon oder öffnen Sie dort Einstellungen → Konto → Gerät koppeln und geben Sie diesen Code ein.",
   "pair.expired": "Dieser Code ist abgelaufen oder wurde abgelehnt. Beginnen Sie am Fernseher erneut.",
   "pair.unsupported": "Dieser Server unterstützt das Koppeln von Geräten nicht. Melden Sie sich mit dem Passwort an oder aktualisieren Sie den Server.",
   "common.retry": "Erneut versuchen",

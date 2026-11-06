@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { PairDeviceDialog } from "./PairDeviceDialog";
+import { PairDeviceDialog, pairLinkCode } from "./PairDeviceDialog";
 import { setLocale } from "./i18n";
 import type { Session } from "./types";
 
@@ -160,5 +160,23 @@ describe("PairDeviceDialog", () => {
   it("puts the cursor in the code field when it opens", async () => {
     await mount();
     expect(document.activeElement).toBe(document.body.querySelector('input[autocomplete="off"]'));
+  });
+  it("looks up the code from a QR link at once but approves only on a click", async () => {
+    fetchMock.mockImplementation((url: string) => Promise.resolve(String(url).endsWith("/inspect") ? json(preview) : json({}, 500)));
+    await act(async () => {
+      root.render(<PairDeviceDialog session={session} onClose={vi.fn()} onNotify={vi.fn()} initialCode="abcd 2345"/>);
+      await Promise.resolve(); await Promise.resolve();
+    });
+    const inspected = fetchMock.mock.calls.filter((call) => String(call[0]).endsWith("/inspect"));
+    expect(inspected).toHaveLength(1);
+    expect(JSON.parse(String((inspected[0][1] as RequestInit).body))).toEqual({ code: "abcd 2345" });
+    expect(button("Sign in this device")).toBeTruthy();
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/approve"))).toBe(false);
+  });
+
+  it("reads the code from the pair query parameter only", () => {
+    expect(pairLinkCode("?pair=ABCD2345")).toBe("ABCD2345");
+    expect(pairLinkCode("?other=1")).toBeNull();
+    expect(pairLinkCode(`?pair=${"A".repeat(40)}`)).toBeNull();
   });
 });

@@ -71,7 +71,7 @@ export const cs: Catalog = {
   "pair.success": "Zařízení bylo schváleno. Přihlášení se dokončí na televizi.",
   "pair.expires": "Platnost kódu vyprší za {seconds} s.",
   "pair.phone": "Přihlásit pomocí telefonu",
-  "pair.instructions": "Na telefonu otevřete Nastavení → Účet → Spárovat zařízení a zadejte tento kód.",
+  "pair.instructions": "Naskenujte QR kód telefonem, nebo na telefonu otevřete Nastavení → Účet → Spárovat zařízení a zadejte tento kód.",
   "pair.expired": "Platnost kódu vypršela nebo byl zamítnut. Začněte znovu na televizi.",
   "pair.unsupported": "Tento server nepodporuje párování zařízení. Přihlaste se heslem nebo aktualizujte server.",
 

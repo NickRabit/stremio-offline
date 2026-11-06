@@ -9,7 +9,7 @@
   <string name="auth_signed_in_as">Přihlášen jako %1$s</string>
   <string name="pair_phone">Přihlásit pomocí telefonu</string>
   <string name="pair_expires">Platnost kódu vyprší za %1$s s.</string>
-  <string name="pair_instructions">Na telefonu otevřete Nastavení → Účet → Spárovat zařízení a zadejte tento kód.</string>
+  <string name="pair_instructions">Naskenujte QR kód telefonem, nebo na telefonu otevřete Nastavení → Účet → Spárovat zařízení a zadejte tento kód.</string>
   <string name="pair_unsupported">Tento server nepodporuje párování zařízení. Přihlaste se heslem nebo aktualizujte server.</string>
   <string name="pair_expired">Platnost kódu vypršela nebo byl zamítnut. Začněte znovu na televizi.</string>
   <string name="common_loading">Načítám…</string>

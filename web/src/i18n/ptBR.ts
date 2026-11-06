@@ -2228,7 +2228,7 @@ export const ptBR: Catalog = {
   "pair.success": "Dispositivo aprovado. Conclua a entrada na TV.",
   "pair.expires": "Este código expira em {seconds} segundos.",
   "pair.phone": "Entrar com o telefone",
-  "pair.instructions": "No telefone, abra Configurações → Conta → Emparelhar um dispositivo e digite este código.",
+  "pair.instructions": "Escaneie o código QR com o telefone ou abra Configurações → Conta → Emparelhar um dispositivo e digite este código.",
   "pair.expired": "Este código expirou ou foi negado. Comece novamente na TV.",
   "pair.unsupported": "Este servidor não oferece suporte ao emparelhamento de dispositivos. Entre com sua senha ou atualize o servidor.",
   "common.retry": "Tentar novamente",

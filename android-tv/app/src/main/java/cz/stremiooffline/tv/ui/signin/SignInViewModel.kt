@@ -43,6 +43,8 @@ sealed interface PairingState {
     val code: String,
     val expiresIn: Int,
     val interval: Int,
+    /** The server's own page with the code filled in, for the phone to open from a QR code. */
+    val link: String = "",
   ) : PairingState
   data class Failed(val error: PairingErrorInfo) : PairingState
 }
@@ -70,6 +72,10 @@ fun ApiFailure.messageRes(): Int = when (this) {
   ApiFailure.Forbidden -> R.string.tv_err_generic
   ApiFailure.Generic -> R.string.tv_err_generic
 }
+
+/** The web interface opens the pairing confirmation for `?pair=`; the prefix of a reverse proxy is kept. */
+fun pairingLink(address: ServerAddress, code: String): String =
+  address.resolve("/").newBuilder().addQueryParameter("pair", code).build().toString()
 
 fun PairingFailure.messageRes(): Int = when (this) {
   PairingFailure.Unsupported -> R.string.pair_unsupported
@@ -246,7 +252,12 @@ class SignInViewModel(
           val expiresAt = now() + started.expiresIn.coerceAtLeast(1) * 1_000L
           state = state.copy(
             busy = false,
-            pairing = PairingState.Waiting(started.code, started.expiresIn.coerceAtLeast(1), started.interval.coerceAtLeast(1)),
+            pairing = PairingState.Waiting(
+              started.code,
+              started.expiresIn.coerceAtLeast(1),
+              started.interval.coerceAtLeast(1),
+              pairingLink(address, started.code),
+            ),
           )
           pollPairing(address, transport, started.pollToken, interval, expiresAt, currentGeneration)
         }

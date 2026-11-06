@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -73,6 +74,8 @@ fun TvTextField(
   onFocusLost: () -> Unit = {},
   testTag: String? = null,
   inputTestTag: String? = null,
+  /** A disabled field is dimmed and the D-pad passes over it. */
+  enabled: Boolean = true,
   onSubmit: (() -> Unit)? = null,
   below: (@Composable () -> Unit)? = null,
 ) {
@@ -89,7 +92,8 @@ fun TvTextField(
   fun stopEditing(move: FocusDirection?) {
     editing = false
     keyboard?.hide()
-    if (move == null) surface.requestFocus() else focusManager.moveFocus(move)
+    // When nothing below can take focus, the edit still ends on the field itself.
+    if (move == null || !focusManager.moveFocus(move)) surface.requestFocus()
   }
 
   /** The end of an edit: a field with [onSubmit] runs it, and one without moves focus on instead.
@@ -154,7 +158,9 @@ fun TvTextField(
         }
         // Observes the surface's own focus target, so it has to sit before `focusable()`.
         .onFocusChanged { surfaceFocused = it.isFocused }
+        .focusProperties { canFocus = enabled }
         .focusable()
+        .alpha(if (enabled) 1f else 0.45f)
         .semantics { this[TvFieldActive] = active }
         .background(Tokens.Bg, shape)
         .border(if (active) 2.dp else 1.dp, if (active) Tokens.Accent2 else Tokens.Line, shape)

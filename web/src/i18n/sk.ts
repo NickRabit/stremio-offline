@@ -2240,7 +2240,7 @@ export const sk: Catalog = {
   "pair.success": "Zariadenie bolo schválené. Prihlásenie dokončite na televízore.",
   "pair.expires": "Platnosť kódu vyprší za {seconds} s.",
   "pair.phone": "Prihlásiť pomocou telefónu",
-  "pair.instructions": "Na telefóne otvorte Nastavenia → Účet → Spárovať zariadenie a zadajte tento kód.",
+  "pair.instructions": "Naskenujte QR kód telefónom, alebo na telefóne otvorte Nastavenia → Účet → Spárovať zariadenie a zadajte tento kód.",
   "pair.expired": "Platnosť kódu vypršala alebo bol zamietnutý. Začnite znova na televízore.",
   "pair.unsupported": "Tento server nepodporuje párovanie zariadení. Prihláste sa heslom alebo aktualizujte server.",
   "common.retry": "Skúsiť znova",

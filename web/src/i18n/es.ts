@@ -2228,7 +2228,7 @@ export const es: Catalog = {
   "pair.success": "Dispositivo aprobado. Termina de iniciar sesión en el televisor.",
   "pair.expires": "Este código caduca en {seconds} segundos.",
   "pair.phone": "Iniciar sesión con el teléfono",
-  "pair.instructions": "En el teléfono, abre Ajustes → Cuenta → Emparejar un dispositivo e introduce este código.",
+  "pair.instructions": "Escanea el código QR con el teléfono o abre Ajustes → Cuenta → Emparejar un dispositivo e introduce este código.",
   "pair.expired": "Este código caducó o fue denegado. Empieza de nuevo en el televisor.",
   "pair.unsupported": "Este servidor no admite el emparejamiento de dispositivos. Inicia sesión con tu contraseña o actualiza el servidor.",
   "common.retry": "Reintentar",

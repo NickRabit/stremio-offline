@@ -2228,7 +2228,7 @@ export const fr: Catalog = {
   "pair.success": "Appareil approuvé. Terminez la connexion sur le téléviseur.",
   "pair.expires": "Ce code expire dans {seconds} secondes.",
   "pair.phone": "Se connecter avec le téléphone",
-  "pair.instructions": "Sur votre téléphone, ouvrez Réglages → Compte → Associer un appareil et saisissez ce code.",
+  "pair.instructions": "Scannez le code QR avec votre téléphone, ou ouvrez Réglages → Compte → Associer un appareil et saisissez ce code.",
   "pair.expired": "Ce code a expiré ou a été refusé. Recommencez sur le téléviseur.",
   "pair.unsupported": "Ce serveur ne prend pas en charge l’association d’appareils. Connectez-vous avec votre mot de passe ou mettez le serveur à jour.",
   "common.retry": "Réessayer",

@@ -33,7 +33,7 @@ metadata store, or scheduler for each platform.
 | Then | Search by cast and crew | A person in the title detail opens what that person made, not a text search for the name: TMDB filmography when a key is set, the owned copies first. See [Search by cast and crew](#search-by-cast-and-crew). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
-| Implemented | Android TV manual-code sign-in | The TV shows a short code; an account already signed in on a phone or computer inspects and confirms it. No password typed with the remote. QR/discovery remain deferred. |
+| Implemented | Android TV sign-in by code | The TV shows a short code and a QR link to it; an account already signed in on a phone or computer inspects and confirms it. No password typed with the remote. Server discovery remains deferred. |
 | Proposed | Trakt and Simkl | Send what was watched, read the watchlist and history, so people coming from Stremio or Nuvio bring theirs along. See [Trakt and Simkl](#trakt-and-simkl). |
 | Proposed | Notifications | A new episode, a finished or failed download and a full disk reach the household through ntfy, Telegram or browser push. Extends the queue's completion notice. See [Notifications](#notifications). |
 | Proposed | Player extras on the web | Picture in picture, playback speed, dialogue boost and loudness levelling, and a bitrate cap for viewers outside the home network. See [Player extras](#player-extras). |
@@ -463,16 +463,16 @@ be checked there first.
 
 ### Sign-in by code on the television
 
-The manual-code MVP is implemented. The TV app asks the server for an
-eight-character, five-minute code; a signed-in account on another device enters
-it under Settings → Account, inspects the account and device, and explicitly
-approves it. The TV then receives its own ordinary 30-day session. Pairing
+Implemented. The TV app asks the server for an eight-character, five-minute
+code and shows it beside a QR code for `<server>/?pair=<code>`; a signed-in
+account on another device scans it or enters the code under Settings → Account,
+inspects the account and device, and explicitly approves it. The TV then receives its own ordinary 30-day session. Pairing
 records and inspection nonces are in memory, every poll and attempt is bounded
 and rate limited, restricted mode disables pairing, and the confirming account
 can only hand over itself.
 
-Deferred follow-ups are QR rendering, URL/hash entry, server discovery, public
-URL configuration, Cloudflare Access changes, web/desktop receiving-device UI
+Deferred follow-ups are server discovery, public URL configuration (the QR link
+uses the address the TV was given), Cloudflare Access changes, web/desktop receiving-device UI
 and device inventory. Desktop LAN sharing is unchanged.
 
 ### Trakt and Simkl

@@ -5,6 +5,9 @@ package cz.stremiooffline.tv.ui.signin
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
+import cz.stremiooffline.tv.data.ApiFailure
+import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -25,6 +28,8 @@ import org.robolectric.annotation.Config
 class SignInScreenTest {
 
   @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+  private val Ready = SignInState(server = "http://nas:8090", check = ServerCheck.Found("0.7.61"))
 
   private class FakeActions(initial: SignInState) : SignInActions {
     override var state: SignInState by mutableStateOf(initial)
@@ -48,7 +53,7 @@ class SignInScreenTest {
     override fun signIn() {}
 
     override fun startPairing() {
-      state = state.copy(pairing = PairingState.Waiting("ABCDEF23", 300, 5))
+      state = state.copy(pairing = PairingState.Waiting("ABCDEF23", 300, 5, "http://nas:8090/?pair=ABCDEF23"))
     }
 
     override fun cancelPairing() {
@@ -58,7 +63,7 @@ class SignInScreenTest {
     override fun onScreenLeave() {}
   }
 
-  private fun mount(actions: SignInActions = FakeActions(SignInState())) {
+  private fun mount(actions: SignInActions = FakeActions(Ready)) {
     compose.setContent {
       SignInScreen(viewModel = actions, prefillAddress = "http://")
     }
@@ -88,17 +93,18 @@ class SignInScreenTest {
   }
 
   @Test
-  fun `down from password sign in reaches the phone action`() {
+  fun `the phone action sits right of sign in`() {
     mount()
-    for (tag in listOf(TagAddress, TagUsername, TagPassword, TagSignIn)) {
+    for (tag in listOf(TagAddress, TagUsername, TagPassword)) {
       compose.onNodeWithTag(tag).performKeyInput { pressKey(Key.DirectionDown) }
     }
+    compose.onNodeWithTag(TagSignIn).performKeyInput { pressKey(Key.DirectionRight) }
     compose.onNodeWithTag(TagPhone).assertIsFocused()
   }
 
   @Test
   fun `ok starts editing and down ends it and moves to the next field`() {
-    val actions = FakeActions(SignInState())
+    val actions = FakeActions(Ready)
     mount(actions)
 
     compose.onNodeWithTag(TagAddress).performKeyInput { pressKey(Key.DirectionCenter) }
@@ -114,7 +120,7 @@ class SignInScreenTest {
 
   @Test
   fun `pairing shows the grouped code and gives focus to cancel`() {
-    mount(FakeActions(SignInState(pairing = PairingState.Waiting("ABCDEF23", 300, 5))))
+    mount(FakeActions(Ready.copy(pairing = PairingState.Waiting("ABCDEF23", 300, 5, "http://nas:8090/?pair=ABCDEF23"))))
 
     compose.onNodeWithTag(TagPairCode).assertTextContains("ABCD EF23")
     compose.onNodeWithTag(TagPairCancel).assertIsFocused()
@@ -122,7 +128,7 @@ class SignInScreenTest {
 
   @Test
   fun `cancel returns to password sign in`() {
-    val actions = FakeActions(SignInState(pairing = PairingState.Waiting("ABCDEF23", 300, 5)))
+    val actions = FakeActions(Ready.copy(pairing = PairingState.Waiting("ABCDEF23", 300, 5, "http://nas:8090/?pair=ABCDEF23")))
     mount(actions)
 
     compose.onNodeWithTag(TagPairCancel).performKeyInput { pressKey(Key.DirectionCenter) }
@@ -133,11 +139,12 @@ class SignInScreenTest {
 
   @Test
   fun `ok on the phone action shows the code and back returns to sign in`() {
-    val actions = FakeActions(SignInState())
+    val actions = FakeActions(Ready)
     mount(actions)
-    for (tag in listOf(TagAddress, TagUsername, TagPassword, TagSignIn)) {
+    for (tag in listOf(TagAddress, TagUsername, TagPassword)) {
       compose.onNodeWithTag(tag).performKeyInput { pressKey(Key.DirectionDown) }
     }
+    compose.onNodeWithTag(TagSignIn).performKeyInput { pressKey(Key.DirectionRight) }
     compose.onNodeWithTag(TagPhone).performKeyInput { pressKey(Key.DirectionCenter) }
     compose.onNodeWithTag(TagPairCode).assertTextContains("ABCD EF23")
     compose.onNodeWithTag(TagPairCancel).assertIsFocused()
@@ -146,5 +153,24 @@ class SignInScreenTest {
     compose.onNodeWithTag(TagPairCode).assertDoesNotExist()
     compose.onNodeWithTag(TagPhone).assertIsFocused()
     assert(actions.state.pairing == PairingState.Idle)
+  }
+
+  @Test
+  fun `without an answering server the d-pad stays on the address`() {
+    val actions = FakeActions(SignInState(server = "http://nas:8090", check = ServerCheck.Failed(ApiFailure.Unreachable)))
+    mount(actions)
+
+    compose.onNodeWithTag(TagAddress).performKeyInput { pressKey(Key.DirectionDown) }
+    compose.onNodeWithTag(TagAddress).assertIsFocused()
+    compose.onNodeWithTag(TagUsername).assertIsNotFocused()
+    compose.onNodeWithTag(TagSignIn).assertIsNotEnabled()
+    compose.onNodeWithTag(TagPhone).assertIsNotEnabled()
+  }
+
+  @Test
+  fun `the waiting code shows a qr code for the link`() {
+    mount(FakeActions(Ready.copy(pairing = PairingState.Waiting("ABCDEF23", 300, 5, "http://nas:8090/?pair=ABCDEF23"))))
+
+    compose.onNodeWithTag(TagPairQr).assertContentDescriptionEquals("http://nas:8090/?pair=ABCDEF23")
   }
 }

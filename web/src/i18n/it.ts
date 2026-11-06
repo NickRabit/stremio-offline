@@ -2228,7 +2228,7 @@ export const it: Catalog = {
   "pair.success": "Dispositivo approvato. Completa l’accesso sul televisore.",
   "pair.expires": "Questo codice scade tra {seconds} secondi.",
   "pair.phone": "Accedi con il telefono",
-  "pair.instructions": "Sul telefono apri Impostazioni → Account → Abbina un dispositivo e inserisci questo codice.",
+  "pair.instructions": "Inquadra il codice QR con il telefono, oppure apri Impostazioni → Account → Abbina un dispositivo e inserisci questo codice.",
   "pair.expired": "Questo codice è scaduto o è stato negato. Ricomincia sul televisore.",
   "pair.unsupported": "Questo server non supporta l’abbinamento dei dispositivi. Accedi con la password o aggiorna il server.",
   "common.retry": "Riprova",

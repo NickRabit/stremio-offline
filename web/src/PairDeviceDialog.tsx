@@ -7,10 +7,26 @@ import { useDialogViewport } from "./dialog-viewport";
 import { t, useI18n } from "./i18n";
 import type { PairingInspection, Session } from "./types";
 
-export function PairDeviceDialog({ session, onClose, onNotify }: {
+/** The code a TV put in its QR link (`?pair=`), if this page was opened from one. */
+export const pairLinkCode = (search = location.search): string | null => {
+  const value = new URLSearchParams(search).get("pair")?.trim();
+  return value && value.length <= 16 ? value : null;
+};
+
+/** Takes the code out of the address, so a reload or a shared link does not reopen the dialog. */
+export const clearPairLink = () => {
+  const url = new URL(location.href);
+  if (!url.searchParams.has("pair")) return;
+  url.searchParams.delete("pair");
+  history.replaceState(history.state, "", url);
+};
+
+export function PairDeviceDialog({ session, onClose, onNotify, initialCode }: {
   session: Session;
   onClose: () => void;
   onNotify: (message: string) => void;
+  /** A code from a QR link: it is looked up at once, and approving still takes a click. */
+  initialCode?: string;
 }) {
   useI18n();
   const overlay = useRef<HTMLDivElement | null>(null);
@@ -19,7 +35,7 @@ export function PairDeviceDialog({ session, onClose, onNotify }: {
   const generation = useRef(0);
   const alive = useRef(true);
   const acting = useRef(false);
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(initialCode ?? "");
   const [preview, setPreview] = useState<PairingInspection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -49,6 +65,9 @@ export function PairDeviceDialog({ session, onClose, onNotify }: {
     setBusy(false);
     acting.current = false;
   }, [session.username, session.role]);
+  useEffect(() => {
+    if (initialCode) inspect();
+  }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();

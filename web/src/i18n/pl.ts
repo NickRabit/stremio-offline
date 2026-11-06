@@ -2243,7 +2243,7 @@ export const pl: Catalog = {
   "pair.success": "Urządzenie zatwierdzone. Dokończ logowanie na telewizorze.",
   "pair.expires": "Ten kod wygaśnie za {seconds} s.",
   "pair.phone": "Zaloguj się telefonem",
-  "pair.instructions": "Na telefonie otwórz Ustawienia → Konto → Sparuj urządzenie i wpisz ten kod.",
+  "pair.instructions": "Zeskanuj kod QR telefonem albo otwórz na nim Ustawienia → Konto → Sparuj urządzenie i wpisz ten kod.",
   "pair.expired": "Ten kod wygasł lub został odrzucony. Zacznij ponownie na telewizorze.",
   "pair.unsupported": "Ten serwer nie obsługuje parowania urządzeń. Zaloguj się hasłem lub zaktualizuj serwer.",
   "common.retry": "Spróbuj ponownie",

@@ -20,6 +20,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.focusProperties
+import cz.stremiooffline.tv.ui.components.QrCode
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +59,7 @@ const val TagPhone = "signin_phone"
 const val TagPairCode = "signin_pair_code"
 const val TagPairCancel = "signin_pair_cancel"
 const val TagPairRetry = "signin_pair_retry"
+const val TagPairQr = "signin_pair_qr"
 
 /**
  * @param prefillAddress the address the sign-in screen was opened with. It decides the initial
@@ -69,8 +74,27 @@ fun SignInScreen(viewModel: SignInActions, prefillAddress: String, modifier: Mod
   val phoneFocus = remember { FocusRequester() }
   val pairingCancelFocus = remember { FocusRequester() }
 
+  val usernameFocus = remember { FocusRequester() }
+  val ready = state.check is ServerCheck.Found
+  // Where focus goes once the server answers; the fields below the address stay closed until then.
+  val pendingFocus = remember { mutableStateOf<FocusRequester?>(null) }
+
   LaunchedEffect(Unit) {
-    if (prefillAddress == DefaultAddress) addressFocus.requestFocus() else signInFocus.requestFocus()
+    addressFocus.requestFocus()
+    if (prefillAddress != DefaultAddress) {
+      pendingFocus.value = signInFocus
+      viewModel.checkServer()
+    }
+  }
+  LaunchedEffect(state.check) {
+    when (state.check) {
+      is ServerCheck.Found -> pendingFocus.value?.let { target ->
+        pendingFocus.value = null
+        target.requestFocus()
+      }
+      is ServerCheck.Failed -> pendingFocus.value = null
+      else -> Unit
+    }
   }
   val pairingShown = state.pairing !is PairingState.Idle
   val wasPairing = remember { mutableStateOf(false) }
@@ -116,7 +140,10 @@ fun SignInScreen(viewModel: SignInActions, prefillAddress: String, modifier: Mod
         onValueChange = viewModel::onServerChange,
         keyboardType = KeyboardType.Uri,
         surfaceRequester = addressFocus,
-        onFocusLost = viewModel::checkServer,
+        onFocusLost = {
+          if (state.check !is ServerCheck.Found) pendingFocus.value = usernameFocus
+          viewModel.checkServer()
+        },
         testTag = TagAddress,
       ) { ServerStatusLine(state.check) }
 
@@ -125,7 +152,9 @@ fun SignInScreen(viewModel: SignInActions, prefillAddress: String, modifier: Mod
           label = stringResource(R.string.auth_username),
           value = state.username,
           onValueChange = viewModel::onUsernameChange,
+          surfaceRequester = usernameFocus,
           testTag = TagUsername,
+          enabled = ready,
         )
         TvTextField(
           label = stringResource(R.string.auth_password),
@@ -134,18 +163,29 @@ fun SignInScreen(viewModel: SignInActions, prefillAddress: String, modifier: Mod
           password = true,
           imeAction = ImeAction.Done,
           testTag = TagPassword,
+          enabled = ready,
         )
-        FocusButton(
-          text = stringResource(R.string.auth_sign_in),
-          onClick = viewModel::signIn,
-          modifier = Modifier.focusRequester(signInFocus).testTag(TagSignIn),
-          kind = FocusButtonKind.Primary,
-        )
-        FocusButton(
-          text = stringResource(R.string.pair_phone),
-          onClick = viewModel::startPairing,
-          modifier = Modifier.focusRequester(phoneFocus).testTag(TagPhone),
-        )
+        Row(
+          // Coming down from the password, focus lands on Sign in, not on whichever button is nearer.
+          modifier = Modifier
+            .focusProperties { onEnter = { if (requestedFocusDirection == FocusDirection.Down) signInFocus.requestFocus() } }
+            .focusGroup(),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          FocusButton(
+            text = stringResource(R.string.auth_sign_in),
+            onClick = viewModel::signIn,
+            modifier = Modifier.focusRequester(signInFocus).focusProperties { canFocus = ready }.testTag(TagSignIn),
+            kind = FocusButtonKind.Primary,
+            enabled = ready,
+          )
+          FocusButton(
+            text = stringResource(R.string.pair_phone),
+            onClick = viewModel::startPairing,
+            modifier = Modifier.focusRequester(phoneFocus).focusProperties { canFocus = ready }.testTag(TagPhone),
+            enabled = ready,
+          )
+        }
         val error = state.error
         if (error != null) {
           Text(
@@ -189,17 +229,24 @@ private fun PairingPanel(
   when (state) {
     PairingState.Idle -> Unit
     PairingState.Starting -> Text(stringResource(R.string.common_loading), color = Tokens.Muted, fontSize = 11.sp)
-    is PairingState.Waiting -> {
-      Text(
-        state.code.chunked(4).joinToString(" "),
-        modifier = Modifier.testTag(TagPairCode),
-        color = Tokens.Text,
-        fontSize = 36.sp,
-        fontFamily = FontFamily.Monospace,
-        fontWeight = FontWeight.ExtraBold,
-        letterSpacing = 5.sp,
-      )
-      Text(stringResource(R.string.pair_expires, state.expiresIn.toString()), color = Tokens.Muted, fontSize = 9.5.sp)
+    is PairingState.Waiting -> Row(
+      horizontalArrangement = Arrangement.spacedBy(18.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+          state.code.chunked(4).joinToString(" "),
+          modifier = Modifier.testTag(TagPairCode),
+          color = Tokens.Text,
+          fontSize = 30.sp,
+          fontFamily = FontFamily.Monospace,
+          fontWeight = FontWeight.ExtraBold,
+          letterSpacing = 3.sp,
+          maxLines = 1,
+        )
+        Text(stringResource(R.string.pair_expires, state.expiresIn.toString()), color = Tokens.Muted, fontSize = 9.5.sp)
+      }
+      if (state.link.isNotBlank()) QrCode(state.link, Modifier.size(112.dp).testTag(TagPairQr))
     }
     is PairingState.Failed -> Text(
       stringResource(state.error.failure.messageRes()),
@@ -234,7 +281,13 @@ private fun PairingPanel(
 @Composable
 private fun ServerStatusLine(check: ServerCheck) {
   when (check) {
-    ServerCheck.Idle, ServerCheck.Checking -> Spacer(Modifier.height(13.dp))
+    ServerCheck.Idle -> Spacer(Modifier.height(13.dp))
+    ServerCheck.Checking -> Text(
+      stringResource(R.string.common_loading),
+      modifier = Modifier.height(13.dp),
+      color = Tokens.Muted,
+      fontSize = 10.sp,
+    )
     is ServerCheck.Found -> Row(
       modifier = Modifier.height(13.dp),
       verticalAlignment = Alignment.CenterVertically,
