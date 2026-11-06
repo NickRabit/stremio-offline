@@ -11,6 +11,7 @@
   <string name="nav_catalog">Каталог</string>
   <string name="nav_library">Библиотека</string>
   <string name="nav_favorites">Избранное</string>
+  <string name="nav_downloads">Загрузки</string>
   <string name="nav_resume">Продолжить просмотр</string>
   <string name="nav_settings">Настройки</string>
   <string name="tv_nav_search">Поиск</string>
@@ -128,19 +129,6 @@
   <string name="home_ready_to_play">Готово к воспроизведению</string>
   <string name="home_recent">Недавно добавленные</string>
   <string name="home_to_confirm">Подтвердить</string>
-  <string name="home_downloads">Загрузки</string>
-  <plurals name="home_downloads_summary">
-    <item quantity="one">%1$s задача</item>
-    <item quantity="few">%1$s задачи</item>
-    <item quantity="many">%1$s задач</item>
-    <item quantity="other">%1$s задач</item>
-  </plurals>
-  <plurals name="home_attention">
-    <item quantity="one">%1$s требует внимания</item>
-    <item quantity="few">%1$s требуют внимания</item>
-    <item quantity="many">%1$s требуют внимания</item>
-    <item quantity="other">%1$s требуют внимания</item>
-  </plurals>
   <string name="home_partial">Некоторые названия не удалось проверить.</string>
   <string name="home_retry">Повторить</string>
   <string name="home_row_failed">Не удалось загрузить эту строку.</string>
@@ -164,7 +152,23 @@
   <string name="downloads_status_downloading">Загрузка</string>
   <string name="downloads_status_paused">Приостановлено</string>
   <string name="downloads_status_failed">Ошибка</string>
-  <string name="tv_queue_empty">Ничего не скачивается.</string>
+  <string name="downloads_empty_active">В данный момент загрузки не выполняются.</string>
+  <plurals name="tv_downloads_running">
+    <item quantity="one">%1$s загружается</item>
+    <item quantity="few">%1$s загружаются</item>
+    <item quantity="many">%1$s загружается</item>
+    <item quantity="other">%1$s загружается</item>
+  </plurals>
+  <string name="tv_downloads_progress">%1$s из %2$s</string>
+  <string name="tv_downloads_left">осталось %1$s</string>
+  <plurals name="tv_downloads_in_queue">
+    <item quantity="one">%1$s задание ожидает в очереди</item>
+    <item quantity="few">%1$s задания ожидают в очереди</item>
+    <item quantity="many">%1$s заданий ожидают в очереди</item>
+    <item quantity="other">%1$s задания ожидают в очереди</item>
+  </plurals>
+  <string name="tv_downloads_manage_on_web">Управление очередью на сайте</string>
+  <string name="tv_downloads_load_error">Не удалось загрузить данные о загрузках.</string>
   <string name="catalog_type_movie">фильм</string>
   <string name="catalog_type_series">серия</string>
   <string name="favorites_title">Избранное</string>

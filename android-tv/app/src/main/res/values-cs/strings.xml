@@ -11,6 +11,7 @@
   <string name="nav_catalog">Katalog</string>
   <string name="nav_library">Knihovna</string>
   <string name="nav_favorites">Oblíbené</string>
+  <string name="nav_downloads">Stahování</string>
   <string name="nav_resume">Pokračovat ve sledování</string>
   <string name="nav_settings">Nastavení</string>
   <string name="tv_nav_search">Hledat</string>
@@ -128,19 +129,6 @@
   <string name="home_ready_to_play">Připraveno k přehrání</string>
   <string name="home_recent">Nedávno přidané</string>
   <string name="home_to_confirm">K potvrzení</string>
-  <string name="home_downloads">Stahování</string>
-  <plurals name="home_downloads_summary">
-    <item quantity="one">1 úloha</item>
-    <item quantity="few">%1$s úlohy</item>
-    <item quantity="many">%1$s úlohy</item>
-    <item quantity="other">%1$s úloh</item>
-  </plurals>
-  <plurals name="home_attention">
-    <item quantity="one">1 vyžaduje pozornost</item>
-    <item quantity="few">%1$s vyžadují pozornost</item>
-    <item quantity="many">%1$s vyžaduje pozornost</item>
-    <item quantity="other">%1$s vyžaduje pozornost</item>
-  </plurals>
   <string name="home_partial">Některé tituly se nepodařilo ověřit.</string>
   <string name="home_retry">Zkusit znovu</string>
   <string name="home_row_failed">Tuto řadu se nepodařilo načíst.</string>
@@ -164,7 +152,23 @@
   <string name="downloads_status_downloading">Stahuji</string>
   <string name="downloads_status_paused">Pozastaveno</string>
   <string name="downloads_status_failed">Chyba</string>
-  <string name="tv_queue_empty">Nic se nestahuje.</string>
+  <string name="downloads_empty_active">Právě neprobíhá žádné stahování.</string>
+  <plurals name="tv_downloads_running">
+    <item quantity="one">%1$s právě běží</item>
+    <item quantity="few">%1$s právě běží</item>
+    <item quantity="many">%1$s právě běží</item>
+    <item quantity="other">%1$s právě běží</item>
+  </plurals>
+  <string name="tv_downloads_progress">%1$s z %2$s</string>
+  <string name="tv_downloads_left">zbývá %1$s</string>
+  <plurals name="tv_downloads_in_queue">
+    <item quantity="one">Ve frontě čeká %1$s položka</item>
+    <item quantity="few">Ve frontě čekají %1$s položky</item>
+    <item quantity="many">Ve frontě čeká %1$s položky</item>
+    <item quantity="other">Ve frontě čeká %1$s položek</item>
+  </plurals>
+  <string name="tv_downloads_manage_on_web">Správa fronty je na webu</string>
+  <string name="tv_downloads_load_error">Stahování se nepodařilo načíst.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">seriál</string>
   <string name="favorites_title">Oblíbené</string>

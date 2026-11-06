@@ -11,6 +11,7 @@
   <string name="nav_catalog">Catalogue</string>
   <string name="nav_library">Bibliothèque</string>
   <string name="nav_favorites">Favoris</string>
+  <string name="nav_downloads">Téléch.</string>
   <string name="nav_resume">Continuer à regarder</string>
   <string name="nav_settings">Paramètres</string>
   <string name="tv_nav_search">Rechercher</string>
@@ -128,15 +129,6 @@
   <string name="home_ready_to_play">Prêt à lire</string>
   <string name="home_recent">Ajouté récemment</string>
   <string name="home_to_confirm">À confirmer</string>
-  <string name="home_downloads">Téléchargements</string>
-  <plurals name="home_downloads_summary">
-    <item quantity="one">%1$s tâche</item>
-    <item quantity="other">%1$s tâches</item>
-  </plurals>
-  <plurals name="home_attention">
-    <item quantity="one">%1$s demande attention</item>
-    <item quantity="other">%1$s demandent attention</item>
-  </plurals>
   <string name="home_partial">Certains titres n’ont pas pu être vérifiés.</string>
   <string name="home_retry">Réessayer</string>
   <string name="home_row_failed">Cette rangée n’a pas pu être chargée.</string>
@@ -160,7 +152,19 @@
   <string name="downloads_status_downloading">Téléchargement</string>
   <string name="downloads_status_paused">En pause</string>
   <string name="downloads_status_failed">Erreur</string>
-  <string name="tv_queue_empty">Aucun téléchargement en cours.</string>
+  <string name="downloads_empty_active">Aucun téléchargement en cours pour le moment.</string>
+  <plurals name="tv_downloads_running">
+    <item quantity="one">%1$s en cours</item>
+    <item quantity="other">%1$s en cours</item>
+  </plurals>
+  <string name="tv_downloads_progress">%1$s sur %2$s</string>
+  <string name="tv_downloads_left">%1$s restantes</string>
+  <plurals name="tv_downloads_in_queue">
+    <item quantity="one">%1$s en attente dans la file</item>
+    <item quantity="other">%1$s en attente dans la file</item>
+  </plurals>
+  <string name="tv_downloads_manage_on_web">Gérer la file d\'attente sur le web</string>
+  <string name="tv_downloads_load_error">Impossible de charger les téléchargements.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">série</string>
   <string name="favorites_title">Favoris</string>

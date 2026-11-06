@@ -81,6 +81,8 @@ import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.remoteExtrasIdentity
 import cz.stremiooffline.tv.ui.detail.remoteMetadataNeedsItem
 import cz.stremiooffline.tv.ui.detail.resolveRemoteMetadata
+import cz.stremiooffline.tv.ui.downloads.DownloadsScreen
+import cz.stremiooffline.tv.ui.downloads.activeJobs
 import cz.stremiooffline.tv.ui.favorites.FavoritesRoute
 import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.HomeScreen
@@ -109,6 +111,7 @@ enum class Section(val route: String) {
   Library("library"),
   Resume("resume"),
   Favorites("favorites"),
+  Downloads("downloads"),
   Account("account"),
 }
 
@@ -127,6 +130,7 @@ private val Section.labelRes: Int
     Section.Library -> R.string.nav_library
     Section.Resume -> R.string.nav_resume
     Section.Favorites -> R.string.nav_favorites
+    Section.Downloads -> R.string.nav_downloads
     Section.Account -> R.string.nav_settings
   }
 
@@ -196,6 +200,7 @@ fun Shell(
   val catalogStack = remember { CatalogDetailStack() }
   var catalogReturnOrigin by remember { mutableStateOf<CatalogReturnOrigin?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
+  var downloading by remember { mutableStateOf(false) }
   /** The streams of the title the player is on: the catalogue reports them while addons answer. */
   var playerSources by remember { mutableStateOf(OfferedSources()) }
   /** The same for a play that started from the library: the title its file is bound to is looked
@@ -405,6 +410,18 @@ fun Shell(
   LaunchedEffect(Unit) {
     searchEverywhereEnabled = runCatching { api.searchEverywhereEnabled() }.getOrDefault(false)
   }
+  LaunchedEffect(player == null) {
+    if (player != null) return@LaunchedEffect
+    while (true) {
+      try {
+        downloading = activeJobs(api.downloads().jobs).isNotEmpty()
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+      }
+      delay(15_000L)
+    }
+  }
   LaunchedEffect(current) {
     detailLookup.cancel()
     if (current == Section.Library) {
@@ -433,6 +450,7 @@ fun Shell(
     username = username,
     start = start,
     current = current,
+    downloading = downloading,
     hint = hint,
     onSection = { section ->
       // The rail's Search is not the catalogue's or a library's: it starts with no preset.
@@ -502,6 +520,7 @@ fun Shell(
           restoreToken = returnToken,
           refreshToken = favoritesRefreshToken,
         )
+        Section.Downloads -> DownloadsScreen(api = api)
         Section.Catalog -> CatalogScreen(
           api = api,
           onOpenDetail = ::openCatalog,
@@ -688,6 +707,7 @@ fun ShellScaffold(
   username: String,
   start: Section,
   current: Section,
+  downloading: Boolean = false,
   onSection: (Section) -> Boolean = { false },
   onBackToExit: () -> Unit,
   railHidden: Boolean = false,
@@ -740,6 +760,7 @@ fun ShellScaffold(
       Rail(
         username = username,
         current = current,
+        downloading = downloading,
         requesters = railFocusRequesters,
         contentRequester = { contentFocusRequester },
         onFocusChanged = { section, focused ->
@@ -762,6 +783,7 @@ fun ShellScaffold(
 private fun Rail(
   username: String,
   current: Section,
+  downloading: Boolean,
   requesters: Map<Section, FocusRequester>,
   contentRequester: () -> FocusRequester,
   onFocusChanged: (Section, Boolean) -> Unit,
@@ -775,6 +797,7 @@ private fun Rail(
       Section.Library to LibraryIcon,
       Section.Resume to HistoryIcon,
       Section.Favorites to StarIcon,
+      Section.Downloads to DownloadIcon,
     )
   }
 
@@ -797,7 +820,30 @@ private fun Rail(
           .testTag(railTag(section))
           .focusRequester(requesters.getValue(section))
           .focusProperties { right = contentRequester() },
-        leading = { Icon(mark, contentDescription = null, modifier = Modifier.size(16.dp)) },
+        leading = {
+          if (section == Section.Downloads) {
+            Box(Modifier.size(24.dp)) {
+              Icon(
+                mark,
+                contentDescription = null,
+                modifier = Modifier.align(Alignment.Center).size(16.dp),
+              )
+              if (downloading) {
+                Box(
+                  Modifier
+                    .align(Alignment.TopEnd)
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(Tokens.Accent2)
+                    .border(2.dp, Tokens.Bg, CircleShape)
+                    .testTag(TagRailDownloadingDot),
+                )
+              }
+            }
+          } else {
+            Icon(mark, contentDescription = null, modifier = Modifier.size(16.dp))
+          }
+        },
         onFocusChanged = { onFocusChanged(section, it) },
         onClick = { onSelect(section) },
       )
@@ -821,6 +867,8 @@ private fun Rail(
 }
 
 fun railTag(section: Section): String = TAG_RAIL_PREFIX + section.route
+
+const val TagRailDownloadingDot = "rail_downloading_dot"
 
 /** RIGHT from the rail goes to the content's remembered element when that element is on screen;
  *  a section that has not attached it yet (still loading, or a screen without one) falls back to
@@ -982,4 +1030,14 @@ private val StarIcon = outlineIcon("Star") {
   lineTo(3.4f, 9.9f)
   lineTo(9.4f, 9f)
   close()
+}
+
+private val DownloadIcon = outlineIcon("Download") {
+  moveTo(12f, 4f)
+  lineTo(12f, 15f)
+  moveTo(7f, 10f)
+  lineTo(12f, 15f)
+  lineTo(17f, 10f)
+  moveTo(5f, 19f)
+  lineTo(19f, 19f)
 }

@@ -25,8 +25,6 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
-import cz.stremiooffline.tv.data.DownloadDto
-import cz.stremiooffline.tv.data.DownloadsResponseDto
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.HomeCardsJson
 import cz.stremiooffline.tv.data.HomeOrderEntry
@@ -602,13 +600,13 @@ class HomeScreenTest {
   }
 
   @Test
-  fun `the downloads strip is hidden without jobs`() {
+  fun `home never loads the downloads queue`() {
     val api = FakeTvApi()
     serve(api, order("resume"), mapOf("resume" to row(resumeFile("a", "First"))))
     mount(api)
     compose.waitForIdle()
 
-    compose.onNodeWithTag(TagDownloadsStrip).assertDoesNotExist()
+    assertEquals(0, api.downloadsRequests)
   }
 
   // Found on the owner's server: the focused first card's left border and glow were cut off.
@@ -628,32 +626,6 @@ class HomeScreenTest {
       "the scaled card ${card.left - half}..${card.right + half} does not fit the row ${row.left}..${row.right}",
       card.left - half >= row.left && card.right + half <= row.right,
     )
-  }
-
-  @Test
-  fun `the downloads strip counts the jobs, marks attention and opens the queue panel`() {
-    val api = FakeTvApi()
-    serve(api, emptyList(), emptyMap())
-    api.downloadsValue = DownloadsResponseDto(
-      listOf(DownloadDto(id = "j", title = "It", status = "failed", order = 0, mine = true)),
-    )
-    mount(api)
-    compose.waitForIdle()
-
-    compose.onNodeWithText(context.resources.getQuantityString(R.plurals.home_downloads_summary, 1, 1)).assertExists()
-    compose.onNodeWithText(context.resources.getQuantityString(R.plurals.home_attention, 1, 1)).assertExists()
-    compose.onNodeWithTag(TagDownloadsStrip).performKeyInput { pressKey(Key.DirectionCenter) }
-    compose.waitForIdle()
-
-    compose.onAllNodesWithText(context.getString(R.string.home_downloads)).assertCountEquals(2)
-    compose.onNodeWithText("It").assertExists()
-    compose.onNodeWithText(context.getString(R.string.tv_queue_empty)).assertDoesNotExist()
-
-    compose.onRoot().performKeyInput { pressKey(Key.Back) }
-    compose.waitForIdle()
-    compose.onNodeWithText("It").assertDoesNotExist()
-    compose.onAllNodesWithText(context.getString(R.string.home_downloads)).assertCountEquals(1)
-    compose.onNodeWithTag(TagDownloadsStrip).assertIsFocused()
   }
 
   @Test

@@ -24,6 +24,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.R
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -69,8 +70,22 @@ class RailTest {
     compose.onNodeWithTag(railTag(Section.Catalog)).assertContentDescriptionEquals(context.getString(R.string.nav_catalog))
     compose.onNodeWithTag(railTag(Section.Library)).assertContentDescriptionEquals(context.getString(R.string.nav_library))
     compose.onNodeWithTag(railTag(Section.Favorites)).assertContentDescriptionEquals(context.getString(R.string.nav_favorites))
+    compose.onNodeWithTag(railTag(Section.Downloads)).assertContentDescriptionEquals(context.getString(R.string.nav_downloads))
     // The account item shows the avatar alone; the username is only its spoken name.
     compose.onNodeWithTag(railTag(Section.Account)).assertContentDescriptionEquals("demo")
+  }
+
+  @Test
+  fun `downloads sits between favourites and the account and the rail fits the screen`() {
+    mount()
+
+    val favorites = compose.onNodeWithTag(railTag(Section.Favorites)).getUnclippedBoundsInRoot()
+    val downloads = compose.onNodeWithTag(railTag(Section.Downloads)).getUnclippedBoundsInRoot()
+    val account = compose.onNodeWithTag(railTag(Section.Account)).getUnclippedBoundsInRoot()
+
+    assertTrue(favorites.top < downloads.top)
+    assertTrue(downloads.top < account.top)
+    assertTrue("account rail item ends at ${account.bottom}", account.bottom.value <= 540f)
   }
 
   @Test

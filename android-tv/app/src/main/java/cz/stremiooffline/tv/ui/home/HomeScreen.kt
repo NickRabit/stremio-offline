@@ -33,7 +33,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,7 +53,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,7 +68,6 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import cz.stremiooffline.tv.R
-import cz.stremiooffline.tv.data.DownloadDto
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.MetaDto
@@ -92,11 +89,8 @@ import cz.stremiooffline.tv.ui.settings.typeTag
 import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlin.math.roundToInt
-import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
-const val TagDownloadsStrip = "home_downloads_strip"
 const val TagBackdropTitle = "home_backdrop_title"
 const val TagBackdropHero = "home_backdrop_hero"
 const val TagHeroMetaLoading = "home_hero_meta_loading"
@@ -113,7 +107,6 @@ fun homeRowTag(rowId: String): String = "row:$rowId"
 
 fun homeRetryTag(rowId: String): String = "home_retry:$rowId"
 
-private const val StripId = "downloads"
 private val BackdropHeight = 300.dp
 private val RowsTop = 270.dp
 private val RowGap = 14.dp
@@ -124,8 +117,8 @@ private const val HeroCopyFadeMs = 200
 private const val PlaceholderCards = 5
 
 /**
- * The rail's Home: rows in the server's order, a backdrop that follows focus, lazy addon
- * carousels and the Downloads strip at the end.
+ * The rail's Home: rows in the server's order, a backdrop that follows focus and lazy addon
+ * carousels.
  */
 @Composable
 fun HomeScreen(
@@ -140,17 +133,6 @@ fun HomeScreen(
   LaunchedEffect(refreshToken) { if (refreshToken > 0) viewModel.refresh() }
   val state = viewModel.state
   val imageUrl = remember(api) { { path: String? -> path?.let(api::url) } }
-  var queueOpen by remember { mutableStateOf(false) }
-  val downloadsFocus = remember { FocusRequester() }
-  val scope = rememberCoroutineScope()
-
-  fun closeQueue() {
-    queueOpen = false
-    scope.launch {
-      awaitFrame()
-      runCatching { downloadsFocus.requestFocus() }
-    }
-  }
 
   // A catalogue row that came back before the addon answered is asked again, three times.
   state.rows.forEach { slot ->
@@ -180,16 +162,10 @@ fun HomeScreen(
         onReveal = viewModel::reveal,
         onRetry = viewModel::retry,
         onHeroMeta = viewModel::heroMeta,
-        downloadsFocus = downloadsFocus,
-        onDownloads = { queueOpen = true },
       )
-    }
-    if (queueOpen) {
-      QueuePanel(api, state.downloads, onClose = ::closeQueue)
     }
   }
 }
-
 @Composable
 private fun HomeLoading() {
   Column(
@@ -252,16 +228,12 @@ private fun HomeBody(
   onReveal: (String) -> Unit,
   onRetry: (String) -> Unit,
   onHeroMeta: (String, String) -> Unit,
-  downloadsFocus: FocusRequester,
-  onDownloads: () -> Unit,
 ) {
   val slots = state.rows.filter { drawnContent(it.content) }
-  val downloads = homeQueue(state.downloads)
-  val attention = attentionCount(state.downloads)
   val allEmpty = state.rows.isNotEmpty() &&
     state.rows.all { slot -> (slot.content as? RowContent.Cards)?.let { it.items.isEmpty() && !it.partial } == true }
 
-  if (allEmpty && downloads.isEmpty()) {
+  if (allEmpty) {
     HomeEmptyPanel()
     return
   }
@@ -275,7 +247,7 @@ private fun HomeBody(
   val rowHeights = remember { mutableStateMapOf<String, Int>() }
   val gapPx = with(LocalDensity.current) { RowGap.toPx() }
 
-  val rowIds = slots.map { it.id } + if (downloads.isNotEmpty()) listOf(StripId) else emptyList()
+  val rowIds = slots.map { it.id }
   val focusedIndex = rowIds.indexOf(focusedRowId).takeIf { it >= 0 } ?: 0
   val focusedSlot = slots.getOrNull(focusedIndex)
   val focusedItems = (focusedSlot?.content as? RowContent.Cards)?.items.orEmpty()
@@ -388,19 +360,6 @@ private fun HomeBody(
             onCardClick = { card -> onAction(actionFor(card)) },
             onRetry = { onRetry(slot.id) },
             onSize = { rowHeights[slot.id] = it },
-          )
-        }
-        if (downloads.isNotEmpty()) {
-          DownloadsStrip(
-            jobs = downloads,
-            attention = attention,
-            onSize = { rowHeights[StripId] = it },
-            onClick = onDownloads,
-            requester = downloadsFocus.also { requesters[StripId to "index:0"] = it },
-            onFocus = {
-              focusedRowId = StripId
-              focusedCardIndex = 0
-            },
           )
         }
       }
@@ -718,57 +677,5 @@ private fun HomeCardView(
       caption = caption,
       cardTag = cardTag,
     )
-  }
-}
-
-@Composable
-private fun DownloadsStrip(
-  jobs: List<DownloadDto>,
-  attention: Int,
-  requester: FocusRequester,
-  onSize: (Int) -> Unit,
-  onFocus: () -> Unit,
-  onClick: () -> Unit,
-) {
-  val shape = RoundedCornerShape(12.dp)
-  Column(Modifier.fillMaxWidth().padding(start = Tokens.SafeX, end = Tokens.SafeX).onSizeChanged { onSize(it.height) }) {
-    Text(stringResource(R.string.home_downloads), color = Tokens.Text, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-    Spacer(Modifier.height(9.dp))
-    Surface(
-      onClick = onClick,
-      modifier = Modifier
-        .testTag(TagDownloadsStrip)
-        .focusRequester(requester)
-        .onFocusChanged { if (it.isFocused) onFocus() },
-      shape = ClickableSurfaceDefaults.shape(shape = shape),
-      scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
-      glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Tokens.Accent2.copy(alpha = 0.35f), 18.dp)),
-      border = ClickableSurfaceDefaults.border(
-        border = Border(BorderStroke(1.dp, Tokens.Line), shape = shape),
-        focusedBorder = Border(BorderStroke(2.dp, Tokens.Accent2), shape = shape),
-      ),
-      colors = ClickableSurfaceDefaults.colors(containerColor = Tokens.Panel, focusedContainerColor = Tokens.Panel2),
-    ) {
-      Row(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Text(
-          pluralStringResource(R.plurals.home_downloads_summary, jobs.size, jobs.size),
-          color = Tokens.Text,
-          fontSize = 13.sp,
-          fontWeight = FontWeight.SemiBold,
-        )
-        if (attention > 0) {
-          Text(
-            pluralStringResource(R.plurals.home_attention, attention, attention),
-            color = Tokens.Red,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-          )
-        }
-      }
-    }
   }
 }
