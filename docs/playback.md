@@ -74,7 +74,13 @@ your audio and subtitle choices. If you picked the source by hand, it stays
 with that provider while it still has a source; if the active rule picked it, the
 rule picks again, and a library copy of the next episode that meets the rule
 plays from the library. The library also offers previous/next-file navigation. Finishing
-a movie leaves the player open.
+a movie, or the last episode there is, closes the player and returns to the title's detail.
+
+On Android TV the countdown card plays the next episode at zero, **OK** plays it at once
+and **Back** dismisses it. An episode started from a catalogue title's detail moves on
+through that detail: its source rules pick the next episode's source, the same way Play
+would there. When that episode has nothing playable, the player closes on its detail,
+which shows the sources or the reason.
 
 **Settings → Playback → Offer the next episode** can bring that offer forward: at
 97–99 % of the episode, or 30 s to 3 min before its end. With either of those, a

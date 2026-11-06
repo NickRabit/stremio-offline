@@ -879,10 +879,12 @@ open class FakeTvApi : TvApi {
     startedCapabilities += capabilities
     startedSubtitleIds += subtitleIds
     startedLanguages += StartLanguages(audioLanguage, subtitleLanguage, subtitleOff)
-    return startAnswer
+    return startAnswers[sourceId] ?: startAnswer
   }
 
   var startAnswer: PlaybackDescriptorDto = PlaybackDescriptorDto(id = "p1", url = "stream.mp4")
+  /** A session of its own for a source, so two episodes are two different streams. */
+  val startAnswers: MutableMap<String, PlaybackDescriptorDto> = mutableMapOf()
   val startedSubtitleIds: MutableList<List<String>> = mutableListOf()
   /** The track choices each start named on the wire, in order. */
   val startedLanguages: MutableList<StartLanguages> = mutableListOf()

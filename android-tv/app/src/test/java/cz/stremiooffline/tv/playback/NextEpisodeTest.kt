@@ -22,4 +22,12 @@ class NextEpisodeTest {
     assertNull(nextEpisodeOf(null))
     assertNull(nextEpisodeOf(NextFileDto("", "")))
   }
+
+  @Test
+  fun `the end offers a next episode, waits for its lookup, and otherwise leaves`() {
+    assertEquals(EndAction.OfferNext, endAction(hasNext = true, nextPending = false))
+    assertEquals(EndAction.OfferNext, endAction(hasNext = true, nextPending = true))
+    assertEquals(EndAction.Wait, endAction(hasNext = false, nextPending = true))
+    assertEquals(EndAction.Leave, endAction(hasNext = false, nextPending = false))
+  }
 }
