@@ -154,6 +154,7 @@ export function PairDeviceDialog({ session, onClose, onNotify }: {
             <span>{t("pair.code")}</span>
             <input
               ref={input}
+              autoFocus
               value={code}
               onChange={(event) => edit(event.target.value)}
               autoComplete="off"

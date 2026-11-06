@@ -157,4 +157,8 @@ describe("PairDeviceDialog", () => {
     expect(button("Deny")).toBeUndefined();
     expect(button(next)).toBeTruthy();
   });
+  it("puts the cursor in the code field when it opens", async () => {
+    await mount();
+    expect(document.activeElement).toBe(document.body.querySelector('input[autocomplete="off"]'));
+  });
 });
