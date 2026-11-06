@@ -613,6 +613,25 @@ export interface UserAccount {
 /** `mustChangePassword` is set when an administrator chose the password this session signed
  *  in with. The server refuses everything but the change itself while it stands. */
 export interface Session { username: string; role: UserRole; language?: Locale; mustChangePassword?: boolean }
+export interface PairingStart {
+  code: string;
+  pollToken: string;
+  expiresIn: number;
+  interval: number;
+}
+export interface PairingInspection {
+  code: string;
+  deviceLabel: string;
+  username: string;
+  nonce: string;
+  expiresIn: number;
+}
+export interface PairingApproved {
+  status: "approved";
+  username: string;
+  role: UserRole;
+  language: Locale;
+}
 /** A fresh install answers with the setup order instead of a session. Both carry the
  *  stored language: the sign-in and setup screens render before any other call. */
 export type AuthStatus = (Session | { setup: true }) & { language?: Locale };

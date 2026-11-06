@@ -5,6 +5,7 @@ import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, Rectangl
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, describeError, saveToDevice } from "./api";
 import { LoginScreen, PasswordChangeRequired } from "./Login";
+import { clearPairLink, PairDeviceDialog, pairLinkCode } from "./PairDeviceDialog";
 import { bytes, Heading, hideBroken } from "./settings-ui";
 import { Player } from "./Player";
 import { TrailerPlayer } from "./TrailerPlayer";
@@ -936,6 +937,8 @@ export function App() {
     } catch (error) { fail(error); }
   };
   const notify = (text: string) => { setMessage(text); setTimeout(() => setMessage(""), 3200); };
+  const [pairLink, setPairLink] = useState(() => pairLinkCode());
+  useEffect(() => { if (pairLink) clearPairLink(); }, []);
   const fail = (value: unknown) => {
     if (value instanceof ApiError && value.status === 401) { setSession(null); return; }
     // A failure with a reference stays long enough to copy the reference down.
@@ -4357,6 +4360,7 @@ export function App() {
       onRememberFollowSourceProfile={rememberFollowSourceProfile}
       follow={{ create: { metaId: followStart.id, name: followStart.name, poster: followStart.poster, ...(followStart.addonKey ? { addonKey: followStart.addonKey } : {}) }, onFollowed: (follow) => followed(followStart, follow) }} onClose={() => setFollowStart(null)}/>}
     {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
+    {pairLink && !restricted && <PairDeviceDialog session={session!} initialCode={pairLink} onClose={() => setPairLink(null)} onNotify={notify}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>
   </TitleExtrasActions.Provider>;

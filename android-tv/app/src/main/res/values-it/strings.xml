@@ -7,6 +7,15 @@
   <string name="auth_sign_in">Accedi</string>
   <string name="auth_sign_out">Esci</string>
   <string name="auth_signed_in_as">Accedi come %1$s</string>
+  <string name="pair_phone">Accedi con il telefono</string>
+  <string name="pair_expires">Questo codice scade tra %1$s secondi.</string>
+  <string name="pair_instructions">Inquadra il codice QR con il telefono, oppure apri Impostazioni → Account → Abbina un dispositivo e inserisci questo codice.</string>
+  <string name="pair_unsupported">Questo server non supporta l’abbinamento dei dispositivi. Accedi con la password o aggiorna il server.</string>
+  <string name="pair_expired">Questo codice è scaduto o è stato negato. Ricomincia sul televisore.</string>
+  <string name="common_loading">Caricamento…</string>
+  <string name="common_retry">Riprova</string>
+  <string name="err_restricted">Questa istanza è in modalità limitata.</string>
+  <string name="err_pair_busy">Troppi dispositivi sono in attesa. Riprova più tardi.</string>
   <string name="nav_home">Home</string>
   <string name="nav_catalog">Catalogo</string>
   <string name="nav_library">Libreria</string>

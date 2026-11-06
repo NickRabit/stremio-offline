@@ -4,6 +4,7 @@ import { api, describeError } from "./api";
 import type { Session } from "./types";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES, useI18n, type Locale } from "./i18n";
+import { PairDeviceDialog } from "./PairDeviceDialog";
 
 export function LoginScreen({ setup, onSession }: { setup: boolean; onSession: (session: Session) => void }) {
   const { t, locale, setLocale } = useI18n();
@@ -124,6 +125,7 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pairing, setPairing] = useState(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -142,24 +144,28 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
     try { await api.logout(everywhere); } finally { location.reload(); }
   };
 
-  return <form className="panel settings-section" onSubmit={submit}>
-    <SettingsSectionHead icon={<KeyRound/>} title={t("auth.sectionTitle")} text={t("auth.signedInAs", { username: session.username })}/>
-    {!restricted && <>
-      <SettingControl title={t("auth.username")} text={t("auth.usernameHint")}>
-        <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required/>
-      </SettingControl>
-      <SettingControl title={t("auth.currentPassword")} text={t("auth.currentPasswordHint")}>
-        <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required/>
-      </SettingControl>
-      <SettingControl title={t("auth.newPassword")} text={t("auth.newPasswordHint")}>
-        <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" required/>
-      </SettingControl>
-    </>}
-    <div className="setting-actions">
-      {!restricted && <button className="primary" disabled={busy}><KeyRound/> {t("auth.changeCredentials")}</button>}
-      <button type="button" onClick={() => void signOut(false)}><LogOut/> {t("auth.signOut")}</button>
-      {!restricted && <button type="button" className="danger" onClick={() => void signOut(true)}><ShieldAlert/> {t("auth.signOutEverywhere")}</button>}
-    </div>
-    {!restricted && <small className="setting-note">{t("auth.sessionNote")}</small>}
-  </form>;
+  return <>
+    <form className="panel settings-section" onSubmit={submit}>
+      <SettingsSectionHead icon={<KeyRound/>} title={t("auth.sectionTitle")} text={t("auth.signedInAs", { username: session.username })}/>
+      {!restricted && <>
+        <SettingControl title={t("auth.username")} text={t("auth.usernameHint")}>
+          <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required/>
+        </SettingControl>
+        <SettingControl title={t("auth.currentPassword")} text={t("auth.currentPasswordHint")}>
+          <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required/>
+        </SettingControl>
+        <SettingControl title={t("auth.newPassword")} text={t("auth.newPasswordHint")}>
+          <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" required/>
+        </SettingControl>
+      </>}
+      <div className="setting-actions">
+        {!restricted && <button className="primary" disabled={busy}><KeyRound/> {t("auth.changeCredentials")}</button>}
+        <button type="button" onClick={() => void signOut(false)}><LogOut/> {t("auth.signOut")}</button>
+        {!restricted && <button type="button" className="danger" onClick={() => void signOut(true)}><ShieldAlert/> {t("auth.signOutEverywhere")}</button>}
+        {!restricted && <button type="button" disabled={busy} onClick={() => setPairing(true)}>{t("pair.title")}</button>}
+      </div>
+      {!restricted && <small className="setting-note">{t("auth.sessionNote")}</small>}
+    </form>
+    {!restricted && pairing && <PairDeviceDialog session={session} onClose={() => setPairing(false)} onNotify={onNotify}/>}
+  </>;
 }

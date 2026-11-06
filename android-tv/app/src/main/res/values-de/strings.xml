@@ -7,6 +7,15 @@
   <string name="auth_sign_in">Anmelden</string>
   <string name="auth_sign_out">Abmelden</string>
   <string name="auth_signed_in_as">Angemeldet als %1$s</string>
+  <string name="pair_phone">Mit Telefon anmelden</string>
+  <string name="pair_expires">Dieser Code läuft in %1$s Sekunden ab.</string>
+  <string name="pair_instructions">Scannen Sie den QR-Code mit dem Telefon oder öffnen Sie dort Einstellungen → Konto → Gerät koppeln und geben Sie diesen Code ein.</string>
+  <string name="pair_unsupported">Dieser Server unterstützt das Koppeln von Geräten nicht. Melden Sie sich mit dem Passwort an oder aktualisieren Sie den Server.</string>
+  <string name="pair_expired">Dieser Code ist abgelaufen oder wurde abgelehnt. Beginnen Sie am Fernseher erneut.</string>
+  <string name="common_loading">Laden…</string>
+  <string name="common_retry">Erneut versuchen</string>
+  <string name="err_restricted">Diese Instanz befindet sich im eingeschränkten Modus.</string>
+  <string name="err_pair_busy">Zu viele Geräte warten. Versuchen Sie es später erneut.</string>
   <string name="nav_home">Startseite</string>
   <string name="nav_catalog">Katalog</string>
   <string name="nav_library">Bibliothek</string>

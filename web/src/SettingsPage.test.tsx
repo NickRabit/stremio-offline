@@ -147,6 +147,14 @@ describe("SettingsPage tabs", () => {
     await render({}, true);
     await selectTab("Home");
     expect(startView().disabled).toBe(true);
+    await selectTab("Account");
+    expect(host.textContent).not.toContain(en["pair.title"]);
+  });
+
+  it("offers device pairing from ordinary Account Settings", async () => {
+    await render();
+    await selectTab("Account");
+    expect([...host.querySelectorAll("button")].some((candidate) => candidate.textContent?.trim() === en["pair.title"])).toBe(true);
   });
 
   it("reopens the tab the session stored", async () => {

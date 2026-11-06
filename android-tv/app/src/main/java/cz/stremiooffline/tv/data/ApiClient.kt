@@ -196,6 +196,66 @@ class ApiClient(
       }
   }
 
+  suspend fun startPairing(deviceLabel: String): PairingStartOutcome {
+    val payload = json.encodeToString(PairingStartRequest.serializer(), PairingStartRequest(deviceLabel))
+    val request = Request.Builder()
+      .url(address.resolve("/api/auth/pair/start"))
+      .post(payload.toRequestBody(mediaType))
+      .build()
+    return try {
+      callCancellable(request).closing { response ->
+        val body = readBody(response, log = false)
+        if (response.isSuccessful) {
+          val parsed = body.decodeOrNull<PairingStartResponse>()
+          if (parsed == null || parsed.code.length != 8 || parsed.pollToken.isBlank()) {
+            PairingStartOutcome.Failed(PairingErrorInfo(PairingFailure.Incompatible))
+          } else {
+            PairingStartOutcome.Started(parsed.code, parsed.pollToken, parsed.expiresIn, parsed.interval)
+          }
+        } else {
+          PairingStartOutcome.Failed(pairingError(response, body))
+        }
+      }
+    } catch (error: ApiError) {
+      PairingStartOutcome.Failed(
+        PairingErrorInfo(
+          if (error.failure == ApiFailure.Unreachable) PairingFailure.Unreachable else PairingFailure.Generic,
+          serverMessage = error.serverMessage,
+        ),
+      )
+    }
+  }
+
+  suspend fun pollPairing(pollToken: String): PairingPollOutcome {
+    val payload = json.encodeToString(PairingPollRequest.serializer(), PairingPollRequest(pollToken))
+    val request = Request.Builder()
+      .url(address.resolve("/api/auth/pair/poll"))
+      .post(payload.toRequestBody(mediaType))
+      .build()
+    return try {
+      callCancellable(request).closing { response ->
+        val body = readBody(response, log = false)
+        if (!response.isSuccessful) return@closing PairingPollOutcome.Failed(pairingError(response, body))
+        when (val parsed = body.decodeOrNull<PairingPollResponse>()) {
+          null -> PairingPollOutcome.Failed(PairingErrorInfo(PairingFailure.Incompatible))
+          else -> when (parsed.status) {
+            "pending" -> PairingPollOutcome.Pending
+            "approved" -> parsed.username?.let { PairingPollOutcome.Approved(it, parsed.language) }
+              ?: PairingPollOutcome.Failed(PairingErrorInfo(PairingFailure.Incompatible))
+            else -> PairingPollOutcome.Failed(PairingErrorInfo(PairingFailure.Generic))
+          }
+        }
+      }
+    } catch (error: ApiError) {
+      PairingPollOutcome.Failed(
+        PairingErrorInfo(
+          if (error.failure == ApiFailure.Unreachable) PairingFailure.Unreachable else PairingFailure.Generic,
+          serverMessage = error.serverMessage,
+        ),
+      )
+    }
+  }
+
   suspend fun me(): MeResult {
     val request = Request.Builder().url(address.resolve("/api/auth/me")).get().build()
     val started = System.currentTimeMillis()
@@ -837,6 +897,21 @@ class ApiClient(
       404, 410 -> throw ApiError(ApiFailure.NotFound, serverMessage = error?.error, status = response.code, messageKey = error?.messageKey)
       else -> throw ApiError(ApiFailure.Generic, serverMessage = error?.error, status = response.code, messageKey = error?.messageKey)
     }
+  }
+
+  private fun pairingError(response: Response, body: String): PairingErrorInfo {
+    val error = body.decodeOrNull<ErrorBody>()
+    val seconds = response.header("Retry-After")?.toIntOrNull() ?: error?.vars?.seconds
+    val failure = when {
+      response.code == 429 -> PairingFailure.Busy
+      response.code == 410 -> PairingFailure.Expired
+      response.code == 404 || response.code == 405 -> PairingFailure.Unsupported
+      error?.messageKey == "err.restricted" -> PairingFailure.Restricted
+      error?.messageKey == "err.noAccount" -> PairingFailure.NeedsSetup
+      error?.messageKey == "err.mustChangePassword" -> PairingFailure.MustChangePassword
+      else -> PairingFailure.Generic
+    }
+    return PairingErrorInfo(failure, seconds, error?.error, error?.messageKey)
   }
 
   private inline fun <reified T> String.decode(): T? = try {

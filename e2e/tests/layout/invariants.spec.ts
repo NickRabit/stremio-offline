@@ -165,6 +165,31 @@ test.describe("layout invariants", () => {
     expect(escaped, "row controls outside their row").toEqual([]);
   });
 
+  test("the pair-device dialog keeps its form and primary action inside the viewport", async ({ page, request }, testInfo) => {
+    const started = await request.post("/api/auth/pair/start", { data: { deviceLabel: "Viewport TV" } });
+    expect(started.status()).toBe(201);
+    const { code } = await started.json() as { code: string };
+
+    await openView(page, "Nastavení");
+    await page.getByRole("tab", { name: "Účet", exact: true }).click();
+    await page.getByRole("button", { name: "Spárovat zařízení", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Spárovat zařízení" });
+    await dialog.getByLabel("Kód na televizi").fill(code);
+    await expect(dialog.getByRole("button", { name: "Pokračovat", exact: true })).toBeInViewport();
+
+    const viewport = page.viewportSize()!;
+    const card = (await dialog.locator(".identify-card").boundingBox())!;
+    expect(card.x, `${testInfo.project.name}: the pairing card starts offscreen`).toBeGreaterThanOrEqual(-1);
+    expect(card.y, `${testInfo.project.name}: the pairing card starts above the viewport`).toBeGreaterThanOrEqual(-1);
+    expect(card.x + card.width, `${testInfo.project.name}: the pairing card ends offscreen`).toBeLessThanOrEqual(viewport.width + 1);
+    expect(card.y + card.height, `${testInfo.project.name}: the pairing card ends below the viewport`).toBeLessThanOrEqual(viewport.height + 1);
+    const overflow = await horizontalOverflow(page);
+    expect(overflow.offenders, `${testInfo.project.name}: the pairing dialog overflows horizontally`).toEqual([]);
+    expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1);
+    await dialog.getByRole("button", { name: "Zrušit", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+  });
+
   test("navigation follows the 700px breakpoint", async ({ page }, testInfo) => {
     await openView(page, "Katalog");
     const width = page.viewportSize()!.width;

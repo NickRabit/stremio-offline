@@ -637,6 +637,17 @@ test("a missing or read-only target pauses the remote copy before any byte", asy
 
 test("the native proof deadline stops bytes even when revalidation ignores abort", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+  // The proof interval starts only after the GET answered and the disk was checked, through real
+  // file I/O, so no fixed number of event-loop turns is enough on a busy runner: wait for the
+  // interval itself to be set.
+  const mockedInterval = globalThis.setInterval;
+  let guardStarted!: () => void;
+  const guard = new Promise<void>((resolve) => { guardStarted = resolve; });
+  t.mock.method(globalThis, "setInterval", ((callback: () => void, ms?: number) => {
+    const timer = mockedInterval(callback, ms);
+    if (ms === 20) guardStarted();
+    return timer;
+  }) as typeof setInterval);
   const h = await harness({ total: 4 * MiB, chunkDelayMs: 8, revalidateMs: 20, revalidateTimeoutMs: 30 });
   let release!: () => void;
   h.remote.revalidateGate = new Promise<void>((resolve) => { release = resolve; });
@@ -645,9 +656,7 @@ test("the native proof deadline stops bytes even when revalidation ignores abort
     const ref = reference();
     await h.queue.add("Movie", sealedStream(ref, h.remote.body.length), undefined, settings, OWNER, ref);
     const id = h.queue.list()[0]!.id;
-    for (let attempt = 0; attempt < 1000 && h.remote.calls.length === 0; attempt += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+    await guard;
     assert.equal(h.remote.calls.length, 1);
     assert.equal(h.remote.revalidations, 0, "the proof interval has not run yet");
     t.mock.timers.tick(20);
@@ -655,9 +664,8 @@ test("the native proof deadline stops bytes even when revalidation ignores abort
     t.mock.timers.tick(29);
     assert.notEqual(h.queue.get(id)?.status, "paused");
     t.mock.timers.tick(1);
-    for (let attempt = 0; attempt < 1000 && h.queue.get(id)?.status !== "paused"; attempt += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+    // The pause only waits for the abort to unwind; the test timeout names one that never comes.
+    while (h.queue.get(id)?.status !== "paused") await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(h.queue.get(id)?.status, "paused");
     assert.ok((h.queue.get(id)?.received ?? 0) < h.remote.body.length);
     assert.equal(h.remote.calls.length, 1);

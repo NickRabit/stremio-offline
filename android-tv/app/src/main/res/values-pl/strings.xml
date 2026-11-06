@@ -7,6 +7,15 @@
   <string name="auth_sign_in">Zaloguj się</string>
   <string name="auth_sign_out">Wyloguj się</string>
   <string name="auth_signed_in_as">Zalogowano jako %1$s</string>
+  <string name="pair_phone">Zaloguj się telefonem</string>
+  <string name="pair_expires">Ten kod wygaśnie za %1$s s.</string>
+  <string name="pair_instructions">Zeskanuj kod QR telefonem albo otwórz na nim Ustawienia → Konto → Sparuj urządzenie i wpisz ten kod.</string>
+  <string name="pair_unsupported">Ten serwer nie obsługuje parowania urządzeń. Zaloguj się hasłem lub zaktualizuj serwer.</string>
+  <string name="pair_expired">Ten kod wygasł lub został odrzucony. Zacznij ponownie na telewizorze.</string>
+  <string name="common_loading">Ładowanie…</string>
+  <string name="common_retry">Spróbuj ponownie</string>
+  <string name="err_restricted">Ta instancja jest w trybie ograniczonym.</string>
+  <string name="err_pair_busy">Zbyt wiele urządzeń czeka. Spróbuj później.</string>
   <string name="nav_home">Start</string>
   <string name="nav_catalog">Katalog</string>
   <string name="nav_library">Biblioteka</string>

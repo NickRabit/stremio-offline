@@ -1,11 +1,9 @@
 # Android TV client: specification
 
-Status: proposed, nothing implemented. Written 2026-10-10 against `main` at
-0.5.36. It revises an implementation brief from another agent; every claim
-about current behaviour below was checked against the source, and a second,
-independent pass re-checked the routes, the playback lifecycle and the Home
-contract. The [roadmap](roadmap.md) owns priority; this file owns the scope and
-the contracts. A clickable layout study lives in
+Status: implemented, including the manual-code sign-in MVP. Written 2026-10-10
+against `main` at 0.5.36 and updated for later shipped work; the
+[roadmap](roadmap.md) owns priority, while this file owns the scope and the
+contracts. A clickable layout study lives in
 [android-tv-prototype](android-tv-prototype/index.html).
 
 ## Outcome
@@ -185,7 +183,24 @@ text comes from the `AppError` `messageKey`.
   stored with Android Keystore protection; the password is never stored.
 - Cleartext HTTP is allowed only for the address the user typed (network
   security config), never by downgrading HTTPS or skipping certificate checks.
-- Pairing by QR code, server discovery and Cloudflare Access are follow-ups.
+- **Sign-in by code is implemented.** The username, password and both sign-in
+  buttons (side by side) take focus only once the server answered `/api/status`;
+  until then the D-pad stays on the address. **Sign in with phone** requests an eight-character code from
+  `POST /api/auth/pair/start`. The TV polls every five seconds with the private
+  poll token, stops after the five-minute deadline, and treats expiry, denial,
+  restricted mode and an older server as terminal states with a clear retry or
+  password fallback. Beside the code a QR code links to `<server>/?pair=<code>`,
+  which opens the web confirmation with the code looked up (after a sign-in if
+  needed). Otherwise the signed-in phone or computer opens Settings → Account →
+  Pair a device, inspects the account and device label, then explicitly approves
+  the code. The approval creates a separate ordinary 30-day TV session; it does
+  not reuse the approver's session identifier or cookie.
+- Pairing works through reverse-proxy path prefixes because the TV keeps the full
+  `ServerAddress.display`. The session cookie is received into an isolated
+  staging jar and only adopted after the approval and settings bootstrap are
+  still current; a cancelled or superseded request cannot sign the TV in.
+- Server discovery, public URL configuration, Cloudflare Access changes and
+  device inventory remain deferred.
 
 ## Playback: the server work comes first
 
@@ -317,7 +332,7 @@ carries a `messageKey` plus `vars`, mapped to the same catalogue.
 | PR | Contents | Proof |
 | --- | --- | --- |
 | 1 | Server: capability contract, MKV and audio-only conversion for native clients, the Home `order` array | Server unit tests; browser behaviour unchanged |
-| 2 | Android vertical slice: sign-in, Library → title → direct MKV playback with ping and release → stop → resume shown on the web | Debug run on the emulator, then a real device |
+| 2 | Android vertical slice: password or manual-code sign-in, Library → title → direct MKV playback with ping and release → stop → resume shown on the web | Debug run on the emulator, then a real device |
 | 3 | Home from `/api/home` and the Downloads summary | Instrumented focus tests |
 | 4 | Catalog: catalogs, type and genre, search, detail, source picker, To library | Instrumented focus tests |
 | 5 | Player completion: tracks, subtitles and delay, fallback, error states, diagnostics | Device matrix below |

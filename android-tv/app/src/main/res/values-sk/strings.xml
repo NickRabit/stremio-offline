@@ -7,6 +7,15 @@
   <string name="auth_sign_in">Prihlásiť sa</string>
   <string name="auth_sign_out">Odhlásiť sa</string>
   <string name="auth_signed_in_as">Prihlásený ako %1$s</string>
+  <string name="pair_phone">Prihlásiť pomocou telefónu</string>
+  <string name="pair_expires">Platnosť kódu vyprší za %1$s s.</string>
+  <string name="pair_instructions">Naskenujte QR kód telefónom, alebo na telefóne otvorte Nastavenia → Účet → Spárovať zariadenie a zadajte tento kód.</string>
+  <string name="pair_unsupported">Tento server nepodporuje párovanie zariadení. Prihláste sa heslom alebo aktualizujte server.</string>
+  <string name="pair_expired">Platnosť kódu vypršala alebo bol zamietnutý. Začnite znova na televízore.</string>
+  <string name="common_loading">Načítava sa…</string>
+  <string name="common_retry">Skúsiť znova</string>
+  <string name="err_restricted">Táto inštancia je v obmedzenom režime.</string>
+  <string name="err_pair_busy">Na prihlásenie čaká príliš mnoho zariadení. Skúste to neskôr.</string>
   <string name="nav_home">Domov</string>
   <string name="nav_catalog">Katalóg</string>
   <string name="nav_library">Knižnica</string>
