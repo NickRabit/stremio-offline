@@ -17,11 +17,12 @@ import { browseDirectory, holdsLibraryRoot, isVideo, listFolders, type LibraryEn
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryHealth } from "../library-probe.js";
 import type { TransferProgress } from "../library-transfer.js";
+import { localSeriesId, markerCovers } from "../local-series.js";
 import { log } from "../logger.js";
 import { assertUsableName } from "../naming.js";
 import { renamedSidecar, subtitleSidecars } from "../library-sidecars.js";
 import { fileProgressKeys, newestProgress, titleProgressKey } from "../progress-identity.js";
-import type { StoredProgress, UserPrefs } from "../store.js";
+import type { StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
 import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
@@ -44,6 +45,7 @@ export interface ContentDeps extends RouteContext {
   libraryRootBrowse(viewer: Viewer, options?: { prewarm?: boolean }): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
   /** Every title unit of every library, the walk the browse folder mosaic groups. */
   libraryUnits(read?: { stale?: boolean }): Promise<TitleUnit[]>;
+  markersOf(data: UserData): Record<string, WatchedMarker>;
   locateArtwork(entry: LibraryEntry, shape?: ArtShape): Promise<string | undefined>;
   locateFileArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
   locateFolderArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
@@ -73,7 +75,7 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
   const fileSnaps = deps.fileSnaps ?? new FileSnapCache();
   const mosaics = deps.mosaics ?? new MosaicCache(path.join(os.tmpdir(), `mosaics-${randomBytes(6).toString("hex")}`));
 
@@ -176,6 +178,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const progressUnits = await libraryUnits();
     const progressRecords = metaStore.qualifiedMeta();
     const progress = progressOf(data);
+    const markers = markersOf(data);
     const relative = resolved?.relative ?? "";
     const looseEpisodes = seriesTyped || unitFor(libraryPath(library.id, relative), units)?.kind === "series";
     const result = await browseDirectory(library.root, resolved?.relative ?? "", String(req.query.query ?? ""),
@@ -224,13 +227,16 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         [...keys].filter((stored) => progress[stored] !== undefined).map((stored): [string, StoredProgress] => [stored, progress[stored]!]),
         titleKey ?? fileKey,
       )?.[1];
+      const covered = !watched && !titleKey && markerCovers(markers[localSeriesId(key, progressUnits)], item);
       const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage, { prewarm });
       return {
         ...withMeta,
         path,
         poster: await thumbUrl("path", path, art),
         wide: await thumbUrl("path", path, wide, "wide"),
-        progress: watched ? { position: watched.position, duration: watched.duration } : undefined,
+        progress: watched
+          ? { position: watched.position, duration: watched.duration }
+          : covered ? { position: 1, duration: 1 } : undefined,
         backfill, moving,
       };
     }));

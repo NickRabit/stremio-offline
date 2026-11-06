@@ -61,7 +61,7 @@ internal fun ownCatalogueArgs(data: DetailData): CatalogDetailArgs {
   } else {
     null
   }
-  val playIndex = data.files.indexOfFirst { !isCompleted(it) }.let { if (it < 0) 0 else it }
+  val playIndex = data.files.indexOfFirst { !isCompleted(it) }.let { if (it < 0) data.files.lastIndex else it }
   val playFile = data.files.getOrNull(playIndex)
   val episode = if (type == "series") {
     playFile?.season?.let { season ->

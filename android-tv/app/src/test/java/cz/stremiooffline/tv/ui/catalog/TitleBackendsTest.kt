@@ -2,11 +2,13 @@ package cz.stremiooffline.tv.ui.catalog
 
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.HomeProgress
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemotePersonalPage
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -16,6 +18,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TitleBackendsTest {
+
+  private fun video(id: String, season: Int, episode: Int) =
+    VideoDto(id = id, season = season, episode = episode, title = id)
 
   private fun local(path: String) = StreamDto(
     sourceId = "file:$path",
@@ -139,5 +144,47 @@ class TitleBackendsTest {
     assertFalse(ownEpisodeCompleted(progress, "remote:library:e2"))
     assertEquals(listOf(Triple("resume", 0, 60)), api.remotePersonalRequests)
     assertTrue(api.progressRequests.isEmpty())
+  }
+
+  @Test
+  fun `a finished own episode hands over to the next unfinished one`() {
+    val first = video("e1", 1, 1)
+    val second = video("e2", 1, 2)
+    val third = video("e3", 1, 3)
+    val progress = mapOf("e1" to ProgressDto(1.0, 1.0))
+
+    assertEquals(second, ownEpisodeAfterPlay(listOf(first, second, third), first, progress))
+  }
+
+  @Test
+  fun `an unfinished own episode keeps its selection`() {
+    val first = video("e1", 1, 1)
+    val second = video("e2", 1, 2)
+
+    assertNull(ownEpisodeAfterPlay(listOf(first, second), first, emptyMap()))
+    assertNull(ownEpisodeAfterPlay(listOf(first, second), null, emptyMap()))
+  }
+
+  @Test
+  fun `a finished own series selects the last episode when every episode is done`() {
+    val first = video("e1", 1, 1)
+    val second = video("e2", 1, 2)
+    val third = video("e3", 1, 3)
+    val progress = listOf(first, second, third).associate { it.id!! to ProgressDto(1.0, 1.0) }
+
+    assertEquals(third, ownEpisodeAfterPlay(listOf(first, second, third), first, progress))
+  }
+
+  @Test
+  fun `specials sort after regular seasons when a finished episode hands over`() {
+    val first = video("e1", 1, 1)
+    val second = video("e2", 1, 2)
+    val special = video("special", 0, 1)
+    val progress = mapOf(
+      "e1" to ProgressDto(1.0, 1.0),
+      "e2" to ProgressDto(1.0, 1.0),
+    )
+
+    assertEquals(special, ownEpisodeAfterPlay(listOf(special, first, second), first, progress))
   }
 }

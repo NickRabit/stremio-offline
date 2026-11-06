@@ -12,7 +12,7 @@ import { libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, visi
 import type { GalleryEntry, LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isPathWithin, type LibraryEntry } from "../library.js";
-import type { Store, StoredProgress, UserPrefs } from "../store.js";
+import type { Store, StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
 import { emptyUserData, type UserRecord } from "../users.js";
 import { registerContentRoutes, type ContentDeps } from "./content.js";
 
@@ -58,6 +58,8 @@ interface LibraryState {
   watchlist?: Record<string, unknown>;
   /** The stored positions the browse listing reads a file row's `watched` from. */
   progress?: Record<string, StoredProgress>;
+  /** The local and catalogue markers the browse listing reads too. */
+  markers?: Record<string, WatchedMarker>;
   units?: import("../library-match.js").TitleUnit[];
   /** A fake catalogue picture per key, so a test can see where a mosaic reads its posters. */
   artwork?: (key: string) => string | undefined;
@@ -145,6 +147,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     locateFolderArtwork: async (key) => { calls.thumbAsked.push(key); return state.artwork?.(key); },
     locateFolderArtworkPair: async (key) => ({ poster: state.artwork?.(key), wide: state.artwork?.(key) }),
     markBrowsed: (record) => { calls.browsed.push(record.id); },
+    markersOf: () => state.markers ?? {},
     metaStore: {
       qualifiedMeta: () => state.records ?? {},
       qualifiedSuggestions: () => state.suggestions ?? {},
@@ -328,6 +331,39 @@ test("a file row reports a title row that names it, whichever key that row kept"
   assert.equal(response.status, 200);
   const body = await response.json() as { items: Array<{ kind: string; path: string; progress?: { position: number } }> };
   assert.deepEqual(body.items.map((item) => [item.kind, item.path, item.progress?.position]), [["file", "Shows/Dark/S01/Dark.S01E01.mkv", 300]]);
+});
+
+test("a local marker marks the unbound episodes it covers", async (t) => {
+  const root = await makeRoot();
+  const first = "lib_00000001/Shows/Local/Season 01/Local - S01E01.mp4";
+  const second = "lib_00000001/Shows/Local/Season 01/Local - S01E02.mp4";
+  await put(root, "Shows/Local/Season 01/Local - S01E01.mp4");
+  await put(root, "Shows/Local/Season 01/Local - S01E02.mp4");
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    units: [{
+      key: "lib_00000001/Shows/Local",
+      kind: "series",
+      relative: "Shows/Local",
+      sampleFiles: [first, second],
+    }],
+    markers: {
+      "local:lib_00000001/Shows/Local": {
+        name: "Local",
+        season: 1,
+        episode: 1,
+        updatedAt: "2024-01-01T00:00:00.000Z",
+      },
+    },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const body = await (await api(harness.base, "/api/library/browse?path=Shows/Local/Season%2001")).json() as {
+    items: Array<{ path: string; progress?: { position: number; duration: number } }>;
+  };
+  assert.deepEqual(body.items.map((item) => [item.path, item.progress]), [
+    ["Shows/Local/Season 01/Local - S01E01.mp4", { position: 1, duration: 1 }],
+    ["Shows/Local/Season 01/Local - S01E02.mp4", undefined],
+  ]);
 });
 
 test("a prewarm root browse sweeps nothing and asks the root listing for a prewarm", async (t) => {

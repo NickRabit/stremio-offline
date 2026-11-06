@@ -577,6 +577,10 @@ fun CatalogDetailScreen(
     runCatching { focus.primary.requestFocus() }
     if (!args.backend.catalogue) {
       ui.episodeProgress = args.backend.episodeProgress(api)
+      ownEpisodeAfterPlay(meta.videos.orEmpty(), pick.selectedVideo, ui.episodeProgress)?.let {
+        pick.selectedVideo = it
+        pick.season = it.season ?: pick.season
+      }
       return@LaunchedEffect
     }
     if (isSeries) {
