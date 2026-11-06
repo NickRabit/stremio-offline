@@ -115,6 +115,7 @@ import { registerMediaServerRoutes } from "./routes/media-servers.js";
 import { registerPersonalRoutes } from "./routes/personal.js";
 import { registerHomeRoutes } from "./routes/home.js";
 import { HomeCatalogCache, homeCatalogTargets } from "./home-catalogs.js";
+import { registerPairingRoutes } from "./routes/pairing.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
@@ -859,7 +860,12 @@ const playbackMeta = (stream: StreamItem): TrafficMeta => {
 
 // Without a sign-in only the server status and the sign-in itself are open. /api/proxy
 // especially must not be public, or anyone could pull foreign addresses through this server.
-const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me", "/auth/setup"]);
+const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me", "/auth/setup", "/auth/pair/start", "/auth/pair/poll"]);
+app.use("/api/auth/pair", (_req, res, next) => {
+  res.setHeader("cache-control", "private, no-store");
+  res.setHeader("pragma", "no-cache");
+  next();
+});
 const unauthorized = new RepeatFilter();
 app.use("/api", (req, res, next) => {
   if (OPEN_PATHS.has(req.path)) return next();
@@ -923,6 +929,7 @@ const routeContext: RouteContext = {
   requireAccess, stopContentAccess,
 };
 registerAuthRoutes(app, routeContext);
+registerPairingRoutes(app, routeContext);
 registerUsersRoutes(app, { ...routeContext, deleteUserAccess, permissionsChanged });
 registerSourceProfilesRoutes(app, routeContext);
 registerAdminSourceProfilesRoutes(app, routeContext);

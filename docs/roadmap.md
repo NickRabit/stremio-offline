@@ -33,7 +33,7 @@ metadata store, or scheduler for each platform.
 | Then | Search by cast and crew | A person in the title detail opens what that person made, not a text search for the name: TMDB filmography when a key is set, the owned copies first. See [Search by cast and crew](#search-by-cast-and-crew). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
-| Proposed | Android TV sign-in by code | The TV shows a short code; an account already signed in on a phone or computer confirms it. No password typed with the remote. See [Sign-in by code](#sign-in-by-code-on-the-television). |
+| Implemented | Android TV manual-code sign-in | The TV shows a short code; an account already signed in on a phone or computer inspects and confirms it. No password typed with the remote. QR/discovery remain deferred. |
 | Proposed | Trakt and Simkl | Send what was watched, read the watchlist and history, so people coming from Stremio or Nuvio bring theirs along. See [Trakt and Simkl](#trakt-and-simkl). |
 | Proposed | Notifications | A new episode, a finished or failed download and a full disk reach the household through ntfy, Telegram or browser push. Extends the queue's completion notice. See [Notifications](#notifications). |
 | Proposed | Player extras on the web | Picture in picture, playback speed, dialogue boost and loudness levelling, and a bitrate cap for viewers outside the home network. See [Player extras](#player-extras). |
@@ -441,7 +441,6 @@ Still open on the television:
 
 - **Following a series** (automatic new episodes) from the TV, in the same panel
   style as the series download.
-- **Sign-in by code**; see [below](#sign-in-by-code-on-the-television).
 
 ### Desktop
 
@@ -464,14 +463,17 @@ be checked there first.
 
 ### Sign-in by code on the television
 
-Jellyfin's Quick Connect and Plex's link page. The TV app asks the server for a
-short-lived code and shows it with the server address; a signed-in account on
-another device enters it under Settings and confirms which account the TV gets.
-The TV then receives an ordinary session. Contracts to settle: a code lives a
-few minutes and works once, attempts are rate limited, an administrator can
-turn the feature off, and the confirming account can only hand over itself.
-The new routes must go into `USER_ALLOWED` in `roles.ts`. D-pad test: the code
-screen is reachable from the sign-in screen, and Back returns to it.
+The manual-code MVP is implemented. The TV app asks the server for an
+eight-character, five-minute code; a signed-in account on another device enters
+it under Settings → Account, inspects the account and device, and explicitly
+approves it. The TV then receives its own ordinary 30-day session. Pairing
+records and inspection nonces are in memory, every poll and attempt is bounded
+and rate limited, restricted mode disables pairing, and the confirming account
+can only hand over itself.
+
+Deferred follow-ups are QR rendering, URL/hash entry, server discovery, public
+URL configuration, Cloudflare Access changes, web/desktop receiving-device UI
+and device inventory. Desktop LAN sharing is unchanged.
 
 ### Trakt and Simkl
 

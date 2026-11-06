@@ -7,6 +7,15 @@
   <string name="auth_sign_in">Přihlásit se</string>
   <string name="auth_sign_out">Odhlásit se</string>
   <string name="auth_signed_in_as">Přihlášen jako %1$s</string>
+  <string name="pair_phone">Přihlásit pomocí telefonu</string>
+  <string name="pair_expires">Platnost kódu vyprší za %1$s s.</string>
+  <string name="pair_instructions">Na telefonu otevřete Nastavení → Účet → Spárovat zařízení a zadejte tento kód.</string>
+  <string name="pair_unsupported">Tento server nepodporuje párování zařízení. Přihlaste se heslem nebo aktualizujte server.</string>
+  <string name="pair_expired">Platnost kódu vypršela nebo byl zamítnut. Začněte znovu na televizi.</string>
+  <string name="common_loading">Načítám…</string>
+  <string name="common_retry">Zkusit znovu</string>
+  <string name="err_restricted">Tato instance běží v omezeném režimu.</string>
+  <string name="err_pair_busy">Na přihlášení čeká příliš mnoho zařízení. Zkuste to později.</string>
   <string name="nav_home">Domů</string>
   <string name="nav_catalog">Katalog</string>
   <string name="nav_library">Knihovna</string>

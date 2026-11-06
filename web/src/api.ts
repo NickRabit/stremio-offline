@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, BulkDownloadOrigin, BulkPrepareResponse, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, CatalogSearchPollResult, CatalogSearchRequest, CatalogSearchSnapshot, Download, DownloadRules, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, IntroSegments, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, SourceProfile, AdminSourceProfile, Stream, Subtitle, TitleExtras, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, BulkDownloadOrigin, BulkPrepareResponse, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, CatalogSearchPollResult, CatalogSearchRequest, CatalogSearchSnapshot, Download, DownloadRules, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, IntroSegments, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, PairingApproved, PairingInspection, PairingStart, ProfileSelection, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, SourceProfile, AdminSourceProfile, Stream, Subtitle, TitleExtras, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
@@ -102,6 +102,29 @@ const PLAYBACK_START_MS = 180_000;
 const q = (values: Record<string, string | number | undefined>) => new URLSearchParams(Object.entries(values).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
 
 export const api = {
+  startPairing: (deviceLabel: string, signal?: AbortSignal) =>
+    request<PairingStart>("/api/auth/pair/start", { method: "POST", body: JSON.stringify({ deviceLabel }), signal }),
+  inspectPairing: (code: string, signal?: AbortSignal) =>
+    request<PairingInspection>("/api/auth/pair/inspect", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+      headers: { "x-pairing-intent": "approve" },
+      signal,
+    }),
+  approvePairing: (code: string, nonce: string, signal?: AbortSignal) =>
+    request<void>("/api/auth/pair/approve", {
+      method: "POST",
+      body: JSON.stringify({ code, nonce }),
+      headers: { "x-pairing-intent": "approve" },
+      signal,
+    }),
+  denyPairing: (code: string, nonce: string, signal?: AbortSignal) =>
+    request<void>("/api/auth/pair/deny", {
+      method: "POST",
+      body: JSON.stringify({ code, nonce }),
+      headers: { "x-pairing-intent": "approve" },
+      signal,
+    }),
   addons: () => request<Addon[]>("/api/addons"),
   addAddon: (url: string, role: string) => request<Addon>("/api/addons", { method: "POST", body: JSON.stringify({ url, role }) }),
   moveAddon: (key: string, direction: -1 | 1) => request<void>(`/api/addons/${key}/move`, { method: "POST", body: JSON.stringify({ direction }) }),

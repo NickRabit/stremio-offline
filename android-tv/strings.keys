@@ -6,6 +6,15 @@ auth.password
 auth.signIn
 auth.signOut
 auth.signedInAs
+pair.phone
+pair.expires
+pair.instructions
+pair.unsupported
+pair.expired
+common.loading
+common.retry
+err.restricted
+err.pairBusy
 nav.home
 nav.catalog
 nav.library

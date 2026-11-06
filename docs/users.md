@@ -116,6 +116,28 @@ is forgotten after fifteen minutes. The cap stays low on purpose — behind a
 reverse proxy every request arrives from the same address, so a long lock would
 keep the household out as effectively as an attacker.
 
+### Signing a TV in with a code
+
+The Android TV app can request a short code instead of having a password typed
+with the remote. Select **Sign in with phone** on the TV after entering the
+server address. On a phone or computer that is already signed in, open
+**Settings → Account → Pair a device**, enter the code shown on the TV, check the
+device name and account, and select **Sign in this device**. The TV receives an
+ordinary remembered session only after that explicit approval.
+
+The code expires after five minutes and can be used once. The TV keeps its own
+session: signing the phone out later does not sign the TV out, signing the TV out
+does not affect the phone, and both expire after 30 days unless a new sign-in
+replaces them. Pending codes exist only in memory, so restarting the server
+cancels unfinished pairings and the TV must request a new code. Restricted mode
+disables pairing.
+
+The confirmation shows the server-reported username and the device label sent by
+the TV. Treat that label as untrusted text, and approve only a code displayed on
+a device you intend to sign in. This first version supports manual code entry
+only; it does not render a QR code, discover servers, or maintain a device
+inventory.
+
 ## Disabling and deleting
 
 - **Disable** stops the account signing in and keeps everything it has: its

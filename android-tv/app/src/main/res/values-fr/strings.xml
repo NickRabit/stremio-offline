@@ -7,6 +7,15 @@
   <string name="auth_sign_in">Se connecter</string>
   <string name="auth_sign_out">Se déconnecter</string>
   <string name="auth_signed_in_as">Connecté en tant que %1$s</string>
+  <string name="pair_phone">Se connecter avec le téléphone</string>
+  <string name="pair_expires">Ce code expire dans %1$s secondes.</string>
+  <string name="pair_instructions">Sur votre téléphone, ouvrez Réglages → Compte → Associer un appareil et saisissez ce code.</string>
+  <string name="pair_unsupported">Ce serveur ne prend pas en charge l’association d’appareils. Connectez-vous avec votre mot de passe ou mettez le serveur à jour.</string>
+  <string name="pair_expired">Ce code a expiré ou a été refusé. Recommencez sur le téléviseur.</string>
+  <string name="common_loading">Chargement…</string>
+  <string name="common_retry">Réessayer</string>
+  <string name="err_restricted">Cette instance est en mode restreint.</string>
+  <string name="err_pair_busy">Trop d’appareils sont en attente. Réessayez plus tard.</string>
   <string name="nav_home">Accueil</string>
   <string name="nav_catalog">Catalogue</string>
   <string name="nav_library">Bibliothèque</string>

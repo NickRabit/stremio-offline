@@ -20,6 +20,11 @@ export const USER_ALLOWED: Rule[] = [
   { method: "POST", pattern: /^\/auth\/login$/ },
   { method: "POST", pattern: /^\/auth\/logout$/ },
   { method: "PATCH", pattern: /^\/auth\/password$/ },
+  { method: "POST", pattern: /^\/auth\/pair\/start$/ },
+  { method: "POST", pattern: /^\/auth\/pair\/poll$/ },
+  { method: "POST", pattern: /^\/auth\/pair\/inspect$/ },
+  { method: "POST", pattern: /^\/auth\/pair\/approve$/ },
+  { method: "POST", pattern: /^\/auth\/pair\/deny$/ },
   // Their own rows: watchlist, progress, favourites and resume.
   { method: "GET", pattern: /^\/watchlist$/ },
   { method: "POST", pattern: /^\/watchlist$/ },

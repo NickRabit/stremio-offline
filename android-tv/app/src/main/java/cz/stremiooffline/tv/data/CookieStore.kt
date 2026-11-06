@@ -11,6 +11,19 @@ interface SessionPersistence {
   fun saveSession(origin: String, value: String?)
 }
 
+/** Pairing receives a cookie before it is allowed to become the active session. */
+class MemorySessionPersistence : SessionPersistence {
+  private var origin: String? = null
+  private var value: String? = null
+
+  override fun loadSession(origin: String): String? = value.takeIf { this.origin == origin }
+
+  override fun saveSession(origin: String, value: String?) {
+    this.origin = origin
+    this.value = value
+  }
+}
+
 /**
  * Keeps cookies for the configured origin only. A request to another origin -- the other end of a
  * cross-origin redirect, say -- carries none of them, so the session cannot leak off the server.
@@ -39,6 +52,11 @@ class CookieStore(private val origin: String, private val persistence: SessionPe
     if (ServerAddress.originOf(url) != origin) return emptyList()
     val now = System.currentTimeMillis()
     return cookies.values.filter { it.expiresAt > now && it.matches(url) }
+  }
+
+  fun currentSession(): String? {
+    val now = System.currentTimeMillis()
+    return cookies[SESSION_COOKIE]?.takeIf { it.expiresAt > now }?.value ?: persistence.loadSession(origin)
   }
 
   companion object {

@@ -7,6 +7,15 @@
   <string name="auth_sign_in">Entrar</string>
   <string name="auth_sign_out">Sair</string>
   <string name="auth_signed_in_as">Conectado como %1$s</string>
+  <string name="pair_phone">Entrar com o telefone</string>
+  <string name="pair_expires">Este código expira em %1$s segundos.</string>
+  <string name="pair_instructions">No telefone, abra Configurações → Conta → Emparelhar um dispositivo e digite este código.</string>
+  <string name="pair_unsupported">Este servidor não oferece suporte ao emparelhamento de dispositivos. Entre com sua senha ou atualize o servidor.</string>
+  <string name="pair_expired">Este código expirou ou foi negado. Comece novamente na TV.</string>
+  <string name="common_loading">Carregando…</string>
+  <string name="common_retry">Tentar novamente</string>
+  <string name="err_restricted">Esta instância está em modo restrito.</string>
+  <string name="err_pair_busy">Há dispositivos demais aguardando. Tente novamente mais tarde.</string>
   <string name="nav_home">Início</string>
   <string name="nav_catalog">Catálogo</string>
   <string name="nav_library">Biblioteca</string>

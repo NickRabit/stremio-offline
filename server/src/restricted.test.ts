@@ -208,7 +208,7 @@ type Kind = "OPEN" | "DENIED_GETS" | "ALLOWED_MUTATIONS" | "ALLOW_GET" | "IMPLIC
 type Parsed = { method: string; path: string; raw: string };
 
 const IGNORE_PATHS = new Set(["/api/proxy", "/api/subtitle", "/api/library/file", "/{*path}"]);
-const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me", "/auth/setup"]);
+const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me", "/auth/setup", "/auth/pair/start", "/auth/pair/poll"]);
 
 const parseRoutes = (source: string): Parsed[] => {
   const routes: Parsed[] = [];
@@ -277,7 +277,7 @@ test("index.ts route catalogue: implicit deny passes, orphan allow/deny regexes 
   assert.ok((byKind.get("ALLOWED_MUTATIONS") ?? []).some((route) => route.path === "/api/downloads" && route.method === "POST"));
   assert.ok((byKind.get("IGNORE") ?? []).some((route) => route.path === "/api/proxy"));
   assert.ok((byKind.get("IGNORE") ?? []).some((route) => route.path === "/{*path}"));
-  assert.equal((byKind.get("OPEN") ?? []).length, 4);
+  assert.equal((byKind.get("OPEN") ?? []).length, 6);
 
   const apiRoutes = routes.filter((route) => route.path.startsWith("/api/") && !IGNORE_PATHS.has(route.path));
   for (const rule of ALLOWED_MUTATIONS) {

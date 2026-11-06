@@ -5,8 +5,11 @@ package cz.stremiooffline.tv.ui.signin
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertDoesNotExist
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import org.junit.Rule
@@ -41,6 +44,16 @@ class SignInScreenTest {
     override fun checkServer() {}
 
     override fun signIn() {}
+
+    override fun startPairing() {
+      state = state.copy(pairing = PairingState.Waiting("ABCDEF23", 300, 5))
+    }
+
+    override fun cancelPairing() {
+      state = state.copy(pairing = PairingState.Idle)
+    }
+
+    override fun onScreenLeave() {}
   }
 
   private fun mount(actions: SignInActions = FakeActions(SignInState())) {
@@ -73,6 +86,14 @@ class SignInScreenTest {
   }
 
   @Test
+  fun `down from password sign in reaches the phone action`() {
+    mount()
+    compose.onNodeWithTag(TagPassword).performKeyInput { pressKey(Key.DirectionDown) }
+    compose.onNodeWithTag(TagSignIn).performKeyInput { pressKey(Key.DirectionDown) }
+    compose.onNodeWithTag(TagPhone).assertIsFocused()
+  }
+
+  @Test
   fun `ok starts editing and down ends it and moves to the next field`() {
     val actions = FakeActions(SignInState())
     mount(actions)
@@ -86,5 +107,24 @@ class SignInScreenTest {
 
     compose.onNodeWithTag(TagAddress).performKeyInput { pressKey(Key.DirectionDown) }
     compose.onNodeWithTag(TagUsername).assertIsFocused()
+  }
+
+  @Test
+  fun `pairing shows the grouped code and gives focus to cancel`() {
+    mount(FakeActions(SignInState(pairing = PairingState.Waiting("ABCDEF23", 300, 5))))
+
+    compose.onNodeWithTag(TagPairCode).assertTextContains("ABCD EF23")
+    compose.onNodeWithTag(TagPairCancel).assertIsFocused()
+  }
+
+  @Test
+  fun `cancel returns to password sign in`() {
+    val actions = FakeActions(SignInState(pairing = PairingState.Waiting("ABCDEF23", 300, 5)))
+    mount(actions)
+
+    compose.onNodeWithTag(TagPairCancel).performClick()
+    compose.onNodeWithTag(TagPassword).assertIsNotFocused()
+    compose.onNodeWithTag(TagPairCode).assertDoesNotExist()
+    assert(actions.state.pairing == PairingState.Idle)
   }
 }
