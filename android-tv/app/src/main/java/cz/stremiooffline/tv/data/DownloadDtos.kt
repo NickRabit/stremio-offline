@@ -4,7 +4,7 @@ import java.text.DecimalFormatSymbols
 import java.util.Locale
 import kotlinx.serialization.Serializable
 
-/** The fields of one `GET /api/downloads` job the TVs Home summary reads. */
+/** The fields of one `GET /api/downloads` job the TV reads. */
 @Serializable
 data class DownloadDto(
   val id: String = "",
@@ -17,7 +17,13 @@ data class DownloadDto(
   val mine: Boolean? = null,
   val pauseReason: String? = null,
   val libraryGone: Boolean? = null,
+  val libraryId: String? = null,
+  val debridProgress: Double? = null,
+  val media: DownloadMediaDto? = null,
 )
+
+@Serializable
+data class DownloadMediaDto(val poster: String? = null)
 
 @Serializable
 data class DownloadsResponseDto(val jobs: List<DownloadDto> = emptyList())

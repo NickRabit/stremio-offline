@@ -11,6 +11,7 @@
   <string name="nav_catalog">Katalog</string>
   <string name="nav_library">Biblioteka</string>
   <string name="nav_favorites">Ulubione</string>
+  <string name="nav_downloads">Pobrane</string>
   <string name="nav_resume">Kontynuuj oglądanie</string>
   <string name="nav_settings">Ustawienia</string>
   <string name="tv_nav_search">Szukaj</string>
@@ -128,19 +129,6 @@
   <string name="home_ready_to_play">Gotowe do odtworzenia</string>
   <string name="home_recent">Ostatnio dodane</string>
   <string name="home_to_confirm">Do potwierdzenia</string>
-  <string name="home_downloads">Pobierane</string>
-  <plurals name="home_downloads_summary">
-    <item quantity="one">1 zadanie</item>
-    <item quantity="few">%1$s zadania</item>
-    <item quantity="many">%1$s zadań</item>
-    <item quantity="other">%1$s zadań</item>
-  </plurals>
-  <plurals name="home_attention">
-    <item quantity="one">1 wymaga uwagi</item>
-    <item quantity="few">%1$s wymagają uwagi</item>
-    <item quantity="many">%1$s wymaga uwagi</item>
-    <item quantity="other">%1$s wymaga uwagi</item>
-  </plurals>
   <string name="home_partial">Nie udało się sprawdzić niektórych tytułów.</string>
   <string name="home_retry">Spróbuj ponownie</string>
   <string name="home_row_failed">Nie udało się wczytać tego rzędu.</string>
@@ -164,7 +152,23 @@
   <string name="downloads_status_downloading">Pobieranie</string>
   <string name="downloads_status_paused">Wstrzymano</string>
   <string name="downloads_status_failed">Błąd</string>
-  <string name="tv_queue_empty">Nic się nie pobiera.</string>
+  <string name="downloads_empty_active">W tej chwili nie są pobierane żadne pliki do pobrania.</string>
+  <plurals name="tv_downloads_running">
+    <item quantity="one">%1$s pobieranie w toku</item>
+    <item quantity="few">%1$s pobierania w toku</item>
+    <item quantity="many">%1$s pobierań w toku</item>
+    <item quantity="other">%1$s pobierania w toku</item>
+  </plurals>
+  <string name="tv_downloads_progress">%1$s z %2$s</string>
+  <string name="tv_downloads_left">pozostało %1$s</string>
+  <plurals name="tv_downloads_in_queue">
+    <item quantity="one">%1$s zadanie czeka w kolejce</item>
+    <item quantity="few">%1$s zadania czekają w kolejce</item>
+    <item quantity="many">%1$s zadań czeka w kolejce</item>
+    <item quantity="other">%1$s zadania czeka w kolejce</item>
+  </plurals>
+  <string name="tv_downloads_manage_on_web">Zarządzaj kolejką w przeglądarce</string>
+  <string name="tv_downloads_load_error">Nie udało się wczytać pobrań.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">seria</string>
   <string name="favorites_title">Ulubione</string>

@@ -17,4 +17,9 @@ class ShellStateTest {
     state.pick(Section.Home)
     assertEquals(Section.Home, state.selected)
   }
+
+  @Test
+  fun `a saved downloads route restores the downloads section`() {
+    assertEquals(Section.Downloads, ShellStateSaver.restore("downloads")?.selected)
+  }
 }

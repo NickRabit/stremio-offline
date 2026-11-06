@@ -10,6 +10,7 @@ nav.home
 nav.catalog
 nav.library
 nav.favorites
+nav.downloads
 nav.resume
 nav.settings
 tv.navSearch
@@ -127,9 +128,6 @@ home.newEpisodes
 home.readyToPlay
 home.recent
 home.toConfirm
-home.downloads
-home.downloadsSummary
-home.attention
 home.partial
 home.retry
 home.rowFailed
@@ -153,7 +151,13 @@ downloads.status.checking
 downloads.status.downloading
 downloads.status.paused
 downloads.status.failed
-tv.queueEmpty
+downloads.empty.active
+tv.downloads.running
+tv.downloads.progress
+tv.downloads.left
+tv.downloads.inQueue
+tv.downloads.manageOnWeb
+tv.downloads.loadError
 catalog.typeMovie
 catalog.typeSeries
 favorites.title

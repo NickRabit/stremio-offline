@@ -9,7 +9,6 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
-import cz.stremiooffline.tv.data.DownloadDto
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.HomeRowStatus
@@ -59,7 +58,6 @@ data class HomeState(
   /** Why the page failed, when it did: a refusal or a missing route means Home is simply not
    *  there for this account, which the panel says instead of a generic load error. */
   val failure: ApiFailure? = null,
-  val downloads: List<DownloadDto> = emptyList(),
   /** Bumped whenever rows land, so the screen can restore the remembered card. */
   val dataVersion: Int = 0,
 )
@@ -79,8 +77,8 @@ fun drawnContent(content: RowContent): Boolean = when (content) {
 fun drawnRowIds(rows: List<HomeRowSlot>): List<String> = rows.filter { drawnContent(it.content) }.map { it.id }
 
 /**
- * The Home rows: the `order` probe, the built-in request, the lazy catalogue carousels and the
- * downloads summary. Rows are keyed by id, so a retry touches only the row it names.
+ * The Home rows: the `order` probe, the built-in request and the lazy catalogue carousels. Rows
+ * are keyed by id, so a retry touches only the row it names.
  */
 class HomeViewModel(private val api: TvApi) : ViewModel() {
 
@@ -199,26 +197,12 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
         val answer = ask(asked)
         if (answer is RowAnswer.Ok) apply(asked, answer.response, catalog = true, claims = claims)
       }
-      refreshDownloads()
     }
   }
 
   /** The catalogue rows already on screen, which a refresh asks again along with the built-ins. */
   private fun revealedCatalogRows(slots: List<HomeRowSlot>): List<String> =
     slots.filter { it.catalog && it.content != RowContent.Placeholder }.map { it.id }
-
-  private fun refreshDownloads() {
-    viewModelScope.launch {
-      val jobs = try {
-        api.downloads().jobs
-      } catch (cancelled: CancellationException) {
-        throw cancelled
-      } catch (_: ApiError) {
-        return@launch
-      }
-      state = state.copy(downloads = jobs)
-    }
-  }
 
   /** A catalogue row came within a row of focus: reveal it, batching rows revealed together. */
   fun reveal(rowId: String) {

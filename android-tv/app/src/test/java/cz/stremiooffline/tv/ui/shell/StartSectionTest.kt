@@ -19,5 +19,6 @@ class StartSectionTest {
     assertEquals(Section.Home, startSection(""))
     assertEquals(Section.Home, startSection("anything"))
     assertEquals(Section.Home, startSection("following"))
+    assertEquals(Section.Home, startSection("downloads"))
   }
 }

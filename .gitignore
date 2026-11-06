@@ -10,6 +10,7 @@ desktop/ffmpeg-win/
 desktop/ffmpeg-linux/
 data/
 downloads/
+!android-tv/app/src/*/java/cz/stremiooffline/tv/ui/downloads/
 datacenter/
 .env
 *.log
