@@ -85,10 +85,12 @@ const changed = () =>
 
 export const normalizePairingCode = (value: unknown): string | undefined => {
   if (typeof value !== "string") return undefined;
+  // The alphabet leaves out I, L and O, so a misread letter becomes the digit it looks like.
   const canonical = value
-    .replace(/[A-Z]/g, (letter) => letter.toLowerCase())
     .replace(/[ -]/g, "")
-    .toUpperCase();
+    .toUpperCase()
+    .replace(/O/g, "0")
+    .replace(/[IL]/g, "1");
   return canonical.length === 8 && [...canonical].every((letter) => PAIRING_ALPHABET.includes(letter))
     ? canonical
     : undefined;

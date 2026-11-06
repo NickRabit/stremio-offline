@@ -141,4 +141,20 @@ describe("PairDeviceDialog", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/deny"))).toBe(true);
     expect(onClose).toHaveBeenCalled();
   });
+  it.each([
+    [410, "err.pairInvalid", "Try again"],
+    [409, "err.pairChanged", "Continue"],
+  ])("leaves the confirmation when approval answers %i", async (status, messageKey, next) => {
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).endsWith("/inspect")) return Promise.resolve(json(preview));
+      return Promise.resolve(json({ error: "gone", messageKey }, status));
+    });
+    await mount();
+    await changeCode("ABCD2345");
+    await act(async () => { button("Continue")!.click(); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { button("Sign in this device")!.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(button("Sign in this device")).toBeUndefined();
+    expect(button("Deny")).toBeUndefined();
+    expect(button(next)).toBeTruthy();
+  });
 });

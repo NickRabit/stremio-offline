@@ -54,6 +54,8 @@ test("codes normalize only ASCII case, space and hyphen", () => {
   assert.equal(normalizePairingCode("ABCD_EF23"), undefined);
   assert.equal(normalizePairingCode("ABCD\u2011EF23"), undefined);
   assert.equal(normalizePairingCode(12345678), undefined);
+  assert.equal(normalizePairingCode("oabc ilD2"), "0ABC11D2");
+  assert.equal(normalizePairingCode("UABCDEF2"), undefined);
 });
 
 test("start returns a grouped-display-ready code and a private 32-byte token", () => {

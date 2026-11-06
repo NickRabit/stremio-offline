@@ -86,7 +86,10 @@ export function PairDeviceDialog({ session, onClose, onNotify }: {
     } catch (value) {
       if (controller.signal.aborted || !alive.current || current !== generation.current) return;
       setError(describeError(value));
-      setTerminal(value instanceof ApiError && value.status === 410);
+      const status = value instanceof ApiError ? value.status : undefined;
+      // The inspected code is gone or was inspected again elsewhere: its buttons can no longer succeed.
+      if (status === 409 || status === 410) setPreview(null);
+      setTerminal(status === 410);
     } finally {
       if (current === generation.current) {
         request.current = null;
