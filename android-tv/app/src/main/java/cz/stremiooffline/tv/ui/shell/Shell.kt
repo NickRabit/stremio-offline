@@ -70,6 +70,8 @@ import cz.stremiooffline.tv.ui.components.BrandMark
 import cz.stremiooffline.tv.ui.components.outlineIcon
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailScreen
+import cz.stremiooffline.tv.ui.catalog.CatalogueNextBridge
+import cz.stremiooffline.tv.playback.CatalogueNext
 import cz.stremiooffline.tv.ui.catalog.CatalogScreen
 import cz.stremiooffline.tv.ui.catalog.OfferedSources
 import cz.stremiooffline.tv.ui.catalog.remoteResumeCards
@@ -200,6 +202,10 @@ fun Shell(
   val catalogStack = remember { CatalogDetailStack() }
   var catalogReturnOrigin by remember { mutableStateOf<CatalogReturnOrigin?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
+  // The next catalogue episode: the detail offers it, the player asks for it, and the play the
+  // detail resolves is handed to the running player instead of opening a new one.
+  val nextBridge = remember { CatalogueNextBridge() }
+  var playerNext by remember { mutableStateOf<PlayTarget?>(null) }
   var downloading by remember { mutableStateOf(false) }
   /** The streams of the title the player is on: the catalogue reports them while addons answer. */
   var playerSources by remember { mutableStateOf(OfferedSources()) }
@@ -606,10 +612,15 @@ fun Shell(
       args = openCatalogDetail,
       imageUrl = { path -> path?.let(api::url) },
       onPlay = {
-        playedSourceId = null
-        player = it
+        if (player != null && nextBridge.take()) {
+          playerNext = it
+        } else {
+          playedSourceId = null
+          player = it
+        }
       },
       onSources = { playerSources = it },
+      nextBridge = nextBridge,
       playedSourceId = playedSourceId,
       onShowInLibrary = { folder ->
         openLibraryFolder(folder)
@@ -648,6 +659,15 @@ fun Shell(
       LibraryPlaySources(api).load(openPlayer) { librarySources = it }
     }
     val sourcesNow = playerSourcesFor(openPlayer, playerSources, librarySources)
+    // The next episode had nothing playable: the player closes on its detail, which shows why.
+    nextBridge.onFailed = {
+      playedSourceId = null
+      playerNext = null
+      player = null
+      detailReturnToken++
+    }
+    val offer = nextBridge.offer.takeIf { openPlayer.catalogue && catalogDetail != null }
+    val catalogueNext = remember(offer) { offer?.let { CatalogueNext(it.title) { nextBridge.advance() } } }
     PlayerScreen(
       api = api,
       target = openPlayer,
@@ -658,7 +678,12 @@ fun Shell(
       // The catalogue detail owns its own discovery; its Retry re-reads it through the token, and
       // a library-bound play reloads the loader it is bound to.
       onSourcesRetry = if (openPlayer.catalogue) ({ catalogueSourcesRetry++ }) else ({ librarySourcesRetry++ }),
+      catalogueNext = catalogueNext,
+      nextTarget = playerNext,
+      onNextTargetTaken = { playerNext = null },
       onExit = { endedSourceId ->
+        nextBridge.cancel()
+        playerNext = null
         playedSourceId = endedSourceId
         player = null
         if (catalogDetail != null) detailReturnToken++ else returnToken++

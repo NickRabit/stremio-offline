@@ -255,6 +255,8 @@ fun CatalogDetailScreen(
   onShowInLibrary: (String) -> Unit = {},
   onSearchPerson: (String) -> Unit = {},
   onOpenRelated: (RelatedTitleDto) -> Unit = {},
+  /** The player above asks here for the episode after the one it plays. */
+  nextBridge: CatalogueNextBridge? = null,
 ) {
   // An OK while the sources load waits for them; Back or a second OK drops the wait.
   var pendingPlay by remember { mutableStateOf(args.autoPlay) }
@@ -995,6 +997,7 @@ fun CatalogDetailScreen(
   fun resolvePendingPlay() {
     cancelPendingPlay()
     val stream = preferredStream
+    if (stream?.playable != true) nextBridge?.fail()
     if (stream?.playable == true) {
       play(stream)
     } else if (Streams.needsSourceChoice(rows, Streams.ruleIdOf(filters.sort), stream)) {
@@ -1171,6 +1174,14 @@ fun CatalogDetailScreen(
     remote.discoveryFailed = false
     save.queuedSourceId = null
     notice(null)
+  }
+
+  // The player above moves on to the episode after the selected one, picked by this detail's rules.
+  LaunchedEffect(nextBridge, pick.selectedVideo?.id, meta.videos, baseTitle) {
+    val bridge = nextBridge ?: return@LaunchedEffect
+    bridge.offer = catalogueEpisodeAfter(meta.videos.orEmpty(), pick.selectedVideo)?.let { video ->
+      CatalogueNextOffer("$baseTitle · ${video.label}", { selectVideo(video); pick.season = video.season ?: pick.season; armPendingPlay() }, { cancelPendingPlay() })
+    }
   }
 
   // The deadline starts when OK arms the wait, not when the first stream lands.

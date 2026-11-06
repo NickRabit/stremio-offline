@@ -92,6 +92,9 @@ import cz.stremiooffline.tv.playback.diagPath
 import cz.stremiooffline.tv.playback.introQueryOf
 import cz.stremiooffline.tv.playback.matchTrack
 import cz.stremiooffline.tv.playback.nextEpisodeOf
+import cz.stremiooffline.tv.playback.CatalogueNext
+import cz.stremiooffline.tv.playback.EndAction
+import cz.stremiooffline.tv.playback.endAction
 import cz.stremiooffline.tv.playback.parseVtt
 import cz.stremiooffline.tv.playback.qualityChoice
 import cz.stremiooffline.tv.playback.sidecarAdvanced
@@ -135,6 +138,12 @@ fun PlayerScreen(
   ruleNoteProfileId: String? = null,
   /** Re-runs only the caller's source discovery, leaving the running session alone. */
   onSourcesRetry: (() -> Unit)? = null,
+  /** The episode after a catalogue play, as the detail that started it offers it. */
+  catalogueNext: CatalogueNext? = null,
+  /** The next episode's play that detail resolved; it replaces the episode that ended. */
+  nextTarget: PlayTarget? = null,
+  onNextTargetTaken: () -> Unit = {},
+  createPlayer: (Context, okhttp3.OkHttpClient) -> ExoPlayer = ::buildExoPlayer,
 ) {
   val context = LocalContext.current
   val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -153,11 +162,7 @@ fun PlayerScreen(
   val scope = rememberCoroutineScope()
   val state by controller.state.collectAsStateWithLifecycle()
 
-  val exoPlayer = remember(api) {
-    ExoPlayer.Builder(context)
-      .setMediaSourceFactory(DefaultMediaSourceFactory(OkHttpDataSource.Factory(api.http)))
-      .build()
-  }
+  val exoPlayer = remember(api) { createPlayer(context, api.http) }
   val mediaSession = remember(exoPlayer) { MediaSession.Builder(context, exoPlayer).build() }
 
   var attempt by remember { mutableIntStateOf(0) }
@@ -208,6 +213,12 @@ fun PlayerScreen(
   var restoreFocus by remember { mutableStateOf<FocusRequester?>(null) }
   var nextEpisode by remember { mutableStateOf<NextEpisode?>(null) }
   var nextCard by remember { mutableStateOf(false) }
+  // The picture reached its end; a seek back or the next session clears it.
+  var ended by remember { mutableStateOf(false) }
+  // The library is still being asked for a next episode, so an end now waits for its answer.
+  var nextPending by remember { mutableStateOf(false) }
+  // The detail is picking the next catalogue episode's source.
+  var advancing by remember { mutableStateOf(false) }
   // A next episode replaces the file the caller's list was gathered for, so its addon rows name
   // the episode that just ended. The list is dropped with it rather than offered for the new file.
   var fileReplaced by remember { mutableStateOf(false) }
@@ -225,6 +236,7 @@ fun PlayerScreen(
 
   val currentState by rememberUpdatedState(state)
   val currentNext by rememberUpdatedState(nextEpisode)
+  val currentCatalogueNext by rememberUpdatedState(catalogueNext)
   val closedShuffle = remember { mutableSetOf<String>() }
 
   fun loadReplacementSources(target: PlayTarget) {
@@ -327,9 +339,30 @@ fun PlayerScreen(
     if (exoPlayer.trackSelectionParameters != desired) exoPlayer.trackSelectionParameters = desired
   }
 
+  /** What belonged to the episode that ended: its offer, its end, its skips and its delay. The
+   *  card or the OSD button that started the next one goes away, so the remote is handed back. */
+  fun forgetEpisode() {
+    nextCard = false
+    ended = false
+    delaySeconds = 0.0
+    cues = emptyList()
+    autoSkipped.clear()
+    previousPosition = 0.0
+    upNextTrigger.reset()
+    reclaimFocus++
+  }
+
   fun startNext() {
     val next = currentNext ?: return
-    nextCard = false
+    val catalogue = currentCatalogueNext
+    if (catalogue != null && currentTarget.catalogue && currentTarget.shuffle == null) {
+      nextCard = false
+      reclaimFocus++
+      advancing = true
+      catalogue.advance()
+      return
+    }
+    forgetEpisode()
     val run = currentTarget.shuffle
     if (run != null) {
       nextEpisode = null
@@ -337,8 +370,6 @@ fun PlayerScreen(
         val answer = runCatching { api.shuffleNext(run.id) }.getOrNull() ?: return@launch
         val item = answer.item ?: return@launch
         fileReplaced = true
-        delaySeconds = 0.0
-        cues = emptyList()
         title = item.title
         val shuffle = ShuffleRun(run.id, answer.upcoming?.title)
         val nextTarget = if (item.remote != null) {
@@ -366,8 +397,6 @@ fun PlayerScreen(
       return
     }
     fileReplaced = true
-    delaySeconds = 0.0
-    cues = emptyList()
     title = next.title
     val nextTarget = PlayTarget(
       key = Progress.libraryKey(next.path),
@@ -395,8 +424,34 @@ fun PlayerScreen(
     nextSubtitlesFor = nextTarget
   }
 
+  // The detail resolved the next catalogue episode: it replaces the ended one in this session, and
+  // the sources the detail offers now belong to it.
+  LaunchedEffect(nextTarget) {
+    val next = nextTarget ?: return@LaunchedEffect
+    onNextTargetTaken()
+    advancing = false
+    nextEpisode = null
+    forgetEpisode()
+    fileReplaced = false
+    title = next.title
+    currentTarget = next
+    controller.playNext(
+      key = next.key,
+      title = next.title,
+      path = next.path,
+      resume = next.resume,
+      poster = next.poster,
+      sourceId = next.sourceId,
+      remoteItem = next.remoteItem,
+      stableKey = next.stableKey,
+    ) { next.path?.let { path -> runCatching { api.librarySource(path) }.getOrNull()?.sourceId } }
+    nextSubtitlesFor = next
+  }
+
   // A new title left nothing behind: the cached list, the offer and the delay belong to one playback.
   LaunchedEffect(target.key) {
+    ended = false
+    advancing = false
     addonFetched = false
     addonSubtitles = emptyList()
     nextEpisode = null
@@ -426,11 +481,12 @@ fun PlayerScreen(
     if (fileIdentities.containsKey(path)) fileIdentities[path]
     else libraryAddonIdentity(runCatching { api.libraryTitle(path) }.getOrNull()).also { fileIdentities[path] = it }
 
-  LaunchedEffect(api, target.key) {
+  LaunchedEffect(api, currentTarget.key) {
     rawSegments = null
+    val playing = currentTarget
     // A library file's key names the file; IntroDB is asked about the title it is bound to.
-    val query = introQueryOf(target.key)
-      ?: (carriedSubtitleIdentity(target) ?: target.path?.let { fileIdentity(it) })
+    val query = introQueryOf(playing.key)
+      ?: (carriedSubtitleIdentity(playing) ?: playing.path?.let { fileIdentity(it) })
         ?.let { (type, id) -> introQueryOf("$type:$id") }
       ?: return@LaunchedEffect
     rawSegments = runCatching { api.introSegments(query.imdb, query.season, query.episode) }.getOrNull()
@@ -477,6 +533,9 @@ fun PlayerScreen(
   LaunchedEffect(nextSubtitlesFor) {
     val next = nextSubtitlesFor ?: return@LaunchedEffect
     readAccount(next)
+    // An addon episode's subtitles are read in full before they are handed over; the other kinds
+    // hand theirs over beside the session.
+    if (next.path == null && next.remoteItem == null) controller.offerSubtitles(next.key, addonSubtitles)
   }
 
   // The sources the caller offers in its own order; an addon's notice is not a source. A play the
@@ -636,7 +695,9 @@ fun PlayerScreen(
         if (playbackState == Player.STATE_READY) controller.onPlayerReady()
         if (playbackState == Player.STATE_ENDED) {
           controller.onEnded()
-          if (currentNext != null) nextCard = true
+          ended = true
+        } else if (playbackState != Player.STATE_IDLE) {
+          ended = false
         }
       }
 
@@ -661,6 +722,7 @@ fun PlayerScreen(
   }
 
   // The next library file is resolved once the session is up, so the offer is ready at the end.
+  // A catalogue play follows the detail's episode list, so its rules pick the next source too.
   LaunchedEffect(
     state.started,
     state.startedAt,
@@ -668,6 +730,7 @@ fun PlayerScreen(
     target.path,
     currentTarget.shuffle?.id,
     currentTarget.shuffle?.upcomingTitle,
+    catalogueNext?.title,
   ) {
     if (!state.started) return@LaunchedEffect
     val run = currentTarget.shuffle
@@ -675,9 +738,30 @@ fun PlayerScreen(
       nextEpisode = run.upcomingTitle?.let { NextEpisode("", it) }
       return@LaunchedEffect
     }
+    val catalogueTitle = catalogueNext?.title
+    if (currentTarget.catalogue && (catalogueTitle != null || target.path == null)) {
+      nextEpisode = catalogueTitle?.let { NextEpisode("", it) }
+      return@LaunchedEffect
+    }
     if (target.path == null) return@LaunchedEffect
     val id = state.sourceId ?: return@LaunchedEffect
-    nextEpisode = runCatching { api.libraryNext(id) }.getOrNull()?.let(::nextEpisodeOf)
+    nextPending = true
+    try {
+      nextEpisode = runCatching { api.libraryNext(id) }.getOrNull()?.let(::nextEpisodeOf)
+    } finally {
+      nextPending = false
+    }
+  }
+
+  // The end offers the next episode; a film or the last episode hands the screen back to the
+  // detail instead of leaving the viewer on its last frame.
+  LaunchedEffect(ended, currentNext, nextPending, advancing, state.error) {
+    if (!ended || advancing || state.error != null) return@LaunchedEffect
+    when (endAction(currentNext != null, nextPending)) {
+      EndAction.OfferNext -> nextCard = true
+      EndAction.Wait -> Unit
+      EndAction.Leave -> leave()
+    }
   }
 
   LaunchedEffect(
@@ -1098,9 +1182,14 @@ fun PlayerScreen(
       modifier = Modifier.fillMaxSize(),
     )
 
-    if (state.error == null && !state.started) LoadingOverlay(title = title)
+    if (state.error == null && (!state.started || advancing)) LoadingOverlay(title = if (advancing) currentNext?.title ?: title else title)
   }
 }
+
+internal fun buildExoPlayer(context: Context, http: okhttp3.OkHttpClient): ExoPlayer =
+  ExoPlayer.Builder(context)
+    .setMediaSourceFactory(DefaultMediaSourceFactory(OkHttpDataSource.Factory(http)))
+    .build()
 
 /**
  * The media keys work whether or not the OSD is up; a null answer means the key is not ours. Back
