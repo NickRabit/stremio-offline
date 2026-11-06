@@ -201,6 +201,35 @@ class CatalogueNextTest {
   }
 
   @Test
+  fun `a hand pick keeps its own install when two installs share the addon name`() {
+    fun row(sourceId: String, key: String, name: String) =
+      StreamDto(sourceId = sourceId, kind = "remote", playable = true, name = name, addonKey = key, addonName = "Torrentio")
+    val api = twoAddonApi(
+      listOf(one, two, special),
+      mapOf(
+        one.id.orEmpty() to mapOf("alpha" to listOf(row("a1", "alpha", "First 1")), "beta" to listOf(row("b1", "beta", "Second 1"))),
+        two.id.orEmpty() to mapOf("alpha" to listOf(row("a2", "alpha", "First 2")), "beta" to listOf(row("b2", "beta", "Second 2"))),
+      ),
+    )
+    mount(api)
+    compose.waitUntil(5_000) { bridge.offer != null }
+    compose.waitUntil(5_000) {
+      api.streamsCompleted.containsAll(listOf("series:tt1:1:1|alpha", "series:tt1:1:1|beta"))
+    }
+    compose.waitForIdle()
+
+    openSources()
+    chooseSource("Second 1")
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { played.size == 1 }
+    assertEquals("b1", played.first().sourceId)
+
+    advance()
+    compose.waitUntil(5_000) { played.size == 2 }
+    assertEquals("b2", played.last().sourceId)
+  }
+
+  @Test
   fun `a rule pick lets the rule choose again`() {
     val a1 = addonRow("a1", "alpha", "Alpha", 1)
     val b1 = addonRow("b1", "beta", "Beta", 1)
@@ -372,6 +401,15 @@ class StreamsNextEpisodeRowTest {
     val same = stream("same", null, "Second", "English 2 GB", 2_000)
 
     assertEquals(same, Streams.nextEpisodeRow(current, listOf(other, same), "en", null))
+  }
+
+  @Test
+  fun `two installs of one addon under the same name are told apart by their key`() {
+    val current = stream("current", "second-install", "Torrentio", "English 900 MB", 900)
+    val first = stream("first", "first-install", "Torrentio", "English 900 MB", 900)
+    val second = stream("second", "second-install", "Torrentio", "English 900 MB", 900)
+
+    assertEquals(second, Streams.nextEpisodeRow(current, listOf(first, second), "en", null))
   }
 
   @Test

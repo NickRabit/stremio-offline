@@ -186,10 +186,10 @@ export function pickNextEpisodeStream(streams: Stream[], current: Stream | null,
       return pickDefaultStream(catalogSourceRows(local, ranked, "", sort, preferredLanguage, priority, titleLanguage), ruleId);
     }
   }
-  const sameAddon = ranked.filter((stream) => Boolean(current) && (
-    (current?.addonKey && stream.addonKey === current.addonKey)
-    || (current?.addonName && stream.addonName === current.addonName)
-  ));
+  // Two installs of one addon share its name, so the key decides; the name only stands in when
+  // the key matches nothing.
+  const byKey = current?.addonKey ? ranked.filter((stream) => stream.addonKey === current.addonKey) : [];
+  const sameAddon = byKey.length ? byKey : current?.addonName ? ranked.filter((stream) => stream.addonName === current.addonName) : [];
   if (!sameAddon.length) return ranked[0];
   const currentSize = current ? streamSize(current) : undefined;
   return [...sameAddon].sort((left, right) => {

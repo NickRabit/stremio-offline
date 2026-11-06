@@ -223,17 +223,18 @@ object Streams {
   }
 
   /** The row of [current]'s addon among [rows] for the next episode, the web's keepProvider pick:
-   *  playable rows of the same addon (addonKey, else addonName), audio language [preferredLanguage]
-   *  first, then the size closest to [current]'s (log distance), then [rows] order. Null when the addon has none. */
+   *  playable rows of the same addon (its key, else its name when no row has that key), audio
+   *  language [preferredLanguage] first, then the size closest to [current]'s (log distance), then
+   *  [rows] order. Null when the addon has none. */
   fun nextEpisodeRow(current: StreamDto, rows: List<StreamDto>, preferredLanguage: String, titleLanguage: String?): StreamDto? {
-    val candidates = rows.mapIndexedNotNull { index, row ->
-      val sameAddon =
-        (current.addonKey?.isNotBlank() == true && row.addonKey == current.addonKey) ||
-          (current.addonName?.isNotBlank() == true && row.addonName == current.addonName)
-      row.takeIf {
-        it.playable && sameAddon && !isLocalStream(it) && !isRemoteStream(it)
-      }?.let { it to index }
-    }
+    val usable = rows.withIndex().filter { (_, row) -> row.playable && !isLocalStream(row) && !isRemoteStream(row) }
+    // Two installs of one addon share its name, so the key decides; the name only stands in when
+    // the key matches nothing.
+    val byKey = current.addonKey?.takeIf { it.isNotBlank() }
+      ?.let { key -> usable.filter { it.value.addonKey == key } }.orEmpty()
+    val candidates = byKey.ifEmpty {
+      current.addonName?.takeIf { it.isNotBlank() }?.let { name -> usable.filter { it.value.addonName == name } }.orEmpty()
+    }.map { it.value to it.index }
     if (candidates.isEmpty()) return null
     val currentSize = streamSize(current)
     return candidates.sortedWith(Comparator { left, right ->
