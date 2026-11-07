@@ -22,14 +22,17 @@ function scrollParent(element: HTMLElement): Scroller {
  * a shelf that turns out empty on screen keeps its place until it scrolls out of view -- and if
  * it left over the top, the page is shifted by its height so nothing in view moves -- or until
  * the page has been still for a moment, when a change is no longer in the middle of a gesture.
- * Off screen it goes at once.
+ * Off screen it goes at once, and a shelf that is already empty when it mounts is never drawn.
  */
 export function useOmission(omit: boolean, element: RefObject<HTMLElement | null>): boolean {
-  const [gone, setGone] = useState(false);
+  // A shelf already known to be empty when it mounts -- Home drawn again from rows it holds --
+  // is never drawn: only one that turns empty on the page is held.
+  const [gone, setGone] = useState(omit);
   const pending = useRef<{ anchor: Element; top: number; scroller: Scroller } | null>(null);
 
   useEffect(() => {
     if (!omit) { setGone(false); return; }
+    if (gone) return;
     const node = element.current;
     if (!node || typeof IntersectionObserver === "undefined") { setGone(true); return; }
     const scroller = scrollParent(node);
@@ -62,6 +65,7 @@ export function useOmission(omit: boolean, element: RefObject<HTMLElement | null
     scrollTarget.addEventListener("scroll", restartIdle, { passive: true });
     observer.observe(node);
     return stop;
+    // `gone` is read only to skip a shelf that is already off the page; it never restarts a hold.
   }, [omit, element]);
 
   // The shelf has just left over the top: put the first thing after it back where it was. A

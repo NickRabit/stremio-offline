@@ -431,6 +431,13 @@ describe("Home", () => {
     });
     afterEach(() => { vi.useRealTimers(); });
 
+    it("is never drawn when it is already empty as Home is drawn again", async () => {
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
+      expect(row(catalogRow)).toBeNull();
+      expect(watchers.has(row("episodes")!)).toBe(false);
+      expect(window.scrollBy).not.toHaveBeenCalled();
+    });
+
     it("keeps its place while it is in view, so nothing under the thumb moves", async () => {
       await render({ addons: [catalogAddon], order: catalogOrder, rows: loading() });
       await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
