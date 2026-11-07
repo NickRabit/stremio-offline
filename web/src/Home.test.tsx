@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { OMIT_IDLE_MS } from "./home-omit";
 import { Home } from "./Home";
 import { setLocale } from "./i18n";
 import type { HomeRowState, HomeRows } from "./home-state";
@@ -392,22 +393,86 @@ describe("Home", () => {
   });
 
   it("holds an addon shelf as a titled placeholder until it nears the screen, then asks for it once", async () => {
-    let notify: ((entries: Array<{ isIntersecting: boolean }>) => void) | undefined;
-    const observe = vi.fn();
+    // Empty built-in rows watch the screen too (see home-omit); only the addon shelf's own
+    // observer matters here.
+    const watchers = new Map<Element, (entries: Array<{ isIntersecting: boolean }>) => void>();
     vi.stubGlobal("IntersectionObserver", class {
-      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) { notify = callback; }
-      observe = observe;
+      constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+      observe = (element: Element) => { watchers.set(element, this.callback); };
       disconnect = vi.fn();
     });
     const onVisible = vi.fn();
     await render({ addons: [catalogAddon], order: catalogOrder, onVisible });
     expect(row(catalogRow)!.textContent).toContain("Cinemeta · Popular (movie)");
     expect(row(catalogRow)!.querySelector(".skeleton")).not.toBeNull();
-    expect(observe).toHaveBeenCalledTimes(1);
+    expect(watchers.has(row(catalogRow)!)).toBe(true);
     expect(onVisible).not.toHaveBeenCalled();
-    await act(async () => { notify!([{ isIntersecting: true }]); });
+    await act(async () => { watchers.get(row(catalogRow)!)!([{ isIntersecting: true }]); });
     expect(onVisible).toHaveBeenCalledTimes(1);
     expect(onVisible).toHaveBeenCalledWith(catalogRow);
+  });
+
+  describe("a shelf that comes back empty while on screen", () => {
+    type Entry = { isIntersecting: boolean; boundingClientRect: { bottom: number }; rootBounds: { top: number } };
+    let watchers: Map<Element, (entries: Entry[]) => void>;
+    const loading = () => allEmpty({ [catalogRow]: rowState({ status: "loading" }), episodes: rowState({ items: [episodeCard()] }) });
+    const empty = () => allEmpty({ [catalogRow]: rowState({ settled: true }), episodes: rowState({ items: [episodeCard()] }) });
+    const report = async (entry: Partial<Entry>) => {
+      await act(async () => { watchers.get(row(catalogRow)!)!([{ isIntersecting: false, boundingClientRect: { bottom: 900 }, rootBounds: { top: 0 }, ...entry }]); });
+    };
+    beforeEach(() => {
+      watchers = new Map();
+      vi.stubGlobal("IntersectionObserver", class {
+        constructor(private callback: (entries: Entry[]) => void) {}
+        observe = (element: Element) => { watchers.set(element, this.callback); };
+        disconnect = vi.fn();
+      });
+      vi.stubGlobal("scrollBy", vi.fn());
+    });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it("keeps its place while it is in view, so nothing under the thumb moves", async () => {
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: loading() });
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
+      await report({ isIntersecting: true });
+      expect(row(catalogRow)).not.toBeNull();
+      expect(row(catalogRow)!.querySelector(".skeleton")).not.toBeNull();
+      expect(row(catalogRow)!.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("leaves once scrolled out over the top and keeps what follows where it was", async () => {
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: loading() });
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
+      await report({ isIntersecting: true });
+      // The next shelf sits at 500 while the empty one is there, and at 285 once it is gone.
+      const next = row("episodes")!;
+      vi.spyOn(next, "getBoundingClientRect").mockImplementation(() => ({ top: row(catalogRow) ? 500 : 285 } as DOMRect));
+      await report({ isIntersecting: false, boundingClientRect: { bottom: -20 } });
+      expect(row(catalogRow)).toBeNull();
+      expect(window.scrollBy).toHaveBeenCalledWith(0, -215);
+    });
+
+    it("leaves at once below the screen without touching the scroll", async () => {
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: loading() });
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
+      await report({ isIntersecting: false, boundingClientRect: { bottom: 1400 } });
+      expect(row(catalogRow)).toBeNull();
+      expect(window.scrollBy).not.toHaveBeenCalled();
+    });
+
+    it("leaves on screen once the page has been still for a moment", async () => {
+      vi.useFakeTimers();
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: loading() });
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
+      await report({ isIntersecting: true });
+      await act(async () => { vi.advanceTimersByTime(OMIT_IDLE_MS - 100); });
+      // A scroll in the meantime starts the wait again.
+      await act(async () => { window.dispatchEvent(new Event("scroll")); vi.advanceTimersByTime(OMIT_IDLE_MS - 100); });
+      expect(row(catalogRow)).not.toBeNull();
+      await act(async () => { vi.advanceTimersByTime(200); });
+      expect(row(catalogRow)).toBeNull();
+      expect(window.scrollBy).not.toHaveBeenCalled();
+    });
   });
 
   it("asks for an addon shelf at once where the browser cannot observe it", async () => {
