@@ -43,14 +43,18 @@ export function precompressedAssets(webRoot: string): express.RequestHandler {
     const encoding = allowed("br") ? "br" : allowed("gzip") ? "gzip" : undefined;
     if (!encoding) return next();
 
-    const compressed = `${file}.${encoding === "br" ? "br" : "gz"}`;
+    const suffix = encoding === "br" ? ".br" : ".gz";
+    const compressed = `${file}${suffix}`;
     void stat(compressed).then((info) => {
       if (!info.isFile()) return next();
       res.type(path.extname(file));
       res.setHeader("Content-Encoding", encoding);
       res.setHeader("Vary", "Accept-Encoding");
       res.setHeader("Cache-Control", ASSET_CACHE_CONTROL);
-      res.sendFile(compressed, (error) => { if (error) next(error); });
+      // `root` keeps send's dotfile check to the asset's own name: the install path may
+      // hold a dot-segment (e2e runs from `e2e/.tmp/app`).
+      const name = `${relative}${suffix}`.split(path.sep).map(encodeURIComponent).join("/");
+      res.sendFile(name, { root: assetsRoot }, (error) => { if (error) next(error); });
     }, () => next());
   };
 }

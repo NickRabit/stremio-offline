@@ -6,6 +6,7 @@ import http, { type IncomingHttpHeaders } from "node:http";
 import path from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import express from "express";
+import { pageRequestLimiter } from "./request-limits.js";
 import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 
 interface RawResponse { status: number; headers: IncomingHttpHeaders; body: Buffer }
@@ -32,7 +33,9 @@ const rawRequest = (port: number, requestPath: string, method = "GET", acceptEnc
   });
 
 async function fixture() {
-  const directory = await mkdtemp(path.join(tmpdir(), "stremio-static-assets-"));
+  // A dot-segment in the install path (e2e runs from `e2e/.tmp/app`) must not make
+  // `send` refuse the file as a dotfile.
+  const directory = await mkdtemp(path.join(tmpdir(), ".stremio-static-assets-"));
   const assets = path.join(directory, "assets");
   await mkdir(assets);
   const script = Buffer.from("console.log('the uncompressed script');\n");
@@ -48,6 +51,7 @@ async function fixture() {
   ]);
 
   const app = express();
+  app.use(pageRequestLimiter({ limit: 1000 }));
   app.use(precompressedAssets(directory));
   app.use(express.static(directory, {
     setHeaders: (response, file) => {
