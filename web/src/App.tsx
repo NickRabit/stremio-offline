@@ -73,6 +73,7 @@ import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryIm
 import { loadTitleGallery, useCatalogueStills, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
 import { rememberedStartView, rememberStartView, resolveStartView } from "./start-view";
+import { layoutKey, rememberedLayout, rememberLayout } from "./layout-memory";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
@@ -259,7 +260,10 @@ export function App() {
   const [seriesBulk, setSeriesBulk] = useState<SeriesBulkRequest | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, upNextAt: "end", skipSegmentsAuto: false, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>(() => ({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, upNextAt: "end", skipSegmentsAuto: false, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false, ...rememberedLayout() }));
+  // Only what the server said is remembered: the guess above must not overwrite the last answer.
+  const settingsArrived = useRef(false);
+  useEffect(() => { if (settingsArrived.current) rememberLayout(settings); }, [layoutKey(settings)]);
   const [sourceProfiles, setSourceProfiles] = useState<SourceProfile[] | null>(null);
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
@@ -1495,6 +1499,7 @@ export function App() {
     if (!ready) { navigated.current = false; return; }
     const loaded = refresh().catch((error: unknown) => { fail(error); return null; });
     api.settings().then(async (next) => {
+      settingsArrived.current = true;
       setSettings((current: AppSettings) => ({ ...current, ...next }));
       setLocale(next.uiLanguage);
       // An install with no catalogue yet keeps its first run on the catalogue's onboarding.

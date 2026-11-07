@@ -110,6 +110,7 @@ beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
   settings.startView = "catalog";
+  settings.tileSize = "medium";
   searchEverywhere = true;
   startBodies = [];
   searchQueries = [];
@@ -350,6 +351,27 @@ describe("title detail from the catalogue", () => {
     await until(() => localStorage.getItem("start-view") === "home"
       && ["/api/follows", "/api/follows/new-episodes", "/api/downloads", "/api/watchlist", "/api/searchable"]
         .every((path) => requestCounts.get(path) === 1));
+  });
+
+  it("draws the first frame with the remembered tile layout and keeps the server's one", async () => {
+    settings.startView = "home";
+    settings.tileSize = "large";
+    localStorage.setItem("tile-layout", JSON.stringify({ tileSize: "small", homeTileShape: "poster", catalogTileShape: "bogus" }));
+    let releaseSettings!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    const shell = () => host.querySelector(".app-shell")!.className;
+    // Before the settings answer: the remembered values, and the default for an invalid one.
+    expect(shell()).toContain("tile-size-small");
+    expect(shell()).toContain("home-shape-poster");
+    expect(shell()).toContain("catalog-shape-poster");
+
+    releaseSettings();
+    await until(() => shell().includes("tile-size-large"));
+    expect(shell()).toContain("home-shape-wide");
+    expect(JSON.parse(localStorage.getItem("tile-layout")!)).toMatchObject({ tileSize: "large", homeTileShape: "wide" });
   });
 
   it("moves to the configured Library start page and remembers it", async () => {
