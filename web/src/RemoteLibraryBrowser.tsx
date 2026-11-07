@@ -2022,6 +2022,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         {detail && <div className="remote-detail">
           <LibraryTitleDetail
             identityKey={`${selected!.id}:${detail.id}`}
+            inspect={(stream, signal) => api.inspect(stream, signal)}
             title={heroItem!.name}
             {...(detail.type === "episode" ? { subtitle: t("mediaServer.episodeLabel", { season: detail.season ?? 0, episode: detail.episode ?? 0 }) } : {})}
             {...(heroItem?.poster ? { poster: heroItem.poster } : {})}

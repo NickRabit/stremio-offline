@@ -460,6 +460,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       {...(waitingEpisode ? {} : { sourceGroups: { groups: showTorrents ? extra.groups : extra.groups.map((group) => ({ ...group, streams: group.streams.filter(offered) })), retry: extra.retry }, onOpenSources: () => setChooserOpen(true) })}
       nativeSourceLabel={t("sources.heading")}
       {...(preferredLanguage ? { preferredLanguage } : {})}
+      inspect={(stream, signal) => api.inspect(stream, signal)}
       sourceProfiles={sourceProfiles}
       defaultSort={defaultSort}
       {...(progress ? { progress } : {})}

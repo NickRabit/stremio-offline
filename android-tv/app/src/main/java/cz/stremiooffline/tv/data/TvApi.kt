@@ -67,6 +67,7 @@ interface CatalogApi : SearchHistoryApi {
     throw ApiError(ApiFailure.Generic)
   suspend fun streamSources(type: String, id: String): List<StreamSourceDto>
   suspend fun streams(type: String, id: String, addon: String? = null): List<StreamDto>
+  suspend fun inspect(sourceId: String): InspectionDto = throw ApiError(ApiFailure.Generic)
   /** The viewer's own library copies of one title or episode (`GET /api/local-streams`). */
   suspend fun localStreams(type: String, id: String): List<StreamDto>
   suspend fun addons(): List<AddonDto>

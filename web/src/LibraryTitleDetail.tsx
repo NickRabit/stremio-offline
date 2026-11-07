@@ -15,7 +15,8 @@ import { isLocalStream, isRemoteStream, pickDefaultStream, resolveStreamSort, so
 import { audioFactsText, audioFormat } from "./release-audio";
 import { bytes } from "./settings-ui";
 import { SourceChooser } from "./SourceChooser";
-import type { SourceProfile, Stream, TitlePerson, Trailer, VideoFacts } from "./types";
+import { useSourceInspection } from "./source-inspection";
+import type { Inspection, SourceProfile, Stream, TitlePerson, Trailer, VideoFacts } from "./types";
 
 export interface LibraryTitleDetailProps {
   /** Scopes the viewer's source choice to one title, so another title opens with a fresh default. */
@@ -102,6 +103,7 @@ export interface LibraryTitleDetailProps {
   nativeSourceLabel?: string;
   /** The viewer's audio language, which the legacy fallback order prefers. */
   preferredLanguage?: string;
+  inspect?: (stream: Stream, signal: AbortSignal) => Promise<Inspection>;
   sourceProfiles?: SourceProfile[] | null;
   defaultSort?: string;
   sourceError?: string;
@@ -171,7 +173,7 @@ const videoLine = (facts: VideoFacts | undefined): { height: string; tags: Array
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
 const TECH_SKELETON_ROWS = ["detail.tech.source", "detail.tech.video", "detail.tech.audio", "detail.tech.file"] as const;
 
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, originalLine, ratings, heroExtra, people, trailer, onTrailer, secureMode, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, ownFallback = false, preferLocalCopy = false, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, copyPending = false, trailerPending = false, progressPending = false, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, factsExtra, originalLine, ratings, heroExtra, people, trailer, onTrailer, secureMode, extras, description, chips, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, preferredSource, resumeStableKey, keepOrder, addonPriority, defaultSources, ownFallback = false, preferLocalCopy = false, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, inspect, sourceProfiles = null, defaultSort = "recommended", sourceError, onRetry, placeholder, descriptionLoading, copyPending = false, trailerPending = false, progressPending = false, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -331,8 +333,20 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   // Filled only once a version is actually selected. While the list is still loading the skeleton
   // above the progress bar is the only source row, so the two never draw together.
   const shown = sources !== null && selected && !ruleRefusal ? selected : null;
+  const inspection = useSourceInspection(shown, inspect);
   const video = shown ? videoLine(shown.videoFacts) : null;
-  const audioNames = shown ? streamLanguages(shown).map((code) => languageName(code)).filter(Boolean) : [];
+  const listedAudio = shown ? streamLanguages(shown) : [];
+  const audioNames = listedAudio.map((code) => languageName(code)).filter(Boolean);
+  const inspectedAudio = inspection.state === "done" && inspection.tracks.audioKnown ? inspection.tracks : null;
+  const inspectedSubtitles = inspection.state === "done" && inspection.tracks.subtitlesKnown && inspection.tracks.subtitles.length > 0
+    ? inspection.tracks : null;
+  const checkedAudioNames = inspectedAudio?.audio.map((code) => languageName(code)) ?? [];
+  const checkedSubtitleNames = inspectedSubtitles?.subtitles.map((code) => languageName(code)) ?? [];
+  const preferredMissingName = inspectedAudio && preferredLanguage
+    && listedAudio.includes(preferredLanguage) && !inspectedAudio.audio.includes(preferredLanguage)
+    ? languageName(preferredLanguage) : null;
+  const checking = inspection.state === "checking";
+  const noSubtitleTracks = inspection.state === "done" && inspection.tracks.noSubtitleTracks;
   const releaseText = shown?.behaviorHints?.filename ?? shown?.title ?? shown?.name;
   // What the server read out of a library file beats what its name advertises.
   const audioTag = audioFactsText(shown?.audioFacts) ?? (releaseText ? audioFormat(releaseText) : undefined);
@@ -342,6 +356,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const addonQuality = shown && (shown.addonName || shown.addonKey) ? streamBadge(shown) : "";
   const subtitleNames = shown ? (shown.subtitleLanguages ?? []).map((code) => languageName(code)).filter(Boolean) : [];
   const addonSubtitleCount = shown?.subtitles?.length ?? 0;
+  const fromFileTag = <span className="tag verified" title={t("detail.tech.fromFileHint")}><Check aria-hidden="true"/>{t("detail.tech.fromFile")}</span>;
   const fileName = shown?.behaviorHints?.filename;
   const placeName = shown ? sourcePlace(shown) : "";
   const sizeLabel = shown && streamSize(shown) ? bytes(streamSize(shown)) : "";
@@ -475,14 +490,29 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
             ? <>{video.height}{video.tags.map((tag) => <span key={tag.text} className={tag.hdr ? "tag hdr" : "tag"}>{tag.text}</span>)}</>
             : releaseHeight ? t("rules.resolutionValue", { height: Number(releaseHeight) }) : addonQuality}</dd>
         </>}
-        {(audioNames.length > 0 || audioTag) && <>
+        {(audioNames.length > 0 || audioTag || inspectedAudio || checking) && <>
           <dt>{t("detail.tech.audio")}</dt>
-          <dd>{audioNames.join(", ")}{audioTag && <span className="tag">{audioTag}</span>}</dd>
+          <dd>{inspectedAudio
+            ? <>
+              {checkedAudioNames.join(", ")}
+              {audioTag && <span className="tag">{audioTag}</span>}
+              {fromFileTag}
+              {preferredMissingName && <span className="tag missing">
+                {t("detail.tech.missingLanguage", { language: preferredMissingName })}
+              </span>}
+            </>
+            : <>
+              {audioNames.join(", ")}
+              {audioTag && <span className="tag">{audioTag}</span>}
+              {checking && <span className="checking">{t("sources.probing")}</span>}
+            </>}</dd>
         </>}
-        {(subtitleNames.length > 0 || addonSubtitleCount > 0) && <>
+        {(subtitleNames.length > 0 || addonSubtitleCount > 0 || inspectedSubtitles || noSubtitleTracks) && <>
           <dt>{t("detail.tech.subtitles")}</dt>
           <dd>
-            {subtitleNames.join(", ")}
+            {inspectedSubtitles
+              ? <>{checkedSubtitleNames.join(", ")}{fromFileTag}</>
+              : noSubtitleTracks ? t("detail.tech.noneInFile") : subtitleNames.join(", ")}
             {addonSubtitleCount > 0 && <span>{t("detail.subtitlesFromAddons", { count: addonSubtitleCount })}</span>}
           </dd>
         </>}

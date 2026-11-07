@@ -58,6 +58,8 @@ let streamReply: Handler;
 let localReply: Handler;
 let remoteReply: Handler;
 let galleryReply: Handler;
+let inspectReply: Handler;
+let inspectCalls: Array<{ url: URL; init?: RequestInit }>;
 const calls = {
   meta: [] as URL[], extras: [] as URL[], providers: [] as URL[], streams: [] as URL[],
   libraries: [] as URL[], remoteStreams: [] as URL[], gallery: [] as URL[],
@@ -72,7 +74,9 @@ beforeEach(() => {
   clearTitleExtras();
   clearTitleEnrichment();
   calls.gallery = [];
+  inspectCalls = [];
   galleryReply = () => json({ images: [] });
+  inspectReply = () => json({ audioTracks: [], subtitleTracks: [] });
   calls.meta = []; calls.extras = []; calls.providers = []; calls.streams = []; calls.libraries = []; calls.remoteStreams = [];
   metaReply = () => json(film());
   extrasReply = () => json({ people: [], related: [], source: "addon" });
@@ -80,7 +84,7 @@ beforeEach(() => {
   streamReply = () => json([addon("a1", "1080p", 1_000)]);
   localReply = () => json([]);
   remoteReply = () => json({ streams: [] });
-  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
     if (path.endsWith("/extras")) { calls.extras.push(url); return Promise.resolve(extrasReply(url)); }
@@ -89,6 +93,7 @@ beforeEach(() => {
     if (path.startsWith("/api/stream-sources/")) { calls.providers.push(url); return Promise.resolve(providerReply(url)); }
     if (path.startsWith("/api/streams/")) { calls.streams.push(url); return Promise.resolve(streamReply(url)); }
     if (path.startsWith("/api/local-streams/")) return Promise.resolve(localReply(url));
+    if (path === "/api/inspect") { inspectCalls.push({ url, init }); return Promise.resolve(inspectReply(url)); }
     if (path === "/api/remote-libraries") { calls.libraries.push(url); return Promise.resolve(json({ libraries: [remoteLibrary] })); }
     if (/^\/api\/remote-libraries\/[^/]+\/streams\/[^/]+\/[^/]+$/.test(path)) {
       calls.remoteStreams.push(url);
@@ -192,6 +197,14 @@ describe("CatalogueTitleDetail metadata", () => {
 });
 
 describe("CatalogueTitleDetail sources", () => {
+  it("asks the server to inspect the preselected addon HTTP source", async () => {
+    await render();
+    await flush();
+    expect(inspectCalls).toHaveLength(1);
+    expect(inspectCalls[0]!.url.pathname).toBe("/api/inspect");
+    expect(JSON.parse(String(inspectCalls[0]!.init?.body))).toEqual({ sourceId: "a1" });
+  });
+
   it("ranks a better meeting addon before a worse meeting library row for libraryFirst", async () => {
     const worseLibrary = { ...remote("ms1", "Emby copy", 500), rules: { balanced: ruleVerdict([0, 1], "meets") } };
     const betterAddon = { ...addon("a1", "1080p", 1_000), rules: { balanced: ruleVerdict([0, 0], "meets") } };

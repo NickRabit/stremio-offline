@@ -96,6 +96,7 @@
   <string name="sources_addon">Complemento</string>
   <string name="sources_all_addons">Todos</string>
   <string name="sources_any_language">Qualquer</string>
+  <string name="sources_probing">lendo as faixas…</string>
   <string name="sources_of_total">%1$s de %2$s</string>
   <string name="sources_sort_recommended">Recomendado</string>
   <string name="sources_rule_breaks">Não cumpre as regras: %1$s</string>
@@ -485,6 +486,9 @@
   <string name="detail_action_folder">Pasta</string>
   <string name="home_open_detail">Abrir detalhes</string>
   <string name="detail_tech_file">Arquivo</string>
+  <string name="detail_tech_from_file">do arquivo</string>
+  <string name="detail_tech_none_in_file">nenhuma no arquivo</string>
+  <string name="detail_tech_missing_language">sem %1$s</string>
   <string name="sources_audio_channels">%1$s can.</string>
   <string name="genre_action">Ação</string>
   <string name="genre_adventure">Aventura</string>

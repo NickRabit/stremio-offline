@@ -12,6 +12,10 @@ object Streams {
 
   private val UNITS: Map<String, Double> =
     mapOf("tb" to 1e12, "gb" to 1e9, "mb" to 1e6, "kb" to 1e3, "t" to 1e12, "g" to 1e9)
+  private val UNCACHED_DEBRID = Regex(
+    """\[(?:RD|AD|PM|DL|TB|ED|OC|PD|DLS)\b[^\]]*(?:download|⏳)[^\]]*\]""",
+    RegexOption.IGNORE_CASE,
+  )
 
   private val SIZE = Regex(
     "(\\d+(?:[.,]\\d+)?)\\s*(TB|GB|MB|KB|T|G)\\b(?!\\s*(?:/\\s*s|ps|it)\\b)",
@@ -33,6 +37,13 @@ object Streams {
     if (!value.isFinite() || unit <= 0) return null
     return (value * unit).roundToLong().toDouble()
   }
+
+  fun uncachedDebrid(stream: StreamDto): Boolean =
+    listOfNotNull(stream.name, stream.title).any(UNCACHED_DEBRID::containsMatchIn)
+
+  fun inspectable(stream: StreamDto): Boolean =
+    stream.playable && stream.kind == "remote" && stream.provider == null &&
+      stream.remoteItem == null && !uncachedDebrid(stream)
 
   /** `titleLanguage` stands in only for a source whose addon admitted it found no language. */
   fun streamLanguages(stream: StreamDto, titleLanguage: String? = null): List<String> {

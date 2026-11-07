@@ -84,7 +84,7 @@ import cz.stremiooffline.tv.ui.detail.SeriesRows
 import cz.stremiooffline.tv.ui.detail.TitleExtraFacts
 import cz.stremiooffline.tv.ui.detail.TitleExtrasRows
 import cz.stremiooffline.tv.ui.detail.TitleExtrasState
-import cz.stremiooffline.tv.ui.detail.TitleTechBlock
+import cz.stremiooffline.tv.ui.detail.InspectedTitleTechBlock
 import cz.stremiooffline.tv.ui.detail.downIntoExtras
 import cz.stremiooffline.tv.ui.detail.scrollToTopOnFocus
 import cz.stremiooffline.tv.ui.library.RemoteSeriesBulkHost
@@ -1511,11 +1511,13 @@ fun CatalogDetailScreen(
         ),
       )
       activeStream?.let { stream ->
-        TitleTechBlock(
+        InspectedTitleTechBlock(
+          api = api,
           stream = stream,
           modifier = Modifier.testTag(TagCatalogChosenSource),
           uiLanguage = settings.uiLanguage,
           titleLanguage = titleLanguage,
+          preferredLanguage = settings.audioLanguage,
         )
       }
       val shown = message

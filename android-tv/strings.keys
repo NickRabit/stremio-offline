@@ -95,6 +95,7 @@ sources.localHint
 sources.addon
 sources.allAddons
 sources.anyLanguage
+sources.probing
 sources.ofTotal
 sources.sortRecommended
 sources.ruleBreaks
@@ -457,6 +458,9 @@ detail.action.wholeSeries
 detail.action.folder
 home.openDetail
 detail.tech.file
+detail.tech.fromFile
+detail.tech.noneInFile
+detail.tech.missingLanguage
 sources.audioChannels
 genre.action
 genre.adventure

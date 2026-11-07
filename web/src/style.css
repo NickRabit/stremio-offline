@@ -2379,6 +2379,10 @@ p.next-episode b{color:var(--accent2)}
 .detail-versions svg{width:14px;height:14px}
 .detail-tech .tag{font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px;background:#ffffff12;color:#dfe5ee}
 .detail-tech .tag.hdr{background:#e9b56022;color:#f0d089}
+.detail-tech .tag.verified{display:inline-flex;align-items:center;gap:3px;background:#42ce9116;color:var(--green)}
+.detail-tech .tag.verified svg{width:12px;height:12px;stroke-width:3}
+.detail-tech .tag.missing{background:#2a2113;color:#e7b867}
+.detail-tech .checking{color:var(--muted);font-size:11px;font-style:italic}
 .detail-tech .source-file{flex-basis:auto;display:block}
 .detail-video{flex:0 0 260px;width:260px;display:grid;gap:7px;border:0;background:none;padding:0;min-height:0;color:inherit;text-align:left;scroll-snap-align:start}
 .detail-video .thumb{position:relative;display:block;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#1b222d;border:1px solid var(--line)}

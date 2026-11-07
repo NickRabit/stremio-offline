@@ -59,6 +59,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -686,6 +687,8 @@ fun TitleTechBlock(
   uiLanguage: String? = null,
   titleLanguage: String? = null,
   versionCount: Int = 0,
+  inspection: SourceInspection? = null,
+  preferredLanguage: String? = null,
 ) {
   val locale = uiLanguage?.takeIf { it.isNotBlank() }?.let(::Locale) ?: LocalConfiguration.current.locales[0]
   val source = listOfNotNull(
@@ -711,24 +714,36 @@ fun TitleTechBlock(
       else -> null
     },
   )
-  val audioLanguages = (if (stream.audioLanguages.isNotEmpty()) {
+  val listedAudio = if (stream.audioLanguages.isNotEmpty()) {
     stream.audioLanguages
   } else {
     Streams.streamLanguages(stream, titleLanguage)
-  }).map { languageName(it, locale) }.distinct()
+  }
+  val audioLanguages = listedAudio.map { languageName(it, locale) }.distinct()
   // What the server read out of a library file beats what its name advertises.
   val audioTag = audioFactsText(stream.audioFacts, stringResource(R.string.sources_audio_channels))
     ?: audioFormat(Streams.streamText(stream)).takeIf { it.isNotEmpty() }
   val fileName = stream.behaviorHints?.filename?.takeIf { it.isNotBlank() && it != willPlayName(stream) }
   val subtitles = stream.subtitleLanguages.map { languageName(it, locale) }.distinct()
+  val tracks = (inspection as? SourceInspection.Done)?.tracks
+  val checkedAudio = tracks?.takeIf { it.audioKnown }
+  val checkedSubtitles = tracks?.takeIf { it.subtitlesKnown && it.subtitles.isNotEmpty() }
+  val checking = inspection == SourceInspection.Checking
+  val noSubtitleTracks = tracks?.noSubtitleTracks == true
+  val preferred = preferredLanguage?.takeIf { it.isNotBlank() }
+  val missingPreferred = if (checkedAudio != null && preferred != null &&
+    listedAudio.contains(preferred) && !checkedAudio.audio.contains(preferred)
+  ) preferred else null
+  val hasAudio = audioLanguages.isNotEmpty() || audioTag != null || checkedAudio != null
+  val hasSubtitles = subtitles.isNotEmpty() || checkedSubtitles != null || noSubtitleTracks
   val rows = listOf(
     source.takeIf { it.isNotBlank() },
     resolution,
-    audioLanguages.takeIf { it.isNotEmpty() }.then(audioTag),
-    subtitles.takeIf { it.isNotEmpty() },
+    audioLanguages.takeIf { hasAudio }.then(audioTag),
+    subtitles.takeIf { hasSubtitles },
     fileName,
   )
-  if (rows.all { it == null }) return
+  if (rows.all { it == null } && !checking) return
 
   Column(
     modifier
@@ -740,20 +755,56 @@ fun TitleTechBlock(
       TechRow(stringResource(R.string.detail_will_play), it)
     }
     if (resolution != null || videoTags.isNotEmpty()) {
-      TechRow(stringResource(R.string.detail_tech_video), resolution.orEmpty(), videoTags)
+      TechRow(stringResource(R.string.detail_tech_video), resolution.orEmpty(), videoTags.map { TechTag(it) })
     }
-    if (audioLanguages.isNotEmpty() || audioTag != null) {
-      TechRow(stringResource(R.string.detail_tech_audio), audioLanguages.joinToString(", "), listOfNotNull(audioTag))
+    if (hasAudio || checking) {
+      val tags = if (checkedAudio != null) {
+        listOfNotNull(
+          audioTag?.let { TechTag(it) },
+          TechTag("✓ " + stringResource(R.string.detail_tech_from_file), TechTagTone.Verified),
+          missingPreferred?.let {
+            TechTag(
+              stringResource(R.string.detail_tech_missing_language, languageName(it, locale)),
+              TechTagTone.Missing,
+            )
+          },
+        )
+      } else {
+        listOfNotNull(audioTag?.let { TechTag(it) })
+      }
+      TechRow(
+        stringResource(R.string.detail_tech_audio),
+        checkedAudio?.audio?.map { languageName(it, locale) }?.joinToString(", ") ?: audioLanguages.joinToString(", "),
+        tags,
+        note = if (checking) stringResource(R.string.sources_probing) else null,
+      )
     }
-    if (subtitles.isNotEmpty()) {
+    if (checkedSubtitles != null) {
+      TechRow(
+        stringResource(R.string.detail_tech_subtitles),
+        checkedSubtitles.subtitles.map { languageName(it, locale) }.joinToString(", "),
+        listOf(TechTag("✓ " + stringResource(R.string.detail_tech_from_file), TechTagTone.Verified)),
+      )
+    } else if (noSubtitleTracks) {
+      TechRow(stringResource(R.string.detail_tech_subtitles), stringResource(R.string.detail_tech_none_in_file))
+    } else if (subtitles.isNotEmpty()) {
       TechRow(stringResource(R.string.detail_tech_subtitles), subtitles.joinToString(", "))
     }
     fileName?.let { TechRow(stringResource(R.string.detail_tech_file), it) }
   }
 }
 
+internal enum class TechTagTone { Neutral, Verified, Missing }
+
+internal data class TechTag(val text: String, val tone: TechTagTone = TechTagTone.Neutral)
+
 @Composable
-private fun TechRow(label: String, value: String, tags: List<String> = emptyList()) {
+private fun TechRow(
+  label: String,
+  value: String,
+  tags: List<TechTag> = emptyList(),
+  note: String? = null,
+) {
   Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
     Text(
       label,
@@ -766,15 +817,28 @@ private fun TechRow(label: String, value: String, tags: List<String> = emptyList
       if (value.isNotEmpty()) Text(value, color = Tokens.Text.copy(alpha = 0.88f), fontSize = 10.5.sp)
       tags.forEach { tag ->
         Text(
-          tag,
-          color = Tokens.Text,
+          tag.text,
+          color = when (tag.tone) {
+            TechTagTone.Neutral -> Tokens.Text
+            TechTagTone.Verified -> Tokens.Green
+            TechTagTone.Missing -> Tokens.Gold
+          },
           fontSize = 8.5.sp,
           fontWeight = FontWeight.Black,
           modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(Tokens.Panel2)
+            .background(
+              when (tag.tone) {
+                TechTagTone.Neutral -> Tokens.Panel2
+                TechTagTone.Verified -> Tokens.Green.copy(alpha = 0.14f)
+                TechTagTone.Missing -> Tokens.Gold.copy(alpha = 0.14f)
+              },
+            )
             .padding(horizontal = 5.dp, vertical = 2.dp),
         )
+      }
+      note?.let {
+        Text(it, color = Tokens.Muted, fontSize = 10.sp, fontStyle = FontStyle.Italic)
       }
     }
   }
