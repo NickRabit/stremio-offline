@@ -166,4 +166,22 @@ class LibraryCatalogueTest {
     assertEquals(ResumeEpisode("series:local:$second", 1, 2), args.episode)
     assertEquals(second, (args.backend as LibraryBackend).rows["local:$second"]?.single()?.localPath)
   }
+
+  @Test
+  fun `an unbound series with every episode finished opens on the last one`() {
+    val first = "Shows/Show/Show.S01E01.mkv"
+    val second = "Shows/Show/Show.S01E02.mkv"
+    val third = "Shows/Show/Show.S01E03.mkv"
+    val done = ProgressDto(120.0, 120.0)
+    val args = ownCatalogueArgs(
+      detail(
+        file(first, season = 1, episode = 1, progress = done),
+        file(second, season = 1, episode = 2, progress = done),
+        file(third, season = 1, episode = 3, progress = done),
+      ),
+    )
+
+    assertEquals(ResumeEpisode("series:local:$third", 1, 3), args.episode)
+    assertEquals(third, (args.backend as LibraryBackend).rows["local:$third"]?.single()?.localPath)
+  }
 }

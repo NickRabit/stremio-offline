@@ -340,6 +340,25 @@ internal fun ownEpisodeProgress(progress: Map<String, ProgressDto>, videoId: Str
 internal fun ownEpisodeCompleted(progress: Map<String, ProgressDto>, videoId: String?): Boolean =
   progress[videoId]?.let { Progress.isCompleted(it.position, it.duration) } == true
 
+/** The episode a library series detail selects after a play: the selected one once finished hands over
+ *  to the next unfinished episode after it, or the last episode when none is left. Null = keep. */
+internal fun ownEpisodeAfterPlay(
+  videos: List<VideoDto>,
+  selected: VideoDto?,
+  progress: Map<String, ProgressDto>,
+): VideoDto? {
+  if (selected == null || !ownEpisodeCompleted(progress, selected.id)) return null
+  val ordered = videos.sortedWith(compareBy(
+    { if (it.season == 0) 1 else 0 },
+    { it.season ?: Int.MAX_VALUE },
+    { it.episode ?: Int.MAX_VALUE },
+  ))
+  val index = ordered.indexOfFirst { it.id == selected.id }
+  if (index < 0) return null
+  return ordered.drop(index + 1).firstOrNull { !ownEpisodeCompleted(progress, it.id) }
+    ?: ordered.lastOrNull()
+}
+
 /** Every episode's position read again under its file's key; a failed read keeps the old one. */
 internal suspend fun refreshedOwnProgress(
   api: TvApi,

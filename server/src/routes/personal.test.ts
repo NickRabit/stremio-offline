@@ -843,6 +843,95 @@ test("an unbound file keeps its own file key", async (t) => {
   assert.deepEqual(harness.data(ALICE).progress, {});
 });
 
+test("an unbound series remembers its last finished episode", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  metaLookups = [];
+  const folder = "lib_00000001/Shows/Local";
+  const file = (episode: number) => `${folder}/Season 01/Local - S01E0${episode}.mp4`;
+  harness.units.push({
+    key: folder,
+    kind: "series",
+    relative: "Shows/Local",
+    sampleFiles: [1, 2, 3, 4, 5].map(file),
+  });
+  const markerId = `local:${folder}`;
+
+  const finished = await api(harness.base, "/api/progress", {
+    method: "POST",
+    user: ALICE,
+    body: { key: `file:${file(3)}`, position: 95, duration: 100, poster: "local-poster.jpg" },
+  });
+  assert.equal(finished.status, 204);
+  const marker = harness.data(ALICE).watchedSeries?.[markerId] as WatchedMarker;
+  assert.equal(marker.name, "Local");
+  assert.equal(marker.season, 1);
+  assert.equal(marker.episode, 3);
+  assert.equal(marker.poster, "local-poster.jpg");
+  assert.equal(typeof marker.updatedAt, "string");
+  assert.deepEqual(harness.data(ALICE).progress, {});
+
+  const first = await readProgress(harness, `file:${file(1)}`);
+  assert.deepEqual(
+    { position: first?.position, duration: first?.duration, title: first?.title, path: first?.path, updatedAt: first?.updatedAt },
+    { position: 1, duration: 1, title: "Local", path: file(1), updatedAt: marker.updatedAt },
+  );
+  assert.equal((await readProgress(harness, `file:${file(3)}`))?.position, 1);
+  assert.equal(await readProgress(harness, `file:${file(4)}`), null);
+
+  await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE, body: { key: `file:${file(1)}`, position: 95, duration: 100 },
+  });
+  assert.equal((harness.data(ALICE).watchedSeries?.[markerId] as WatchedMarker).episode, 3, "an earlier finish does not move the marker");
+  await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE, body: { key: `file:${file(5)}`, position: 95, duration: 100, shuffle: true },
+  });
+  assert.equal((harness.data(ALICE).watchedSeries?.[markerId] as WatchedMarker).episode, 3, "a shuffle leaves the marker");
+  await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE, body: { key: `file:${file(2)}`, position: 40, duration: 100 },
+  });
+  assert.equal((harness.data(ALICE).watchedSeries?.[markerId] as WatchedMarker).episode, 3, "a mid-play report leaves the marker");
+
+  const list = await api(harness.base, "/api/progress", { user: ALICE });
+  const rows = await list.json() as Array<{ pending?: true }>;
+  assert.equal(rows.some((row) => row.pending === true), false, "a local marker never becomes a pending episode row");
+  assert.deepEqual(metaLookups, [], "a local marker never asks the catalogue for a next episode");
+});
+
+test("forgetting an unbound episode walks its local marker back or removes it", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  const folder = "lib_00000001/Shows/Local";
+  const file = (episode: number) => `${folder}/Season 01/Local - S01E0${episode}.mp4`;
+  harness.units.push({
+    key: folder,
+    kind: "series",
+    relative: "Shows/Local",
+    sampleFiles: [1, 2, 3].map(file),
+  });
+  const markerId = `local:${folder}`;
+  const marker = { name: "Local", season: 1, episode: 3, updatedAt: "2024-01-01T00:00:00.000Z" };
+  harness.data(ALICE).watchedSeries = { [markerId]: marker };
+
+  const removed = await api(harness.base, `/api/progress/${encodeURIComponent(`file:${file(3)}`)}`, {
+    method: "DELETE", user: ALICE,
+  });
+  assert.equal(removed.status, 204);
+  assert.deepEqual(harness.data(ALICE).watchedSeries?.[markerId], { ...marker, episode: 2 });
+
+  harness.data(ALICE).watchedSeries = { [markerId]: marker };
+  const forgotten = await api(harness.base, "/api/progress/forget", {
+    method: "POST", user: ALICE, body: { keys: [`file:${file(3)}`] },
+  });
+  assert.equal(forgotten.status, 204);
+  assert.deepEqual(harness.data(ALICE).watchedSeries?.[markerId], { ...marker, episode: 2 });
+
+  await api(harness.base, "/api/progress/forget", {
+    method: "POST", user: ALICE, body: { keys: [`file:${file(1)}`] },
+  });
+  assert.equal(harness.data(ALICE).watchedSeries?.[markerId], undefined);
+});
+
 test("a file key naming a library that is gone still reads and removes its stored row", async (t) => {
   const harness = await mount([filmLibrary]);
   t.after(harness.close);

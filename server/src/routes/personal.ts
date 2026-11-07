@@ -19,6 +19,7 @@ import { stableKeyOfFile, stableKeyOfRemote } from "../media-resources.js";
 import { artworkBindingKey, knownTitleEntry, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
+import { compareEpisodes, localSeriesId, markerCovers } from "../local-series.js";
 import { libraryFor, libraryPath, libraryPathVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { remoteLibraryVisibleTo } from "../media-server-access.js";
@@ -452,7 +453,13 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   /** The handle a source is stored by: the one shape `stableSourceKey` mints, and nothing else. */
   const STABLE_SOURCE_KEY = /^[mtfau]:[0-9a-f]{24}$/;
   /** The stored key a client key stands for: a bound file's `file:` key becomes its title key. */
-  const resolveProgressKey = async (stored: string): Promise<{ key: string; file?: string; title?: ReturnType<typeof titleProgressKey> }> => {
+  type ResolvedProgressKey = {
+    key: string;
+    file?: string;
+    title?: ReturnType<typeof titleProgressKey>;
+    listed?: { season?: number | null; episode?: number | null };
+  };
+  const resolveProgressKey = async (stored: string): Promise<ResolvedProgressKey> => {
     if (!stored.startsWith("file:")) return { key: stored };
     const file = stored.slice(5);
     // A key naming a library that is gone cannot be described; it stays its own file key, so the
@@ -460,8 +467,13 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const item = await describeLibraryPath(file, { stale: true }).catch(() => undefined);
     const listed = item?.kind === "file" ? { season: item.season, episode: item.episode } : undefined;
     const title = titleProgressKey(file, metaStore.qualifiedMeta(), await libraryUnits(), listed);
-    return title ? { key: title.key, file, title } : { key: stored, file };
+    return title ? { key: title.key, file, title, listed } : { key: stored, file, listed };
   };
+  const unboundEpisode = (resolved: ResolvedProgressKey): resolved is ResolvedProgressKey & {
+    file: string;
+    listed: { season: number; episode: number };
+  } =>
+    Boolean(resolved.file && !resolved.title && typeof resolved.listed?.season === "number" && typeof resolved.listed.episode === "number");
   /** Whether the caller may still see the remote library the version that wrote a row belongs to. */
   const remoteWriterVisible = (writer: RemoteProgressWriter, req: express.Request): boolean => {
     const user = currentUser(req);
@@ -550,6 +562,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // has no row here: showing it would offer a next episode from a source this account is
     // not allowed to ask, and finding that out by asking is itself the leak.
     const owing = markersOwingRow(markersOf(data), shown)
+      .filter(([id]) => !id.startsWith("local:"))
       .filter(([, marker]) => !marker.addonKey || allowed.has(marker.addonKey));
     const owed = options.markerLimit === undefined
       ? owing
@@ -605,16 +618,36 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     if (isRemoteProgressKey(raw)) return void res.json(null);
     const all = progressOf(dataOf(req));
     const resolved = await resolveProgressKey(storedProgressKey(raw));
+    const units = await libraryUnits();
     // Every row that stands for the same title is a candidate: the title's own, the legacy
     // `file:` rows resolving to it, and the file this key names. The newest of them answers.
-    const rows = standingKeys(resolved, all, metaStore.qualifiedMeta(), await libraryUnits())
+    const rows = standingKeys(resolved, all, metaStore.qualifiedMeta(), units)
       .filter((key) => all[key] !== undefined)
       .map((key): [string, StoredProgress] => [key, all[key]!]);
     const found = newestProgress(rows, resolved.key)?.[1];
     const visible = !found?.path || pathVisible(found.path, viewerOf(currentUser(req)), store.libraries());
     const stalePath = Boolean(found?.path && found.stableKey && found.stableKey !== stableKeyOfFile(found.path));
-    const answer = found && visible ? { ...found, poster: images.proxied(found.poster), ...(stalePath ? { path: undefined } : {}) } : null;
-    res.json(answer && answer.remote && !remoteWriterVisible(answer.remote, req) ? { ...answer, remote: undefined } : answer);
+    const localFile = unboundEpisode(resolved) ? resolved.file : undefined;
+    const localMarker = localFile
+      ? markersOf(dataOf(req))[localSeriesId(localFile, units)]
+      : undefined;
+    const covered = localFile !== undefined && localMarker &&
+      pathVisible(localFile, viewerOf(currentUser(req)), store.libraries()) &&
+      markerCovers(localMarker, resolved.listed!)
+      ? {
+        position: 1,
+        duration: 1,
+        title: localMarker.name,
+        path: wirePath(localFile),
+        updatedAt: localMarker.updatedAt,
+      }
+      : undefined;
+    if (found && visible) {
+      const answer = { ...found, poster: images.proxied(found.poster), ...(stalePath ? { path: undefined } : {}) };
+      res.json(answer.remote && !remoteWriterVisible(answer.remote, req) ? { ...answer, remote: undefined } : answer);
+      return;
+    }
+    res.json(covered ?? null);
   }));
   app.post("/api/progress", asyncRoute(async (req, res) => {
     // With tracking switched off the position is written nowhere.
@@ -685,6 +718,22 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
           season: series.season, episode: series.episode, updatedAt: record.updatedAt,
         };
       } else all[key] = record;
+      if (finished && !shuffle && unboundEpisode(resolved)) {
+        const id = localSeriesId(resolved.file!, units);
+        const marker = markers[id];
+        const season = resolved.listed!.season!;
+        const episode = resolved.listed!.episode!;
+        if (!marker || compareEpisodes({ season, episode }, marker) > 0) {
+          const poster = posterOf(req.body.poster);
+          markers[id] = {
+            name: id.slice(id.lastIndexOf("/") + 1),
+            ...(poster ? { poster } : {}),
+            season,
+            episode,
+            updatedAt: record.updatedAt,
+          };
+        }
+      }
       // The list must not grow without bound.
       const keys = Object.keys(all).sort((a, b) => all[b]!.updatedAt.localeCompare(all[a]!.updatedAt));
       data.progress = Object.fromEntries(keys.slice(0, 60).map((item) => [item, all[item]!]));
@@ -714,7 +763,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
     if (isRemoteProgressKey(String(req.params.key))) return void res.status(404).end();
     const resolved = await resolveProgressKey(storedProgressKey(String(req.params.key)));
-    const keys = standingKeys(resolved, progressOf(dataOf(req)), metaStore.qualifiedMeta(), await libraryUnits());
+    const units = await libraryUnits();
+    const keys = standingKeys(resolved, progressOf(dataOf(req)), metaStore.qualifiedMeta(), units);
     await updateData(req, (data) => {
       const all = { ...progressOf(data) };
       const markers = { ...markersOf(data) };
@@ -725,6 +775,16 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         delete all[key];
         const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
         if (series) delete markers[series.id];
+      }
+      if (unboundEpisode(resolved)) {
+        const id = localSeriesId(resolved.file!, units);
+        const marker = markers[id];
+        const season = resolved.listed!.season!;
+        const episode = resolved.listed!.episode!;
+        if (marker && markerCovers(marker, { season, episode })) {
+          if (marker.season === season && episode > 1) markers[id] = { ...marker, episode: episode - 1 };
+          else delete markers[id];
+        }
       }
       data.progress = all;
       data.watchedSeries = markers;
@@ -754,6 +814,16 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         delete stored[key];
         const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
         if (series) delete markers[series.id];
+      }
+      for (const entry of resolved) {
+        if (!unboundEpisode(entry)) continue;
+        const id = localSeriesId(entry.file!, units);
+        const marker = markers[id];
+        const season = entry.listed!.season!;
+        const episode = entry.listed!.episode!;
+        if (!marker || !markerCovers(marker, { season, episode })) continue;
+        if (marker.season === season && episode > 1) markers[id] = { ...marker, episode: episode - 1 };
+        else delete markers[id];
       }
       data.progress = stored;
       data.watchedSeries = markers;
