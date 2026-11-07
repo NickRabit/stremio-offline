@@ -127,7 +127,8 @@ the control that opened it. There are no centred dialogs on TV.
 
 **Player.** The web's controls, sized for the sofa: the eyebrow names the
 playback path (`Direct play · MKV · no server conversion`, `Remux`, `Audio
-converted`), the title below it; at the bottom the timeline and a row of round
+converted`), the title below it, and the time of day in the top-right corner
+(in the TV's own 12/24-hour format); at the bottom the timeline and a row of round
 buttons: back 10, play/pause in the accent, forward 10, audio and subtitles
 (labelled with the current choice), next episode, diagnostics. With the
 controls hidden, OK pauses and shows them, and left or right seek with a bubble
