@@ -988,6 +988,8 @@ img.broken{visibility:hidden}
   .player-overlay .player-controls .transport-controls .seek-step svg{width:24px;height:24px}
   .player-overlay .player-controls .transport-controls .play-toggle{width:58px;height:58px;min-width:58px;min-height:58px;padding:0}
   .player-overlay .player-controls .transport-controls .play-toggle svg{width:24px;height:24px}
+  /* Previous and next episode join the row: five buttons still fit a 320 px phone. */
+  .player-overlay .transport-controls.has-episodes{gap:10px}
   .player-overlay .player-controls>button,.player-overlay .player-view-controls>button{flex:1 1 0;max-width:64px}
 }
 
