@@ -34,12 +34,19 @@ const FORBIDDEN = /[\u0000-\u001f/:*?"<>|\\]/g;
  *  create. An underscore in front keeps the name recognisable and makes it legal again. */
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
+/** `/\.+$/` retries from every dot of a long run, which is quadratic. */
+function trimTrailingDots(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === ".") end--;
+  return value.slice(0, end);
+}
+
 export function safeName(value: string): string {
-  const cleaned = value.normalize("NFC")
+  const cleaned = trimTrailingDots(value.normalize("NFC")
     .replace(FORBIDDEN, " ")
     // Stripping the slashes from "../.." leaves lone dots, which make no sense as part of a name.
     .split(/\s+/).filter((part) => part && !/^\.+$/.test(part)).join(" ")
-    .replace(/^\.+/, "").replace(/\.+$/, "").trim();
+    .replace(/^\.+/, "")).trim();
   const stem = cleaned.split(".")[0] ?? "";
   const named = RESERVED.test(stem) ? `_${cleaned}` : cleaned;
   return named.slice(0, 150).trim() || "video";

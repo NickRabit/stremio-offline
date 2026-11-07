@@ -874,3 +874,10 @@ test("a library filter lists a matching folder once without repeating its descen
     assert.equal(inside.total, 2, "opening the folder still exposes its file and subfolder");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("a long run of whitespace before a line break does not stall the episode parser", () => {
+  const started = performance.now();
+  assert.equal(parseEpisode(`1${"\t".repeat(50_000)}x\ny.mkv`).episode, 1);
+  assert.equal(parseEpisode(`s01e02${"\t".repeat(50_000)}x\ny.mkv`).episode, 2);
+  assert.ok(performance.now() - started < 1000);
+});
