@@ -14,7 +14,7 @@ export const sourceText = (source: ListedSource): string =>
 
 const UNITS: Record<string, number> = { tb: 1e12, gb: 1e9, mb: 1e6, kb: 1e3, t: 1e12, g: 1e9 };
 // Addons put sizes in text, including Luna's short "2.2G", sometimes beside a bitrate.
-const SIZE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB|T|G)\b(?!\s*(?:\/\s*s|ps|it)\b)/gi;
+const SIZE = /(?<!\d)(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB|T|G)\b(?!\s*(?:\/\s*s|ps|it)\b)/gi;
 
 export function sourceSize(source: ListedSource): number | undefined {
   const hinted = source.behaviorHints?.videoSize;

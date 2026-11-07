@@ -308,7 +308,7 @@ function normalize(value: string): string {
   // the way to the syscall, so a spelling that survives here reaches the same directory
   // under a name no string comparison recognises -- and the carve-out guard and the
   // listing's exclusion are both string comparisons.
-  return toPosix(value).replace(/\/{2,}/g, "/").replace(/^\/+|\/+$/g, "");
+  return toPosix(value).split("/").filter(Boolean).join("/");
 }
 
 /** The same on the wire, where the separator is always `/`: a backslash is an ordinary
@@ -316,7 +316,7 @@ function normalize(value: string): string {
 function wireKey(value: string): string {
   // Most keys are already clean; the thumbnail sweep asks for thousands of them.
   if (!value.includes("//") && !value.startsWith("/") && !value.endsWith("/")) return value;
-  return value.replace(/\/{2,}/g, "/").replace(/^\/+|\/+$/g, "");
+  return value.split("/").filter(Boolean).join("/");
 }
 
 /** The deepest existing ancestor of `target`, resolved. A path that does not exist yet
