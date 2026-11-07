@@ -73,7 +73,16 @@ test("player keeps its picture stable and its overlay controls reachable", async
       const transportLeft = Math.min(...transportBoxes.map((box) => box!.x));
       const transportRight = Math.max(...transportBoxes.map((box) => box!.x + box!.width));
 
-      expect(new Set(transportBoxes.map((box) => Math.round(box!.y))).size).toBe(1);
+      expect(new Set(transportBoxes.map((box) => Math.round(box!.y + box!.height / 2))).size).toBe(1);
+      // Play is the main control: larger than the seek steps and with room around it, never
+      // squeezed against them.
+      const transport = transportBoxes.map((box) => box!).sort((a, b) => a.x - b.x);
+      for (let index = 1; index < transport.length; index += 1) {
+        expect(transport[index]!.x - transport[index - 1]!.x - transport[index - 1]!.width).toBeGreaterThanOrEqual(16);
+      }
+      const play = (await overlay.locator(".transport-controls .play-toggle").boundingBox())!;
+      expect(play.height).toBeGreaterThanOrEqual(56);
+      expect(play.width).toBeGreaterThanOrEqual(56);
       expect(Math.abs((transportLeft + transportRight) / 2 - (controlsBox.x + controlsBox.width / 2))).toBeLessThanOrEqual(1);
       expect(new Set(rowTwo.map((box) => Math.round(box.y))).size).toBe(1);
       // Spread evenly across the full width: the space at each edge is the space between buttons,

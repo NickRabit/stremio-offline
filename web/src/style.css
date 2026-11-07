@@ -981,8 +981,14 @@ img.broken{visibility:hidden}
 @media(max-width:700px){.player-overlay .player-controls{flex-wrap:wrap}.player-overlay .transport-controls{display:flex;flex:0 0 auto;flex-wrap:nowrap;gap:inherit}.player-controls .seek-step{padding:6px;gap:2px;font-size:10px}.player-controls .seek-step svg{width:20px}}
 @media(max-width:700px) and (orientation:portrait){
   .player-overlay .player-controls{justify-content:space-evenly;overflow:visible}
-  .player-overlay .transport-controls{flex:0 0 100%;justify-content:center}
+  .player-overlay .transport-controls{flex:0 0 100%;justify-content:center;align-items:center;gap:28px}
   .player-overlay .player-view-controls{display:contents}
+  /* Play leads the row; the seek steps sit at a thumb's distance instead of touching it. */
+  .player-overlay .player-controls .transport-controls .seek-step{min-width:52px;min-height:52px;font-size:11px}
+  .player-overlay .player-controls .transport-controls .seek-step svg{width:24px;height:24px}
+  .player-overlay .player-controls .transport-controls .play-toggle{width:58px;height:58px;min-width:58px;min-height:58px;padding:0}
+  .player-overlay .player-controls .transport-controls .play-toggle svg{width:24px;height:24px}
+  .player-overlay .player-controls>button,.player-overlay .player-view-controls>button{flex:1 1 0;max-width:64px}
 }
 
 .player-overlay.cursor-hidden,.player-overlay.cursor-hidden *{cursor:none!important}
