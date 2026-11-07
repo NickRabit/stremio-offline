@@ -986,18 +986,23 @@ img.broken{visibility:hidden}
 .transport-controls{display:contents}
 @media(max-width:700px){.player-overlay .player-controls{flex-wrap:wrap}.player-overlay .transport-controls{display:flex;flex:0 0 auto;flex-wrap:nowrap;gap:inherit}.player-controls .seek-step{padding:6px;gap:2px;font-size:10px}.player-controls .seek-step svg{width:20px}}
 @media(max-width:700px) and (orientation:portrait){
-  /* One row under the timeline: a film's eight buttons fit a 360 px phone edge to edge once the
-     bar's sides narrow to 4 px. */
+  /* Held upright, playback sits on the picture where the thumb is, and the bar below keeps one
+     row: the episode steps at its ends and the rest between them. */
   .player-bottom{padding-left:max(4px,env(safe-area-inset-left));padding-right:max(4px,env(safe-area-inset-right))}
-  .player-overlay .player-controls{justify-content:space-between;gap:0;row-gap:4px;overflow:visible}
-  .player-overlay .transport-controls,.player-overlay .player-view-controls{display:contents}
+  .player-overlay .player-controls{justify-content:space-between;gap:0;overflow:visible}
+  .player-overlay .player-view-controls{display:contents}
   .player-overlay .player-controls button{flex:0 0 44px;width:44px;min-width:44px;height:44px;min-height:44px;padding:0}
   .player-overlay .player-controls button svg{width:22px;height:22px}
-  .player-overlay .player-controls .seek-step{gap:1px}
-  .player-overlay .player-controls .seek-step svg{width:20px;height:20px}
-  /* A series adds previous and next episode: ten buttons never fit one row, so playback keeps a
-     row of its own and the rest follow below it rather than breaking anywhere. */
-  .player-overlay .transport-controls.has-episodes{display:flex;flex:0 0 100%;justify-content:space-between}
+  .player-overlay .player-controls .previous-episode{order:-1}
+  .player-overlay .player-controls .next-episode{order:1}
+  .player-overlay .transport-controls{display:flex;position:fixed;left:0;right:0;top:50%;transform:translateY(-50%);z-index:9;justify-content:center;align-items:center;gap:32px;pointer-events:none}
+  .player-overlay .player-controls .transport-controls button,.player-overlay .player-controls .transport-controls .seek-step:hover:not(:disabled){pointer-events:auto;flex:0 0 52px;width:52px;min-width:52px;height:52px;min-height:52px;border-radius:50%;background:#0b0e13b3;backdrop-filter:blur(6px)}
+  .player-overlay .player-controls .transport-controls .seek-step{gap:1px}
+  .player-overlay .player-controls .transport-controls .seek-step svg{width:20px;height:20px}
+  .player-overlay .player-controls .transport-controls .play-toggle,.player-overlay .player-controls .transport-controls .play-toggle:hover:not(:disabled){flex-basis:68px;width:68px;min-width:68px;height:68px;min-height:68px;background:var(--accent)}
+  .player-overlay .player-controls .transport-controls .play-toggle svg{width:30px;height:30px}
+  /* An open settings or sources panel covers the picture: playback steps aside rather than peek over it. */
+  .player-overlay:has(.player-settings) .transport-controls{visibility:hidden}
 }
 
 .player-overlay.cursor-hidden,.player-overlay.cursor-hidden *{cursor:none!important}

@@ -58,45 +58,52 @@ test("player keeps its picture stable and its overlay controls reachable", async
   expect(await viewItems[2].getAttribute("aria-label")).toBe("Nastavení přehrávání");
   const viewBoxes = await Promise.all(viewItems.map((button) => button.boundingBox()));
   expect(viewBoxes.map((box) => box!.x)).toEqual(viewBoxes.map((box) => box!.x).sort((a, b) => a - b));
-  // The same quiet controls at every size and orientation: play is the one filled button, the
-  // rest are bare icons until the pointer is over them or their panel is open.
+  // The same quiet bar at every size and orientation: its buttons are bare icons until the pointer
+  // is over them or their panel is open, and play is filled wherever it sits.
   await page.mouse.move(0, 0);
-  const filled = await overlay.locator(".player-controls button:not(.player-fill-toggle):not([aria-expanded=\"true\"])").evaluateAll((buttons) =>
+  const filled = await overlay.locator(".player-controls > button:not([aria-expanded=\"true\"]), .player-view-controls > button:not(.player-fill-toggle):not([aria-expanded=\"true\"])").evaluateAll((buttons) =>
     buttons.filter((button) => getComputedStyle(button).backgroundColor !== "rgba(0, 0, 0, 0)").map((button) => button.className));
-  expect(filled).toEqual(["play-toggle"]);
+  expect(filled).toEqual([]);
+  expect(await overlay.locator(".play-toggle").evaluate((button) => getComputedStyle(button).backgroundColor)).toBe("rgb(255, 91, 56)");
 
   if (testInfo.project.name === "mobile") {
     const controls = overlay.locator(".player-controls");
-    const visibleBoxes = async () => (await Promise.all(
-      (await controls.locator("button").all()).map((button) => button.boundingBox()),
+    const barBoxes = async () => (await Promise.all(
+      (await overlay.locator(".player-controls > button, .player-view-controls > button").all()).map((button) => button.boundingBox()),
     )).filter((box): box is NonNullable<typeof box> => box !== null && box.width > 0).sort((a, b) => a.x - b.x);
-    // A film on a phone held upright: every control in one row under the timeline, playback
-    // first, spread from edge to edge with even spaces between them.
-    const checkOneRow = async () => {
+    // A phone held upright: playback sits on the picture, centred, play the largest of the three;
+    // the bar below is one row spread from edge to edge with even spaces.
+    const checkPortrait = async () => {
       const controlsBox = (await controls.boundingBox())!;
-      const boxes = await visibleBoxes();
+      const boxes = await barBoxes();
       expect(new Set(boxes.map((box) => Math.round(box.y + box.height / 2))).size).toBe(1);
-      const transport = await Promise.all((await overlay.locator(".transport-controls button").all()).map((button) => button.boundingBox()));
-      expect(transport.map((box) => box!.x)).toEqual(boxes.slice(0, transport.length).map((box) => box.x));
       const gaps = boxes.slice(1).map((box, index) => box.x - boxes[index]!.x - boxes[index]!.width);
       expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(1);
       expect(Math.abs(boxes[0]!.x - controlsBox.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(controlsBox.x + controlsBox.width - boxes.at(-1)!.x - boxes.at(-1)!.width)).toBeLessThanOrEqual(1);
       expect(await controls.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
+
+      const transport = (await Promise.all((await overlay.locator(".transport-controls button").all()).map((button) => button.boundingBox())))
+        .map((box) => box!).sort((a, b) => a.x - b.x);
+      expect(transport).toHaveLength(3);
+      expect(new Set(transport.map((box) => Math.round(box.y + box.height / 2))).size).toBe(1);
+      const middle = (transport[0]!.x + transport.at(-1)!.x + transport.at(-1)!.width) / 2;
+      expect(Math.abs(middle - page.viewportSize()!.width / 2)).toBeLessThanOrEqual(1);
+      expect(transport[1]!.height).toBeGreaterThanOrEqual(56);
+      // Over the picture, clear of the bar below it.
+      expect(transport[0]!.y + transport[0]!.height).toBeLessThan(boxes[0]!.y);
+      const picture = (await video.boundingBox())!;
+      const centre = transport[1]!.y + transport[1]!.height / 2;
+      expect(centre).toBeGreaterThan(picture.y);
+      expect(centre).toBeLessThan(picture.y + picture.height);
     };
 
-    await checkOneRow();
+    await checkPortrait();
     const viewport = page.viewportSize()!;
-    // An Android phone 360 px wide still holds the whole row, fullscreen included.
     await page.setViewportSize({ width: 360, height: viewport.height });
-    await checkOneRow();
-    // Narrower than that the row may wrap, but nothing leaves the screen.
+    await checkPortrait();
     await page.setViewportSize({ width: 320, height: viewport.height });
-    for (const button of await overlay.locator(".player-controls button").all()) {
-      const box = await button.boundingBox();
-      expect(box!.x).toBeGreaterThanOrEqual(0);
-      expect(box!.x + box!.width).toBeLessThanOrEqual(320);
-    }
+    await checkPortrait();
     await page.setViewportSize(viewport);
   }
 
