@@ -521,15 +521,28 @@ export function sortFiles<T extends { label: string; size: number; modified: str
 /** Describes one path as a list item. Used for the virtual favourites folder, whose items
  *  come from all over the tree. `videosInside` answers a folder's videos from a walk the
  *  caller already holds instead of walking the folder again. */
+const REAL_ROOT_TTL_MS = 60_000;
+const realRoots = new Map<string, { at: number; real: Promise<string> }>();
+
+/** Home rows describe dozens of keys per library; on a NAS each realpath of the root is a round trip. */
+function realRootOf(root: string): Promise<string> {
+  const cached = realRoots.get(root);
+  if (cached && Date.now() - cached.at < REAL_ROOT_TTL_MS) return cached.real;
+  const real = realpath(root);
+  realRoots.set(root, { at: Date.now(), real });
+  real.catch(() => realRoots.delete(root));
+  return real;
+}
+
 export async function describePath(root: string, relative: string, exclude?: ReadonlySet<string>, videosInside?: () => Promise<FoundFile[]>): Promise<BrowseItem | undefined> {
   if (exclude?.has(relative)) return undefined;
   const target = resolveInside(root, relative);
   if (!target) return undefined;
-  const info = await stat(target).catch(() => undefined);
-  if (!info) return undefined;
   // The key may come from a request; a symlink inside the library must not describe what lies outside it.
-  const [real, realRoot] = await Promise.all([realpath(target), realpath(root)]).catch(() => []);
+  const [real, realRoot] = await Promise.all([realpath(target), realRootOf(root)]).catch(() => []);
   if (!real || !realRoot || !isInside(real, realRoot)) return undefined;
+  const info = await stat(real).catch(() => undefined);
+  if (!info) return undefined;
   const name = posixBase(relative);
   if (info.isDirectory()) {
     const inside = videosInside ? await videosInside() : await listVideos(root, relative, 0, exclude);
