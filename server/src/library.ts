@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
-import { foldPath, posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
+import { foldPath, isInside, posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
 
 const VIDEO = new Set([".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts", ".m2ts", ".wmv", ".flv", ".mpg", ".mpeg"]);
 
@@ -527,6 +527,9 @@ export async function describePath(root: string, relative: string, exclude?: Rea
   if (!target) return undefined;
   const info = await stat(target).catch(() => undefined);
   if (!info) return undefined;
+  // The key may come from a request; a symlink inside the library must not describe what lies outside it.
+  const [real, realRoot] = await Promise.all([realpath(target), realpath(root)]).catch(() => []);
+  if (!real || !realRoot || !isInside(real, realRoot)) return undefined;
   const name = posixBase(relative);
   if (info.isDirectory()) {
     const inside = videosInside ? await videosInside() : await listVideos(root, relative, 0, exclude);

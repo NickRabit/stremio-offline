@@ -243,7 +243,7 @@ test("an explicit subfolder is used as named, a rule's is tidied", () => {
 
 test("a long run of dots inside a name is tidied in linear time", () => {
   const started = performance.now();
-  assert.equal(safeName(`a${".".repeat(50_000)}b`), `a${".".repeat(149)}`);
+  assert.equal(safeName(`a${".".repeat(200_000)}b`), `a${".".repeat(149)}`);
   assert.equal(safeName("Name..."), "Name");
   assert.ok(performance.now() - started < 1000);
 });
