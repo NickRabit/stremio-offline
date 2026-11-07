@@ -37,6 +37,7 @@ class SourceInspectionTest {
         subtitles = listOf("de", "fr"),
         subtitlesKnown = true,
         noSubtitleTracks = false,
+        audioFacts = cz.stremiooffline.tv.data.AudioFactsDto(),
       ),
       detectedTracks(
         InspectionDto(
@@ -54,6 +55,21 @@ class SourceInspectionTest {
         ),
       ),
     )
+  }
+
+  @Test
+  fun `the first sound track's codec, untagged audio and the picture's class are read`() {
+    val read = detectedTracks(
+      InspectionDto(
+        video = cz.stremiooffline.tv.data.InspectionVideoDto(codec = "h264", width = 1920, height = 800),
+        audioTracks = listOf(InspectionTrackDto(codec = "eac3", channels = 6), InspectionTrackDto(codec = "aac", channels = 2)),
+      ),
+    )
+    assertEquals(true, read.audioUntagged)
+    assertEquals(cz.stremiooffline.tv.data.AudioFactsDto(codec = "eac3", channels = 6), read.audioFacts)
+    assertEquals(1080, read.videoHeight)
+    assertEquals(576, resolutionClass(720, 576))
+    assertEquals(false, detectedTracks(InspectionDto()).audioUntagged)
   }
 
   @Test

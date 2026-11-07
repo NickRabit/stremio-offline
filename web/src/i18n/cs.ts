@@ -458,6 +458,7 @@ export const cs: Catalog = {
   "detail.tech.fromFileHint": "Přečteno přímo ze souboru, ne z jeho názvu",
   "detail.tech.noneInFile": "v souboru nejsou",
   "detail.tech.missingLanguage": "{language} chybí",
+  "detail.tech.languageUnknown": "jazyk v souboru neuveden",
   "detail.action.trailer": "Trailer",
   "detail.action.fromStart": "Od začátku",
   "detail.action.watched": "Zhlédnuto",

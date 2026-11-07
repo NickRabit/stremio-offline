@@ -224,10 +224,15 @@ data class InspectionTrackDto(
   val language: String? = null,
   val title: String? = null,
   val codec: String? = null,
+  val channels: Int? = null,
 )
 
 @Serializable
+data class InspectionVideoDto(val codec: String? = null, val width: Int? = null, val height: Int? = null)
+
+@Serializable
 data class InspectionDto(
+  val video: InspectionVideoDto? = null,
   val audioTracks: List<InspectionTrackDto> = emptyList(),
   val subtitleTracks: List<InspectionTrackDto> = emptyList(),
 )

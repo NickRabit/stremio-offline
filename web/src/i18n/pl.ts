@@ -419,6 +419,7 @@ export const pl: Catalog = {
   "detail.tech.fromFileHint": "Odczytane z samego pliku, nie z jego nazwy",
   "detail.tech.noneInFile": "brak w pliku",
   "detail.tech.missingLanguage": "brak: {language}",
+  "detail.tech.languageUnknown": "język nie podany w pliku",
   "detail.action.trailer": "Zwiastun",
   "detail.action.fromStart": "Od początku",
   "detail.action.watched": "Obejrzane",

@@ -312,6 +312,27 @@ class TitleExtrasTest {
   }
 
   @Test
+  fun aReadFileWithoutLanguageTagsKeepsTheGuessMarkedAndFillsSoundAndPicture() {
+    val stream = StreamDto(sourceId = "s1", kind = "remote", playable = true, name = "Film.2013.CZ.EN.avi", addonName = "Cineshare")
+    val read = detectedTracks(
+      cz.stremiooffline.tv.data.InspectionDto(
+        video = cz.stremiooffline.tv.data.InspectionVideoDto(codec = "mpeg4", width = 720, height = 576),
+        audioTracks = listOf(cz.stremiooffline.tv.data.InspectionTrackDto(codec = "mp3", channels = 2)),
+      ),
+    )
+    compose.setContent {
+      TitleTechBlock(stream, uiLanguage = "en", inspection = SourceInspection.Done(read))
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithText("Czech, English", substring = true).assertExists()
+    compose.onNodeWithText("language not stated in the file", substring = true).assertExists()
+    compose.onNodeWithText("MP3 2.0", substring = true).assertExists()
+    compose.onNodeWithText("576p", substring = true).assertExists()
+    compose.onNodeWithText("from the file", substring = true).assertDoesNotExist()
+  }
+
+  @Test
   fun `the videos row is hidden without a resolving activity`() {
     val state = TitleExtrasState().apply {
       extras = extras().copy(

@@ -419,6 +419,7 @@ export const ptBR: Catalog = {
   "detail.tech.fromFileHint": "Lido do próprio arquivo, não do nome",
   "detail.tech.noneInFile": "nenhuma no arquivo",
   "detail.tech.missingLanguage": "sem {language}",
+  "detail.tech.languageUnknown": "idioma não indicado no arquivo",
   "detail.action.trailer": "Trailer",
   "detail.action.fromStart": "Do início",
   "detail.action.watched": "Visto",

@@ -489,6 +489,7 @@
   <string name="detail_tech_from_file">del archivo</string>
   <string name="detail_tech_none_in_file">ninguno en el archivo</string>
   <string name="detail_tech_missing_language">falta %1$s</string>
+  <string name="detail_tech_language_unknown">idioma no indicado en el archivo</string>
   <string name="sources_audio_channels">%1$s can.</string>
   <string name="genre_action">Acción</string>
   <string name="genre_adventure">Aventura</string>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { isRemoteStream } from "./streams";
-import type { Inspection, Stream, Track } from "./types";
+import type { AudioFacts, Inspection, Stream, Track } from "./types";
 
 const UNCACHED_DEBRID = /\[(?:RD|AD|PM|DL|TB|ED|OC|PD|DLS)\b[^\]]*(?:download|⏳)[^\]]*\]/i;
 
@@ -18,6 +18,24 @@ export interface DetectedTracks {
   subtitles: string[];
   subtitlesKnown: boolean;
   noSubtitleTracks: boolean;
+  /** The file has sound tracks, but none of them names its language. */
+  audioUntagged: boolean;
+  /** The first sound track's codec and channels, in the form a library file's facts take. */
+  audioFacts?: AudioFacts;
+  /** The picture's resolution class, read from the file. */
+  videoHeight?: number;
+}
+
+const READ_CODECS = new Set<string>(["aac", "ac3", "eac3", "dts", "truehd", "opus", "flac", "mp3"]);
+
+/** The class a release would name: a 1920x800 scope picture is 1080p, not 800p. */
+export function resolutionClass(width: number | undefined, height: number | undefined): number | undefined {
+  if (!height || height <= 0) return undefined;
+  const wide = width ?? 0;
+  if (wide >= 3200 || height >= 2000) return 2160;
+  if (wide >= 1800 || height >= 1000) return 1080;
+  if (wide >= 1200 || height >= 700) return 720;
+  return Math.round(height);
 }
 
 const languages = (tracks: Track[]): string[] =>
@@ -26,12 +44,20 @@ const languages = (tracks: Track[]): string[] =>
 export function detectedTracks(inspection: Inspection): DetectedTracks {
   const audio = languages(inspection.audioTracks);
   const subtitles = languages(inspection.subtitleTracks);
+  const first = inspection.audioTracks[0];
+  const videoHeight = resolutionClass(inspection.video?.width, inspection.video?.height);
   return {
     audio,
     audioKnown: audio.length > 0,
     subtitles,
     subtitlesKnown: inspection.subtitleTracks.length === 0 || subtitles.length > 0,
     noSubtitleTracks: inspection.subtitleTracks.length === 0,
+    audioUntagged: inspection.audioTracks.length > 0 && audio.length === 0,
+    ...(first ? { audioFacts: {
+      ...(first.codec && READ_CODECS.has(first.codec) ? { codec: first.codec as NonNullable<AudioFacts["codec"]> } : {}),
+      ...(first.channels && first.channels > 0 ? { channels: first.channels } : {}),
+    } } : {}),
+    ...(videoHeight ? { videoHeight } : {}),
   };
 }
 

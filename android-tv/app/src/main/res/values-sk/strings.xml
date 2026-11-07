@@ -511,6 +511,7 @@
   <string name="detail_tech_from_file">zo súboru</string>
   <string name="detail_tech_none_in_file">v súbore nie sú</string>
   <string name="detail_tech_missing_language">%1$s chýba</string>
+  <string name="detail_tech_language_unknown">jazyk v súbore neuvedený</string>
   <string name="sources_audio_channels">%1$s kan.</string>
   <string name="genre_action">Akčný</string>
   <string name="genre_adventure">Dobrodružný</string>

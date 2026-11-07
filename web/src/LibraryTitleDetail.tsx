@@ -346,10 +346,13 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     && listedAudio.includes(preferredLanguage) && !inspectedAudio.audio.includes(preferredLanguage)
     ? languageName(preferredLanguage) : null;
   const checking = inspection.state === "checking";
+  const readTracks = inspection.state === "done" ? inspection.tracks : null;
+  // The file was read but names no language: the release name's guess stays, marked as one.
+  const audioUntagged = Boolean(readTracks?.audioUntagged);
   const noSubtitleTracks = inspection.state === "done" && inspection.tracks.noSubtitleTracks;
   const releaseText = shown?.behaviorHints?.filename ?? shown?.title ?? shown?.name;
   // What the server read out of a library file beats what its name advertises.
-  const audioTag = audioFactsText(shown?.audioFacts) ?? (releaseText ? audioFormat(releaseText) : undefined);
+  const audioTag = audioFactsText(shown?.audioFacts) ?? (releaseText ? audioFormat(releaseText) : undefined) ?? audioFactsText(readTracks?.audioFacts);
   // Without probed facts the release name may still say the resolution; a source badge such as a
   // library's LOCAL says nothing about the picture, so only an addon's own quality label stands in.
   const releaseHeight = releaseText ? /\b(2160|1440|1080|720|576|480)[pi]\b/i.exec(releaseText)?.[1] ?? (/\b4k\b|\buhd\b/i.test(releaseText) ? "2160" : undefined) : undefined;
@@ -484,13 +487,14 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         </>}
       </dd>
       {shown && <>
-        {(video || releaseHeight || addonQuality) && <>
+        {(video || releaseHeight || readTracks?.videoHeight || addonQuality) && <>
           <dt>{t("detail.tech.video")}</dt>
           <dd>{video
             ? <>{video.height}{video.tags.map((tag) => <span key={tag.text} className={tag.hdr ? "tag hdr" : "tag"}>{tag.text}</span>)}</>
-            : releaseHeight ? t("rules.resolutionValue", { height: Number(releaseHeight) }) : addonQuality}</dd>
+            : releaseHeight ? t("rules.resolutionValue", { height: Number(releaseHeight) })
+              : readTracks?.videoHeight ? t("rules.resolutionValue", { height: readTracks.videoHeight }) : addonQuality}</dd>
         </>}
-        {(audioNames.length > 0 || audioTag || inspectedAudio || checking) && <>
+        {(audioNames.length > 0 || audioTag || inspectedAudio || checking || audioUntagged) && <>
           <dt>{t("detail.tech.audio")}</dt>
           <dd>{inspectedAudio
             ? <>
@@ -505,6 +509,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
               {audioNames.join(", ")}
               {audioTag && <span className="tag">{audioTag}</span>}
               {checking && <span className="checking">{t("sources.probing")}</span>}
+              {audioUntagged && <span className="note">{t("detail.tech.languageUnknown")}</span>}
             </>}</dd>
         </>}
         {(subtitleNames.length > 0 || addonSubtitleCount > 0 || inspectedSubtitles || noSubtitleTracks) && <>

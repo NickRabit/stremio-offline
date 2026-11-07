@@ -463,6 +463,7 @@ export const en = {
   "detail.tech.fromFileHint": "Read from the file itself, not from its name",
   "detail.tech.noneInFile": "none in the file",
   "detail.tech.missingLanguage": "{language} missing",
+  "detail.tech.languageUnknown": "language not stated in the file",
   "detail.action.trailer": "Trailer",
   "detail.action.fromStart": "From start",
   "detail.action.watched": "Watched",
