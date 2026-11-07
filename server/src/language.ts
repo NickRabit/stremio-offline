@@ -51,7 +51,7 @@ export const isUiLanguage = (value: unknown): value is UiLanguage => UI_LANGUAGE
 /** Returns the two-letter code, or undefined when the language is not recognised. */
 export function normalizeLanguage(value?: string): string | undefined {
   if (!value) return undefined;
-  const cleaned = value.toLowerCase().trim().replace(/[_-].*$/, "");
+  const cleaned = value.toLowerCase().trim().split(/[_-]/, 1)[0];
   return LOOKUP.get(cleaned) ?? (/^[a-z]{2}$/.test(cleaned) ? cleaned : undefined);
 }
 

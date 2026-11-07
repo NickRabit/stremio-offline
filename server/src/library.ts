@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
-import { foldPath, posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
+import { foldPath, isInside, posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
 
 const VIDEO = new Set([".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts", ".m2ts", ".wmv", ".flv", ".mpg", ".mpeg"]);
 
@@ -94,9 +94,9 @@ export function parseSeason(folder: string): number | null {
 /** "07 - Name", "S01E07 Name", "7." -- the episode number comes first, the rest is the name. */
 export function parseEpisode(filename: string): { episode: number | null; title: string } {
   const base = filename.replace(/\.[^.]+$/, "").trim();
-  const tagged = /^s\d{1,3}[\s._-]*e(\d{1,4})[\s._-]*(.*)$/i.exec(base);
+  const tagged = /^s\d{1,3}[\s._-]*e(\d{1,4})[\s._-]*(.*)$/is.exec(base);
   if (tagged) return { episode: Number(tagged[1]), title: tagged[2].trim() || `Epizoda ${Number(tagged[1])}` };
-  const numbered = /^(\d{1,4})\s*[-–.)]?\s*(.*)$/.exec(base);
+  const numbered = /^(\d{1,4})\s*[-–.)]?\s*(.*)$/s.exec(base);
   if (numbered) {
     const episode = Number(numbered[1]);
     return { episode, title: numbered[2].trim() || `Epizoda ${episode}` };
@@ -521,11 +521,27 @@ export function sortFiles<T extends { label: string; size: number; modified: str
 /** Describes one path as a list item. Used for the virtual favourites folder, whose items
  *  come from all over the tree. `videosInside` answers a folder's videos from a walk the
  *  caller already holds instead of walking the folder again. */
+const REAL_ROOT_TTL_MS = 60_000;
+const realRoots = new Map<string, { at: number; real: Promise<string> }>();
+
+/** Home rows describe dozens of keys per library; on a NAS each realpath of the root is a round trip. */
+function realRootOf(root: string): Promise<string> {
+  const cached = realRoots.get(root);
+  if (cached && Date.now() - cached.at < REAL_ROOT_TTL_MS) return cached.real;
+  const real = realpath(root);
+  realRoots.set(root, { at: Date.now(), real });
+  real.catch(() => realRoots.delete(root));
+  return real;
+}
+
 export async function describePath(root: string, relative: string, exclude?: ReadonlySet<string>, videosInside?: () => Promise<FoundFile[]>): Promise<BrowseItem | undefined> {
   if (exclude?.has(relative)) return undefined;
   const target = resolveInside(root, relative);
   if (!target) return undefined;
-  const info = await stat(target).catch(() => undefined);
+  // The key may come from a request; a symlink inside the library must not describe what lies outside it.
+  const [real, realRoot] = await Promise.all([realpath(target), realRootOf(root)]).catch(() => []);
+  if (!real || !realRoot || !isInside(real, realRoot)) return undefined;
+  const info = await stat(real).catch(() => undefined);
   if (!info) return undefined;
   const name = posixBase(relative);
   if (info.isDirectory()) {
