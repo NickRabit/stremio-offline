@@ -271,7 +271,12 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const home = useHome({ active: view === "home", account: session?.username ?? null, admin: session?.role === "admin", playerOpen });
+  const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
+  const restricted = buildInfo?.restricted === true;
+  // Home waits for the build's answer: a restricted build must never draw it, not even for the
+  // first few frames. A failed answer reads as unrestricted, as it always has.
+  const [buildKnown, setBuildKnown] = useState(false);
+  const home = useHome({ active: view === "home" && buildKnown && !restricted, account: session?.username ?? null, admin: session?.role === "admin", playerOpen });
   const [resumeCards, setResumeCards] = useState<ResumeCard[]>([]);
   const [resumeCardsTotal, setResumeCardsTotal] = useState(0);
   const [resumeFilter, setResumeFilter] = useState<ResumeFilter>("all");
@@ -1401,8 +1406,6 @@ export function App() {
     setTimeout(() => { void api.followByMeta(follow.type, follow.metaId).then((fresh) => { if (fresh) applyFollowChange(fresh.id, fresh); }).catch(() => undefined); }, 5000);
   };
   const [setupNeeded, setSetupNeeded] = useState(false);
-  const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
-  const restricted = buildInfo?.restricted === true;
   const searchEverywhere = useSearchEverywhere({
     active: view === "search",
     covered: (view === "library" && searchReturn) || (view === "search" && catalogueDetail !== null),
@@ -1447,7 +1450,7 @@ export function App() {
   const admin = session?.role === "admin";
   const buildInfoRequest = useRef<Promise<BuildInfo | null> | null>(null);
   const loadBuildInfo = () => buildInfoRequest.current ??= api.status().catch(() => null);
-  useEffect(() => { void loadBuildInfo().then(setBuildInfo); }, []);
+  useEffect(() => { void loadBuildInfo().then((info) => { setBuildInfo(info); setBuildKnown(true); }); }, []);
   useEffect(() => {
     if (!buildInfo?.searchEverywhere) return;
     const onKey = (event: KeyboardEvent) => {
@@ -1560,6 +1563,10 @@ export function App() {
     try { const saved = await api.updateSettings({ [key]: next }); setSettings((current: AppSettings) => ({ ...current, ...saved })); }
     catch (e) { setSettings((current: AppSettings) => ({ ...current, [key]: before })); fail(e); }
   };
+  /** A start page chosen or restored now is the one the next visit draws first. */
+  const rememberChosenStartView = (view: AppSettings["startView"] | undefined) => {
+    if (view) rememberStartView(restricted && view === "home" ? "catalog" : view);
+  };
   const saveSettings = async (patch: SettingsPatch) => {
     const { realDebridToken: _token, tmdbApiKey: _apiKey, ...rest } = patch;
     // Clearing the Home layout is stored as its absence, so the optimistic state drops the
@@ -1567,7 +1574,7 @@ export function App() {
     const optimistic = { ...rest } as Partial<AppSettings>;
     if (optimistic.homeLayout === null) delete optimistic.homeLayout;
     if (Object.keys(optimistic).length) setSettings((current: AppSettings) => ({ ...current, ...optimistic }));
-    try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => ({ ...current, ...saved })); notify(t("settings.saved")); } catch (e) { fail(e); }
+    try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => ({ ...current, ...saved })); rememberChosenStartView(saved.startView); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
   const rememberSourceProfile = async (downloadSourceProfile: string | null) => {
     const saved = await api.updateSettings({ downloadSourceProfile });
@@ -3802,7 +3809,7 @@ export function App() {
       {/* The library stays mounted under a catalogue detail opened from it: a remote title lives
           in the browser, and unmounting it would land Back on the list instead of that title. */}
       {(!catalogueDetail || view === "library") && <>
-      {view === "home" && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
+      {view === "home" && buildKnown && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
         onShuffle={(row, shuffle) => home.refresh([row], { shuffle })} onVisible={home.reveal} onOpenCatalog={(row) => { const pick = parseHomeCatalogRowId(row); if (pick) resetCatalog(pick); }}
@@ -4278,6 +4285,7 @@ export function App() {
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSourceProfilesChanged={reloadSourceRules} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
+        rememberChosenStartView(restored.settings.startView);
         setSelectedCatalog("");
         // Rules that named a library of the machine the backup came from are pointed at this
         // instance's own, or at the default; say how many had to move.

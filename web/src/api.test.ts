@@ -141,6 +141,36 @@ describe("request", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("never hands a read started before a write to a read asked after it", async () => {
+    const resolvers: Array<(response: Response) => void> = [];
+    fetchMock.mockImplementation(() => new Promise<Response>((done) => { resolvers.push(done); }));
+    const before = api.watchlist();
+    const write = api.setWatchlist({ type: "movie", id: "tt1", favorite: false });
+    const after = api.watchlist();
+    // The write and a new read go out: the read asked after the write sees its result.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    resolvers[0]!(json([]));
+    resolvers[1]!(json({ key: "movie:tt1", favorite: false }));
+    resolvers[2]!(json([{ key: "movie:tt1" }]));
+    await expect(before).resolves.toEqual([]);
+    await write;
+    await expect(after).resolves.toEqual([{ key: "movie:tt1" }]);
+  });
+
+  it("does not share a read across a sign-in as somebody else", async () => {
+    const resolvers: Array<(response: Response) => void> = [];
+    fetchMock.mockImplementation(() => new Promise<Response>((done) => { resolvers.push(done); }));
+    const old = api.follows();
+    const signIn = api.login("bob", "secret", false);
+    const fresh = api.follows();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    resolvers[0]!(json({ follows: [{ id: "alice" }] }));
+    resolvers[1]!(json({ username: "bob", role: "user" }));
+    resolvers[2]!(json({ follows: [] }));
+    await old; await signIn;
+    await expect(fresh).resolves.toEqual([]);
+  });
+
   it("never coalesces a POST", async () => {
     const resolvers: Array<(response: Response) => void> = [];
     fetchMock.mockImplementation(() => new Promise<Response>((done) => { resolvers.push(done); }));

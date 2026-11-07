@@ -100,6 +100,7 @@ let playbackStarts: Array<Record<string, unknown>>;
 let configuredAddons: Array<Record<string, unknown>>;
 let requestCounts: Map<string, number>;
 let settingsGate: Promise<void> | null;
+let statusGate: Promise<void> | null;
 let restrictedBuild: boolean;
 let startupCatalogs: Array<{ addonKey: string; addonName: string; type: string; id: string; name: string }>;
 
@@ -131,6 +132,7 @@ beforeEach(() => {
   configuredAddons = [];
   requestCounts = new Map();
   settingsGate = null;
+  statusGate = null;
   restrictedBuild = false;
   startupCatalogs = [{ addonKey: "cinemeta", addonName: "Cinemeta", type: "movie", id: "top", name: "Top" }];
   vi.stubGlobal("matchMedia", () => ({
@@ -157,7 +159,10 @@ beforeEach(() => {
     const path = url.pathname;
     const method = init?.method ?? "GET";
     requestCounts.set(path, (requestCounts.get(path) ?? 0) + 1);
-    if (path === "/api/status") return json({ status: "ok", version: "test", searchEverywhere, restricted: restrictedBuild });
+    if (path === "/api/status") {
+      if (statusGate) await statusGate;
+      return json({ status: "ok", version: "test", searchEverywhere, restricted: restrictedBuild });
+    }
     if (path === "/api/auth/me") return json({ username: "alice", role: "admin", language: "en" });
     if (path === "/api/auth/login" && method === "POST") return json({ username: "bob", role: "admin", language: "en" });
     if (path === "/api/addons") return json(configuredAddons);
@@ -166,7 +171,13 @@ beforeEach(() => {
     if (path === "/api/home") return json({ generatedAt: "", order: [], rows: {} });
     if (path === "/api/catalog") return json(catalogItems);
     if (path === "/api/libraries") return json([]);
+    if (path === "/api/media-servers") return json({ connections: [], keyConfigured: false });
+    if (path === "/api/media-servers/libraries") return json({ libraries: [] });
     if (path === "/api/views") return json(emptyViews());
+    if (path === "/api/settings" && method === "PATCH") {
+      Object.assign(settings, JSON.parse(String(init?.body)));
+      return json(settings);
+    }
     if (path === "/api/settings") {
       if (settingsGate) await settingsGate;
       return json(settings);
@@ -397,6 +408,22 @@ describe("title detail from the catalogue", () => {
     await flush();
   });
 
+  it("remembers a start page chosen in Settings for the next visit", async () => {
+    settings.startView = "catalog";
+    await act(async () => { root.render(<App/>); });
+    await until(() => localStorage.getItem("start-view") === "catalog");
+    await clickNav("Settings");
+    await until(() => host.querySelector("#settings-tab-home") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>("#settings-tab-home")!.click(); });
+    await until(() => host.querySelector('select[aria-label="Start page"]') !== null);
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Start page"]')!;
+    await act(async () => {
+      select.value = "library";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await until(() => localStorage.getItem("start-view") === "library");
+  });
+
   it("moves to the configured Library start page and remembers it", async () => {
     settings.startView = "library";
     let releaseSettings!: () => void;
@@ -452,11 +479,19 @@ describe("title detail from the catalogue", () => {
   it("keeps a restricted build off Home", async () => {
     settings.startView = "home";
     restrictedBuild = true;
+    // A browser that last saw Home starts on it, before the build has said it is restricted.
+    localStorage.setItem("start-view", "home");
     let releaseSettings!: () => void;
     settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+    let releaseStatus!: () => void;
+    statusGate = new Promise<void>((resolve) => { releaseStatus = resolve; });
 
     await act(async () => { root.render(<App/>); });
     await until(() => host.querySelector(".app-shell") !== null);
+    await flush();
+    expect(host.querySelector("main.view-home .home-row")).toBeNull();
+    expect(requestCounts.get("/api/home")).toBeUndefined();
+    releaseStatus();
     releaseSettings();
     await until(() => host.querySelector("main.view-catalog") !== null);
     expect(localStorage.getItem("start-view")).toBe("catalog");

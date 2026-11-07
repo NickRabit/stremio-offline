@@ -47,6 +47,9 @@ async function fixture() {
     writeFile(path.join(assets, "app.js.br"), brotli),
     writeFile(path.join(assets, "app.js.gz"), gzip),
     writeFile(path.join(assets, "plain.css"), style),
+    // Brotli came out no smaller than the original, so the build kept only gzip.
+    writeFile(path.join(assets, "gzip-only.js"), script),
+    writeFile(path.join(assets, "gzip-only.js.gz"), gzip),
     writeFile(path.join(directory, "index.html"), "<!doctype html><title>Index</title>"),
   ]);
 
@@ -106,6 +109,21 @@ test("precompressed assets prefer brotli, fall back to gzip and then the plain f
     assert.equal(plain.headers.vary, "Accept-Encoding");
     assert.equal(plain.headers["cache-control"], ASSET_CACHE_CONTROL);
     assert.deepEqual(plain.body, site.style);
+  } finally {
+    await site.close();
+  }
+});
+
+test("precompressed assets follow the client's preference and fall back to the next encoding on disk", async () => {
+  const site = await fixture();
+  try {
+    const preferred = await rawRequest(site.port, "/assets/app.js", "GET", "br;q=0.1, gzip;q=1");
+    assert.equal(preferred.headers["content-encoding"], "gzip");
+    assert.deepEqual(preferred.body, site.gzip);
+
+    const fallback = await rawRequest(site.port, "/assets/gzip-only.js", "GET", "br, gzip");
+    assert.equal(fallback.headers["content-encoding"], "gzip");
+    assert.deepEqual(fallback.body, site.gzip);
   } finally {
     await site.close();
   }

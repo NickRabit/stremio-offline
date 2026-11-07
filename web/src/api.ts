@@ -54,7 +54,11 @@ const inFlightGets = new Map<string, Promise<unknown>>();
 async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const timeoutMs = options?.timeoutMs ?? 30_000;
   const method = options?.method;
-  const coalescible = (method === undefined || method === "GET") && options?.body == null && options?.signal === undefined;
+  const read = method === undefined || method === "GET";
+  // A write -- sign-in and sign-out included -- may change what any read returns: a read asked
+  // after it must not join one that left before it, and never another account's.
+  if (!read) inFlightGets.clear();
+  const coalescible = read && options?.body == null && options?.signal === undefined;
   if (!coalescible) return performRequest<T>(url, options);
 
   const key = `${url}\n${timeoutMs}`;
