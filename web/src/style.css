@@ -980,17 +980,19 @@ img.broken{visibility:hidden}
 .transport-controls{display:contents}
 @media(max-width:700px){.player-overlay .player-controls{flex-wrap:wrap}.player-overlay .transport-controls{display:flex;flex:0 0 auto;flex-wrap:nowrap;gap:inherit}.player-controls .seek-step{padding:6px;gap:2px;font-size:10px}.player-controls .seek-step svg{width:20px}}
 @media(max-width:700px) and (orientation:portrait){
-  .player-overlay .player-controls{justify-content:space-evenly;overflow:visible}
-  .player-overlay .transport-controls{flex:0 0 100%;justify-content:center;align-items:center;gap:28px}
-  .player-overlay .player-view-controls{display:contents}
-  /* Play leads the row; the seek steps sit at a thumb's distance instead of touching it. */
-  .player-overlay .player-controls .transport-controls .seek-step{min-width:52px;min-height:52px;font-size:11px}
-  .player-overlay .player-controls .transport-controls .seek-step svg{width:24px;height:24px}
-  .player-overlay .player-controls .transport-controls .play-toggle{width:58px;height:58px;min-width:58px;min-height:58px;padding:0}
-  .player-overlay .player-controls .transport-controls .play-toggle svg{width:24px;height:24px}
-  /* Previous and next episode join the row: five buttons still fit a 320 px phone. */
-  .player-overlay .transport-controls.has-episodes{gap:10px}
-  .player-overlay .player-controls>button,.player-overlay .player-view-controls>button{flex:1 1 0;max-width:64px}
+  /* One quiet row under the timeline: plain icons, play the only filled button. A film's eight
+     buttons fit a 360 px phone edge to edge, which is why the bar's sides narrow to 4 px. */
+  .player-bottom{padding-left:max(4px,env(safe-area-inset-left));padding-right:max(4px,env(safe-area-inset-right))}
+  .player-overlay .player-controls{justify-content:space-between;gap:0;row-gap:4px;overflow:visible}
+  .player-overlay .transport-controls,.player-overlay .player-view-controls{display:contents}
+  .player-overlay .player-controls button{flex:0 0 44px;width:44px;min-width:44px;height:44px;min-height:44px;padding:0;border:0;background:transparent;box-shadow:none}
+  .player-overlay .player-controls button svg{width:22px;height:22px}
+  .player-overlay .player-controls .seek-step{gap:1px;font-size:10px}
+  .player-overlay .player-controls .seek-step svg{width:20px;height:20px}
+  .player-overlay .player-controls .play-toggle{border-radius:50%;background:var(--accent);box-shadow:0 6px 18px #ff5b3833}
+  /* A series adds previous and next episode: ten buttons never fit one row, so playback keeps a
+     row of its own and the rest follow below it rather than breaking anywhere. */
+  .player-overlay .transport-controls.has-episodes{display:flex;flex:0 0 100%;justify-content:space-between}
 }
 
 .player-overlay.cursor-hidden,.player-overlay.cursor-hidden *{cursor:none!important}
