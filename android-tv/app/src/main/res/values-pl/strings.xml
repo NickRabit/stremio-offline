@@ -511,6 +511,7 @@
   <string name="detail_tech_from_file">z pliku</string>
   <string name="detail_tech_none_in_file">brak w pliku</string>
   <string name="detail_tech_missing_language">brak: %1$s</string>
+  <string name="detail_tech_language_unknown">język nie podany w pliku</string>
   <string name="sources_audio_channels">%1$s kan.</string>
   <string name="genre_action">Akcja</string>
   <string name="genre_adventure">Przygodowy</string>

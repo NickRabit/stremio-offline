@@ -419,6 +419,7 @@ export const ru: Catalog = {
   "detail.tech.fromFileHint": "Прочитано из самого файла, а не из названия",
   "detail.tech.noneInFile": "в файле нет",
   "detail.tech.missingLanguage": "нет: {language}",
+  "detail.tech.languageUnknown": "язык в файле не указан",
   "detail.action.trailer": "Трейлер",
   "detail.action.fromStart": "С начала",
   "detail.action.watched": "Просмотрено",

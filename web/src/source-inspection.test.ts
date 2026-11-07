@@ -43,7 +43,23 @@ describe("detectedTracks", () => {
       subtitles: ["de", "fr"],
       subtitlesKnown: true,
       noSubtitleTracks: false,
+      audioUntagged: false,
+      audioFacts: { codec: "aac" },
     });
+  });
+
+  it("reads the sound's codec and channels, untagged audio and the picture's class", () => {
+    const read = detectedTracks({
+      video: { codec: "h264", width: 1920, height: 800 },
+      audioTracks: [{ index: 0, codec: "eac3", channels: 6 }, { index: 1, codec: "aac", channels: 2 }],
+      subtitleTracks: [],
+    });
+    expect(read.audioUntagged).toBe(true);
+    expect(read.audioFacts).toEqual({ codec: "eac3", channels: 6 });
+    expect(read.videoHeight).toBe(1080);
+    expect(detectedTracks({ video: { codec: "mpeg4", width: 720, height: 576 }, audioTracks: [{ index: 0, codec: "pcm_s16le" }], subtitleTracks: [] }))
+      .toMatchObject({ videoHeight: 576, audioFacts: {} });
+    expect(detectedTracks({ audioTracks: [], subtitleTracks: [] }).audioUntagged).toBe(false);
   });
 
   it("treats untagged audio as unknown", () => {

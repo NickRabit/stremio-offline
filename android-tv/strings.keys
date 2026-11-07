@@ -461,6 +461,7 @@ detail.tech.file
 detail.tech.fromFile
 detail.tech.noneInFile
 detail.tech.missingLanguage
+detail.tech.languageUnknown
 sources.audioChannels
 genre.action
 genre.adventure

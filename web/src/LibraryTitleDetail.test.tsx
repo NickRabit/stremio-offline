@@ -1325,6 +1325,22 @@ describe("LibraryTitleDetail source inspection", () => {
     expect(inspect).not.toHaveBeenCalled();
   });
 
+  it("marks a read file whose tracks name no language, and fills sound and picture from it", async () => {
+    const inspect = vi.fn((_stream: Stream, _signal: AbortSignal) => Promise.resolve({
+      video: { codec: "mpeg4", width: 720, height: 576 },
+      audioTracks: [{ index: 0, codec: "mp3", channels: 2 }],
+      subtitleTracks: [],
+    } satisfies Inspection));
+    render({ sources: [addon("a1", "Film.2013.CZ.EN.avi", 1)], inspect });
+    await flush();
+    const audio = techRow("Audio")!;
+    expect(audio.textContent).toContain("Czech, English");
+    expect(audio.querySelector(".note")!.textContent).toBe("language not stated in the file");
+    expect([...audio.querySelectorAll(".tag")].map((tag) => tag.textContent)).toEqual(["MP3 2.0"]);
+    expect(audio.querySelector(".tag.verified")).toBeNull();
+    expect(techRow("Video")!.textContent).toBe("576p");
+  });
+
   it("falls back silently to the listing when the read fails", async () => {
     const inspect = vi.fn((_stream: Stream, _signal: AbortSignal) => Promise.reject(new Error("offline")));
     render({ sources: [addon("a1", "Film.CZ.1080p.mkv", 1)], inspect });

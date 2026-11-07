@@ -419,6 +419,7 @@ export const sk: Catalog = {
   "detail.tech.fromFileHint": "Prečítané priamo zo súboru, nie z jeho názvu",
   "detail.tech.noneInFile": "v súbore nie sú",
   "detail.tech.missingLanguage": "{language} chýba",
+  "detail.tech.languageUnknown": "jazyk v súbore neuvedený",
   "detail.action.trailer": "Trailer",
   "detail.action.fromStart": "Od začiatku",
   "detail.action.watched": "Pozreté",

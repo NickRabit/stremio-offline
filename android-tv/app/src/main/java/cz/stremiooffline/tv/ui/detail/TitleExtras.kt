@@ -700,7 +700,8 @@ fun TitleTechBlock(
   ).joinToString(" · ")
   val facts = stream.videoFacts
   val releaseText = stream.behaviorHints?.filename ?: stream.title ?: stream.name
-  val resolution = videoResolution(facts?.heightPixels, releaseText)
+  val tracks = (inspection as? SourceInspection.Done)?.tracks
+  val resolution = videoResolution(facts?.heightPixels, releaseText) ?: tracks?.videoHeight?.let { "${it}p" }
   val videoTags = listOfNotNull(
     when (facts?.range) {
       "hdr" -> "HDR10"
@@ -721,11 +722,12 @@ fun TitleTechBlock(
   }
   val audioLanguages = listedAudio.map { languageName(it, locale) }.distinct()
   // What the server read out of a library file beats what its name advertises.
-  val audioTag = audioFactsText(stream.audioFacts, stringResource(R.string.sources_audio_channels))
+  val channelsPattern = stringResource(R.string.sources_audio_channels)
+  val audioTag = audioFactsText(stream.audioFacts, channelsPattern)
     ?: audioFormat(Streams.streamText(stream)).takeIf { it.isNotEmpty() }
+    ?: audioFactsText(tracks?.audioFacts, channelsPattern)
   val fileName = stream.behaviorHints?.filename?.takeIf { it.isNotBlank() && it != willPlayName(stream) }
   val subtitles = stream.subtitleLanguages.map { languageName(it, locale) }.distinct()
-  val tracks = (inspection as? SourceInspection.Done)?.tracks
   val checkedAudio = tracks?.takeIf { it.audioKnown }
   val checkedSubtitles = tracks?.takeIf { it.subtitlesKnown && it.subtitles.isNotEmpty() }
   val checking = inspection == SourceInspection.Checking
@@ -734,7 +736,9 @@ fun TitleTechBlock(
   val missingPreferred = if (checkedAudio != null && preferred != null &&
     listedAudio.contains(preferred) && !checkedAudio.audio.contains(preferred)
   ) preferred else null
-  val hasAudio = audioLanguages.isNotEmpty() || audioTag != null || checkedAudio != null
+  // The file was read but names no language: the release name's guess stays, marked as one.
+  val audioUntagged = tracks?.audioUntagged == true
+  val hasAudio = audioLanguages.isNotEmpty() || audioTag != null || checkedAudio != null || audioUntagged
   val hasSubtitles = subtitles.isNotEmpty() || checkedSubtitles != null || noSubtitleTracks
   val rows = listOf(
     source.takeIf { it.isNotBlank() },
@@ -776,7 +780,11 @@ fun TitleTechBlock(
         stringResource(R.string.detail_tech_audio),
         checkedAudio?.audio?.map { languageName(it, locale) }?.joinToString(", ") ?: audioLanguages.joinToString(", "),
         tags,
-        note = if (checking) stringResource(R.string.sources_probing) else null,
+        note = when {
+          checking -> stringResource(R.string.sources_probing)
+          audioUntagged -> stringResource(R.string.detail_tech_language_unknown)
+          else -> null
+        },
       )
     }
     if (checkedSubtitles != null) {

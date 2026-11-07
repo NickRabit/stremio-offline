@@ -419,6 +419,7 @@ export const es: Catalog = {
   "detail.tech.fromFileHint": "Leído del propio archivo, no de su nombre",
   "detail.tech.noneInFile": "ninguno en el archivo",
   "detail.tech.missingLanguage": "falta {language}",
+  "detail.tech.languageUnknown": "idioma no indicado en el archivo",
   "detail.action.trailer": "Tráiler",
   "detail.action.fromStart": "Desde el inicio",
   "detail.action.watched": "Visto",
