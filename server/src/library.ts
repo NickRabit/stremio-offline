@@ -94,9 +94,9 @@ export function parseSeason(folder: string): number | null {
 /** "07 - Name", "S01E07 Name", "7." -- the episode number comes first, the rest is the name. */
 export function parseEpisode(filename: string): { episode: number | null; title: string } {
   const base = filename.replace(/\.[^.]+$/, "").trim();
-  const tagged = /^s\d{1,3}[\s._-]*e(\d{1,4})[\s._-]*(.*)$/i.exec(base);
+  const tagged = /^s\d{1,3}[\s._-]*e(\d{1,4})[\s._-]*(.*)$/is.exec(base);
   if (tagged) return { episode: Number(tagged[1]), title: tagged[2].trim() || `Epizoda ${Number(tagged[1])}` };
-  const numbered = /^(\d{1,4})\s*[-–.)]?\s*(.*)$/.exec(base);
+  const numbered = /^(\d{1,4})\s*[-–.)]?\s*(.*)$/s.exec(base);
   if (numbered) {
     const episode = Number(numbered[1]);
     return { episode, title: numbered[2].trim() || `Epizoda ${episode}` };
