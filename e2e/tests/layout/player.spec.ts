@@ -58,6 +58,12 @@ test("player keeps its picture stable and its overlay controls reachable", async
   expect(await viewItems[2].getAttribute("aria-label")).toBe("Nastavení přehrávání");
   const viewBoxes = await Promise.all(viewItems.map((button) => button.boundingBox()));
   expect(viewBoxes.map((box) => box!.x)).toEqual(viewBoxes.map((box) => box!.x).sort((a, b) => a - b));
+  // The same quiet controls at every size and orientation: play is the one filled button, the
+  // rest are bare icons until the pointer is over them or their panel is open.
+  await page.mouse.move(0, 0);
+  const filled = await overlay.locator(".player-controls button:not(.player-fill-toggle):not([aria-expanded=\"true\"])").evaluateAll((buttons) =>
+    buttons.filter((button) => getComputedStyle(button).backgroundColor !== "rgba(0, 0, 0, 0)").map((button) => button.className));
+  expect(filled).toEqual(["play-toggle"]);
 
   if (testInfo.project.name === "mobile") {
     const controls = overlay.locator(".player-controls");
@@ -76,10 +82,6 @@ test("player keeps its picture stable and its overlay controls reachable", async
       expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(1);
       expect(Math.abs(boxes[0]!.x - controlsBox.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(controlsBox.x + controlsBox.width - boxes.at(-1)!.x - boxes.at(-1)!.width)).toBeLessThanOrEqual(1);
-      // Play is the one filled control; the rest are bare icons.
-      const fills = await controls.locator("button:not(.player-fill-toggle)").evaluateAll((buttons) =>
-        buttons.filter((button) => getComputedStyle(button).backgroundColor !== "rgba(0, 0, 0, 0)").map((button) => button.className));
-      expect(fills).toEqual(["play-toggle"]);
       expect(await controls.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
     };
 
