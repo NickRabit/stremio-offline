@@ -42,6 +42,6 @@ test("picks the preferred language, then English, then the default track", () =>
 
 test("a long run of separators before a line break is cut in linear time", () => {
   const started = performance.now();
-  assert.equal(normalizeLanguage(`${"-".repeat(50_000)}\nx`), undefined);
+  assert.equal(normalizeLanguage(`${"-".repeat(200_000)}\nx`), undefined);
   assert.ok(performance.now() - started < 1000);
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -880,4 +880,23 @@ test("a long run of whitespace before a line break does not stall the episode pa
   assert.equal(parseEpisode(`1${"\t".repeat(50_000)}x\ny.mkv`).episode, 1);
   assert.equal(parseEpisode(`s01e02${"\t".repeat(50_000)}x\ny.mkv`).episode, 2);
   assert.ok(performance.now() - started < 1000);
+});
+
+test("describePath does not follow a symlink out of the library", async () => {
+  const base = await mkdtemp(path.join(tmpdir(), "describe-symlink-"));
+  try {
+    const root = path.join(base, "library");
+    const outside = path.join(base, "outside");
+    await mkdir(path.join(root, "Inside"), { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(path.join(outside, "secret.mkv"), "x");
+    await writeFile(path.join(root, "Inside", "film.mkv"), "x");
+    await symlink(outside, path.join(root, "escape"));
+    await symlink(path.join(root, "Inside"), path.join(root, "alias"));
+    assert.equal(await describePath(root, "escape/secret.mkv"), undefined);
+    assert.equal(await describePath(root, "escape"), undefined);
+    assert.equal((await describePath(root, "alias/film.mkv"))?.kind, "file");
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
 });
