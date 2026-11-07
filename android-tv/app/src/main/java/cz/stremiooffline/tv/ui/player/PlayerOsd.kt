@@ -221,35 +221,39 @@ fun Osd(
     null
   }
   Box(Modifier.fillMaxSize()) {
-    Column(
+    Row(
       Modifier
         .align(Alignment.TopStart)
         .fillMaxWidth()
         .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)))
         .padding(horizontal = Tokens.SafeX, vertical = Tokens.SafeY),
-      verticalArrangement = Arrangement.spacedBy(4.dp),
+      verticalAlignment = Alignment.Top,
     ) {
-      Text(eyebrow, color = Tokens.Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.8.sp)
-      Text(title, color = Tokens.Text, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
-      if (badges.isNotEmpty()) {
-        Row(
-          modifier = Modifier.testTag(TAG_OSD_BADGES),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          badges.forEach { badge ->
-            Text(
-              badge,
-              color = Tokens.Text,
-              fontSize = 9.sp,
-              fontWeight = FontWeight.Bold,
-              modifier = Modifier
-                .background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
-                .padding(horizontal = 8.dp, vertical = 3.dp),
-            )
+      Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(eyebrow, color = Tokens.Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.8.sp)
+        Text(title, color = Tokens.Text, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+        if (badges.isNotEmpty()) {
+          Row(
+            modifier = Modifier.testTag(TAG_OSD_BADGES),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            badges.forEach { badge ->
+              Text(
+                badge,
+                color = Tokens.Text,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                  .background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
+                  .padding(horizontal = 8.dp, vertical = 3.dp),
+              )
+            }
           }
         }
       }
+      // The time of day, top right: a paused film tells the viewer how late it is.
+      PlayerClock(Modifier.padding(start = 24.dp))
     }
 
     Column(
