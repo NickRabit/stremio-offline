@@ -32,7 +32,7 @@ import { memberSettings, publicSettings, UP_NEXT_AT, type InstanceSettings, type
 import { normalizeStreamSort } from "../stream-sort.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
-import type { AddonRecord, MetaItem } from "../types.js";
+import type { AddonRecord } from "../types.js";
 import { PERSONAL_SETTINGS, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
@@ -44,7 +44,7 @@ export interface SettingsDeps extends RouteContext {
   /** The media-server configuration the backup carries. A settings export is an
    *  administrator's act like every other read of it. */
   mediaServers: MediaServerManager;
-  metaCache: Map<string, { value: MetaItem | null; at: number }>;
+  metaCache: { clear(): void };
   metaStore: LibraryMetaStore;
   mutateData(state: State, id: string, mutate: (data: UserData) => void): void;
   prefsOf(req?: express.Request): UserPrefs;

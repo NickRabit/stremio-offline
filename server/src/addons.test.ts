@@ -186,6 +186,26 @@ test("a real provider failure still falls through to metadata addons", async () 
   assert.equal(calls.length, 1);
 });
 
+test("metadata tells a clean empty answer from a failed addon", async () => {
+  // `{"meta":null}` is the addon's answer: nothing failed, the caller may remember it.
+  await withStubbedAddons(() => json({ meta: null }), async () => {
+    const outcome = { failed: false };
+    assert.equal(await metadata([metaAddon("empty")], "movie", "tt4", "cs", undefined, false, false, undefined, outcome), null);
+    assert.equal(outcome.failed, false);
+  });
+  // A server error is no answer: the null means "unknown".
+  await withStubbedAddons(() => new Response("down", { status: 503 }), async () => {
+    const outcome = { failed: false };
+    assert.equal(await metadata([metaAddon("down")], "movie", "tt4", "cs", undefined, false, false, undefined, outcome), null);
+    assert.equal(outcome.failed, true);
+  });
+  // So is a provider that throws, even when no addon is asked at all.
+  const outcome = { failed: false };
+  const provider = async () => { throw new Error("TMDB is offline"); };
+  assert.equal(await metadata([], "movie", "tt4", "cs", provider, false, false, undefined, outcome), null);
+  assert.equal(outcome.failed, true);
+});
+
 test("the artwork reading reads on past a localized description until a backdrop appears", async () => {
   const czech = { ...metaAddon("czech"), manifestUrl: "https://czech.example/manifest.json?language=cs" };
   const cinemeta = metaAddon("com.linvo.cinemeta");
