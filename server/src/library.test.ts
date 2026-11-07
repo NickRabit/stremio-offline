@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -873,4 +873,30 @@ test("a library filter lists a matching folder once without repeating its descen
     const inside = await browseDirectory(root, "Já, kocour (2016)", "koc", 0, 60, "name");
     assert.equal(inside.total, 2, "opening the folder still exposes its file and subfolder");
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a long run of whitespace before a line break does not stall the episode parser", () => {
+  const started = performance.now();
+  assert.equal(parseEpisode(`1${"\t".repeat(50_000)}x\ny.mkv`).episode, 1);
+  assert.equal(parseEpisode(`s01e02${"\t".repeat(50_000)}x\ny.mkv`).episode, 2);
+  assert.ok(performance.now() - started < 1000);
+});
+
+test("describePath does not follow a symlink out of the library", async () => {
+  const base = await mkdtemp(path.join(tmpdir(), "describe-symlink-"));
+  try {
+    const root = path.join(base, "library");
+    const outside = path.join(base, "outside");
+    await mkdir(path.join(root, "Inside"), { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(path.join(outside, "secret.mkv"), "x");
+    await writeFile(path.join(root, "Inside", "film.mkv"), "x");
+    await symlink(outside, path.join(root, "escape"), "junction");
+    await symlink(path.join(root, "Inside"), path.join(root, "alias"), "junction");
+    assert.equal(await describePath(root, "escape/secret.mkv"), undefined);
+    assert.equal(await describePath(root, "escape"), undefined);
+    assert.equal((await describePath(root, "alias/film.mkv"))?.kind, "file");
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
 });

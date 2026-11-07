@@ -1,0 +1,13 @@
+name: stremio-offline
+# Tests, end-to-end fixtures and maintenance scripts never run in the shipped server, and
+# their findings drowned the real ones. Sources stay the default remote ones: environment
+# variables and local files are set by the operator of a self-hosted install.
+paths-ignore:
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.test.mjs"
+  - "**/test/**"
+  - "**/tests/**"
+  - "e2e/**"
+  - "scripts/**"
+  - "web/scripts/**"

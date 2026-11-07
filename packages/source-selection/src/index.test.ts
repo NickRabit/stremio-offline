@@ -67,3 +67,10 @@ for (const vector of vectors.titleLanguageCases) {
     assert.equal(titleLanguage(vector.value), vector.expected === null ? undefined : vector.expected);
   });
 }
+
+test("a long run of digits is scanned for a size in linear time", () => {
+  const started = performance.now();
+  assert.equal(sourceSize({ name: "0".repeat(50_000) } as ListedSource), undefined);
+  assert.equal(sourceSize({ name: "Film 1080p 2.2G" } as ListedSource), Math.round(2.2e9));
+  assert.ok(performance.now() - started < 1000);
+});
