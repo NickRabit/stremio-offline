@@ -891,8 +891,8 @@ test("describePath does not follow a symlink out of the library", async () => {
     await mkdir(outside, { recursive: true });
     await writeFile(path.join(outside, "secret.mkv"), "x");
     await writeFile(path.join(root, "Inside", "film.mkv"), "x");
-    await symlink(outside, path.join(root, "escape"));
-    await symlink(path.join(root, "Inside"), path.join(root, "alias"));
+    await symlink(outside, path.join(root, "escape"), "junction");
+    await symlink(path.join(root, "Inside"), path.join(root, "alias"), "junction");
     assert.equal(await describePath(root, "escape/secret.mkv"), undefined);
     assert.equal(await describePath(root, "escape"), undefined);
     assert.equal((await describePath(root, "alias/film.mkv"))?.kind, "file");
