@@ -986,19 +986,18 @@ img.broken{visibility:hidden}
 .transport-controls{display:contents}
 @media(max-width:700px){.player-overlay .player-controls{flex-wrap:wrap}.player-overlay .transport-controls{display:flex;flex:0 0 auto;flex-wrap:nowrap;gap:inherit}.player-controls .seek-step{padding:6px;gap:2px;font-size:10px}.player-controls .seek-step svg{width:20px}}
 @media(max-width:700px) and (orientation:portrait){
-  /* Held upright, playback gets a row of its own above the timeline, clear of the picture, and the
-     icons below keep one row: the episode steps at its ends and the rest between them. The bar
-     reserves that row in its top padding, so the subtitles, panels and hints it lifts stay above
-     it too. */
-  .player-bottom{padding-top:94px;padding-left:max(4px,env(safe-area-inset-left));padding-right:max(4px,env(safe-area-inset-right))}
-  .player-overlay .player-controls{justify-content:space-between;gap:0;overflow:visible}
+  /* Held upright, playback gets a row of its own under the timeline, clear of the picture, and the
+     icons below it keep one row: the episode steps at its ends and the rest between them. Both rows
+     are part of the bar, so the subtitles, panels and hints it lifts stay above them. */
+  .player-bottom{padding-left:max(4px,env(safe-area-inset-left));padding-right:max(4px,env(safe-area-inset-right))}
+  .player-overlay .player-controls{flex-wrap:wrap;justify-content:space-between;gap:0;row-gap:10px;overflow:visible}
   .player-overlay .player-view-controls{display:contents}
   .player-overlay .player-controls button{flex:0 0 44px;width:44px;min-width:44px;height:44px;min-height:44px;padding:0}
   .player-overlay .player-controls button svg{width:22px;height:22px}
   .player-overlay .player-controls .previous-episode{order:-1}
   .player-overlay .player-controls .next-episode{order:1}
-  .player-overlay .transport-controls{display:flex;position:absolute;left:0;right:0;top:16px;height:68px;justify-content:center;align-items:center;gap:32px;pointer-events:none}
-  .player-overlay .player-controls .transport-controls button,.player-overlay .player-controls .transport-controls .seek-step:hover:not(:disabled){pointer-events:auto;flex:0 0 52px;width:52px;min-width:52px;height:52px;min-height:52px;border-radius:50%;background:#0b0e13b3;backdrop-filter:blur(6px)}
+  .player-overlay .transport-controls{display:flex;order:-2;flex:0 0 100%;margin-top:6px;justify-content:center;align-items:center;gap:32px}
+  .player-overlay .player-controls .transport-controls button,.player-overlay .player-controls .transport-controls .seek-step:hover:not(:disabled){flex:0 0 52px;width:52px;min-width:52px;height:52px;min-height:52px;border-radius:50%;background:#0b0e13b3;backdrop-filter:blur(6px)}
   .player-overlay .player-controls .transport-controls .seek-step{gap:1px}
   .player-overlay .player-controls .transport-controls .seek-step svg{width:20px;height:20px}
   .player-overlay .player-controls .transport-controls .play-toggle,.player-overlay .player-controls .transport-controls .play-toggle:hover:not(:disabled){flex-basis:68px;width:68px;min-width:68px;height:68px;min-height:68px;background:var(--accent)}
