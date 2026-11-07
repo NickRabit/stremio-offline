@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef } from "react";
-import { ChevronRight, Shuffle } from "lucide-react";
+import { memo, useEffect, useRef, useState } from "react";
+import { ChevronRight, Shuffle, TriangleAlert } from "lucide-react";
 import { HomeCard, type HomeCardActions } from "./HomeCard";
 import { showAllTarget, type ShowAllTarget } from "./home-cards";
 import { t, type Key } from "./i18n";
@@ -37,6 +37,8 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
   onOpenCatalog?: () => void;
 }) {
   const placeholder = useRef<HTMLElement>(null);
+  // The partial mark explains itself on a click: a phone has no hover for the title.
+  const [explained, setExplained] = useState(false);
   const waiting = (!state || state.status === "idle") && onVisible !== undefined;
   useEffect(() => {
     if (!waiting) return;
@@ -57,21 +59,26 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
     <div className="subhead"><div className="home-head">{heading(title ?? row)}</div></div>
     {skeleton}
   </section>;
+  if ((!state || state.status === "idle") && row in TITLE) return <section className="home-row" data-row={row}>
+    <div className="subhead"><div className="home-head">{heading(title ?? t(TITLE[row as BuiltinHomeRowId]))}</div></div>
+    {skeleton}
+  </section>;
   if (!state || state.status === "idle") return null;
   const empty = state.items.length === 0;
   if ((state.status === "ok" || (state.status === "loading" && state.settled)) && empty && !state.partial) return null;
   const target = showAllTarget(row, state.hasMore);
+  const partial = state.status !== "error" && state.partial === true;
 
   return <section className="home-row" data-row={row}>
     <div className="subhead">
-      <div className="home-head">{heading(title ?? (row in TITLE ? t(TITLE[row as BuiltinHomeRowId]) : row))}{row === "confirm" && state.total != null && <span className="count">{state.total}</span>}</div>
+      <div className="home-head">{heading(title ?? (row in TITLE ? t(TITLE[row as BuiltinHomeRowId]) : row))}{row === "confirm" && state.total != null && <span className="count">{state.total}</span>}{partial && <button type="button" className="home-partial" title={t("home.partial")} aria-label={t("home.partial")} aria-expanded={explained} aria-controls={`home-partial-${row}`} onClick={() => setExplained((open) => !open)}><TriangleAlert aria-hidden="true"/></button>}</div>
       {(row === "tonight" || row.startsWith("catalog:") ) && onShuffle && <button className="home-shuffle" aria-label={t("home.shuffle")} title={t("home.shuffle")} onClick={onShuffle}><Shuffle/></button>}
       {target && <button className="resume-show-all" onClick={() => onShowAll(target)}>{t(SHOW_ALL[row] ?? "library.showAll")}<ChevronRight/></button>}
     </div>
+    {partial && explained && <div className="home-note" id={`home-partial-${row}`} role="note"><span>{t("home.partialHint")}</span><button className="home-retry" onClick={() => { setExplained(false); onRetry(row); }}>{t("home.retry")}</button></div>}
     {state.status === "error"
       ? <div className="home-note bad"><span>{t("home.rowFailed")}</span><button className="home-retry" onClick={() => onRetry(row)}>{t("home.retry")}</button></div>
       : <>
-          {state.partial && <div className="home-note"><span>{t("home.partial")}</span><button className="home-retry" onClick={() => onRetry(row)}>{t("home.retry")}</button></div>}
           {state.status === "loading" && empty
             ? skeleton
             : <div className={`resume-strip${state.status === "loading" ? " refreshing" : ""}`} aria-busy={state.status === "loading" || undefined} data-shape={shape}>

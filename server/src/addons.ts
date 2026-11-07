@@ -330,6 +330,9 @@ export async function metadata(
   interactive = false,
   requireArtwork = false,
   signal?: AbortSignal,
+  /** Set when a provider or an addon failed rather than answered: a `null` then means
+   *  "unknown", not "this title has no metadata", and must not be remembered as one. */
+  outcome?: { failed: boolean },
 ) {
   throwIfCancelled(signal);
   let best: MetaItem | null = null;
@@ -339,6 +342,7 @@ export async function metadata(
       throwIfCancelled(signal);
     } catch (error) {
       if (signal?.aborted) throw error;
+      if (outcome) outcome.failed = true;
       best = null;
     }
   }
@@ -356,6 +360,7 @@ export async function metadata(
       if (best.description && (type !== "series" || (best.videos?.length ?? 0) > 0) && (!requireArtwork || Boolean(best.background))) return best;
     } catch (error) {
       if (signal?.aborted) throw error;
+      if (outcome) outcome.failed = true;
       /* try next metadata provider */
     }
   }

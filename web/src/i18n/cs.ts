@@ -237,6 +237,7 @@ export const cs: Catalog = {
   "home.forget": "Zapomenout postup",
   "home.forgetConfirm": "Zapomenout uloženou pozici u „{title}“? Nejde ji obnovit.",
   "home.partial": "Některé tituly se nepodařilo ověřit.",
+  "home.partialHint": "Některé tituly se nepodařilo ověřit, třeba protože vzdálená knihovna právě neodpovídá. V řádku proto pár titulů může chybět.",
   "home.rowFailed": "Tuto řadu se nepodařilo načíst.",
   "home.retry": "Zkusit znovu",
   "home.shapePoster": "Zobrazit plakáty",

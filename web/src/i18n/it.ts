@@ -205,6 +205,7 @@ export const it: Catalog = {
   "home.forget": "Dimentica avanzamento",
   "home.forgetConfirm": "Dimenticare la posizione salvata di «{title}»? Non può essere ripristinata.",
   "home.partial": "Alcuni titoli non sono stati verificati.",
+  "home.partialHint": "Non è stato possibile verificare alcuni titoli, ad esempio perché una libreria remota non risponde. In questa fila potrebbero mancarne alcuni.",
   "home.rowFailed": "Impossibile caricare questa riga.",
   "home.retry": "Riprova",
   "home.shapePoster": "Mostra poster",

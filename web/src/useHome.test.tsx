@@ -13,7 +13,8 @@ const series = homeCatalogRowId("cinemeta", "series", "top");
 
 let root: Root;
 let hook: ReturnType<typeof useHome>;
-const Probe = () => { hook = useHome({ active: true, account: "alice", admin: false, playerOpen: false }); return null; };
+let account: string | null;
+const Probe = () => { hook = useHome({ active: true, account, admin: false, playerOpen: false }); return null; };
 
 const answer = (rows: readonly HomeRowId[], partial: ReadonlySet<HomeRowId> = new Set(), items: Partial<Record<HomeRowId, HomeCard[]>> = {}): HomeResponse => ({
   generatedAt: "", order: [], rows: Object.fromEntries(rows.map((row) => [row, { status: "ok", items: items[row] ?? [], hasMore: false, ...(partial.has(row) ? { partial: true } : {}) }])),
@@ -32,6 +33,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   localStorage.clear();
   vi.useFakeTimers();
+  account = "alice";
   root = createRoot(document.createElement("div"));
 });
 
@@ -68,13 +70,27 @@ describe("useHome", () => {
   it("loads the built-in rows first and an addon shelf only once it is revealed, in one request per moment", async () => {
     const home = vi.spyOn(api, "home").mockImplementation(async (rows) => answer(rows ?? []));
     await act(async () => { root.render(<Probe/>); });
-    expect(home).toHaveBeenCalledTimes(1);
-    expect(home.mock.calls[0]![0]!.some((row) => row.startsWith("catalog:"))).toBe(false);
+    expect(home).toHaveBeenCalledTimes(2);
+    expect(home.mock.calls[0]![0]).toEqual(["resume"]);
+    expect(home.mock.calls[1]![0]!.some((row) => row.startsWith("catalog:") || row === "resume")).toBe(false);
 
     await act(async () => { hook.reveal(movie); hook.reveal(series); hook.reveal(movie); await vi.runAllTimersAsync(); });
-    expect(home).toHaveBeenCalledTimes(2);
-    expect(home.mock.calls[1]![0]).toEqual([movie, series]);
+    expect(home).toHaveBeenCalledTimes(3);
+    expect(home.mock.calls[2]![0]).toEqual([movie, series]);
     expect(hook.rows[movie]?.status).toBe("ok");
+  });
+
+  it("waits for an account and splits its first Home load around resume", async () => {
+    account = null;
+    const home = vi.spyOn(api, "home").mockImplementation(() => new Promise(() => {}));
+    await act(async () => { root.render(<Probe/>); });
+    expect(home).not.toHaveBeenCalled();
+
+    account = "alice";
+    await act(async () => { root.render(<Probe/>); });
+    expect(home).toHaveBeenCalledTimes(2);
+    expect(home.mock.calls[0]![0]).toEqual(["resume"]);
+    expect(home.mock.calls[1]![0]).not.toContain("resume");
   });
 
   it("asks again for a shelf the server could not fill in time, and gives up after a few tries", async () => {

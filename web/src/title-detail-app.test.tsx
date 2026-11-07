@@ -98,6 +98,11 @@ let streamCalls: URL[];
 let subtitleCalls: URL[];
 let playbackStarts: Array<Record<string, unknown>>;
 let configuredAddons: Array<Record<string, unknown>>;
+let requestCounts: Map<string, number>;
+let settingsGate: Promise<void> | null;
+let statusGate: Promise<void> | null;
+let restrictedBuild: boolean;
+let startupCatalogs: Array<{ addonKey: string; addonName: string; type: string; id: string; name: string }>;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -105,6 +110,8 @@ beforeEach(() => {
   clearTitleExtras();
   sessionStorage.clear();
   localStorage.clear();
+  settings.startView = "catalog";
+  settings.tileSize = "medium";
   searchEverywhere = true;
   startBodies = [];
   searchQueries = [];
@@ -123,6 +130,11 @@ beforeEach(() => {
   subtitleCalls = [];
   playbackStarts = [];
   configuredAddons = [];
+  requestCounts = new Map();
+  settingsGate = null;
+  statusGate = null;
+  restrictedBuild = false;
+  startupCatalogs = [{ addonKey: "cinemeta", addonName: "Cinemeta", type: "movie", id: "top", name: "Top" }];
   vi.stubGlobal("matchMedia", () => ({
     matches: false, media: "", onchange: null,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -146,16 +158,30 @@ beforeEach(() => {
     const url = new URL(String(input), "http://test");
     const path = url.pathname;
     const method = init?.method ?? "GET";
-    if (path === "/api/status") return json({ status: "ok", version: "test", searchEverywhere });
+    requestCounts.set(path, (requestCounts.get(path) ?? 0) + 1);
+    if (path === "/api/status") {
+      if (statusGate) await statusGate;
+      return json({ status: "ok", version: "test", searchEverywhere, restricted: restrictedBuild });
+    }
     if (path === "/api/auth/me") return json({ username: "alice", role: "admin", language: "en" });
     if (path === "/api/auth/login" && method === "POST") return json({ username: "bob", role: "admin", language: "en" });
     if (path === "/api/addons") return json(configuredAddons);
     if (path === "/api/searchable" || path === "/api/languages") return json([]);
-    if (path === "/api/catalogs") return json([{ addonKey: "cinemeta", addonName: "Cinemeta", type: "movie", id: "top", name: "Top" }]);
+    if (path === "/api/catalogs") return json(startupCatalogs);
+    if (path === "/api/home") return json({ generatedAt: "", order: [], rows: {} });
     if (path === "/api/catalog") return json(catalogItems);
     if (path === "/api/libraries") return json([]);
+    if (path === "/api/media-servers") return json({ connections: [], keyConfigured: false });
+    if (path === "/api/media-servers/libraries") return json({ libraries: [] });
     if (path === "/api/views") return json(emptyViews());
-    if (path === "/api/settings") return json(settings);
+    if (path === "/api/settings" && method === "PATCH") {
+      Object.assign(settings, JSON.parse(String(init?.body)));
+      return json(settings);
+    }
+    if (path === "/api/settings") {
+      if (settingsGate) await settingsGate;
+      return json(settings);
+    }
     if (path === "/api/downloads" && method === "GET") {
       if (downloadMode === "unauthorized") return json({ error: "signed out" }, 401);
       if (downloadMode === "idle") return json({ jobs: [], halt: null, deviceTransfers: [] });
@@ -322,6 +348,155 @@ const typeInto = async (input: HTMLInputElement, value: string) => {
 };
 
 describe("title detail from the catalogue", () => {
+  it("opens Home first on a fresh visit and asks each start-up endpoint once", async () => {
+    settings.startView = "home";
+    let releaseSettings!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    expect(host.querySelector("main.view-home")).not.toBeNull();
+    expect(host.querySelector("main.view-catalog")).toBeNull();
+
+    releaseSettings();
+    await until(() => localStorage.getItem("start-view") === "home"
+      && ["/api/follows", "/api/follows/new-episodes", "/api/downloads", "/api/watchlist", "/api/searchable"]
+        .every((path) => requestCounts.get(path) === 1));
+  });
+
+  it("draws the first frame with the remembered tile layout and keeps the server's one", async () => {
+    settings.startView = "home";
+    settings.tileSize = "large";
+    localStorage.setItem("tile-layout", JSON.stringify({ tileSize: "small", homeTileShape: "poster", catalogTileShape: "bogus" }));
+    let releaseSettings!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    const shell = () => host.querySelector(".app-shell")!.className;
+    // Before the settings answer: the remembered values, and the default for an invalid one.
+    expect(shell()).toContain("tile-size-small");
+    expect(shell()).toContain("home-shape-poster");
+    expect(shell()).toContain("catalog-shape-poster");
+
+    releaseSettings();
+    await until(() => shell().includes("tile-size-large"));
+    expect(shell()).toContain("home-shape-wide");
+    expect(JSON.parse(localStorage.getItem("tile-layout")!)).toMatchObject({ tileSize: "large", homeTileShape: "wide" });
+  });
+
+  it("keeps Home's rows hidden in a fresh browser until the tile size is known", async () => {
+    settings.startView = "home";
+    let releaseSettings!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    expect(host.querySelector(".app-shell")!.classList.contains("tiles-pending")).toBe(true);
+    releaseSettings();
+    await until(() => !host.querySelector(".app-shell")!.classList.contains("tiles-pending"));
+
+    // The next visit knows the size and shows the rows from the first frame.
+    act(() => root.unmount());
+    root = createRoot(host);
+    let releaseAgain!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseAgain = resolve; });
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    expect(host.querySelector(".app-shell")!.classList.contains("tiles-pending")).toBe(false);
+    releaseAgain();
+    await flush();
+  });
+
+  it("remembers a start page chosen in Settings for the next visit", async () => {
+    settings.startView = "catalog";
+    await act(async () => { root.render(<App/>); });
+    await until(() => localStorage.getItem("start-view") === "catalog");
+    await clickNav("Settings");
+    await until(() => host.querySelector("#settings-tab-home") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>("#settings-tab-home")!.click(); });
+    await until(() => host.querySelector('select[aria-label="Start page"]') !== null);
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Start page"]')!;
+    await act(async () => {
+      select.value = "library";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await until(() => localStorage.getItem("start-view") === "library");
+  });
+
+  it("moves to the configured Library start page and remembers it", async () => {
+    settings.startView = "library";
+    let releaseSettings!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    releaseSettings();
+    await until(() => host.querySelector("main.view-library") !== null);
+    expect(localStorage.getItem("start-view")).toBe("library");
+  });
+
+  it("moves to the configured clean catalogue and remembers it", async () => {
+    settings.startView = "catalog";
+    let releaseSettings!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    releaseSettings();
+    await until(() => host.querySelector(".poster-card") !== null);
+    expect(host.querySelector("main.view-catalog")).not.toBeNull();
+    expect(localStorage.getItem("start-view")).toBe("catalog");
+  });
+
+  it("does not move somebody who navigates before settings arrive", async () => {
+    settings.startView = "library";
+    let releaseSettings!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    await clickNav("Catalog");
+    releaseSettings();
+    await flush();
+    expect(host.querySelector("main.view-catalog")).not.toBeNull();
+    expect(localStorage.getItem("start-view")).toBeNull();
+  });
+
+  it("keeps an install with no catalogues on the onboarding page", async () => {
+    settings.startView = "home";
+    startupCatalogs = [];
+    let releaseSettings!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    releaseSettings();
+    await until(() => host.querySelector(".onboarding") !== null);
+    expect(localStorage.getItem("start-view")).toBe("catalog");
+  });
+
+  it("keeps a restricted build off Home", async () => {
+    settings.startView = "home";
+    restrictedBuild = true;
+    // A browser that last saw Home starts on it, before the build has said it is restricted.
+    localStorage.setItem("start-view", "home");
+    let releaseSettings!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+    let releaseStatus!: () => void;
+    statusGate = new Promise<void>((resolve) => { releaseStatus = resolve; });
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector(".app-shell") !== null);
+    await flush();
+    expect(host.querySelector("main.view-home .home-row")).toBeNull();
+    expect(requestCounts.get("/api/home")).toBeUndefined();
+    releaseStatus();
+    releaseSettings();
+    await until(() => host.querySelector("main.view-catalog") !== null);
+    expect(localStorage.getItem("start-view")).toBe("catalog");
+  });
+
   it("submits the query openSearch is given and ignores a click passed as the argument", async () => {
     await openCatalog();
     await act(async () => { host.querySelector<HTMLButtonElement>(".topbar-search")!.click(); });

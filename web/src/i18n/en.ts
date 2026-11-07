@@ -242,6 +242,7 @@ export const en = {
   "home.forget": "Forget progress",
   "home.forgetConfirm": "Forget the saved position of \"{title}\"? It cannot be restored.",
   "home.partial": "Some titles could not be checked.",
+  "home.partialHint": "Some titles could not be checked, for example because a remote library is not answering right now. This row may be missing a few of them.",
   "home.rowFailed": "This row could not load.",
   "home.retry": "Try again",
   "home.shapePoster": "Show posters",

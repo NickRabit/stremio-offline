@@ -200,9 +200,21 @@ tests when starting that slice, rather than treating it as a blocker.
 - A single empty row is omitted.
 - A row answers `ok`, `partial` or `error`. A partial row keeps its usable local
   cards while catalogue enrichment is unavailable, and its Retry retries only the
-  missing source. An error row shows no invented empty count.
-- First load: a fixed-height skeleton per row. Refresh: keep the cards on screen
+  missing source. The partial notice is a small warning icon in the row heading,
+  so it never pushes the cards down on its own; a click unfolds a short
+  explanation under the heading, and its Try again button retries. An error row
+  shows no invented empty count.
+- First load: a fixed-height skeleton per row, built-in rows included, and addon
+  shelves only once the saved row order is known -- nothing above the fold moves
+  when the rows arrive. Continue watching is asked on its own, so a slow resume
+  source does not hold back the other rows. Refresh: keep the cards on screen
   with a quiet loading state.
+- The start page and the tile size and shapes last seen in the settings are
+  remembered in the browser, so a returning visitor sees that page at its final
+  size at once instead of a loading screen while settings arrive. A browser
+  that has never seen them keeps Home's rows hidden (laid out and loading)
+  until the settings answer. Home waits for the build's status, so a
+  restricted build never draws it.
 - On an account switch, discard all Home state and in-flight responses. On a lost
   grant, remove the cards, artwork, counts and cached totals of that source
   before rendering another stale response, and check permission again at every

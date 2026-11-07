@@ -205,6 +205,7 @@ export const fr: Catalog = {
   "home.forget": "Oublier la progression",
   "home.forgetConfirm": "Oublier la position enregistrée de « {title} » ? Elle ne pourra pas être restaurée.",
   "home.partial": "Certains titres n’ont pas pu être vérifiés.",
+  "home.partialHint": "Certains titres n’ont pas pu être vérifiés, par exemple parce qu’une bibliothèque distante ne répond pas. Il peut en manquer quelques-uns dans cette rangée.",
   "home.rowFailed": "Cette rangée n’a pas pu être chargée.",
   "home.retry": "Réessayer",
   "home.shapePoster": "Afficher les affiches",

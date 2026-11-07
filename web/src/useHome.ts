@@ -78,7 +78,12 @@ export function useHome({ active, account, admin, playerOpen }: { active: boolea
 
   const full = useCallback(() => {
     retries.current.clear();
-    refresh(builtinRows);
+    if (builtinRows.includes("resume")) {
+      refresh(["resume"]);
+      refresh(builtinRows.filter((row) => row !== "resume"));
+    } else {
+      refresh(builtinRows);
+    }
     refresh(orderRef.current.filter((entry) => isHomeCatalogRow(entry.id) && shown.current.has(entry.id)).map((entry) => entry.id));
   }, [builtinRows, refresh]);
 
@@ -125,14 +130,14 @@ export function useHome({ active, account, admin, playerOpen }: { active: boolea
   }, [rows, order, account]);
 
   // Opening Home, and every return to it while signed in.
-  useEffect(() => { if (active) full(); }, [active, full]);
+  useEffect(() => { if (active && account !== null) full(); }, [active, account, full]);
 
   // Closing the player may have moved a title along, but only while Home is on screen.
   const wasOpen = useRef(playerOpen);
   useEffect(() => {
-    if (wasOpen.current && !playerOpen && active) full();
+    if (wasOpen.current && !playerOpen && active && account !== null) full();
     wasOpen.current = playerOpen;
-  }, [playerOpen, active, full]);
+  }, [playerOpen, active, account, full]);
 
   return { rows, order, refresh, reveal };
 }

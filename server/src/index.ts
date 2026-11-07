@@ -143,6 +143,8 @@ import { SearchSessionManager, type SearchAuthority } from "./search-session.js"
 import { CatalogSearchManager } from "./search-catalog-session.js";
 import { SearchError } from "./search-contracts.js";
 import { STREAM_SORTS } from "./stream-sort.js";
+import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
+import { createMetaCache } from "./meta-cache.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -1214,7 +1216,11 @@ const relativeKeyIn = (libraryId: string, key: string) => {
   return parsed?.libraryId === libraryId ? parsed.relative : undefined;
 };
 
-const metaCache = new Map<string, { value: MetaItem | null; at: number }>();
+const metaCache = createMetaCache<MetaItem>({
+  ttlMs: 6 * 60 * 60_000,
+  failureTtlMs: 30 * 60_000,
+  limit: 500,
+});
 /** A lookup with no request in hand -- the artwork queue, a backfill, a job that has just
  *  finished -- reads the language of the one account. A caller that knows which person is
  *  asking passes that person's language. */
@@ -1236,19 +1242,22 @@ const cachedMeta = async (
   // `fresh` reads past the cache but still records its answer, so a scheduled check sees
   // what the providers say now without leaving the next reader to ask again.
   const hit = opts.fresh ? undefined : metaCache.get(key);
-  if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
+  if (hit?.hit) return hit.value;
+  const outcome = { failed: false };
   const found = await metadata(
     sources, type, id, language,
     opts.artwork ? tmdbArtworkProvider(language) : tmdbProvider(language),
     opts.interactive ?? viewer !== undefined,
     opts.artwork === true,
     opts.signal,
-  ).catch(() => null);
+    outcome,
+  ).catch(() => { outcome.failed = true; return null; });
   if (opts.signal?.aborted) return null;
   const value = found ? await deadArtwork.prune(found, opts.signal) : found;
-  if (metaCache.size > 300) metaCache.clear();
-  // A failed lookup is not an answer: caching it would hold a title empty for six hours.
-  if (value) metaCache.set(key, { value, at: Date.now() });
+  // Only a clean "nothing" is remembered, for half an hour: an addon that is down or slow
+  // says nothing about the title, and the next reader asks again.
+  if (value && Object.keys(value).length > 0) metaCache.set(key, value);
+  else if (!opts.signal?.aborted && !outcome.failed) metaCache.fail(key);
   return value;
 };
 // Walking the tree is expensive, so it is held in memory for a while. The queue invalidates it once a download finishes.
@@ -2995,7 +3004,17 @@ const sendPage = (_req: express.Request, res: express.Response) => {
 };
 app.get("/", pageLimit, sendPage);
 app.get("/index.html", pageLimit, sendPage);
-app.use(express.static(webRoot, { setHeaders: (res, file) => { if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store"); } }));
+app.use(precompressedAssets(webRoot));
+app.use(express.static(webRoot, {
+  setHeaders: (res, file) => {
+    const relative = path.relative(path.join(webRoot, "assets"), file);
+    if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+      res.setHeader("Cache-Control", ASSET_CACHE_CONTROL);
+      res.setHeader("Vary", "Accept-Encoding");
+    }
+    if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store");
+  },
+}));
 app.get("/{*path}", pageLimit, sendPage);
 app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   // The 400 default is deliberate: the interface treats anything but a 401 the same way,

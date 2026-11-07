@@ -72,7 +72,8 @@ import { MediaGallery } from "./MediaGallery";
 import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage } from "./gallery-images";
 import { loadTitleGallery, useCatalogueStills, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
-import { resolveStartView } from "./start-view";
+import { rememberedStartView, rememberStartView, resolveStartView } from "./start-view";
+import { layoutKey, rememberedLayout, rememberLayout } from "./layout-memory";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
@@ -143,7 +144,8 @@ const orderedVideos = (videos: Video[]) => videos.map((video, index) => ({ video
 }).map(({ video }) => video);
 export function App() {
   const { t } = useI18n();
-  const [view, setView] = useState<View>("catalog"); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
+  const [view, setView] = useState<View>(() => rememberedStartView()); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
+  const firstView = useRef<View>(view);
   // Until the first answer, an empty list means "not read yet", not "no addon installed".
   const [catalogsKnown, setCatalogsKnown] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -154,10 +156,12 @@ export function App() {
   const scrollByView = useRef<Partial<Record<View, number>>>({});
   const libraryPrewarmStarted = useRef(false);
   const restoringScroll = useRef(false);
-  const viewRef = useRef<View>("catalog");
+  const viewRef = useRef<View>(view);
   /** True once the person has chosen a view themselves, so the start-page switch never
    *  drags them away from where they went on purpose. Reset on a fresh sign-in. */
   const navigated = useRef(false);
+  const startupViewTransition = useRef(false);
+  const startupPersonalRefresh = useRef(false);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   const galleryRequest = useRef(0);
   const galleryTrigger = useRef<HTMLElement | null>(null);
@@ -256,12 +260,23 @@ export function App() {
   const [seriesBulk, setSeriesBulk] = useState<SeriesBulkRequest | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, upNextAt: "end", skipSegmentsAuto: false, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>(() => ({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, upNextAt: "end", skipSegmentsAuto: false, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false, ...rememberedLayout() }));
+  // Only what the server said is remembered: the guess above must not overwrite the last answer.
+  const settingsArrived = useRef(false);
+  useEffect(() => { if (settingsArrived.current) rememberLayout(settings); }, [layoutKey(settings)]);
+  // A browser that has never seen the settings does not know the tile size: Home's rows stay
+  // hidden (still laid out and loading) until it does, so they appear at their final size.
+  const [tilesKnown, setTilesKnown] = useState(() => Object.keys(rememberedLayout()).length > 0);
   const [sourceProfiles, setSourceProfiles] = useState<SourceProfile[] | null>(null);
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const home = useHome({ active: view === "home", account: session?.username ?? null, admin: session?.role === "admin", playerOpen });
+  const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
+  const restricted = buildInfo?.restricted === true;
+  // Home waits for the build's answer: a restricted build must never draw it, not even for the
+  // first few frames. A failed answer reads as unrestricted, as it always has.
+  const [buildKnown, setBuildKnown] = useState(false);
+  const home = useHome({ active: view === "home" && buildKnown && !restricted, account: session?.username ?? null, admin: session?.role === "admin", playerOpen });
   const [resumeCards, setResumeCards] = useState<ResumeCard[]>([]);
   const [resumeCardsTotal, setResumeCardsTotal] = useState(0);
   const [resumeFilter, setResumeFilter] = useState<ResumeFilter>("all");
@@ -1391,8 +1406,6 @@ export function App() {
     setTimeout(() => { void api.followByMeta(follow.type, follow.metaId).then((fresh) => { if (fresh) applyFollowChange(fresh.id, fresh); }).catch(() => undefined); }, 5000);
   };
   const [setupNeeded, setSetupNeeded] = useState(false);
-  const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
-  const restricted = buildInfo?.restricted === true;
   const searchEverywhere = useSearchEverywhere({
     active: view === "search",
     covered: (view === "library" && searchReturn) || (view === "search" && catalogueDetail !== null),
@@ -1435,7 +1448,9 @@ export function App() {
   // What the instance owns is administrator-only, and an ordinary user gets the same
   // read-only shape the demo mode uses: the API refuses those writes either way.
   const admin = session?.role === "admin";
-  useEffect(() => { api.status().then(setBuildInfo).catch(() => setBuildInfo(null)); }, []);
+  const buildInfoRequest = useRef<Promise<BuildInfo | null> | null>(null);
+  const loadBuildInfo = () => buildInfoRequest.current ??= api.status().catch(() => null);
+  useEffect(() => { void loadBuildInfo().then((info) => { setBuildInfo(info); setBuildKnown(true); }); }, []);
   useEffect(() => {
     if (!buildInfo?.searchEverywhere) return;
     const onKey = (event: KeyboardEvent) => {
@@ -1488,18 +1503,34 @@ export function App() {
     // A fresh sign-in re-arms the start page: signing out again must not remember the last
     // switch as if the person had navigated.
     if (!ready) { navigated.current = false; return; }
-    const loaded = refresh().catch((error: unknown) => { fail(error); return null; }); loadDownloads(); loadFollows();
+    const loaded = refresh().catch((error: unknown) => { fail(error); return null; });
     api.settings().then(async (next) => {
-      setSettings((current: AppSettings) => ({ ...current, ...next }));
+      settingsArrived.current = true;
+      // Remembered here as well as in the effect: an answer equal to the defaults changes
+      // nothing the effect watches, and would otherwise never be kept. The rows are shown in
+      // the same render that applies the size.
+      setSettings((current: AppSettings) => { const merged = { ...current, ...next }; rememberLayout(merged); return merged; });
+      setTilesKnown(true);
       setLocale(next.uiLanguage);
       // An install with no catalogue yet keeps its first run on the catalogue's onboarding.
-      const hasCatalogs = Boolean((await loaded)?.length);
+      const nextCatalogs = await loaded;
+      const hasCatalogs = Boolean(nextCatalogs?.length);
+      const resolvedBuild = await loadBuildInfo();
       // The chosen page is opened once, and only while nobody has gone anywhere yet.
-      if (view === "catalog" && !navigated.current && !selected && !playerOpen) {
-        const target = resolveStartView(next.startView, { restricted, navigated: navigated.current, hasCatalogs });
-        if (target) { navigated.current = true; openView(target); }
+      if (!navigated.current && !selected && !playerOpen) {
+        const target = resolveStartView(next.startView, { restricted: resolvedBuild?.restricted === true, navigated: navigated.current, hasCatalogs }) ?? "catalog";
+        rememberStartView(target);
+        if (target !== firstView.current) {
+          startupViewTransition.current = true;
+          startupPersonalRefresh.current = true;
+          // `refresh()` above has already picked the first catalogue; resetCatalog would read the
+          // first render's empty list and clear that pick.
+          if (target === "catalog") setView("catalog");
+          else openView(target);
+        }
+        navigated.current = true;
       }
-    }).catch(fail);
+    }).catch((error: unknown) => { setTilesKnown(true); fail(error); });
     api.languages().then(setLanguages).catch(() => undefined);
     api.sourceProfiles().then(setSourceProfiles).catch(() => setSourceProfiles([]));
     void loadViews();
@@ -1511,7 +1542,10 @@ export function App() {
     api.settings().then((next) => setSettings((current: AppSettings) => ({ ...current, ...next }))).catch(() => undefined);
   };
   // Which addons are worth searching changes as they are switched on and off.
-  useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
+  useEffect(() => {
+    if (!catalogsKnown) return;
+    api.searchable().then(setSearchable).catch(() => undefined);
+  }, [addons, catalogsKnown]);
   // Only a file probe knows the exact languages, so we run one for the chosen stream.
   useEffect(() => {
     setInspection(null);
@@ -1529,6 +1563,10 @@ export function App() {
     try { const saved = await api.updateSettings({ [key]: next }); setSettings((current: AppSettings) => ({ ...current, ...saved })); }
     catch (e) { setSettings((current: AppSettings) => ({ ...current, [key]: before })); fail(e); }
   };
+  /** A start page chosen or restored now is the one the next visit draws first. */
+  const rememberChosenStartView = (view: AppSettings["startView"] | undefined) => {
+    if (view) rememberStartView(restricted && view === "home" ? "catalog" : view);
+  };
   const saveSettings = async (patch: SettingsPatch) => {
     const { realDebridToken: _token, tmdbApiKey: _apiKey, ...rest } = patch;
     // Clearing the Home layout is stored as its absence, so the optimistic state drops the
@@ -1536,7 +1574,7 @@ export function App() {
     const optimistic = { ...rest } as Partial<AppSettings>;
     if (optimistic.homeLayout === null) delete optimistic.homeLayout;
     if (Object.keys(optimistic).length) setSettings((current: AppSettings) => ({ ...current, ...optimistic }));
-    try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => ({ ...current, ...saved })); notify(t("settings.saved")); } catch (e) { fail(e); }
+    try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => ({ ...current, ...saved })); rememberChosenStartView(saved.startView); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
   const rememberSourceProfile = async (downloadSourceProfile: string | null) => {
     const saved = await api.updateSettings({ downloadSourceProfile });
@@ -1584,7 +1622,15 @@ export function App() {
       if (location === browseLocation.current && request === browseRequest.current) setBrowse(page);
     } catch { /* Artwork refresh is optional. */ }
   };
-  useEffect(() => { if (!ready) return; api.watchlist().then(setWatchlist).catch(() => undefined); void loadFollows(); }, [ready, view]);
+  useEffect(() => {
+    if (!ready) return;
+    if (startupPersonalRefresh.current) {
+      startupPersonalRefresh.current = false;
+      return;
+    }
+    api.watchlist().then(setWatchlist).catch(() => undefined);
+    void loadFollows();
+  }, [ready, view]);
   useEffect(() => {
     if (!ready || view !== "favorites") return;
     // The previous filter's cards and its own "load more" must not stay under the new one.
@@ -2160,7 +2206,10 @@ export function App() {
     };
     const wake = () => { if (!document.hidden) { clearTimeout(timer); delay = base; void tick(); } };
     document.addEventListener("visibilitychange", wake);
-    void tick();
+    if (startupViewTransition.current) {
+      startupViewTransition.current = false;
+      plan(base);
+    } else void tick();
     return () => { stopped = true; clearTimeout(timer); document.removeEventListener("visibilitychange", wake); };
   }, [view, ready]);
 
@@ -3682,7 +3731,7 @@ export function App() {
     : previousFile ? () => playAdjacent(previousFile) : undefined;
 
   return <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
-  <div className={`app-shell tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+  <div className={`app-shell${tilesKnown ? "" : " tiles-pending"} tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user"><span className="topbar-user-name">
         <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
@@ -3760,7 +3809,7 @@ export function App() {
       {/* The library stays mounted under a catalogue detail opened from it: a remote title lives
           in the browser, and unmounting it would land Back on the list instead of that title. */}
       {(!catalogueDetail || view === "library") && <>
-      {view === "home" && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
+      {view === "home" && buildKnown && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
         onShuffle={(row, shuffle) => home.refresh([row], { shuffle })} onVisible={home.reveal} onOpenCatalog={(row) => { const pick = parseHomeCatalogRowId(row); if (pick) resetCatalog(pick); }}
@@ -4236,6 +4285,7 @@ export function App() {
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSourceProfilesChanged={reloadSourceRules} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
+        rememberChosenStartView(restored.settings.startView);
         setSelectedCatalog("");
         // Rules that named a library of the machine the backup came from are pointed at this
         // instance's own, or at the default; say how many had to move.

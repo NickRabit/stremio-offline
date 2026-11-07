@@ -1,5 +1,36 @@
-import { describe, expect, it } from "vitest";
-import { resolveStartView } from "./start-view";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { rememberedStartView, rememberStartView, resolveStartView } from "./start-view";
+
+afterEach(() => {
+  localStorage.clear();
+  vi.restoreAllMocks();
+});
+
+describe("rememberedStartView", () => {
+  it("defaults to Home", () => {
+    expect(rememberedStartView()).toBe("home");
+  });
+
+  it("returns a stored start view", () => {
+    localStorage.setItem("start-view", "library");
+    expect(rememberedStartView()).toBe("library");
+  });
+
+  it("defaults to Home for an invalid value", () => {
+    localStorage.setItem("start-view", "search");
+    expect(rememberedStartView()).toBe("home");
+  });
+
+  it("defaults to Home when storage throws", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+    expect(rememberedStartView()).toBe("home");
+  });
+
+  it("remembers a start view", () => {
+    rememberStartView("catalog");
+    expect(localStorage.getItem("start-view")).toBe("catalog");
+  });
+});
 
 describe("resolveStartView", () => {
   it("does nothing for the default catalogue", () => {
