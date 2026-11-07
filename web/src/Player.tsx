@@ -1507,13 +1507,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         <span>{fmt(duration)}</span>
       </div>
       <div className="player-controls">
-        <div className={`transport-controls${onPrevious || onNext ? " has-episodes" : ""}`}>
-          {onPrevious && <button className="previous-episode" disabled={nextBusy} aria-label={t("player.previousEpisode")} title={t("player.previousEpisodeTitle", { title: previousTitle ?? "" })} onClick={() => void onPrevious()}><SkipBack /></button>}
-        <button className="seek-step" onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
-        <button className="play-toggle" aria-label={paused ? t("player.play") : t("player.pause")} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
-        <button className="seek-step" onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
-          {onNext && <button className="next-episode" disabled={nextBusy} aria-label={t("player.nextEpisode")} title={t("player.nextEpisodeTitle", { title: nextTitle ?? "" })} onClick={() => void onNext()}><SkipForward /></button>}
+        {onPrevious && <button className="previous-episode" disabled={nextBusy} aria-label={t("player.previousEpisode")} title={t("player.previousEpisodeTitle", { title: previousTitle ?? "" })} onClick={() => void onPrevious()}><SkipBack /></button>}
+        {/* Playback is its own group: on a phone held upright it moves onto the picture, while the
+            episode steps stay at the ends of the row below. */}
+        <div className="transport-controls">
+          <button className="seek-step" onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
+          <button className="play-toggle" aria-label={paused ? t("player.play") : t("player.pause")} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
+          <button className="seek-step" onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
         </div>
+        {onNext && <button className="next-episode" disabled={nextBusy} aria-label={t("player.nextEpisode")} title={t("player.nextEpisodeTitle", { title: nextTitle ?? "" })} onClick={() => void onNext()}><SkipForward /></button>}
         <Volume2 />
         <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" value={Math.round(volume * 100)}
           onChange={(event) => { const next = clampVolume(Number(event.target.value) / 100); setVolume(next); writeVolume(next); }} />
