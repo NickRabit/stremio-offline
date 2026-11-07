@@ -71,7 +71,7 @@ test("player keeps its picture stable and its overlay controls reachable", async
     const barBoxes = async () => (await Promise.all(
       (await overlay.locator(".player-controls > button, .player-view-controls > button").all()).map((button) => button.boundingBox()),
     )).filter((box): box is NonNullable<typeof box> => box !== null && box.width > 0).sort((a, b) => a.x - b.x);
-    // A phone held upright: playback sits on the picture, centred, play the largest of the three;
+    // A phone held upright: playback has a centred row above the timeline, play the largest of the three;
     // the bar below is one row spread from edge to edge with even spaces.
     const checkPortrait = async () => {
       const controlsBox = (await controls.boundingBox())!;
@@ -90,12 +90,12 @@ test("player keeps its picture stable and its overlay controls reachable", async
       const middle = (transport[0]!.x + transport.at(-1)!.x + transport.at(-1)!.width) / 2;
       expect(Math.abs(middle - page.viewportSize()!.width / 2)).toBeLessThanOrEqual(1);
       expect(transport[1]!.height).toBeGreaterThanOrEqual(56);
-      // Over the picture, clear of the bar below it.
-      expect(transport[0]!.y + transport[0]!.height).toBeLessThan(boxes[0]!.y);
-      const picture = (await video.boundingBox())!;
-      const centre = transport[1]!.y + transport[1]!.height / 2;
-      expect(centre).toBeGreaterThan(picture.y);
-      expect(centre).toBeLessThan(picture.y + picture.height);
+      // A row of its own above the timeline, so it never sits on the picture, and the subtitles,
+      // panels and hints the bar lifts clear it too.
+      const timeline = (await overlay.locator(".timeline").boundingBox())!;
+      expect(transport[1]!.y + transport[1]!.height).toBeLessThanOrEqual(timeline.y + 1);
+      const bar = (await overlay.locator(".player-bottom").boundingBox())!;
+      expect(transport[1]!.y).toBeGreaterThanOrEqual(bar.y);
     };
 
     await checkPortrait();
