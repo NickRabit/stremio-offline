@@ -38,7 +38,7 @@ let addonStreams: Handler;
 let remoteLibraries: Handler;
 let remoteMatches: Handler;
 let remoteState: Handler;
-const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], extras: [] as URL[], links: [] as URL[], trailer: [] as URL[], gallery: [] as URL[], catalogueGallery: [] as URL[], progress: [] as URL[], providers: [] as URL[], addon: [] as URL[], libraries: [] as URL[], remote: [] as URL[], remoteState: [] as URL[], remoteWrites: [] as Record<string, unknown>[] };
+const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], extras: [] as URL[], links: [] as URL[], trailer: [] as URL[], gallery: [] as URL[], catalogueGallery: [] as URL[], progress: [] as URL[], providers: [] as URL[], addon: [] as URL[], libraries: [] as URL[], remote: [] as URL[], remoteState: [] as URL[], remoteWrites: [] as Record<string, unknown>[], inspect: [] as string[] };
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -58,6 +58,7 @@ beforeEach(() => {
   clearTitleEnrichment();
   clearTitleExtras();
   calls.source = []; calls.identity = []; calls.localStreams = []; calls.meta = []; calls.extras = []; calls.links = []; calls.trailer = []; calls.gallery = []; calls.catalogueGallery = []; calls.progress = [];
+  calls.inspect = [];
   calls.providers = []; calls.addon = []; calls.libraries = []; calls.remote = []; calls.remoteState = []; calls.remoteWrites = [];
   source = () => json({ sourceId: "exact", kind: "library", playable: true, behaviorHints: { filename: "Heat.mkv" } });
   identityHandler = () => json(identity());
@@ -89,6 +90,7 @@ beforeEach(() => {
     if (/^\/api\/local-streams\/[^/]+\/[^/]+$/.test(path)) { calls.localStreams.push(url); return Promise.resolve(copies(url, init)); }
     if (path.startsWith("/api/stream-sources/")) { calls.providers.push(url); return Promise.resolve(providers(url, init)); }
     if (path.startsWith("/api/streams/")) { calls.addon.push(url); return Promise.resolve(addonStreams(url, init)); }
+    if (path === "/api/inspect") { calls.inspect.push((JSON.parse(String(init?.body)) as { sourceId: string }).sourceId); return Promise.resolve(json({ audioTracks: [{ index: 0, codec: "aac", language: "cs" }], subtitleTracks: [] })); }
     if (path === "/api/remote-libraries") { calls.libraries.push(url); return Promise.resolve(remoteLibraries(url, init)); }
     if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/.test(path)) {
       calls.remoteState.push(url);
@@ -469,6 +471,20 @@ describe("LocalLibraryDetail extra sources", () => {
     capabilities: { rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: false, downloadToDevice: false },
   });
   const oneNative = () => json([copy("Heat/Heat.mkv", "Heat.mkv", 2_000_000_000)]);
+
+  it("reads the tracks of a picked addon source, never of the library's own copy", async () => {
+    identityHandler = boundMovie;
+    copies = oneNative;
+    providers = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    await render(folder());
+    await flush();
+    expect(calls.inspect).toEqual([]);
+    await openPicker();
+    await click(rows().find((row) => row.textContent?.includes("Torrentio 4K")) ?? null);
+    await flush();
+    expect(calls.inspect).toEqual(["addon-1"]);
+  });
 
   it("asks nothing until the chooser opens, then reads the addons and the other libraries at once", async () => {
     identityHandler = boundMovie;

@@ -51,6 +51,7 @@ let shuffleStart: Handler;
 let shuffleNext: Handler;
 const shuffleCalls = { start: [] as URL[], starts: [] as Array<Record<string, unknown>>, next: [] as string[], deleted: [] as string[] };
 const calls = { browse: [] as URL[], personal: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[], title: [] as string[] };
+const inspectedSources: string[] = [];
 const downloadCalls: Array<Record<string, unknown>> = [];
 const deviceCalls: Array<Record<string, unknown>> = [];
 const librarySourceCalls: Array<Record<string, unknown>> = [];
@@ -128,6 +129,7 @@ beforeEach(() => {
   localCopies = () => json([]);
   remoteLibraryStreams = () => json({ streams: [] });
   forgetReply = undefined;
+  inspectedSources.length = 0;
   playback = () => json({
     id: "sess1", mode: "direct", url: "/api/stream/sess1", offset: 0, duration: 3600, hardware: false, acceleration: false,
     audioTracks: [], subtitleTracks: [], audioTrack: 0, subtitleTrack: null, quality: null,
@@ -188,6 +190,7 @@ beforeEach(() => {
     if (/^\/api\/playback\/[^/]+$/.test(path)) return Promise.resolve(new Response(null, { status: 204 }));
     if (path.startsWith("/api/stream-sources/")) { addonCalls.sources.push(url); return Promise.resolve(addonProviders(url, init)); }
     if (path.startsWith("/api/streams/")) { addonCalls.streams.push(url); return Promise.resolve(addonStreams(url, init)); }
+    if (path === "/api/inspect") { inspectedSources.push((JSON.parse(String(init?.body)) as { sourceId: string }).sourceId); return Promise.resolve(json({ audioTracks: [{ index: 0, codec: "aac", language: "cs" }], subtitleTracks: [] })); }
     if (path.startsWith("/api/subtitles/")) { addonCalls.subtitles.push(url); addonCalls.subtitleSignals.push(init?.signal); return Promise.resolve(addonSubtitles(url, init)); }
     if (/^\/api\/local-streams\/[^/]+\/[^/]+$/.test(path)) { addonCalls.local.push(url); return Promise.resolve(localCopies(url, init)); }
     if (/^\/api\/remote-libraries\/[^/]+\/streams\/[^/]+\/[^/]+$/.test(path)) { addonCalls.remote.push(url); return Promise.resolve(remoteLibraryStreams(url, init)); }
@@ -1891,6 +1894,19 @@ describe("RemoteLibraryBrowser addon sources", () => {
   };
   const closePicker = async () => { await click(document.querySelector(".library-source-card .dialog-foot button")!); };
   const addonGetPaths = () => addonCalls.progress.filter((call) => call.method === "GET").map((call) => call.path);
+
+  it("reads the tracks of a picked addon source, never of the server's own version", async () => {
+    await openDetail();
+    await flush();
+    expect(inspectedSources).toEqual([]);
+    await openPicker();
+    await selectAddonRow();
+    await flush();
+    expect(inspectedSources).toEqual(["addon-1"]);
+    const audio = [...host.querySelectorAll(".detail-tech dt")].find((node) => node.textContent === "Audio")!.nextElementSibling!;
+    expect(audio.textContent).toContain("Czech");
+    expect(audio.querySelector(".tag.verified")).not.toBeNull();
+  });
 
   it("keeps the native version playable while a provider fails", async () => {
     await openDetail();
