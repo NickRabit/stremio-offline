@@ -6,6 +6,7 @@ import { t, type Key } from "./i18n";
 import type { HomeRowState } from "./home-state";
 import type { BuiltinHomeRowId, HomeRowId } from "../../server/src/home";
 import type { TileShape } from "./types";
+import { useOmission } from "./home-omit";
 
 const TITLE: Record<BuiltinHomeRowId, Key> = {
   resume: "home.continue", episodes: "home.newEpisodes", completed: "home.readyToPlay",
@@ -40,6 +41,12 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
   // The partial mark explains itself on a click: a phone has no hover for the title.
   const [explained, setExplained] = useState(false);
   const waiting = (!state || state.status === "idle") && onVisible !== undefined;
+  // A shelf with nothing in it is not drawn -- but one that turns out empty on screen leaves
+  // only once that moves nothing in view (see useOmission).
+  const empty = state !== undefined && state.status !== "idle" && state.status !== "error" && state.items.length === 0;
+  const omit = state !== undefined && (state.status === "ok" || (state.status === "loading" && state.settled === true)) && empty && !state.partial;
+  const held = useRef<HTMLElement>(null);
+  const gone = useOmission(omit, held);
   useEffect(() => {
     if (!waiting) return;
     const element = placeholder.current;
@@ -64,8 +71,10 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
     {skeleton}
   </section>;
   if (!state || state.status === "idle") return null;
-  const empty = state.items.length === 0;
-  if ((state.status === "ok" || (state.status === "loading" && state.settled)) && empty && !state.partial) return null;
+  if (omit) return gone ? null : <section className="home-row" data-row={row} ref={held} aria-hidden="true">
+    <div className="subhead"><div className="home-head">{heading(title ?? (row in TITLE ? t(TITLE[row as BuiltinHomeRowId]) : row))}</div></div>
+    {skeleton}
+  </section>;
   const target = showAllTarget(row, state.hasMore);
   const partial = state.status !== "error" && state.partial === true;
 

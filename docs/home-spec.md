@@ -197,7 +197,12 @@ tests when starting that slice, rather than treating it as a blocker.
   state pointing at the catalogue. Only an administrator also gets the setup
   shortcut. A source that failed or is still loading is not an empty account.
 - A restricted account does not mount Home and does not issue its requests.
-- A single empty row is omitted.
+- A single empty row is omitted. A shelf that loads as it nears the screen can
+  come back empty while it is already in view and the viewer is scrolling (a
+  slow server); it then keeps its place, still as a skeleton, until it scrolls
+  out of view -- shifting the page by its height when it leaves over the top, so
+  nothing in view moves -- or until the page has been still for 1.5 s. A row
+  that turns empty while nobody is scrolling (a first load) goes at once.
 - A row answers `ok`, `partial` or `error`. A partial row keeps its usable local
   cards while catalogue enrichment is unavailable, and its Retry retries only the
   missing source. The partial notice is a small warning icon in the row heading,
