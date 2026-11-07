@@ -25,3 +25,13 @@ private fun copiesOf(files: List<BrowseItem.File>, file: BrowseItem.File): List<
   val key = episodeKey(file)
   return files.filter { episodeKey(it) == key }
 }
+
+/**
+ * One file per episode of a series folder: a second copy of an episode (another container or
+ * quality) is a source of that episode, not another card. As on the web, the copy the viewer has
+ * started stands for the episode, so its progress shows; otherwise the largest one does.
+ */
+internal fun episodeFiles(files: List<BrowseItem.File>): List<BrowseItem.File> =
+  files.groupBy(::episodeKey).values.map { copies ->
+    copies.maxWith(compareBy<BrowseItem.File>({ (it.progress?.position ?: 0.0) > 0 }, { it.size }))
+  }

@@ -24,6 +24,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -298,8 +300,11 @@ private class SessionViewModelStoreOwner : ViewModelStoreOwner {
 }
 
 @Composable
-private fun OfflinePanel(server: String, onRetry: () -> Unit, onChangeServer: () -> Unit) {
+internal fun OfflinePanel(server: String, onRetry: () -> Unit, onChangeServer: () -> Unit) {
   val shape = RoundedCornerShape(12.dp)
+  // Nothing else on screen holds focus, so without this the first press of the remote only wakes it.
+  val retryFocus = remember { FocusRequester() }
+  LaunchedEffect(Unit) { runCatching { retryFocus.requestFocus() } }
   Box(Modifier.fillMaxSize().appBackground(), contentAlignment = Alignment.Center) {
     Column(
       modifier = Modifier
@@ -329,7 +334,7 @@ private fun OfflinePanel(server: String, onRetry: () -> Unit, onChangeServer: ()
         lineHeight = 17.sp,
       )
       Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-        FocusButton(stringResource(R.string.tv_try_again), onClick = onRetry, kind = FocusButtonKind.Primary)
+        FocusButton(stringResource(R.string.tv_try_again), onClick = onRetry, modifier = Modifier.focusRequester(retryFocus), kind = FocusButtonKind.Primary)
         FocusButton(stringResource(R.string.tv_change_server), onClick = onChangeServer)
       }
     }

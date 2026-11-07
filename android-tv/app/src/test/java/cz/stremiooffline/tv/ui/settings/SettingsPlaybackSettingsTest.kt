@@ -7,6 +7,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
@@ -75,5 +79,20 @@ class SettingsPlaybackSettingsTest {
     press(Key.DirectionCenter)
 
     assertEquals(listOf("skipSegmentsAuto" to true), api.settingFlagPatches)
+  }
+
+  @Test
+  fun `a switch shows its value in the same column as a choice, beside its label`() {
+    mount(FakeTvApi().apply { settingsValue = SettingsResponse(upNextAt = "end") })
+    val choice = compose.onNode(hasText("When the episode ends") and hasAnyAncestor(hasTestTag(TagSettingsRowUpNext)), useUnmergedTree = true)
+      .getBoundsInRoot()
+    val switchValue = compose.onNode(hasText("Off") and hasAnyAncestor(hasTestTag(TagSettingsRowSkipSegments)), useUnmergedTree = true)
+      .getBoundsInRoot()
+    val switchLabel = compose.onNode(hasText("Skip intro and recap automatically") and hasAnyAncestor(hasTestTag(TagSettingsRowSkipSegments)), useUnmergedTree = true)
+      .getBoundsInRoot()
+
+    assertEquals(choice.left.value, switchValue.left.value, 0.5f)
+    // No empty note line pushes the label above the value it belongs to.
+    assertEquals((switchLabel.top.value + switchLabel.bottom.value) / 2, (switchValue.top.value + switchValue.bottom.value) / 2, 1.5f)
   }
 }

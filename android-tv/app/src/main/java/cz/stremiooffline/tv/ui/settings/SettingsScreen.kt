@@ -787,9 +787,12 @@ private fun ToggleRow(
   ) {
     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
       Text(label, color = Tokens.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(note, color = Tokens.Muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      if (note.isNotBlank()) {
+        Text(note, color = Tokens.Muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
     }
     Text(value, modifier = Modifier.weight(1f, fill = false), color = Tokens.Muted, fontSize = 13.sp, textAlign = TextAlign.End, maxLines = 1)
+    ChevronSpace()
   }
 }
 
@@ -849,11 +852,18 @@ private fun InfoRow(
     Row(verticalAlignment = Alignment.CenterVertically) {
       Text(label, modifier = Modifier.weight(1f), color = Tokens.Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
       Text(value, modifier = Modifier.weight(1f, fill = false), color = Tokens.Muted, fontSize = 13.sp, textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      ChevronSpace()
     }
     if (note.isNotBlank()) {
       Text(note, color = noteColor, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.testTag("settings_note_$label"))
     }
   }
+}
+
+/** The room a chevron and its gap take, so a row without one keeps its value in the same column. */
+@Composable
+private fun ChevronSpace() {
+  Spacer(Modifier.width(24.dp))
 }
 
 @Composable

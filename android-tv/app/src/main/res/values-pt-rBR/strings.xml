@@ -386,7 +386,10 @@
   <string name="media_server_eyebrow_episode">%1$s · episódio</string>
   <string name="media_server_state_local">A posição e a preferência são guardadas neste servidor, só para este app.</string>
   <string name="media_server_versions">Versões</string>
-  <string name="media_server_versions_available">%1$s versões disponíveis</string>
+  <plurals name="media_server_versions_available">
+    <item quantity="one">%1$s versão disponível</item>
+    <item quantity="other">%1$s versões disponíveis</item>
+  </plurals>
   <string name="media_server_finding_versions">Procurando versões…</string>
   <string name="media_server_sources_empty">Este item não tem versão reproduzível.</string>
   <string name="media_server_sources_error">Não foi possível carregar as versões.</string>

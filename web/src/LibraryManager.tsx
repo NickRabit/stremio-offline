@@ -98,7 +98,7 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
             onClick={() => void reorder(index, 1)}><ArrowDown/></button>
         </span>}
       </div>
-      <small className="library-admin-counts">{t("library.libraryCounts", { titles: library.titles, files: library.files, size: bytes(library.bytes) })}</small>
+      <small className="library-admin-counts">{t("library.libraryCounts", { titles: t("library.titleCount", { count: library.titles }), files: t("library.fileCount", { count: library.files }), size: bytes(library.bytes) })}</small>
       {!restricted && <footer className="library-admin-footer">
         <button onClick={() => setEditing(library)} disabled={busy}><SlidersHorizontal/> {t("library.editLibrary")}</button>
       </footer>}
@@ -496,7 +496,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
           <strong title={selected}>{selected || t("library.pickerNothingSelected")}</strong>
           {pendingCreate && <p>{t(reroot ? "library.newFolderPendingReroot" : "library.newFolderPending")}</p>}
           {estimate && <p className="library-picker-estimate">
-            {t("library.estimate", { titles: estimate.titles, files: estimate.files })}
+            {t("library.estimate", { titles: t("library.titleCount", { count: estimate.titles }), files: t("library.fileCount", { count: estimate.files }) })}
             {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
             {estimate.truncated ? ` · ${t("library.estimateTruncated")}` : ""}
           </p>}

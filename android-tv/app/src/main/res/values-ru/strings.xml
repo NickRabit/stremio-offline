@@ -402,7 +402,12 @@
   <string name="media_server_eyebrow_episode">%1$s · эпизод</string>
   <string name="media_server_state_local">Позиция и настройка хранятся на этом сервере только для этого приложения.</string>
   <string name="media_server_versions">Версии</string>
-  <string name="media_server_versions_available">Доступно версий: %1$s</string>
+  <plurals name="media_server_versions_available">
+    <item quantity="one">Доступна %1$s версия</item>
+    <item quantity="few">Доступно %1$s версии</item>
+    <item quantity="many">Доступно %1$s версий</item>
+    <item quantity="other">Доступно версий: %1$s</item>
+  </plurals>
   <string name="media_server_finding_versions">Поиск версий…</string>
   <string name="media_server_sources_empty">У этого элемента нет воспроизводимой версии.</string>
   <string name="media_server_sources_error">Не удалось загрузить версии.</string>

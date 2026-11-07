@@ -2,7 +2,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** A More menu entry by its label. A badge (the add-on count, the Following indicator) is part
+/** A More menu entry by its label. A badge (the Following indicator) is part
  *  of the accessible name, so the match allows a trailing number. */
 export const menuItem = (page: Page, name: string): Locator =>
   page.getByRole("menuitem", { name: new RegExp(`^${escape(name)}(\\s+\\d+)?$`) });

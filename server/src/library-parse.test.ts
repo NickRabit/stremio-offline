@@ -259,3 +259,13 @@ test("words that only look like a language phrase stay in the title", () => {
   const country = parseMediaName("The Office cesky dabing (US)");
   assert.deepEqual({ title: country.title, country: country.country }, { title: "The Office", country: "US" });
 });
+
+test("an episode tag between dashes leaves one dash, not two", () => {
+  const playgroup = parseMediaPath("Prasátko Peppa - S01E06 - The Playgroup.mp4");
+  assert.equal(playgroup.title, "Prasátko Peppa - The Playgroup");
+  assert.equal(playgroup.season, 1);
+  assert.equal(playgroup.episode, 6);
+  assert.doesNotMatch(playgroup.query, /^-|- -/);
+  assert.equal(parseMediaPath("Show - 1x02 - Pilot.mkv").title, "Show - Pilot");
+  assert.equal(parseMediaPath("Show - S01E02.mkv").title, "Show");
+});
