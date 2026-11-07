@@ -58,40 +58,40 @@ test("player keeps its picture stable and its overlay controls reachable", async
   expect(await viewItems[2].getAttribute("aria-label")).toBe("Nastavení přehrávání");
   const viewBoxes = await Promise.all(viewItems.map((button) => button.boundingBox()));
   expect(viewBoxes.map((box) => box!.x)).toEqual(viewBoxes.map((box) => box!.x).sort((a, b) => a - b));
+  // The same quiet controls at every size and orientation: play is the one filled button, the
+  // rest are bare icons until the pointer is over them or their panel is open.
+  await page.mouse.move(0, 0);
+  const filled = await overlay.locator(".player-controls button:not(.player-fill-toggle):not([aria-expanded=\"true\"])").evaluateAll((buttons) =>
+    buttons.filter((button) => getComputedStyle(button).backgroundColor !== "rgba(0, 0, 0, 0)").map((button) => button.className));
+  expect(filled).toEqual(["play-toggle"]);
 
   if (testInfo.project.name === "mobile") {
     const controls = overlay.locator(".player-controls");
-    const checkRows = async () => {
+    const visibleBoxes = async () => (await Promise.all(
+      (await controls.locator("button").all()).map((button) => button.boundingBox()),
+    )).filter((box): box is NonNullable<typeof box> => box !== null && box.width > 0).sort((a, b) => a.x - b.x);
+    // A film on a phone held upright: every control in one row under the timeline, playback
+    // first, spread from edge to edge with even spaces between them.
+    const checkOneRow = async () => {
       const controlsBox = (await controls.boundingBox())!;
-      const transportBoxes = await Promise.all((await overlay.locator(".transport-controls button").all()).map((button) => button.boundingBox()));
-      const rowTwoBoxes = await Promise.all([
-        ...(await controls.locator(":scope > button").all()).map((button) => button.boundingBox()),
-        ...(await overlay.locator(".player-view-controls button").all()).map((button) => button.boundingBox()),
-      ]);
-      const rowTwo = rowTwoBoxes.filter((box) => box !== null).sort((a, b) => a.x - b.x);
-      const gaps = rowTwo.slice(1).map((box, index) => box.x - rowTwo[index]!.x - rowTwo[index]!.width);
-      const transportLeft = Math.min(...transportBoxes.map((box) => box!.x));
-      const transportRight = Math.max(...transportBoxes.map((box) => box!.x + box!.width));
-
-      expect(new Set(transportBoxes.map((box) => Math.round(box!.y))).size).toBe(1);
-      expect(Math.abs((transportLeft + transportRight) / 2 - (controlsBox.x + controlsBox.width / 2))).toBeLessThanOrEqual(1);
-      expect(new Set(rowTwo.map((box) => Math.round(box.y))).size).toBe(1);
-      // Spread evenly across the full width: the space at each edge is the space between buttons,
-      // however many buttons the row holds (a file without subtitles has no subtitles button).
-      const leftEdge = rowTwo[0]!.x - controlsBox.x;
-      const rightEdge = controlsBox.x + controlsBox.width - rowTwo.at(-1)!.x - rowTwo.at(-1)!.width;
+      const boxes = await visibleBoxes();
+      expect(new Set(boxes.map((box) => Math.round(box.y + box.height / 2))).size).toBe(1);
+      const transport = await Promise.all((await overlay.locator(".transport-controls button").all()).map((button) => button.boundingBox()));
+      expect(transport.map((box) => box!.x)).toEqual(boxes.slice(0, transport.length).map((box) => box.x));
+      const gaps = boxes.slice(1).map((box, index) => box.x - boxes[index]!.x - boxes[index]!.width);
       expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(1);
-      // The row's own CSS gap sits only between buttons, on top of the even share.
-      const columnGap = await controls.evaluate((element) => Number.parseFloat(getComputedStyle(element).columnGap) || 0);
-      expect(Math.abs(leftEdge + columnGap - gaps[0]!)).toBeLessThanOrEqual(1);
-      expect(Math.abs(rightEdge + columnGap - gaps[0]!)).toBeLessThanOrEqual(1);
+      expect(Math.abs(boxes[0]!.x - controlsBox.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(controlsBox.x + controlsBox.width - boxes.at(-1)!.x - boxes.at(-1)!.width)).toBeLessThanOrEqual(1);
       expect(await controls.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
     };
 
-    await checkRows();
+    await checkOneRow();
     const viewport = page.viewportSize()!;
+    // An Android phone 360 px wide still holds the whole row, fullscreen included.
+    await page.setViewportSize({ width: 360, height: viewport.height });
+    await checkOneRow();
+    // Narrower than that the row may wrap, but nothing leaves the screen.
     await page.setViewportSize({ width: 320, height: viewport.height });
-    await checkRows();
     for (const button of await overlay.locator(".player-controls button").all()) {
       const box = await button.boundingBox();
       expect(box!.x).toBeGreaterThanOrEqual(0);

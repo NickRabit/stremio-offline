@@ -848,6 +848,12 @@ html.dialog-locked,html.dialog-locked body{overflow:hidden;overscroll-behavior:n
 .player-overlay .timeline{height:auto;margin:0;padding:0;grid-template-columns:48px minmax(0,1fr) 48px;font-size:11px}
 .player-overlay .player-controls{display:flex;flex-wrap:nowrap;overflow:visible;gap:8px;justify-content:flex-start;min-height:44px;height:auto;margin:0;padding:0}
 .player-overlay .player-controls button,.player-settings button{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;min-width:44px;min-height:44px;padding:8px}
+/* The player's controls are bare icons in every orientation and on the desktop: play is the only
+   filled button, and the others light up only under the pointer or while their panel is open. */
+.player-overlay .player-controls button{border-color:transparent;background:transparent;box-shadow:none}
+.player-overlay .player-controls button:hover:not(:disabled),.player-overlay .player-controls button[aria-expanded="true"]{background:#ffffff14}
+.player-overlay .player-controls .play-toggle,.player-overlay .player-controls .play-toggle:hover:not(:disabled){border-radius:50%;background:var(--accent);box-shadow:0 6px 18px #ff5b3833}
+.player-overlay .player-controls .seek-step{gap:2px;font-size:11px;font-weight:700}
 .player-controls .player-settings-toggle{margin-left:auto}
 .player-overlay .player-controls .fullscreen-action{order:0}
 .player-controls .player-view-controls{display:flex;align-items:center;flex-wrap:nowrap;flex:0 0 auto;gap:inherit;margin-left:auto}
@@ -980,9 +986,18 @@ img.broken{visibility:hidden}
 .transport-controls{display:contents}
 @media(max-width:700px){.player-overlay .player-controls{flex-wrap:wrap}.player-overlay .transport-controls{display:flex;flex:0 0 auto;flex-wrap:nowrap;gap:inherit}.player-controls .seek-step{padding:6px;gap:2px;font-size:10px}.player-controls .seek-step svg{width:20px}}
 @media(max-width:700px) and (orientation:portrait){
-  .player-overlay .player-controls{justify-content:space-evenly;overflow:visible}
-  .player-overlay .transport-controls{flex:0 0 100%;justify-content:center}
-  .player-overlay .player-view-controls{display:contents}
+  /* One row under the timeline: a film's eight buttons fit a 360 px phone edge to edge once the
+     bar's sides narrow to 4 px. */
+  .player-bottom{padding-left:max(4px,env(safe-area-inset-left));padding-right:max(4px,env(safe-area-inset-right))}
+  .player-overlay .player-controls{justify-content:space-between;gap:0;row-gap:4px;overflow:visible}
+  .player-overlay .transport-controls,.player-overlay .player-view-controls{display:contents}
+  .player-overlay .player-controls button{flex:0 0 44px;width:44px;min-width:44px;height:44px;min-height:44px;padding:0}
+  .player-overlay .player-controls button svg{width:22px;height:22px}
+  .player-overlay .player-controls .seek-step{gap:1px}
+  .player-overlay .player-controls .seek-step svg{width:20px;height:20px}
+  /* A series adds previous and next episode: ten buttons never fit one row, so playback keeps a
+     row of its own and the rest follow below it rather than breaking anywhere. */
+  .player-overlay .transport-controls.has-episodes{display:flex;flex:0 0 100%;justify-content:space-between}
 }
 
 .player-overlay.cursor-hidden,.player-overlay.cursor-hidden *{cursor:none!important}

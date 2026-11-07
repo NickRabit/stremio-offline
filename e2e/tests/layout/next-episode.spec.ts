@@ -56,7 +56,9 @@ test("local player previews a frame and plays the next naturally sorted file", a
     expect(await overlay.locator(".player-controls").evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
     const transport = overlay.locator(".transport-controls");
     const boxes = await Promise.all((await transport.locator("button").all()).map((button) => button.boundingBox()));
-    expect(new Set(boxes.map((box) => Math.round(box!.y))).size).toBe(1);
+    // Play is taller than the steps around it: one row means one shared vertical centre.
+    expect(new Set(boxes.map((box) => Math.round(box!.y + box!.height / 2))).size).toBe(1);
+    for (const box of boxes) expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
     expect(boxes.map((box) => box!.x)).toEqual(boxes.map((box) => box!.x).sort((a, b) => a - b));
     if (page.viewportSize()!.width >= 350 && page.viewportSize()!.width <= 700) {
       // The toolbar may wrap onto a second row, but neither group may be split across rows.
