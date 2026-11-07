@@ -2640,10 +2640,13 @@ export function App() {
       .then((found) => { if (!stale()) setLocalStreams(found.filter(isLocalStream)); })
       .catch(() => undefined)
       .finally(() => { if (!stale()) setLocalLoading(false); });
+    void api.subtitles(type, id)
+      .then((next) => { if (!stale()) setSubtitles(next); })
+      .catch(() => undefined);
     try {
-      const [sources, nextSubtitles] = await Promise.all([api.streamSources(type, id), api.subtitles(type, id)]);
+      const sources = await api.streamSources(type, id);
       if (stale()) return;
-      setSubtitles(nextSubtitles); setSourcesLoaded(true); setBusy(false); setPendingSources(sources.length);
+      setSourcesLoaded(true); setBusy(false); setPendingSources(sources.length);
       await Promise.all(sources.map(async (source) => {
         const part = await loadStreamPart(type, id, source);
         if (!stale() && part.length) setStreams((previous) => [...previous, ...part]);
@@ -2655,7 +2658,7 @@ export function App() {
     finally { if (!stale()) setBusy(false); }
   };
   const openMeta = async (item: Meta, resume?: ResumeTarget["episode"]) => {
-    const request = ++sourcesRequestRef.current;
+    let request = ++sourcesRequestRef.current;
     const linksRequest = ++linksRequestRef.current;
     const trailerRequest = ++trailerRequestRef.current;
     setMetaLoading(true);
@@ -2665,11 +2668,28 @@ export function App() {
     requestAnimationFrame(() => detailRef.current?.scrollTo({ top: 0 }));
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
+    let earlySources = false;
     try {
-      const metadata = await api.meta(type, item.id, settings.uiLanguage);
-      detail = mergeMetaDetail(item, metadata); setSelected(detail); setSelectedDownloadTitle(localizedDownloadTitle(item, metadata, downloadTitleLanguage));
+      const metadata = api.meta(type, item.id, settings.uiLanguage);
+      if (type === "movie" && !item.videos?.length && !resume) {
+        void fetchSources(type, item.id, undefined, item.name);
+        request = sourcesRequestRef.current;
+        earlySources = true;
+      }
+      const answered = await metadata;
+      detail = mergeMetaDetail(item, answered); setSelected(detail); setSelectedDownloadTitle(localizedDownloadTitle(item, answered, downloadTitleLanguage));
     } catch { /* catalog item is still useful */ }
     finally { if (request === sourcesRequestRef.current) setMetaLoading(false); }
+    // The sources fetch moves the same token, so an abandoned open must not start one.
+    if (request !== sourcesRequestRef.current) return;
+    if (earlySources && detail.videos?.length) {
+      // A "film" in parts: the early fetch is dropped and the parts are chosen as for a series.
+      // It set the busy and loading state; nothing stale may leave it on.
+      request = ++sourcesRequestRef.current;
+      cancelRemoteWork();
+      setBusy(false); setSourcesLoaded(false); setSourcesComplete(false); setPendingSources(0);
+      setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]);
+    }
     // The links never hold up the description, and only the title on screen keeps them.
     void api.links(type, item.id, settings.uiLanguage)
       .then((answer) => { if (linksRequest === linksRequestRef.current) setTitleLinks(answer.links); })
@@ -2677,13 +2697,11 @@ export function App() {
     void api.trailer(type, item.id, settings.uiLanguage)
       .then((answer) => { if (trailerRequest === trailerRequestRef.current) setTitleTrailer(answer.trailer); })
       .catch(() => { if (trailerRequest === trailerRequestRef.current) setTitleTrailer(null); });
-    // The sources fetch moves the same token, so an abandoned open must not start one.
-    if (request !== sourcesRequestRef.current) return;
     const remembered = resumeVideo(detail.videos, resume);
     if (remembered) {
       setSeason(remembered.season ?? null); setEpisodesOpen(false);
       await fetchSources(type, remembered.id!, remembered, detail.name);
-    } else if (type !== "series" && !detail.videos?.length) await fetchSources(type, item.id, undefined, detail.name);
+    } else if (!earlySources && type !== "series" && !detail.videos?.length) await fetchSources(type, item.id, undefined, detail.name);
   };
   const closeMeta = () => {
     sourcesRequestRef.current += 1;

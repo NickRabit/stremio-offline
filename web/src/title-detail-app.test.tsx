@@ -96,11 +96,15 @@ let devicePosts: Array<Record<string, unknown>>;
 let progressPosts: Array<Record<string, unknown>>;
 let streamCalls: URL[];
 let subtitleCalls: URL[];
+let addonStreamReply: (url: URL) => Response | Promise<Response>;
 let playbackStarts: Array<Record<string, unknown>>;
 let configuredAddons: Array<Record<string, unknown>>;
 let requestCounts: Map<string, number>;
 let settingsGate: Promise<void> | null;
 let statusGate: Promise<void> | null;
+let metaGate: Promise<void> | null;
+let sourcesGate: Promise<void> | null;
+let subtitleGate: Promise<void> | null;
 let restrictedBuild: boolean;
 let startupCatalogs: Array<{ addonKey: string; addonName: string; type: string; id: string; name: string }>;
 
@@ -128,11 +132,15 @@ beforeEach(() => {
   progressPosts = [];
   streamCalls = [];
   subtitleCalls = [];
+  addonStreamReply = () => json([]);
   playbackStarts = [];
   configuredAddons = [];
   requestCounts = new Map();
   settingsGate = null;
   statusGate = null;
+  metaGate = null;
+  sourcesGate = null;
+  subtitleGate = null;
   restrictedBuild = false;
   startupCatalogs = [{ addonKey: "cinemeta", addonName: "Cinemeta", type: "movie", id: "top", name: "Top" }];
   vi.stubGlobal("matchMedia", () => ({
@@ -262,20 +270,25 @@ beforeEach(() => {
       return json(extrasFor(id));
     }
     if (path.startsWith("/api/meta/")) {
+      if (metaGate) await metaGate;
       if (path.includes("/tt2")) return json(town);
       if (path.includes("/tt9")) return json(show);
       if (path.includes("/tt4")) return json(plain);
       if (path.includes("/tt6")) return json(otherFilm);
+      if (path.includes("/tt77")) return json({ ...heat, id: "tt77", videos: [{ id: "tt77:1", title: "Part one" }, { id: "tt77:2", title: "Part two" }] });
       if (path.includes("/tt5000")) return json({ id: "tt5000", type: "movie", name: "Jelly Movie", description: "On the server." });
       return json(heat);
     }
     if (path.startsWith("/api/links/")) return json({ links: [] });
     if (path.startsWith("/api/trailer/")) return json({ trailer: null });
     if (path.startsWith("/api/follows/by-meta/")) return json({ follow: null });
-    if (path.startsWith("/api/stream-sources/")) return json([{ key: "alpha", name: "Alpha" }]);
+    if (path.startsWith("/api/stream-sources/")) {
+      if (sourcesGate) await sourcesGate;
+      return json([{ key: "alpha", name: "Alpha" }]);
+    }
     if (path.startsWith("/api/streams/")) {
-      if (!path.startsWith("/api/streams/series/")) return json([]);
       streamCalls.push(url);
+      if (!path.startsWith("/api/streams/series/")) return addonStreamReply(url);
       const id = decodeURIComponent(path.slice("/api/streams/series/".length));
       const episode = id.endsWith(":2") ? 2 : 1;
       return json([{
@@ -288,6 +301,7 @@ beforeEach(() => {
     }
     if (path.startsWith("/api/subtitles/")) {
       subtitleCalls.push(url);
+      if (subtitleGate) await subtitleGate;
       return json([{ subtitleId: `addon-${decodeURIComponent(path.split("/").pop() ?? "subtitle")}`, lang: "en", addonName: "Subtitles" }]);
     }
     if (path.startsWith("/api/local-streams/")) return json([]);
@@ -348,6 +362,50 @@ const typeInto = async (input: HTMLInputElement, value: string) => {
 };
 
 describe("title detail from the catalogue", () => {
+  it("starts a film's addon sources without waiting for subtitles", async () => {
+    subtitleGate = new Promise<void>(() => undefined);
+    addonStreamReply = () => json([{
+      sourceId: "movie-a", kind: "remote", playable: true, name: "Movie source",
+      addonKey: "alpha", addonName: "Alpha",
+    }]);
+    await openCatalog();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".poster-card")!.click(); });
+
+    await until(() => streamCalls.some((url) => url.pathname === "/api/streams/movie/tt1"
+      && url.searchParams.get("addon") === "alpha"));
+    await until(() => [...host.querySelectorAll<HTMLElement>(".detail-panel .stream-list button")]
+      .some((row) => row.textContent?.includes("Movie source") ?? false));
+  });
+
+  it("starts a film's sources before its metadata answers and asks once", async () => {
+    let releaseMeta!: () => void;
+    metaGate = new Promise<void>((resolve) => { releaseMeta = resolve; });
+    await openCatalog();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".poster-card")!.click(); });
+
+    await until(() => (requestCounts.get("/api/stream-sources/movie/tt1") ?? 0) > 0);
+    expect(requestCounts.get("/api/stream-sources/movie/tt1")).toBe(1);
+    releaseMeta();
+    await flush();
+    expect(requestCounts.get("/api/stream-sources/movie/tt1")).toBe(1);
+  });
+
+  it("drops the early sources of a film that turns out to come in parts and leaves the grid live", async () => {
+    catalogItems = [{ ...heat, id: "tt77" }];
+    let releaseMeta!: () => void;
+    metaGate = new Promise<void>((resolve) => { releaseMeta = resolve; });
+    sourcesGate = new Promise<void>(() => undefined);
+    await openCatalog();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".poster-card")!.click(); });
+    await until(() => (requestCounts.get("/api/stream-sources/movie/tt77") ?? 0) > 0);
+    releaseMeta();
+    await flush();
+    // The parts are chosen like episodes; the early fetch must not leave the grid busy.
+    expect(host.querySelector(".poster-grid")!.classList.contains("stale")).toBe(false);
+    expect(host.querySelector(".poster-grid")!.getAttribute("aria-busy")).toBeNull();
+    expect(streamCalls.some((url) => url.pathname === "/api/streams/movie/tt77")).toBe(false);
+  });
+
   it("opens Home first on a fresh visit and asks each start-up endpoint once", async () => {
     settings.startView = "home";
     let releaseSettings!: () => void;
