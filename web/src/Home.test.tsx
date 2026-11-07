@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { OMIT_IDLE_MS } from "./home-omit";
+import { OMIT_IDLE_MS, SCROLLING_MS } from "./home-omit";
 import { Home } from "./Home";
 import { setLocale } from "./i18n";
 import type { HomeRowState, HomeRows } from "./home-state";
@@ -430,6 +430,8 @@ describe("Home", () => {
       vi.stubGlobal("scrollBy", vi.fn());
     });
     afterEach(() => { vi.useRealTimers(); });
+    /** The viewer is in the middle of a scroll. */
+    const scroll = () => document.dispatchEvent(new Event("scroll"));
 
     it("is never drawn when it is already empty as Home is drawn again", async () => {
       await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
@@ -438,8 +440,20 @@ describe("Home", () => {
       expect(window.scrollBy).not.toHaveBeenCalled();
     });
 
-    it("keeps its place while it is in view, so nothing under the thumb moves", async () => {
+    it("goes at once when it turns empty while nobody is scrolling, as on a first load", async () => {
+      vi.useFakeTimers();
       await render({ addons: [catalogAddon], order: catalogOrder, rows: loading() });
+      // The last scroll was long ago.
+      scroll();
+      await act(async () => { vi.advanceTimersByTime(SCROLLING_MS + 50); });
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
+      expect(row(catalogRow)).toBeNull();
+      expect(window.scrollBy).not.toHaveBeenCalled();
+    });
+
+    it("keeps its place while it is in view mid-scroll, so nothing under the thumb moves", async () => {
+      await render({ addons: [catalogAddon], order: catalogOrder, rows: loading() });
+      scroll();
       await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
       await report({ isIntersecting: true });
       expect(row(catalogRow)).not.toBeNull();
@@ -449,6 +463,7 @@ describe("Home", () => {
 
     it("leaves once scrolled out over the top and keeps what follows where it was", async () => {
       await render({ addons: [catalogAddon], order: catalogOrder, rows: loading() });
+      scroll();
       await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
       await report({ isIntersecting: true });
       // The next shelf sits at 500 while the empty one is there, and at 285 once it is gone.
@@ -461,6 +476,7 @@ describe("Home", () => {
 
     it("leaves at once below the screen without touching the scroll", async () => {
       await render({ addons: [catalogAddon], order: catalogOrder, rows: loading() });
+      scroll();
       await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
       await report({ isIntersecting: false, boundingClientRect: { bottom: 1400 } });
       expect(row(catalogRow)).toBeNull();
@@ -470,6 +486,7 @@ describe("Home", () => {
     it("leaves on screen once the page has been still for a moment", async () => {
       vi.useFakeTimers();
       await render({ addons: [catalogAddon], order: catalogOrder, rows: loading() });
+      scroll();
       await render({ addons: [catalogAddon], order: catalogOrder, rows: empty() });
       await report({ isIntersecting: true });
       await act(async () => { vi.advanceTimersByTime(OMIT_IDLE_MS - 100); });

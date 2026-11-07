@@ -2,6 +2,15 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 
 /** How long the page has to stay still before an empty shelf on screen is taken away. */
 export const OMIT_IDLE_MS = 1500;
+/** A scroll this recent means the viewer is in the middle of a gesture. */
+export const SCROLLING_MS = 1000;
+
+// When the page -- or anything in it -- last scrolled. Capture sees every scroller's events.
+let lastScrollAt = Number.NEGATIVE_INFINITY;
+if (typeof document !== "undefined") {
+  document.addEventListener("scroll", () => { lastScrollAt = Date.now(); }, { capture: true, passive: true });
+}
+const scrolling = () => Date.now() - lastScrollAt < SCROLLING_MS;
 
 type Scroller = HTMLElement | null;
 
@@ -18,11 +27,14 @@ function scrollParent(element: HTMLElement): Scroller {
  * Whether a shelf that has nothing to show may leave the page now.
  *
  * A shelf loads as it nears the screen, so on a slow server it can come back empty while it is
- * already in view. Taking it away then pulls everything below it up under the viewer's thumb. So
- * a shelf that turns out empty on screen keeps its place until it scrolls out of view -- and if
- * it left over the top, the page is shifted by its height so nothing in view moves -- or until
- * the page has been still for a moment, when a change is no longer in the middle of a gesture.
- * Off screen it goes at once, and a shelf that is already empty when it mounts is never drawn.
+ * already in view and the viewer is scrolling. Taking it away then pulls everything below it up
+ * under the thumb. So a shelf that turns out empty on screen in the middle of a scroll keeps its
+ * place until it scrolls out of view -- and if it left over the top, the page is shifted by its
+ * height so nothing in view moves -- or until the page has been still for a moment.
+ *
+ * Everything else goes at once, as it always has: a shelf off screen, one that turns empty while
+ * nobody is scrolling (a first load, where an empty row left standing would only fall away later),
+ * and one that is already empty when it mounts, which is never drawn.
  */
 export function useOmission(omit: boolean, element: RefObject<HTMLElement | null>): boolean {
   // A shelf already known to be empty when it mounts -- Home drawn again from rows it holds --
@@ -34,7 +46,7 @@ export function useOmission(omit: boolean, element: RefObject<HTMLElement | null
     if (!omit) { setGone(false); return; }
     if (gone) return;
     const node = element.current;
-    if (!node || typeof IntersectionObserver === "undefined") { setGone(true); return; }
+    if (!node || typeof IntersectionObserver === "undefined" || !scrolling()) { setGone(true); return; }
     const scroller = scrollParent(node);
     const scrollTarget: EventTarget = scroller ?? window;
     let idle: ReturnType<typeof setTimeout> | undefined;
