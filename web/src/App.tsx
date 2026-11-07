@@ -876,6 +876,8 @@ export function App() {
   const [skip, setSkip] = useState(0); const [cursor, setCursor] = useState(""); const [hasMore, setHasMore] = useState(false); const [loadingMore, setLoadingMore] = useState(false); const [sourceCount, setSourceCount] = useState(0);
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); /** The viewer chose the playing source by hand, so the next episode stays with its provider. */ const viewerChoseSourceRef = useRef(false); const sourcesRequestRef = useRef(0);
+  const sourcesBusyRef = useRef(false);
+  const subtitlesReadyRef = useRef<Promise<unknown>>(Promise.resolve());
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null); const sourceListRef = useRef<HTMLDivElement>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
@@ -2624,10 +2626,18 @@ export function App() {
     if (target) void loadRemoteGroups(target.type, target.id, target.nameHint);
   };
   /** Each addon is asked separately, so results show up as they arrive instead of waiting for the slowest. */
+  /** Drops what a superseded or closed sources fetch left switched on. `busy` is shared with the
+   *  catalogue's own loading, so only a fetch that set it clears it here. */
+  const dropSourcesWork = () => {
+    if (!sourcesBusyRef.current) return;
+    sourcesBusyRef.current = false;
+    setBusy(false); setPendingSources(0); setLocalLoading(false);
+  };
   const fetchSources = async (type: string, id: string, video?: Video, nameHint?: string) => {
     const request = ++sourcesRequestRef.current;
     const stale = () => request !== sourcesRequestRef.current;
     cancelRemoteWork();
+    sourcesBusyRef.current = true;
     setSelectedVideo(video ?? null); setSourcesLoaded(false); setSourcesComplete(false); setBusy(true);
     setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0);
     pickedRef.current = false; viewerChoseSourceRef.current = false;
@@ -2640,13 +2650,15 @@ export function App() {
       .then((found) => { if (!stale()) setLocalStreams(found.filter(isLocalStream)); })
       .catch(() => undefined)
       .finally(() => { if (!stale()) setLocalLoading(false); });
-    void api.subtitles(type, id)
+    // Subtitles never hold up the sources; a play waits for them instead (startCatalogPlayback),
+    // because the server binds a film's addon subtitles to the session it starts.
+    subtitlesReadyRef.current = api.subtitles(type, id)
       .then((next) => { if (!stale()) setSubtitles(next); })
       .catch(() => undefined);
     try {
       const sources = await api.streamSources(type, id);
       if (stale()) return;
-      setSourcesLoaded(true); setBusy(false); setPendingSources(sources.length);
+      setSourcesLoaded(true); setBusy(false); sourcesBusyRef.current = false; setPendingSources(sources.length);
       await Promise.all(sources.map(async (source) => {
         const part = await loadStreamPart(type, id, source);
         if (!stale() && part.length) setStreams((previous) => [...previous, ...part]);
@@ -2655,10 +2667,11 @@ export function App() {
       // Every provider has answered: the shared detail may take these rows instead of asking again.
       if (!stale()) setSourcesComplete(true);
     } catch (e) { if (!stale()) { fail(e); setSourcesLoaded(true); } }
-    finally { if (!stale()) setBusy(false); }
+    finally { if (!stale()) { setBusy(false); sourcesBusyRef.current = false; } }
   };
   const openMeta = async (item: Meta, resume?: ResumeTarget["episode"]) => {
     let request = ++sourcesRequestRef.current;
+    dropSourcesWork();
     const linksRequest = ++linksRequestRef.current;
     const trailerRequest = ++trailerRequestRef.current;
     setMetaLoading(true);
@@ -2687,7 +2700,8 @@ export function App() {
       // It set the busy and loading state; nothing stale may leave it on.
       request = ++sourcesRequestRef.current;
       cancelRemoteWork();
-      setBusy(false); setSourcesLoaded(false); setSourcesComplete(false); setPendingSources(0);
+      dropSourcesWork();
+      setSourcesLoaded(false); setSourcesComplete(false); setPendingSources(0);
       setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]);
     }
     // The links never hold up the description, and only the title on screen keeps them.
@@ -2705,6 +2719,7 @@ export function App() {
   };
   const closeMeta = () => {
     sourcesRequestRef.current += 1;
+    dropSourcesWork();
     cancelRemoteWork();
     linksRequestRef.current += 1;
     trailerRequestRef.current += 1;
@@ -2927,8 +2942,11 @@ export function App() {
     // The panel's own play is never the shared detail's.
     setDetailPlaying(null);
     setPlayingCatalogue(catalogue);
-    if (isLocalStream(stream) && stream.localPath) void playLocal(videoTitle, stream.localPath, selected.poster, Boolean(selectedVideo), anchor, false, catalogue ?? undefined, { key, panel: true });
-    else openPlayer(anchor, subject);
+    if (isLocalStream(stream) && stream.localPath) { void playLocal(videoTitle, stream.localPath, selected.poster, Boolean(selectedVideo), anchor, false, catalogue ?? undefined, { key, panel: true }); return; }
+    // The addon subtitles are asked for with the sources and are usually here by now; the server
+    // binds them to the session it starts, so a play waits for any still on their way.
+    const request = sourcesRequestRef.current;
+    void subtitlesReadyRef.current.then(() => { if (request === sourcesRequestRef.current) openPlayer(anchor, subject); });
   };
   const enqueue = async (target?: SaveTarget) => {
     if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;

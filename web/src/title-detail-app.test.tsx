@@ -322,7 +322,16 @@ beforeEach(() => {
   root = createRoot(host);
 });
 
-afterEach(() => {
+/** A gate a test never opens itself. It is opened after the test: `api.ts` shares an identical
+ *  GET still in flight, so a request left hanging would be joined by the next test's. */
+let heldReleases: Array<() => void> = [];
+const held = () => new Promise<void>((resolve) => { heldReleases.push(resolve); });
+
+afterEach(async () => {
+  for (const release of heldReleases) release();
+  heldReleases = [];
+  await flush();
+
   act(() => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
@@ -363,7 +372,7 @@ const typeInto = async (input: HTMLInputElement, value: string) => {
 
 describe("title detail from the catalogue", () => {
   it("starts a film's addon sources without waiting for subtitles", async () => {
-    subtitleGate = new Promise<void>(() => undefined);
+    subtitleGate = held();
     addonStreamReply = () => json([{
       sourceId: "movie-a", kind: "remote", playable: true, name: "Movie source",
       addonKey: "alpha", addonName: "Alpha",
@@ -394,7 +403,7 @@ describe("title detail from the catalogue", () => {
     catalogItems = [{ ...heat, id: "tt77" }];
     let releaseMeta!: () => void;
     metaGate = new Promise<void>((resolve) => { releaseMeta = resolve; });
-    sourcesGate = new Promise<void>(() => undefined);
+    sourcesGate = held();
     await openCatalog();
     await act(async () => { host.querySelector<HTMLButtonElement>(".poster-card")!.click(); });
     await until(() => (requestCounts.get("/api/stream-sources/movie/tt77") ?? 0) > 0);
@@ -404,6 +413,37 @@ describe("title detail from the catalogue", () => {
     expect(host.querySelector(".poster-grid")!.classList.contains("stale")).toBe(false);
     expect(host.querySelector(".poster-grid")!.getAttribute("aria-busy")).toBeNull();
     expect(streamCalls.some((url) => url.pathname === "/api/streams/movie/tt77")).toBe(false);
+  });
+
+  it("leaves the grid live when a film still loading its sources gives way to a series", async () => {
+    catalogItems = [heat, show];
+    sourcesGate = held();
+    await openCatalog();
+    await act(async () => { host.querySelectorAll<HTMLButtonElement>(".poster-card")[0]!.click(); });
+    await until(() => (requestCounts.get("/api/stream-sources/movie/tt1") ?? 0) > 0);
+    await act(async () => { host.querySelectorAll<HTMLButtonElement>(".poster-card")[1]!.click(); });
+    await until(() => host.querySelectorAll(".detail-panel .episode-list button").length > 0);
+    expect(host.querySelector(".poster-grid")!.classList.contains("stale")).toBe(false);
+    expect(host.querySelector(".poster-grid")!.getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("starts a film's play once its addon subtitles are in, so the session carries them", async () => {
+    let releaseSubtitles!: () => void;
+    subtitleGate = new Promise<void>((resolve) => { releaseSubtitles = resolve; });
+    addonStreamReply = () => json([{
+      sourceId: "movie-a", kind: "remote", playable: true, name: "Movie source",
+      addonKey: "alpha", addonName: "Alpha",
+    }]);
+    await openCatalog();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".poster-card")!.click(); });
+    const play = () => host.querySelector<HTMLButtonElement>(".detail-panel .actions button.primary");
+    await until(() => play() !== null && !play()!.disabled);
+    await act(async () => { play()!.click(); });
+    await flush();
+    expect(playbackStarts).toHaveLength(0);
+    releaseSubtitles();
+    await until(() => playbackStarts.length === 1);
+    expect(playbackStarts[0]).toEqual(expect.objectContaining({ sourceId: "movie-a", subtitleIds: ["addon-tt1"] }));
   });
 
   it("opens Home first on a fresh visit and asks each start-up endpoint once", async () => {
