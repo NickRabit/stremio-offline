@@ -264,6 +264,9 @@ export function App() {
   // Only what the server said is remembered: the guess above must not overwrite the last answer.
   const settingsArrived = useRef(false);
   useEffect(() => { if (settingsArrived.current) rememberLayout(settings); }, [layoutKey(settings)]);
+  // A browser that has never seen the settings does not know the tile size: Home's rows stay
+  // hidden (still laid out and loading) until it does, so they appear at their final size.
+  const [tilesKnown, setTilesKnown] = useState(() => Object.keys(rememberedLayout()).length > 0);
   const [sourceProfiles, setSourceProfiles] = useState<SourceProfile[] | null>(null);
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
@@ -1500,7 +1503,11 @@ export function App() {
     const loaded = refresh().catch((error: unknown) => { fail(error); return null; });
     api.settings().then(async (next) => {
       settingsArrived.current = true;
-      setSettings((current: AppSettings) => ({ ...current, ...next }));
+      // Remembered here as well as in the effect: an answer equal to the defaults changes
+      // nothing the effect watches, and would otherwise never be kept. The rows are shown in
+      // the same render that applies the size.
+      setSettings((current: AppSettings) => { const merged = { ...current, ...next }; rememberLayout(merged); return merged; });
+      setTilesKnown(true);
       setLocale(next.uiLanguage);
       // An install with no catalogue yet keeps its first run on the catalogue's onboarding.
       const nextCatalogs = await loaded;
@@ -1520,7 +1527,7 @@ export function App() {
         }
         navigated.current = true;
       }
-    }).catch(fail);
+    }).catch((error: unknown) => { setTilesKnown(true); fail(error); });
     api.languages().then(setLanguages).catch(() => undefined);
     api.sourceProfiles().then(setSourceProfiles).catch(() => setSourceProfiles([]));
     void loadViews();
@@ -3717,7 +3724,7 @@ export function App() {
     : previousFile ? () => playAdjacent(previousFile) : undefined;
 
   return <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
-  <div className={`app-shell tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+  <div className={`app-shell${tilesKnown ? "" : " tiles-pending"} tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user"><span className="topbar-user-name">
         <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>

@@ -205,6 +205,7 @@ export const sk: Catalog = {
   "home.forget": "Zabudnúť postup",
   "home.forgetConfirm": "Zabudnúť uloženú pozíciu pre „{title}“? Nedá sa obnoviť.",
   "home.partial": "Niektoré tituly sa nepodarilo overiť.",
+  "home.partialHint": "Niektoré tituly sa nepodarilo overiť, napríklad preto, že vzdialená knižnica práve neodpovedá. V riadku preto môže pár titulov chýbať.",
   "home.rowFailed": "Tento riadok sa nepodarilo načítať.",
   "home.retry": "Skúsiť znova",
   "home.shapePoster": "Zobraziť plagáty",

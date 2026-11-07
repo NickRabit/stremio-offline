@@ -205,6 +205,7 @@ export const pl: Catalog = {
   "home.forget": "Zapomnij postęp",
   "home.forgetConfirm": "Zapomnieć zapisaną pozycję „{title}”? Nie da się jej przywrócić.",
   "home.partial": "Nie udało się sprawdzić niektórych tytułów.",
+  "home.partialHint": "Nie udało się sprawdzić niektórych tytułów, na przykład dlatego, że zdalna biblioteka teraz nie odpowiada. W tym rzędzie może brakować kilku z nich.",
   "home.rowFailed": "Nie udało się wczytać tego rzędu.",
   "home.retry": "Spróbuj ponownie",
   "home.shapePoster": "Pokaż plakaty",

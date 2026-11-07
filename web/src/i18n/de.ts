@@ -205,6 +205,7 @@ export const de: Catalog = {
   "home.forget": "Fortschritt vergessen",
   "home.forgetConfirm": "Die gespeicherte Position von „{title}“ vergessen? Sie lässt sich nicht wiederherstellen.",
   "home.partial": "Einige Titel konnten nicht geprüft werden.",
+  "home.partialHint": "Einige Titel konnten nicht geprüft werden, etwa weil eine entfernte Bibliothek gerade nicht antwortet. In dieser Reihe können deshalb einige fehlen.",
   "home.rowFailed": "Diese Reihe konnte nicht geladen werden.",
   "home.retry": "Erneut versuchen",
   "home.shapePoster": "Poster anzeigen",

@@ -374,6 +374,29 @@ describe("title detail from the catalogue", () => {
     expect(JSON.parse(localStorage.getItem("tile-layout")!)).toMatchObject({ tileSize: "large", homeTileShape: "wide" });
   });
 
+  it("keeps Home's rows hidden in a fresh browser until the tile size is known", async () => {
+    settings.startView = "home";
+    let releaseSettings!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseSettings = resolve; });
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    expect(host.querySelector(".app-shell")!.classList.contains("tiles-pending")).toBe(true);
+    releaseSettings();
+    await until(() => !host.querySelector(".app-shell")!.classList.contains("tiles-pending"));
+
+    // The next visit knows the size and shows the rows from the first frame.
+    act(() => root.unmount());
+    root = createRoot(host);
+    let releaseAgain!: () => void;
+    settingsGate = new Promise<void>((resolve) => { releaseAgain = resolve; });
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    expect(host.querySelector(".app-shell")!.classList.contains("tiles-pending")).toBe(false);
+    releaseAgain();
+    await flush();
+  });
+
   it("moves to the configured Library start page and remembers it", async () => {
     settings.startView = "library";
     let releaseSettings!: () => void;

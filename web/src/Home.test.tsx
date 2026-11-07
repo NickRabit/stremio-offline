@@ -233,15 +233,31 @@ describe("Home", () => {
     expect(onRetry).toHaveBeenCalledWith("resume");
   });
 
-  it("puts a partial row's retry in its heading without a note line", async () => {
+  it("explains a partial row's mark on a click and retries from the explanation", async () => {
     const { onRetry } = await render({ rows: allEmpty({ resume: rowState({ items: [resumeFile()], partial: true }) }) });
+    // Nothing pushes the cards down until somebody asks.
     expect(row("resume")!.querySelector(".home-note")).toBeNull();
-    const retry = row("resume")!.querySelector<HTMLButtonElement>(".home-head .home-partial")!;
-    expect(retry.getAttribute("title")).toBe("Some titles could not be checked. Try again");
-    expect(retry.getAttribute("aria-label")).toBe("Some titles could not be checked. Try again");
-    expect(retry.querySelector("svg")).not.toBeNull();
-    await click(retry);
+    const mark = row("resume")!.querySelector<HTMLButtonElement>(".home-head .home-partial")!;
+    expect(mark.getAttribute("title")).toBe("Some titles could not be checked.");
+    expect(mark.getAttribute("aria-label")).toBe("Some titles could not be checked.");
+    expect(mark.getAttribute("aria-expanded")).toBe("false");
+    expect(mark.querySelector("svg")).not.toBeNull();
+
+    await click(mark);
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(mark.getAttribute("aria-expanded")).toBe("true");
+    const note = row("resume")!.querySelector(".home-note")!;
+    expect(note.id).toBe(mark.getAttribute("aria-controls"));
+    expect(note.textContent).toContain("a remote library is not answering");
+
+    await click(mark);
+    expect(row("resume")!.querySelector(".home-note")).toBeNull();
+
+    await click(mark);
+    await click(row("resume")!.querySelector<HTMLButtonElement>(".home-note .home-retry")!);
+    expect(onRetry).toHaveBeenCalledTimes(1);
     expect(onRetry).toHaveBeenCalledWith("resume");
+    expect(row("resume")!.querySelector(".home-note")).toBeNull();
   });
 
   it("opens a resume-file's detail, plays it from the menu and offers Show in library", async () => {

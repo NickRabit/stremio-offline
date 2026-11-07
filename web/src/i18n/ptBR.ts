@@ -205,6 +205,7 @@ export const ptBR: Catalog = {
   "home.forget": "Esquecer progresso",
   "home.forgetConfirm": "Esquecer a posição salva de “{title}”? Não é possível restaurá-la.",
   "home.partial": "Não foi possível verificar alguns títulos.",
+  "home.partialHint": "Não foi possível verificar alguns títulos, por exemplo porque uma biblioteca remota não está respondendo. Podem faltar alguns nesta fileira.",
   "home.rowFailed": "Não foi possível carregar esta linha.",
   "home.retry": "Tentar novamente",
   "home.shapePoster": "Mostrar pôsteres",
