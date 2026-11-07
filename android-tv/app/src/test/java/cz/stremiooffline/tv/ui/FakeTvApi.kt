@@ -30,6 +30,7 @@ import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.HomeLayoutDto
 import cz.stremiooffline.tv.data.HomeLayoutResponseDto
 import cz.stremiooffline.tv.data.IntroSegmentsDto
+import cz.stremiooffline.tv.data.InspectionDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
 import cz.stremiooffline.tv.data.GlobalSearchPollDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
@@ -143,6 +144,10 @@ open class FakeTvApi : TvApi {
   var streamsGates: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
   var streamFailures: MutableMap<String, ApiFailure> = mutableMapOf()
   var streamSourcesFailures: MutableMap<String, ApiFailure> = mutableMapOf()
+  var inspectValues: MutableMap<String, InspectionDto> = mutableMapOf()
+  var inspectFailure: ApiFailure? = null
+  var inspectGate: CompletableDeferred<Unit>? = null
+  val inspectCalls: MutableList<String> = mutableListOf()
   var localStreamsResult: List<StreamDto> = emptyList()
   /** Per-request answers keyed by `type:id`; takes precedence over [localStreamsResult]. */
   var localStreamsValues: MutableMap<String, List<StreamDto>> = mutableMapOf()
@@ -536,6 +541,13 @@ open class FakeTvApi : TvApi {
     } finally {
       streamsInFlight -= 1
     }
+  }
+
+  override suspend fun inspect(sourceId: String): InspectionDto {
+    inspectCalls += sourceId
+    inspectGate?.await()
+    inspectFailure?.let { throw ApiError(it) }
+    return inspectValues[sourceId] ?: InspectionDto()
   }
 
   override suspend fun localStreams(type: String, id: String): List<StreamDto> {

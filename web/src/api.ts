@@ -233,7 +233,11 @@ export const api = {
   exportSettings: () => request<SettingsBackup>("/api/settings/export"),
   importSettings: (backup: unknown) => request<{ settings: Settings; addons: Addon[]; remapped: number }>("/api/settings/import", { method: "POST", body: JSON.stringify(backup), timeoutMs: 120_000 }),
   languages: () => request<Array<{ code: string; name: string }>>("/api/languages"),
-  inspect: (stream: Stream) => request<Inspection>("/api/inspect", { method: "POST", body: JSON.stringify({ sourceId: stream.sourceId }) }),
+  inspect: (stream: Stream, signal?: AbortSignal) => request<Inspection>("/api/inspect", {
+    method: "POST",
+    body: JSON.stringify({ sourceId: stream.sourceId }),
+    signal,
+  }),
   logs: (options: { tail?: number; level?: string; hours?: number; search?: string; inline?: boolean } = {}) =>
     fetch(`/api/logs?${q({ tail: options.tail, level: options.level || undefined, hours: options.hours || undefined, q: options.search || undefined, inline: options.inline ? 1 : undefined })}`)
       .then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),

@@ -8,7 +8,7 @@ import type { LibrarySourceGroup } from "./library-sources";
 import type { GalleryImage } from "./gallery-images";
 import { sourceIdentity } from "./library-detail-sources";
 import { setLocale } from "./i18n";
-import type { MediaServerProvider, SourceProfile, Stream } from "./types";
+import type { Inspection, MediaServerProvider, SourceProfile, Stream, Track } from "./types";
 
 const poster = (url: string): GalleryImage => ({ url, label: "Poster", shape: "poster", kind: "poster" });
 const still = (url: string): GalleryImage => ({ url, label: "Still 1", shape: "wide", kind: "still" });
@@ -1242,5 +1242,147 @@ describe("LibraryTitleDetail source row names the version", () => {
   it("shows the selected version's own label beside its addon", () => {
     render({ sources: [addon("a1", "E2E 720p", 900)] });
     expect(host.querySelector(".detail-tech .detail-version")!.textContent).toBe("E2E 720p");
+  });
+});
+
+describe("LibraryTitleDetail source inspection", () => {
+  const inspectTrack = (language?: string): Track => ({ index: 0, codec: "aac", ...(language === undefined ? {} : { language }) });
+  const inspection = (audioTracks: Track[], subtitleTracks: Track[]): Inspection => ({ audioTracks, subtitleTracks });
+  const techRow = (label: string) => {
+    const term = [...host.querySelectorAll(".detail-tech dt")].find((node) => node.textContent === label);
+    return term?.nextElementSibling as HTMLElement | null;
+  };
+
+  it("reads the preselected inspectable source once and keeps the picker's listing languages", async () => {
+    const source = addon("a1", "Film.CZ.1080p.mkv", 2_000);
+    const other = addon("a2", "Film.720p.mkv", 1_000);
+    const pending = deferred<Inspection>();
+    const inspect = vi.fn((_stream: Stream, _signal: AbortSignal) => pending.promise);
+    render({ sources: [source, other], initialSource: source, inspect });
+
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(inspect).toHaveBeenCalledWith(source, expect.any(AbortSignal));
+    expect(techRow("Audio")!.textContent).toContain("reading the tracks…");
+
+    await act(async () => { pending.resolve(inspection([inspectTrack("en"), inspectTrack("cs")], [])); });
+    await flush();
+    expect(techRow("Audio")!.textContent).toContain("English, Czech");
+    expect(techRow("Audio")!.querySelector(".tag.verified")!.textContent).toContain("from the file");
+    expect(techRow("Audio")!.querySelector(".tag.verified")!.getAttribute("title")).toBe("Read from the file itself, not from its name");
+
+    click(host.querySelector(".split-button-toggle"));
+    expect([...chosenRow()!.querySelectorAll(".lang-badge")].map((badge) => badge.textContent)).toEqual(["CZ"]);
+    expect(chosenRow()!.textContent).not.toContain("English");
+  });
+
+  it("aborts the previous read, reads the new version and ignores the late answer", async () => {
+    const first = addon("a1", "Film.720p.CZ.mkv", 1_000);
+    const second = addon("a2", "Film.1080p.EN.mkv", 2_000);
+    const firstRead = deferred<Inspection>();
+    const secondRead = deferred<Inspection>();
+    const signals: AbortSignal[] = [];
+    const inspect = vi.fn((stream: Stream, signal: AbortSignal) => {
+      signals.push(signal);
+      return stream.sourceId === first.sourceId ? firstRead.promise : secondRead.promise;
+    });
+    render({ sources: [first, second], initialSource: first, inspect });
+    await flush();
+    expect(signals).toHaveLength(1);
+
+    click(host.querySelector(".split-button-toggle"));
+    click(pickerRows().find((row) => row.textContent?.includes("1080p")) ?? null);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(inspect.mock.calls[1]![0]).toBe(second);
+
+    await act(async () => { secondRead.resolve(inspection([inspectTrack("en")], [])); });
+    await flush();
+    expect(techRow("Audio")!.textContent).toContain("English");
+
+    await act(async () => { firstRead.resolve(inspection([inspectTrack("cs")], [])); });
+    await flush();
+    expect(techRow("Audio")!.textContent).toContain("English");
+    expect(techRow("Audio")!.textContent).not.toContain("Czech");
+  });
+
+  it("never reads local copies, media-server versions, torrents, uncached debrid links or without a reader", async () => {
+    const inspect = vi.fn((_stream: Stream, _signal: AbortSignal) => Promise.resolve(inspection([], [])));
+    const skipped = [
+      local("films/Heat.mkv", "Heat.mkv"),
+      remote("media", "Media server"),
+      addon("torrent", "Torrent", 1),
+      addon("debrid", "[RD download] Torrentio", 1),
+    ];
+    skipped[2] = { ...skipped[2]!, kind: "torrent" };
+    for (const source of skipped) {
+      render({ identityKey: source.sourceId, sources: [source], inspect });
+      await flush();
+    }
+    expect(inspect).not.toHaveBeenCalled();
+
+    render({ identityKey: "no-reader", sources: [addon("plain", "Film.CZ.1080p.mkv", 1)] });
+    await flush();
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
+  it("falls back silently to the listing when the read fails", async () => {
+    const inspect = vi.fn((_stream: Stream, _signal: AbortSignal) => Promise.reject(new Error("offline")));
+    render({ sources: [addon("a1", "Film.CZ.1080p.mkv", 1)], inspect });
+    await flush();
+    expect(techRow("Audio")!.textContent).toContain("Czech");
+    expect(techRow("Audio")!.textContent).not.toContain("reading the tracks…");
+    expect(techRow("Audio")!.querySelector(".tag.verified")).toBeNull();
+  });
+
+  it("marks a claimed preferred language that the file does not contain", async () => {
+    const inspect = vi.fn((_stream: Stream, _signal: AbortSignal) =>
+      Promise.resolve(inspection([inspectTrack("en")], [])));
+    render({
+      sources: [addon("a1", "Film.2020.CZ.EN.1080p.mkv", 1)],
+      preferredLanguage: "cs",
+      inspect,
+    });
+    await flush();
+    expect(techRow("Audio")!.querySelector(".tag.missing")!.textContent).toBe("Czech missing");
+
+    render({
+      identityKey: "without-czech",
+      sources: [addon("a2", "Film.2020.EN.1080p.mkv", 1)],
+      preferredLanguage: "cs",
+      inspect,
+    });
+    await flush();
+    expect(techRow("Audio")!.querySelector(".tag.missing")).toBeNull();
+  });
+
+  it("shows a known empty subtitle answer and leaves untagged subtitles at today's rendering", async () => {
+    const inspect = vi.fn((_stream: Stream, _signal: AbortSignal) => Promise.resolve(inspection([], [])));
+    render({ sources: [addon("a1", "Film.CZ.1080p.mkv", 1)], inspect });
+    await flush();
+    expect(techRow("Subtitles")!.textContent).toBe("none in the file");
+    expect(techRow("Subtitles")!.querySelector(".tag.verified")).toBeNull();
+
+    inspect.mockImplementation((_stream: Stream, _signal: AbortSignal) =>
+      Promise.resolve(inspection([], [inspectTrack()])));
+    render({
+      identityKey: "untagged-subtitles",
+      sources: [{ ...addon("a2", "Film.CZ.1080p.mkv", 1), subtitleLanguages: ["en"] }],
+      inspect,
+    });
+    await flush();
+    expect(techRow("Subtitles")!.textContent).toBe("English");
+    expect(techRow("Subtitles")!.textContent).not.toContain("none in the file");
+    expect(techRow("Subtitles")!.querySelector(".tag.verified")).toBeNull();
+
+    inspect.mockImplementation((_stream: Stream, _signal: AbortSignal) =>
+      Promise.resolve(inspection([], [inspectTrack("de")])));
+    render({
+      identityKey: "probed-subtitles",
+      sources: [addon("a3", "Film.CZ.1080p.mkv", 1)],
+      inspect,
+    });
+    await flush();
+    expect(techRow("Subtitles")!.textContent).toContain("German");
+    expect(techRow("Subtitles")!.querySelector(".tag.verified")).not.toBeNull();
   });
 });

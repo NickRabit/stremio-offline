@@ -96,6 +96,7 @@
   <string name="sources_addon">Аддон</string>
   <string name="sources_all_addons">Все</string>
   <string name="sources_any_language">Любой</string>
+  <string name="sources_probing">читаю следы…</string>
   <string name="sources_of_total">%1$s из %2$s</string>
   <string name="sources_sort_recommended">Рекомендуется</string>
   <string name="sources_rule_breaks">Не соответствует правилам: %1$s</string>
@@ -507,6 +508,9 @@
   <string name="detail_action_folder">Папка</string>
   <string name="home_open_detail">Открыть описание</string>
   <string name="detail_tech_file">Файл</string>
+  <string name="detail_tech_from_file">из файла</string>
+  <string name="detail_tech_none_in_file">в файле нет</string>
+  <string name="detail_tech_missing_language">нет: %1$s</string>
   <string name="sources_audio_channels">%1$s кан.</string>
   <string name="genre_action">Боевик</string>
   <string name="genre_adventure">Приключения</string>

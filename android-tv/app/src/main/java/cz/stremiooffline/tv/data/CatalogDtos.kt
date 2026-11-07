@@ -219,6 +219,19 @@ data class StreamDto(
   val rules: Map<String, SourceRuleVerdictDto> = emptyMap(),
 )
 
+@Serializable
+data class InspectionTrackDto(
+  val language: String? = null,
+  val title: String? = null,
+  val codec: String? = null,
+)
+
+@Serializable
+data class InspectionDto(
+  val audioTracks: List<InspectionTrackDto> = emptyList(),
+  val subtitleTracks: List<InspectionTrackDto> = emptyList(),
+)
+
 /** One `GET /api/stream-sources/:type/:id` entry: a source addon the streams are asked from. */
 @Serializable
 data class StreamSourceDto(val key: String = "", val name: String = "")

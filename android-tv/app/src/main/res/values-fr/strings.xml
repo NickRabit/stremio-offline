@@ -96,6 +96,7 @@
   <string name="sources_addon">Module complémentaire</string>
   <string name="sources_all_addons">Tout</string>
   <string name="sources_any_language">N\'importe lequel</string>
+  <string name="sources_probing">lire les traces…</string>
   <string name="sources_of_total">%1$s sur %2$s</string>
   <string name="sources_sort_recommended">Recommandé</string>
   <string name="sources_rule_breaks">Ne respecte pas les règles : %1$s</string>
@@ -485,6 +486,9 @@
   <string name="detail_action_folder">Dossier</string>
   <string name="home_open_detail">Ouvrir la fiche</string>
   <string name="detail_tech_file">Fichier</string>
+  <string name="detail_tech_from_file">du fichier</string>
+  <string name="detail_tech_none_in_file">aucun dans le fichier</string>
+  <string name="detail_tech_missing_language">%1$s absent</string>
   <string name="sources_audio_channels">%1$s can.</string>
   <string name="genre_action">Action</string>
   <string name="genre_adventure">Aventure</string>

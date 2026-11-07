@@ -622,6 +622,14 @@ class ApiClient(
       ?: emptyList()
   }
 
+  override suspend fun inspect(sourceId: String): InspectionDto {
+    val payload = json.encodeToString(InspectRequest.serializer(), InspectRequest(sourceId))
+    return requestCancellable(
+      Request.Builder().url(address.resolve("/api/inspect")).post(payload.toRequestBody(mediaType)).build(),
+      logFailure = false,
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
   /** The library copies of one title or episode, asked beside the addons. */
   override suspend fun localStreams(type: String, id: String): List<StreamDto> =
     request(Request.Builder().url(address.resolve("/api/local-streams/" + encode(type) + "/" + encode(id))).get().build()).decode()
@@ -875,22 +883,24 @@ class ApiClient(
     }
   }
 
-  private suspend fun requestCancellable(request: Request): String {
+  private suspend fun requestCancellable(request: Request, logFailure: Boolean = true): String {
     val started = System.currentTimeMillis()
-    return callCancellable(request).closing { response -> mappedBody(response, started) }
+    return callCancellable(request, logFailure).closing { response -> mappedBody(response, started, logFailure) }
   }
 
-  private suspend fun mappedBody(response: Response, started: Long): String {
-    if (response.isSuccessful) return readBody(response)
-    AppLog.apiFailure(
-      response.request.method,
-      response.request.url.encodedPath,
-      response.code,
-      System.currentTimeMillis() - started,
-    )
+  private suspend fun mappedBody(response: Response, started: Long, logFailure: Boolean = true): String {
+    if (response.isSuccessful) return readBody(response, logFailure)
+    if (logFailure) {
+      AppLog.apiFailure(
+        response.request.method,
+        response.request.url.encodedPath,
+        response.code,
+        System.currentTimeMillis() - started,
+      )
+    }
     // A refusal carries the server's own English message plus the catalogue key it renders as;
     // the interface shows the message when it can explain a failure better than a generic line.
-    val error = readBody(response).decodeOrNull<ErrorBody>()
+    val error = readBody(response, logFailure).decodeOrNull<ErrorBody>()
     return when (response.code) {
       401 -> throw ApiError(ApiFailure.SessionExpired, serverMessage = error?.error, status = response.code, messageKey = error?.messageKey)
       403 -> throw ApiError(ApiFailure.Forbidden, serverMessage = error?.error, status = response.code, messageKey = error?.messageKey)
@@ -932,14 +942,14 @@ class ApiClient(
     }
   }
 
-  private suspend fun callCancellable(request: Request): Response = suspendCancellableCoroutine { continuation ->
+  private suspend fun callCancellable(request: Request, logFailure: Boolean = true): Response = suspendCancellableCoroutine { continuation ->
     val started = System.currentTimeMillis()
     val call = client.newCall(request)
     continuation.invokeOnCancellation { call.cancel() }
     call.enqueue(object : okhttp3.Callback {
       override fun onFailure(call: okhttp3.Call, e: IOException) {
         if (!continuation.isActive) return
-        AppLog.apiFailure(request.method, request.url.encodedPath, null, System.currentTimeMillis() - started)
+        if (logFailure) AppLog.apiFailure(request.method, request.url.encodedPath, null, System.currentTimeMillis() - started)
         continuation.resumeWithException(ApiError(ApiFailure.Unreachable))
       }
 
@@ -984,6 +994,9 @@ class ApiClient(
 
 @Serializable
 private data class SourceRequest(val path: String)
+
+@Serializable
+private data class InspectRequest(val sourceId: String)
 
 @Serializable
 private data class PollRequest(val revision: Int)
