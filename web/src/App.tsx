@@ -72,7 +72,7 @@ import { MediaGallery } from "./MediaGallery";
 import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage } from "./gallery-images";
 import { loadTitleGallery, useCatalogueStills, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
-import { resolveStartView } from "./start-view";
+import { rememberedStartView, rememberStartView, resolveStartView } from "./start-view";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
@@ -143,7 +143,8 @@ const orderedVideos = (videos: Video[]) => videos.map((video, index) => ({ video
 }).map(({ video }) => video);
 export function App() {
   const { t } = useI18n();
-  const [view, setView] = useState<View>("catalog"); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
+  const [view, setView] = useState<View>(() => rememberedStartView()); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
+  const firstView = useRef<View>(view);
   // Until the first answer, an empty list means "not read yet", not "no addon installed".
   const [catalogsKnown, setCatalogsKnown] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -154,10 +155,12 @@ export function App() {
   const scrollByView = useRef<Partial<Record<View, number>>>({});
   const libraryPrewarmStarted = useRef(false);
   const restoringScroll = useRef(false);
-  const viewRef = useRef<View>("catalog");
+  const viewRef = useRef<View>(view);
   /** True once the person has chosen a view themselves, so the start-page switch never
    *  drags them away from where they went on purpose. Reset on a fresh sign-in. */
   const navigated = useRef(false);
+  const startupViewTransition = useRef(false);
+  const startupPersonalRefresh = useRef(false);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   const galleryRequest = useRef(0);
   const galleryTrigger = useRef<HTMLElement | null>(null);
@@ -1435,7 +1438,9 @@ export function App() {
   // What the instance owns is administrator-only, and an ordinary user gets the same
   // read-only shape the demo mode uses: the API refuses those writes either way.
   const admin = session?.role === "admin";
-  useEffect(() => { api.status().then(setBuildInfo).catch(() => setBuildInfo(null)); }, []);
+  const buildInfoRequest = useRef<Promise<BuildInfo | null> | null>(null);
+  const loadBuildInfo = () => buildInfoRequest.current ??= api.status().catch(() => null);
+  useEffect(() => { void loadBuildInfo().then(setBuildInfo); }, []);
   useEffect(() => {
     if (!buildInfo?.searchEverywhere) return;
     const onKey = (event: KeyboardEvent) => {
@@ -1488,16 +1493,27 @@ export function App() {
     // A fresh sign-in re-arms the start page: signing out again must not remember the last
     // switch as if the person had navigated.
     if (!ready) { navigated.current = false; return; }
-    const loaded = refresh().catch((error: unknown) => { fail(error); return null; }); loadDownloads(); loadFollows();
+    const loaded = refresh().catch((error: unknown) => { fail(error); return null; });
     api.settings().then(async (next) => {
       setSettings((current: AppSettings) => ({ ...current, ...next }));
       setLocale(next.uiLanguage);
       // An install with no catalogue yet keeps its first run on the catalogue's onboarding.
-      const hasCatalogs = Boolean((await loaded)?.length);
+      const nextCatalogs = await loaded;
+      const hasCatalogs = Boolean(nextCatalogs?.length);
+      const resolvedBuild = await loadBuildInfo();
       // The chosen page is opened once, and only while nobody has gone anywhere yet.
-      if (view === "catalog" && !navigated.current && !selected && !playerOpen) {
-        const target = resolveStartView(next.startView, { restricted, navigated: navigated.current, hasCatalogs });
-        if (target) { navigated.current = true; openView(target); }
+      if (!navigated.current && !selected && !playerOpen) {
+        const target = resolveStartView(next.startView, { restricted: resolvedBuild?.restricted === true, navigated: navigated.current, hasCatalogs }) ?? "catalog";
+        rememberStartView(target);
+        if (target !== firstView.current) {
+          startupViewTransition.current = true;
+          startupPersonalRefresh.current = true;
+          // `refresh()` above has already picked the first catalogue; resetCatalog would read the
+          // first render's empty list and clear that pick.
+          if (target === "catalog") setView("catalog");
+          else openView(target);
+        }
+        navigated.current = true;
       }
     }).catch(fail);
     api.languages().then(setLanguages).catch(() => undefined);
@@ -1511,7 +1527,10 @@ export function App() {
     api.settings().then((next) => setSettings((current: AppSettings) => ({ ...current, ...next }))).catch(() => undefined);
   };
   // Which addons are worth searching changes as they are switched on and off.
-  useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
+  useEffect(() => {
+    if (!catalogsKnown) return;
+    api.searchable().then(setSearchable).catch(() => undefined);
+  }, [addons, catalogsKnown]);
   // Only a file probe knows the exact languages, so we run one for the chosen stream.
   useEffect(() => {
     setInspection(null);
@@ -1584,7 +1603,15 @@ export function App() {
       if (location === browseLocation.current && request === browseRequest.current) setBrowse(page);
     } catch { /* Artwork refresh is optional. */ }
   };
-  useEffect(() => { if (!ready) return; api.watchlist().then(setWatchlist).catch(() => undefined); void loadFollows(); }, [ready, view]);
+  useEffect(() => {
+    if (!ready) return;
+    if (startupPersonalRefresh.current) {
+      startupPersonalRefresh.current = false;
+      return;
+    }
+    api.watchlist().then(setWatchlist).catch(() => undefined);
+    void loadFollows();
+  }, [ready, view]);
   useEffect(() => {
     if (!ready || view !== "favorites") return;
     // The previous filter's cards and its own "load more" must not stay under the new one.
@@ -2160,7 +2187,10 @@ export function App() {
     };
     const wake = () => { if (!document.hidden) { clearTimeout(timer); delay = base; void tick(); } };
     document.addEventListener("visibilitychange", wake);
-    void tick();
+    if (startupViewTransition.current) {
+      startupViewTransition.current = false;
+      plan(base);
+    } else void tick();
     return () => { stopped = true; clearTimeout(timer); document.removeEventListener("visibilitychange", wake); };
   }, [view, ready]);
 

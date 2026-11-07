@@ -46,10 +46,30 @@ export interface ShuffleItem {
 export interface ShuffleStep { item: ShuffleItem; hasNext: boolean; hasPrevious: boolean; upcoming?: { title: string } }
 export interface ShuffleStart extends ShuffleStep { id: string; total: number; capped?: true }
 
+const inFlightGets = new Map<string, Promise<unknown>>();
+
 /** Every call gets a deadline. A stalled connection would otherwise be held until the
  * operating system gives up, which takes minutes, and six of those exhaust the browser's
  * per-origin pool -- the app then looks dead on that one device while others are fine. */
 async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
+  const timeoutMs = options?.timeoutMs ?? 30_000;
+  const method = options?.method;
+  const coalescible = (method === undefined || method === "GET") && options?.body == null && options?.signal === undefined;
+  if (!coalescible) return performRequest<T>(url, options);
+
+  const key = `${url}\n${timeoutMs}`;
+  const existing = inFlightGets.get(key);
+  if (existing) return existing as Promise<T>;
+  const pending = performRequest<T>(url, options);
+  inFlightGets.set(key, pending);
+  pending.then(
+    () => { if (inFlightGets.get(key) === pending) inFlightGets.delete(key); },
+    () => { if (inFlightGets.get(key) === pending) inFlightGets.delete(key); },
+  );
+  return pending;
+}
+
+async function performRequest<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const { timeoutMs = 30_000, signal: callerSignal, ...init } = options ?? {};
   // `AbortSignal.any` is not in Safari < 17.4, so the deadline and the caller's own signal are
   // wired into one controller by hand. The timeout aborts with a TimeoutError reason, which the

@@ -125,6 +125,49 @@ describe("request", () => {
     await api.addons();
     expect(optionsOf().signal).toBeInstanceOf(AbortSignal);
   });
+
+  it("coalesces concurrent identical GETs only while one is in flight", async () => {
+    let resolve!: (response: Response) => void;
+    fetchMock.mockImplementation(() => new Promise<Response>((done) => { resolve = done; }));
+
+    const first = api.follows();
+    const second = api.follows();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolve(json({ follows: [] }));
+    await expect(Promise.all([first, second])).resolves.toEqual([[], []]);
+
+    fetchMock.mockResolvedValue(json({ follows: [] }));
+    await api.follows();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("never coalesces a POST", async () => {
+    const resolvers: Array<(response: Response) => void> = [];
+    fetchMock.mockImplementation(() => new Promise<Response>((done) => { resolvers.push(done); }));
+    const first = api.addAddon("https://one.example/manifest.json", "catalog");
+    const second = api.addAddon("https://two.example/manifest.json", "catalog");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const resolve of resolvers) resolve(json({ key: "addon" }));
+    await Promise.all([first, second]);
+  });
+
+  it("rejects every coalesced caller on failure and starts clean next time", async () => {
+    let reject!: (error: unknown) => void;
+    fetchMock.mockImplementation(() => new Promise<Response>((_resolve, fail) => { reject = fail; }));
+    const first = api.follows().catch((error: unknown) => error);
+    const second = api.follows().catch((error: unknown) => error);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const failure = new TypeError("Failed to fetch");
+    reject(failure);
+    const firstError = await first;
+    const secondError = await second;
+    expect(firstError).toMatchObject({ status: 0, code: "NETWORK_ERROR" });
+    expect(secondError).toBe(firstError);
+
+    fetchMock.mockResolvedValue(json({ follows: [] }));
+    await expect(api.follows()).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("query building", () => {

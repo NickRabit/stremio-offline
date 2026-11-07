@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { Home } from "./Home";
 import { setLocale } from "./i18n";
 import type { HomeRowState, HomeRows } from "./home-state";
-import type { HomeCard } from "../../server/src/home";
+import type { HomeCard, HomeOrderEntry } from "../../server/src/home";
 import { homeCatalogRowId } from "../../server/src/home";
 import type { Download, TileShape } from "./types";
 
@@ -44,6 +44,10 @@ const discoveryCard = (): Discovery => ({ kind: "discovery", key: "movie:tt1", t
 const catalogAddon = { key: "cinemeta", role: "catalog" as const, enabled: true, globalSearch: true, showOnHome: true,
   manifest: { id: "com.linvo.cinemeta", name: "Cinemeta", version: "1", catalogs: [{ type: "movie", id: "top", name: "Popular" }] } };
 const catalogRow = homeCatalogRowId("cinemeta", "movie", "top");
+const catalogOrder: HomeOrderEntry[] = [
+  { id: "resume" }, { id: "favorites" }, { id: "tonight" }, { id: catalogRow },
+  { id: "episodes" }, { id: "completed" }, { id: "recent" }, { id: "confirm" },
+];
 
 let root: Root;
 let host: HTMLDivElement;
@@ -125,6 +129,7 @@ describe("Home", () => {
     await render({
       admin: true,
       addons: [catalogAddon],
+      order: catalogOrder,
       jobs: [job({ id: "failed", status: "failed" })],
       rows: allEmpty({
         resume: rowState({ items: [resumeFile()] }),
@@ -199,6 +204,15 @@ describe("Home", () => {
     expect(row("resume")!.querySelector(".resume-strip.skeleton")).not.toBeNull();
   });
 
+  it("draws every built-in heading and skeleton without waiting for row state or addon order", async () => {
+    await render({ addons: [catalogAddon], rows: {} });
+    const rows = [...host.querySelectorAll<HTMLElement>(".home-row")];
+    expect(rows.map((element) => element.dataset.row)).toEqual(["resume", "favorites", "tonight", "episodes", "completed", "recent"]);
+    expect(rows.every((element) => element.querySelector(".resume-strip.skeleton") !== null)).toBe(true);
+    expect(host.textContent).toContain("Continue watching");
+    expect(row(catalogRow)).toBeNull();
+  });
+
   it("draws nothing, not a skeleton, while a row that answered empty before refreshes", async () => {
     await render({ rows: allEmpty({ resume: rowState({ status: "loading", items: [], settled: true }), completed: rowState({ items: [completedCard()] }) }) });
     expect(row("resume")).toBeNull();
@@ -219,10 +233,14 @@ describe("Home", () => {
     expect(onRetry).toHaveBeenCalledWith("resume");
   });
 
-  it("notes a partial row", async () => {
+  it("puts a partial row's retry in its heading without a note line", async () => {
     const { onRetry } = await render({ rows: allEmpty({ resume: rowState({ items: [resumeFile()], partial: true }) }) });
-    expect(row("resume")!.querySelector(".home-note")!.textContent).toContain("Some titles could not be checked.");
-    await click(row("resume")!.querySelector<HTMLButtonElement>(".home-retry")!);
+    expect(row("resume")!.querySelector(".home-note")).toBeNull();
+    const retry = row("resume")!.querySelector<HTMLButtonElement>(".home-head .home-partial")!;
+    expect(retry.getAttribute("title")).toBe("Some titles could not be checked. Try again");
+    expect(retry.getAttribute("aria-label")).toBe("Some titles could not be checked. Try again");
+    expect(retry.querySelector("svg")).not.toBeNull();
+    await click(retry);
     expect(onRetry).toHaveBeenCalledWith("resume");
   });
 
@@ -350,7 +368,7 @@ describe("Home", () => {
 
   it("opens a Cinemeta title and displays its year without a card menu", async () => {
     const card = discoveryCard();
-    const { onOpenCatalogue } = await render({ addons: [catalogAddon], rows: allEmpty({ [catalogRow]: rowState({ items: [card] }) }) });
+    const { onOpenCatalogue } = await render({ addons: [catalogAddon], order: catalogOrder, rows: allEmpty({ [catalogRow]: rowState({ items: [card] }) }) });
     expect(row(catalogRow)!.textContent).toContain("2025");
     await click(primary(catalogRow));
     expect(onOpenCatalogue).toHaveBeenCalledWith(card);
@@ -366,7 +384,7 @@ describe("Home", () => {
       disconnect = vi.fn();
     });
     const onVisible = vi.fn();
-    await render({ addons: [catalogAddon], onVisible });
+    await render({ addons: [catalogAddon], order: catalogOrder, onVisible });
     expect(row(catalogRow)!.textContent).toContain("Cinemeta · Popular (movie)");
     expect(row(catalogRow)!.querySelector(".skeleton")).not.toBeNull();
     expect(observe).toHaveBeenCalledTimes(1);
@@ -379,13 +397,13 @@ describe("Home", () => {
   it("asks for an addon shelf at once where the browser cannot observe it", async () => {
     vi.stubGlobal("IntersectionObserver", undefined);
     const onVisible = vi.fn();
-    await render({ addons: [catalogAddon], onVisible });
+    await render({ addons: [catalogAddon], order: catalogOrder, onVisible });
     expect(onVisible).toHaveBeenCalledWith(catalogRow);
   });
 
   it("opens an addon shelf's whole catalogue from its heading, loaded or not", async () => {
     const onOpenCatalog = vi.fn();
-    await render({ addons: [catalogAddon], rows: allEmpty({ [catalogRow]: rowState({ items: [discoveryCard()] }) }), onOpenCatalog });
+    await render({ addons: [catalogAddon], order: catalogOrder, rows: allEmpty({ [catalogRow]: rowState({ items: [discoveryCard()] }) }), onOpenCatalog });
     const link = row(catalogRow)!.querySelector<HTMLButtonElement>(".home-catalog-link")!;
     expect(link.textContent).toContain("Cinemeta · Popular (movie)");
     expect(link.title).toBe("Open in catalogue");
@@ -394,7 +412,7 @@ describe("Home", () => {
     expect(row("resume")?.querySelector(".home-catalog-link") ?? null).toBeNull();
 
     vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
-    await render({ addons: [catalogAddon], rows: allEmpty(), onOpenCatalog, onVisible: vi.fn() });
+    await render({ addons: [catalogAddon], order: catalogOrder, rows: allEmpty(), onOpenCatalog, onVisible: vi.fn() });
     expect(row(catalogRow)!.querySelector(".home-catalog-link")).not.toBeNull();
   });
 
@@ -455,7 +473,7 @@ describe("Home", () => {
 
   it("shuffles the Cinemeta row with an incrementing counter", async () => {
     const onShuffle = vi.fn();
-    await render({ addons: [catalogAddon], rows: allEmpty({ [catalogRow]: rowState({ items: [discoveryCard()] }) }), onShuffle });
+    await render({ addons: [catalogAddon], order: catalogOrder, rows: allEmpty({ [catalogRow]: rowState({ items: [discoveryCard()] }) }), onShuffle });
     const shuffle = row(catalogRow)!.querySelector<HTMLButtonElement>(".home-shuffle")!;
     expect(shuffle.getAttribute("aria-label")).toBe("Shuffle");
     await click(shuffle);

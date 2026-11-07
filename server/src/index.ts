@@ -143,6 +143,7 @@ import { SearchSessionManager, type SearchAuthority } from "./search-session.js"
 import { CatalogSearchManager } from "./search-catalog-session.js";
 import { SearchError } from "./search-contracts.js";
 import { STREAM_SORTS } from "./stream-sort.js";
+import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -2995,7 +2996,17 @@ const sendPage = (_req: express.Request, res: express.Response) => {
 };
 app.get("/", pageLimit, sendPage);
 app.get("/index.html", pageLimit, sendPage);
-app.use(express.static(webRoot, { setHeaders: (res, file) => { if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store"); } }));
+app.use(precompressedAssets(webRoot));
+app.use(express.static(webRoot, {
+  setHeaders: (res, file) => {
+    const relative = path.relative(path.join(webRoot, "assets"), file);
+    if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+      res.setHeader("Cache-Control", ASSET_CACHE_CONTROL);
+      res.setHeader("Vary", "Accept-Encoding");
+    }
+    if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store");
+  },
+}));
 app.get("/{*path}", pageLimit, sendPage);
 app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   // The 400 default is deliberate: the interface treats anything but a 401 the same way,

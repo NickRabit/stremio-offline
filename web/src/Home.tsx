@@ -109,7 +109,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
   };
   const catalogTitles = new Map(homeCatalogShelves(addons).map((shelf) => [shelf.id, homeFeedTitle(shelf.id, shelf.title)]));
   for (const entry of order ?? []) if (entry.title) catalogTitles.set(entry.id, homeFeedTitle(entry.id, entry.title));
-  const askedRows = order?.length ? order.map((entry) => entry.id) : homeRowsFor(admin, addons);
+  const askedRows = order?.length ? order.map((entry) => entry.id) : homeRowsFor(admin);
   const items = homeQueue(jobs);
   const attention = attentionCount(jobs);
   const cards = items.filter((job) => queueGroup(job) === "attention");
