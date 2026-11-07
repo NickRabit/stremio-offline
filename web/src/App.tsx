@@ -3728,6 +3728,13 @@ export function App() {
             sourceProfiles={sourceProfiles}
             defaultSort={defaultStreamSort}
             addonPriority={addonPriority} showTorrents={settings.realDebridConfigured}
+            {...(detailPlaying && detailPlaying.target.type === catalogueDetail.type && detailPlaying.target.id === catalogueDetail.id ? {
+              playingEpisode: {
+                ...(detailPlaying.target.season != null ? { season: detailPlaying.target.season } : {}),
+                ...(detailPlaying.target.episode != null ? { episode: detailPlaying.target.episode } : {}),
+                ...(detailPlaying.target.videoId != null ? { videoId: detailPlaying.target.videoId } : {}),
+              },
+            } : {})}
             onRead={setDetailRead}
             {...(detailChips ? { chips: detailChips } : {})}
             trailer={detailTrailer} onTrailer={setTrailerOpen} secureMode={settings.secureMode}

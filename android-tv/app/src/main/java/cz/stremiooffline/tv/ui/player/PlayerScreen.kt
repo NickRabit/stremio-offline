@@ -140,6 +140,8 @@ fun PlayerScreen(
   onSourcesRetry: (() -> Unit)? = null,
   /** The episode after a catalogue play, as the detail that started it offers it. */
   catalogueNext: CatalogueNext? = null,
+  /** A source the viewer chose in this player, for the detail to carry to the next episode. */
+  onSourceChosen: (StreamDto) -> Unit = {},
   /** The next episode's play that detail resolved; it replaces the episode that ended. */
   nextTarget: PlayTarget? = null,
   onNextTargetTaken: () -> Unit = {},
@@ -607,6 +609,7 @@ fun PlayerScreen(
     sourcesOpen = false
     restoreFocus = sourcesFocus
     if (playingSource === stream) return
+    onSourceChosen(stream)
     val target = switchedTarget(currentTarget, stream)
     previousTarget = currentTarget
     switchTarget = target

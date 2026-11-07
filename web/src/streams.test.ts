@@ -386,6 +386,13 @@ describe("pickNextEpisodeStream", () => {
     expect(pickNextEpisodeStream([english, other, czech], current, "cs", new Map(), undefined, "rule:balanced")?.name).toBe("czech");
   });
 
+  it("tells two installs of one addon apart by their key, not their shared name", () => {
+    const current = stream({ addonKey: "second-install", addonName: "Torrentio", title: "English 900 MB" });
+    const first = stream({ name: "first", addonKey: "first-install", addonName: "Torrentio", title: "English 900 MB" });
+    const second = stream({ name: "second", addonKey: "second-install", addonName: "Torrentio", title: "English 900 MB" });
+    expect(pickNextEpisodeStream([first, second], current, "en", new Map(), undefined, "rule:balanced", [], true)?.name).toBe("second");
+  });
+
   it("falls back to the normal rule ranking when the addon has no next episode", () => {
     const current = stream({ addonKey: "gone", addonName: "Gone" });
     const english = stream({ name: "english", addonKey: "one", addonName: "One", title: "English 20 GB" });

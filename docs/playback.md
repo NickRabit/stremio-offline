@@ -78,8 +78,10 @@ a movie, or the last episode there is, closes the player and returns to the titl
 
 On Android TV the countdown card plays the next episode at zero, **OK** plays it at once
 and **Back** dismisses it. An episode started from a catalogue title's detail moves on
-through that detail: its source rules pick the next episode's source, the same way Play
-would there. When that episode has nothing playable, the player closes on its detail,
+through that detail the same way: a source you picked by hand -- in the detail's
+**Sources** or in the player's own -- stays with that provider (the same addon install,
+not just one of the same name) while it has a source, and otherwise the detail's source
+rules pick, the same way Play would there. When that episode has nothing playable, the player closes on its detail,
 which shows the sources or the reason.
 
 **Settings → Playback → Offer the next episode** can bring that offer forward: at

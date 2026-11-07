@@ -679,6 +679,7 @@ fun Shell(
       // a library-bound play reloads the loader it is bound to.
       onSourcesRetry = if (openPlayer.catalogue) ({ catalogueSourcesRetry++ }) else ({ librarySourcesRetry++ }),
       catalogueNext = catalogueNext,
+      onSourceChosen = { if (openPlayer.catalogue) nextBridge.choseInPlayer(it) },
       nextTarget = playerNext,
       onNextTargetTaken = { playerNext = null },
       onExit = { endedSourceId ->
