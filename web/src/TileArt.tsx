@@ -3,20 +3,21 @@ import { remoteTileArtwork } from "./remote-artwork";
 import { fitFor, pickTileArt, type TileFit } from "./tile-shape";
 import type { TileShape } from "./types";
 
-const KNOWN_FIT_LIMIT = 1000;
-const knownFit = new Map<string, TileFit>();
-const fitKey = (shape: TileShape, url: string) => `${shape}|${url}`;
+const KNOWN_SIZE_LIMIT = 1000;
+// A picture's real size, by address: a tile drawn again -- or in the other shape -- already knows
+// how its picture sits, with no load event and no refit after it.
+const knownSize = new Map<string, { width: number; height: number }>();
 
-function rememberFit(key: string, fit: TileFit): void {
-  knownFit.delete(key);
-  knownFit.set(key, fit);
-  if (knownFit.size <= KNOWN_FIT_LIMIT) return;
-  const oldest = knownFit.keys().next().value;
-  if (oldest !== undefined) knownFit.delete(oldest);
+function rememberSize(url: string, width: number, height: number): void {
+  knownSize.delete(url);
+  knownSize.set(url, { width, height });
+  if (knownSize.size <= KNOWN_SIZE_LIMIT) return;
+  const oldest = knownSize.keys().next().value;
+  if (oldest !== undefined) knownSize.delete(oldest);
 }
 
-export function forgetKnownFits(): void {
-  knownFit.clear();
+export function forgetKnownSizes(): void {
+  knownSize.clear();
 }
 
 
@@ -61,17 +62,16 @@ export function TileArt({ shape, poster, wide, fallback, eager = false }: {
   // remembers; `pickTileArt` narrows the same way, and narrowing twice is the same address.
   const tiled = remoteTileArtwork(wide);
   const { url, fit } = pickTileArt(shape, failed.includes(poster ?? "") ? undefined : poster, failed.includes(tiled ?? "") ? undefined : wide);
-  const [measured, setMeasured] = useState<{ url: string; width: number; height: number }>();
-  const measuredFit = measured && measured.url === url ? fitFor(shape, measured.width, measured.height) : undefined;
-  const rememberedFit = url ? knownFit.get(fitKey(shape, url)) : undefined;
-  const effectiveFit: TileFit = measuredFit ?? rememberedFit ?? fit;
+  // Bumped only when a load changes how the picture sits; the size itself lives in knownSize.
+  const [, setRefit] = useState(0);
+  const size = url ? knownSize.get(url) : undefined;
+  const effectiveFit: TileFit = size ? fitFor(shape, size.width, size.height) : fit;
   const onLoad = (event: SyntheticEvent<HTMLImageElement>) => {
     if (!url) return;
     const width = event.currentTarget.naturalWidth;
     const height = event.currentTarget.naturalHeight;
-    const measuredFit = fitFor(shape, width, height);
-    rememberFit(fitKey(shape, url), measuredFit);
-    if (measuredFit !== effectiveFit) setMeasured({ url, width, height });
+    rememberSize(url, width, height);
+    if (fitFor(shape, width, height) !== effectiveFit) setRefit((count) => count + 1);
   };
   const onError = () => {
     if (url) setFailure((previous) => ({ identity, urls: [...(previous.identity === identity ? previous.urls : []), url] }));

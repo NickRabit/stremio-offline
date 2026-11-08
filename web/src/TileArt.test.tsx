@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, Profiler } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { forgetKnownFits, PosterMosaic, TileArt } from "./TileArt";
+import { forgetKnownSizes, PosterMosaic, TileArt } from "./TileArt";
 import { setLocale } from "./i18n";
 
 let root: Root;
@@ -10,7 +10,7 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
-  forgetKnownFits();
+  forgetKnownSizes();
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -112,6 +112,15 @@ describe("TileArt picture layout", () => {
     render("poster", "/wide.jpg");
     expect(host.querySelector(".tile-fit")).not.toBeNull();
     expect(host.querySelector(".tile-blur")).not.toBeNull();
+  });
+
+  it("keeps a picture's real size for a shape it has not been drawn in yet", () => {
+    // A square picture fills both frames; a load in one shape must still settle the other.
+    render("poster", "/square.jpg");
+    load(picture(), 600, 600);
+    render("wide", "/square.jpg");
+    expect(host.querySelector(".tile-fit")).toBeNull();
+    expect(host.querySelector(".tile-blur")).toBeNull();
   });
 
   it("does not rerender when a loaded picture already has the drawn fit", () => {
