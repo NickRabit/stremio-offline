@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { readHomeCache, writeHomeCache } from "./home-cache";
 import { emptyHomeRows, homeReducer, homeRowsFor, isHomeCatalogRow, type HomeRows } from "./home-state";
@@ -67,9 +67,14 @@ export function useHome({ active, account, admin, playerOpen }: { active: boolea
     setRows((current) => homeReducer(current, { type: "begin", rows, request: number }));
     api.home(rows, options).then(
       (response) => {
-        setRows((current) => homeReducer(current, { type: "answer", rows, request: number, response }));
-        if (generation !== epoch.current) return;
-        setOrder(response.order);
+        // A shelf's cards arrive as a transition: React renders them in slices and lets the
+        // browser draw between them, instead of one long task in the middle of a scroll.
+        const sameAccount = generation === epoch.current;
+        startTransition(() => {
+          setRows((state) => homeReducer(state, { type: "answer", rows, request: number, response }));
+          if (sameAccount) setOrder(response.order);
+        });
+        if (!sameAccount) return;
         orderRef.current = response.order;
         const unfinished: HomeRowId[] = [];
         for (const row of rows) {

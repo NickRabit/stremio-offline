@@ -2463,3 +2463,8 @@ p.next-episode b{color:var(--accent2)}
 .home-partial:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 /* Until the tile size is known, Home's rows are laid out but not shown (see App's tilesKnown). */
 .tiles-pending .home-row{visibility:hidden}
+/* A Home shelf off screen is not rendered, painted or composited: a large layout keeps dozens of
+   shelves and hundreds of pictures alive, and Safari on a phone spent its scroll compositing them.
+   The estimate is the drawn height of a wide and of a poster shelf; auto keeps the real one once seen. */
+.home-row{content-visibility:auto;contain-intrinsic-size:auto 230px}
+.home-shape-poster .home-row{contain-intrinsic-size:auto 410px}
