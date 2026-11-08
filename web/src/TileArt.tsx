@@ -1,5 +1,5 @@
-import { useRef, useState, type ReactNode, type SyntheticEvent } from "react";
-import { useNearScreen } from "./artwork-proximity";
+import { useRef, useState, type ReactNode, type RefObject, type SyntheticEvent } from "react";
+import { useArtworkWatched, useNearScreen } from "./artwork-proximity";
 import { remoteTileArtwork } from "./remote-artwork";
 import { fitFor, pickTileArt, type TileFit } from "./tile-shape";
 import type { TileShape } from "./types";
@@ -30,8 +30,12 @@ export function PosterMosaic({ posters, label, fallback = null }: { posters: str
   const [failure, setFailure] = useState({ identity, urls: [] as string[] });
   const failed = failure.identity === identity ? failure.urls : [];
   const available = posters.filter((url) => !failed.includes(url));
+  const frame = useRef<HTMLElement>(null);
+  const watched = useArtworkWatched();
+  const near = useNearScreen(frame, posters.length < 2 ? undefined : identity);
   if (posters.length < 2) return null;
   if (!available.length) return <>{fallback}</>;
+  if (watched && !near) return <ArtWait frame={frame}/>;
   const onError = (url: string) => setFailure((previous) => ({ identity, urls: [...(previous.identity === identity ? previous.urls : []), url] }));
   if (available.length === 1) return <img key={available[0]} src={available[0]} alt="" loading="lazy" decoding="async" onError={() => onError(available[0])}/>;
   return <span className="library-preview-collage" role="img" aria-label={label}>
@@ -48,6 +52,15 @@ export function PosterMosaic({ posters, label, fallback = null }: { posters: str
  * catalogue filed it under: an addon that calls a 16:9 picture a poster is common enough that
  * trusting the label crops half its titles to a sliver.
  */
+/**
+ * Where a tile's pictures go until the tile comes near the screen. Creating a picture is most of
+ * what a page of tiles costs Safari to draw, so a grid of sixty makes the few it shows, not all of
+ * them in one long task; the frame keeps the picture's size, so nothing moves when it arrives.
+ */
+function ArtWait({ frame }: { frame: RefObject<HTMLElement | null> }) {
+  return <span ref={frame} className="tile-art-wait" aria-hidden="true"/>;
+}
+
 export function TileArt({ shape, poster, wide, fallback, eager = false }: {
   shape: TileShape;
   poster?: string;
@@ -67,7 +80,8 @@ export function TileArt({ shape, poster, wide, fallback, eager = false }: {
   // knownSize, so a tile on screen keeps it after the shared memory has let it go.
   const [, setRefit] = useState(0);
   const own = useRef<{ url: string; width: number; height: number } | undefined>(undefined);
-  const main = useRef<HTMLImageElement>(null);
+  const main = useRef<HTMLElement>(null);
+  const watched = useArtworkWatched();
   const near = useNearScreen(main, url);
   const size = url ? knownSize.get(url) ?? (own.current?.url === url ? own.current : undefined) : undefined;
   const effectiveFit: TileFit = size ? fitFor(shape, size.width, size.height) : fit;
@@ -83,9 +97,10 @@ export function TileArt({ shape, poster, wide, fallback, eager = false }: {
     if (url) setFailure((previous) => ({ identity, urls: [...(previous.identity === identity ? previous.urls : []), url] }));
   };
   if (!url) return <>{fallback}</>;
+  if (watched && !eager && !near) return <ArtWait frame={main}/>;
   const loading = eager || near ? "eager" : "lazy";
   return <>
     {effectiveFit === "contain" && <img key={`blur:${url}`} className="tile-blur" src={url} alt="" aria-hidden="true" loading={loading} decoding="async"/>}
-    <img key={url} ref={main} className={effectiveFit === "contain" ? "tile-fit" : undefined} src={url} alt="" loading={loading} decoding="async" onLoad={onLoad} onError={onError}/>
+    <img key={url} ref={main as RefObject<HTMLImageElement | null>} className={effectiveFit === "contain" ? "tile-fit" : undefined} src={url} alt="" loading={loading} decoding="async" onLoad={onLoad} onError={onError}/>
   </>;
 }

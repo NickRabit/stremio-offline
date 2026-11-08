@@ -964,7 +964,9 @@ describe("RemoteLibraryBrowser listing", () => {
     browse = () => json(page([movie("m1", "One")]));
     await openRootLibrary();
     const pane = host.querySelector<HTMLDivElement>(".remote-browse-panel .browse-scroll")!;
-    const picture = pane.querySelector<HTMLImageElement>(".browse-item .browse-art img:not(.tile-blur)")!;
+    // Until it comes near, the tile holds a frame in place of its picture, and that is what is watched.
+    const picture = pane.querySelector<HTMLElement>(".browse-item .browse-art .tile-art-wait")!;
+    expect(pane.querySelector(".browse-item .browse-art img")).toBeNull();
     pane.style.overflowY = "auto";
     act(() => window.dispatchEvent(new Event("resize")));
     expect(FakeIntersectionObserver.live.some((observer) => observer.root === pane && observer.elements.has(picture))).toBe(true);
