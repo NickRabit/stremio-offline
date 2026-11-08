@@ -132,7 +132,9 @@ converted`), the title below it, and the time of day in the top-right corner
 buttons: back 10, play/pause in the accent, forward 10, audio and subtitles
 (labelled with the current choice), next episode, diagnostics. With the
 controls hidden, OK pauses and shows them, and left or right seek with a bubble
-and a thin progress line at the bottom edge. The controls hide after 5 seconds
+and a timeline at the bottom (target time, bar, length) inside the safe area;
+it follows a held key and stays two seconds after the seek is sent, with
+nothing focusable, so the pad keeps seeking. The controls hide after 5 seconds
 of playback without input. Over video, whose colours the app does not control,
 focus is a white fill instead of the accent, and play/pause keeps the web's
 accent circle with a white ring when focused.

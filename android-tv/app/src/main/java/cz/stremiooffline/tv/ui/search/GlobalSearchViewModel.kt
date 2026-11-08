@@ -281,7 +281,7 @@ class GlobalSearchViewModel(
       if (currentGeneration != generation) throw ApiError(ApiFailure.Generic)
       return page
     } catch (error: ApiError) {
-      if (error.status == 410) restartExpired(currentGeneration)
+      if (error.status == 410 || error.status == 404) restartExpired(currentGeneration)
       throw error
     }
   }
@@ -412,6 +412,8 @@ class GlobalSearchViewModel(
           break
         }
         if (currentGeneration != generation) break
+        // The session answers again, so a later expiry may restart it once more.
+        restartDepth = 0
         if (answer.changed && answer.snapshot != null) {
           applySnapshot(answer.snapshot, freshLayout = false)
           continue
@@ -444,7 +446,9 @@ class GlobalSearchViewModel(
 
   private fun handleError(error: ApiError, currentGeneration: Int, query: String) {
     if (currentGeneration != generation) return
-    if (error.status == 410) {
+    // 410 is a search the server retired; 404 is one it has forgotten altogether, as it does a few
+    // minutes after an idle search expires -- a film watched over the results is that long.
+    if (error.status == 410 || (error.status == 404 && sessionId != null)) {
       restartExpired(currentGeneration)
       return
     }

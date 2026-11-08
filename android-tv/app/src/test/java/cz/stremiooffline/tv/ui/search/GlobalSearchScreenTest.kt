@@ -20,6 +20,8 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModelProvider
 import cz.stremiooffline.tv.data.GlobalSearchAliasDto
 import cz.stremiooffline.tv.data.GlobalSearchCanonicalDto
@@ -1205,4 +1207,42 @@ class GlobalSearchScreenTest {
     title = "Member $key",
     locator = locator,
   )
+
+  @Test
+  fun `results come back after the player when the server forgot the search`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("matrix", "m1", title = "The Matrix")))
+    var overlay by androidx.compose.runtime.mutableStateOf(false)
+    compose.setContent {
+      GlobalSearchScreen(
+        api = api,
+        onOpenCatalog = { catalogOpened = it },
+        onOpenRemote = { remoteOpened = it },
+        onOpenLibrary = { libraryOpened = it },
+        imageUrl = { null },
+        overlayOpen = overlay,
+        voiceAvailable = false,
+      )
+    }
+    compose.waitForIdle()
+    search()
+    compose.onNodeWithTag(globalSearchCardTag("m1")).assertIsDisplayed()
+
+    // A film plays over the search for longer than the server keeps an idle search.
+    overlay = true
+    compose.waitForIdle()
+    api.globalPollHandler = { _, _ -> throw cz.stremiooffline.tv.data.ApiError(cz.stremiooffline.tv.data.ApiFailure.NotFound, status = 404) }
+    val startsBefore = api.globalStartCalls.size
+    api.globalStartHandler = {
+      api.globalPollHandler = { _, revision -> GlobalSearchPollDto(changed = false, revision = revision) }
+      GlobalSearchStartResultDto(id = "gs2", snapshot = snapshot(1, listOf(cluster("matrix", "m1", title = "The Matrix"))))
+    }
+    overlay = false
+    compose.waitForIdle()
+
+    assertEquals(startsBefore + 1, api.globalStartCalls.size)
+    assertEquals("matrix", api.globalStartCalls.last().query)
+    compose.onNodeWithTag(TagGlobalSearchInput).assertTextContains("matrix")
+    compose.onNodeWithTag(globalSearchCardTag("m1")).assertIsDisplayed()
+  }
 }

@@ -388,7 +388,10 @@ Expired, invalidated or deleted session use returns `410` with
 `{ "code": "search-restart-required" }`. A session id that does not exist, or
 belongs to another account or browser session, is answered as missing (`404`)
 rather than revealing that it exists. Both outcomes tell the clients to start a
-fresh session. Cleanup runs on a timer during startup, not only when another
+fresh session. The TV does so with the same query and keeps the old results on
+screen until the new ones arrive, which matters after a film: watching one over
+the results outlasts both the idle expiry and its tombstone, so the poll on
+return gets `404`. The restart allowance renews once a poll answers again. Cleanup runs on a timer during startup, not only when another
 request arrives.
 
 To distinguish an owner's expired id from an unknown one without keeping the

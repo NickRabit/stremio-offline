@@ -151,6 +151,39 @@ class GlobalSearchViewModelTest {
   }
 
   @Test
+  fun `a search the server forgot while the player was up starts again with its results kept`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    api.globalStartHandler = { request ->
+      GlobalSearchStartResultDto(
+        id = "gs_${request.generation}",
+        snapshot = GlobalSearchSnapshotDto(revision = 1, state = "complete", clusters = listOf(cluster("c", "m"))),
+      )
+    }
+    api.globalPollHandler = { _, revision -> GlobalSearchPollDto(changed = false, revision = revision) }
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+    viewModel.submit("matrix")
+    runCurrent()
+
+    repeat(2) { round ->
+      viewModel.setActive(false)
+      // The idle search expired on the server; past its tombstone the answer is a plain 404.
+      api.globalPollHandler = { _, _ ->
+        api.globalPollHandler = { _, revision -> GlobalSearchPollDto(changed = false, revision = revision) }
+        throw ApiError(ApiFailure.NotFound, status = if (round == 0) 404 else 410)
+      }
+      viewModel.setActive(true)
+      runCurrent()
+
+      assertEquals(round + 2, api.globalStartCalls.size)
+      assertEquals("matrix", api.globalStartCalls.last().query)
+      assertNull(viewModel.state.error)
+      assertEquals(listOf("c"), viewModel.state.order)
+    }
+    viewModel.setActive(false)
+  }
+
+  @Test
   fun `aliases keep a retired card in place and append new cards in server order`() {
     val previous = listOf("a", "b", "gone")
     val clusters = listOf(cluster("b", "m2"), cluster("a", "m1"), cluster("c", "m3"))

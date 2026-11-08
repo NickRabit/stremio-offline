@@ -518,11 +518,38 @@ private fun RoundButton(
   }
 }
 
+const val TAG_SEEK_STRIP = "seek_strip"
+const val TAG_SEEK_STRIP_POSITION = "seek_strip_position"
+const val TAG_SEEK_STRIP_DURATION = "seek_strip_duration"
+
+/**
+ * The timeline a seek shows while the controls are hidden: the target time, the bar and the
+ * length, inside the safe area the way the OSD draws them, but with nothing to focus, so the pad
+ * keeps seeking. A hairline at the very edge was lost to the overscan of most TVs.
+ */
 @Composable
-fun MiniTimeline(fraction: Float) {
+fun SeekStrip(position: Double, duration: Double) {
+  val fraction = if (duration > 0) (position / duration).toFloat().coerceIn(0f, 1f) else 0f
   Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomStart) {
-    Box(Modifier.fillMaxWidth().height(2.5.dp).background(Color.White.copy(alpha = 0.2f))) {
-      Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f)).background(Tokens.Accent))
+    Row(
+      Modifier
+        .fillMaxWidth()
+        .testTag(TAG_SEEK_STRIP)
+        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))))
+        .padding(horizontal = Tokens.SafeX, vertical = Tokens.SafeY),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Text(formatTime(position), color = Tokens.Text, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag(TAG_SEEK_STRIP_POSITION))
+      Box(
+        Modifier
+          .weight(1f)
+          .height(4.dp)
+          .background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(999.dp)),
+      ) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).background(Tokens.Accent, RoundedCornerShape(999.dp)))
+      }
+      Text(formatTime(duration), color = Tokens.Text, fontSize = 13.sp, modifier = Modifier.testTag(TAG_SEEK_STRIP_DURATION))
     }
   }
 }

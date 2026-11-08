@@ -50,6 +50,9 @@ import kotlinx.coroutines.launch
 const val CONTROLS_HIDE_MS = 5_000L
 private const val BUBBLE_MS = 900L
 
+/** How long the seek timeline stays up after the seek is sent, with the controls hidden. */
+const val SEEK_STRIP_MS = 2_000L
+
 /** How long the refused-seek message stays up, as the web shows it. */
 const val SEEK_KEPT_MS = 3_000L
 
@@ -125,6 +128,9 @@ fun PlayerOverlayShell(
   var activity by remember { mutableIntStateOf(0) }
   var bubble by remember { mutableStateOf<String?>(null) }
   var kept by remember { mutableStateOf(false) }
+  // Bumped by every seek: the timeline stays while the presses come and a while after the last.
+  var stripToken by remember { mutableIntStateOf(0) }
+  var stripShown by remember { mutableStateOf(false) }
   val rootFocus = remember { FocusRequester() }
   val scope = rememberCoroutineScope()
 
@@ -155,6 +161,7 @@ fun PlayerOverlayShell(
       previewDirection = direction
       holdStart = eventTime
     }
+    stripToken++
     val limit = if (duration > 0) duration else Double.MAX_VALUE
     preview = (base + direction * seekStep(eventTime - holdStart)).coerceIn(0.0, limit)
     seekTimer?.cancel()
@@ -186,6 +193,12 @@ fun PlayerOverlayShell(
       delay(BUBBLE_MS)
       bubble = null
     }
+  }
+  LaunchedEffect(stripToken) {
+    if (stripToken == 0) return@LaunchedEffect
+    stripShown = true
+    delay(PlaybackController.SEEK_DEBOUNCE_MS + SEEK_STRIP_MS)
+    stripShown = false
   }
   LaunchedEffect(showControls) {
     if (showControls > 0) controls = true
@@ -241,6 +254,7 @@ fun PlayerOverlayShell(
     preview = Double.NaN
     previewDirection = 0
     val target = (from + offsetSeconds).coerceAtLeast(0.0)
+    stripToken++
     bubble = seekBubble(offsetSeconds.toLong())
     onSeek(target)
   }
@@ -355,10 +369,8 @@ fun PlayerOverlayShell(
           .background(Tokens.Bg.copy(alpha = 0.65f), RoundedCornerShape(999.dp))
           .padding(horizontal = 22.dp, vertical = 12.dp),
       )
-      if (!controls) {
-        MiniTimeline(fraction = if (duration > 0) (shownPosition / duration).toFloat() else 0f)
-      }
     }
+    if ((stripShown || previewing) && !controls && !modal) SeekStrip(position = shownPosition, duration = duration)
 
     if (kept) {
       Text(
