@@ -225,6 +225,30 @@ describe("Home", () => {
     expect(row("resume")!.querySelector(".resume-strip.refreshing")).not.toBeNull();
   });
 
+  it("loads the first six pictures in a shelf eagerly and the rest lazily", async () => {
+    const items = Array.from({ length: 8 }, (_, index) => ({ ...episodeCard(), key: `episode:f:${index}` }));
+    await render({ rows: allEmpty({ episodes: rowState({ items }) }) });
+    const pictures = [...row("episodes")!.querySelectorAll<HTMLImageElement>(".home-card .browse-art img:not(.tile-blur)")];
+    expect(pictures.map((picture) => picture.getAttribute("loading"))).toEqual([
+      "eager", "eager", "eager", "eager", "eager", "eager", "lazy", "lazy",
+    ]);
+  });
+
+  it("asks for a shelf's first pictures eagerly only once the shelf is near the screen", async () => {
+    const strips = new Map<Element, (entries: Array<{ isIntersecting: boolean }>) => void>();
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+      observe = (element: Element) => { if (element.classList.contains("resume-strip")) strips.set(element, this.callback); };
+      disconnect = vi.fn();
+    });
+    const items = Array.from({ length: 8 }, (_, index) => ({ ...episodeCard(), key: `episode:f:${index}` }));
+    await render({ rows: allEmpty({ episodes: rowState({ items }) }) });
+    const loading = () => [...row("episodes")!.querySelectorAll<HTMLImageElement>(".home-card .browse-art img:not(.tile-blur)")].map((picture) => picture.getAttribute("loading"));
+    expect(loading()).toEqual(Array(8).fill("lazy"));
+    await act(async () => { strips.get(row("episodes")!.querySelector(".resume-strip")!)!([{ isIntersecting: true }]); });
+    expect(loading()).toEqual(["eager", "eager", "eager", "eager", "eager", "eager", "lazy", "lazy"]);
+  });
+
   it("shows a row's own error line and retries only that row", async () => {
     const { onRetry } = await render({ rows: allEmpty({ resume: rowState({ status: "error" }), favorites: rowState({ items: [favoriteCard("file")] }) }) });
     const retry = row("resume")!.querySelector<HTMLButtonElement>(".home-retry")!;

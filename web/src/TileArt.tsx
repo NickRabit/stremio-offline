@@ -1,8 +1,24 @@
-import { useState, type ReactNode, type SyntheticEvent } from "react";
+import { useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import { remoteTileArtwork } from "./remote-artwork";
 import { fitFor, pickTileArt, type TileFit } from "./tile-shape";
 import type { TileShape } from "./types";
 
+export const KNOWN_SIZE_LIMIT = 1000;
+// A picture's real size, by address: a tile drawn again -- or in the other shape -- already knows
+// how its picture sits, with no load event and no refit after it.
+const knownSize = new Map<string, { width: number; height: number }>();
+
+function rememberSize(url: string, width: number, height: number): void {
+  knownSize.delete(url);
+  knownSize.set(url, { width, height });
+  if (knownSize.size <= KNOWN_SIZE_LIMIT) return;
+  const oldest = knownSize.keys().next().value;
+  if (oldest !== undefined) knownSize.delete(oldest);
+}
+
+export function forgetKnownSizes(): void {
+  knownSize.clear();
+}
 
 
 /** A folder that stands for several films: their posters as one small mosaic instead of a
@@ -31,12 +47,13 @@ export function PosterMosaic({ posters, label, fallback = null }: { posters: str
  * catalogue filed it under: an addon that calls a 16:9 picture a poster is common enough that
  * trusting the label crops half its titles to a sliver.
  */
-export function TileArt({ shape, poster, wide, fallback }: {
+export function TileArt({ shape, poster, wide, fallback, eager = false }: {
   shape: TileShape;
   poster?: string;
   wide?: string;
   /** Drawn when the title has neither picture. */
   fallback: ReactNode;
+  eager?: boolean;
 }) {
   const identity = JSON.stringify([poster, wide]);
   const [failure, setFailure] = useState({ identity, urls: [] as string[] });
@@ -45,17 +62,27 @@ export function TileArt({ shape, poster, wide, fallback }: {
   // remembers; `pickTileArt` narrows the same way, and narrowing twice is the same address.
   const tiled = remoteTileArtwork(wide);
   const { url, fit } = pickTileArt(shape, failed.includes(poster ?? "") ? undefined : poster, failed.includes(tiled ?? "") ? undefined : wide);
-  const [measured, setMeasured] = useState<{ url: string; width: number; height: number }>();
+  // Bumped only when a load changes how the picture sits. The size is kept here as well as in
+  // knownSize, so a tile on screen keeps it after the shared memory has let it go.
+  const [, setRefit] = useState(0);
+  const own = useRef<{ url: string; width: number; height: number } | undefined>(undefined);
+  const size = url ? knownSize.get(url) ?? (own.current?.url === url ? own.current : undefined) : undefined;
+  const effectiveFit: TileFit = size ? fitFor(shape, size.width, size.height) : fit;
   const onLoad = (event: SyntheticEvent<HTMLImageElement>) => {
-    if (url) setMeasured({ url, width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight });
+    if (!url) return;
+    const width = event.currentTarget.naturalWidth;
+    const height = event.currentTarget.naturalHeight;
+    rememberSize(url, width, height);
+    own.current = { url, width, height };
+    if (fitFor(shape, width, height) !== effectiveFit) setRefit((count) => count + 1);
   };
   const onError = () => {
     if (url) setFailure((previous) => ({ identity, urls: [...(previous.identity === identity ? previous.urls : []), url] }));
   };
   if (!url) return <>{fallback}</>;
-  const effectiveFit: TileFit = measured?.url === url ? fitFor(shape, measured.width, measured.height) : fit;
+  const loading = eager ? "eager" : "lazy";
   return <>
-    {effectiveFit === "contain" && <img key={`blur:${url}`} className="tile-blur" src={url} alt="" aria-hidden="true" loading="lazy"/>}
-    <img key={url} className={effectiveFit === "contain" ? "tile-fit" : undefined} src={url} alt="" loading="lazy" onLoad={onLoad} onError={onError}/>
+    {effectiveFit === "contain" && <img key={`blur:${url}`} className="tile-blur" src={url} alt="" aria-hidden="true" loading={loading} decoding="async"/>}
+    <img key={url} className={effectiveFit === "contain" ? "tile-fit" : undefined} src={url} alt="" loading={loading} decoding="async" onLoad={onLoad} onError={onError}/>
   </>;
 }

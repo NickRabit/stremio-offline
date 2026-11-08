@@ -42,7 +42,7 @@ const hasPath = (card: HomeCardData): card is Extract<HomeCardData, { path: stri
 
 /** One card on a Home shelf. The artwork and the caption are a single button; the overflow
  *  control is a sibling, so a tap on one never lands on the other. */
-export const HomeCard = memo(function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: TileShape; actions: HomeCardActions }) {
+export const HomeCard = memo(function HomeCard({ card, shape, actions, eager }: { card: HomeCardData; shape: TileShape; actions: HomeCardActions; eager?: boolean }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const percent = cardProgress(card);
   const title = titleOf(card);
@@ -72,7 +72,7 @@ export const HomeCard = memo(function HomeCard({ card, shape, actions }: { card:
   return <article className="browse-item home-card" data-kind={card.kind}>
     <div className="browse-frame">
       <button className="browse-open" title={title} onClick={primary}>
-        <span className="browse-art"><TileArt shape={shape} poster={poster} wide={wide} fallback={folder ? <FolderOpen/> : <Film/>}/>
+        <span className="browse-art"><TileArt shape={shape} poster={poster} wide={wide} eager={eager} fallback={folder ? <FolderOpen/> : <Film/>}/>
           {percent != null && <i className="resume-bar"><i style={{ width: `${percent}%` }}/></i>}</span>
         <strong>{title}</strong>
         <small className={card.kind === "confirm" ? "home-candidate" : undefined} title={caption}>{caption}</small>

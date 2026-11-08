@@ -4,8 +4,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { api } from "./api";
 import { readHomeCache, writeHomeCache } from "./home-cache";
 import { useHome } from "./useHome";
+import { SCROLLING_MS } from "./home-omit";
 import { homeCatalogRowId, type HomeResponse, type HomeRowId } from "../../server/src/home";
-import type { HomeCard } from "../../server/src/home";
+import type { HomeCard, HomeOrderEntry } from "../../server/src/home";
 import type { HomeRows, HomeRowState } from "./home-state";
 
 const movie = homeCatalogRowId("cinemeta", "movie", "top");
@@ -14,7 +15,12 @@ const series = homeCatalogRowId("cinemeta", "series", "top");
 let root: Root;
 let hook: ReturnType<typeof useHome>;
 let account: string | null;
-const Probe = () => { hook = useHome({ active: true, account, admin: false, playerOpen: false }); return null; };
+let renders: Array<{ account: string | null; rows: HomeRows; order: HomeOrderEntry[] }>;
+const Probe = () => {
+  hook = useHome({ active: true, account, admin: false, playerOpen: false });
+  renders.push({ account, rows: hook.rows, order: hook.order });
+  return null;
+};
 
 const answer = (rows: readonly HomeRowId[], partial: ReadonlySet<HomeRowId> = new Set(), items: Partial<Record<HomeRowId, HomeCard[]>> = {}): HomeResponse => ({
   generatedAt: "", order: [], rows: Object.fromEntries(rows.map((row) => [row, { status: "ok", items: items[row] ?? [], hasMore: false, ...(partial.has(row) ? { partial: true } : {}) }])),
@@ -34,6 +40,7 @@ beforeEach(() => {
   localStorage.clear();
   vi.useFakeTimers();
   account = "alice";
+  renders = [];
   root = createRoot(document.createElement("div"));
 });
 
@@ -45,6 +52,32 @@ afterEach(() => {
 });
 
 describe("useHome", () => {
+  it("draws a cached Home on its first render", async () => {
+    const cachedOrder = [{ id: "resume" as const }, { id: movie }];
+    writeHomeCache("alice", cachedOrder, cachedRows());
+    vi.spyOn(api, "home").mockImplementation(() => new Promise(() => {}));
+
+    await act(async () => { root.render(<Probe/>); });
+
+    expect(renders[0]?.rows.resume?.items).toEqual([card]);
+    expect(renders[0]?.order).toEqual(cachedOrder);
+  });
+
+  it("draws a cached Home on the first render after the account becomes known", async () => {
+    const cachedOrder = [{ id: "resume" as const }, { id: movie }];
+    writeHomeCache("alice", cachedOrder, cachedRows());
+    vi.spyOn(api, "home").mockImplementation(() => new Promise(() => {}));
+    account = null;
+    await act(async () => { root.render(<Probe/>); });
+
+    account = "alice";
+    await act(async () => { root.render(<Probe/>); });
+
+    const firstAlice = renders.find((render) => render.account === "alice");
+    expect(firstAlice?.rows.resume?.items).toEqual([card]);
+    expect(firstAlice?.order).toEqual(cachedOrder);
+  });
+
   it("draws the cached rows and refreshes their catalogue shelves", async () => {
     const cachedOrder = [{ id: "resume" as const }, { id: movie }];
     writeHomeCache("alice", cachedOrder, cachedRows());
@@ -64,6 +97,21 @@ describe("useHome", () => {
     expect(readHomeCache("alice")).toBeNull();
 
     await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(readHomeCache("alice")?.rows.resume?.items).toEqual([card]);
+  });
+
+  it("waits for scrolling to stop before storing the answered Home", async () => {
+    vi.spyOn(api, "home").mockImplementation(async (rows) => answer(rows ?? [], new Set(), { resume: [card] }));
+    await act(async () => { root.render(<Probe/>); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    for (let elapsed = 0; elapsed < 2000; elapsed += 200) {
+      document.dispatchEvent(new Event("scroll"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    }
+    expect(readHomeCache("alice")).toBeNull();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(SCROLLING_MS + 500); });
     expect(readHomeCache("alice")?.rows.resume?.items).toEqual([card]);
   });
 

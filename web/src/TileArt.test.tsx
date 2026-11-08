@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { act } from "react";
+import { act, Profiler } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { PosterMosaic, TileArt } from "./TileArt";
+import { forgetKnownSizes, KNOWN_SIZE_LIMIT, PosterMosaic, TileArt } from "./TileArt";
 import { setLocale } from "./i18n";
 
 let root: Root;
@@ -10,6 +10,7 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
+  forgetKnownSizes();
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -85,5 +86,69 @@ describe("TileArt image failures", () => {
     expect(host.querySelector(".library-preview-collage")).toBeNull();
     act(() => host.querySelector("img")!.dispatchEvent(new Event("error")));
     expect(host.querySelector("[data-fallback]")).not.toBeNull();
+  });
+});
+
+describe("TileArt picture layout", () => {
+  const render = (shape: "wide" | "poster", poster?: string, wide?: string) =>
+    act(() => root.render(<TileArt shape={shape} poster={poster} wide={wide} fallback={<span data-fallback/>}/>));
+  const picture = () => host.querySelector<HTMLImageElement>("img:not(.tile-blur)")!;
+  const load = (node: HTMLImageElement, width: number, height: number) => {
+    Object.defineProperty(node, "naturalWidth", { value: width, configurable: true });
+    Object.defineProperty(node, "naturalHeight", { value: height, configurable: true });
+    act(() => node.dispatchEvent(new Event("load")));
+  };
+
+  it("remembers the measured fit of a picture for its next mount", () => {
+    render("poster", "/wide.jpg");
+    expect(host.querySelector(".tile-fit")).toBeNull();
+    load(picture(), 1600, 900);
+    expect(host.querySelector(".tile-fit")).not.toBeNull();
+    expect(host.querySelector(".tile-blur")).not.toBeNull();
+    expect([...host.querySelectorAll("img")].map((image) => image.getAttribute("decoding"))).toEqual(["async", "async"]);
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    render("poster", "/wide.jpg");
+    expect(host.querySelector(".tile-fit")).not.toBeNull();
+    expect(host.querySelector(".tile-blur")).not.toBeNull();
+  });
+
+  it("keeps a picture's real size for a shape it has not been drawn in yet", () => {
+    // A square picture fills both frames; a load in one shape must still settle the other.
+    render("poster", "/square.jpg");
+    load(picture(), 600, 600);
+    render("wide", "/square.jpg");
+    expect(host.querySelector(".tile-fit")).toBeNull();
+    expect(host.querySelector(".tile-blur")).toBeNull();
+  });
+
+  it("keeps the fit of a tile on screen after the shared memory has let its picture go", () => {
+    render("poster", "/wide.jpg");
+    load(picture(), 1600, 900);
+    expect(host.querySelector(".tile-fit")).not.toBeNull();
+    // Other tiles load enough pictures to push this one out of the shared memory.
+    const others = document.createElement("div");
+    const otherRoot = createRoot(others);
+    for (let index = 0; index <= KNOWN_SIZE_LIMIT; index += 1) {
+      act(() => otherRoot.render(<TileArt shape="poster" poster={`/other-${index}.jpg`} fallback={null}/>));
+      const node = others.querySelector<HTMLImageElement>("img:not(.tile-blur)")!;
+      Object.defineProperty(node, "naturalWidth", { value: 400, configurable: true });
+      Object.defineProperty(node, "naturalHeight", { value: 600, configurable: true });
+      act(() => node.dispatchEvent(new Event("load")));
+    }
+    act(() => otherRoot.unmount());
+    render("poster", "/wide.jpg");
+    expect(host.querySelector(".tile-fit")).not.toBeNull();
+  });
+
+  it("does not rerender when a loaded picture already has the drawn fit", () => {
+    let renders = 0;
+    act(() => root.render(<Profiler id="tile" onRender={() => { renders += 1; }}><TileArt shape="wide" poster="/poster.jpg" fallback={<span data-fallback/>}/></Profiler>));
+    const beforeLoad = renders;
+
+    load(picture(), 400, 600);
+
+    expect(renders).toBe(beforeLoad);
   });
 });

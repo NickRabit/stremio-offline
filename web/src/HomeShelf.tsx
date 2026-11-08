@@ -17,6 +17,10 @@ const SKELETON = [0, 1, 2, 3];
 /** How far below the screen a waiting shelf starts loading, so it is drawn by the time it
  *  scrolls in. */
 const AHEAD = "800px 0px";
+/** The first cards of a shelf cover a phone or desktop row; their pictures are asked for at once
+ *  when the shelf comes within NEAR_PX of the screen, where Safari's lazy loading starts too late. */
+export const EAGER_CARDS = 6;
+const NEAR_PX = 800;
 
 const skeleton = <div className="resume-strip skeleton" aria-hidden="true">{SKELETON.map((index) => <div className="browse-item" key={index}><span className="browse-art"/><span className="home-skeleton-line title"/><span className="home-skeleton-line caption"/></div>)}</div>;
 
@@ -47,6 +51,21 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
   const omit = state !== undefined && (state.status === "ok" || (state.status === "loading" && state.settled === true)) && empty && !state.partial;
   const held = useRef<HTMLElement>(null);
   const gone = useOmission(omit, held);
+  // Watched on the card strip, not on the section: the section has observers of its own, and a
+  // shelf restored from the cache may sit far below the screen.
+  const strip = useRef<HTMLDivElement>(null);
+  const [near, setNear] = useState(false);
+  const cards = state?.items.length ?? 0;
+  useEffect(() => {
+    const element = strip.current;
+    if (near || !element) return;
+    if (typeof IntersectionObserver === "undefined") { setNear(true); return; }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) { observer.disconnect(); setNear(true); }
+    }, { rootMargin: `${NEAR_PX}px 0px` });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [near, cards]);
   useEffect(() => {
     if (!waiting) return;
     const element = placeholder.current;
@@ -90,8 +109,8 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
       : <>
           {state.status === "loading" && empty
             ? skeleton
-            : <div className={`resume-strip${state.status === "loading" ? " refreshing" : ""}`} aria-busy={state.status === "loading" || undefined} data-shape={shape}>
-                {state.items.map((card) => <HomeCard key={card.key} card={card} shape={shape} actions={actions}/>)}
+            : <div ref={strip} className={`resume-strip${state.status === "loading" ? " refreshing" : ""}`} aria-busy={state.status === "loading" || undefined} data-shape={shape}>
+                {state.items.map((card, index) => <HomeCard key={card.key} card={card} shape={shape} actions={actions} eager={near && index < EAGER_CARDS}/>)}
               </div>}
         </>}
   </section>;
