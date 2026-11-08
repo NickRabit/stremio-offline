@@ -19,6 +19,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -198,6 +199,26 @@ class PlayerOverlayTest {
     compose.waitForIdle()
 
     assertEquals(1, pauses)
+  }
+
+  @Test
+  fun `with controls hidden a seek shows the timeline with the target time and the length`() {
+    mount(position = 100.0, duration = 1_000.0, initiallyShown = false)
+    compose.onNodeWithTag(TAG_SEEK_STRIP).assertDoesNotExist()
+
+    compose.onNodeWithTag("video").performKeyInput { pressKey(Key.DirectionRight) }
+    compose.mainClock.advanceTimeBy(50)
+
+    // While the key is held the strip follows the target, not the playing position.
+    compose.onNodeWithTag(TAG_SEEK_STRIP).assertIsDisplayed()
+    compose.onNodeWithTag(TAG_SEEK_STRIP_POSITION, useUnmergedTree = true).assertTextEquals("01:50")
+    compose.onNodeWithTag(TAG_SEEK_STRIP_DURATION, useUnmergedTree = true).assertTextEquals("16:40")
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertDoesNotExist()
+
+    compose.mainClock.advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 100)
+    compose.onNodeWithTag(TAG_SEEK_STRIP).assertIsDisplayed()
+    compose.mainClock.advanceTimeBy(SEEK_STRIP_MS + 100)
+    compose.onNodeWithTag(TAG_SEEK_STRIP).assertDoesNotExist()
   }
 
   @Test
