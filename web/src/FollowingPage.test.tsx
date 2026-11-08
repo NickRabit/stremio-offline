@@ -5,6 +5,25 @@ import { FollowingPage } from "./FollowingPage";
 import { setLocale } from "./i18n";
 import type { FollowView } from "./types";
 
+class RecordingIntersectionObserver {
+  static instances: RecordingIntersectionObserver[] = [];
+
+  readonly root: Element | Document | null;
+  readonly rootMargin: string;
+  readonly elements = new Set<Element>();
+
+  constructor(readonly callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    this.root = options?.root ?? null;
+    this.rootMargin = options?.rootMargin ?? "0px";
+    RecordingIntersectionObserver.instances.push(this);
+  }
+
+  observe(element: Element) { this.elements.add(element); }
+  unobserve(element: Element) { this.elements.delete(element); }
+  disconnect() { this.elements.clear(); }
+  takeRecords(): IntersectionObserverEntry[] { return []; }
+}
+
 const downloads = { queued: 0, waiting: 0, completed: 0, skipped: 0, attention: 0 };
 const follow = (overrides: Partial<FollowView>): FollowView => ({
   id: "f1", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show",
@@ -121,6 +140,21 @@ describe("FollowingPage", () => {
     expect(card.textContent).toContain("S02E04 · Finale");
     await act(async () => { card.click(); });
     expect(onOpenSeries).toHaveBeenCalledWith({ type: "series", id: "tt1", name: "Show", poster: undefined });
+  });
+
+  it("observes a new episode picture inside the following page provider", async () => {
+    RecordingIntersectionObserver.instances = [];
+    vi.stubGlobal("IntersectionObserver", RecordingIntersectionObserver);
+    const episode = {
+      followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 2, episode: 4,
+      title: "Finale", released: "2024-02-01T00:00:00.000Z", poster: "/new-episode.jpg",
+    };
+    await render([follow({})], { newEpisodes: [episode] });
+    const picture = host.querySelector<HTMLImageElement>(".following-new-episodes img")!;
+    expect(picture.getAttribute("src")).toBe("/new-episode.jpg");
+    expect(picture.getAttribute("loading")).toBe("lazy");
+    expect(picture.getAttribute("decoding")).toBe("async");
+    expect(RecordingIntersectionObserver.instances.some((observer) => observer.elements.has(picture))).toBe(true);
   });
 
   it("hides the new-episodes section when nothing is new", async () => {

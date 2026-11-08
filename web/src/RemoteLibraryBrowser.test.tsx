@@ -66,8 +66,14 @@ const addonCalls = {
 class FakeIntersectionObserver {
   static live: FakeIntersectionObserver[] = [];
   elements = new Set<Element>();
-  root = null; rootMargin = ""; thresholds: number[] = [];
-  constructor(private callback: IntersectionObserverCallback) { FakeIntersectionObserver.live.push(this); }
+  root: Element | Document | null;
+  rootMargin: string;
+  thresholds: number[] = [];
+  constructor(private callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    this.root = options?.root ?? null;
+    this.rootMargin = options?.rootMargin ?? "";
+    FakeIntersectionObserver.live.push(this);
+  }
   observe(element: Element) { this.elements.add(element); }
   unobserve(element: Element) { this.elements.delete(element); }
   disconnect() { this.elements.clear(); }
@@ -951,6 +957,17 @@ describe("RemoteLibraryBrowser listing", () => {
     expect(calls.sources).toHaveLength(0);
     expect(calls.browse).toHaveLength(2);
     expect(host.querySelector(".player-overlay")).toBeNull();
+  });
+
+  it("observes a listing picture through the browse-scroll provider", async () => {
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    browse = () => json(page([movie("m1", "One")]));
+    await openRootLibrary();
+    const pane = host.querySelector<HTMLDivElement>(".remote-browse-panel .browse-scroll")!;
+    const picture = pane.querySelector<HTMLImageElement>(".browse-item .browse-art img:not(.tile-blur)")!;
+    pane.style.overflowY = "auto";
+    act(() => window.dispatchEvent(new Event("resize")));
+    expect(FakeIntersectionObserver.live.some((observer) => observer.root === pane && observer.elements.has(picture))).toBe(true);
   });
 
   it("keeps a failed listing usable with a retry", async () => {

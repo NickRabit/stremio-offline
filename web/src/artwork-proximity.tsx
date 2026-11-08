@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type JSX,
+  type ImgHTMLAttributes,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -15,24 +16,26 @@ import {
  *  still looks this far. */
 export const ARTWORK_AHEAD_MIN_PX = 600;
 
+/** The element that scrolls `element`: itself or its nearest ancestor whose style scrolls it,
+ *  decided by style rather than content (an empty grid scrolls a moment later); null for the page. */
+export function scrollingAncestor(element: Element | null): Element | null {
+  for (let node = element; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+    const { overflowX, overflowY } = getComputedStyle(node);
+    if (overflowX === "auto" || overflowX === "scroll" || overflowY === "auto" || overflowY === "scroll") return node;
+  }
+  return null;
+}
+
 export function artworkAhead(root: Element | null): string {
-  const height = root ? root.clientHeight : window.innerHeight;
-  const ahead = Math.max(ARTWORK_AHEAD_MIN_PX, Math.round(height));
-  return `${ahead}px ${Math.round(ahead / 2)}px`;
+  const vertical = Math.max(ARTWORK_AHEAD_MIN_PX, root ? root.clientHeight : window.innerHeight);
+  const horizontal = Math.max(ARTWORK_AHEAD_MIN_PX / 2, Math.round((root ? root.clientWidth : window.innerWidth) / 2));
+  return `${vertical}px ${horizontal}px`;
 }
 
 type RegisterArtwork = (element: Element, onIntersect: () => void) => () => void;
 type Registration = { onIntersect: () => void };
 
 const ArtworkProximityContext = createContext<RegisterArtwork | null>(null);
-
-// Decided by the style, not by the content: a grid is empty when it mounts and scrolls a moment
-// later, while a phone layout that lets the page scroll gives the element no overflow at all.
-function artworkRoot(scroller: HTMLElement | null): Element | null {
-  if (!scroller) return null;
-  const { overflowY } = getComputedStyle(scroller);
-  return overflowY === "auto" || overflowY === "scroll" ? scroller : null;
-}
 
 export function ArtworkProximity({ scroller, children }: {
   scroller: RefObject<HTMLElement | null>;
@@ -42,11 +45,31 @@ export function ArtworkProximity({ scroller, children }: {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const rootRef = useRef<Element | null>(null);
   const marginRef = useRef("");
+  const evaluatedRef = useRef(false);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const resizeTargetsRef = useRef(new Set<Element>());
+  const resizeFrameRef = useRef<number | null>(null);
+
+  const pointResizeObserver = useCallback((scrollerElement: Element | null, root: Element | null) => {
+    const observer = resizeObserverRef.current;
+    if (!observer) return;
+    const next = new Set<Element>();
+    if (scrollerElement) next.add(scrollerElement);
+    if (root) next.add(root);
+    const previous = resizeTargetsRef.current;
+    if (previous.size === next.size && [...next].every((element) => previous.has(element))) return;
+    for (const element of previous) if (!next.has(element)) observer.unobserve(element);
+    for (const element of next) if (!previous.has(element)) observer.observe(element);
+    resizeTargetsRef.current = next;
+  }, []);
 
   const createObserver = useCallback((force: boolean) => {
-    const root = artworkRoot(scroller.current);
+    const scrollerElement = scroller.current;
+    const root = scrollingAncestor(scrollerElement);
     const margin = artworkAhead(root);
-    if (!force && observerRef.current && root === rootRef.current && margin === marginRef.current) return;
+    pointResizeObserver(scrollerElement, root);
+    if (!force && evaluatedRef.current && root === rootRef.current && margin === marginRef.current) return;
+    evaluatedRef.current = true;
     marginRef.current = margin;
 
     observerRef.current?.disconnect();
@@ -72,19 +95,35 @@ export function ArtworkProximity({ scroller, children }: {
 
     observerRef.current = observer;
     for (const element of registrations.current.keys()) observer.observe(element);
-  }, [scroller]);
+  }, [pointResizeObserver, scroller]);
 
   useEffect(() => {
     createObserver(true);
     const onResize = () => createObserver(false);
     window.addEventListener("resize", onResize);
+    if (typeof ResizeObserver !== "undefined") {
+      const resizeObserver = new ResizeObserver(() => {
+        if (resizeFrameRef.current !== null) return;
+        resizeFrameRef.current = window.requestAnimationFrame(() => {
+          resizeFrameRef.current = null;
+          createObserver(false);
+        });
+      });
+      resizeObserverRef.current = resizeObserver;
+      pointResizeObserver(scroller.current, rootRef.current);
+    }
     return () => {
       window.removeEventListener("resize", onResize);
+      if (resizeFrameRef.current !== null) window.cancelAnimationFrame(resizeFrameRef.current);
+      resizeFrameRef.current = null;
+      resizeObserverRef.current?.disconnect();
+      resizeObserverRef.current = null;
+      resizeTargetsRef.current.clear();
       registrations.current.clear();
       observerRef.current?.disconnect();
       observerRef.current = null;
     };
-  }, [createObserver]);
+  }, [createObserver, pointResizeObserver]);
 
   const register = useCallback<RegisterArtwork>((element, onIntersect) => {
     const registration = { onIntersect };
@@ -122,4 +161,10 @@ export function useNearScreen(target: RefObject<Element | null>, key: string | u
   }, [key, register, target]);
 
   return key !== undefined && nearKey === key;
+}
+
+export function NearImage({ src, ...props }: ImgHTMLAttributes<HTMLImageElement> & { src: string }) {
+  const image = useRef<HTMLImageElement>(null);
+  const near = useNearScreen(image, src);
+  return <img {...props} ref={image} src={src} decoding="async" loading={near ? "eager" : "lazy"}/>;
 }

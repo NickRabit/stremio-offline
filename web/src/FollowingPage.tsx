@@ -6,6 +6,7 @@ import { copyText } from "./clipboard";
 import { FollowDialog } from "./FollowDialog";
 import { Heading } from "./settings-ui";
 import { TileArt } from "./TileArt";
+import { ArtworkProximity, NearImage } from "./artwork-proximity";
 import { languageName, localeTag, serverText, t, useI18n } from "./i18n";
 import type { ActivityItem, CalendarEpisodeState, CalendarItem, UndatedCalendarItem, FollowView, LibraryView, NewEpisode, TileShape } from "./types";
 
@@ -65,6 +66,7 @@ export function FollowingPage({ follows, newEpisodes, canRetain = false, librari
   const [tab, setTab] = useState<Tab>("overview");
   const [openId, setOpenId] = useState<string | null>(null);
   const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
+  const pageRef = useRef<HTMLElement>(null);
   const open = follows.find((follow) => follow.id === openId) ?? null;
 
   const moveTab = (from: Tab, direction: 1 | -1) => {
@@ -73,7 +75,8 @@ export function FollowingPage({ follows, newEpisodes, canRetain = false, librari
     tabRefs.current[next]?.focus();
   };
 
-  return <section className="following-page">
+  return <section className="following-page" ref={pageRef}>
+    <ArtworkProximity scroller={pageRef}>
     <Heading eyebrow={t("following.eyebrow")} title={t("following.title")}/>
     <div className="following-tabs" role="tablist" aria-label={t("following.title")}>
       {TABS.map((name) => <button key={name} role="tab" type="button" id={`following-tab-${name}`} aria-selected={tab === name}
@@ -94,6 +97,7 @@ export function FollowingPage({ follows, newEpisodes, canRetain = false, librari
       downloadSourceProfileId={downloadSourceProfileId} followSourceProfileId={followSourceProfileId}
       onRememberDownloadSourceProfile={onRememberDownloadSourceProfile} onRememberFollowSourceProfile={onRememberFollowSourceProfile}
       onChanged={(updated) => onChanged(open.id, updated)} onClose={() => setOpenId(null)} onNotify={onNotify}/>}
+    </ArtworkProximity>
   </section>;
 }
 
@@ -115,7 +119,7 @@ function NewEpisodesSection({ episodes, onOpen }: { episodes: NewEpisode[]; onOp
     <h3>{t("home.newEpisodes")}</h3>
     <div className="resume-strip">
       {episodes.map((episode) => <button type="button" className="browse-item" key={`${episode.followId}:${episode.videoId}`} onClick={() => onOpen(episode)}>
-        <span className="browse-art">{episode.poster ? <img src={episode.poster} alt="" loading="lazy"/> : <Film/>}</span>
+        <span className="browse-art">{episode.poster ? <NearImage src={episode.poster} alt=""/> : <Film/>}</span>
         <strong>{episode.name}</strong>
         <small>{codeOf(episode)}{episode.title ? ` · ${episode.title}` : ""}</small>
         <small>{formatDay(episode.released)}</small>
@@ -176,7 +180,7 @@ function StatePill({ state, children }: { state: CalendarEpisodeState; children?
 
 function EpisodeRow({ item, onOpen }: { item: CalendarItem | UndatedCalendarItem; onOpen: () => void }) {
   return <button type="button" className="following-episode-row" title={item.dateUncertain ? t("following.dateUncertainHint") : undefined} onClick={onOpen}>
-    <span className="following-episode-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
+    <span className="following-episode-art">{item.poster ? <NearImage src={item.poster} alt=""/> : <Film/>}</span>
     <span className="following-episode-copy">
       <strong>{item.name}</strong>
       <small>{`${item.dateUncertain ? "≈ " : ""}${codeOf(item)}${item.title && item.type !== "movie" ? ` · ${item.title}` : ""}`}</small>
@@ -353,7 +357,7 @@ function CalendarTab({ onOpenSeries, onNotify }: { onOpenSeries: FollowingPagePr
             </button>
             {dayItems.length > 0 && <div className="following-day-items">
               {dayItems.slice(0, 3).map((item) => <button type="button" key={itemKey(item)} className={`following-event state-${item.state}`} title={item.dateUncertain ? t("following.dateUncertainHint") : `${item.name} ${codeOf(item)}${item.title ? ` · ${item.title}` : ""}`} onClick={() => openOf(item)}>
-                {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : null}
+                {item.poster ? <NearImage src={item.poster} alt=""/> : null}
                 <span><strong>{item.name}</strong><small>{`${item.dateUncertain ? "≈ " : ""}${codeOf(item)}`}</small></span>
               </button>)}
               {dayItems.length > 3 && <button type="button" className="following-event-more" onClick={() => setSelected(key)}>{t("following.more", { count: dayItems.length - 3 })}</button>}
@@ -407,7 +411,7 @@ function ActivityTab({ onNotify }: { onNotify: (text: string) => void }) {
       const canSkip = item.state === "reserved" || item.state === "queued" || item.state === "waiting";
       const canRetry = item.state === "waiting" || item.state === "attention" || item.state === "skipped";
       return <div className="following-activity-row" key={`${item.followId}:${key}`}>
-        <span className="following-activity-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
+        <span className="following-activity-art">{item.poster ? <NearImage src={item.poster} alt=""/> : <Film/>}</span>
         <span className="following-activity-copy"><strong>{`${item.name} · ${codeOf(item)}${item.title ? ` · ${item.title}` : ""}`}</strong>
           <span className="following-activity-meta"><StatePill state={item.state}/>{item.reasonKey && item.state !== "skipped" ? <small>{serverText(item.reasonKey, "", item.reasonVars?.language === undefined ? item.reasonVars : { ...item.reasonVars, language: languageName(String(item.reasonVars.language)) })}</small> : null}{item.state === "waiting" && item.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(item.nextAttemptAt) })}</small> : null}</span>
         </span>

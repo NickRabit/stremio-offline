@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { ARTWORK_AHEAD_MIN_PX, ArtworkProximity, artworkAhead } from "./artwork-proximity";
+import { ARTWORK_AHEAD_MIN_PX, ArtworkProximity, artworkAhead, NearImage, scrollingAncestor } from "./artwork-proximity";
 import { TileArt } from "./TileArt";
 
 class StubIntersectionObserver {
@@ -47,10 +47,41 @@ class StubIntersectionObserver {
   }
 }
 
+class StubResizeObserver {
+  static instances: StubResizeObserver[] = [];
+
+  readonly elements = new Set<Element>();
+  disconnected = false;
+
+  constructor(readonly callback: ResizeObserverCallback) {
+    StubResizeObserver.instances.push(this);
+  }
+
+  observe(element: Element) {
+    this.elements.add(element);
+  }
+
+  unobserve(element: Element) {
+    this.elements.delete(element);
+  }
+
+  disconnect() {
+    this.disconnected = true;
+    this.elements.clear();
+  }
+
+  fire() {
+    this.callback([...this.elements].map((target) => ({ target } as ResizeObserverEntry)), this as unknown as ResizeObserver);
+  }
+}
+
 let root: Root;
 let host: HTMLDivElement;
 let scroller: HTMLDivElement;
 let scrollerRef: { current: HTMLDivElement | null };
+let ancestorRef: { current: HTMLDivElement | null };
+let animationFrames: Map<number, FrameRequestCallback>;
+let nextAnimationFrame: number;
 
 const picture = (poster: string, key = poster) =>
   <TileArt key={key} shape="poster" poster={poster} fallback={<span/>}/>;
@@ -76,14 +107,31 @@ const setScrolling = (scrolls: boolean) => {
   scroller.style.overflowY = scrolls ? "auto" : "visible";
 };
 
+const flushAnimationFrame = () => {
+  const callbacks = [...animationFrames.values()];
+  animationFrames.clear();
+  act(() => callbacks.forEach((callback) => callback(performance.now())));
+};
+
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   StubIntersectionObserver.instances = [];
+  StubResizeObserver.instances = [];
+  animationFrames = new Map();
+  nextAnimationFrame = 1;
   vi.stubGlobal("IntersectionObserver", StubIntersectionObserver);
+  vi.stubGlobal("ResizeObserver", StubResizeObserver);
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const handle = nextAnimationFrame++;
+    animationFrames.set(handle, callback);
+    return handle;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (handle: number) => { animationFrames.delete(handle); });
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
   scrollerRef = { current: null };
+  ancestorRef = { current: null };
   act(() => root.render(<div ref={scrollerRef}/>));
   scroller = scrollerRef.current!;
   setScrolling(false);
@@ -97,11 +145,19 @@ afterEach(() => {
 });
 
 describe("ArtworkProximity", () => {
-  it("uses a scrolling container as the shared root and the page when it does not scroll", () => {
-    setScrolling(true);
-    render(picture("/first.jpg"));
-    expect(observer().root).toBe(scroller);
-    expect(observer().rootMargin).toBe(artworkAhead(scroller));
+  it("uses the nearest horizontal or vertical scrolling ancestor", () => {
+    act(() => root.render(
+      <div ref={ancestorRef} style={{ overflowY: "auto" }}>
+        <div ref={scrollerRef}>
+          <ArtworkProximity scroller={scrollerRef}>{picture("/first.jpg")}</ArtworkProximity>
+        </div>
+      </div>,
+    ));
+    expect(observer().root).toBe(ancestorRef.current);
+    expect(scrollingAncestor(scrollerRef.current)).toBe(ancestorRef.current);
+
+    scrollerRef.current!.style.overflowY = "auto";
+    expect(scrollingAncestor(scrollerRef.current)).toBe(scrollerRef.current);
 
     act(() => root.render(<div ref={scrollerRef}/>));
     setScrolling(false);
@@ -178,6 +234,61 @@ describe("ArtworkProximity", () => {
     expect(loading("/first.jpg")).toBe("eager");
   });
 
+  it("switches from a self-scrolling pane to its scrolling ancestor after a layout change", () => {
+    act(() => root.render(
+      <div ref={ancestorRef}>
+        <div ref={scrollerRef}>
+          <ArtworkProximity scroller={scrollerRef}>{picture("/first.jpg")}</ArtworkProximity>
+        </div>
+      </div>,
+    ));
+    scrollerRef.current!.style.overflowY = "auto";
+    act(() => window.dispatchEvent(new Event("resize")));
+    const pane = observer();
+    expect(pane.root).toBe(scrollerRef.current);
+
+    scrollerRef.current!.style.overflowY = "visible";
+    ancestorRef.current!.style.overflowY = "auto";
+    act(() => StubResizeObserver.instances.at(-1)!.fire());
+    flushAnimationFrame();
+
+    const ancestor = observer();
+    expect(ancestor).not.toBe(pane);
+    expect(pane.disconnected).toBe(true);
+    expect(ancestor.root).toBe(ancestorRef.current);
+    expect(ancestor.elements.has(image("/first.jpg"))).toBe(true);
+
+    const observers = StubIntersectionObserver.instances.length;
+    act(() => StubResizeObserver.instances.at(-1)!.fire());
+    flushAnimationFrame();
+    expect(StubIntersectionObserver.instances).toHaveLength(observers);
+  });
+
+  it("uses a horizontal strip as its root and takes half its width as horizontal reach", () => {
+    scroller.style.overflowX = "auto";
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 900 });
+    Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 1600 });
+    render(picture("/first.jpg"));
+    expect(observer().root).toBe(scroller);
+    expect(artworkAhead(scroller)).toBe("900px 800px");
+    expect(observer().rootMargin).toBe("900px 800px");
+  });
+
+  it("makes NearImage lazy and async until reported while preserving its error handler", () => {
+    const onError = vi.fn();
+    render(<NearImage src="/near.jpg" alt="Near" className="near-picture" onError={onError}/>);
+    const picture = image("/near.jpg");
+    expect(picture.getAttribute("loading")).toBe("lazy");
+    expect(picture.getAttribute("decoding")).toBe("async");
+    expect(picture.getAttribute("alt")).toBe("Near");
+    expect(picture.className).toBe("near-picture");
+
+    act(() => observer().fire([picture]));
+    expect(picture.getAttribute("loading")).toBe("eager");
+    act(() => picture.dispatchEvent(new Event("error")));
+    expect(onError).toHaveBeenCalledOnce();
+  });
+
   it("takes a scrolling grid as its root while the grid is still empty", () => {
     setScrolling(true);
     Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 0 });
@@ -188,8 +299,10 @@ describe("ArtworkProximity", () => {
 
   it("reaches one panel ahead, and never less than the minimum", () => {
     Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 1400 });
-    expect(artworkAhead(scroller)).toBe("1400px 700px");
+    Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 1000 });
+    expect(artworkAhead(scroller)).toBe("1400px 500px");
     Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+    Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 200 });
     expect(artworkAhead(scroller)).toBe(`${ARTWORK_AHEAD_MIN_PX}px ${ARTWORK_AHEAD_MIN_PX / 2}px`);
   });
 });

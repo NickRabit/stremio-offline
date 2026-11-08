@@ -7,6 +7,25 @@ import { setLocale } from "./i18n";
 import { isTagLine, synopsisOf, TitleExtraFacts, TitleExtrasActions, TitleExtrasRows, trailerFromExtras, type TitleExtrasActionsValue } from "./TitleExtras";
 import type { TitleExtras } from "./types";
 
+class RecordingIntersectionObserver {
+  static instances: RecordingIntersectionObserver[] = [];
+
+  readonly root: Element | Document | null;
+  readonly rootMargin: string;
+  readonly elements = new Set<Element>();
+
+  constructor(readonly callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    this.root = options?.root ?? null;
+    this.rootMargin = options?.rootMargin ?? "0px";
+    RecordingIntersectionObserver.instances.push(this);
+  }
+
+  observe(element: Element) { this.elements.add(element); }
+  unobserve(element: Element) { this.elements.delete(element); }
+  disconnect() { this.elements.clear(); }
+  takeRecords(): IntersectionObserverEntry[] { return []; }
+}
+
 const cast = {
   people: [
     { name: "Show Runner", role: "creator" as const },
@@ -43,6 +62,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const mount = (node: ReactNode, actions?: TitleExtrasActionsValue) => {
@@ -149,6 +170,32 @@ describe("TitleExtrasRows", () => {
     expect(videos[1]!.textContent).toContain("Clip");
     act(() => { videos[0]!.click(); });
     expect(onTrailer).toHaveBeenCalledWith({ youtubeId: "abcdefghijk", title: "Official trailer", provider: "tmdb" });
+  });
+
+  it("observes each populated extras strip and loads its pictures near the strip", () => {
+    RecordingIntersectionObserver.instances = [];
+    vi.stubGlobal("IntersectionObserver", RecordingIntersectionObserver);
+    const computed = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+      const style = computed(element, pseudo);
+      if (element.classList.contains("extras-strip")) {
+        Object.defineProperty(style, "overflowX", { configurable: true, value: "auto" });
+        Object.defineProperty(style, "overflowY", { configurable: true, value: "hidden" });
+      }
+      return style;
+    });
+
+    mount(<TitleExtrasRows extras={{ ...cast, videos: [{ key: "abcdefghijk", name: "Trailer", kind: "trailer", thumbnail: "/trailer.jpg" }] }} loading={false}/>);
+
+    const strips = [...host.querySelectorAll<HTMLElement>(".extras-strip")];
+    expect(strips).toHaveLength(3);
+    expect(strips.map((strip) => RecordingIntersectionObserver.instances.filter((observer) => observer.root === strip))).toHaveLength(3);
+    expect(strips.every((strip) => RecordingIntersectionObserver.instances.filter((observer) => observer.root === strip).length === 1)).toBe(true);
+
+    const pictures = [...host.querySelectorAll<HTMLImageElement>(".extras-strip img")];
+    expect(pictures.map((picture) => picture.getAttribute("src"))).toEqual(["/ada.jpg", "/trailer.jpg", "/sally.jpg"]);
+    expect(pictures.every((picture) => picture.getAttribute("loading") === "lazy" && picture.getAttribute("decoding") === "async")).toBe(true);
+    expect(pictures.every((picture) => RecordingIntersectionObserver.instances.some((observer) => observer.elements.has(picture)))).toBe(true);
   });
 
   it("opens a video on YouTube in secure mode and ignores an id that is not a video", () => {
