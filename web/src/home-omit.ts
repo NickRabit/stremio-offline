@@ -10,7 +10,9 @@ let lastScrollAt = Number.NEGATIVE_INFINITY;
 if (typeof document !== "undefined") {
   document.addEventListener("scroll", () => { lastScrollAt = Date.now(); }, { capture: true, passive: true });
 }
-const scrolling = () => Date.now() - lastScrollAt < SCROLLING_MS;
+export function isScrolling(): boolean {
+  return Date.now() - lastScrollAt < SCROLLING_MS;
+}
 
 type Scroller = HTMLElement | null;
 
@@ -46,7 +48,7 @@ export function useOmission(omit: boolean, element: RefObject<HTMLElement | null
     if (!omit) { setGone(false); return; }
     if (gone) return;
     const node = element.current;
-    if (!node || typeof IntersectionObserver === "undefined" || !scrolling()) { setGone(true); return; }
+    if (!node || typeof IntersectionObserver === "undefined" || !isScrolling()) { setGone(true); return; }
     const scroller = scrollParent(node);
     const scrollTarget: EventTarget = scroller ?? window;
     let idle: ReturnType<typeof setTimeout> | undefined;

@@ -225,6 +225,15 @@ describe("Home", () => {
     expect(row("resume")!.querySelector(".resume-strip.refreshing")).not.toBeNull();
   });
 
+  it("loads the first six pictures in a shelf eagerly and the rest lazily", async () => {
+    const items = Array.from({ length: 8 }, (_, index) => ({ ...episodeCard(), key: `episode:f:${index}` }));
+    await render({ rows: allEmpty({ episodes: rowState({ items }) }) });
+    const pictures = [...row("episodes")!.querySelectorAll<HTMLImageElement>(".home-card .browse-art img:not(.tile-blur)")];
+    expect(pictures.map((picture) => picture.getAttribute("loading"))).toEqual([
+      "eager", "eager", "eager", "eager", "eager", "eager", "lazy", "lazy",
+    ]);
+  });
+
   it("shows a row's own error line and retries only that row", async () => {
     const { onRetry } = await render({ rows: allEmpty({ resume: rowState({ status: "error" }), favorites: rowState({ items: [favoriteCard("file")] }) }) });
     const retry = row("resume")!.querySelector<HTMLButtonElement>(".home-retry")!;

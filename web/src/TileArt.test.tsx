@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { act } from "react";
+import { act, Profiler } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { PosterMosaic, TileArt } from "./TileArt";
+import { forgetKnownFits, PosterMosaic, TileArt } from "./TileArt";
 import { setLocale } from "./i18n";
 
 let root: Root;
@@ -10,6 +10,7 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
+  forgetKnownFits();
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -85,5 +86,41 @@ describe("TileArt image failures", () => {
     expect(host.querySelector(".library-preview-collage")).toBeNull();
     act(() => host.querySelector("img")!.dispatchEvent(new Event("error")));
     expect(host.querySelector("[data-fallback]")).not.toBeNull();
+  });
+});
+
+describe("TileArt picture layout", () => {
+  const render = (shape: "wide" | "poster", poster?: string, wide?: string) =>
+    act(() => root.render(<TileArt shape={shape} poster={poster} wide={wide} fallback={<span data-fallback/>}/>));
+  const picture = () => host.querySelector<HTMLImageElement>("img:not(.tile-blur)")!;
+  const load = (node: HTMLImageElement, width: number, height: number) => {
+    Object.defineProperty(node, "naturalWidth", { value: width, configurable: true });
+    Object.defineProperty(node, "naturalHeight", { value: height, configurable: true });
+    act(() => node.dispatchEvent(new Event("load")));
+  };
+
+  it("remembers the measured fit of a picture for its next mount", () => {
+    render("poster", "/wide.jpg");
+    expect(host.querySelector(".tile-fit")).toBeNull();
+    load(picture(), 1600, 900);
+    expect(host.querySelector(".tile-fit")).not.toBeNull();
+    expect(host.querySelector(".tile-blur")).not.toBeNull();
+    expect([...host.querySelectorAll("img")].map((image) => image.getAttribute("decoding"))).toEqual(["async", "async"]);
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    render("poster", "/wide.jpg");
+    expect(host.querySelector(".tile-fit")).not.toBeNull();
+    expect(host.querySelector(".tile-blur")).not.toBeNull();
+  });
+
+  it("does not rerender when a loaded picture already has the drawn fit", () => {
+    let renders = 0;
+    act(() => root.render(<Profiler id="tile" onRender={() => { renders += 1; }}><TileArt shape="wide" poster="/poster.jpg" fallback={<span data-fallback/>}/></Profiler>));
+    const beforeLoad = renders;
+
+    load(picture(), 400, 600);
+
+    expect(renders).toBe(beforeLoad);
   });
 });

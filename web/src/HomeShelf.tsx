@@ -17,6 +17,8 @@ const SKELETON = [0, 1, 2, 3];
 /** How far below the screen a waiting shelf starts loading, so it is drawn by the time it
  *  scrolls in. */
 const AHEAD = "800px 0px";
+/** The first cards of a shelf cover a phone or desktop row, and the shelf itself is only drawn near the screen. */
+export const EAGER_CARDS = 6;
 
 const skeleton = <div className="resume-strip skeleton" aria-hidden="true">{SKELETON.map((index) => <div className="browse-item" key={index}><span className="browse-art"/><span className="home-skeleton-line title"/><span className="home-skeleton-line caption"/></div>)}</div>;
 
@@ -91,7 +93,7 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
           {state.status === "loading" && empty
             ? skeleton
             : <div className={`resume-strip${state.status === "loading" ? " refreshing" : ""}`} aria-busy={state.status === "loading" || undefined} data-shape={shape}>
-                {state.items.map((card) => <HomeCard key={card.key} card={card} shape={shape} actions={actions}/>)}
+                {state.items.map((card, index) => <HomeCard key={card.key} card={card} shape={shape} actions={actions} eager={index < EAGER_CARDS}/>)}
               </div>}
         </>}
   </section>;

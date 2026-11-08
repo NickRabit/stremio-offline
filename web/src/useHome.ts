@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { readHomeCache, writeHomeCache } from "./home-cache";
 import { emptyHomeRows, homeReducer, homeRowsFor, isHomeCatalogRow, type HomeRows } from "./home-state";
+import { isScrolling } from "./home-omit";
 import type { HomeOrderEntry, HomeRowId } from "../../server/src/home";
 
 /** A shelf the server could not fill before its deadline is still being fetched there; asking
@@ -10,27 +11,48 @@ const PARTIAL_RETRY_MS = 2500;
 const PARTIAL_RETRIES = 3;
 const HOME_CACHE_WRITE_MS = 500;
 
+const shownCatalogueRows = (rows: HomeRows): Set<HomeRowId> => {
+  const shown = new Set<HomeRowId>();
+  for (const row of Object.keys(rows)) {
+    if (isHomeCatalogRow(row as HomeRowId)) shown.add(row as HomeRowId);
+  }
+  return shown;
+};
+
 /** Home's media rows, wired to `GET /api/home`. Each call names its rows, so a retry touches
  *  only the row that failed; an answer only lands on the request still current for it. Addon
  *  shelves load once they come near the screen, in a request of their own, so a slow addon
  *  never holds up Continue watching. */
 export function useHome({ active, account, admin, playerOpen }: { active: boolean; account: string | null; admin: boolean; playerOpen: boolean }) {
-  const [rows, setRows] = useState<HomeRows>(emptyHomeRows);
+  const [initial] = useState(() => account === null ? null : readHomeCache(account));
+  const [rows, setRows] = useState<HomeRows>(() => initial?.rows ?? emptyHomeRows());
   /** The shelves the server says this account has, in its own order. A personal layout can
    *  hide a built-in or add a feed the client's addon list does not know, so the answer -- not
    *  `homeRowsFor` -- is what the page draws once it arrives. */
-  const [order, setOrder] = useState<HomeOrderEntry[]>([]);
-  const orderRef = useRef<HomeOrderEntry[]>([]);
+  const [order, setOrder] = useState<HomeOrderEntry[]>(() => initial?.order ?? []);
+  const [builtFor, setBuiltFor] = useState(account);
+  const orderRef = useRef<HomeOrderEntry[]>(initial?.order ?? []);
   const request = useRef(0);
   const builtinRows = useMemo(() => homeRowsFor(admin), [admin]);
   /** Addon shelves that have come into view, kept across visits until the account changes. */
-  const shown = useRef(new Set<HomeRowId>());
+  const shown = useRef(shownCatalogueRows(initial?.rows ?? {}));
   const retries = useRef(new Map<HomeRowId, number>());
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const pending = useRef(new Set<HomeRowId>());
   const cacheTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /** Bumped on an account change, so a retry planned for the previous account is dropped. */
   const epoch = useRef(0);
+
+  let appliedRows = rows;
+  let appliedOrder = order;
+  if (account !== builtFor) {
+    const cached = account === null ? null : readHomeCache(account);
+    appliedRows = cached?.rows ?? emptyHomeRows();
+    appliedOrder = cached?.order ?? [];
+    setRows(appliedRows);
+    setOrder(appliedOrder);
+    setBuiltFor(account);
+  }
 
   const later = useCallback((run: () => void, ms: number) => {
     const timer = setTimeout(() => { timers.current.delete(timer); run(); }, ms);
@@ -91,25 +113,12 @@ export function useHome({ active, account, admin, playerOpen }: { active: boolea
   useEffect(() => {
     request.current += 1;
     epoch.current += 1;
-    shown.current.clear();
+    shown.current = shownCatalogueRows(rows);
     pending.current.clear();
     retries.current.clear();
     for (const timer of timers.current) clearTimeout(timer);
     timers.current.clear();
-    orderRef.current = [];
-    setOrder([]);
-    setRows(emptyHomeRows());
-    if (account !== null) {
-      const cached = readHomeCache(account);
-      if (cached) {
-        setRows(cached.rows);
-        setOrder(cached.order);
-        orderRef.current = cached.order;
-        for (const row of Object.keys(cached.rows)) {
-          if (isHomeCatalogRow(row as HomeRowId)) shown.current.add(row as HomeRowId);
-        }
-      }
-    }
+    orderRef.current = order;
   }, [account]);
 
   useEffect(() => () => { for (const timer of timers.current) clearTimeout(timer); }, []);
@@ -118,10 +127,14 @@ export function useHome({ active, account, admin, playerOpen }: { active: boolea
     if (cacheTimer.current) clearTimeout(cacheTimer.current);
     cacheTimer.current = undefined;
     if (account === null || !Object.values(rows).some((row) => row?.status === "ok")) return;
-    cacheTimer.current = setTimeout(() => {
-      cacheTimer.current = undefined;
-      writeHomeCache(account, order, rows);
-    }, HOME_CACHE_WRITE_MS);
+    const schedule = () => {
+      cacheTimer.current = setTimeout(() => {
+        if (isScrolling()) { schedule(); return; }
+        cacheTimer.current = undefined;
+        writeHomeCache(account, order, rows);
+      }, HOME_CACHE_WRITE_MS);
+    };
+    schedule();
     return () => {
       if (!cacheTimer.current) return;
       clearTimeout(cacheTimer.current);
@@ -139,5 +152,5 @@ export function useHome({ active, account, admin, playerOpen }: { active: boolea
     wasOpen.current = playerOpen;
   }, [playerOpen, active, account, full]);
 
-  return { rows, order, refresh, reveal };
+  return { rows: appliedRows, order: appliedOrder, refresh, reveal };
 }

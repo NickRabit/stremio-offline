@@ -3,6 +3,21 @@ import { remoteTileArtwork } from "./remote-artwork";
 import { fitFor, pickTileArt, type TileFit } from "./tile-shape";
 import type { TileShape } from "./types";
 
+const KNOWN_FIT_LIMIT = 1000;
+const knownFit = new Map<string, TileFit>();
+const fitKey = (shape: TileShape, url: string) => `${shape}|${url}`;
+
+function rememberFit(key: string, fit: TileFit): void {
+  knownFit.delete(key);
+  knownFit.set(key, fit);
+  if (knownFit.size <= KNOWN_FIT_LIMIT) return;
+  const oldest = knownFit.keys().next().value;
+  if (oldest !== undefined) knownFit.delete(oldest);
+}
+
+export function forgetKnownFits(): void {
+  knownFit.clear();
+}
 
 
 /** A folder that stands for several films: their posters as one small mosaic instead of a
@@ -31,12 +46,13 @@ export function PosterMosaic({ posters, label, fallback = null }: { posters: str
  * catalogue filed it under: an addon that calls a 16:9 picture a poster is common enough that
  * trusting the label crops half its titles to a sliver.
  */
-export function TileArt({ shape, poster, wide, fallback }: {
+export function TileArt({ shape, poster, wide, fallback, eager = false }: {
   shape: TileShape;
   poster?: string;
   wide?: string;
   /** Drawn when the title has neither picture. */
   fallback: ReactNode;
+  eager?: boolean;
 }) {
   const identity = JSON.stringify([poster, wide]);
   const [failure, setFailure] = useState({ identity, urls: [] as string[] });
@@ -46,16 +62,24 @@ export function TileArt({ shape, poster, wide, fallback }: {
   const tiled = remoteTileArtwork(wide);
   const { url, fit } = pickTileArt(shape, failed.includes(poster ?? "") ? undefined : poster, failed.includes(tiled ?? "") ? undefined : wide);
   const [measured, setMeasured] = useState<{ url: string; width: number; height: number }>();
+  const measuredFit = measured && measured.url === url ? fitFor(shape, measured.width, measured.height) : undefined;
+  const rememberedFit = url ? knownFit.get(fitKey(shape, url)) : undefined;
+  const effectiveFit: TileFit = measuredFit ?? rememberedFit ?? fit;
   const onLoad = (event: SyntheticEvent<HTMLImageElement>) => {
-    if (url) setMeasured({ url, width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight });
+    if (!url) return;
+    const width = event.currentTarget.naturalWidth;
+    const height = event.currentTarget.naturalHeight;
+    const measuredFit = fitFor(shape, width, height);
+    rememberFit(fitKey(shape, url), measuredFit);
+    if (measuredFit !== effectiveFit) setMeasured({ url, width, height });
   };
   const onError = () => {
     if (url) setFailure((previous) => ({ identity, urls: [...(previous.identity === identity ? previous.urls : []), url] }));
   };
   if (!url) return <>{fallback}</>;
-  const effectiveFit: TileFit = measured?.url === url ? fitFor(shape, measured.width, measured.height) : fit;
+  const loading = eager ? "eager" : "lazy";
   return <>
-    {effectiveFit === "contain" && <img key={`blur:${url}`} className="tile-blur" src={url} alt="" aria-hidden="true" loading="lazy"/>}
-    <img key={url} className={effectiveFit === "contain" ? "tile-fit" : undefined} src={url} alt="" loading="lazy" onLoad={onLoad} onError={onError}/>
+    {effectiveFit === "contain" && <img key={`blur:${url}`} className="tile-blur" src={url} alt="" aria-hidden="true" loading={loading} decoding="async"/>}
+    <img key={url} className={effectiveFit === "contain" ? "tile-fit" : undefined} src={url} alt="" loading={loading} decoding="async" onLoad={onLoad} onError={onError}/>
   </>;
 }
