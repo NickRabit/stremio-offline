@@ -1093,7 +1093,9 @@ test("a stalled resume page spends one metadata deadline instead of starting a n
 
   assert.equal(page.items.length, 11);
   assert.equal(harness.metaCalls.length, 4, "only the first four workers may start during the shared budget");
-  assert.equal(harness.metaSignals.every((signal) => signal?.aborted), true);
+  // Home stops waiting at the deadline but leaves the lookups running, so their answers reach the
+  // metadata cache and the next Home does not wait for the same titles again.
+  assert.equal(harness.metaSignals.every((signal) => signal === undefined), true);
   assert.equal(page.items.filter((item) => item.kind === "remote").every((item) => item.poster?.includes("artwork/Primary")), true);
   assert.equal(page.items.find((item) => item.kind === "resume-file")?.poster, "thumb:Shows/Show",
     "local title artwork remains available after the metadata budget is spent");
