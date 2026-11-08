@@ -1,9 +1,9 @@
-import { useState, type ReactNode, type SyntheticEvent } from "react";
+import { useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import { remoteTileArtwork } from "./remote-artwork";
 import { fitFor, pickTileArt, type TileFit } from "./tile-shape";
 import type { TileShape } from "./types";
 
-const KNOWN_SIZE_LIMIT = 1000;
+export const KNOWN_SIZE_LIMIT = 1000;
 // A picture's real size, by address: a tile drawn again -- or in the other shape -- already knows
 // how its picture sits, with no load event and no refit after it.
 const knownSize = new Map<string, { width: number; height: number }>();
@@ -62,15 +62,18 @@ export function TileArt({ shape, poster, wide, fallback, eager = false }: {
   // remembers; `pickTileArt` narrows the same way, and narrowing twice is the same address.
   const tiled = remoteTileArtwork(wide);
   const { url, fit } = pickTileArt(shape, failed.includes(poster ?? "") ? undefined : poster, failed.includes(tiled ?? "") ? undefined : wide);
-  // Bumped only when a load changes how the picture sits; the size itself lives in knownSize.
+  // Bumped only when a load changes how the picture sits. The size is kept here as well as in
+  // knownSize, so a tile on screen keeps it after the shared memory has let it go.
   const [, setRefit] = useState(0);
-  const size = url ? knownSize.get(url) : undefined;
+  const own = useRef<{ url: string; width: number; height: number } | undefined>(undefined);
+  const size = url ? knownSize.get(url) ?? (own.current?.url === url ? own.current : undefined) : undefined;
   const effectiveFit: TileFit = size ? fitFor(shape, size.width, size.height) : fit;
   const onLoad = (event: SyntheticEvent<HTMLImageElement>) => {
     if (!url) return;
     const width = event.currentTarget.naturalWidth;
     const height = event.currentTarget.naturalHeight;
     rememberSize(url, width, height);
+    own.current = { url, width, height };
     if (fitFor(shape, width, height) !== effectiveFit) setRefit((count) => count + 1);
   };
   const onError = () => {

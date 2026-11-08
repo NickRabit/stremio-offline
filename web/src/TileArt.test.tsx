@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, Profiler } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { forgetKnownSizes, PosterMosaic, TileArt } from "./TileArt";
+import { forgetKnownSizes, KNOWN_SIZE_LIMIT, PosterMosaic, TileArt } from "./TileArt";
 import { setLocale } from "./i18n";
 
 let root: Root;
@@ -121,6 +121,25 @@ describe("TileArt picture layout", () => {
     render("wide", "/square.jpg");
     expect(host.querySelector(".tile-fit")).toBeNull();
     expect(host.querySelector(".tile-blur")).toBeNull();
+  });
+
+  it("keeps the fit of a tile on screen after the shared memory has let its picture go", () => {
+    render("poster", "/wide.jpg");
+    load(picture(), 1600, 900);
+    expect(host.querySelector(".tile-fit")).not.toBeNull();
+    // Other tiles load enough pictures to push this one out of the shared memory.
+    const others = document.createElement("div");
+    const otherRoot = createRoot(others);
+    for (let index = 0; index <= KNOWN_SIZE_LIMIT; index += 1) {
+      act(() => otherRoot.render(<TileArt shape="poster" poster={`/other-${index}.jpg`} fallback={null}/>));
+      const node = others.querySelector<HTMLImageElement>("img:not(.tile-blur)")!;
+      Object.defineProperty(node, "naturalWidth", { value: 400, configurable: true });
+      Object.defineProperty(node, "naturalHeight", { value: 600, configurable: true });
+      act(() => node.dispatchEvent(new Event("load")));
+    }
+    act(() => otherRoot.unmount());
+    render("poster", "/wide.jpg");
+    expect(host.querySelector(".tile-fit")).not.toBeNull();
   });
 
   it("does not rerender when a loaded picture already has the drawn fit", () => {
