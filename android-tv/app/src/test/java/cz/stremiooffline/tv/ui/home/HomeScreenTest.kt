@@ -12,6 +12,7 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -802,7 +803,7 @@ class HomeScreenTest {
     compose.waitForIdle()
 
     assertEquals(1, api.metaRequests.size)
-    compose.onNodeWithText(card.episodeCodeText!!).assertExists()
+    compose.onAllNodesWithText(card.episodeCodeText!!).onFirst().assertExists()
   }
 
   @Test
@@ -947,7 +948,8 @@ class HomeScreenTest {
     compose.waitForIdle()
 
     assertTrue(api.metaRequests.isEmpty())
-    compose.onNodeWithText("Films/First.mkv").assertExists()
+    // The hero and the card caption both carry the line now that the card has no Resume word.
+    compose.onAllNodesWithText("Films/First.mkv").onFirst().assertExists()
   }
 
   @Test

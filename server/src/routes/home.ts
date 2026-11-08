@@ -12,7 +12,7 @@ import {
   arrangeHomeRows, boundCards, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, mergeResume, parseHomeLayout,
   parseResumeFilter, resumePage, tmdbIdOfIdentity,
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
-  type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeIdentity, type ResumeSources,
+  withEpisodeNaming, type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeIdentity, type ResumeSources,
 } from "../home.js";
 import { libraryFor, libraryPath, libraryPathOpen, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, isVideo, type BrowseItem } from "../library.js";
@@ -783,6 +783,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     }));
     for (const proof of proofs) remotePersonal.assertCardsCurrent(proof.authority, proof.cards);
     requireAccess(req);
+    for (const row of Object.values(rows)) if (row) row.items = row.items.map(withEpisodeNaming);
     const response: HomeResponse = { generatedAt: new Date().toISOString(), order, rows };
     res.json(response);
   }));
@@ -803,7 +804,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     if (proof) remotePersonal.assertCardsCurrent(proof.authority, proof.cards);
     requireAccess(req);
     res.json({
-      items, total: page.total,
+      items: items.map(withEpisodeNaming), total: page.total,
       // A page is pending when a card on it still lacks a poster, and the library source
       // reports a file still waiting for artwork or metadata.
       pending: pending || items.some((item) => !item.poster),

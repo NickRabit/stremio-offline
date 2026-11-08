@@ -42,6 +42,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -62,6 +63,9 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
 
+/** The icon a card without artwork shows in place of its picture. */
+const val TagCardPlaceholder = "card_placeholder"
+
 /** Room a focused card's scale and glow need inside a scrolling viewport, so the first one is
  *  not clipped by the row or grid it lives in. */
 val CardRowInset = 24.dp
@@ -81,6 +85,8 @@ fun PosterCard(
   mosaic: List<String> = emptyList(),
   /** Try an image before the collage and use the collage only when every image fails. */
   imageBeforeMosaic: Boolean = false,
+  /** What stands in for missing artwork: a film, or a folder for a folder. */
+  placeholderIcon: ImageVector = FilmIcon,
 ) {
   var focused by remember { mutableStateOf(false) }
   val candidates = remember(imageUrl, fallbackImageUrl) { listOfNotNull(imageUrl, fallbackImageUrl).distinct() }
@@ -129,17 +135,13 @@ fun PosterCard(
         if (collage && (!imageBeforeMosaic || art == null)) {
           PosterMosaic(mosaic, label = stringResource(R.string.library_mosaic_alt, mosaic.size.toString()))
         }
-        // The name over the artwork is the gradient fallback; with a real poster it would only
-        // fight the picture.
+        // Without artwork an icon holds the place, as on the web; the name is already under the card.
         if (!imageShown && !collage) {
-          Text(
-            name,
-            color = Tokens.Text,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.ExtraBold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
+          androidx.tv.material3.Icon(
+            placeholderIcon,
+            contentDescription = null,
+            tint = Tokens.Muted,
+            modifier = Modifier.align(Alignment.Center).size(34.dp).testTag(TagCardPlaceholder),
           )
         }
         if (progress != null) {
@@ -345,17 +347,13 @@ fun WideCard(
             modifier = Modifier.fillMaxSize(),
           )
         }
-        // The title over the artwork is the gradient fallback; with a real still it would only
-        // fight the picture.
+        // Without a still an icon holds the place; the label is already under the card.
         if (art == null) {
-          Text(
-            label,
-            color = Tokens.Text,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.ExtraBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.BottomStart).padding(7.dp),
+          androidx.tv.material3.Icon(
+            FilmIcon,
+            contentDescription = null,
+            tint = Tokens.Muted,
+            modifier = Modifier.align(Alignment.Center).size(28.dp).testTag(TagCardPlaceholder),
           )
         }
         if (progress != null) {

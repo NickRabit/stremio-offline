@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.data
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.actionFor
+import cz.stremiooffline.tv.ui.home.captionOf
 import cz.stremiooffline.tv.ui.home.cardLabel
 import cz.stremiooffline.tv.ui.home.heroDescription
 import cz.stremiooffline.tv.ui.home.heroMetaLine
@@ -99,7 +100,7 @@ class HomeCardsTest {
   }
 
   @Test
-  fun `a remembered film or series resumes, a pending next episode does not`() {
+  fun `a remembered film or series carries no label under Continue watching, a pending next episode does`() {
     fun card(type: String, pending: Boolean = false) = HomeCard.ResumeCatalogue(
       key = "$type:tt1",
       type = type,
@@ -108,8 +109,8 @@ class HomeCardsTest {
       pending = pending,
     )
 
-    assertEquals(R.string.home_resume, cardLabel(card("movie")))
-    assertEquals(R.string.home_resume, cardLabel(card("series")))
+    assertNull(cardLabel(card("movie")))
+    assertNull(cardLabel(card("series")))
     assertEquals(R.string.home_next_episode, cardLabel(card("series", pending = true)))
   }
 
@@ -270,5 +271,22 @@ class HomeCardsTest {
 
     assertEquals(HomeRowStatus.Error, decoded.status)
     assertTrue(decoded.items.isEmpty())
+  }
+
+  @Test
+  fun `an episode card is titled by its show and names the episode beside its numbering`() {
+    val card = HomeCard.ResumeFile(
+      key = "f",
+      title = "Prasátko Peppa - S01E04 - Polly Parrot",
+      season = 1,
+      episode = 4,
+      series = "Prasátko Peppa",
+      episodeName = "Polly Parrot",
+    )
+
+    assertEquals("Prasátko Peppa", card.displayTitle)
+    assertEquals("S1 · E4 · Polly Parrot", captionOf(card, cardLabel(card)?.toString()))
+    // A card the server could not split keeps the title it was written with.
+    assertEquals("Heat", HomeCard.ResumeFile(key = "h", title = "Heat").displayTitle)
   }
 }

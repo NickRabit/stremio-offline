@@ -142,7 +142,6 @@ home.partial
 home.retry
 home.rowFailed
 home.nextEpisode
-home.resume
 home.newEpisode
 home.emptyTitle
 home.emptyText

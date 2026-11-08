@@ -9,7 +9,8 @@ const size = (value: number) => !value ? "0 B"
   : value >= 1e6 ? `${Math.round(value / 1e6)} MB`
   : `${Math.round(value / 1e3)} kB`;
 
-const files = (count: number) => t("stats.items", { count });
+// Only a transfer that ended counts; one still running adds its bytes and nothing here.
+const files = (count: number) => t("stats.finished", { count });
 
 /** How long the playback has been running, in the shape a player shows it. */
 const elapsed = (from: string, now: number) => {

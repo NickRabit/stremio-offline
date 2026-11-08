@@ -813,6 +813,7 @@ export class MediaServerPersonal {
       ...(record.mediaSourceId !== undefined ? { mediaSourceId: record.mediaSourceId } : {}),
       ...(record.series?.season !== undefined ? { season: record.series.season } : {}),
       ...(record.series?.episode !== undefined ? { episode: record.series.episode } : {}),
+      ...(record.series?.name ? { seriesName: record.series.name } : {}),
       ...(record.primaryAbsent === true ? {} : { poster: remoteArtworkPath(library.id, record.itemId, "Primary") }),
       ...(wide === undefined ? {} : { wide }),
       ...(record.duration > 0 ? { progress: { position: record.position, duration: record.duration } } : {}),

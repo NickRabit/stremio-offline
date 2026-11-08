@@ -58,6 +58,13 @@ const loads = (node: HTMLImageElement, width: number, height: number) => {
 };
 
 describe("HomeCard wide tiles", () => {
+  it("titles an episode by its show and puts the episode's name beside its numbering", () => {
+    render({ kind: "resume-file", key: "f", title: "Prasátko Peppa - S01E04 - Polly Parrot", series: "Prasátko Peppa", episodeName: "Polly Parrot", path: "lib_00000000/p.mkv", progress: { position: 1, duration: 4 }, season: 1, episode: 4, updatedAt: "", forgetKeys: ["f"] });
+    expect(host.querySelector(".library-copy strong, .home-title, b, strong")?.textContent ?? host.textContent).toContain("Prasátko Peppa");
+    expect(host.textContent).toContain("S01E04 · Polly Parrot");
+    expect(host.textContent).not.toContain("S01E04 - Polly Parrot");
+  });
+
   it("dates a new episode by the day its release names, whatever the zone", () => {
     for (const zone of ["America/New_York", "Asia/Tokyo"]) {
       process.env.TZ = zone;

@@ -53,6 +53,7 @@ import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.ui.components.FilmIcon
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
@@ -640,6 +641,7 @@ private fun LocalLibraryCard(
       cardTag = cardTag,
       mosaic = item.mosaic.map(api::url),
       imageBeforeMosaic = item.mosaicImage != null && item.mosaic.size >= 2,
+      placeholderIcon = if (item is BrowseItem.Folder) FolderIcon else FilmIcon,
       onClick = onClick,
       onLongClick = onMenu,
       modifier = modifier,
