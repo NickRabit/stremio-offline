@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ARTWORK_AHEAD_MIN_PX, ArtworkProximity, artworkAhead, NearImage, scrollingAncestor } from "./artwork-proximity";
-import { TileArt } from "./TileArt";
+import { PosterMosaic, TileArt } from "./TileArt";
 
 class StubIntersectionObserver {
   static instances: StubIntersectionObserver[] = [];
@@ -100,6 +100,9 @@ const image = (poster: string) =>
 
 const loading = (poster: string) => image(poster).getAttribute("loading");
 
+// The frames tiles hold until they come near, in document order.
+const waits = () => [...host.querySelectorAll<HTMLElement>(".tile-art-wait")];
+
 const observer = () => StubIntersectionObserver.instances.at(-1)!;
 
 // A layout that scrolls the element gives it overflow; one that scrolls the page does not.
@@ -165,22 +168,38 @@ describe("ArtworkProximity", () => {
     expect(observer().root).toBeNull();
   });
 
-  it("keeps tiles lazy until each one is reported intersecting", () => {
+  it("creates no picture until its tile is reported near, then loads it eagerly", () => {
     render(<>{picture("/first.jpg")}{picture("/second.jpg")}</>);
-    expect(loading("/first.jpg")).toBe("lazy");
-    expect(loading("/second.jpg")).toBe("lazy");
+    expect(host.querySelector("img")).toBeNull();
+    const [first, second] = waits();
+    expect(observer().elements.has(first)).toBe(true);
+    expect(observer().elements.has(second)).toBe(true);
 
-    act(() => observer().fire([image("/first.jpg")]));
+    act(() => observer().fire([first]));
     expect(loading("/first.jpg")).toBe("eager");
-    expect(loading("/second.jpg")).toBe("lazy");
+    expect(host.querySelector('img[src="/second.jpg"]')).toBeNull();
+    expect(waits()).toEqual([second]);
+  });
+
+  it("draws the picture at once where the browser cannot watch tiles", () => {
+    vi.stubGlobal("IntersectionObserver", undefined);
+    render(picture("/first.jpg"));
+    expect(loading("/first.jpg")).toBe("lazy");
+    expect(waits()).toHaveLength(0);
+  });
+
+  it("creates a poster mosaic only once its tile is reported near", () => {
+    render(<PosterMosaic posters={["/a.jpg", "/b.jpg"]} label="Two"/>);
+    expect(host.querySelector("img")).toBeNull();
+    act(() => observer().fire(waits()));
+    expect(host.querySelectorAll(".library-preview-collage img")).toHaveLength(2);
   });
 
   it("unobserves reported and unmounted tiles, disconnects the provider, and ignores late entries", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     render(<>{picture("/first.jpg")}{picture("/second.jpg")}</>);
     const watched = observer();
-    const first = image("/first.jpg");
-    const second = image("/second.jpg");
+    const [first, second] = waits();
 
     act(() => watched.fire([first]));
     expect(watched.elements.has(first)).toBe(false);
@@ -196,15 +215,16 @@ describe("ArtworkProximity", () => {
     expect(error).not.toHaveBeenCalled();
   });
 
-  it("makes a tile lazy again when its picture changes", () => {
-    render(picture("/first.jpg"));
-    act(() => observer().fire([image("/first.jpg")]));
+  it("makes a tile wait again when its picture changes", () => {
+    render(picture("/first.jpg", "tile"));
+    act(() => observer().fire(waits()));
     expect(loading("/first.jpg")).toBe("eager");
 
-    render(picture("/second.jpg"));
-    expect(loading("/second.jpg")).toBe("lazy");
-    expect(observer().elements.has(image("/second.jpg"))).toBe(true);
-    act(() => observer().fire([image("/second.jpg")]));
+    render(picture("/second.jpg", "tile"));
+    expect(host.querySelector("img")).toBeNull();
+    const [wait] = waits();
+    expect(observer().elements.has(wait)).toBe(true);
+    act(() => observer().fire([wait]));
     expect(loading("/second.jpg")).toBe("eager");
   });
 
@@ -219,7 +239,8 @@ describe("ArtworkProximity", () => {
     render(picture("/first.jpg"));
     const scrolling = observer();
     expect(scrolling.root).toBe(scroller);
-    expect(scrolling.elements.has(image("/first.jpg"))).toBe(true);
+    const [wait] = waits();
+    expect(scrolling.elements.has(wait)).toBe(true);
 
     setScrolling(false);
     act(() => window.dispatchEvent(new Event("resize")));
@@ -228,9 +249,9 @@ describe("ArtworkProximity", () => {
     expect(page).not.toBe(scrolling);
     expect(scrolling.disconnected).toBe(true);
     expect(page.root).toBeNull();
-    expect(page.elements.has(image("/first.jpg"))).toBe(true);
-    expect(loading("/first.jpg")).toBe("lazy");
-    act(() => page.fire([image("/first.jpg")]));
+    expect(page.elements.has(wait)).toBe(true);
+    expect(host.querySelector("img")).toBeNull();
+    act(() => page.fire([wait]));
     expect(loading("/first.jpg")).toBe("eager");
   });
 
@@ -256,7 +277,7 @@ describe("ArtworkProximity", () => {
     expect(ancestor).not.toBe(pane);
     expect(pane.disconnected).toBe(true);
     expect(ancestor.root).toBe(ancestorRef.current);
-    expect(ancestor.elements.has(image("/first.jpg"))).toBe(true);
+    expect(ancestor.elements.has(waits()[0])).toBe(true);
 
     const observers = StubIntersectionObserver.instances.length;
     act(() => StubResizeObserver.instances.at(-1)!.fire());

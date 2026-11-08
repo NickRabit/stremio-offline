@@ -140,6 +140,12 @@ export function ArtworkProximity({ scroller, children }: {
   return <ArtworkProximityContext.Provider value={register}>{children}</ArtworkProximityContext.Provider>;
 }
 
+/** Whether a tile here can wait for the screen: it sits in an `ArtworkProximity` and the browser
+ *  can watch it. Elsewhere a tile draws its picture at once, as it always did. */
+export function useArtworkWatched(): boolean {
+  return useContext(ArtworkProximityContext) !== null && typeof IntersectionObserver !== "undefined";
+}
+
 export function useNearScreen(target: RefObject<Element | null>, key: string | undefined): boolean {
   const register = useContext(ArtworkProximityContext);
   // The picture that came near; a tile showing another one is lazy again until it does too.
