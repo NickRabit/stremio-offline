@@ -143,7 +143,6 @@
   <string name="home_retry">Reintentar</string>
   <string name="home_row_failed">No se pudo cargar esta fila.</string>
   <string name="home_next_episode">Siguiente episodio</string>
-  <string name="home_resume">Continuar</string>
   <string name="home_new_episode">Nuevo episodio</string>
   <string name="home_empty_title">Aquí todavía no hay nada</string>
   <string name="home_empty_text">Descarga algo o empieza a ver algo y aparecerá aquí.</string>
@@ -386,7 +385,10 @@
   <string name="media_server_eyebrow_episode">%1$s · episodio</string>
   <string name="media_server_state_local">La posición y la preferencia se guardan en este servidor solo para esta app.</string>
   <string name="media_server_versions">Versiones</string>
-  <string name="media_server_versions_available">%1$s versiones disponibles</string>
+  <plurals name="media_server_versions_available">
+    <item quantity="one">%1$s versión disponible</item>
+    <item quantity="other">%1$s versiones disponibles</item>
+  </plurals>
   <string name="media_server_finding_versions">Buscando versiones…</string>
   <string name="media_server_sources_empty">Este elemento no tiene ninguna versión reproducible.</string>
   <string name="media_server_sources_error">No se pudieron cargar las versiones.</string>

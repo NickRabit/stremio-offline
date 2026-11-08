@@ -184,4 +184,28 @@ class LibraryCatalogueTest {
     assertEquals(ResumeEpisode("series:local:$third", 1, 3), args.episode)
     assertEquals(third, (args.backend as LibraryBackend).rows["local:$third"]?.single()?.localPath)
   }
+
+  @Test
+  fun `two copies of one episode make one card whose sources hold both`() {
+    val mkv = "Shows/Peppa/Peppa - S01E01 - Muddy Puddles.mkv"
+    val mp4 = "Shows/Peppa/Peppa - S01E01 - Muddy Puddles.mp4"
+    val next = "Shows/Peppa/Peppa - S01E02 - Mr Dinosaur.mkv"
+    val args = ownCatalogueArgs(
+      detail(
+        file(mkv, season = 1, episode = 1, size = 2.0),
+        file(mp4, season = 1, episode = 1, size = 1.0, progress = ProgressDto(30.0, 300.0)),
+        file(next, season = 1, episode = 2),
+      ),
+    )
+    val videos = args.meta.videos.orEmpty()
+
+    assertEquals(listOf(1 to 1, 1 to 2), videos.map { it.season to it.episode })
+    // The copy with a position stands for the episode, so the card shows how far it got.
+    assertEquals("local:$mp4", videos.first().id)
+    assertEquals(listOf(mkv, mp4), (args.backend as LibraryBackend).rows["local:$mp4"]?.map { it.localPath })
+    assertEquals(ResumeEpisode("series:local:$mp4", 1, 1), args.episode)
+
+    val unwatched = ownCatalogueArgs(detail(file(mp4, season = 1, episode = 1, size = 1.0), file(mkv, season = 1, episode = 1, size = 2.0)))
+    assertEquals(listOf("local:$mkv"), unwatched.meta.videos.orEmpty().map { it.id })
+  }
 }

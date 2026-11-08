@@ -279,16 +279,16 @@ describe("Home", () => {
   it("opens a catalogue card's detail on the remembered episode, whatever source wrote it", async () => {
     const card = catalogue();
     const { onPlay, onOpenCatalogue } = await render({ rows: allEmpty({ resume: rowState({ items: [card] }) }) });
-    expect(row("resume")!.textContent).toContain("Resume");
+    expect(row("resume")!.textContent).not.toContain("Resume");
     expect(row("resume")!.textContent).toContain("S02E04");
     await click(primary("resume"));
     expect(onOpenCatalogue).toHaveBeenCalledWith(card);
     expect(onPlay).not.toHaveBeenCalled();
   });
 
-  it("labels a film Resume and a pending next episode without a progress bar", async () => {
+  it("leaves a started film unlabelled and labels a pending next episode without a progress bar", async () => {
     await render({ rows: allEmpty({ resume: rowState({ items: [catalogue({ type: "movie", id: "tt9", key: "movie:tt9", name: "Film" })] }) }) });
-    expect(row("resume")!.textContent).toContain("Resume");
+    expect(row("resume")!.textContent).not.toContain("Resume");
     await render({ rows: allEmpty({ resume: rowState({ items: [catalogue({ pending: true, progress: undefined, episode: 5, key: "series:tt2:2:5" })] }) }) });
     expect(row("resume")!.textContent).toContain("Next episode");
     expect(row("resume")!.textContent).toContain("S02E05");

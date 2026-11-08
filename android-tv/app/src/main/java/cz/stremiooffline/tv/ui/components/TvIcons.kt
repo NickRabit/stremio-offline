@@ -35,3 +35,15 @@ val ShuffleIcon: ImageVector = outlineIcon("Shuffle") {
   moveTo(15f, 15f); lineTo(21f, 21f)
   moveTo(4f, 4f); lineTo(9f, 9f)
 }
+
+/** A strip of film: what a title without artwork shows in place of its picture. */
+val FilmIcon: ImageVector = outlineIcon("Film") {
+  moveTo(4f, 3f); lineTo(20f, 3f); lineTo(20f, 21f); lineTo(4f, 21f); close()
+  moveTo(8f, 3f); lineTo(8f, 21f)
+  moveTo(16f, 3f); lineTo(16f, 21f)
+  moveTo(4f, 8f); lineTo(8f, 8f)
+  moveTo(4f, 16f); lineTo(8f, 16f)
+  moveTo(16f, 8f); lineTo(20f, 8f)
+  moveTo(16f, 16f); lineTo(20f, 16f)
+  moveTo(4f, 12f); lineTo(20f, 12f)
+}

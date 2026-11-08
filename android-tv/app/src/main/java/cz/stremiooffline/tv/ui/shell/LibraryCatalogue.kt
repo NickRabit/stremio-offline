@@ -9,6 +9,7 @@ import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.LibraryBackend
 import cz.stremiooffline.tv.ui.catalog.episodeNumbers
 import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.detail.episodeFiles
 import cz.stremiooffline.tv.ui.detail.isCompleted
 import cz.stremiooffline.tv.ui.detail.isEpisodeDetail
 import cz.stremiooffline.tv.ui.detail.ownFileRows
@@ -48,8 +49,9 @@ internal fun libraryCatalogueArgs(data: DetailData, binding: LibraryTitleDto): C
 internal fun ownCatalogueArgs(data: DetailData): CatalogDetailArgs {
   val type = if (isEpisodeDetail(data)) "series" else "movie"
   val metaId = "local:${data.gridPath}"
+  val episodes = if (type == "series") episodeFiles(data.files) else data.files
   val videos = if (type == "series") {
-    data.files.map { file ->
+    episodes.map { file ->
       VideoDto(
         id = ownVideoId(file.path),
         season = file.season,
@@ -61,8 +63,8 @@ internal fun ownCatalogueArgs(data: DetailData): CatalogDetailArgs {
   } else {
     null
   }
-  val playIndex = data.files.indexOfFirst { !isCompleted(it) }.let { if (it < 0) data.files.lastIndex else it }
-  val playFile = data.files.getOrNull(playIndex)
+  val playIndex = episodes.indexOfFirst { !isCompleted(it) }.let { if (it < 0) episodes.lastIndex else it }
+  val playFile = episodes.getOrNull(playIndex)
   val episode = if (type == "series") {
     playFile?.season?.let { season ->
       playFile.episode?.let { number ->
@@ -73,7 +75,7 @@ internal fun ownCatalogueArgs(data: DetailData): CatalogDetailArgs {
     null
   }
   val rows = if (type == "series") {
-    data.files.associate { file -> ownVideoId(file.path) to ownFileRows(data, file) }
+    episodes.associate { file -> ownVideoId(file.path) to ownFileRows(data, file) }
   } else {
     mapOf(metaId to ownFileRows(data, data.files.firstOrNull()))
   }

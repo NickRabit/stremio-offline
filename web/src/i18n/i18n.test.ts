@@ -161,3 +161,40 @@ describe("every message key the server can send exists in the catalogue", () => 
     }
   });
 });
+
+describe("plural catalogues", () => {
+  // French and Brazilian Portuguese file 0 under "one", Russian files 21, 31, 101 there: a form
+  // that spells out "1" shows that number for all of them.
+  const samples = [0, 1, 2, 5, 21, 22, 25, 101];
+  // Counts that never reach the other numbers of "one": the download of a whole show starts at one
+  // episode, and the refresh interval is picked from 6, 12, 24 and 48 hours.
+  const exempt = new Set(["fr episodes.wholeShowCount", "pt-BR episodes.wholeShowCount", "settings.addonRefreshHoursOption"]);
+
+  it("never spells out the number in a form that covers more than one count", () => {
+    const wrong: string[] = [];
+    for (const [code, catalogue] of Object.entries(catalogues)) {
+      const rules = new Intl.PluralRules(code);
+      for (const [key, value] of Object.entries(catalogue)) {
+        if (typeof value !== "object" || value === null) continue;
+        for (const [category, text] of Object.entries(value as Record<string, string>)) {
+          const counts = samples.filter((count) => rules.select(count) === category);
+          if (exempt.has(`${code} ${key}`) || exempt.has(key)) continue;
+          if (counts.length > 1 && !text.includes("{count}")) wrong.push(`${code} ${key}.${category}: ${text}`);
+        }
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it("counts titles, items and versions with the plural rules of each language", () => {
+    const counted = ["library.titleCount", "library.fileCount", "library.bulkItems", "library.bulkDeleteConfirm", "library.suggestionsWaiting", "mediaServer.versionsAvailable"] as const;
+    for (const [code, catalogue] of Object.entries(catalogues)) {
+      for (const key of counted) expect(typeof catalogue[key], `${code} ${key}`).toBe("object");
+      // The counts are filled in already pluralised, so the template itself carries no noun.
+      expect(catalogue["library.libraryCounts"], code).toBe("{titles} · {files} · {size}");
+    }
+    expect(pluralForm("cs", 4, cs["library.titleCount"] as never).replace("{count}", "4")).toBe("4 tituly");
+    expect(pluralForm("cs", 2, cs["library.bulkItems"] as never).replace("{count}", "2")).toBe("2 položky");
+    expect(pluralForm("en", 1, en["mediaServer.versionsAvailable"])).toBe("{count} version available");
+  });
+});

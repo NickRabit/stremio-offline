@@ -143,7 +143,6 @@
   <string name="home_retry">Erneut versuchen</string>
   <string name="home_row_failed">Diese Reihe konnte nicht geladen werden.</string>
   <string name="home_next_episode">Nächste Episode</string>
-  <string name="home_resume">Fortsetzen</string>
   <string name="home_new_episode">Neue Folge</string>
   <string name="home_empty_title">Hier ist noch nichts</string>
   <string name="home_empty_text">Laden Sie etwas herunter oder beginnen Sie zu schauen – es erscheint dann hier.</string>
@@ -386,7 +385,10 @@
   <string name="media_server_eyebrow_episode">%1$s · Episode</string>
   <string name="media_server_state_local">Position und Einstellung werden auf diesem Server nur für diese App gespeichert.</string>
   <string name="media_server_versions">Versionen</string>
-  <string name="media_server_versions_available">%1$s Versionen verfügbar</string>
+  <plurals name="media_server_versions_available">
+    <item quantity="one">%1$s Version verfügbar</item>
+    <item quantity="other">%1$s Versionen verfügbar</item>
+  </plurals>
   <string name="media_server_finding_versions">Versionen werden gesucht…</string>
   <string name="media_server_sources_empty">Dieser Eintrag hat keine abspielbare Version.</string>
   <string name="media_server_sources_error">Die Versionen konnten nicht geladen werden.</string>

@@ -237,6 +237,8 @@ test.describe("layout invariants", () => {
     for (const name of ["Oblíbené", "Pokračovat ve sledování", "Sledované", "Doplňky", "Nastavení", "Statistiky", "Odhlásit"]) {
       await expect(menuItem(page, name), `${name} is in More`).toBeVisible();
     }
+    // A badge in More asks for attention; the number of installed add-ons never does.
+    await expect(page.getByRole("menuitem", { name: "Doplňky", exact: true })).toBeVisible();
     const menu = (await page.getByRole("menu").boundingBox())!;
     const viewport = page.viewportSize()!;
     expect(menu.x).toBeGreaterThanOrEqual(-1);

@@ -96,6 +96,9 @@ sealed interface HomeCard {
     val updatedAt: String? = null,
     /** Every stored key this card stands for; the detail forgets them together. */
     val forgetKeys: List<String> = emptyList(),
+    /** The show an episode belongs to and the episode's own name, as the server split them. */
+    val series: String? = null,
+    val episodeName: String? = null,
   ) : HomeCard
 
   @Serializable
@@ -116,6 +119,9 @@ sealed interface HomeCard {
     /** The library file that wrote the position, when it is a video: the card plays that file. */
     val path: String? = null,
     val forgetKeys: List<String> = emptyList(),
+    /** The show an episode belongs to and the episode's own name, as the server split them. */
+    val series: String? = null,
+    val episodeName: String? = null,
   ) : HomeCard
 
   @Serializable
@@ -128,6 +134,9 @@ sealed interface HomeCard {
     val path: String = "",
     val season: Int? = null,
     val episode: Int? = null,
+    /** The show an episode belongs to and the episode's own name, as the server split them. */
+    val series: String? = null,
+    val episodeName: String? = null,
   ) : HomeCard
 
   @Serializable
@@ -165,6 +174,9 @@ sealed interface HomeCard {
     override val wide: String? = null,
     val season: Int? = null,
     val episode: Int? = null,
+    /** The show an episode belongs to and the episode's own name, as the server split them. */
+    val series: String? = null,
+    val episodeName: String? = null,
   ) : HomeCard
 
   @Serializable
@@ -230,6 +242,9 @@ sealed interface HomeCard {
     /** The local keys a merged card stands for, when it won one. */
     val forgetKeys: List<String> = emptyList(),
     val updatedAt: String? = null,
+    /** The show an episode belongs to and the episode's own name, as the server split them. */
+    val series: String? = null,
+    val episodeName: String? = null,
   ) : HomeCard
 }
 
@@ -242,8 +257,21 @@ val HomeCard.isWideKind: Boolean
 fun HomeCard.drawnWide(rowId: String): Boolean = rowId == "resume" || isWideKind
 
 /** The card's display title, exactly as the web's `titleOf` picks it. */
+/** The show and episode name the server gave an episode card, when it could tell them apart. */
+private val HomeCard.naming: Pair<String, String?>? get() = when (this) {
+  is HomeCard.ResumeFile -> series?.let { it to episodeName }
+  is HomeCard.ResumeCatalogue -> series?.let { it to episodeName }
+  is HomeCard.Completed -> series?.let { it to episodeName }
+  is HomeCard.Recent -> series?.let { it to episodeName }
+  is HomeCard.Remote -> series?.let { it to episodeName }
+  else -> null
+}
+
+/** The episode's own name, beside its numbering under a card titled by its show. */
+val HomeCard.episodeNameText: String? get() = naming?.second
+
 val HomeCard.displayTitle: String
-  get() = when (this) {
+  get() = naming?.first ?: when (this) {
     is HomeCard.Favorite -> label
     is HomeCard.FavoriteCatalogue -> name
     is HomeCard.Recent -> label

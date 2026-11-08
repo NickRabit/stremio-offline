@@ -308,7 +308,8 @@ class TitleExtrasTest {
     compose.onNodeWithText("Czech, English", substring = true).assertExists()
     compose.onNodeWithText("DTS-HD MA 5.1", substring = true).assertExists()
     compose.onNodeWithText("Subtitles", substring = true).assertExists()
-    compose.onNodeWithText("1 versions available", substring = true).assertExists()
+    compose.onNodeWithText("1 version available", substring = true).assertExists()
+    compose.onNodeWithText("versions available", substring = true).assertDoesNotExist()
   }
 
   @Test

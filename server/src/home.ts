@@ -144,10 +144,16 @@ export interface RemoteHomeCard {
   /** The local keys this card stands for, when it won a merged group: forgetting the card has to
    *  forget the library files and catalogue rows behind it too. */
   forgetKeys?: string[];
+  /** The show an episode belongs to, when the provider named it. */
+  seriesName?: string;
   updatedAt: string;
 }
 
-export type HomeCard =
+/** How an episode card reads, whatever wrote its title: the show on the first line, the
+ *  episode's own name beside its numbering on the second. */
+export interface EpisodeNaming { series?: string; episodeName?: string }
+
+export type HomeCard = (
   | RemoteHomeCard
   | { kind: "resume-file"; key: string; title: string; subtitle?: string; poster?: string; wide?: string;
       path: string; progress: HomeProgress; season?: number; episode?: number;
@@ -182,7 +188,7 @@ export type HomeCard =
        *  detail instead of the folder the card stands for. */
       title?: { type: "movie" | "series"; id: string } }
   | { kind: "confirm"; key: string; libraryId: string; library: string; label: string;
-      path: string; candidate: { name: string; year?: string; poster?: string }; wide?: string };
+      path: string; candidate: { name: string; year?: string; poster?: string }; wide?: string }) & EpisodeNaming;
 
 export interface HomeRowError { error: string; code?: string; messageKey?: string }
 
@@ -418,4 +424,41 @@ function cardWantedByTitle(card: ResumeCard, wanted: "movie" | "series"): boolea
   }
   if (card.kind === "resume-catalogue") return card.type === wanted;
   return wanted === "series" ? card.itemType === "series" || card.itemType === "episode" : card.itemType === "movie";
+}
+
+const EPISODE_TAG = /(?:^|[\s._\-·–])(?:s\d{1,3}[\s._-]*e\d{1,4}(?:-?e?\d{1,4})?|\d{1,2}[x×]\d{1,3})(?=$|[\s._\-·–])/i;
+const EDGE = /^[\s._\-·–]+|[\s._\-·–]+$/g;
+
+/** Splits "Show - S01E04 - Name", "Show · 01×05" or "Show.S01E04.Name" at its numbering. */
+export function splitEpisodeTitle(title: string): EpisodeNaming {
+  const tag = EPISODE_TAG.exec(title);
+  if (!tag) return {};
+  // A dotted release name ("Show.Name.S01E02.Pilot") uses dots for spaces; a spaced one keeps them.
+  const words = (part: string) => (part.includes(" ") ? part : part.replace(/[._]+/g, " ")).replace(EDGE, "").trim();
+  const series = words(title.slice(0, tag.index));
+  const episodeName = words(title.slice(tag.index + tag[0].length));
+  return { ...(series ? { series } : {}), ...(episodeName ? { episodeName } : {}) };
+}
+
+/** Gives an episode card the show and the episode name it is drawn with, so Home reads the same
+ *  whether a library file, a catalogue row or a media server wrote the card. */
+export function withEpisodeNaming<T extends HomeCard>(card: T): T & EpisodeNaming {
+  const numbered = typeof (card as { season?: unknown }).season === "number" && typeof (card as { episode?: unknown }).episode === "number";
+  if (!numbered) return card;
+  let naming: EpisodeNaming;
+  if (card.kind === "resume-catalogue") {
+    if (card.type !== "series") return card;
+    naming = { ...splitEpisodeTitle(card.title), ...(card.name ? { series: card.name } : {}) };
+  } else if (card.kind === "remote") {
+    if (card.itemType !== "episode") return card;
+    naming = { ...(card.seriesName ? { series: card.seriesName } : {}), ...(card.title ? { episodeName: card.title } : {}) };
+  } else if (card.kind === "resume-file" || card.kind === "completed") {
+    naming = splitEpisodeTitle(card.title);
+  } else if (card.kind === "recent") {
+    naming = splitEpisodeTitle(card.label);
+  } else {
+    return card;
+  }
+  // Without the show the title stays as written; a lone episode name would hide which show it is.
+  return naming.series ? { ...card, ...naming } : card;
 }

@@ -499,7 +499,8 @@ export function parseMediaName(name: string): ParsedMedia {
       return " ";
     });
   }
-  title = collapse(title);
+  // "Show - S01E06 - Name" loses its tag between two dashes; one of them is enough.
+  title = collapse(title).replace(/\s[-–](?:\s+[-–])+\s/g, " - ").replace(/^[-–]\s+|\s+[-–]$/g, "");
   const query = bilingualQuery(title);
   const result: ParsedMedia = { title, query };
   if (year != null) result.year = year;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { HOME_ROWS, HOME_ROW_LIMIT, boundCards, homeCatalogRowId, homeRowOrder, mergeResume, parseHomeCatalogRowId, parseResumeFilter, resumePage, type HomeCard, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeFilter } from "./home.js";
+import { HOME_ROWS, HOME_ROW_LIMIT, boundCards, homeCatalogRowId, homeRowOrder, mergeResume, parseHomeCatalogRowId, parseResumeFilter, resumePage, splitEpisodeTitle, withEpisodeNaming, type HomeCard, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeFilter } from "./home.js";
 
 const at = (day: number) => `2024-01-${String(day).padStart(2, "0")}T00:00:00.000Z`;
 
@@ -401,4 +401,26 @@ test("homeRowOrder copies catalogue entries between tonight and episodes, titles
   ]);
   assert.deepEqual(order.slice(3, 5), shelves);
   assert.equal("title" in order[0]!, false, "a built-in entry carries no title");
+});
+
+test("an episode card names its show and the episode, whatever wrote its title", () => {
+  assert.deepEqual(splitEpisodeTitle("Prasátko Peppa - S01E04 - Polly Parrot"), { series: "Prasátko Peppa", episodeName: "Polly Parrot" });
+  assert.deepEqual(splitEpisodeTitle("South Park · 01×05"), { series: "South Park" });
+  assert.deepEqual(splitEpisodeTitle("Show.Name.S02E10.The.End"), { series: "Show Name", episodeName: "The End" });
+  assert.deepEqual(splitEpisodeTitle("Mr. Robot - S01E01 - eps1.0_hellofriend.mov"), { series: "Mr. Robot", episodeName: "eps1.0_hellofriend.mov" });
+  assert.deepEqual(splitEpisodeTitle("Heat"), {});
+
+  const file = withEpisodeNaming({ kind: "resume-file", key: "f", title: "Prasátko Peppa - S01E04 - Polly Parrot", path: "lib/a.mkv", progress: { position: 1, duration: 4 }, season: 1, episode: 4, updatedAt: "", forgetKeys: [] });
+  assert.equal(file.series, "Prasátko Peppa");
+  assert.equal(file.episodeName, "Polly Parrot");
+  const catalogue = withEpisodeNaming({ kind: "resume-catalogue", key: "c", title: "South Park · 01×05", type: "series", id: "tt1", name: "South Park", season: 1, episode: 5, updatedAt: "", forgetKeys: [] });
+  assert.equal(catalogue.series, "South Park");
+  assert.equal(catalogue.episodeName, undefined);
+  const remote = withEpisodeNaming({ kind: "remote", key: "r", title: "Pilot", provider: "jellyfin", libraryId: "l", libraryName: "L", itemId: "i", itemType: "episode", season: 1, episode: 1, seriesName: "Lost", updatedAt: "" });
+  assert.deepEqual([remote.series, remote.episodeName], ["Lost", "Pilot"]);
+  // A film, or an episode file whose name carries no numbering, keeps its title as written.
+  const film = withEpisodeNaming({ kind: "resume-catalogue", key: "m", title: "Heat", type: "movie", id: "tt2", name: "Heat", updatedAt: "", forgetKeys: [] });
+  assert.equal(film.series, undefined);
+  const loose = withEpisodeNaming({ kind: "resume-file", key: "g", title: "Pilot", path: "lib/b.mkv", progress: { position: 1, duration: 4 }, season: 1, episode: 1, updatedAt: "", forgetKeys: [] });
+  assert.equal(loose.series, undefined);
 });

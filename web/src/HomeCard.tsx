@@ -17,7 +17,8 @@ export interface HomeCardActions {
  *  the library or media server it came from: a list is about titles, not about sources. */
 function captionOf(card: HomeCardData, locale: string): string {
   const label = cardLabel(card);
-  const parts: Array<string | undefined> = [label && t(label), cardNumbering(card)];
+  // An episode's own name sits beside its numbering; the show is the card's title.
+  const parts: Array<string | undefined> = [label && t(label), cardNumbering(card), card.series ? card.episodeName : undefined];
   if (card.kind === "resume-file") parts.push(card.subtitle);
   // A release is a calendar date kept inside that UTC day, so it is read in UTC, not moved by the zone.
   if (card.kind === "episode") parts.push(new Intl.DateTimeFormat(locale, { dateStyle: "short", timeZone: "UTC" }).format(new Date(card.released)));
@@ -30,7 +31,8 @@ function captionOf(card: HomeCardData, locale: string): string {
 }
 
 const titleOf = (card: HomeCardData): string =>
-  card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" || card.kind === "confirm" ? card.label
+  card.series ? card.series
+  : card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" || card.kind === "confirm" ? card.label
   : card.kind === "episode" || card.kind === "discovery" || card.kind === "favorite-catalogue" ? card.name
   : card.title;
 

@@ -163,7 +163,9 @@ class CardsTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagPosterMosaic, useUnmergedTree = true).assertDoesNotExist()
-    compose.onAllNodesWithText("One").assertCountEquals(2)
+    // An icon holds the missing picture; the name is written once, under the card.
+    compose.onNodeWithTag(TagCardPlaceholder, useUnmergedTree = true).assertExists()
+    compose.onAllNodesWithText("One").assertCountEquals(1)
   }
 
   @Test
@@ -254,5 +256,16 @@ class CardsTest {
     compose.waitUntil(5_000) { requested.containsAll(listOf("http://server/provider-root.jpg", "http://server/b.jpg")) }
 
     compose.onNodeWithTag(TagPosterMosaic, useUnmergedTree = true).assertExists()
+  }
+
+  @Test
+  fun `an episode card without a still names the episode once, under the card`() {
+    compose.setContent {
+      WideCard(label = "S1 · E1", imageUrl = null, progress = null, completed = false, onClick = {})
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCardPlaceholder, useUnmergedTree = true).assertExists()
+    compose.onAllNodesWithText("S1 · E1").assertCountEquals(1)
   }
 }

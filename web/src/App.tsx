@@ -3740,7 +3740,7 @@ export function App() {
     { key: "favorites", icon: <Star/>, label: t("nav.favorites"), active: view === "favorites", onSelect: () => openView("favorites") },
     { key: "resume", icon: <History/>, label: t("nav.resume"), active: view === "resume", onSelect: () => openView("resume") },
     { key: "following", icon: <BellRing/>, label: t("nav.following"), badge: followingBadge, active: view === "following", onSelect: () => openView("following") },
-    { key: "addons", icon: <PackagePlus/>, label: t("nav.addons"), badge: addons.length, active: view === "addons", onSelect: () => openView("addons") },
+    { key: "addons", icon: <PackagePlus/>, label: t("nav.addons"), active: view === "addons", onSelect: () => openView("addons") },
     { key: "settings", icon: <Settings/>, label: t("nav.settings"), active: view === "settings", onSelect: () => openView("settings") },
     ...(session!.role === "admin" ? [{ key: "stats", icon: <BarChart3/>, label: t("nav.stats"), active: view === "stats", onSelect: () => openView("stats") }] : []),
   ];
@@ -3939,7 +3939,7 @@ export function App() {
               window.setTimeout(() => { bar?.removeEventListener("transitionend", onEnd); focus(); }, 400);
             }}><SlidersHorizontal/></button>
           </div></div></div>
-          <div className="catalog-layout"><section className={`panel result-panel${staleGrid ? " refreshing" : ""}`}><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
+          <div className="catalog-layout"><section className={`panel result-panel${staleGrid ? " refreshing" : ""}`}><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t(hasMore ? "catalog.itemCountMore" : "catalog.itemCount", { count: visibleItems.length })}</span></div>
             <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;

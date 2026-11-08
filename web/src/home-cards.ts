@@ -4,15 +4,14 @@ const pad = (value: number) => String(value).padStart(2, "0");
 
 /** The catalogue key a card's caption leads with. A completed file and a favourite carry no
  *  label of their own, so their caption is just the numbering. */
-export type CardLabel = "home.resume" | "home.nextEpisode" | "player.play" | "home.newEpisode";
+export type CardLabel = "home.nextEpisode" | "player.play" | "home.newEpisode";
 
 export function cardLabel(card: HomeCard): CardLabel | undefined {
-  if (card.kind === "resume-file") return "home.resume";
   if (card.kind === "completed") return "player.play";
   if (card.kind === "episode") return "home.newEpisode";
-  if (card.kind !== "resume-catalogue") return undefined;
-  // A stored position plays where it stopped, whatever wrote it; a next episode opens to choose.
-  return card.pending ? "home.nextEpisode" : "home.resume";
+  // A stored position only ever shows under Continue watching, which already says so; a next
+  // episode is the one card there that is not a position, so it keeps its word.
+  return card.kind === "resume-catalogue" && card.pending ? "home.nextEpisode" : undefined;
 }
 
 /** `S02E04`, when the card carries both numbers. A stored position usually does; a pending

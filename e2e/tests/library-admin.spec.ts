@@ -83,7 +83,7 @@ test("a granted root is added, previewed and revoked without losing what it reme
   const picker = page.getByRole("dialog", { name: "Vyberte složku" });
   await picker.locator(".move-list button", { hasText: "granted-root" }).click();
   await picker.getByRole("button", { name: "Použít tuto složku" }).click();
-  await expect(picker).toContainText("Nalezeno 1 titulů, 1 souborů.");
+  await expect(picker).toContainText("Nalezeno: 1 titul, 1 soubor.");
   await picker.getByRole("button", { name: "Zrušit" }).click();
   await expect(picker).toHaveCount(0);
   await dialog.getByRole("button", { name: "Zavřít" }).click();

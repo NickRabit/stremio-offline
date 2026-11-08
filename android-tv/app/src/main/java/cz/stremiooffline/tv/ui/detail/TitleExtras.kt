@@ -56,6 +56,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -695,7 +696,7 @@ fun TitleTechBlock(
     willPlayName(stream),
     formatSize(Streams.streamSize(stream)),
     versionCount.takeIf { it > 0 }?.let {
-      stringResource(R.string.media_server_versions_available, it.toString())
+      pluralStringResource(R.plurals.media_server_versions_available, it, it.toString())
     },
   ).joinToString(" · ")
   val facts = stream.videoFacts

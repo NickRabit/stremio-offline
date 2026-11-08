@@ -11,6 +11,7 @@ import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.TitleRefDto
 import cz.stremiooffline.tv.data.episodeCodeText
+import cz.stremiooffline.tv.data.episodeNameText
 import cz.stremiooffline.tv.data.yearText
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
@@ -49,11 +50,11 @@ fun builtinRowTitle(id: String): Int? = when (id) {
 /** The web's `cardLabel`: the key a card's caption leads with, or nothing. */
 @StringRes
 fun cardLabel(card: HomeCard): Int? = when (card) {
-  is HomeCard.ResumeFile -> R.string.home_resume
+  // A stored position only ever shows under Continue watching, which already says so.
   is HomeCard.Completed -> R.string.home_open_detail
   is HomeCard.Recent -> R.string.home_open_detail
   is HomeCard.Episode -> R.string.home_new_episode
-  is HomeCard.ResumeCatalogue -> if (card.pending) R.string.home_next_episode else R.string.home_resume
+  is HomeCard.ResumeCatalogue -> if (card.pending) R.string.home_next_episode else null
   else -> null
 }
 
@@ -94,6 +95,7 @@ private fun remoteIds(identity: TitleRefDto): RemoteProviderIdsDto = when {
 fun captionOf(card: HomeCard, label: String?): String? = listOfNotNull(
   label,
   card.episodeCodeText,
+  card.episodeNameText,
   (card as? HomeCard.ResumeFile)?.subtitle?.takeIf { it.isNotBlank() },
   card.yearText?.takeIf { it.isNotBlank() },
 ).joinToString(" · ").ifEmpty { null }

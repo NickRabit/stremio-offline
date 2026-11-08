@@ -116,8 +116,8 @@ it("opens a provider row onto the hosts behind it, largest first", async () => {
   await act(async () => { control(0, "2 servers")?.click(); });
   const hosts = [...panel(0).querySelectorAll(".stats-hosts li")].map((row) => row.textContent);
   expect(hosts).toEqual([
-    "den2-4.download.real-debrid.com · 9.0 GB · 1 item",
-    "131-4.download.real-debrid.com · 4.0 GB · 1 item",
+    "den2-4.download.real-debrid.com · 9.0 GB · Finished: 1",
+    "131-4.download.real-debrid.com · 4.0 GB · Finished: 1",
   ]);
 
   await act(async () => { control(0, "Show fewer")?.click(); });

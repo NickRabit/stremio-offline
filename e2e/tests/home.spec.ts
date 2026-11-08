@@ -20,7 +20,8 @@ test("Home shows the title that was left half watched and Forget progress remove
   const shelf = page.locator(".home-row", { has: page.getByRole("heading", { name: "Pokračovat ve sledování" }) });
   const card = shelf.locator(".browse-item", { hasText: "Zkušební film" });
   await expect(card).toBeVisible();
-  await expect(card).toContainText("Pokračovat");
+  // The shelf's heading already says Continue; the card does not repeat it.
+  await expect(card).not.toContainText("Pokračovat");
 
   page.once("dialog", (dialog) => dialog.accept());
   await card.getByRole("button", { name: /Akce pro/ }).click();

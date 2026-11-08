@@ -143,7 +143,6 @@
   <string name="home_retry">Spróbuj ponownie</string>
   <string name="home_row_failed">Nie udało się wczytać tego rzędu.</string>
   <string name="home_next_episode">Następny odcinek</string>
-  <string name="home_resume">Kontynuuj</string>
   <string name="home_new_episode">Nowy odcinek</string>
   <string name="home_empty_title">Jeszcze nic tu nie ma</string>
   <string name="home_empty_text">Pobierz coś albo zacznij oglądać, a pojawi się to tutaj.</string>
@@ -402,7 +401,12 @@
   <string name="media_server_eyebrow_episode">%1$s · odcinek</string>
   <string name="media_server_state_local">Pozycja i preferencja są zapisane na tym serwerze tylko dla tej aplikacji.</string>
   <string name="media_server_versions">Wersje</string>
-  <string name="media_server_versions_available">Dostępnych wersji: %1$s</string>
+  <plurals name="media_server_versions_available">
+    <item quantity="one">Dostępna %1$s wersja</item>
+    <item quantity="few">Dostępne %1$s wersje</item>
+    <item quantity="many">Dostępnych %1$s wersji</item>
+    <item quantity="other">Dostępne wersje: %1$s</item>
+  </plurals>
   <string name="media_server_finding_versions">Szukanie wersji…</string>
   <string name="media_server_sources_empty">Ten element nie ma odtwarzalnej wersji.</string>
   <string name="media_server_sources_error">Nie udało się wczytać wersji.</string>
