@@ -113,6 +113,10 @@ afterEach(() => {
 });
 
 const flush = () => act(async () => { await new Promise((done) => setTimeout(done, 0)); });
+const until = async (ready: () => boolean) => {
+  for (let step = 0; step < 30 && !ready(); step += 1) await flush();
+  expect(ready()).toBe(true);
+};
 const click = async (element: Element | null) => { await act(async () => { (element as HTMLElement).click(); }); await flush(); };
 const playButton = () => host.querySelector<HTMLButtonElement>(".library-detail-play button.primary")!;
 const episodeRows = () => [...host.querySelectorAll<HTMLButtonElement>(".catalogue-episodes .episode-list button")];
@@ -197,6 +201,51 @@ describe("CatalogueTitleDetail metadata", () => {
 });
 
 describe("CatalogueTitleDetail sources", () => {
+  it("shows rows as providers answer and waits for all before the detail stops being pending", async () => {
+    providerReply = () => json([{ key: "fast", name: "Fast" }, { key: "slow", name: "Slow" }]);
+    const slow = deferred<Response>();
+    streamReply = (url) => url.searchParams.get("addon") === "slow"
+      ? slow.promise
+      : json([{ ...addon("fast-row", "Fast row"), stableKey: "fast" }]);
+    const onRead = vi.fn();
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "slow" } },
+      onRead,
+    });
+
+    await until(() => {
+      const read = onRead.mock.calls.at(-1)?.[0];
+      return read?.pending === true && read?.playable === true;
+    });
+    await until(() => pickerArrow() !== null);
+    await click(pickerArrow());
+    expect(pickerRows().some((row) => row.textContent?.includes("Fast row"))).toBe(true);
+    expect(onRead.mock.calls.at(-1)?.[0]).toMatchObject({ pending: true });
+    expect(onPlay).not.toHaveBeenCalled();
+
+    await act(async () => {
+      slow.resolve(json([{ ...addon("slow-row", "Slow row"), stableKey: "slow" }]));
+    });
+    await flush();
+    expect(onRead.mock.calls.at(-1)?.[0]).toMatchObject({ pending: false });
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "slow-row" }), expect.anything(), false);
+  });
+
+  it("shows a provider error only after every provider has failed", async () => {
+    providerReply = () => json([{ key: "fast", name: "Fast" }, { key: "slow", name: "Slow" }]);
+    const slow = deferred<Response>();
+    streamReply = (url) => url.searchParams.get("addon") === "slow"
+      ? slow.promise
+      : json({ error: "fast failed" }, 500);
+    await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() } });
+
+    expect(host.querySelector(".remote-error")).toBeNull();
+    await act(async () => { slow.resolve(json({ error: "slow failed" }, 500)); });
+    await flush();
+    expect(host.querySelector(".remote-error")?.textContent).toContain("fast failed");
+  });
+
   it("asks the server to inspect the preselected addon HTTP source", async () => {
     await render();
     await flush();

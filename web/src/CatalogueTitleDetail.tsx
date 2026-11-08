@@ -108,10 +108,6 @@ export interface CatalogueTitleDetailProps {
   playingEpisode?: { season?: number; episode?: number; videoId?: string };
 }
 
-/** One provider's answer: its rows, or the failure that kept them away. A provider that failed
- *  never hides the rows the others answered. */
-type ProviderAnswer = { rows: Stream[] } | { error: unknown };
-
 /** One row per source id: an addon that repeats a source under two labels is still one thing. */
 const dedupe = (streams: Stream[]): Stream[] => {
   const seen = new Set<string>();
@@ -134,6 +130,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSeason, setPickerSeason] = useState<number | null>(null);
   const [rows, setRows] = useState<Stream[] | null>(null);
+  const [pendingProviders, setPendingProviders] = useState(0);
   const [sourceError, setSourceError] = useState("");
   const [nonce, setNonce] = useState(0);
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -230,27 +227,37 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const seed = streamId === incomingId ? target.initialSource : undefined;
 
   useEffect(() => {
-    if (waitingEpisode) { setRows(null); setSourceError(""); return; }
-    if (handed !== undefined) { setRows(handed); setSourceError(""); return; }
+    if (waitingEpisode) { setRows(null); setPendingProviders(0); setSourceError(""); return; }
+    if (handed !== undefined) { setRows(handed); setPendingProviders(0); setSourceError(""); return; }
     const controller = new AbortController();
     let live = true;
-    setRows(null); setSourceError("");
+    setRows(null); setPendingProviders(0); setSourceError("");
     void (async () => {
       try {
         const providers = await api.streamSources(type, streamId, controller.signal);
-        const answers = await Promise.all(providers.map(async (provider): Promise<ProviderAnswer> => {
-          try { return { rows: await api.streams(type, streamId, provider.key, controller.signal) }; }
-          catch (error) { return { error }; }
-        }));
         if (!live) return;
-        const failed = answers.filter((answer): answer is { error: unknown } => "error" in answer);
-        // Every provider failing is not an empty title: the list keeps its retry and says why.
-        if (providers.length > 0 && failed.length === providers.length) {
-          setRows([]);
-          setSourceError(describeError(failed[0]!.error));
-          return;
-        }
-        setRows(dedupe(answers.flatMap((answer) => "rows" in answer ? answer.rows : [])));
+        setPendingProviders(providers.length);
+        if (providers.length === 0) { setRows([]); return; }
+        const failures: Array<{ error: unknown } | undefined> = new Array(providers.length).fill(undefined);
+        let completed = 0;
+        providers.forEach((provider, index) => {
+          void api.streams(type, streamId, provider.key, controller.signal)
+            .then((answer) => {
+              if (live) setRows((current) => dedupe([...(current ?? []), ...answer]));
+            })
+            .catch((error: unknown) => { if (live) failures[index] = { error }; })
+            .finally(() => {
+              if (!live) return;
+              completed += 1;
+              setPendingProviders((count) => Math.max(0, count - 1));
+              if (completed !== providers.length || !failures.every((failure) => failure !== undefined)) return;
+              // Every provider failing is not an empty title: the list keeps its retry and says why.
+              const firstFailure = failures.find((failure) => failure !== undefined);
+              if (!firstFailure) return;
+              setRows([]);
+              setSourceError(describeError(firstFailure.error));
+            });
+        });
       } catch (error) {
         if (!live) return;
         setRows([]);
@@ -288,7 +295,8 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   // A resumed version that is not among the rows already in hand lives in another library.
   // Those groups load without opening the chooser. The key itself arrives from the caller,
   // who already read the title's catalogue record, so nothing here waits on a selected row.
-  const resumeElsewhere = Boolean(resumeStableKey && ordered && !ordered.some((stream) => stream.stableKey === resumeStableKey));
+  const resumeElsewhere = Boolean(resumeStableKey && ordered && pendingProviders === 0
+    && !ordered.some((stream) => stream.stableKey === resumeStableKey));
   const extra = useLibrarySources({
     scope: `catalogue:${type}:${streamId}`,
     open: chooserOpen || libraryFirst || remoteFirst || resumeElsewhere,
@@ -331,25 +339,27 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
 
   // What this detail holds is the caller's business too: its chips, its saved position and the
   // episode after the one it plays all belong to the title read here.
-  const latest = useRef({ snapshot, rows, effective });
-  latest.current = { snapshot, rows, effective };
+  const latest = useRef({ snapshot, rows, effective, pendingProviders });
+  latest.current = { snapshot, rows, effective, pendingProviders };
   const report = useRef(onRead);
   report.current = onRead;
   const episodeKey = `${effective.type}:${catalogueStreamId(effective)}`;
   useEffect(() => {
     const read = latest.current;
-    report.current?.({ meta: read.snapshot, target: read.effective, pending: read.rows === null, playable: (read.rows ?? []).some((stream) => stream.playable) });
-  }, [episodeKey, snapshot, rows]);
+    report.current?.({ meta: read.snapshot, target: read.effective, pending: read.rows === null || read.pendingProviders > 0, playable: (read.rows ?? []).some((stream) => stream.playable) });
+  }, [episodeKey, snapshot, rows, pendingProviders]);
 
   // Continue watching plays once, the first time the rows are known: an addon that renames or
   // resizes the row it answered with must not leave the card that asked to play doing nothing.
   useEffect(() => {
     if (!target.resume || resumed.current || rows === null) return;
-    resumed.current = true;
     const key = target.resume.stableKey;
-    const pick = (key ? ordered?.find((stream) => stream.playable && stream.stableKey === key) : undefined) ?? firstPlayable;
+    const keyed = key ? ordered?.find((stream) => stream.playable && stream.stableKey === key) : undefined;
+    if (!keyed && pendingProviders > 0) return;
+    resumed.current = true;
+    const pick = keyed ?? firstPlayable;
     if (pick) onPlay(pick, latest.current.effective, false);
-  }, [target.resume, rows, ordered, firstPlayable, onPlay]);
+  }, [target.resume, rows, ordered, firstPlayable, pendingProviders, onPlay]);
 
   // A listing's poster stands in when the title's own metadata has none that loads.
   const gallery = useMemo(() => {
@@ -456,7 +466,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       defaultSources={firstPlayable ? [firstPlayable] : []}
       {...(seed ? { initialSource: seed } : {})}
       episodes={episodePicker}
-      {...(waitingEpisode ? { placeholder: null } : {})}
+      {...(waitingEpisode || pendingProviders > 0 ? { placeholder: null } : {})}
       {...(waitingEpisode ? {} : { sourceGroups: { groups: showTorrents ? extra.groups : extra.groups.map((group) => ({ ...group, streams: group.streams.filter(offered) })), retry: extra.retry }, onOpenSources: () => setChooserOpen(true) })}
       nativeSourceLabel={t("sources.heading")}
       {...(preferredLanguage ? { preferredLanguage } : {})}
