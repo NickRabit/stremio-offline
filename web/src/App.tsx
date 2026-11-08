@@ -50,6 +50,7 @@ import { CandidatePool, suggest, type Suggestion } from "./search-suggestions";
 import { galleryPayload, gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import { resumeVideo, type ResumeTarget } from "./resume-target";
 import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } from "./views";
+import { ArtworkProximity } from "./artwork-proximity";
 import { Empty, Nav, Onboarding } from "./app-chrome";
 import { FavoritesView } from "./FavoritesView";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget } from "./CatalogueTitleDetail";
@@ -3941,6 +3942,7 @@ export function App() {
           </div></div></div>
           <div className="catalog-layout"><section className={`panel result-panel${staleGrid ? " refreshing" : ""}`}><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t(hasMore ? "catalog.itemCountMore" : "catalog.itemCount", { count: visibleItems.length })}</span></div>
             <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
+              <ArtworkProximity scroller={gridRef}>
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;
                 const postup = catalogProgress(item);
@@ -3964,6 +3966,7 @@ export function App() {
                 </button>;
               })}
               {hasMore && <div className="load-more">{loadingMore ? <span>{t("common.loadingMore")}</span> : <button onClick={() => void loadPage(false)}>{t("common.loadMore")}</button>}</div>}
+              </ArtworkProximity>
             </div>
             {!items.length && !busy && <Empty icon={<Search/>}
               title={t(submittedQuery ? "catalog.emptySearchTitle" : searchRequired ? "catalog.needQueryTitle" : "catalog.emptyTitle")}
@@ -4179,6 +4182,7 @@ export function App() {
           compactOnScroll(event, libraryCompact, setLibraryCompact);
           scheduleViewAnchor();
         }}>
+        <ArtworkProximity scroller={browseScrollRef}>
         {localDetail ? <LocalLibraryDetail key={localDetail.item.path}
           {...localLibraryDetailProps(localDetail.item, { live: liveLocalItem })}/> : openLocalSeries ? localSeriesState.loading
           ? <div className="loading" role="status">{t("common.loading")}</div>
@@ -4297,6 +4301,7 @@ export function App() {
             })()}
           </>}
         </>}
+        </ArtworkProximity>
         </div>
         </div>}
       </section>}

@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Play } from "lucide-react";
+import { ArtworkProximity, NearImage } from "./artwork-proximity";
 import { localeTag, t, useI18n, type Locale } from "./i18n";
 import { hideBroken } from "./settings-ui";
 import { trailerAction } from "./trailers";
@@ -44,7 +45,7 @@ function PersonFace({ name, photo }: { name: string; photo?: string }) {
   const [broken, setBroken] = useState(false);
   const source = photo?.trim();
   if (!source || broken) return <span className="person-face">{initials(name)}</span>;
-  return <span className="person-face"><img src={source} alt="" onError={() => setBroken(true)}/></span>;
+  return <span className="person-face"><NearImage src={source} alt="" onError={() => setBroken(true)}/></span>;
 }
 
 function emphasize(template: string, value: string): ReactNode {
@@ -152,6 +153,13 @@ function PersonButton({ name, onSearch, children }: { name: string; onSearch: (n
 const SKELETONS = [0, 1, 2, 3, 4, 5, 6];
 const STRIP_ORDER: TitlePerson["role"][] = ["creator", "director", "cast", "writer", "novel"];
 
+function ExtrasStrip({ children }: { children: ReactNode }) {
+  const strip = useRef<HTMLDivElement>(null);
+  return <ArtworkProximity scroller={strip}>
+    <div className="extras-strip" ref={strip}>{children}</div>
+  </ArtworkProximity>;
+}
+
 /** One strip for everybody: who made it first, then the cast, then the writers. A crew member
  *  carries the role where a cast member carries the character. */
 /** Whether an addon's description is only a line of tags, such as `(Original) · 📺 HD · 🔊 CS`,
@@ -218,34 +226,34 @@ export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer
   return <section className="title-extras">
     {people.length > 0 && <div className="extras-row">
       <h3>{translate("detail.people")} <small>{translate("detail.peopleHint")}</small></h3>
-      <div className="extras-strip">{strip.map((person, index) => <button type="button" className="person" key={`${person.name}:${person.role}:${index}`}
+      <ExtrasStrip>{strip.map((person, index) => <button type="button" className="person" key={`${person.name}:${person.role}:${index}`}
         title={translate("detail.searchPerson", { name: person.name })} onClick={() => actions.searchPerson(person.name)}>
         <PersonFace name={person.name} photo={person.photo}/>
         <strong>{person.name}</strong>
         {person.role === "cast"
           ? person.character ? <small>{person.character}</small> : null
           : <small>{translate(`detail.role.${person.role}`)}</small>}
-      </button>)}</div>
+      </button>)}</ExtrasStrip>
     </div>}
     {videos.length > 0 && <div className="extras-row">
       <h3>{translate("detail.videos")}</h3>
-      <div className="extras-strip">{videos.map((video) => <button type="button" className="detail-video" key={video.key}
+      <ExtrasStrip>{videos.map((video) => <button type="button" className="detail-video" key={video.key}
         onClick={() => openVideo(video)}>
-        <span className="thumb">{video.thumbnail ? <img src={video.thumbnail} alt="" onError={hideBroken}/> : null}<Play/></span>
+        <span className="thumb">{video.thumbnail ? <NearImage src={video.thumbnail} alt="" onError={hideBroken}/> : null}<Play/></span>
         <strong>{video.name}</strong>
         <small>{translate(`detail.video.${video.kind}`)}</small>
-      </button>)}</div>
+      </button>)}</ExtrasStrip>
     </div>}
     {related.length > 0 && <div className="extras-row">
       <h3>{translate("detail.related")}</h3>
-      <div className="extras-strip">{related.map((title) => <RelatedTile key={`${title.type}:${title.id}`} title={title} onOpen={(target) => remoteFirst ? actions.openTitle(target, { remoteFirst }) : actions.openTitle(target)}/>)}</div>
+      <ExtrasStrip>{related.map((title) => <RelatedTile key={`${title.type}:${title.id}`} title={title} onOpen={(target) => remoteFirst ? actions.openTitle(target, { remoteFirst }) : actions.openTitle(target)}/>)}</ExtrasStrip>
     </div>}
   </section>;
 }
 
 function RelatedTile({ title, onOpen }: { title: RelatedTitle; onOpen: (title: TitleExtrasTarget) => void }) {
   return <button type="button" className="related" onClick={() => onOpen({ type: title.type, id: title.id, name: title.name, poster: title.poster })}>
-    <span className="related-art">{title.poster ? <img src={title.poster} alt="" onError={hideBroken}/> : title.name}</span>
+    <span className="related-art">{title.poster ? <NearImage src={title.poster} alt="" onError={hideBroken}/> : title.name}</span>
     <strong>{title.name}</strong>
     {title.year ? <small>{title.year}</small> : null}
     {title.inLibrary ? <small className="in-library">{t("detail.inLibrary")}</small> : null}

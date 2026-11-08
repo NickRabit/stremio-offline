@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode, type SyntheticEvent } from "react";
+import { useNearScreen } from "./artwork-proximity";
 import { remoteTileArtwork } from "./remote-artwork";
 import { fitFor, pickTileArt, type TileFit } from "./tile-shape";
 import type { TileShape } from "./types";
@@ -32,9 +33,9 @@ export function PosterMosaic({ posters, label, fallback = null }: { posters: str
   if (posters.length < 2) return null;
   if (!available.length) return <>{fallback}</>;
   const onError = (url: string) => setFailure((previous) => ({ identity, urls: [...(previous.identity === identity ? previous.urls : []), url] }));
-  if (available.length === 1) return <img key={available[0]} src={available[0]} alt="" loading="lazy" onError={() => onError(available[0])}/>;
+  if (available.length === 1) return <img key={available[0]} src={available[0]} alt="" loading="lazy" decoding="async" onError={() => onError(available[0])}/>;
   return <span className="library-preview-collage" role="img" aria-label={label}>
-    {available.map((poster) => <img key={poster} src={poster} alt="" loading="lazy" onError={() => onError(poster)}/>)}
+    {available.map((poster) => <img key={poster} src={poster} alt="" loading="lazy" decoding="async" onError={() => onError(poster)}/>)}
   </span>;
 }
 
@@ -66,6 +67,8 @@ export function TileArt({ shape, poster, wide, fallback, eager = false }: {
   // knownSize, so a tile on screen keeps it after the shared memory has let it go.
   const [, setRefit] = useState(0);
   const own = useRef<{ url: string; width: number; height: number } | undefined>(undefined);
+  const main = useRef<HTMLImageElement>(null);
+  const near = useNearScreen(main, url);
   const size = url ? knownSize.get(url) ?? (own.current?.url === url ? own.current : undefined) : undefined;
   const effectiveFit: TileFit = size ? fitFor(shape, size.width, size.height) : fit;
   const onLoad = (event: SyntheticEvent<HTMLImageElement>) => {
@@ -80,9 +83,9 @@ export function TileArt({ shape, poster, wide, fallback, eager = false }: {
     if (url) setFailure((previous) => ({ identity, urls: [...(previous.identity === identity ? previous.urls : []), url] }));
   };
   if (!url) return <>{fallback}</>;
-  const loading = eager ? "eager" : "lazy";
+  const loading = eager || near ? "eager" : "lazy";
   return <>
     {effectiveFit === "contain" && <img key={`blur:${url}`} className="tile-blur" src={url} alt="" aria-hidden="true" loading={loading} decoding="async"/>}
-    <img key={url} className={effectiveFit === "contain" ? "tile-fit" : undefined} src={url} alt="" loading={loading} decoding="async" onLoad={onLoad} onError={onError}/>
+    <img key={url} ref={main} className={effectiveFit === "contain" ? "tile-fit" : undefined} src={url} alt="" loading={loading} decoding="async" onLoad={onLoad} onError={onError}/>
   </>;
 }

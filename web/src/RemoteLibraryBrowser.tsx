@@ -30,6 +30,7 @@ import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes } from "./settings-ui";
+import { ArtworkProximity } from "./artwork-proximity";
 import { catalogueRef, useCatalogueStills, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
 import { TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
@@ -2006,6 +2007,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         </div>
       </div>
       <div className="browse-scroll" ref={scrollRef} onScroll={onBrowseScroll}>
+        <ArtworkProximity scroller={scrollRef}>
         {!detail && <>
           {listing.error && <div className="remote-error" role="alert">
             <span>{listing.error}</span>
@@ -2106,6 +2108,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             <button type="button" onClick={retryDetail}>{t("mediaServer.retry")}</button>
           </div>}
         </div>}
+        </ArtworkProximity>
       </div>
     </div>}
     {playing && (() => {
