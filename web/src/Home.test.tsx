@@ -225,16 +225,18 @@ describe("Home", () => {
     expect(row("resume")!.querySelector(".resume-strip.refreshing")).not.toBeNull();
   });
 
-  it("loads the first six pictures in a shelf eagerly and the rest lazily", async () => {
+  it("creates pictures only for the cards a near shelf shows, and the rest once it is moved", async () => {
     const items = Array.from({ length: 8 }, (_, index) => ({ ...episodeCard(), key: `episode:f:${index}` }));
     await render({ rows: allEmpty({ episodes: rowState({ items }) }) });
-    const pictures = [...row("episodes")!.querySelectorAll<HTMLImageElement>(".home-card .browse-art img:not(.tile-blur)")];
-    expect(pictures.map((picture) => picture.getAttribute("loading"))).toEqual([
-      "eager", "eager", "eager", "eager", "eager", "eager", "lazy", "lazy",
-    ]);
+    const loading = () => [...row("episodes")!.querySelectorAll(".home-card")].map((card) => card.querySelector(".browse-art img:not(.tile-blur)")?.getAttribute("loading") ?? null);
+    // jsdom measures nothing, so the shelf keeps its default of six shown cards.
+    expect(loading()).toEqual(["eager", "eager", "eager", "eager", "eager", "eager", null, null]);
+    expect(row("episodes")!.querySelectorAll(".home-card")).toHaveLength(8);
+    await act(async () => { row("episodes")!.querySelector(".resume-strip")!.dispatchEvent(new Event("scroll", { bubbles: true })); });
+    expect(loading()).toEqual(["eager", "eager", "eager", "eager", "eager", "eager", "lazy", "lazy"]);
   });
 
-  it("asks for a shelf's first pictures eagerly only once the shelf is near the screen", async () => {
+  it("gives a shelf far below the screen no pictures until it comes near", async () => {
     const strips = new Map<Element, (entries: Array<{ isIntersecting: boolean }>) => void>();
     vi.stubGlobal("IntersectionObserver", class {
       constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
@@ -243,10 +245,20 @@ describe("Home", () => {
     });
     const items = Array.from({ length: 8 }, (_, index) => ({ ...episodeCard(), key: `episode:f:${index}` }));
     await render({ rows: allEmpty({ episodes: rowState({ items }) }) });
-    const loading = () => [...row("episodes")!.querySelectorAll<HTMLImageElement>(".home-card .browse-art img:not(.tile-blur)")].map((picture) => picture.getAttribute("loading"));
-    expect(loading()).toEqual(Array(8).fill("lazy"));
+    const pictures = () => row("episodes")!.querySelectorAll(".home-card .browse-art img:not(.tile-blur)");
+    expect(pictures()).toHaveLength(0);
     await act(async () => { strips.get(row("episodes")!.querySelector(".resume-strip")!)!([{ isIntersecting: true }]); });
-    expect(loading()).toEqual(["eager", "eager", "eager", "eager", "eager", "eager", "lazy", "lazy"]);
+    expect([...pictures()].map((picture) => picture.getAttribute("loading"))).toEqual(Array(6).fill("eager"));
+  });
+
+  it("fits the shown cards to the strip's width, plus two", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("resume-strip") ? 300 : 0; });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      return { width: this.classList.contains("home-card") ? 150 : 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+    const items = Array.from({ length: 8 }, (_, index) => ({ ...episodeCard(), key: `episode:f:${index}` }));
+    await render({ rows: allEmpty({ episodes: rowState({ items }) }) });
+    expect(row("episodes")!.querySelectorAll(".home-card .browse-art img:not(.tile-blur)")).toHaveLength(4);
   });
 
   it("shows a row's own error line and retries only that row", async () => {
