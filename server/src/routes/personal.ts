@@ -312,17 +312,12 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       metadata = state.metadata.get(identityKey);
       if (!metadata) {
         const viewer = viewerOf(currentUser(req));
-        const controller = new AbortController();
+        // Not aborted at the deadline: Home stops waiting, the lookup finishes and lands in the
+        // metadata cache, and the next Home has the pictures at once instead of waiting again.
         metadata = withDeadline(
-          cachedMeta(identity.type, identity.id, prefsOf(req).uiLanguage, viewer, { artwork: true, signal: controller.signal }).catch(() => null),
+          cachedMeta(identity.type, identity.id, prefsOf(req).uiLanguage, viewer, { artwork: true }).catch(() => null),
           remainingMs,
-        ).then((answer) => {
-          if (answer === LOOKUP_TIMEOUT) {
-            controller.abort();
-            return {};
-          }
-          return metadataArtwork(answer);
-        }).catch((): TitleArtwork => ({}));
+        ).then((answer) => answer === LOOKUP_TIMEOUT ? {} : metadataArtwork(answer)).catch((): TitleArtwork => ({}));
         state.metadata.set(identityKey, metadata);
       }
     }

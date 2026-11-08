@@ -82,3 +82,28 @@ test("clear empties the cache", () => {
   assert.deepEqual(cache.get("answer"), { hit: false });
   assert.deepEqual(cache.get("failure"), { hit: false });
 });
+
+test("callers asking for one key while it is looked up share that lookup", async () => {
+  const cache = createMetaCache<string>({ ttlMs: 1_000, failureTtlMs: 500, limit: 10 });
+  let started = 0;
+  let finish!: (value: string) => void;
+  const lookup = () => { started += 1; return new Promise<string | null>((resolve) => { finish = resolve; }); };
+
+  const first = cache.join("movie:tt1", lookup);
+  const second = cache.join("movie:tt1", lookup);
+  assert.equal(started, 1);
+  finish("One");
+  assert.deepEqual(await Promise.all([first, second]), ["One", "One"]);
+
+  // Once settled, the next caller starts a lookup of its own.
+  const third = cache.join("movie:tt1", lookup);
+  assert.equal(started, 2);
+  finish("Again");
+  assert.equal(await third, "Again");
+});
+
+test("a failed shared lookup is not kept for the next caller", async () => {
+  const cache = createMetaCache<string>({ ttlMs: 1_000, failureTtlMs: 500, limit: 10 });
+  await assert.rejects(cache.join("movie:tt1", () => Promise.reject(new Error("down"))));
+  assert.equal(await cache.join("movie:tt1", () => Promise.resolve("up")), "up");
+});

@@ -1243,11 +1243,27 @@ const cachedMeta = async (
   // what the providers say now without leaving the next reader to ask again.
   const hit = opts.fresh ? undefined : metaCache.get(key);
   if (hit?.hit) return hit.value;
+  // A caller that will not abort shares one lookup per key and leaves it to finish: Home gives
+  // up waiting after its deadline, and the answer still lands here for the next reader.
+  const lookup = { ...opts, viewerKnown: viewer !== undefined };
+  if (!opts.signal && !opts.fresh) return metaCache.join(key, () => lookupMeta(sources, key, type, id, language, lookup));
+  return lookupMeta(sources, key, type, id, language, lookup);
+};
+/** One metadata lookup and what it leaves in the cache. A function declaration, so a caller that
+ *  runs before this line in module order still finds it. */
+async function lookupMeta(
+  sources: ReturnType<typeof store.addons>,
+  key: string,
+  type: string,
+  id: string,
+  language: string,
+  opts: { interactive?: boolean; artwork?: boolean; signal?: AbortSignal; viewerKnown: boolean },
+) {
   const outcome = { failed: false };
   const found = await metadata(
     sources, type, id, language,
     opts.artwork ? tmdbArtworkProvider(language) : tmdbProvider(language),
-    opts.interactive ?? viewer !== undefined,
+    opts.interactive ?? opts.viewerKnown === true,
     opts.artwork === true,
     opts.signal,
     outcome,
@@ -1259,7 +1275,7 @@ const cachedMeta = async (
   if (value && Object.keys(value).length > 0) metaCache.set(key, value);
   else if (!opts.signal?.aborted && !outcome.failed) metaCache.fail(key);
   return value;
-};
+}
 // Walking the tree is expensive, so it is held in memory for a while. The queue invalidates it once a download finishes.
 // Units and entries are derived from the one walk, so a cold listing reads the disk once.
 type WalkRead = { stale?: boolean };

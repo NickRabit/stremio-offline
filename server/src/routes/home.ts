@@ -201,22 +201,39 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
    *  `resume` row and `GET /api/resume` read this one builder. On Home a library or add-on
    *  switched off the Home page drops out; the Continue watching section applies only the
    *  destination's own `showInContinueWatching` switch. */
+  // How long each part of a Home answer took, per request, for the `Server-Timing` header: the
+  // stages run in parallel, so the header shows which one the answer waited for.
+  const stageTimes = new WeakMap<express.Request, Array<[string, number]>>();
+  const timed = <T>(req: express.Request, name: string, work: Promise<T>): Promise<T> => {
+    const started = performance.now();
+    const note = () => {
+      const list = stageTimes.get(req) ?? [];
+      list.push([name, performance.now() - started]);
+      stageTimes.set(req, list);
+    };
+    return work.then((value) => { note(); return value; }, (error: unknown) => { note(); throw error; });
+  };
+  const serverTiming = (req: express.Request): string | undefined => {
+    const list = stageTimes.get(req);
+    return list?.length ? list.map(([name, ms]) => `${name};dur=${ms.toFixed(1)}`).join(", ") : undefined;
+  };
+
   const resumeSources = async (req: express.Request, home: boolean): Promise<{ sources: ResumeSources; partial: boolean; pending: boolean; proof?: RowProof }> => {
     const authority = authorityOf(req);
     const [progress, resume, remote] = await Promise.all([
-      personal.progressRows(req, {
+      timed(req, "resume-progress", personal.progressRows(req, {
         markerLimit: HOME_MARKER_LIMIT, deadlineMs: homeLookupDeadlineMs, addonFilter: true,
         // Every candidate of a shown show has to reach the merge, or forgetting the card
         // would leave the other half behind; the merge does the real cut to 20.
         limit: Number.POSITIVE_INFINITY,
-      }),
+      })),
       // Every file candidate, whatever page of the merged list the caller asked for: the
       // stored positions are bounded already, and the merge is what pages. Home only ever
       // draws 20, so it keeps the smaller bound; the section may reach every file.
-      personal.libraryResumeItems(req, { onHome: home, skip: 0, limit: home ? 120 : HOME_RESUME_FILE_LIMIT }),
+      timed(req, "resume-files", personal.libraryResumeItems(req, { onHome: home, skip: 0, limit: home ? 120 : HOME_RESUME_FILE_LIMIT })),
       // The account's own verified remote resume cards. A failure here only drops this half;
       // the local and add-on halves are built above and never depend on it.
-      remotePersonal.cards(authority, { filter: "resume", onHome: home, limit: 1000 }).then((cards) => cards, () => undefined),
+      timed(req, "resume-remote", remotePersonal.cards(authority, { filter: "resume", onHome: home, limit: 1000 })).then((cards) => cards, () => undefined),
     ]);
     // The addon's own switches for the row, as the catalogue row reads them: a row whose addon
     // is gone, or that never recorded one, stays. Home also drops an add-on switched off there.
@@ -269,7 +286,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       ...(item.seriesPath ? { seriesPath: item.seriesPath } : {}),
       ...(item.identity ? { identity: item.identity } : {}),
     }));
-    await learnTitlePairs([...files, ...catalogue, ...(remote?.items ?? [])].map((item) => item.identity));
+    await timed(req, "resume-pairs", learnTitlePairs([...files, ...catalogue, ...(remote?.items ?? [])].map((item) => item.identity)));
     const imdbOf = imdbOfTmdb
       ? (type: "movie" | "series", tmdbId: number) => imdbOfTmdb(type, tmdbId) ?? undefined
       : undefined;
@@ -330,7 +347,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const { sources, partial, proof } = await resumeSources(req, true);
     if (proof) proofs.push(proof);
     const merged = mergeResume(sources);
-    return { status: "ok", items: await enrichResumeArtwork(req, merged.items), hasMore: merged.hasMore, ...(partial ? { partial: true } : {}) };
+    return { status: "ok", items: await timed(req, "resume-artwork", enrichResumeArtwork(req, merged.items)), hasMore: merged.hasMore, ...(partial ? { partial: true } : {}) };
   };
 
   const completedRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
@@ -785,6 +802,8 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     requireAccess(req);
     for (const row of Object.values(rows)) if (row) row.items = row.items.map(withEpisodeNaming);
     const response: HomeResponse = { generatedAt: new Date().toISOString(), order, rows };
+    const timing = serverTiming(req);
+    if (timing) res.setHeader("Server-Timing", timing);
     res.json(response);
   }));
 
