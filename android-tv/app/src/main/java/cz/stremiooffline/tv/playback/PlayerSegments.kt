@@ -19,7 +19,7 @@ fun introQueryOf(progressKey: String?): IntroQuery? {
 enum class SegmentKind { Intro, Recap, Outro }
 
 /** Credits that end this far before the file does were timed on another cut of the title. */
-private const val OUTRO_SLACK_SECONDS = 300.0
+private const val OUTRO_SLACK_SECONDS = 45.0
 /** An intro or a recap starts within the opening part of the file: this share of it, at most the cap. */
 private const val OPENING_SHARE = 0.2
 private const val OPENING_CAP_SECONDS = 20 * 60.0

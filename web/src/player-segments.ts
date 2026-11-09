@@ -19,7 +19,7 @@ export function introQueryOf(progressKey?: string): IntroQuery | undefined {
 export type SegmentKind = "intro" | "recap" | "outro";
 
 /** Credits that end this far before the file does were timed on another cut of the title. */
-const OUTRO_SLACK_SECONDS = 300;
+const OUTRO_SLACK_SECONDS = 45;
 /** An intro or a recap starts within the opening part of the file: this share of it, at most the cap. */
 const OPENING_SHARE = 0.2;
 const OPENING_CAP_SECONDS = 20 * 60;

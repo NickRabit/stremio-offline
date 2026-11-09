@@ -115,6 +115,13 @@ class PlayerSegmentsTest {
   }
 
   @Test
+  fun `drops credits that end over a minute before a longer cut does`() {
+    val credits = IntroSegmentsDto(outro = SegmentRangeDto(1549.0, 1616.0))
+    assertEquals(IntroSegmentsDto(), fitSegments(credits, 1685.0))
+    assertEquals(credits, fitSegments(credits, 1660.0))
+  }
+
+  @Test
   fun `drops an intro deep into the file and keeps a cold open`() {
     assertEquals(IntroSegmentsDto(), fitSegments(IntroSegmentsDto(intro = SegmentRangeDto(1500.0, 1560.0)), 2600.0))
     val coldOpen = IntroSegmentsDto(intro = SegmentRangeDto(437.0, 531.0))
