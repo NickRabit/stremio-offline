@@ -390,8 +390,10 @@ fun PlayerOverlayShell(
   }
 }
 
-/** The bubble's `+1:30` / `−0:10`. */
+/** The bubble's `+1:30` / `−0:10`, and `+1:05:00` past an hour. */
 internal fun seekBubble(deltaSeconds: Long): String {
   val total = kotlin.math.abs(deltaSeconds)
-  return String.format(Locale.US, "%s%d:%02d", if (deltaSeconds < 0) "\u2212" else "+", total / 60, total % 60)
+  val sign = if (deltaSeconds < 0) "\u2212" else "+"
+  return if (total >= 3600) sign + playbackClock(total.toDouble())
+  else String.format(Locale.US, "%s%d:%02d", sign, total / 60, total % 60)
 }

@@ -222,6 +222,17 @@ class PlayerOverlayTest {
   }
 
   @Test
+  fun `a film over an hour shows the timeline in hours, not a minute count`() {
+    mount(position = 5_820.0, duration = 6_300.0, initiallyShown = false)
+
+    compose.onNodeWithTag("video").performKeyInput { pressKey(Key.DirectionRight) }
+    compose.mainClock.advanceTimeBy(50)
+
+    compose.onNodeWithTag(TAG_SEEK_STRIP_POSITION, useUnmergedTree = true).assertTextEquals("1:37:10")
+    compose.onNodeWithTag(TAG_SEEK_STRIP_DURATION, useUnmergedTree = true).assertTextEquals("1:45:00")
+  }
+
+  @Test
   fun `with controls hidden left and right seek and show a bubble`() {
     mount(initiallyShown = false)
 

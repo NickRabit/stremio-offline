@@ -69,7 +69,6 @@ import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.android.awaitFrame
-import java.util.Locale
 
 const val TAG_OSD_SEEK_BACK = "osd_seek_back"
 const val TAG_OSD_SEEK_FORWARD = "osd_seek_forward"
@@ -268,7 +267,7 @@ fun Osd(
         Text(chapterLabel, color = Tokens.Muted, fontSize = 11.sp, modifier = Modifier.testTag(TAG_OSD_CHAPTER))
       }
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(formatTime(position), color = Tokens.Text, fontSize = 11.sp)
+        Text(playbackClock(position, duration >= 3600), color = Tokens.Text, fontSize = 11.sp)
         Timeline(
           fraction = if (duration > 0) (position / duration).toFloat() else 0f,
           chapters = chapters,
@@ -278,7 +277,7 @@ fun Osd(
           onActivity = onActivity,
           modifier = Modifier.weight(1f),
         )
-        Text(formatTime(duration), color = Tokens.Text, fontSize = 11.sp)
+        Text(playbackClock(duration), color = Tokens.Text, fontSize = 11.sp)
       }
       Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
         RoundButton(
@@ -540,7 +539,7 @@ fun SeekStrip(position: Double, duration: Double) {
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      Text(formatTime(position), color = Tokens.Text, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag(TAG_SEEK_STRIP_POSITION))
+      Text(playbackClock(position, duration >= 3600), color = Tokens.Text, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag(TAG_SEEK_STRIP_POSITION))
       Box(
         Modifier
           .weight(1f)
@@ -549,7 +548,7 @@ fun SeekStrip(position: Double, duration: Double) {
       ) {
         Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).background(Tokens.Accent, RoundedCornerShape(999.dp)))
       }
-      Text(formatTime(duration), color = Tokens.Text, fontSize = 13.sp, modifier = Modifier.testTag(TAG_SEEK_STRIP_DURATION))
+      Text(playbackClock(duration), color = Tokens.Text, fontSize = 13.sp, modifier = Modifier.testTag(TAG_SEEK_STRIP_DURATION))
     }
   }
 }
@@ -620,9 +619,4 @@ private fun PauseIcon() {
     drawRect(Color.White, topLeft = Offset(0f, 0f), size = Size(size.width * 0.28f, size.height))
     drawRect(Color.White, topLeft = Offset(size.width * 0.62f, 0f), size = Size(size.width * 0.28f, size.height))
   }
-}
-
-private fun formatTime(seconds: Double): String {
-  val total = seconds.toInt().coerceAtLeast(0)
-  return String.format(Locale.US, "%02d:%02d", total / 60, total % 60)
 }

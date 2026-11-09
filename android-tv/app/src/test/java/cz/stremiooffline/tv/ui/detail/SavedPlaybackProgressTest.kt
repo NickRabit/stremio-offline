@@ -23,6 +23,11 @@ class SavedPlaybackProgressTest {
   }
 
   @Test
+  fun `an elapsed position past an hour reads in hours`() {
+    assertEquals(SavedProgress.Elapsed("1:23:20"), savedProgress(5_000.0, 0.0))
+  }
+
+  @Test
   fun `zero, negative or non-finite positions show nothing`() {
     assertEquals(SavedProgress.None, savedProgress(0.0, 100.0))
     assertEquals(SavedProgress.None, savedProgress(-1.0, 100.0))

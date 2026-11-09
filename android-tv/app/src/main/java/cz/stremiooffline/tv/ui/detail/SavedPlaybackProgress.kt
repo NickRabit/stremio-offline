@@ -18,8 +18,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.ui.player.playbackClock
 import cz.stremiooffline.tv.ui.theme.Tokens
-import java.util.Locale
 
 /** Where a saved position stands, judged from the stored numbers alone. */
 sealed interface SavedProgress {
@@ -41,7 +41,7 @@ fun savedProgress(position: Double, duration: Double): SavedProgress {
     val fraction = (position / duration).toFloat().coerceIn(0f, 1f)
     return SavedProgress.Fraction(fraction, (fraction * 100).toInt())
   }
-  return SavedProgress.Elapsed(formatElapsed(position))
+  return SavedProgress.Elapsed(playbackClock(position))
 }
 
 /** Noninteractive: the bar mirrors the stored position, and the remote never lands on it. */
@@ -77,9 +77,4 @@ fun SavedPlaybackProgress(
       modifier = modifier.testTag(tag),
     )
   }
-}
-
-private fun formatElapsed(seconds: Double): String {
-  val total = seconds.toInt().coerceAtLeast(0)
-  return String.format(Locale.US, "%02d:%02d", total / 60, total % 60)
 }
