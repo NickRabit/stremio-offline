@@ -468,7 +468,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       {...(seed ? { initialSource: seed } : {})}
       episodes={episodePicker}
       {...(waitingEpisode || pendingProviders > 0 ? { placeholder: null } : {})}
-      {...(waitingEpisode ? {} : { sourceGroups: { groups: showTorrents ? extra.groups : extra.groups.map((group) => ({ ...group, streams: group.streams.filter(offered) })), retry: extra.retry }, onOpenSources: () => setChooserOpen(true) })}
+      {...(waitingEpisode ? {} : { sourceGroups: { groups: showTorrents ? extra.groups : extra.groups.map((group) => ({ ...group, streams: group.streams.filter(offered) })), retry: extra.retry, renew: extra.renew, refind: extra.refind }, onOpenSources: () => setChooserOpen(true) })}
       nativeSourceLabel={t("sources.heading")}
       {...(preferredLanguage ? { preferredLanguage } : {})}
       inspect={(stream, signal) => api.inspect(stream, signal)}

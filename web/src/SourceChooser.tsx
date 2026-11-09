@@ -57,6 +57,8 @@ export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, 
   const resolvedSort = resolveStreamSort(sort, sourceProfiles);
   const defaultRuleId = sortRuleId(resolveStreamSort(defaultSort, sourceProfiles));
   const listRef = useRef<HTMLDivElement | null>(null);
+  // Opening the chooser is when a list read long ago is read again, before a dead row is picked.
+  useEffect(() => { panel?.renew?.(); }, []);
   // A place that leads with the viewer's own copies would name the file it holds twice, once as a
   // lead row and once in the own-copies group: the group drops the rows the lead already holds,
   // and a group it empties stops being a menu entry of its own.

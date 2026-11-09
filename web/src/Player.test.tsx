@@ -285,6 +285,78 @@ describe("Player source switching", () => {
     expect(sourceRows()[0]!.getAttribute("aria-pressed")).toBe("true");
   });
 
+  /** The server answers an id it dropped the way it does once a listing is 30 minutes old. */
+  const expire = (dropped: Set<string>) => {
+    const base = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/api/playback" && init?.method === "POST" && dropped.has((JSON.parse(String(init.body)) as { sourceId: string }).sourceId)) {
+        playbackPosts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return Promise.resolve(json({ error: "Media resource expired or unavailable. Select the source again.", code: "RESOURCE_EXPIRED" }, 410));
+      }
+      return base(input, init);
+    }));
+  };
+
+  it("reads an expired row's group again and switches to the same row under its new id, once", async () => {
+    const playing = addonRow({ sourceId: "addon-1", name: "4K" });
+    const other = addonRow({ sourceId: "addon-2", name: "1080p", stableKey: "cinema-1080p" });
+    const fresh = addonRow({ sourceId: "addon-2b", name: "1080p", stableKey: "cinema-1080p" });
+    expire(new Set(["addon-2", "addon-2b"]));
+    const group = addonGroup("cinema", "Cinema", [other]);
+    const refind = vi.fn(async () => fresh);
+    const onSwitch = vi.fn(async () => undefined);
+    const sources = sourcesOf(playing, [group], { onSwitch, panel: { groups: [group], retry: vi.fn(), refind } });
+    await render({ stream: playing, sources });
+    await click(sourceButton()!);
+    await click(sourceRows()[1]!);
+    expect(onSwitch).toHaveBeenLastCalledWith(other, 0);
+
+    // The host hands the chosen row over; the server has already dropped its id.
+    await rerender({ stream: other, startAtSeconds: 0, sources });
+    await flush();
+    expect(refind).toHaveBeenCalledWith(other);
+    expect(onSwitch).toHaveBeenLastCalledWith(fresh, 0);
+    expect(host.querySelector(".player-error, [role=alert]")).toBeNull();
+
+    // The new id is refused too: nothing is read a second time, and the failure is shown.
+    await rerender({ stream: fresh, startAtSeconds: 0, sources });
+    await flush();
+    expect(refind).toHaveBeenCalledTimes(1);
+    expect(onSwitch).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toContain("Select the source again");
+  });
+
+  it("shows the refusal when the expired row's group no longer lists it", async () => {
+    const playing = addonRow({ sourceId: "addon-1", name: "4K" });
+    const other = addonRow({ sourceId: "addon-2", name: "1080p" });
+    expire(new Set(["addon-2"]));
+    const group = addonGroup("cinema", "Cinema", [other]);
+    const refind = vi.fn(async () => null);
+    const onSwitch = vi.fn(async () => undefined);
+    const sources = sourcesOf(playing, [group], { onSwitch, panel: { groups: [group], retry: vi.fn(), refind } });
+    await render({ stream: playing, sources });
+    await click(sourceButton()!);
+    await click(sourceRows()[1]!);
+    await rerender({ stream: other, startAtSeconds: 0, sources });
+    await flush();
+    expect(refind).toHaveBeenCalledTimes(1);
+    expect(onSwitch).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Select the source again");
+  });
+
+  it("re-reads stale groups each time the Sources panel opens", async () => {
+    const playing = addonRow({ sourceId: "addon-1", name: "4K" });
+    const renew = vi.fn();
+    const group = addonGroup("cinema", "Cinema", [addonRow({ sourceId: "addon-2" })]);
+    await render({ stream: playing, sources: sourcesOf(playing, [group], { panel: { groups: [group], retry: vi.fn(), renew } }) });
+    await click(sourceButton()!);
+    expect(renew).toHaveBeenCalledTimes(1);
+    await click(sourceButton()!);
+    await click(sourceButton()!);
+    expect(renew).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the lead row alone for a play nothing names, and asks no group for it", async () => {
     const loose = ownFile({ sourceId: "local-9", localPath: "Films/Loose.mkv", behaviorHints: { filename: "Loose.mkv" } });
     const onOpen = vi.fn();

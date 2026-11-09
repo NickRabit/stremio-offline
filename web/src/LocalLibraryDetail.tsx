@@ -375,7 +375,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     {...(defaultSort ? { defaultSort } : {})}
     {...(saved && saved.sourceKey === selectedKey ? { progress: saved } : {})}
     onClearProgress={clearSelectedProgress}
-    {...(catalogue ? { sourceGroups: { groups: extra.groups, retry: extra.retry }, onOpenSources: () => setChooserOpen(true) } : {})}
+    {...(catalogue ? { sourceGroups: { groups: extra.groups, retry: extra.retry, renew: extra.renew, refind: extra.refind }, onOpenSources: () => setChooserOpen(true) } : {})}
     {...(catalogue && onSaveAlternative ? {
       onSaveToLibrary: (stream: Stream) => onSaveAlternative({
         stream, title, ...(item.poster ? { poster: item.poster } : {}), catalogue, media: alternativeMedia(),

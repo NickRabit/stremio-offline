@@ -2052,7 +2052,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             sourceProfiles={sourceProfiles}
             {...(defaultSort ? { defaultSort } : {})}
             {...(addonIdentity ? {
-              sourceGroups: { groups: extra.groups, retry: extra.retry },
+              sourceGroups: { groups: extra.groups, retry: extra.retry, renew: extra.renew, refind: extra.refind },
               onOpenSources: () => setChooserOpen(true),
               nativeSourceLabel: ownLabel,
               preferredLanguage: audioLanguage,
@@ -2160,7 +2160,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         // them. Nothing is read before that: the panel is the hook's own `open`.
         sources={{
           lead: sources ?? [], leadLabel: ownLabel, groups: extra.groups,
-          panel: { groups: extra.groups, retry: extra.retry },
+          panel: { groups: extra.groups, retry: extra.retry, renew: extra.renew, refind: extra.refind },
           onOpen: () => setPlayerSourcesOpen(true),
           onSwitch: switchDetailSource,
         }}

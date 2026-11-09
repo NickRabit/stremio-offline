@@ -4364,7 +4364,7 @@ export function App() {
         lead: playingStream ? [playingStream] : [],
         leadLabel: playingStream ? streamGroupLabel(playingStream) : t("sources.heading"),
         groups: playingSources.groups,
-        panel: { groups: playingSources.groups, retry: playingSources.retry },
+        panel: { groups: playingSources.groups, retry: playingSources.retry, renew: playingSources.renew, refind: playingSources.refind },
         onOpen: () => setPlayerSourcesOpen(true),
         onSwitch: switchPlaybackSource,
       }}
@@ -4383,7 +4383,7 @@ export function App() {
         lead: [alternative.stream],
         leadLabel: streamGroupLabel(alternative.stream),
         groups: alternativeSources.groups,
-        panel: { groups: alternativeSources.groups, retry: alternativeSources.retry },
+        panel: { groups: alternativeSources.groups, retry: alternativeSources.retry, renew: alternativeSources.renew, refind: alternativeSources.refind },
         onOpen: () => setAlternativeSourcesOpen(true),
         onSwitch: switchAlternativeSource,
       }}

@@ -70,6 +70,7 @@ import cz.stremiooffline.tv.diagnostics.AppLog
 import cz.stremiooffline.tv.playback.NextEpisode
 import cz.stremiooffline.tv.playback.PlaybackController
 import cz.stremiooffline.tv.playback.PlaybackDiagnostics
+import cz.stremiooffline.tv.playback.PlaybackError
 import cz.stremiooffline.tv.playback.PlaybackMode
 import cz.stremiooffline.tv.playback.PlayerTrack
 import cz.stremiooffline.tv.playback.PlayerTrackGroup
@@ -114,6 +115,7 @@ import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.ShuffleRun
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
@@ -146,6 +148,8 @@ fun PlayerScreen(
   nextTarget: PlayTarget? = null,
   onNextTargetTaken: () -> Unit = {},
   createPlayer: (Context, okhttp3.OkHttpClient) -> ExoPlayer = ::buildExoPlayer,
+  /** The wall clock the age of a listed source is measured on. */
+  clock: () -> Long = System::currentTimeMillis,
 ) {
   val context = LocalContext.current
   val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -227,6 +231,15 @@ fun PlayerScreen(
   var replacementSources by remember { mutableStateOf<OfferedSources?>(null) }
   var replacementSourcesLoading by remember { mutableStateOf(false) }
   var replacementSourcesEpoch by remember { mutableIntStateOf(0) }
+  // The list read again because it grew old. It stands over the rows the caller handed over until
+  // the episode changes, and each source id is timed from when it was first offered here.
+  var renewedSources by remember { mutableStateOf<OfferedSources?>(null) }
+  var renewalEpoch by remember { mutableIntStateOf(0) }
+  var renewal by remember { mutableStateOf<Job?>(null) }
+  val listedAt = remember { mutableMapOf<String, Long>() }
+  // The row a switch asked for, so a refusal for an expired id can find it again in a fresh list.
+  var switchStream by remember { mutableStateOf<StreamDto?>(null) }
+  var expiredRetried by remember { mutableStateOf(false) }
   // The correction lives with this playback, not beyond it.
   var delaySeconds by remember(target.key) { mutableDoubleStateOf(0.0) }
   var cues by remember { mutableStateOf<List<VttCue>>(emptyList()) }
@@ -241,7 +254,15 @@ fun PlayerScreen(
   val currentCatalogueNext by rememberUpdatedState(catalogueNext)
   val closedShuffle = remember { mutableSetOf<String>() }
 
+  fun dropRenewal() {
+    renewalEpoch += 1
+    renewal?.cancel()
+    renewal = null
+    renewedSources = null
+  }
+
   fun loadReplacementSources(target: PlayTarget) {
+    dropRenewal()
     val epoch = ++replacementSourcesEpoch
     replacementSources = OfferedSources(Streams.deduped(target.initialSources ?: target.remoteSources))
     replacementSourcesLoading = true
@@ -344,6 +365,7 @@ fun PlayerScreen(
   /** What belonged to the episode that ended: its offer, its end, its skips and its delay. The
    *  card or the OSD button that started the next one goes away, so the remote is handed back. */
   fun forgetEpisode() {
+    dropRenewal()
     nextCard = false
     ended = false
     delaySeconds = 0.0
@@ -462,6 +484,7 @@ fun PlayerScreen(
     replacementSources = null
     replacementSourcesLoading = false
     replacementSourcesEpoch += 1
+    dropRenewal()
     tracksOpen = false
     diagnosticsOpen = false
     sourcesOpen = false
@@ -469,6 +492,7 @@ fun PlayerScreen(
     chaptersOpen = false
     switchTarget = null
     previousTarget = null
+    switchStream = null
     switchAt = 0.0
     cues = emptyList()
     rawSegments = null
@@ -543,8 +567,37 @@ fun PlayerScreen(
   // The sources the caller offers in its own order; an addon's notice is not a source. A play the
   // catalogue never started has none, so both the button and the panel stay away. A next episode
   // replaces the file those sources belong to, and they go with it.
-  val offeredSources = Streams.offeredStreams(if (fileReplaced) replacementSources?.streams.orEmpty() else sources)
-  val sourcesAsking = if (fileReplaced) replacementSourcesLoading else sourcesLoading
+  val callerSources = if (fileReplaced) replacementSources?.streams.orEmpty() else sources
+  val offeredSources = remember(callerSources, renewedSources) {
+    Streams.offeredStreams(renewedSources?.let { renewedRows(callerSources, it.streams) } ?: callerSources)
+  }
+  val sourcesAsking = (if (fileReplaced) replacementSourcesLoading else sourcesLoading) || renewedSources?.loading == true
+  LaunchedEffect(offeredSources) {
+    val now = clock()
+    offeredSources.forEach { if (it.sourceId.isNotBlank()) listedAt.putIfAbsent(it.sourceId, now) }
+  }
+
+  /** Reads the playing title's sources again. The rows on offer stay until each answer lands, and
+   *  one read at a time serves the panel and an expired switch alike. */
+  fun renewSources(): Job {
+    renewal?.takeIf { it.isActive }?.let { return it }
+    val epoch = renewalEpoch
+    val from = currentTarget
+    val startedAt = clock()
+    return scope.launch {
+      LibraryPlaySources(api).load(from, renew = true) { found ->
+        if (epoch != renewalEpoch) return@load
+        found.streams.forEach { if (it.sourceId.isNotBlank()) listedAt[it.sourceId] = startedAt }
+        renewedSources = found
+      }
+      if (epoch == renewalEpoch) renewedSources = renewedSources?.copy(loading = false)
+    }.also { renewal = it }
+  }
+
+  fun openSources() {
+    sourcesOpen = true
+    if (sourcesStale(offeredSources, listedAt, clock())) renewSources()
+  }
   // The row the session plays: an addon one by its source id, a library copy by the path it plays.
   // A blank source id names no source, so it marks no row; a source id match wins over a path one,
   // because an addon source chosen over a library file leaves that file's path on the session.
@@ -613,6 +666,8 @@ fun PlayerScreen(
     val target = switchedTarget(currentTarget, stream)
     previousTarget = currentTarget
     switchTarget = target
+    switchStream = stream
+    expiredRetried = false
     switchAt = controller.position
     startSwitch(target, switchAt)
   }
@@ -623,11 +678,36 @@ fun PlayerScreen(
     controller.selectQuality(quality)
   }
 
+  /** A switch the server refused because the row's id outlived its list: the list is read again
+   *  and the same version is started under the id it has now. */
+  fun renewSwitch() {
+    val chosen = switchStream ?: return
+    val back = previousTarget ?: return
+    scope.launch {
+      renewSources().join()
+      val fresh = renewedSources?.streams?.firstOrNull { sameSource(chosen, it) } ?: return@launch
+      if (switchStream !== chosen) return@launch
+      val target = switchedTarget(back, fresh)
+      switchStream = fresh
+      switchTarget = target
+      onSourceChosen(fresh)
+      startSwitch(target, switchAt)
+    }
+  }
+
+  LaunchedEffect(state.error) {
+    if (state.error == PlaybackError.Expired && switchTarget != null && !expiredRetried) {
+      expiredRetried = true
+      renewSwitch()
+    }
+  }
+
   // Once a session has landed, the switch it came from is no longer something to go back from.
   LaunchedEffect(state.started) {
     if (state.started) {
       switchTarget = null
       previousTarget = null
+      switchStream = null
     }
   }
 
@@ -992,7 +1072,7 @@ fun PlayerScreen(
     tracksText = tracksButtonText(state.audioTrack?.language),
     tracksLabel = stringResource(R.string.tv_tracks_title),
     tracksFocus = tracksFocus,
-    onSources = if (sourcesShown) ({ sourcesOpen = true }) else null,
+    onSources = if (sourcesShown) ({ openSources() }) else null,
     sourcesText = sourcesTitle,
     sourcesLabel = sourcesTitle,
     sourcesFocus = sourcesFocus,
@@ -1154,7 +1234,8 @@ fun PlayerScreen(
             // session and short-lived, so a started session cannot reuse the ones it began with.
             // Try again is the new source, not the one the player started with.
             if (failed != null) {
-              startSwitch(failed, switchAt)
+              // An expired id would only be refused again: the row is looked up under its new one.
+              if (state.error == PlaybackError.Expired) renewSwitch() else startSwitch(failed, switchAt)
             } else {
               scope.launch {
                 playerRetry(
