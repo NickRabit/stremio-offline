@@ -497,6 +497,36 @@ npm run test:e2e:docker     # the same run inside the image CI uses
 npm run test:e2e:snapshots  # regenerate the screenshot baselines
 ```
 
+Coverage is generated from the unit and integration suites with:
+
+```bash
+npm run test:coverage
+```
+
+The report is written to `coverage/index.html`, with a machine-readable
+`coverage/summary.json`, LCOV for each workspace and the full per-file HTML
+reports behind the workspace links. It covers production TypeScript and TSX in
+`packages/source-selection/src`, `server/src`, `web/src` and `desktop/src`.
+Tests, test setup, generated output and translation catalogues are excluded.
+Unloaded production files are included at zero so that the total cannot improve
+by leaving a module out of the test process.
+
+Every workspace is counted the same way, so the four can be added up. The web
+suite uses Vitest's V8 coverage. The `node:test` suites run with
+`NODE_V8_COVERAGE`, and the script converts their results with the converter
+Vitest uses, from the code tsx actually ran (read back from tsx's cache and
+checked against Node's record of it). Lines, statements, branches and functions
+therefore come from the syntax tree, not from physical lines, and comments,
+blank lines and type declarations do not count. The interop wrapper tsx adds
+around each dynamic `import()` is left out.
+
+This total deliberately does not include Playwright browser execution, Android
+TV, or screenshot assertions. They test different layers and cannot be added to
+a TypeScript branch percentage without double-counting source or implying that a
+screenshot proves a branch. The `Coverage` GitHub workflow runs on `main`, on
+manual dispatch and on a pull request that changes the report itself. It writes
+the summary to the workflow run and uploads the complete report as an artifact.
+
 `npm run test:e2e` needs the browser on the machine
 (`npx playwright install chromium`) and FFmpeg/ffprobe on PATH. `npm run test:e2e:docker` needs nothing but
 Docker, builds first, and matches CI exactly -- use it when a result has to be

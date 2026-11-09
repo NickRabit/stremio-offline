@@ -21,6 +21,7 @@ e2e/.tmp/
 e2e/.tmp-restricted/
 test-results/
 playwright-report/
+coverage/
 
 # Local-only working documents: an in-progress i18n spec, an unfinished
 # security/perf spec, a speculative desktop-distribution note, and the specs and
