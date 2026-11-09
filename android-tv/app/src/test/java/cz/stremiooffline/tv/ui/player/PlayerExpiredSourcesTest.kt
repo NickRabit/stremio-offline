@@ -148,6 +148,24 @@ class PlayerExpiredSourcesTest {
   }
 
   @Test
+  fun `a row the new listing lost does not make every later open read the title again`() {
+    val api = RelistingApi().apply { relist("srcA2") }
+    // Beta is never listed again, so it keeps the time it was first offered at.
+    mount(api)
+    now += 21 * 60_000L
+    openSources()
+    compose.waitUntil(5_000) { api.streamsCompleted.isNotEmpty() }
+    compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TAG_OSD_SOURCES).assertIsFocused()
+
+    now += 60_000L
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSourcesPanel).assertExists()
+    assertEquals(listOf("movie:tt1"), api.streamSourcesRequests)
+  }
+
+  @Test
   fun `a switch refused as expired reads the list again and starts the same row once more`() {
     val api = ExpiringApi(expired = setOf("srcA")).apply { relist("srcA2") }
     mount(api)

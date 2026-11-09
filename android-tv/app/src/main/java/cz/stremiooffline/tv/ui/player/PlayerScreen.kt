@@ -236,6 +236,9 @@ fun PlayerScreen(
   var renewedSources by remember { mutableStateOf<OfferedSources?>(null) }
   var renewalEpoch by remember { mutableIntStateOf(0) }
   var renewal by remember { mutableStateOf<Job?>(null) }
+  // A row the new listing no longer names keeps its old time; this keeps it from re-reading the
+  // whole title at every later open.
+  var renewedAt by remember { mutableStateOf<Long?>(null) }
   val listedAt = remember { mutableMapOf<String, Long>() }
   // The row a switch asked for, so a refusal for an expired id can find it again in a fresh list.
   var switchStream by remember { mutableStateOf<StreamDto?>(null) }
@@ -259,6 +262,7 @@ fun PlayerScreen(
     renewal?.cancel()
     renewal = null
     renewedSources = null
+    renewedAt = null
   }
 
   fun loadReplacementSources(target: PlayTarget) {
@@ -584,6 +588,7 @@ fun PlayerScreen(
     val epoch = renewalEpoch
     val from = currentTarget
     val startedAt = clock()
+    renewedAt = startedAt
     return scope.launch {
       LibraryPlaySources(api).load(from, renew = true) { found ->
         if (epoch != renewalEpoch) return@load
@@ -596,7 +601,9 @@ fun PlayerScreen(
 
   fun openSources() {
     sourcesOpen = true
-    if (sourcesStale(offeredSources, listedAt, clock())) renewSources()
+    val now = clock()
+    val renewedLately = renewedAt?.let { now - it < SOURCES_FRESH_MS } == true
+    if (!renewedLately && sourcesStale(offeredSources, listedAt, now)) renewSources()
   }
   // The row the session plays: an addon one by its source id, a library copy by the path it plays.
   // A blank source id names no source, so it marks no row; a source id match wins over a path one,
