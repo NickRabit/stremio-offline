@@ -40,6 +40,40 @@ test("a show played from the full detail carries its own episode and plays the n
   await expect(main.locator(".episode-current")).toContainText("Druhý díl");
 });
 
+test("the next episode's sources are read again when the episode ran longer than they last", async ({ page }) => {
+  // The server forgets a listed source after 30 minutes, about one episode. A list read when the
+  // episode started is no longer playable when it ends, so the player has to ask again before it
+  // starts the next one.
+  await page.clock.install();
+  const events: string[] = [];
+  page.on("request", (request) => {
+    const url = decodeURIComponent(request.url());
+    if (url.includes("/api/streams/") && url.includes(":1:2")) events.push("sources");
+    if (request.method() === "POST" && new URL(url).pathname === "/api/playback") events.push("playback");
+  });
+  await openCatalogue(page, /Seriály/);
+  await page.getByRole("button", { name: /Zkušební seriál/ }).click();
+  await page.locator(".detail-panel").getByRole("button", { name: /První díl/ }).click();
+  await page.locator(".detail-panel .stream-list").getByRole("button", { name: /E2E 1080p/ }).click();
+  await info(page).click();
+  const main = page.locator("main.view-title-detail");
+  await main.getByRole("button", { name: "Přehrát", exact: true }).click();
+  const player = page.locator(".player-overlay");
+  await expect(player.locator(".next-episode")).toHaveAttribute("title", /Druhý díl/);
+  await expect.poll(() => events.includes("sources")).toBe(true);
+
+  await page.clock.fastForward("31:00");
+  const clicked = events.length;
+  await player.locator(".next-episode").click();
+  await expect(player.locator(".player-head strong")).toHaveText("Zkušební seriál · 01×02");
+  await expect.poll(() => events.slice(clicked).includes("playback")).toBe(true);
+  const afterClick = events.slice(clicked);
+  const beforeStart = events.slice(0, clicked + afterClick.indexOf("playback"));
+  const lastRead = beforeStart.lastIndexOf("sources");
+  // Read after the half hour went by: during the jump or on the click, never only at the start.
+  expect(lastRead).toBeGreaterThanOrEqual(events.indexOf("sources") + 1);
+});
+
 test("the full detail settles in one step while its extras and sources are still on their way", async ({ page }) => {
   const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
   await page.route("**/api/meta/movie/*/extras*", async (route) => {

@@ -38,6 +38,7 @@ import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { runtimeLabel } from "./runtime-format";
 import { catalogTypeTag } from "./catalog-labels";
 import { addonNotices, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder, pendingAcrossSettle } from "./streams";
+import { freshPrefetch, NEXT_PREFETCH_FRESH_MS } from "./next-prefetch";
 import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
 import { panelProgressAddonKey } from "./player-progress";
@@ -226,9 +227,12 @@ export function App() {
   type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [localStreams, setLocalStreams] = useState<Stream[]>([]); const [localLoading, setLocalLoading] = useState(false); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
-  const nextEpisodePrefetchRef = useRef<{ id: string; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
+  const nextEpisodePrefetchRef = useRef<{ id: string; at: number; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
   /** The next episode of what the shared detail is playing, read while this one runs. */
-  const detailNextPrefetchRef = useRef<{ id: string; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
+  const detailNextPrefetchRef = useRef<{ id: string; at: number; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
+  /** Bumped while the player stays open, so each next-episode prefetch is read again before the
+   *  sources it holds expire on the server. */
+  const [prefetchRound, setPrefetchRound] = useState(0);
   const [remoteGroups, setRemoteGroups] = useState<RemoteGroup[]>([]);
   const [remoteLoading, setRemoteLoading] = useState(0);
   const [remoteDiscoveryError, setRemoteDiscoveryError] = useState("");
@@ -244,7 +248,7 @@ export function App() {
   /** The title a remote-source load was opened for, with the resolved name hint so a retry sends
    *  the same provider filter and never the title of whatever is selected by then. */
   const remoteTargetForRef = useRef<{ type: string; id: string; nameHint?: string } | null>(null);
-  const remoteNextPrefetchRef = useRef<{ id: string; libraryId: string; controller: AbortController; promise: Promise<Stream[]> } | null>(null);
+  const remoteNextPrefetchRef = useRef<{ id: string; libraryId: string; at: number; controller: AbortController; promise: Promise<Stream[]> } | null>(null);
   const remoteTargetNonce = useRef(0);
   useEffect(() => () => { remoteAbortRef.current?.abort(); remoteNextPrefetchRef.current?.controller.abort(); }, []);
   const [sourcesLoaded, setSourcesLoaded] = useState(false); const [sourcesComplete, setSourcesComplete] = useState(false); const [metaLoading, setMetaLoading] = useState(false);
@@ -2748,6 +2752,11 @@ export function App() {
    *  episode list, so another detail's play never offers an episode of a title nobody plays. */
   const catalogueNext = playerSubject?.panel ? nextCatalogEpisode : null;
   useEffect(() => {
+    if (!playerOpen) return;
+    const timer = window.setInterval(() => setPrefetchRound((round) => round + 1), NEXT_PREFETCH_FRESH_MS / 2);
+    return () => window.clearInterval(timer);
+  }, [playerOpen]);
+  useEffect(() => {
     // A detail playback is its own title and episode, with a next episode of its own: the panel's
     // list belongs to another title and never answers for it.
     if (!playerOpen || localStream || detailPlaying || !selected || !catalogueNext?.id) return;
@@ -2761,14 +2770,14 @@ export function App() {
       const controller = new AbortController();
       const promise = api.remoteLibraryStreams(libraryId, type, id, controller.signal, selected?.name);
       void promise.catch(() => undefined);
-      remoteNextPrefetchRef.current = { id, libraryId, controller, promise };
+      remoteNextPrefetchRef.current = { id, libraryId, at: Date.now(), controller, promise };
       return;
     }
     const promise = fetchEpisodeSources(type, id);
     // The viewer may never ask for this one, and nobody would be waiting to hear it failed.
     void promise.catch(() => undefined);
-    nextEpisodePrefetchRef.current = { id, promise };
-  }, [playerOpen, localStream, detailPlaying, selected?.id, selected?.type, catalogueNext?.id, currentCatalog?.type]);
+    nextEpisodePrefetchRef.current = { id, at: Date.now(), promise };
+  }, [playerOpen, localStream, detailPlaying, selected?.id, selected?.type, catalogueNext?.id, currentCatalog?.type, prefetchRound]);
   const stopPlayback = () => {
     endShuffle();
     setPlayerOpen(false); setPlayerSourcesOpen(false); setLocalStream(null); setLocalEpisode(false); setLocalFromBeginning(false); setStartAtSeconds(undefined); setPlayingCatalogue(null); setPlayerSubject(null); setDetailPlaying(null); setPlaybackPreferences({});
@@ -2796,7 +2805,7 @@ export function App() {
     const stale = () => request !== sourcesRequestRef.current || remoteEpoch !== remoteEpochRef.current
       || titleId !== selectedIdRef.current || selectedStreamRef.current?.sourceId !== sourceId
       || !playerOpenRef.current;
-    const prefetched = remoteNextPrefetchRef.current;
+    const prefetched = freshPrefetch(remoteNextPrefetchRef.current);
     const usePrefetch = prefetched?.id === id && prefetched.libraryId === libraryId;
     let streams: Stream[] = [];
     let failure: unknown = null;
@@ -2855,7 +2864,7 @@ export function App() {
       // picked lets the rule choose again, among this episode's library copies too.
       const keepProvider = viewerChoseSourceRef.current;
       const ruleId = keepProvider ? undefined : sortRuleId(defaultStreamSort);
-      const prefetched = nextEpisodePrefetchRef.current;
+      const prefetched = freshPrefetch(nextEpisodePrefetchRef.current);
       const addonRequest = prefetched?.id === id
         ? prefetched.promise.catch(() => fetchEpisodeSources(type, id))
         : fetchEpisodeSources(type, id);
@@ -3537,8 +3546,8 @@ export function App() {
     const id = catalogueStreamId(target);
     const promise = fetchEpisodeSources(target.type, id);
     void promise.catch(() => undefined);
-    detailNextPrefetchRef.current = { id, promise };
-  }, [playerOpen, detailPlaying?.target.videoId, detailPlaying?.target.season, detailPlaying?.target.episode, detailPlaying?.stream.sourceId, nextDetailEpisode?.id]);
+    detailNextPrefetchRef.current = { id, at: Date.now(), promise };
+  }, [playerOpen, detailPlaying?.target.videoId, detailPlaying?.target.season, detailPlaying?.target.episode, detailPlaying?.stream.sourceId, nextDetailEpisode?.id, prefetchRound]);
   /** Plays on from the shared detail: the next episode's own sources are read, and the row that is
    *  playing is picked again where that episode has it too. */
   const playNextDetailEpisode = async () => {
@@ -3551,7 +3560,7 @@ export function App() {
     try {
       const current = playing.stream;
       const libraryId = isRemoteStream(current) ? current.remoteItem?.libraryId : undefined;
-      const prefetched = detailNextPrefetchRef.current;
+      const prefetched = freshPrefetch(detailNextPrefetchRef.current);
       const answer = libraryId
         ? { streams: await api.remoteLibraryStreams(libraryId, target.type, id, undefined, target.name) }
         : prefetched?.id === id ? await prefetched.promise : await fetchEpisodeSources(target.type, id);
