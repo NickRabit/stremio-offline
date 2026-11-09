@@ -75,6 +75,15 @@ describe("fitSegments", () => {
     expect(fitSegments(credits, 10258)).toEqual({ intro: { start: 0, end: 60 } });
   });
 
+  it("drops credits that end over a minute before a longer cut of the episode does", () => {
+    // Silicon Valley 1x02: IntroDB times the credits at 25:49-26:56, the file runs 28:05.
+    expect(fitSegments({ outro: { start: 1549, end: 1616 } }, 1685)).toEqual({});
+  });
+
+  it("keeps credits followed by a short end card", () => {
+    expect(fitSegments({ outro: { start: 1549, end: 1616 } }, 1660)).toEqual({ outro: { start: 1549, end: 1616 } });
+  });
+
   it("drops credits that start after the file ends", () => {
     expect(fitSegments(credits, 8000)).toEqual({ intro: { start: 0, end: 60 } });
   });
