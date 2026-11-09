@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, describeError } from "./api";
 import { t } from "./i18n";
+import { NEXT_PREFETCH_FRESH_MS } from "./next-prefetch";
 import { arrangeStreams, compareRuleRank, isLocalStream, sortRuleId, streamLanguages, type StreamOrder } from "./streams";
 import type { CatalogueRef } from "./title-enrichment";
 import type { RemoteLibrary, Stream } from "./types";
@@ -26,6 +27,26 @@ export interface LibrarySourcePanel {
   groups: LibrarySourceGroup[];
   /** Asks one failed group or discovery again; one that already answered is never read twice. */
   retry: (key: string) => void;
+  /** The chooser opened: every group that answered so long ago that the server may have dropped
+   *  its source ids is read again. */
+  renew?: () => void;
+  /** Reads the group [row] came from again and answers the same version under the id it has now,
+   *  or null when the group no longer lists it. */
+  refind?: (row: Stream) => Promise<Stream | null>;
+}
+
+/** One version across two listings: the server's stable handle when both carry one, otherwise the
+ *  file or media-server version it plays, otherwise the addon row as it is drawn. The source id is
+ *  the one thing a new listing changes, so it never decides. */
+export function sameSource(old: Stream, fresh: Stream): boolean {
+  if (old.stableKey && fresh.stableKey) return old.stableKey === fresh.stableKey;
+  if (old.localPath || fresh.localPath) return old.localPath === fresh.localPath;
+  if (old.remoteItem || fresh.remoteItem) {
+    return Boolean(old.remoteItem && fresh.remoteItem) && old.remoteItem!.libraryId === fresh.remoteItem!.libraryId
+      && old.remoteItem!.itemId === fresh.remoteItem!.itemId && old.remoteItem!.mediaSourceId === fresh.remoteItem!.mediaSourceId;
+  }
+  return (old.addonKey ?? old.addonName) === (fresh.addonKey ?? fresh.addonName) && old.name === fresh.name
+    && old.title === fresh.title && old.behaviorHints?.filename === fresh.behaviorHints?.filename;
 }
 
 /** One option of a chooser filter menu, with the count the menu shows beside it. */
@@ -158,6 +179,8 @@ export interface LibrarySourcesState {
   streams: Stream[];
   /** Asks one failed group again without touching the groups that already answered. */
   retry: (key: string) => void;
+  renew: () => void;
+  refind: (row: Stream) => Promise<Stream | null>;
 }
 
 interface ScopedGroups { scope: string; groups: LibrarySourceGroup[] }
@@ -185,6 +208,17 @@ export function useLibrarySources(options: LibrarySourcesOptions): LibrarySource
   const jobs = useRef(new Map<string, DiscoveryJob>());
   const providers = useRef<Array<{ key: string; name: string }> | null>(null);
   const discovered = useRef<RemoteLibrary[] | null>(null);
+  /** When each group last answered: the server keeps the ids it listed for 30 minutes. */
+  const answeredAt = useRef(new Map<string, number>());
+  /** Callers waiting for one group's next answer, null when it failed or was dropped. */
+  const waiters = useRef(new Map<string, Array<(streams: Stream[] | null) => void>>());
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const settle = (key: string, streams: Stream[] | null) => {
+    const waiting = waiters.current.get(key);
+    waiters.current.delete(key);
+    for (const resolve of waiting ?? []) resolve(streams);
+  };
 
   // The rows belong to the scope they were read for: another title's answers are refused here,
   // even before the effect below has had a chance to drop them.
@@ -245,12 +279,15 @@ export function useLibrarySources(options: LibrarySourcesOptions): LibrarySource
       .then((streams) => {
         release(key, controller);
         if (!live() || controller.signal.aborted) return;
+        answeredAt.current.set(key, Date.now());
         setGroup(key, { status: "loaded", streams, error: "" });
+        settle(key, streams);
       })
       .catch((error) => {
         release(key, controller);
         if (!live() || controller.signal.aborted || aborted(error)) return;
         setGroup(key, { status: "error", streams: [], error: describeError(error) });
+        settle(key, null);
       })
       .finally(() => {
         if (live()) running.current[kind] -= 1;
@@ -330,6 +367,8 @@ export function useLibrarySources(options: LibrarySourcesOptions): LibrarySource
     jobs.current.clear();
     providers.current = null;
     discovered.current = null;
+    answeredAt.current.clear();
+    for (const key of [...waiters.current.keys()]) settle(key, null);
     setState((value) => value.scope === scope ? value : { scope, groups: [] });
   }, [scope]);
 
@@ -352,10 +391,41 @@ export function useLibrarySources(options: LibrarySourcesOptions): LibrarySource
     pump();
   }, []);
 
+  /** Puts one answered group back to be asked, its rows gone until the new answer lands. */
+  const reread = (key: string) => {
+    started.current.delete(key);
+    answeredAt.current.delete(key);
+    setGroup(key, { status: "idle", streams: [], error: "" });
+  };
+
+  const renew = useCallback(() => {
+    if (stateRef.current.scope !== scopeRef.current) return;
+    const now = Date.now();
+    const stale = stateRef.current.groups.filter((group) => group.kind !== "discovery" && group.status === "loaded"
+      && now - (answeredAt.current.get(group.key) ?? now) >= NEXT_PREFETCH_FRESH_MS);
+    if (!stale.length) return;
+    for (const group of stale) reread(group.key);
+    pump();
+  }, []);
+
+  const refind = useCallback(async (row: Stream): Promise<Stream | null> => {
+    if (stateRef.current.scope !== scopeRef.current) return null;
+    const group = stateRef.current.groups.find((entry) => entry.status === "loaded" && entry.streams.some((stream) => stream.sourceId === row.sourceId));
+    if (!group) return null;
+    const answer = new Promise<Stream[] | null>((resolve) => {
+      waiters.current.set(group.key, [...(waiters.current.get(group.key) ?? []), resolve]);
+    });
+    reread(group.key);
+    pump();
+    return (await answer)?.find((stream) => sameSource(row, stream)) ?? null;
+  }, []);
+
   return {
     groups,
     loading: groups.some((group) => group.status === "idle" || group.status === "loading"),
     streams: groups.flatMap((group) => group.status === "loaded" ? group.streams : []),
     retry,
+    renew,
+    refind,
   };
 }

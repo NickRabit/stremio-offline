@@ -748,6 +748,22 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       // A newer film already owns the player. Writing here would put the old failure on it
       // and drop the screen lock under a film that is starting.
       if (disposed) return;
+      const switched = switchedRef.current;
+      const refind = sources?.panel?.refind;
+      if (value instanceof ApiError && value.code === "RESOURCE_EXPIRED" && refind && switched && !switched.renewed && switched.row.sourceId === stream?.sourceId) {
+        switched.renewed = true;
+        report("WARN", "Chosen source expired; reading its group again", { ...context(), phase: "start" });
+        void refind(switched.row).then(async (fresh) => {
+          if (disposed) return;
+          if (!fresh) throw value;
+          switchedRef.current = { row: fresh, at: switched.at, renewed: true };
+          await sources!.onSwitch(fresh, switched.at);
+        }).catch((failure) => {
+          if (disposed) return;
+          setError(describeError(failure)); setPlaybackFailed(true); setBuffering(false);
+        });
+        return;
+      }
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Playback did not start: ${message}`, { ...context(), phase: "start", capabilities: capabilities() });
       setError(describeError(value));
@@ -1303,6 +1319,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const at = duration > 0 && timeRef.current > duration ? 0 : timeRef.current;
     setSourceBusy(next.sourceId);
     setSourceFailure("");
+    switchedRef.current = { row: next, at, renewed: false };
     try {
       await sources.onSwitch(next, at);
       setSourcesOpen(false);
@@ -1310,6 +1327,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       setSourceFailure(describeError(error));
     } finally { setSourceBusy(null); }
   };
+  /** The row the viewer last switched to, so a start refused for an expired id can look it up in a
+   *  fresh list once instead of failing on a row the panel held too long. */
+  const switchedRef = useRef<{ row: Stream; at: number; renewed: boolean } | null>(null);
 
 
   const downloadToDevice = async () => {

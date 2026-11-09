@@ -50,10 +50,14 @@ class LibraryPlaySources(private val api: TvApi) {
   /** Loads the offered rows of [target] and reports them until the last addon answered. The initial
    *  snapshot is published first and every identified group grows behind it. A catalogue play is
    *  owned by its detail and is never rediscovered here; an unidentified target keeps only the
-   *  rows it carried. */
-  suspend fun load(target: PlayTarget, report: (OfferedSources) -> Unit) {
-    val snapshot = (target.initialSources ?: target.remoteSources).orEmpty()
-    if (target.catalogue) return
+   *  rows it carried.
+   *
+   *  A [renew] reads the title again for a list that has grown old, whoever owns it: the rows a
+   *  play carried are as old as the list, so they are left out, and the play's own media-server
+   *  library is asked too, because its versions are among the rows that expire. */
+  suspend fun load(target: PlayTarget, renew: Boolean = false, report: (OfferedSources) -> Unit) {
+    val snapshot = if (renew) emptyList() else (target.initialSources ?: target.remoteSources).orEmpty()
+    if (target.catalogue && !renew) return
     fun reportSnapshot(loading: Boolean) {
       val rows = Streams.deduped(snapshot)
       if (rows.isNotEmpty()) report(OfferedSources(rows, loading))
@@ -162,7 +166,7 @@ class LibraryPlaySources(private val api: TvApi) {
         }
         // A library the account switched off takes no part in matching: it is not asked, and it is
         // not named as a failure either.
-        val libraries = discovered.filter { it.enabled && it.id != target.remoteItem?.libraryId }
+        val libraries = discovered.filter { it.enabled && (renew || it.id != target.remoteItem?.libraryId) }
         if (libraries.isEmpty()) {
           lock.withLock { remoteAsking = false; publish() }
           return@launch

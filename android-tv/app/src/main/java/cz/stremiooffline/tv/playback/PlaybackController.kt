@@ -92,6 +92,8 @@ sealed interface PlaybackError {
   data object Decoder : PlaybackError
   data object Network : PlaybackError
   data object Session : PlaybackError
+  /** The server no longer knows the listed source id: the list it came from has to be read again. */
+  data object Expired : PlaybackError
 }
 
 /** The subtitle the viewer has chosen. The server never learns of an addon choice; the app
@@ -1047,6 +1049,7 @@ class PlaybackController(
 
   private fun errorOf(error: Throwable): PlaybackError {
     val failure = (error as? ApiError)?.failure
+    if ((error as? ApiError)?.status == 410) return PlaybackError.Expired
     return when (failure) {
       ApiFailure.SessionExpired, ApiFailure.Forbidden -> PlaybackError.Session
       else -> PlaybackError.Network

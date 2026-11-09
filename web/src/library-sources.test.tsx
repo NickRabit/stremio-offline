@@ -552,3 +552,66 @@ describe("librarySourceRows", () => {
     expect(librarySourceRows(ordered, "", "", "size-desc", "en").map((row) => row.sourceId)).toEqual(["beta", "alpha"]);
   });
 });
+
+describe("useLibrarySources: rows the server may have dropped", () => {
+  // The server forgets a listed source id 30 minutes after listing it.
+  let now = 1_000_000;
+  beforeEach(() => {
+    now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let round = 0;
+    addonStreams = (url) => { round += 1; return json([stream(`addon-${url.searchParams.get("addon")}-${round}`, { stableKey: `key-${url.searchParams.get("addon")}` })]); };
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("reads nothing again for a chooser opened while the rows are fresh", async () => {
+    await render({ open: true });
+    now += 19 * 60_000;
+    await act(async () => { latest!.renew(); });
+    await flush();
+    expect(calls.addon).toHaveLength(2);
+    expect(calls.local).toHaveLength(1);
+    expect(calls.remote).toHaveLength(1);
+  });
+
+  it("reads every answered group again when the chooser opens on rows older than 20 minutes", async () => {
+    await render({ open: true });
+    const before = ids(latest!.streams);
+    now += 21 * 60_000;
+    await act(async () => { latest!.renew(); });
+    await flush();
+    expect(calls.addon).toHaveLength(4);
+    expect(calls.local).toHaveLength(2);
+    expect(calls.remote).toHaveLength(2);
+    // Discovery names the providers and libraries, not sources, and is not asked again.
+    expect(calls.providers).toHaveLength(1);
+    const after = ids(latest!.streams);
+    expect(after.filter((id) => id.startsWith("addon-"))).not.toEqual(before.filter((id) => id.startsWith("addon-")));
+    // The renewed rows count from their own answer: a second open right after asks nothing.
+    await act(async () => { latest!.renew(); });
+    await flush();
+    expect(calls.addon).toHaveLength(4);
+  });
+
+  it("finds an expired row again by reading only its own group", async () => {
+    await render({ open: true });
+    const old = latest!.streams.find((row) => row.stableKey === "key-a")!;
+    let found: Stream | null = null;
+    await act(async () => { found = await latest!.refind(old); });
+    expect(calls.addon.map((url) => url.searchParams.get("addon"))).toEqual(expect.arrayContaining(["a", "b", "a"]));
+    expect(calls.addon).toHaveLength(3);
+    expect(calls.local).toHaveLength(1);
+    expect(found!.stableKey).toBe("key-a");
+    expect(found!.sourceId).not.toBe(old.sourceId);
+    expect(latest!.streams.some((row) => row.sourceId === found!.sourceId)).toBe(true);
+  });
+
+  it("answers null when the group no longer lists the row", async () => {
+    await render({ open: true });
+    const old = latest!.streams.find((row) => row.stableKey === "key-a")!;
+    addonStreams = () => json([]);
+    let found: Stream | null | undefined;
+    await act(async () => { found = await latest!.refind(old); });
+    expect(found).toBeNull();
+  });
+});
