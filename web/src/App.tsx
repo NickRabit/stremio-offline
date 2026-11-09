@@ -35,6 +35,7 @@ import { StatsPanel } from "./Stats";
 import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
+import { runtimeLabel } from "./runtime-format";
 import { catalogTypeTag } from "./catalog-labels";
 import { addonNotices, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder, pendingAcrossSettle } from "./streams";
 import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
@@ -3730,7 +3731,7 @@ export function App() {
   // render a shell whose every request comes back refused with nothing to explain it.
   if (session?.mustChangePassword) return <PasswordChangeRequired session={session} onSession={setSession}/>;
   const selectedRating = imdbRating(selected);
-  const selectedFactText = [selected?.releaseInfo || selected?.year, ...(selected?.genres || []).slice(0, 3).map(genreLabel)].filter(Boolean).join(" · ");
+  const selectedFactText = [selected?.releaseInfo || selected?.year, ...(selected?.genres || []).slice(0, 3).map(genreLabel), runtimeLabel(selected?.runtime ?? selectedSummary?.runtime, localeTag())].filter(Boolean).join(" · ");
   const panelAge = TitleExtraFacts({ extras: panelExtras.extras, language: settings.uiLanguage, name: selected?.name }).ageBadge;
 
   // Favourites, Following, Addons, Settings and Statistics are the destinations the compact

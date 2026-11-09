@@ -779,7 +779,7 @@ class HomeScreenTest {
     compose.mainClock.advanceTimeBy(HERO_META_DEBOUNCE_MS + 200)
     compose.waitForIdle()
 
-    compose.onNodeWithText("2019 · Drama · Crime · Mystery · 1 h 42 min · ★ 8.1").assertExists()
+    compose.onNodeWithText("2019 · Drama · Crime · Mystery · 1 hr 42 min · ★ 8.1").assertExists()
     compose.onNodeWithText("A quiet film about a loud room.").assertExists()
   }
 

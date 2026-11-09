@@ -4,6 +4,7 @@ import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, Shuffle, SlidersHorizontal, Star } from "lucide-react";
 import { ApiError, api, describeError, saveToDevice, type ShuffleItem } from "./api";
 import { relativeAge } from "./home-cards";
+import { formatRuntime } from "./runtime-format";
 import { localeTag, t, useI18n } from "./i18n";
 import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
@@ -202,18 +203,11 @@ const itemTypeKey = (type: RemoteItemType) =>
   : "mediaServer.type.folder" as const;
 /** The stored state of one item, keyed by library and item so two listings never share it. */
 const stateKey = (libraryId: string, itemId: string) => `${libraryId}:${itemId}`;
-/** A run time in the reader's own units. The client has no shared runtime helper, so the
- *  browser's number formatting supplies the words and no new string is introduced. */
-const unitLabel = (unit: "hour" | "minute" | "second", value: number) =>
-  new Intl.NumberFormat(localeTag(), { style: "unit", unit, unitDisplay: "narrow" }).format(value);
 const runtimeLabel = (ticks?: number): string | undefined => {
   if (!ticks || ticks <= 0) return undefined;
   const seconds = Math.round(ticks / 10_000_000);
-  if (seconds < 60) return unitLabel("second", seconds);
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return unitLabel("minute", minutes);
-  const rest = minutes % 60;
-  return rest ? `${unitLabel("hour", Math.floor(minutes / 60))} ${unitLabel("minute", rest)}` : unitLabel("hour", Math.floor(minutes / 60));
+  if (seconds < 60) return new Intl.NumberFormat(localeTag(), { style: "unit", unit: "second", unitDisplay: "short" }).format(seconds);
+  return formatRuntime(Math.round(seconds / 60), localeTag());
 };
 /** A remote tile's line: when it was made, how long it runs, and what it is. */
 const itemMetaLine = (item: RemoteItem) => {

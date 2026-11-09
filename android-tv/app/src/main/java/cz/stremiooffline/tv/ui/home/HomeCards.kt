@@ -1,5 +1,7 @@
 package cz.stremiooffline.tv.ui.home
 
+import cz.stremiooffline.tv.ui.runtimeLabel
+import java.util.Locale
 import androidx.annotation.StringRes
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.ProgressKey
@@ -116,13 +118,13 @@ fun HomeCard.heroMetaRef(): Pair<String, String>? = when (this) {
 
 /** The hero's line under the title: the catalogue's year, the card's episode code, genres, runtime
  *  and rating once the title has answered, or the card's year and episode code while it has not. */
-fun heroMetaLine(card: HomeCard, meta: MetaDto?, genre: (String) -> String = { it }): String {
+fun heroMetaLine(card: HomeCard, meta: MetaDto?, genre: (String) -> String = { it }, locale: Locale = Locale.getDefault()): String {
   if (meta != null && card !is HomeCard.Episode) {
     val line = listOfNotNull(
       meta.yearText ?: card.yearText,
       card.episodeCodeText,
       *meta.genres.orEmpty().take(3).map(genre).toTypedArray(),
-      meta.runtime?.takeIf { it.isNotBlank() },
+      runtimeLabel(meta.runtime, locale),
       meta.ratingText?.let { "★ $it" },
     ).joinToString(" · ")
     if (line.isNotEmpty()) return line

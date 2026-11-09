@@ -1370,10 +1370,10 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     browse = () => json(page([film]));
     await openRootLibrary();
     const meta = host.querySelector(".browse-panel .browse-item .library-copy small")!;
-    expect(meta.textContent).toBe("2021 · 1h 25m · Movies");
+    expect(meta.textContent).toBe("2021 · 1 hr 25 mins · Movies");
     expect(host.querySelector(".browse-panel .library-desc")!.textContent).toBe("A quiet film.");
     await click(tileButtons()[0]!);
-    expect([...host.querySelectorAll(".remote-detail .meta-line")].map((node) => node.textContent)).toEqual(["2021 · 1h 25m · Drama"]);
+    expect([...host.querySelectorAll(".remote-detail .meta-line")].map((node) => node.textContent)).toEqual(["2021 · 1 hr 25 mins · Drama"]);
     expect(host.querySelector(".remote-detail .library-detail-synopsis")!.textContent).toBe("A quiet film.");
   });
 
