@@ -231,6 +231,10 @@ export class MediaResources {
     this.creationWindows.set(sid, window);
   }
 
+  private expiryOf(owner: ResourceOwner, scope: ResourceScope, parent?: string) {
+    return Math.min(owner.expiresAt, scope === "media" || parent ? owner.expiresAt : this.now() + 30 * 60_000);
+  }
+
   add(stream: StreamItem, owner: ResourceOwner, scope: ResourceScope, parent?: string, unique = false, bill = true): string {
     this.prune();
     if (owner.expiresAt <= this.now()) throw new ResourceError(410, "RESOURCE_EXPIRED");
@@ -240,12 +244,17 @@ export class MediaResources {
     const serialized = JSON.stringify(normalized);
     const key = createHash("sha256").update(JSON.stringify([owner.sid, scope, parent, serialized, unique ? randomBytes(16).toString("hex") : ""])).digest("hex");
     const existing = this.dedup.get(key);
-    if (existing) return existing;
+    if (existing) {
+      // Listing the same row again is the viewer still wanting it, so it lives as long as a new one.
+      const record = this.entries.get(existing);
+      if (record && record.scope !== "media" && !record.parent) record.expiresAt = this.expiryOf(owner, scope, parent);
+      return existing;
+    }
     if (scope === "source" && bill) this.charge(owner.sid);
     const bytes = Buffer.byteLength(serialized) + 512;
     this.reserve(bytes);
     const id = randomBytes(32).toString("base64url");
-    const expiresAt = Math.min(owner.expiresAt, scope === "media" || parent ? owner.expiresAt : this.now() + 30 * 60_000);
+    const expiresAt = this.expiryOf(owner, scope, parent);
     this.entries.set(id, { id, owner: { ...owner }, scope, stream: normalized, expiresAt, parent, bytes, key });
     this.dedup.set(key, id);
     this.bytes += bytes;

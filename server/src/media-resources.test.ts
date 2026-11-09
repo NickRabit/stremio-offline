@@ -75,6 +75,18 @@ test("resources enforce owners, scope, expiry, revocation and deduplication", ()
   assert.throws(() => registry.get(fresh, owner.sid, "source"), { status: 404 });
 });
 
+test("listing a source again keeps it alive as long as a new listing would", () => {
+  let now = 0;
+  const registry = new MediaResources(() => now);
+  const id = registry.add(source, owner, "source");
+  now = 20 * 60_000;
+  assert.equal(registry.add(source, owner, "source"), id);
+  now = 45 * 60_000;
+  assert.equal(registry.get(id, owner.sid, "source").stream.url, source.url);
+  now = 50 * 60_000;
+  assert.throws(() => registry.get(id, owner.sid, "source"), { status: 410, code: "RESOURCE_EXPIRED" });
+});
+
 test("playback claims survive selection expiry but not auth expiry or parent removal", () => {
   let now = 0;
   const registry = new MediaResources(() => now);

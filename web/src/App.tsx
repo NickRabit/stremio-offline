@@ -2766,7 +2766,9 @@ export function App() {
     if (current && isRemoteStream(current) && current.remoteItem) {
       // The next episode of a remote source is looked for on that one library, never elsewhere.
       const libraryId = current.remoteItem.libraryId;
-      remoteNextPrefetchRef.current?.controller.abort();
+      // A refresh of the same episode lets the previous read finish: the hand-off may be awaiting it.
+      const previous = remoteNextPrefetchRef.current;
+      if (previous && (previous.id !== id || previous.libraryId !== libraryId)) previous.controller.abort();
       const controller = new AbortController();
       const promise = api.remoteLibraryStreams(libraryId, type, id, controller.signal, selected?.name);
       void promise.catch(() => undefined);
