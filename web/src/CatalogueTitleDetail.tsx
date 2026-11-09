@@ -4,7 +4,8 @@ import { api, describeError } from "./api";
 import { catalogueGalleryImages, galleryLabel, mergeGallery, type GalleryImage } from "./gallery-images";
 import { DetailRatings, ratingsFrom, useCopyPending } from "./detail-copy";
 import { EpisodePicker } from "./EpisodePicker";
-import { t, useI18n } from "./i18n";
+import { localeTag, t, useI18n } from "./i18n";
+import { runtimeLabel } from "./runtime-format";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { galleryPayload, gridArt } from "./meta";
 import { synopsisOf, TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
@@ -372,7 +373,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const cornerGallery = useMemo(() => mergeGallery(gallery, catalogueStills), [gallery, catalogueStills]);
   const backdrops = useMemo(() => [snapshot?.background, snapshot?.poster, target.poster], [snapshot, target.poster]);
   const factText = snapshot
-    ? [String(snapshot.releaseInfo ?? snapshot.year ?? ""), ...(snapshot.genres ?? []).slice(0, 3).map(genreLabel)]
+    ? [String(snapshot.releaseInfo ?? snapshot.year ?? ""), ...(snapshot.genres ?? []).slice(0, 3).map(genreLabel), runtimeLabel(snapshot.runtime, localeTag()) ?? ""]
       .map((value) => value.trim()).filter(Boolean).join(" · ")
     : "";
   const pieces = TitleExtraFacts({ extras: titleExtras.extras, language: locale, name });

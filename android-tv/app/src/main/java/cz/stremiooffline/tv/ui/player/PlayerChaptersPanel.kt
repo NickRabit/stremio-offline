@@ -12,7 +12,6 @@ import cz.stremiooffline.tv.playback.chapterAt
 import cz.stremiooffline.tv.playback.chapterLabelOf
 import cz.stremiooffline.tv.ui.catalog.PanelOption
 import cz.stremiooffline.tv.ui.catalog.SidePanel
-import java.util.Locale
 
 const val TagChaptersPanel = "chapters_panel"
 
@@ -37,7 +36,7 @@ fun PlayerChaptersPanel(
       val numbered = stringResource(R.string.player_chapter_number, index + 1)
       val label = chapterLabelOf(chapters, index) { numbered }
       PanelOption(
-        text = "$label \u00b7 ${chapterTime(chapter.start)}",
+        text = "$label \u00b7 ${playbackClock(chapter.start)}",
         selected = index == current,
         onClick = {
           onSeek(chapter.start)
@@ -51,7 +50,3 @@ fun PlayerChaptersPanel(
   }
 }
 
-private fun chapterTime(seconds: Double): String {
-  val total = seconds.toInt().coerceAtLeast(0)
-  return String.format(Locale.US, "%d:%02d", total / 60, total % 60)
-}

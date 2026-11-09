@@ -16,6 +16,7 @@ import cz.stremiooffline.tv.ui.catalog.remoteResumeCards
 import cz.stremiooffline.tv.ui.catalog.remoteVideoId
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteMetadata
+import kotlin.math.roundToInt
 import kotlinx.serialization.json.JsonPrimitive
 
 internal fun remoteCatalogueArgs(
@@ -105,6 +106,7 @@ internal fun remoteOwnCatalogueArgs(
         description = catalogueItem.overview,
         releaseInfo = catalogueItem.year?.toString(),
         year = catalogueItem.year?.let(::JsonPrimitive),
+        runtime = remoteRuntime(catalogueItem.durationTicks),
       ),
       addonName = "",
       type = "movie",
@@ -205,6 +207,7 @@ internal fun remoteFallbackCatalogueArgs(data: RemoteDetailData): CatalogDetailA
       description = item.overview,
       releaseInfo = item.year?.toString(),
       year = item.year?.let(::JsonPrimitive),
+      runtime = remoteRuntime(item.durationTicks),
     ),
     addonName = "",
     type = item.type,
@@ -249,3 +252,7 @@ internal suspend fun remoteOwnCatalogueArgs(
   }
   return remoteOwnCatalogueArgs(data, catalogueItem, episodes, resume)
 }
+
+/** A media server's run time, in the "N min" a catalogue sends, so the detail formats both alike. */
+internal fun remoteRuntime(ticks: Long?): String? =
+  ticks?.takeIf { it > 0 }?.let { (it / 600_000_000.0).roundToInt() }?.takeIf { it > 0 }?.let { "$it min" }
