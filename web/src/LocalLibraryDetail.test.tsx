@@ -145,6 +145,15 @@ describe("LocalLibraryDetail discovery", () => {
     expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Heat.mkv");
   });
 
+  it("adds the catalogue's run time to the facts line in hours and minutes", async () => {
+    identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    meta = () => json({ id: "tt1", type: "movie", name: "Heat", runtime: "170 min" });
+    await render(file());
+    await flush();
+    const lines = [...host.querySelectorAll(".library-detail-hero .meta-line")].map((node) => node.textContent ?? "");
+    expect(lines).toContain("2 hrs 50 mins · 2.0 GB");
+  });
+
   it("merges the copies of one title, drops the duplicate of the clicked file and defaults to the largest", async () => {
     identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
     copies = () => json([

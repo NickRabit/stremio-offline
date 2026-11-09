@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
@@ -73,6 +74,16 @@ class CatalogOwnRemoteTest {
         onPlay = { played += it },
         onBack = {},
       )
+    }
+  }
+
+  @Test
+  fun `an id-less remote film shows the server's run time in hours and minutes`() {
+    val film = RemoteItemDto(id = "film", name = "Heat", type = "movie", year = 1995, durationTicks = 102_000_000_000L)
+    val api = FakeTvApi().apply { remoteSourcesValue = listOf(remote("library", "film")) }
+    mount(api, remoteOwnCatalogueArgs(RemoteDetailData("library", "Library", "jellyfin", film), film, emptyList(), emptyList()))
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithText("1995 · 2 hr 50 min").assertExists() }.isSuccess
     }
   }
 

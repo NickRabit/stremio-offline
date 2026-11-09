@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, describeError } from "./api";
 import { DetailRatings, ratingsFrom, useCopyPending } from "./detail-copy";
 import { bytes } from "./settings-ui";
-import { t, useI18n } from "./i18n";
+import { localeTag, t, useI18n } from "./i18n";
+import { runtimeLabel } from "./runtime-format";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { orderSources, sourceIdentity } from "./library-detail-sources";
 import { useLibrarySources } from "./library-sources";
@@ -323,7 +324,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   // Opened as a show with its episode picker, the title is the series, as in the catalogue.
   const chips = <TitleChips kind={t(episodes ? "catalog.oneSeries" : episode ? "episodes.one" : "catalog.oneMovie")} links={enrichment.links}
     onTrailer={onTrailer} secureMode={secureMode}/>;
-  const facts = [item.year, sources?.length === 1 && item.size ? bytes(item.size) : ""].filter(Boolean).join(" · ");
+  const facts = [item.year, runtimeLabel(enrichment.meta?.runtime, localeTag()), sources?.length === 1 && item.size ? bytes(item.size) : ""].filter(Boolean).join(" · ");
   const pieces = TitleExtraFacts({ extras: titleExtras.extras, language: uiLanguage, name: title });
   const scores = ratingsFrom(titleExtras.extras, enrichment.meta);
   // Prefer full-resolution backdrops; unmatched files can still use their existing preview.

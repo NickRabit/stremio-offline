@@ -42,6 +42,7 @@ class RemoteCatalogueTest {
       overview = "A film",
       poster = "poster",
       wide = "backdrop",
+      durationTicks = 102_000_000_000L,
     )
     val args = remoteOwnCatalogueArgs(
       data(item),
@@ -57,6 +58,7 @@ class RemoteCatalogueTest {
     assertEquals("A film", args.meta.description)
     assertEquals("poster", args.meta.poster)
     assertEquals("backdrop", args.meta.background)
+    assertEquals("170 min", args.meta.runtime)
     assertTrue(args.backend is RemoteBackend)
     assertFalse(args.backend.catalogue)
   }
@@ -206,5 +208,13 @@ class RemoteCatalogueTest {
 
     assertEquals(20, api.remoteEpisodesRequests.size)
     assertEquals(20, args?.meta?.videos.orEmpty().size)
+  }
+
+  @Test
+  fun `a server run time becomes minutes and a missing one stays empty`() {
+    assertEquals("170 min", remoteRuntime(102_000_000_000L))
+    assertEquals(null, remoteRuntime(null))
+    assertEquals(null, remoteRuntime(0))
+    assertEquals(null, remoteRuntime(100_000_000L))
   }
 }
