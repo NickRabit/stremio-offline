@@ -8,6 +8,7 @@ import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.PlaybackChapterDto
 import cz.stremiooffline.tv.data.PlaybackFactsDto
+import cz.stremiooffline.tv.data.PlaybackStatusDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemStateDto
@@ -62,6 +63,8 @@ interface PlaybackApi {
   suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto
 
   suspend fun pingPlayback(id: String)
+
+  suspend fun playbackStatus(id: String): PlaybackStatusDto? = null
 
   suspend fun deletePlayback(id: String)
 
@@ -245,6 +248,7 @@ class PlaybackController(
   /** The viewer's own escalate from the Quality panel; a decoder error never sets it. */
   private var escalatedByViewer = false
   private var recovered = false
+  private var shortEnds = 0
   private var stopped = true
   /** The screen is gone for good; a late answer must not start a session, however long it took. */
   private var released = false
@@ -459,6 +463,7 @@ class PlaybackController(
     escalated = false
     escalatedByViewer = false
     recovered = false
+    shortEnds = 0
     stopped = false
     playlist = false
     offset = 0.0
@@ -581,8 +586,54 @@ class PlaybackController(
     if (changed && !stopped) report(ReportEvent.Progress, reported, position, paused = true)
   }
 
-  fun onEnded() {
-    saveNow(final = true)
+  fun onEnded(onRealEnd: () -> Unit) {
+    val id = sessionId
+    if (!playlist || id == null) {
+      saveNow(final = true)
+      onRealEnd()
+      return
+    }
+    val mine = generation
+    scope.launch {
+      val status = runCatching { api.playbackStatus(id) }.getOrNull()
+      if (stopped || mine != generation) return@launch
+      if (status?.conversion == "short") {
+        shortEnds += 1
+        if (shortEnds > 3) {
+          AppLog.error("Conversion ended short repeatedly")
+          _state.update { it.copy(error = PlaybackError.Network) }
+          return@launch
+        }
+        AppLog.warn("Conversion ended short, restarting", mapOf(
+          "source" to (sourceId ?: ""),
+          "reached" to (status.reached?.let(::round)?.toLong()?.toString() ?: ""),
+        ))
+        restartAt(restartPosition)
+        return@launch
+      }
+      saveNow(final = true)
+      onRealEnd()
+    }
+  }
+
+  private suspend fun restartAt(target: Double) {
+    val mine = generation
+    val stamp = ++sequence
+    val id = sessionId ?: return
+    val descriptor = runCatching { api.seekPlayback(id, target) }.getOrElse { error ->
+      if (stopped || mine != generation) return
+      if (isDead(error)) onDeadSession()
+      else _state.update { it.copy(error = PlaybackError.Network) }
+      return
+    }
+    if (stopped || mine != generation || stamp != sequence) return
+    if (descriptor.seekRestored) {
+      _state.update { it.copy(error = PlaybackError.Network) }
+      return
+    }
+    apply(descriptor, target = target)
+    lastPosition = target - offset
+    hasPosition = true
   }
 
   /** Direct play hands the seek to the player; HLS debounces it into one `/seek`. */

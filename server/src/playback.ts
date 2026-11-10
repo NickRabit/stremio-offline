@@ -137,6 +137,21 @@ export interface PlaybackDescriptor {
   playlist?: boolean;
 }
 
+export interface PlaybackStatus {
+  generation: number;
+  /** "direct": nothing is converted; "running": the current generation has not exited cleanly (yet);
+   *  "complete": it exited cleanly at the end; "short": it exited cleanly well before the end. */
+  conversion: "direct" | "running" | "complete" | "short";
+  /** Absolute film time the short conversion reached. */
+  reached?: number;
+}
+
+export function shortConversion(reached: number | undefined, expected: number | undefined): boolean {
+  return expected !== undefined && Number.isFinite(expected) && expected > 0
+    && reached !== undefined && Number.isFinite(reached)
+    && expected - reached > Math.max(30, expected * 0.02);
+}
+
 /** The allowed target qualities and the video bitrate ceiling for each. */
 /** What the source is called in the statistics. Shared with index.ts so transferred bytes
  * and started playbacks land in one entry instead of two nearly identical ones. */
@@ -214,6 +229,7 @@ interface Session {
   retired?: { generation: number; directory: string; until: number };
   /** The client refused the copied stream, so this session must never copy again. */
   copyRejected?: boolean;
+  ending?: { generation: number; short: boolean; reached?: number };
 }
 
 /** Main and Main 10 are two different codecs to a browser. A ten-bit stream must not be copied
@@ -723,6 +739,15 @@ export class PlaybackManager {
   async seek(id: string, time: number) {
     const session = this.require(id);
     return session.operations.run(() => this.restart(session, time, "Playback seek", true));
+  }
+
+  status(id: string): PlaybackStatus {
+    const session = this.require(id);
+    if (session.mode === "direct") return { generation: session.generation, conversion: "direct" };
+    const ending = session.ending?.generation === session.generation ? session.ending : undefined;
+    if (!ending) return { generation: session.generation, conversion: "running" };
+    if (!ending.short) return { generation: session.generation, conversion: "complete" };
+    return { generation: session.generation, conversion: "short", reached: ending.reached };
   }
 
   /** The browser refused what the server sent. Repeating it is pointless: the copy is dropped
@@ -1473,7 +1498,26 @@ export class PlaybackManager {
       // Our own SIGTERM comes back as a plain exit, and taking it for a failure would leave the
       // session carrying an error that never happened -- and the log claiming one.
       const asked = this.stopping.has(child);
-      monitor.finish(asked || signal !== null ? "stopped" : code === 0 ? "finished" : "failed");
+      if (code === 0 && signal === null && !asked) {
+        const reached = monitor.progress.latest?.outTime;
+        const duration = session.info?.duration;
+        const expected = duration !== undefined ? duration - offset : undefined;
+        if (duration !== undefined && reached !== undefined && shortConversion(reached, expected)) {
+          monitor.finish("short");
+          session.ending = { generation, short: true, reached: offset + reached };
+          if (!session.stopped) {
+            log("WARN", "The conversion stopped before the end of the film", {
+              id: session.id, generation, reached: Math.round(offset + reached),
+              expected: Math.round(duration), stderr: redact(stderr).slice(-500),
+            });
+          }
+        } else {
+          monitor.finish("finished");
+          session.ending = { generation, short: false };
+        }
+      } else {
+        monitor.finish(asked || signal !== null ? "stopped" : "failed");
+      }
       if (this.monitors.get(session.id) === monitor) this.monitors.delete(session.id);
       if (code !== 0 && signal === null && !asked) session.error = describeFailure(stderr, code);
       // A conversion that died after the client attached would otherwise stay silent until

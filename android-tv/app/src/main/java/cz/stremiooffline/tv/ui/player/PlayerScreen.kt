@@ -784,8 +784,7 @@ fun PlayerScreen(
       override fun onPlaybackStateChanged(playbackState: Int) {
         if (playbackState == Player.STATE_READY) controller.onPlayerReady()
         if (playbackState == Player.STATE_ENDED) {
-          controller.onEnded()
-          ended = true
+          controller.onEnded { ended = true }
         } else if (playbackState != Player.STATE_IDLE) {
           ended = false
         }

@@ -348,6 +348,11 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     res.type("image/jpeg").setHeader("cache-control", "private, no-store").send(image);
   }));
   app.post("/api/playback/:id/ping", (req, res) => { guardOwned(String(req.params.id)); res.status(204).end(); });
+  app.get("/api/playback/:id/status", asyncRoute(async (req, res) => {
+    const id = String(req.params.id);
+    guardOwned(id);
+    res.json(playback.status(id));
+  }));
   app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => {
     const id = String(req.params.id);
     const value = await playback.seek(id, Number(req.body.time) || 0);

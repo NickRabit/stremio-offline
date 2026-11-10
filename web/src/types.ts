@@ -596,6 +596,14 @@ export interface PlaybackSession {
   /** `url` addresses a playlist, so the element cannot simply be handed it. */
   playlist?: boolean;
 }
+export interface PlaybackStatus {
+  generation: number;
+  /** "direct": nothing is converted; "running": the current generation has not exited cleanly (yet);
+   *  "complete": it exited cleanly at the end; "short": it exited cleanly well before the end. */
+  conversion: "direct" | "running" | "complete" | "short";
+  /** Absolute film time the short conversion reached. */
+  reached?: number;
+}
 
 export type UserRole = "admin" | "user";
 export interface UserPermissions {

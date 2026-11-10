@@ -425,6 +425,10 @@ class ApiClient(
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  override suspend fun playbackStatus(id: String): PlaybackStatusDto? =
+    request(Request.Builder().url(address.resolve("/api/playback/$id/status")).get().build(), playbackClient)
+      .decode<PlaybackStatusDto>()
+
   override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto {
     val payload = json.encodeToString(TimeRequest.serializer(), TimeRequest(time))
     return request(Request.Builder().url(address.resolve("/api/playback/$id/escalate")).post(payload.toRequestBody(mediaType)).build(), playbackClient)

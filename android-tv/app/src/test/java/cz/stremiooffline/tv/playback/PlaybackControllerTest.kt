@@ -6,6 +6,7 @@ import cz.stremiooffline.tv.data.AddonSubtitleDto
 import cz.stremiooffline.tv.data.PlaybackChapterDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.PlaybackFactsDto
+import cz.stremiooffline.tv.data.PlaybackStatusDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.TrackChange
@@ -42,6 +43,8 @@ class PlaybackControllerTest {
     val savedStableKeys = mutableListOf<String?>()
     /** Whether each save was the last report of its playback, in arrival order. */
     val savedFinals = mutableListOf<Boolean>()
+    val statusCalls = mutableListOf<String>()
+    var status: PlaybackStatusDto? = null
     /** Every mutating call in the order it arrived, so a stop's save-then-delete is visible. */
     val calls = mutableListOf<String>()
 
@@ -101,6 +104,11 @@ class PlaybackControllerTest {
     override suspend fun pingPlayback(id: String) {
       pings += id
       pingFailure?.let { throw it }
+    }
+
+    override suspend fun playbackStatus(id: String): PlaybackStatusDto? {
+      statusCalls += id
+      return status
     }
 
     var pingFailure: Throwable? = null
@@ -940,10 +948,110 @@ class PlaybackControllerTest {
     controller.onPlayerPosition(995.0)
     api.savedFinals.clear()
 
-    controller.onEnded()
+    var ended = 0
+    controller.onEnded { ended++ }
     runCurrent()
 
     assertEquals(listOf(true), api.savedFinals)
+    assertEquals(1, ended)
+  }
+
+  @Test
+  fun `a short conversion restarts at the reached position without ending the play`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1",
+      mode = "remux",
+      url = "master.m3u8",
+      duration = 1_000.0,
+      playlist = true,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    playing(controller, 900.0)
+    api.savedFinals.clear()
+    api.status = PlaybackStatusDto(1, "short", 900.0)
+    var ended = 0
+
+    controller.onEnded { ended++ }
+    runCurrent()
+
+    assertEquals(listOf("p1"), api.statusCalls)
+    assertEquals(listOf(900.0), api.seeks)
+    assertEquals(0, ended)
+    assertTrue(api.savedFinals.none { it })
+  }
+
+  @Test
+  fun `a complete conversion saves and ends normally`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1",
+      mode = "remux",
+      url = "master.m3u8",
+      duration = 1_000.0,
+      playlist = true,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    playing(controller, 990.0)
+    api.savedFinals.clear()
+    api.status = PlaybackStatusDto(1, "complete")
+    var ended = 0
+
+    controller.onEnded { ended++ }
+    runCurrent()
+
+    assertEquals(listOf(true), api.savedFinals)
+    assertEquals(1, ended)
+  }
+
+  @Test
+  fun `four short conversions fail on the fourth without another seek`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1",
+      mode = "remux",
+      url = "master.m3u8",
+      duration = 1_000.0,
+      playlist = true,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    playing(controller, 900.0)
+    api.status = PlaybackStatusDto(1, "short", 900.0)
+    var ended = 0
+
+    repeat(4) {
+      controller.onEnded { ended++ }
+      runCurrent()
+    }
+
+    assertEquals(3, api.seeks.size)
+    assertEquals(PlaybackError.Network, controller.state.value.error)
+    assertEquals(0, ended)
+  }
+
+  @Test
+  fun `direct play asks for no status and ends normally`() = runTest {
+    val api = FakeApi()
+    api.status = PlaybackStatusDto(1, "short", 500.0)
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(990.0)
+    var ended = 0
+
+    controller.onEnded { ended++ }
+    runCurrent()
+
+    assertEquals(emptyList<String>(), api.statusCalls)
+    assertEquals(listOf(true), api.savedFinals)
+    assertEquals(1, ended)
   }
 
   @Test
