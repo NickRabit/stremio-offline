@@ -51,7 +51,7 @@ export default defineConfig({
       // run as their own project: between them they are seventy seconds of test time, and a job of
       // its own lets CI run them beside the WebKit journeys instead of at the far end of this
       // suite.
-      testIgnore: [/setup\.spec\.ts/, /layout\//, /restricted\.spec\.ts/, /safari-(scroll|search-position)\.spec\.ts/, /(proxy|remote-library)\.spec\.ts/],
+      testIgnore: [/setup\.spec\.ts/, /layout\//, /restricted\.spec\.ts/, /player-lead-cap\.spec\.ts/, /safari-(scroll|search-position)\.spec\.ts/, /(proxy|remote-library)\.spec\.ts/],
       dependencies: ["setup"],
       use: { ...devices["Desktop Chrome"], storageState },
     },
