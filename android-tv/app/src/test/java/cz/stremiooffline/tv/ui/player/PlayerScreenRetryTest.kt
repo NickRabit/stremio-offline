@@ -125,6 +125,7 @@ class PlayerScreenRetryTest {
       audioLanguage: String?,
       subtitleLanguage: String?,
       subtitleOff: Boolean,
+      quality: Int?,
     ): PlaybackDescriptorDto {
       starts += 1
       offered += subtitleIds
@@ -145,6 +146,7 @@ class PlayerScreenRetryTest {
       audioLanguage: String?,
       subtitleLanguage: String?,
       subtitleOff: Boolean,
+      quality: Int?,
     ): PlaybackDescriptorDto {
       starts += 1
       if (starts == 1) {

@@ -347,7 +347,13 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     if (!image) return void res.status(204).end();
     res.type("image/jpeg").setHeader("cache-control", "private, no-store").send(image);
   }));
-  app.post("/api/playback/:id/ping", (req, res) => { guardOwned(String(req.params.id)); res.status(204).end(); });
+  app.post("/api/playback/:id/ping", (req, res) => {
+    const id = String(req.params.id);
+    guardOwned(id);
+    const paused = req.body?.paused;
+    playback.ping(id, typeof paused === "boolean" ? paused : undefined);
+    res.status(204).end();
+  });
   app.get("/api/playback/:id/status", asyncRoute(async (req, res) => {
     const id = String(req.params.id);
     guardOwned(id);

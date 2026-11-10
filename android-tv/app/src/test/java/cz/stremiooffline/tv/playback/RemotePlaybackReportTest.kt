@@ -57,6 +57,7 @@ class RemotePlaybackReportTest {
       audioLanguage: String?,
       subtitleLanguage: String?,
       subtitleOff: Boolean,
+      quality: Int?,
     ): PlaybackDescriptorDto {
       starts += 1
       return PlaybackDescriptorDto(id = "p$starts", url = "direct.mp4", duration = 1_000.0)
@@ -71,7 +72,7 @@ class RemotePlaybackReportTest {
     override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto =
       PlaybackDescriptorDto(id = id, url = "direct.mp4")
 
-    override suspend fun pingPlayback(id: String) {}
+    override suspend fun pingPlayback(id: String, paused: Boolean?) {}
 
     override suspend fun deletePlayback(id: String) {
       deleted += id

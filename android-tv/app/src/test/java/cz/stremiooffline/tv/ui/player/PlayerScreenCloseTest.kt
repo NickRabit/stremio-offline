@@ -98,7 +98,7 @@ class PlayerScreenCloseTest {
       return answer
     }
 
-    override suspend fun pingPlayback(id: String) {
+    override suspend fun pingPlayback(id: String, paused: Boolean?) {
       pings += id
     }
   }

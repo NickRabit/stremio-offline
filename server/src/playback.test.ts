@@ -2617,6 +2617,139 @@ test("the player asking for a segment is what counts as watching", () => {
   assert.ok(session.clientAt !== undefined && Date.now() - session.clientAt < 1000);
 });
 
+const captureStop = (manager: any) => {
+  const stopped: Array<{ id: string; reason?: string }> = [];
+  manager.stop = async (id: string, reason?: string) => {
+    stopped.push({ id, reason });
+    manager.sessions.delete(id);
+  };
+  return stopped;
+};
+
+const withPausedReleaseEnv = (value: string | undefined, run: () => void) => {
+  const previous = process.env.PLAYBACK_PAUSED_RELEASE_MINUTES;
+  try {
+    if (value === undefined) delete process.env.PLAYBACK_PAUSED_RELEASE_MINUTES;
+    else process.env.PLAYBACK_PAUSED_RELEASE_MINUTES = value;
+    run();
+  } finally {
+    if (previous === undefined) delete process.env.PLAYBACK_PAUSED_RELEASE_MINUTES;
+    else process.env.PLAYBACK_PAUSED_RELEASE_MINUTES = previous;
+  }
+};
+
+test("paused pings longer than the limit release a converted session", async () => {
+  const manager = new PlaybackManager(tmp("test-paused-release")) as any;
+  const stopped = captureStop(manager);
+  const session = remuxSession(manager, { id: "paused-long", claimed: true });
+  session.clientAt = Date.now();
+
+  manager.ping(session.id, true);
+  const first = session.pausedSince;
+  assert.ok(typeof first === "number");
+  manager.ping(session.id, true);
+  assert.equal(session.pausedSince, first, "a later paused ping does not move the clock forward");
+
+  session.pausedSince = Date.now() - 31 * 60_000;
+  manager.reap();
+  assert.deepEqual(stopped, [{ id: "paused-long", reason: "paused" }]);
+  await flushLog();
+  const line = await readLog({ level: "INFO", search: `"id":"paused-long"` });
+  assert.match(line, /Paused session released/);
+  assert.match(line, /"mode":"remux"/);
+  assert.match(line, /"minutes":31/);
+});
+
+test("a playing ping in between keeps a paused session", () => {
+  const manager = new PlaybackManager(tmp("test-paused-playing")) as any;
+  const stopped = captureStop(manager);
+  const session = remuxSession(manager, { id: "paused-playing", claimed: true });
+  session.clientAt = Date.now();
+
+  manager.ping(session.id, true);
+  session.pausedSince = Date.now() - 20 * 60_000;
+  manager.ping(session.id, false);
+  assert.equal(session.pausedSince, undefined);
+  manager.ping(session.id, true);
+  session.pausedSince = Date.now() - 20 * 60_000;
+  manager.reap();
+  assert.deepEqual(stopped, []);
+});
+
+test("pings without the paused field never start the pause clock", () => {
+  const manager = new PlaybackManager(tmp("test-paused-absent")) as any;
+  const stopped = captureStop(manager);
+  const session = remuxSession(manager, { id: "paused-absent", claimed: true });
+  session.clientAt = Date.now();
+
+  manager.ping(session.id, undefined);
+  assert.equal(session.pausedSince, undefined);
+  manager.reap();
+  assert.deepEqual(stopped, []);
+});
+
+test("a direct session is never released for a long pause", () => {
+  const manager = new PlaybackManager(tmp("test-paused-direct")) as any;
+  const stopped = captureStop(manager);
+  const session = remuxSession(manager, { id: "paused-direct", mode: "direct", claimed: true });
+  session.clientAt = Date.now();
+  manager.ping(session.id, true);
+  session.pausedSince = Date.now() - 31 * 60_000;
+  manager.reap();
+  assert.deepEqual(stopped, []);
+});
+
+test("a forward segment fetch resets the pause clock", () => {
+  const manager = new PlaybackManager(tmp("test-paused-fetch")) as any;
+  const session = remuxSession(manager, { id: "paused-fetch" });
+  session.ledger = {
+    generations: new Map([[1, { generation: 1, offset: 0, furthestSegment: 0 }]]),
+    mode: "remux",
+  };
+  manager.ping(session.id, true);
+  session.pausedSince = Date.now() - 31 * 60_000;
+  manager.fetched(session.id, "1", "master.m3u8");
+  manager.fetched(session.id, "1", "seg-0-000000.m4s");
+  assert.ok(session.pausedSince, "a playlist or a repeat of the furthest segment does not count as playing");
+  manager.fetched(session.id, "1", "seg-0-000001.m4s");
+  assert.equal(session.pausedSince, undefined);
+});
+
+test("seek, track and escalate clear the pause clock", async () => {
+  const manager = new PlaybackManager(tmp("test-paused-activity")) as any;
+  const session = remuxSession(manager, { id: "paused-activity" });
+  manager.restart = async () => ({ id: session.id });
+  manager.describe = () => ({ id: session.id });
+  manager.directAllowed = () => ({ ok: false });
+  manager.extractSidecar = () => {};
+  manager.sidecars = { stop: async () => {} };
+
+  manager.ping(session.id, true);
+  await manager.seek(session.id, 10);
+  assert.equal(session.pausedSince, undefined);
+
+  manager.ping(session.id, true);
+  await manager.escalate(session.id, 10);
+  assert.equal(session.pausedSince, undefined);
+
+  manager.ping(session.id, true);
+  await manager.track(session.id, { audio: 0, time: 10 });
+  assert.equal(session.pausedSince, undefined);
+});
+
+test("PLAYBACK_PAUSED_RELEASE_MINUTES=0 disables the paused release", () => {
+  withPausedReleaseEnv("0", () => {
+    const manager = new PlaybackManager(tmp("test-paused-disabled")) as any;
+    const stopped = captureStop(manager);
+    const session = remuxSession(manager, { id: "paused-disabled", claimed: true });
+    session.clientAt = Date.now();
+    manager.ping(session.id, true);
+    session.pausedSince = Date.now() - 24 * 60 * 60_000;
+    manager.reap();
+    assert.deepEqual(stopped, []);
+  });
+});
+
 /** The rule the tracks are chosen by, spelled out once and exercised four ways. */
 const subtitlePick = async (name: string, subtitleTracks: any[], options: Record<string, unknown>) => {
   const manager = new PlaybackManager(tmp(`test-playback-${name}`)) as any;

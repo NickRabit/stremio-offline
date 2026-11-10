@@ -281,7 +281,10 @@ export const api = {
   playbackStatus: (id: string) => request<PlaybackStatus>(`/api/playback/${id}/status`, { timeoutMs: 5_000 }),
   /** The browser refused the stream: the server stops copying and really transcodes. */
   escalatePlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/escalate`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
-  pingPlayback: (id: string) => request<void>(`/api/playback/${id}/ping`, { method: "POST" }),
+  pingPlayback: (id: string, paused?: boolean) => request<void>(`/api/playback/${id}/ping`, {
+    method: "POST",
+    ...(paused === undefined ? {} : { body: JSON.stringify({ paused }) }),
+  }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
   nextLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/next/${encodeURIComponent(sourceId)}`),
   previousLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/previous/${encodeURIComponent(sourceId)}`),

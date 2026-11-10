@@ -50,6 +50,7 @@ class RemoteTitleProgressTest {
       audioLanguage: String?,
       subtitleLanguage: String?,
       subtitleOff: Boolean,
+      quality: Int?,
     ): PlaybackDescriptorDto {
       startedTimes += time
       return PlaybackDescriptorDto(id = "p1", url = "direct.mp4")
@@ -64,7 +65,7 @@ class RemoteTitleProgressTest {
     override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto =
       PlaybackDescriptorDto(id = id, url = "direct.mp4")
 
-    override suspend fun pingPlayback(id: String) {}
+    override suspend fun pingPlayback(id: String, paused: Boolean?) {}
 
     override suspend fun deletePlayback(id: String) {}
 

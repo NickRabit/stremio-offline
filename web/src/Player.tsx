@@ -403,6 +403,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const playedRef = useRef(false);
   const directRefusedRef = useRef(false);
   const lostRecoveredRef = useRef(false);
+  const lostWhilePausedRef = useRef(false);
   const recoverLostSessionRef = useRef<(reason: string, failed: string) => void>(() => undefined);
   const [sidecarReady, setSidecarReady] = useState(false);
   // The reader is still working through the film, so the track is attached again
@@ -745,7 +746,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; lostRecoveredRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
+    decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; lostRecoveredRef.current = false; lostWhilePausedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there. A start-over
     // never reads the store and never writes to it -- the saved position simply stays.
@@ -941,20 +942,29 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const id = sessionRef.current;
     if (!id) return false;
     try {
-      await api.pingPlayback(id);
+      await api.pingPlayback(id, userPausedRef.current);
       return false;
     } catch (value) {
       return isSessionGone(value);
     }
   };
 
+  const lostSessionFailed = () => t("player.playbackFailed", { details: t("err.playbackSessionGone"), type: "networkError" });
+
   const recoverLostSession = (reason: string, failed: string) => {
     if (abandonedRef.current || seekInFlightRef.current) return;
-    if (lostRecoveredRef.current) {
-      abandon(failed);
+    if (reason !== "resume" && userPausedRef.current) {
+      lostWhilePausedRef.current = true;
+      report("WARN", "The playback session was released while paused", { ...context(), reason });
       return;
     }
-    lostRecoveredRef.current = true;
+    if (reason !== "resume") {
+      if (lostRecoveredRef.current) {
+        abandon(failed);
+        return;
+      }
+      lostRecoveredRef.current = true;
+    }
     report("WARN", "The playback session was gone, starting a new one", { ...context(), reason });
     void restartHere(!userPausedRef.current);
   };
@@ -1221,10 +1231,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       const id = sessionRef.current;
       if (!id) return;
       try {
-        await api.pingPlayback(id);
+        await api.pingPlayback(id, userPausedRef.current);
       } catch (value) {
         if (id === sessionRef.current && isSessionGone(value)) {
-          recoverLostSessionRef.current("ping", t("player.playbackFailed", { details: t("err.playbackSessionGone"), type: "networkError" }));
+          recoverLostSessionRef.current("ping", lostSessionFailed());
         }
       }
     };
@@ -1246,10 +1256,22 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     return () => window.removeEventListener("pagehide", leaving);
   }, [open]);
 
+  const resumeLostWhilePaused = () => {
+    if (!lostWhilePausedRef.current) return;
+    lostWhilePausedRef.current = false;
+    userPausedRef.current = false;
+    recoverLostSession("resume", lostSessionFailed());
+  };
+
   const toggle = () => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) { setUserPaused(false); void video.play().catch(() => undefined); }
+    if (video.paused) {
+      setUserPaused(false);
+      userPausedRef.current = false;
+      resumeLostWhilePaused();
+      void video.play().catch(() => undefined);
+    }
     else { setUserPaused(true); video.pause(); }
   };
 
@@ -1560,6 +1582,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           // A failed seek or track change leaves the lock off. Playing again means it recovered.
           setPlaybackFailed(false);
           cancelNext();
+          if (lostWhilePausedRef.current) {
+            setUserPaused(false);
+            userPausedRef.current = false;
+            resumeLostWhilePaused();
+          }
         }} onPause={() => setPaused(true)} onSeeking={cancelNext} onSeeked={reportSeek}
         onEnded={() => { void playbackEnded(); }}
         onTimeUpdate={(event) => {

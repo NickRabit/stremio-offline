@@ -128,6 +128,7 @@ class PlayerScreenLifecycleTest {
       audioLanguage: String?,
       subtitleLanguage: String?,
       subtitleOff: Boolean,
+      quality: Int?,
     ): PlaybackDescriptorDto {
       started += Triple(sourceId, capabilities, time)
       return PlaybackDescriptorDto(id = "p1", url = "/stream.mp4")

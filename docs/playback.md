@@ -74,7 +74,7 @@ it stops. Direct play writes no summary.
 | `fetchedSeconds` | Whole seconds up to the furthest video segment the client requested in each generation |
 | `unfetchedSeconds` | Produced seconds the client did not fetch |
 | `bytesWritten` | Total size of the files left in the generation directories when they were settled |
-| `ended` | `closed`, `orphaned`, `unclaimed`, `idle`, `failed`, `revoked`, or `shutdown` |
+| `ended` | `closed`, `orphaned`, `unclaimed`, `idle`, `failed`, `revoked`, `shutdown`, or `paused` |
 
 ### AC-3 after a seek
 
@@ -83,6 +83,23 @@ position, or during a transcode, the audio is stereo AAC. The descriptor reports
 the codec and channels actually sent. The stereo fallback is kept because the
 original failure was seen on a real file, and no synthetic reproduction or
 muxer option was found that made the copy reliable.
+
+## A long pause
+
+A converted session that has been paused without interruption for longer than
+`PLAYBACK_PAUSED_RELEASE_MINUTES` (default 30, `0` never) is stopped so it no
+longer holds FFmpeg, a hardware encoder slot, or a remote source connection.
+Direct play is left alone. The pause clock starts on a ping that reports
+`paused: true` and is not moved forward by later paused pings. Any sign of
+playing resets it: a ping that reports playing, a seek, a track or quality
+change, an escalation, or a segment request that advances the furthest fetched
+index. A ping without the field, including from an older client, never starts
+the clock.
+
+When the viewer presses play afterwards, the web player and Android TV start a
+new session at the paused position with the same audio track, subtitle track
+and quality. The viewer sees buffering, never an error, and the saved progress
+is unchanged.
 
 ## A session the server closed
 
