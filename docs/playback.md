@@ -60,6 +60,14 @@ a failed track, quality or escalation restart restores the old generation too,
 but still reports the failure to the client. A dead process or incomplete output
 does not qualify, so the restart failure propagates unchanged.
 
+## A session the server closed
+
+The server closes a playback session after 90 seconds without a player request.
+When the web player later finds that session gone, it starts a new one at the
+current position once, preserving the paused state, audio and subtitle choices,
+and subtitle delay. Another loss before playback succeeds is reported as an
+ordinary failure.
+
 ## A conversion that ends short
 
 A dropped source can make FFmpeg finish its playlist with `#EXT-X-ENDLIST` and
