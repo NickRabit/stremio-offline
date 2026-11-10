@@ -169,8 +169,10 @@ Downloaded language-tagged `.srt` and `.vtt` sidecars are discovered beside
 library videos and offered in the player as external tracks.
 
 Audio or quality changes restart conversion at the current position. Subtitle
-changes keep video playing; **Off** stops the subtitle reader. Bitmap subtitles
-(PGS, VobSub) are not offered because they cannot become WebVTT.
+changes keep video playing; **Off** stops the subtitle reader. If an audio,
+subtitle or quality change fails, the previous choices remain selected and
+playback continues with them. Bitmap subtitles (PGS, VobSub) are not offered
+because they cannot become WebVTT.
 
 The subtitle icon in the controls (or <kbd>c</kbd>) does not change the track: it
 only stops drawing the text. Playback and conversion keep going, and turning
