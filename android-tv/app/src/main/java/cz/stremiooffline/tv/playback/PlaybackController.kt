@@ -659,6 +659,7 @@ class PlaybackController(
       val stamp = ++sequence
       val id = sessionId ?: return@launch
       val descriptor = runCatching { api.seekPlayback(id, target) }.getOrElse { error ->
+        if (error is CancellationException) throw error
         if (mine == generation) {
           if (isDead(error)) onDeadSession()
           else {
@@ -788,6 +789,7 @@ class PlaybackController(
     trackJob?.cancel()
     trackJob = scope.launch {
       val descriptor = runCatching { api.trackPlayback(id, change) }.getOrElse { error ->
+        if (error is CancellationException) throw error
         if (mine == generation) {
           if (isDead(error)) onDeadSession()
           else {
