@@ -11,6 +11,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -392,6 +394,7 @@ class ApiClient(
     audioLanguage: String?,
     subtitleLanguage: String?,
     subtitleOff: Boolean,
+    quality: Int?,
   ): PlaybackDescriptorDto {
     val payload = json.encodeToString(
       PlaybackStartRequest.serializer(),
@@ -404,6 +407,7 @@ class ApiClient(
         // An explicit null is a request of its own: "no embedded subtitle", whatever the account
         // settings say. A null that means "the settings decide" is left out of the body entirely.
         subtitleLanguage = if (subtitleOff) JsonNull else subtitleLanguage?.let(::JsonPrimitive),
+        quality = quality,
       ),
     )
     return request(Request.Builder().url(address.resolve("/api/playback")).post(payload.toRequestBody(mediaType)).build(), playbackClient)
@@ -440,8 +444,10 @@ class ApiClient(
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
-  override suspend fun pingPlayback(id: String) {
-    request(Request.Builder().url(address.resolve("/api/playback/$id/ping")).post("{}".toRequestBody(mediaType)).build())
+  override suspend fun pingPlayback(id: String, paused: Boolean?) {
+    val payload = if (paused == null) "{}"
+      else json.encodeToString(PausedRequest.serializer(), PausedRequest(paused))
+    request(Request.Builder().url(address.resolve("/api/playback/$id/ping")).post(payload.toRequestBody(mediaType)).build())
   }
 
   override suspend fun sidecar(url: String, position: Double, delay: Double): SidecarFetch? {
@@ -1049,6 +1055,9 @@ private data class DownloadRequest(
 private data class TimeRequest(val time: Double)
 
 @Serializable
+private data class PausedRequest(val paused: Boolean)
+
+@Serializable
 private data class ShuffleBody(val path: String)
 
 @Serializable
@@ -1057,6 +1066,7 @@ private data class ShuffleRemoteRequest(val libraryId: String, val parentId: Str
 @Serializable
 private data class RemoteShuffleBody(val remote: ShuffleRemoteRequest)
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 private data class PlaybackStartRequest(
   val sourceId: String,
@@ -1067,6 +1077,8 @@ private data class PlaybackStartRequest(
   val audioLanguage: String? = null,
   /** A JSON null asks for no embedded subtitle; an absent field leaves it to the settings. */
   val subtitleLanguage: JsonElement? = null,
+  @EncodeDefault(EncodeDefault.Mode.NEVER)
+  val quality: Int? = null,
 )
 
 @Serializable

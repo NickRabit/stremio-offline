@@ -366,6 +366,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
   app.post("/api/playback/:id/ping", (req, res) => {
     const id = String(req.params.id);
     guardOwned(id);
+    const paused = req.body?.paused;
+    playback.ping(id, typeof paused === "boolean" ? paused : undefined);
     const waitingFor = req.body?.waitingFor;
     if (typeof waitingFor === "number" && Number.isFinite(waitingFor) && waitingFor >= 0) playback.waitingFor(id, waitingFor);
     res.status(204).end();

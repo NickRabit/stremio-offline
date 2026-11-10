@@ -46,6 +46,7 @@ interface Harness {
   errors: unknown[];
   stopped: string[];
   stopReasons: string[];
+  pings: Array<{ id: string; paused: boolean | undefined }>;
   fetched: Array<{ id: string; generation: string; file: string }>;
   waitingFor: Array<{ id: string; absolute: number }>;
   mediaSources: MediaServerSources;
@@ -65,6 +66,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
   const errors: unknown[] = [];
   const stopped: string[] = [];
   const stopReasons: string[] = [];
+  const pings: Array<{ id: string; paused: boolean | undefined }> = [];
   const fetched: Array<{ id: string; generation: string; file: string }> = [];
   const waitingFor: Array<{ id: string; absolute: number }> = [];
   let source = { url: "https://example.test/video.mp4" } as StreamItem;
@@ -87,6 +89,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
   const playback: Record<string, any> = {
     attended: (id: string) => { attended.push(id); },
     stop: async (id: string, reason = "closed") => { stopped.push(id); stopReasons.push(reason); },
+    ping: (id: string, paused: boolean | undefined) => { pings.push({ id, paused }); },
     fetched: (id: string, generation: string, file: string) => { fetched.push({ id, generation, file }); },
     waitingFor: (id: string, absolute: number) => { waitingFor.push({ id, absolute }); },
     directory: () => "/tmp/session-generation",
@@ -171,6 +174,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     errors,
     stopped,
     stopReasons,
+    pings,
     fetched,
     waitingFor,
     mediaSources,
@@ -320,6 +324,26 @@ test("the guard lets the owner through, makes the frame uncacheable and marks th
   assert.equal(response.status, 204);
   assert.equal(response.headers.get("cache-control"), "private, no-store", "one viewer's frames are never cached for another");
   assert.deepEqual(harness.attended, [ID], "attended() is what stops a live session being reaped");
+});
+
+test("a paused ping body reaches PlaybackManager.ping", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: { paused: true } });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(harness.pings, [{ id: ID, paused: true }]);
+});
+
+test("an empty ping body reaches ping without a paused flag", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: {} });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(harness.pings, [{ id: ID, paused: undefined }]);
 });
 
 test("an AirPlay grant for the session passes the guard where another person's plain session does not", async (t) => {

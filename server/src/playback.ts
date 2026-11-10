@@ -44,7 +44,7 @@ export async function sourceReachable(stream: StreamItem, timeoutMs = REACHABILI
 
 /** direct = the browser plays the file as is, remux = repackaging without re-encoding video, transcode = a real conversion. */
 export type PlaybackMode = "direct" | "remux" | "transcode";
-export type StopReason = "closed" | "orphaned" | "unclaimed" | "idle" | "failed" | "revoked" | "shutdown";
+export type StopReason = "closed" | "orphaned" | "unclaimed" | "idle" | "failed" | "revoked" | "shutdown" | "paused";
 
 export interface ClientCapabilities {
   h264?: boolean; hevc?: boolean; hevc10?: boolean; vp8?: boolean; vp9?: boolean; av1?: boolean;
@@ -254,6 +254,8 @@ interface Session {
   claimed: boolean;
   /** When the player itself last asked for anything. */
   clientAt?: number;
+  /** When the player first reported paused without a later sign of playing. */
+  pausedSince?: number;
   /** The generation whose trailing requests are still served for a while after a restart. */
   retired?: { generation: number; directory: string; until: number };
   /** The client refused the copied stream, so this session must never copy again. */
@@ -374,6 +376,14 @@ const UNCLAIMED_MS = 45_000;
  *  pings every thirty, so silence this long means it is gone -- and FFmpeg would otherwise convert
  *  and pull at the source for the whole idle limit with no one to show it to. */
 const ORPHAN_MS = 90_000;
+const DEFAULT_PAUSED_RELEASE_MINUTES = 30;
+
+function pausedReleaseMs(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_PAUSED_RELEASE_MINUTES * 60_000;
+  const minutes = Number(raw);
+  if (!Number.isFinite(minutes) || minutes < 0) return DEFAULT_PAUSED_RELEASE_MINUTES * 60_000;
+  return minutes * 60_000;
+}
 // Requests sent just before a transcode restart arrive at the new generation. hls.js treats a 404
 // on a playlist as fatal, so the old generation is kept around for a while.
 const RETIRED_MS = 15_000;
@@ -464,12 +474,14 @@ export class PlaybackManager {
   /** An LGPL build, like the one the desktop app carries, has no libx264: hardware is all there is. */
   private softwareEncoder = true;
   private ffmpegVersion?: string;
+  private readonly pausedReleaseMs: number;
 
   constructor(
     dataDir = process.env.DATA_DIR ?? "/data",
     private onStop: (id: string) => void = () => {},
     playbackDir = process.env.PLAYBACK_DIR,
   ) {
+    this.pausedReleaseMs = pausedReleaseMs(process.env.PLAYBACK_PAUSED_RELEASE_MINUTES);
     const configuredLead = process.env.PLAYBACK_LEAD_CAP_SECONDS;
     const lead = configuredLead === undefined ? Number.NaN : Number(configuredLead);
     if (process.platform === "win32") {
@@ -582,7 +594,15 @@ export class PlaybackManager {
    *  is a start the client never took up, and has no reason to wait out the whole idle limit. */
   private reap() {
     for (const session of [...this.sessions.values()]) {
-      const unattended = Date.now() - (session.clientAt ?? session.startedAt);
+      const now = Date.now();
+      if (this.pausedReleaseMs > 0 && session.mode !== "direct" && session.pausedSince !== undefined
+        && now - session.pausedSince > this.pausedReleaseMs) {
+        log("INFO", "Paused session released", {
+          id: session.id, mode: session.mode, minutes: Math.round((now - session.pausedSince) / 60_000),
+        });
+        void this.stop(session.id, "paused"); continue;
+      }
+      const unattended = now - (session.clientAt ?? session.startedAt);
       if (session.claimed && unattended > ORPHAN_MS) {
         log("INFO", "No player has asked for this session, closing it", { id: session.id, mode: session.mode, seconds: Math.round(unattended / 1000) });
         void this.stop(session.id, "orphaned"); continue;
@@ -787,6 +807,7 @@ export class PlaybackManager {
   /** A seek outside the part already produced: FFmpeg restarts from the new position and the client shifts its timeline. */
   async seek(id: string, time: number) {
     const session = this.require(id);
+    session.pausedSince = undefined;
     return session.operations.run(() => this.restart(session, time, "Playback seek", true));
   }
 
@@ -804,6 +825,7 @@ export class PlaybackManager {
    * and the session starts again as a real transcode. */
   async escalate(id: string, time: number) {
     const session = this.require(id);
+    session.pausedSince = undefined;
     return session.operations.run(() => {
       const first = !session.copyRejected;
       session.copyRejected = true;
@@ -814,6 +836,7 @@ export class PlaybackManager {
   /** Switching a track or the quality means new mappings or filters, so a restart from the current position. */
   async track(id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time?: number }) {
     const session = this.require(id);
+    session.pausedSince = undefined;
     return session.operations.run(async () => {
       this.assertActive(session);
       const before = { audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality };
@@ -957,6 +980,13 @@ export class PlaybackManager {
     if (session) { session.clientAt = Date.now(); session.lastAccess = Date.now(); session.claimed = true; }
   }
 
+  ping(id: string, paused: boolean | undefined): void {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    if (paused === true) session.pausedSince ??= Date.now();
+    else if (paused === false) session.pausedSince = undefined;
+  }
+
   async stop(id: string, reason: StopReason = "closed") {
     this.previews.stop(id);
     const session = this.sessions.get(id);
@@ -1044,6 +1074,7 @@ export class PlaybackManager {
     const session = this.sessions.get(id);
     const entry = session?.ledger?.generations.get(Number(generation));
     if (!session || !entry || index <= entry.furthestSegment) return;
+    session.pausedSince = undefined;
     if (!this.leadCapHigh) {
       entry.furthestSegment = index;
       return;
