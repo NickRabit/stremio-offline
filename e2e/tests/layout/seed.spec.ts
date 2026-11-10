@@ -24,7 +24,8 @@ test("the screens are taken against the fixture titles", async ({ page, request 
   // this spec once: a second pass treats that folder as the download having landed.
   const movieDir = path.join(downloads, titles[0]!.folder);
   const landed = async () => (await readdir(movieDir).catch(() => [])).length;
-  if (!(await directoryThere(movieDir))) {
+  const downloaded = !(await directoryThere(movieDir));
+  if (downloaded) {
     await page.goto("/");
     await page.getByRole("button", { name: "Katalog", exact: true }).click();
     const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
@@ -44,7 +45,7 @@ test("the screens are taken against the fixture titles", async ({ page, request 
   }
 
   const listing = async () => {
-    const page = await (await request.get("/api/library/browse")).json() as { items: Array<{ path: string; name?: string }> };
+    const page = await (await request.get("/api/library/browse")).json() as { items: Array<{ path: string; name?: string; gallery?: number }> };
     return page.items;
   };
   await expect.poll(async () => {
@@ -52,7 +53,16 @@ test("the screens are taken against the fixture titles", async ({ page, request 
     return titles.every((title) => paths.has(title.folder));
   }, { timeout: 60_000, message: "the walk never saw the fixture folders" }).toBe(true);
 
-  for (const title of titles) {
+  // The finished download binds the movie's folder and then saves its gallery in the
+  // background. A match on that folder replaces the binding and clears its art, so whether the
+  // tile kept its gallery button depended on which of the two came last. The download's own
+  // binding is the state the screens show: wait for its gallery and leave the folder alone.
+  if (downloaded) {
+    await expect.poll(async () => (await listing()).find((item) => item.path === titles[0]!.folder)?.gallery ?? 0, {
+      timeout: 60_000, message: "the downloaded movie never got its gallery",
+    }).toBeGreaterThan(0);
+  }
+  for (const title of downloaded ? titles.slice(1) : titles) {
     const matched = await request.post("/api/library/match", { data: { path: title.folder, id: title.id, type: title.type } });
     expect(matched.status(), await matched.text()).toBe(200);
   }
