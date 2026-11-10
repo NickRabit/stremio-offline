@@ -7,6 +7,54 @@ import { setLocale } from "./i18n";
 import type { LibrarySourceGroup } from "./library-sources";
 import type { RemoteCapabilities, Stream } from "./types";
 
+const hlsMock = vi.hoisted(() => {
+  type Listener = (event: string, data: unknown) => void;
+  class FakeHls {
+    static Events = { MANIFEST_PARSED: "manifestParsed", ERROR: "error", FRAG_BUFFERED: "fragBuffered", DESTROYING: "destroying" };
+    static ErrorTypes = { NETWORK_ERROR: "networkError", MEDIA_ERROR: "mediaError" };
+    static isSupported = () => true;
+    listeners = new Map<string, Listener[]>();
+    startLoadCalls = 0;
+    recoverMediaErrorCalls = 0;
+    destroyed = false;
+    on(event: string, listener: Listener) {
+      this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+    }
+    loadSource() {}
+    attachMedia() {}
+    startLoad() { this.startLoadCalls += 1; }
+    recoverMediaError() { this.recoverMediaErrorCalls += 1; }
+    destroy() { this.destroyed = true; }
+    emit(event: string, data: unknown) {
+      for (const listener of this.listeners.get(event) ?? []) listener(event, data);
+    }
+  }
+  const instances: FakeHls[] = [];
+  const Hls = class extends FakeHls {
+    constructor() {
+      super();
+      instances.push(this);
+    }
+  };
+  const mock = {
+    FakeHls: Hls,
+    instances,
+    enabled: false,
+    reset() { instances.length = 0; mock.enabled = false; },
+  };
+  return mock;
+});
+
+vi.mock("./hls-loader", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./hls-loader")>();
+  const fake = hlsMock.FakeHls as unknown as typeof import("hls.js").default;
+  return {
+    ...actual,
+    hlsIfLoaded: () => hlsMock.enabled ? fake : actual.hlsIfLoaded(),
+    loadHls: async () => hlsMock.enabled ? fake : actual.loadHls(),
+  };
+});
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const rights = (over: Partial<RemoteCapabilities> = {}): RemoteCapabilities => ({
@@ -41,6 +89,10 @@ let playbackReports: Array<Record<string, unknown>>;
 let playbackStatusRequests: string[];
 let playbackStatusAnswer: unknown;
 let seekRequests: Array<{ path: string; time: number }>;
+let seekGone: boolean;
+let pingRequests: string[];
+let pingStatus: number;
+let pingBody: unknown;
 /** Every segment lookup sent for the playback on screen. */
 let introRequests: string[];
 /** What the next segment lookup answers. */
@@ -83,6 +135,10 @@ beforeEach(() => {
   playbackStatusRequests = [];
   playbackStatusAnswer = { generation: 1, conversion: "running" };
   seekRequests = [];
+  seekGone = false;
+  pingRequests = [];
+  pingStatus = 204;
+  pingBody = null;
   introRequests = [];
   introAnswer = {};
   progressReads = [];
@@ -92,6 +148,7 @@ beforeEach(() => {
   playbackPosts = [];
   heldWrite = null;
   sessionShape = {};
+  hlsMock.reset();
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -99,11 +156,15 @@ beforeEach(() => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
     if (path === "/api/playback" && init?.method === "POST") {
-      playbackPosts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      playbackPosts.push(body);
       return Promise.resolve(json(session()));
     }
     if (/^\/api\/playback\/[^/]+$/.test(path) && init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
-    if (/^\/api\/playback\/[^/]+\/ping$/.test(path)) return Promise.resolve(new Response(null, { status: 204 }));
+    if (/^\/api\/playback\/[^/]+\/ping$/.test(path)) {
+      pingRequests.push(path);
+      return Promise.resolve(pingStatus === 204 ? new Response(null, { status: 204 }) : json(pingBody, pingStatus));
+    }
     if (/^\/api\/playback\/[^/]+\/status$/.test(path)) {
       playbackStatusRequests.push(path.slice("/api/playback/".length, -"/status".length));
       return Promise.resolve(json(playbackStatusAnswer));
@@ -111,6 +172,7 @@ beforeEach(() => {
     if (/^\/api\/playback\/[^/]+\/seek$/.test(path) && init?.method === "POST") {
       const time = Number((JSON.parse(String(init.body)) as { time?: number }).time);
       seekRequests.push({ path, time });
+      if (seekGone) return Promise.resolve(json({ error: "gone", code: "RESOURCE_NOT_FOUND", messageKey: "err.playbackSessionGone" }, 404));
       return Promise.resolve(json({ ...session(), offset: time }));
     }
     if (/^\/api\/progress\/[^/]+$/.test(path)) {
@@ -702,6 +764,185 @@ describe("Player refused direct stream", () => {
     expect(escalations).toHaveLength(1);
     expect(playbackPosts).toHaveLength(1);
     expect(host.querySelector(".player-error")?.textContent).toBe("The browser could not play this stream.");
+  });
+});
+
+describe("Player lost playback session", () => {
+  const gone = { error: "The playback session is gone.", code: "RESOURCE_NOT_FOUND", messageKey: "err.playbackSessionGone" };
+  const flushAll = async () => { for (let i = 0; i < 4; i += 1) await flush(); };
+  const at = async (seconds: number) => {
+    const video = host.querySelector<HTMLVideoElement>("video")!;
+    await act(async () => {
+      video.currentTime = seconds;
+      video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+    });
+    return video;
+  };
+  const fatalHlsError = async () => {
+    const hls = hlsMock.instances.at(-1)!;
+    await act(async () => {
+      hls.emit("error", { fatal: true, type: "networkError", details: "manifestLoadError", response: { code: 404 } });
+    });
+    await flushAll();
+  };
+
+  beforeEach(() => {
+    hlsMock.enabled = true;
+    sessionShape = { mode: "remux", url: "/api/playback/sess1/master.m3u8", playlist: true };
+    pingStatus = 404;
+    pingBody = gone;
+    seekGone = true;
+  });
+
+  it("restarts once when hls.js finds the server closed the session", async () => {
+    await render();
+    await at(42);
+
+    await fatalHlsError();
+
+    expect(playbackPosts).toHaveLength(2);
+    expect(playbackPosts[1]!.time).toBeCloseTo(42, 1);
+    expect(host.querySelector(".player-error")).toBeNull();
+    expect(hlsMock.instances.at(-1)!.destroyed).toBe(false);
+
+    await fatalHlsError();
+    expect(playbackPosts).toHaveLength(2);
+    expect(host.querySelector(".player-error")?.textContent).toBe("Playback failed: manifestLoadError (networkError)");
+  });
+
+  it("asks at the first segment 404 hls.js is still retrying, without waiting for it to give up", async () => {
+    await render();
+    await at(42);
+
+    const hls = hlsMock.instances.at(-1)!;
+    await act(async () => {
+      hls.emit("error", { fatal: false, type: "networkError", details: "fragLoadError", response: { code: 404 } });
+    });
+    await flushAll();
+
+    expect(playbackPosts).toHaveLength(2);
+    expect(playbackPosts[1]!.time).toBeCloseTo(42, 1);
+    expect(host.querySelector(".player-error")).toBeNull();
+  });
+
+  it("leaves a segment 404 of a live session to hls.js", async () => {
+    pingStatus = 204;
+    seekGone = false;
+    await render();
+
+    const hls = hlsMock.instances.at(-1)!;
+    await act(async () => {
+      hls.emit("error", { fatal: false, type: "networkError", details: "fragLoadError", response: { code: 404 } });
+    });
+    await flushAll();
+
+    expect(playbackPosts).toHaveLength(1);
+    expect(hls.startLoadCalls).toBe(0);
+    expect(host.querySelector(".player-error")).toBeNull();
+  });
+
+  it("still handles an ordinary fatal network error", async () => {
+    await render();
+    await at(42);
+    const hls = hlsMock.instances.at(-1)!;
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => { hls.emit("error", { fatal: true, type: "networkError", details: "fragLoadTimeOut" }); });
+      await flushAll();
+    }
+    expect(hls.startLoadCalls).toBe(2);
+    expect(playbackPosts).toHaveLength(1);
+    expect(host.querySelector(".player-error")?.textContent ?? "").toContain("fragLoadTimeOut");
+  });
+
+  it("still recovers a fatal media error", async () => {
+    await render();
+    await at(42);
+    const hls = hlsMock.instances.at(-1)!;
+    await act(async () => { hls.emit("error", { fatal: true, type: "mediaError", details: "bufferAppendError" }); });
+    await flushAll();
+    expect(hls.recoverMediaErrorCalls).toBe(1);
+  });
+
+  it("carries the chosen audio track, subtitle track and quality into the new session", async () => {
+    sessionShape = { ...sessionShape, audioTracks: [{ index: 0, language: "cze" }, { index: 1, language: "eng" }], audioTrack: 1, quality: 720,
+      subtitleTracks: [{ index: 0, language: "cze" }, { index: 1, language: "eng" }], subtitleTrack: 1 };
+    await render();
+    await at(42);
+
+    await fatalHlsError();
+
+    expect(playbackPosts).toHaveLength(2);
+    expect(playbackPosts[1]).toMatchObject({ audioTrack: 1, quality: 720, subtitleTrack: 1 });
+  });
+
+  it("keeps hls.js retries and then fails when the session is still alive", async () => {
+    pingStatus = 204;
+    seekGone = false;
+    await render();
+
+    for (let i = 0; i < 3; i += 1) await fatalHlsError();
+
+    expect(hlsMock.instances[0]!.startLoadCalls).toBe(2);
+    expect(playbackPosts).toHaveLength(1);
+    expect(host.querySelector(".player-error")?.textContent).toBe("Playback failed: manifestLoadError (networkError)");
+  });
+
+  it("recovers direct play once at the position, then uses the ordinary refusal", async () => {
+    hlsMock.enabled = false;
+    sessionShape = {};
+    await render();
+    const video = await at(42);
+    await act(async () => { video.dispatchEvent(new Event("playing")); });
+    Object.defineProperty(video, "error", { configurable: true, get: () => ({ code: 4, message: "" }) });
+
+    await act(async () => { video.dispatchEvent(new Event("error")); });
+    await flushAll();
+    await act(async () => { video.dispatchEvent(new Event("loadedmetadata")); });
+
+    expect(playbackPosts).toHaveLength(2);
+    expect(playbackPosts[1]!.time).toBeCloseTo(42, 1);
+    expect(video.currentTime).toBeCloseTo(42, 1);
+    expect(host.querySelector(".player-error")).toBeNull();
+
+    await act(async () => { video.dispatchEvent(new Event("error")); });
+    await flushAll();
+    expect(playbackPosts).toHaveLength(2);
+    expect(host.querySelector(".player-error")?.textContent).toBe("The browser could not play this stream.");
+  });
+
+  it("keeps a viewer's pause across recovery from the ping loop", async () => {
+    hlsMock.enabled = false;
+    sessionShape = {};
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await render();
+      const video = await at(42);
+      await act(async () => { video.dispatchEvent(new Event("playing")); });
+      Object.defineProperty(video, "paused", { configurable: true, get: () => false });
+      await click(host.querySelector(".play-toggle")!);
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockClear();
+
+      await act(async () => { vi.advanceTimersByTime(30_000); });
+      await flushAll();
+
+      expect(playbackPosts).toHaveLength(2);
+      expect(playbackPosts[1]!.time).toBeCloseTo(42, 1);
+      expect(play).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pings at once when the player becomes visible", async () => {
+    hlsMock.enabled = false;
+    sessionShape = {};
+    pingStatus = 204;
+    await render();
+
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await flush();
+
+    expect(pingRequests).toEqual(["/api/playback/sess1/ping"]);
   });
 });
 

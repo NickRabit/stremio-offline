@@ -253,6 +253,9 @@ const SUBTITLE_DELAY_STEP_S = 0.25;
 const SUBTITLE_DELAY_LIMIT_S = 30;
 const SEGMENT_KINDS = ["intro", "recap", "outro"] as const;
 
+const isSessionGone = (value: unknown): boolean =>
+  value instanceof ApiError && (value.code === "RESOURCE_NOT_FOUND" || value.messageKey === "err.playbackSessionGone");
+
 const SEGMENT_KEY: Record<SegmentKind, Key> = {
   intro: "player.segmentIntro",
   recap: "player.segmentRecap",
@@ -399,6 +402,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   /** A direct stream the element refused before a single frame played gets one escalated session. */
   const playedRef = useRef(false);
   const directRefusedRef = useRef(false);
+  const lostRecoveredRef = useRef(false);
+  const recoverLostSessionRef = useRef<(reason: string, failed: string) => void>(() => undefined);
   const [sidecarReady, setSidecarReady] = useState(false);
   // The reader is still working through the film, so the track is attached again
   // whenever the picture is about to catch up with the cues it already has.
@@ -406,12 +411,17 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   /** What the viewer dialled in: a positive delay holds the cues back against the picture. */
   const [subtitleDelay, setSubtitleDelay] = useState(0);
   const [session, setSession] = useState<PlaybackSession | null>(null);
+  /** The session on screen, for handlers created by an earlier render (hls.js, the ping loop). */
+  const currentSessionRef = useRef(session);
+  currentSessionRef.current = session;
   const [addonSubtitle, setAddonSubtitle] = useState<Subtitle | null>(null);
   const [offset, setOffset] = useState(0);
   const [paused, setPaused] = useState(true);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
   const [userPaused, setUserPaused] = useState(false);
+  const userPausedRef = useRef(userPaused);
+  userPausedRef.current = userPaused;
   const [playbackFailed, setPlaybackFailed] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -640,6 +650,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       hlsRef.current = hls;
       hls.on(Hls.Events.MANIFEST_PARSED, () => { if (autoplay) void video.play().catch(() => undefined); });
       let recoveries = 0;
+      let checkingSession = false;
+      let failureWhileChecking: (() => void) | undefined;
       const cancelStartNudge = mode === "remux" ? watchRemuxStart(video,
         () => hlsRef.current === hls && !abandonedRef.current && !seekInFlightRef.current,
         () => report("INFO", "Nudged a stalled remux start", context())) : undefined;
@@ -658,17 +670,37 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           reason: (data as { reason?: string }).reason,
           cause: ((data as { error?: Error }).error?.message ?? (data as { err?: Error }).err?.message)?.slice(0, 160),
         });
-        if (!data.fatal) return;
-        if (recoveries < 2) {
-          recoveries += 1;
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); return; }
-          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
-        }
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          recoverFromDecodeRef.current(data.details);
+        const failed = t("player.playbackFailed", { details: data.details, type: data.type });
+        const handleFailure = () => {
+          if (!data.fatal) return;
+          if (recoveries < 2) {
+            recoveries += 1;
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); return; }
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
+          }
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            recoverFromDecodeRef.current(data.details);
+            return;
+          }
+          abandon(failed);
+        };
+        const code = data.response?.code;
+        // hls.js keeps retrying a missing segment for half a minute before it calls it fatal; a
+        // session the server closed is worth asking about at the first 404.
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && (code === 404 || code === 410) && !checkingSession) {
+          checkingSession = true;
+          const checked = sessionRef.current;
+          void sessionGone().then((gone) => {
+            checkingSession = false;
+            const later = failureWhileChecking; failureWhileChecking = undefined;
+            if (checked !== sessionRef.current || hlsRef.current !== hls || abandonedRef.current || seekInFlightRef.current) return;
+            if (gone) recoverLostSession(`hls ${data.details}`, failed);
+            else { handleFailure(); later?.(); }
+          });
           return;
         }
-        abandon(t("player.playbackFailed", { details: data.details, type: data.type }));
+        if (checkingSession) { if (data.fatal) failureWhileChecking = handleFailure; return; }
+        handleFailure();
       });
       hls.loadSource(url); hls.attachMedia(video);
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) { video.src = url; if (autoplay) void video.play().catch(() => undefined); }
@@ -713,7 +745,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
+    decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; lostRecoveredRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there. A start-over
     // never reads the store and never writes to it -- the saved position simply stays.
@@ -850,12 +882,20 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         try { next = escalating ? await api.escalatePlayback(id, requested) : await api.seekPlayback(id, requested); }
         catch (value) {
           if (epoch !== seekEpochRef.current) return;
-          if (!(value instanceof ApiError) || !(value.code === "RESOURCE_NOT_FOUND" || value.messageKey === "err.playbackSessionGone")) throw value;
+          if (!isSessionGone(value)) throw value;
           // A fresh start would only hand back the stream the browser just refused.
           if (escalating) { abandon(t("player.browserRefused")); return; }
           // The server may have restarted in the meantime, or cleaned up an idle session.
           // A new HLS session starts at the target; a direct stream is moved by the browser.
-          next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current });
+          next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId), {
+            audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current,
+            // The same file, so the same track numbers: what the viewer picked by hand comes along.
+            ...(currentSessionRef.current ? {
+              audioTrack: currentSessionRef.current.audioTrack,
+              subtitleTrack: currentSessionRef.current.subtitleTrack,
+              quality: currentSessionRef.current.quality,
+            } : {}),
+          });
           id = next.id; started = next.id;
           if (next.mode === "direct") recoveredDirectAt = requested;
         }
@@ -895,10 +935,30 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }
   };
 
-  const restartHere = (autoplay: boolean) => {
-    shortRestartRef.current = true;
-    return seekTo(timeRef.current, true, autoplay).finally(() => { shortRestartRef.current = false; });
+  const restartHere = (autoplay: boolean) => seekTo(timeRef.current, true, autoplay);
+
+  const sessionGone = async () => {
+    const id = sessionRef.current;
+    if (!id) return false;
+    try {
+      await api.pingPlayback(id);
+      return false;
+    } catch (value) {
+      return isSessionGone(value);
+    }
   };
+
+  const recoverLostSession = (reason: string, failed: string) => {
+    if (abandonedRef.current || seekInFlightRef.current) return;
+    if (lostRecoveredRef.current) {
+      abandon(failed);
+      return;
+    }
+    lostRecoveredRef.current = true;
+    report("WARN", "The playback session was gone, starting a new one", { ...context(), reason });
+    void restartHere(!userPausedRef.current);
+  };
+  recoverLostSessionRef.current = recoverLostSession;
 
   recoverFromDecodeRef.current = (reason: string) => {
     // A restart is already on its way; whatever it produces decides the next step.
@@ -1157,11 +1217,24 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
 
   useEffect(() => {
     if (!open) return;
-    const timer = setInterval(() => {
+    const checkSession = async () => {
       const id = sessionRef.current;
-      if (id) void api.pingPlayback(id).catch(() => undefined);
-    }, 30_000);
-    return () => clearInterval(timer);
+      if (!id) return;
+      try {
+        await api.pingPlayback(id);
+      } catch (value) {
+        if (id === sessionRef.current && isSessionGone(value)) {
+          recoverLostSessionRef.current("ping", t("player.playbackFailed", { details: t("err.playbackSessionGone"), type: "networkError" }));
+        }
+      }
+    };
+    const timer = setInterval(() => void checkSession(), 30_000);
+    const visible = () => { if (document.visibilityState === "visible") void checkSession(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", visible);
+    };
   }, [open]);
 
   // Closing the tab is not closing the player: nothing unmounts, so without this the server
@@ -1404,7 +1477,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }
     shortRestartFromRef.current = timeRef.current;
     report("WARN", "The conversion ended before the film did, restarting", { ...context(), reached: status.reached });
-    void restartHere(true);
+    shortRestartRef.current = true;
+    void restartHere(true).finally(() => { shortRestartRef.current = false; });
   };
 
   // The screen stays on for as long as the viewer means to watch, and goes back to sleeping on a
@@ -1514,7 +1588,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           if (scrub === null && !seekingRef.current) showTime(absolute);
         }}
         onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && modeRef.current === "direct") setDuration(value); }}
-        onWaiting={noteStall} onPlaying={() => { playedRef.current = true; clearBuffering(); }}
+        onWaiting={noteStall} onPlaying={() => { playedRef.current = true; lostRecoveredRef.current = false; clearBuffering(); }}
         onError={(event) => {
           if (event.target !== event.currentTarget) return;
           if (seekInFlightRef.current || abandonedRef.current) return;
@@ -1541,7 +1615,17 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
             void seekTo(timeRef.current, true);
             return;
           }
-          abandon(t("player.browserRefused"));
+          const failed = t("player.browserRefused");
+          if (!sessionRef.current) {
+            abandon(failed);
+            return;
+          }
+          const checked = sessionRef.current;
+          void sessionGone().then((gone) => {
+            if (checked !== sessionRef.current || abandonedRef.current || seekInFlightRef.current) return;
+            if (gone) recoverLostSession("element", failed);
+            else abandon(failed);
+          });
         }}>
         {sidecarReady && session?.sidecarUrl
           ? <track key={`${session.sidecarUrl}:${sidecarPass}:${subtitleDelay}`} kind="subtitles" src={`${session.sidecarUrl}&pass=${sidecarPass}${subtitleDelay ? `&delay=${subtitleDelay.toFixed(2)}` : ""}`} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
