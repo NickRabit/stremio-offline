@@ -1747,6 +1747,8 @@ const remuxSession = (manager: any, overrides: Record<string, unknown> = {}) => 
   return session;
 };
 
+const FAKE_FFMPEG_SKIP = process.platform === "win32" ? "Windows cannot run a script as the FFmpeg binary" : false;
+
 const runToCleanExit = async (t: TestContext, duration: number | undefined, outTimeSeconds: number) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "playback-clean-exit-"));
   const fake = path.join(directory, "ffmpeg");
@@ -1798,7 +1800,7 @@ test("shortConversion uses the larger of thirty seconds and two percent", () => 
   assert.equal(shortConversion(undefined, 120), false);
 });
 
-test("a clean conversion that stopped during the film is reported as short", async (t) => {
+test("a clean conversion that stopped during the film is reported as short", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
   const { manager, session } = await runToCleanExit(t, 120, 60);
   assert.deepEqual(manager.status(session.id), {
     generation: session.generation,
@@ -1809,17 +1811,17 @@ test("a clean conversion that stopped during the film is reported as short", asy
   assert.match(await readLog({ level: "WARN", search: "The conversion stopped before the end of the film" }), /WARN/);
 });
 
-test("a clean conversion near the end is complete", async (t) => {
+test("a clean conversion near the end is complete", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
   const { manager, session } = await runToCleanExit(t, 120, 119);
   assert.equal(manager.status(session.id).conversion, "complete");
 });
 
-test("a clean conversion without a known duration is complete", async (t) => {
+test("a clean conversion without a known duration is complete", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
   const { manager, session } = await runToCleanExit(t, undefined, 60);
   assert.equal(manager.status(session.id).conversion, "complete");
 });
 
-test("a new generation is running while the previous generation ended short", async (t) => {
+test("a new generation is running while the previous generation ended short", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
   const { manager, session } = await runToCleanExit(t, 120, 60);
   manager.run = async (target: any) => {
     target.process = { exitCode: null, signalCode: null };
