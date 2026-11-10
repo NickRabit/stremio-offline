@@ -60,7 +60,10 @@ const val SEEK_KEPT_MS = 3_000L
 const val TAG_OVERLAY_BUBBLE = "overlay_bubble"
 const val TAG_OVERLAY_ROOT = "overlay_root"
 const val TAG_OVERLAY_SEEK_KEPT = "overlay_seek_kept"
+const val TAG_OVERLAY_TRACK_KEPT = "overlay_track_kept"
 const val TAG_PLAYER_SKIP = "player_skip"
+
+private enum class KeptNotice { Seek, Track }
 
 /**
  * The player overlay without an ExoPlayer: it owns the OSD visibility state, the 5 s auto-hide,
@@ -90,8 +93,9 @@ fun PlayerOverlayShell(
   /** Bumped when the window comes back, including from the screensaver, so the remote has a
    *  target again even if the controls never left. */
   reclaimFocus: Int = 0,
-  /** Bumped when the server refused a seek; the message shows for [SEEK_KEPT_MS]. */
+  /** Bumped when the server refused a seek or a track change; the message shows for [SEEK_KEPT_MS]. */
   seekKept: Int = 0,
+  trackKept: Int = 0,
   /** A panel or the next-episode card is up: it owns the D-pad, Back and the auto-hide timer. */
   modal: Boolean = false,
   onTracks: () -> Unit = {},
@@ -127,7 +131,7 @@ fun PlayerOverlayShell(
   var controls by remember { mutableStateOf(initiallyShown) }
   var activity by remember { mutableIntStateOf(0) }
   var bubble by remember { mutableStateOf<String?>(null) }
-  var kept by remember { mutableStateOf(false) }
+  var keptNotice by remember { mutableStateOf<KeptNotice?>(null) }
   // Bumped by every seek: the timeline stays while the presses come and a while after the last.
   var stripToken by remember { mutableIntStateOf(0) }
   var stripShown by remember { mutableStateOf(false) }
@@ -205,9 +209,16 @@ fun PlayerOverlayShell(
   }
   LaunchedEffect(seekKept) {
     if (seekKept > 0) {
-      kept = true
+      keptNotice = KeptNotice.Seek
       delay(SEEK_KEPT_MS)
-      kept = false
+      if (keptNotice == KeptNotice.Seek) keptNotice = null
+    }
+  }
+  LaunchedEffect(trackKept) {
+    if (trackKept > 0) {
+      keptNotice = KeptNotice.Track
+      delay(SEEK_KEPT_MS)
+      if (keptNotice == KeptNotice.Track) keptNotice = null
     }
   }
 
@@ -372,15 +383,16 @@ fun PlayerOverlayShell(
     }
     if ((stripShown || previewing) && !controls && !modal) SeekStrip(position = shownPosition, duration = duration)
 
-    if (kept) {
+    if (keptNotice != null) {
+      val track = keptNotice == KeptNotice.Track
       Text(
-        stringResource(R.string.player_seek_restored),
+        stringResource(if (track) R.string.player_track_kept else R.string.player_seek_restored),
         color = Tokens.Text,
         fontSize = 16.sp,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier
           .align(Alignment.TopCenter)
-          .testTag(TAG_OVERLAY_SEEK_KEPT)
+          .testTag(if (track) TAG_OVERLAY_TRACK_KEPT else TAG_OVERLAY_SEEK_KEPT)
           .background(Tokens.Bg.copy(alpha = 0.7f), RoundedCornerShape(999.dp))
           .padding(horizontal = 22.dp, vertical = 10.dp),
       )

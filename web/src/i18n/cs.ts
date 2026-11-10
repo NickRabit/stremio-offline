@@ -345,6 +345,7 @@ export const cs: Catalog = {
   "player.lowerQualityTo": "Snížit na {height}p",
   "player.hideHint": "Skrýt",
   "player.seekRestored": "Nepodařilo se přeskočit. Zůstává předchozí pozice.",
+  "player.trackKept": "Stopu se nepodařilo přepnout. Zůstává původní.",
   "player.playbackFailed": "Přehrávání selhalo: {details} ({type})",
   "player.sourceStoppedEarly": "Zdroj přestal posílat film před jeho koncem.",
   "player.noHls": "Tento prohlížeč neumí přehrát HLS.",

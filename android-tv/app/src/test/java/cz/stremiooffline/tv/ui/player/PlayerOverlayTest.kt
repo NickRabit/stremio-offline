@@ -60,6 +60,7 @@ class PlayerOverlayTest {
     initiallyShown: Boolean = true,
     showControls: Int = 0,
     seekKept: Int = 0,
+    trackKept: Int = 0,
     reclaimFocus: Int = 0,
   ) {
     compose.setContent {
@@ -74,6 +75,7 @@ class PlayerOverlayTest {
         initiallyShown = initiallyShown,
         showControls = showControls,
         seekKept = seekKept,
+        trackKept = trackKept,
         reclaimFocus = reclaimFocus,
         onSeek = { seeks += it },
         onTogglePause = { pauses++ },
@@ -322,6 +324,17 @@ class PlayerOverlayTest {
     compose.mainClock.advanceTimeBy(SEEK_KEPT_MS + 100)
     compose.waitForIdle()
     compose.onNodeWithTag(TAG_OVERLAY_SEEK_KEPT).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a refused track change shows its message for a few seconds`() {
+    mount(trackKept = 1)
+
+    compose.onNodeWithTag(TAG_OVERLAY_TRACK_KEPT).assertExists()
+
+    compose.mainClock.advanceTimeBy(SEEK_KEPT_MS + 100)
+    compose.waitForIdle()
+    compose.onNodeWithTag(TAG_OVERLAY_TRACK_KEPT).assertDoesNotExist()
   }
 
   @Test

@@ -53,6 +53,13 @@ browser.
 Because remux copies video, playback starts at the nearest keyframe before the
 requested time — usually a few seconds off. Emby and Jellyfin do the same.
 
+When restarting conversion at a new position fails twice, the session returns to
+the previous generation if its conversion is still running or exited cleanly and
+its `master.m3u8` remains available. A failed seek then resumes the old position;
+a failed track, quality or escalation restart restores the old generation too,
+but still reports the failure to the client. A dead process or incomplete output
+does not qualify, so the restart failure propagates unchanged.
+
 ## A conversion that ends short
 
 A dropped source can make FFmpeg finish its playlist with `#EXT-X-ENDLIST` and

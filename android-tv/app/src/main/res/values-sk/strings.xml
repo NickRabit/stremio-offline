@@ -127,6 +127,7 @@
   <string name="save_queued">Vo fronte</string>
   <string name="player_play">Hrať</string>
   <string name="player_seek_restored">Nepodarilo sa preskočiť. Zostáva predchádzajúca pozícia.</string>
+  <string name="player_track_kept">Stopu sa nepodarilo prepnúť. Zostáva pôvodná.</string>
   <string name="favorite_add">Pridať k obľúbeným</string>
   <string name="favorite_remove">Odstrániť z obľúbených</string>
   <string name="episodes_season_number">sezóna %1$s</string>

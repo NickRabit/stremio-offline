@@ -1070,6 +1070,7 @@ fun PlayerScreen(
     playFocus = playFocus,
     reclaimFocus = reclaimFocus,
     seekKept = state.seekKept,
+    trackKept = state.trackKept,
     modal = tracksOpen || diagnosticsOpen || sourcesOpen || qualityOpen || chaptersOpen || nextCard || state.error != null,
     onSeek = { controller.seekTo(it) },
     onTogglePause = { if (exoPlayer.playWhenReady) exoPlayer.pause() else exoPlayer.play() },

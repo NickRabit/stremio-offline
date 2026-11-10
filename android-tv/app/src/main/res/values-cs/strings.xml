@@ -127,6 +127,7 @@
   <string name="save_queued">Ve frontě</string>
   <string name="player_play">Přehrát</string>
   <string name="player_seek_restored">Nepodařilo se přeskočit. Zůstává předchozí pozice.</string>
+  <string name="player_track_kept">Stopu se nepodařilo přepnout. Zůstává původní.</string>
   <string name="favorite_add">Přidat do oblíbených</string>
   <string name="favorite_remove">Odebrat z oblíbených</string>
   <string name="episodes_season_number">%1$s. série</string>

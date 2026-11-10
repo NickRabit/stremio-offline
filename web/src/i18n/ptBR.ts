@@ -310,6 +310,7 @@ export const ptBR: Catalog = {
   "player.lowerQualityTo": "Desça para {height}p",
   "player.hideHint": "Dispensar",
   "player.seekRestored": "Não foi possível mudar de posição. A posição anterior foi mantida.",
+  "player.trackKept": "Não foi possível trocar a faixa. A atual foi mantida.",
   "player.playbackFailed": "Falha na reprodução: {details} ({type})",
   "player.sourceStoppedEarly": "A fonte parou de enviar o filme antes do fim.",
   "player.noHls": "Este navegador não pode reproduzir HLS.",

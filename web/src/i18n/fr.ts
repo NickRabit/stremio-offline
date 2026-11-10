@@ -310,6 +310,7 @@ export const fr: Catalog = {
   "player.lowerQualityTo": "Descendre à {height}p",
   "player.hideHint": "Rejeter",
   "player.seekRestored": "Impossible de changer de position. La position précédente a été conservée.",
+  "player.trackKept": "Impossible de changer de piste. La piste actuelle a été conservée.",
   "player.playbackFailed": "Échec de la lecture : {details} ({type})",
   "player.sourceStoppedEarly": "La source a cessé d'envoyer le film avant sa fin.",
   "player.noHls": "Ce navigateur ne peut pas lire HLS.",

@@ -310,6 +310,7 @@ export const ru: Catalog = {
   "player.lowerQualityTo": "Опуститься до {height}p",
   "player.hideHint": "Уволить",
   "player.seekRestored": "Не удалось перемотать. Сохранена предыдущая позиция.",
+  "player.trackKept": "Не удалось переключить дорожку. Сохранена текущая.",
   "player.playbackFailed": "Не удалось воспроизвести: {details} ({type})",
   "player.sourceStoppedEarly": "Источник перестал передавать фильм до его конца.",
   "player.noHls": "Этот браузер не может воспроизводить HLS.",
