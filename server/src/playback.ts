@@ -226,6 +226,7 @@ interface GenerationLedger {
     duration?: number;
   };
   fetchedRead?: Promise<void>;
+  waitingFloor?: number;
   producedSeconds?: number;
   fetchedSeconds?: number;
   bytes?: number;
@@ -902,6 +903,7 @@ export class PlaybackManager {
     this.assertActive(session);
     // What is playing is worth more than the seek: the film keeps running while the new position
     // is opened, so a source that refuses the connection costs the viewer a jump, not the film.
+    const playingMonitor = this.monitors.get(id);
     const playing = { process: session.process, generation: session.generation, directory: session.directory, offset: session.offset, mode: session.mode, retired: session.retired, hardware: session.hardware, error: session.error };
     if (playing.directory) session.fallback = { generation: playing.generation, directory: playing.directory };
     if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
@@ -917,6 +919,9 @@ export class PlaybackManager {
       catch (again) {
         if (await this.usableFallback(playing)) {
           Object.assign(session, playing);
+          if (playingMonitor) this.monitors.set(id, playingMonitor);
+          else this.monitors.delete(id);
+          this.evaluateLead(session);
           log("WARN", "The new position could not be opened, the film carries on where it was", { id, wanted: Math.round(target), playing: Math.round(playing.offset) });
           if (restoreSeek && !session.stopped) {
             if (session.subtitleTrack !== null) this.extractSidecar(session);
@@ -1079,6 +1084,15 @@ export class PlaybackManager {
     }).catch(() => undefined);
   }
 
+  waitingFor(id: string, absolute: number): void {
+    if (!this.leadCapHigh || !Number.isFinite(absolute) || absolute < 0) return;
+    const session = this.playing(id);
+    const entry = session?.ledger?.generations.get(session.generation);
+    if (!session || !entry) return;
+    entry.waitingFloor = Math.max(0, absolute - session.offset);
+    this.evaluateLead(session);
+  }
+
   private async readFetchedPrefix(entry: GenerationLedger, index: number): Promise<number | undefined> {
     const prefix = entry.fetchedPrefix ??= { lines: 0, seconds: 0, through: -1 };
     if (index <= prefix.through) return prefix.seconds;
@@ -1112,7 +1126,9 @@ export class PlaybackManager {
     const child = session.process;
     const entry = session.ledger?.generations.get(session.generation);
     const produced = this.monitors.get(session.id)?.progress.latest?.outTime;
-    const fetched = entry?.fetchedSeconds;
+    const fetched = entry?.fetchedSeconds === undefined ? entry?.waitingFloor
+      : entry.waitingFloor === undefined ? entry.fetchedSeconds
+        : Math.max(entry.fetchedSeconds, entry.waitingFloor);
     const lead = produced !== undefined && fetched !== undefined ? produced - fetched : undefined;
 
     if (child && mediaChildSuspended(child) && session.suspendedSince !== undefined) {

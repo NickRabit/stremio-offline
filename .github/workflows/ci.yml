@@ -92,6 +92,9 @@ jobs:
       - run: npx playwright test --project=chromium
         env:
           HOME: /root
+      - run: npx playwright test -c playwright.leadcap.config.ts
+        env:
+          HOME: /root
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:

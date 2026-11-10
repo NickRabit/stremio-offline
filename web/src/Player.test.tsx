@@ -851,6 +851,29 @@ describe("Player lost playback session", () => {
     expect(host.querySelector(".player-error")).toBeNull();
   });
 
+  it("tells the server which position a short catch-up wait is waiting for", async () => {
+    pingStatus = 204;
+    seekGone = false;
+    await render();
+    const video = await at(5);
+    Object.defineProperty(video, "seekable", {
+      configurable: true,
+      get: () => ({ length: 1, start: () => 0, end: () => 10 }),
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+        await Promise.resolve();
+      });
+      expect(pingRequests).toEqual(["/api/playback/sess1/ping"]);
+      expect(pingBodies).toEqual([{ waitingFor: 15 }]);
+      await act(async () => { vi.advanceTimersByTime(8_000); await Promise.resolve(); });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still handles an ordinary fatal network error", async () => {
     await render();
     await at(42);

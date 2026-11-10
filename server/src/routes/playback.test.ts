@@ -48,6 +48,7 @@ interface Harness {
   stopReasons: string[];
   pings: Array<{ id: string; paused: boolean | undefined }>;
   fetched: Array<{ id: string; generation: string; file: string }>;
+  waitingFor: Array<{ id: string; absolute: number }>;
   mediaSources: MediaServerSources;
   playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string }>;
   /** The manager the routes call; a test can replace one method to hold a preparation open. */
@@ -67,6 +68,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
   const stopReasons: string[] = [];
   const pings: Array<{ id: string; paused: boolean | undefined }> = [];
   const fetched: Array<{ id: string; generation: string; file: string }> = [];
+  const waitingFor: Array<{ id: string; absolute: number }> = [];
   let source = { url: "https://example.test/video.mp4" } as StreamItem;
   const sessions = { ada: ADA, bob: BOB };
   const userOf = (req: express.Request) => (req.header("x-user") === "bob" ? "bob" : "ada");
@@ -89,6 +91,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     stop: async (id: string, reason = "closed") => { stopped.push(id); stopReasons.push(reason); },
     ping: (id: string, paused: boolean | undefined) => { pings.push({ id, paused }); },
     fetched: (id: string, generation: string, file: string) => { fetched.push({ id, generation, file }); },
+    waitingFor: (id: string, absolute: number) => { waitingFor.push({ id, absolute }); },
     directory: () => "/tmp/session-generation",
     preview: async () => undefined,
     sidecar: async () => undefined,
@@ -173,6 +176,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     stopReasons,
     pings,
     fetched,
+    waitingFor,
     mediaSources,
     playbackOwners,
     playback,
@@ -289,6 +293,26 @@ test("the owner reads a playback status and another account cannot", async (t) =
 
   const other = await api(harness.base, `/api/playback/${ID}/status`, { user: "bob" });
   assert.equal(other.status, 404);
+});
+
+test("the ping hands a finite waiting position to the playback manager", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: { waitingFor: 123.5 } });
+  assert.equal(response.status, 204);
+  assert.deepEqual(harness.waitingFor, [{ id: ID, absolute: 123.5 }]);
+});
+
+test("the ping ignores waiting positions that are not finite non-negative numbers", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  for (const waitingFor of ["123", -1, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+    const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: { waitingFor } });
+    assert.equal(response.status, 204);
+  }
+  assert.deepEqual(harness.waitingFor, []);
 });
 
 test("the guard lets the owner through, makes the frame uncacheable and marks the session attended", async (t) => {

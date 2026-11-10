@@ -74,6 +74,11 @@ A generation is never suspended before the player fetches its first segment or
 while a seek, track change or conversion escalation is starting. Stopping the
 session or starting a restart resumes the process first.
 
+When the web player waits for a position just past the produced edge, its ping
+carries that absolute position as `waitingFor`. The server treats it as fetched
+for the cap decision while the player waits, so the conversion resumes without
+waiting for the eight-second seek fallback.
+
 Windows has no `SIGSTOP`, so the cap stays off there and logs a warning if the
 variable is set. Subtitle extraction and preview processes are independent and
 are not suspended.

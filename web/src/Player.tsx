@@ -851,6 +851,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (plan === "wait") {
       const epoch = seekEpochRef.current;
       showBufferSoon();
+      const id = sessionRef.current;
+      if (id) void api.pingPlayback(id, { waitingFor: bounded }).catch(() => undefined);
       const covered = await waitForSeekable(
         () => video.seekable.length ? video.seekable.end(video.seekable.length - 1) : 0,
         relative, AHEAD_CATCHUP_MS,
@@ -942,7 +944,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const id = sessionRef.current;
     if (!id) return false;
     try {
-      await api.pingPlayback(id, userPausedRef.current);
+      await api.pingPlayback(id, { paused: userPausedRef.current });
       return false;
     } catch (value) {
       return isSessionGone(value);
@@ -1234,7 +1236,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       const id = sessionRef.current;
       if (!id) return;
       try {
-        await api.pingPlayback(id, userPausedRef.current);
+        await api.pingPlayback(id, { paused: userPausedRef.current });
       } catch (value) {
         if (id === sessionRef.current && isSessionGone(value)) {
           recoverLostSessionRef.current("ping", lostSessionFailed());
