@@ -60,6 +60,49 @@ a failed track, quality or escalation restart restores the old generation too,
 but still reports the failure to the client. A dead process or incomplete output
 does not qualify, so the restart failure propagates unchanged.
 
+## Lead cap
+
+`PLAYBACK_LEAD_CAP_SECONDS` limits how far a conversion may run ahead of the
+furthest segment the player has fetched. It is off by default (`0` or unset).
+When enabled, FFmpeg is suspended with `SIGSTOP` once it is more than the high
+mark ahead, and resumed with `SIGCONT` when the lead falls below 60% of that
+mark. For example, `300` suspends above 300 seconds ahead and resumes below 180.
+
+The produced position is checked on every FFmpeg progress update, not by a
+timer, so the burst `-readrate` makes after a resume is stopped again promptly.
+A generation is never suspended before the player fetches its first segment or
+while a seek, track change or conversion escalation is starting. Stopping the
+session or starting a restart resumes the process first.
+
+When the web player waits for a position just past the produced edge, its ping
+carries that absolute position as `waitingFor`. The server treats it as fetched
+for the cap decision while the player waits, so the conversion resumes without
+waiting for the eight-second seek fallback. The position counts for at most 20
+seconds past the produced edge, for 30 seconds, and only until the player has
+fetched up to it; a viewer who jumps elsewhere meanwhile costs at most that much
+extra lead.
+
+Windows has no `SIGSTOP`, so the cap stays off there and logs a warning if the
+variable is set. Subtitle extraction and preview processes are independent and
+are not suspended.
+
+## Conversion summary
+
+Each remux or transcode session writes one `INFO` line, `Conversion summary`, when
+it stops. Direct play writes no summary.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Playback session id |
+| `mode` | The session's final playback mode |
+| `generations` | Number of conversion generations started, including failed attempts |
+| `producedSeconds` | Whole seconds written across all generation playlists |
+| `fetchedSeconds` | Whole seconds up to the furthest video segment the client requested in each generation |
+| `unfetchedSeconds` | Produced seconds the client did not fetch |
+| `bytesWritten` | Total size of the files left in the generation directories when they were settled |
+| `suspendedSeconds` | Whole seconds the conversion spent suspended by the lead cap |
+| `ended` | `closed`, `orphaned`, `unclaimed`, `idle`, `failed`, `revoked`, `shutdown`, or `paused` |
+
 ### AC-3 after a seek
 
 AC-3 and E-AC-3 are copied only when a remux starts at zero; from any later
@@ -67,6 +110,23 @@ position, or during a transcode, the audio is stereo AAC. The descriptor reports
 the codec and channels actually sent. The stereo fallback is kept because the
 original failure was seen on a real file, and no synthetic reproduction or
 muxer option was found that made the copy reliable.
+
+## A long pause
+
+A converted session that has been paused without interruption for longer than
+`PLAYBACK_PAUSED_RELEASE_MINUTES` (default 30, `0` never) is stopped so it no
+longer holds FFmpeg, a hardware encoder slot, or a remote source connection.
+Direct play is left alone. The pause clock starts on a ping that reports
+`paused: true` and is not moved forward by later paused pings. Any sign of
+playing resets it: a ping that reports playing, a seek, a track or quality
+change, an escalation, or a segment request that advances the furthest fetched
+index. A ping without the field, including from an older client, never starts
+the clock.
+
+When the viewer presses play afterwards, the web player and Android TV start a
+new session at the paused position with the same audio track, subtitle track
+and quality. The viewer sees buffering, never an error, and the saved progress
+is unchanged.
 
 ## A session the server closed
 

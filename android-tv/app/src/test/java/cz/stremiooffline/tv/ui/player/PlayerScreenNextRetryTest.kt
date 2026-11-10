@@ -81,6 +81,7 @@ class PlayerScreenNextRetryTest {
       audioLanguage: String?,
       subtitleLanguage: String?,
       subtitleOff: Boolean,
+      quality: Int?,
     ): PlaybackDescriptorDto {
       startedSources += sourceId
       startedTimes += time

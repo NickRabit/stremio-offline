@@ -147,6 +147,22 @@ const sniffPlaylist = async (body: ReadableStream<Uint8Array>, signal: AbortSign
 
 const rangeStartsAtZero = (range: string) => !range || /^\s*bytes=0-\d*\s*$/.test(range);
 
+const waitForDrainOrClose = (res: express.Response): Promise<boolean> => {
+  if (res.destroyed) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const done = (open: boolean) => {
+      res.off("drain", onDrain);
+      res.off("close", onClose);
+      resolve(open && !res.destroyed);
+    };
+    const onDrain = () => done(true);
+    const onClose = () => done(false);
+    res.once("drain", onDrain);
+    res.once("close", onClose);
+    if (res.destroyed) done(false);
+  });
+};
+
 const readAheadPrefix = async (readAhead: RemoteReadAhead, first: ReadAheadBlock): Promise<Buffer> => {
   const chunks: Buffer[] = [];
   const end = Math.min(first.end, first.start + UTF8_BOM.length + PLAYLIST_PREFIX.length);
@@ -302,7 +318,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });
       if (req.body.capabilities?.airplay === true) airplayAccess.create(started.id, owner, prepared.resourceId);
     } catch (error) {
-      try { if (started) await playback.stop(started.id); }
+      try { if (started) await playback.stop(started.id, controller.signal.aborted ? "failed" : "revoked"); }
       finally { mediaResources.remove(prepared.resourceId); }
       if (controller.signal.aborted && res.destroyed) return;
       throw error;
@@ -324,7 +340,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       try { guardOwned(id); }
       catch {
         // The session's own right is gone: stop it so no converter or reader is left behind.
-        void playback.stop(id).catch(() => undefined);
+        void playback.stop(id, "revoked").catch(() => undefined);
         return res.status(404).json({ error: "The playback session no longer exists.", messageKey: "err.playbackSessionGone", code: "RESOURCE_NOT_FOUND" });
       }
       // A remote session's control, preview, converted segment and sidecar responses are
@@ -347,7 +363,15 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     if (!image) return void res.status(204).end();
     res.type("image/jpeg").setHeader("cache-control", "private, no-store").send(image);
   }));
-  app.post("/api/playback/:id/ping", (req, res) => { guardOwned(String(req.params.id)); res.status(204).end(); });
+  app.post("/api/playback/:id/ping", (req, res) => {
+    const id = String(req.params.id);
+    guardOwned(id);
+    const paused = req.body?.paused;
+    playback.ping(id, typeof paused === "boolean" ? paused : undefined);
+    const waitingFor = req.body?.waitingFor;
+    if (typeof waitingFor === "number" && Number.isFinite(waitingFor) && waitingFor >= 0) playback.waitingFor(id, waitingFor);
+    res.status(204).end();
+  });
   app.get("/api/playback/:id/status", asyncRoute(async (req, res) => {
     const id = String(req.params.id);
     guardOwned(id);
@@ -409,6 +433,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // for that, but repeated 404s on a live session mean playback has fallen apart.
     if (!directory) { log("DEBUG", "Segment from an unknown session or generation", { req: req.id, id: req.params.id, generation: req.params.generation, file: req.params.file }); return res.status(404).end(); }
     const file = String(req.params.file);
+    playback.fetched(sessionId, String(req.params.generation), file);
     const grant = airplayRequest(req);
     const receiverPlaylist = (text: string) => grant ? rewritePlaylist(text, (uri) => {
       if (!/^[A-Za-z0-9_-]{1,64}\.(m3u8|mp4|m4s|vtt)$/.test(uri)) throw new Error("Unsupported AirPlay playlist resource.");
@@ -699,7 +724,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       for (const [name, value] of Object.entries(held.headers)) {
         res.setHeader(name, name.toLowerCase() === "content-type" ? servedMediaType(value) : value);
       }
-      if (!res.write(held.bytes)) await once(res, "drain");
+      if (!res.write(held.bytes) && !await waitForDrainOrClose(res)) return;
       alreadySent = held.bytes.length;
       log("DEBUG", "Served a read the source had already answered", { req: req.id, range: askedRange || "whole file", bytes: alreadySent, whole: held.complete });
       if (held.complete) return void res.end();
@@ -846,7 +871,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
             kept += piece.length;
             if (kept > rangeCache.limit) keep = undefined; else keep.push(Buffer.from(piece));
           }
-          if (piece.length && !res.write(piece)) await once(res, "drain");
+          if (piece.length && !res.write(piece) && !await waitForDrainOrClose(res)) return;
           // Which side this transfer waits on tells a slow source from an FFmpeg that cannot keep up.
           const taken = performance.now();
           const paced = ownerNow();

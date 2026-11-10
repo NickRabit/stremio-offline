@@ -17,7 +17,11 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await rm(folder, { recursive: true, force: true }); });
 
-test("the player starts a new session after the server closes the first", async ({ page }) => {
+// "segments": the session is found gone by the segment requests once play is pressed.
+// "ping": the server released it while the viewer was paused (a long pause); the ping finds it
+// gone, and nothing may start until the viewer presses play.
+for (const scenario of ["segments", "ping"] as const) test(`the player starts a new session after the server closes the first: ${scenario}`, async ({ page }) => {
+  const pings: Array<{ paused?: boolean }> = [];
   let closed = false;
   let firstSegments = 0;
   let releaseFirstSegments = () => {};
@@ -56,7 +60,10 @@ test("the player starts a new session after the server closes the first", async 
     starts.push(time);
     return route.fulfill({ json: starts.length === 1 ? first : { ...second, offset: time } });
   });
-  await page.route("**/api/playback/session-lost-1/**", (route) => route.fulfill({ status: 404, json: gone }));
+  await page.route("**/api/playback/session-lost-1/**", (route) => {
+    if (route.request().url().endsWith("/ping")) pings.push((route.request().postDataJSON() ?? {}) as { paused?: boolean });
+    return closed ? route.fulfill({ status: 404, json: gone }) : route.fulfill({ status: 204 });
+  });
   await page.route("**/api/playback/session-lost-2/**", (route) => {
     if (route.request().url().endsWith("/seek")) {
       const time = Number((route.request().postDataJSON() as { time?: number }).time ?? 0);
@@ -82,6 +89,16 @@ test("the player starts a new session after the server closes the first", async 
   const pausedAt = await video.evaluate((v: HTMLVideoElement) => v.currentTime);
 
   closed = true;
+  if (scenario === "ping") {
+    const pinged = page.waitForResponse((response) => response.url().endsWith("/api/playback/session-lost-1/ping"));
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect((await pinged).status()).toBe(404);
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(pings.at(-1)).toEqual({ paused: true });
+    // Released while paused: nothing starts again until the viewer asks for the film.
+    expect(starts).toHaveLength(1);
+    await expect(overlay.locator(".player-error")).toHaveCount(0);
+  }
   await overlay.dispatchEvent("pointermove");
   await overlay.getByRole("button", { name: "Přehrát", exact: true }).click();
   releaseFirstSegments();

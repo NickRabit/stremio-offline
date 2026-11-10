@@ -1073,7 +1073,13 @@ fun PlayerScreen(
     trackKept = state.trackKept,
     modal = tracksOpen || diagnosticsOpen || sourcesOpen || qualityOpen || chaptersOpen || nextCard || state.error != null,
     onSeek = { controller.seekTo(it) },
-    onTogglePause = { if (exoPlayer.playWhenReady) exoPlayer.pause() else exoPlayer.play() },
+    onTogglePause = {
+      if (exoPlayer.playWhenReady) exoPlayer.pause()
+      else {
+        controller.onPlayRequested()
+        exoPlayer.play()
+      }
+    },
     onExit = leave,
     onTracks = { tracksOpen = true },
     tracksText = tracksButtonText(state.audioTrack?.language),

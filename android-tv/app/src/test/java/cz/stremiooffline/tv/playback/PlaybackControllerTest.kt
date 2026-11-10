@@ -37,6 +37,7 @@ class PlaybackControllerTest {
     val seeks = mutableListOf<Double>()
     val escalates = mutableListOf<Double>()
     val pings = mutableListOf<String>()
+    val pingPaused = mutableListOf<Boolean?>()
     val deleted = mutableListOf<String>()
     val saved = mutableListOf<Pair<String, Double>>()
     /** The stable handle every save carried, in the order the saves arrived. */
@@ -70,6 +71,7 @@ class PlaybackControllerTest {
       audioLanguage: String?,
       subtitleLanguage: String?,
       subtitleOff: Boolean,
+      quality: Int?,
     ): PlaybackDescriptorDto {
       calls += "start"
       started += Triple(sourceId, capabilities, time)
@@ -109,8 +111,9 @@ class PlaybackControllerTest {
       )
     }
 
-    override suspend fun pingPlayback(id: String) {
+    override suspend fun pingPlayback(id: String, paused: Boolean?) {
       pings += id
+      pingPaused += paused
       pingFailure?.let { throw it }
     }
 
@@ -194,6 +197,23 @@ class PlaybackControllerTest {
     runCurrent()
 
     assertTrue(api.saved.isEmpty())
+  }
+
+  @Test
+  fun `the ping carries whether the player is paused`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    advanceTimeBy(30_001)
+    runCurrent()
+    assertEquals(listOf(true), api.pingPaused)
+
+    controller.onPlaying()
+    advanceTimeBy(30_000)
+    runCurrent()
+    assertEquals(listOf(true, false), api.pingPaused)
   }
 
   @Test
@@ -784,6 +804,7 @@ class PlaybackControllerTest {
     runCurrent()
     controller.onPlayerReady()
     controller.onPlayerPosition(50.0)
+    controller.onPlaying()
 
     api.pingFailure = ApiError(ApiFailure.NotFound)
     advanceTimeBy(30_001)
@@ -806,6 +827,7 @@ class PlaybackControllerTest {
     runCurrent()
     controller.onPlayerReady()
     controller.onPlayerPosition(50.0)
+    controller.onPlaying()
     assertEquals(SubtitleChoice.Embedded(1), controller.state.value.subtitle)
 
     api.descriptor = api.descriptor.copy(id = "p2", subtitleTrack = 0, sidecarUrl = "/api/playback/p2/sidecar.vtt")
@@ -846,12 +868,74 @@ class PlaybackControllerTest {
     runCurrent()
     controller.onPlayerReady()
     controller.onPlayerPosition(50.0)
+    controller.onPlaying()
     api.pingFailure = ApiError(ApiFailure.NotFound)
     advanceTimeBy(30_001)
     runCurrent()
 
     assertEquals(2, api.started.size)
     assertEquals(50.0, api.started.last().third, 0.001)
+  }
+
+  @Test
+  fun `a dead session found by the ping while paused waits for play`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(50.0)
+    controller.onPaused()
+    api.pingFailure = ApiError(ApiFailure.NotFound)
+    advanceTimeBy(30_001)
+    runCurrent()
+
+    assertEquals(1, api.started.size)
+    assertEquals(null, controller.state.value.error)
+
+    controller.onPlayRequested()
+    runCurrent()
+
+    assertEquals(2, api.started.size)
+    assertEquals(50.0, api.started.last().third, 0.001)
+    assertEquals(null, controller.state.value.error)
+  }
+
+  @Test
+  fun `two releases while paused each recover after play and thirty seconds of playback`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(50.0)
+    controller.onPaused()
+
+    api.pingFailure = ApiError(ApiFailure.NotFound)
+    advanceTimeBy(30_001)
+    runCurrent()
+    assertEquals(1, api.started.size)
+
+    controller.onPlayRequested()
+    runCurrent()
+    assertEquals(2, api.started.size)
+
+    api.pingFailure = null
+    controller.onPlaying()
+    controller.onPlayerPosition(80.0)
+    controller.onPaused()
+
+    api.pingFailure = ApiError(ApiFailure.NotFound)
+    advanceTimeBy(30_001)
+    runCurrent()
+    assertEquals(2, api.started.size)
+
+    controller.onPlayRequested()
+    runCurrent()
+    assertEquals(3, api.started.size)
+    assertEquals(null, controller.state.value.error)
   }
 
   @Test
@@ -863,6 +947,7 @@ class PlaybackControllerTest {
     runCurrent()
     controller.onPlayerReady()
     controller.onPlayerPosition(50.0)
+    controller.onPlaying()
     api.pingFailure = ApiError(ApiFailure.NotFound)
     api.failStart = true
     advanceTimeBy(30_001)

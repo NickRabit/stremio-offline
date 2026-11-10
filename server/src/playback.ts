@@ -12,7 +12,7 @@ import { internalUrl } from "./internal-url.js";
 import { log } from "./logger.js";
 import { ConversionMonitor, sourcePace } from "./conversion-pace.js";
 import { pickByLanguage } from "./language.js";
-import { ffmpegPath, trackMedia } from "./media-tools.js";
+import { ffmpegPath, killMediaChild, mediaChildSuspended, resumeMediaChild, suspendMediaChild, trackMedia } from "./media-tools.js";
 import { playlistArgs, probe, type MediaInfo, type Track } from "./probe.js";
 import { safeFetch } from "./security.js";
 import type { StreamItem } from "./types.js";
@@ -44,6 +44,7 @@ export async function sourceReachable(stream: StreamItem, timeoutMs = REACHABILI
 
 /** direct = the browser plays the file as is, remux = repackaging without re-encoding video, transcode = a real conversion. */
 export type PlaybackMode = "direct" | "remux" | "transcode";
+export type StopReason = "closed" | "orphaned" | "unclaimed" | "idle" | "failed" | "revoked" | "shutdown" | "paused";
 
 export interface ClientCapabilities {
   h264?: boolean; hevc?: boolean; hevc10?: boolean; vp8?: boolean; vp9?: boolean; av1?: boolean;
@@ -213,6 +214,30 @@ export class SerialOperations {
   wait() { return this.tail; }
 }
 
+interface GenerationLedger {
+  generation: number;
+  offset: number;
+  furthestSegment: number;
+  directory?: string;
+  fetchedPrefix?: {
+    lines: number;
+    seconds: number;
+    through: number;
+    duration?: number;
+  };
+  fetchedRead?: Promise<void>;
+  /** Where the client waits for the producer, counted as fetched until it gets there or expires. */
+  waitingFloor?: { seconds: number; until: number };
+  producedSeconds?: number;
+  fetchedSeconds?: number;
+  bytes?: number;
+}
+
+interface ConversionLedger {
+  generations: Map<number, GenerationLedger>;
+  mode: PlaybackMode;
+}
+
 interface Session {
   id: string; stream: StreamItem; capabilities: ClientCapabilities; info?: MediaInfo;
   mode: PlaybackMode; generation: number; offset: number; hardware: boolean;
@@ -222,15 +247,21 @@ interface Session {
   audioTrack: number; subtitleTrack: number | null; quality: number | null;
   process?: ChildProcess; directory?: string; error?: string; startedAt: number; lastAccess: number; pendingKill?: Promise<void>;
   operations: SerialOperations; stopped: boolean;
+  restarting?: number;
+  suspendedSince?: number;
+  suspendedMs: number;
   /** Until the client first loads it, a session is only a promise; an unclaimed one is closed after a while. */
   claimed: boolean;
   /** When the player itself last asked for anything. */
   clientAt?: number;
+  /** When the player first reported paused without a later sign of playing. */
+  pausedSince?: number;
   /** The generation whose trailing requests are still served for a while after a restart. */
   retired?: { generation: number; directory: string; until: number };
   /** The client refused the copied stream, so this session must never copy again. */
   copyRejected?: boolean;
   ending?: { generation: number; short: boolean; failed?: boolean; reached?: number };
+  ledger?: ConversionLedger;
 }
 
 /** Main and Main 10 are two different codecs to a browser. A ten-bit stream must not be copied
@@ -332,6 +363,11 @@ export async function waitForHlsOutput(directory: string, finished: () => boolea
 export const nvencBusy = (error: string | undefined) =>
   /OpenEncodeSessionEx failed|out of memory|No capable devices found|incompatible client key|CUDA_ERROR_OUT_OF_MEMORY/i.test(error ?? "");
 const AUDIO_REQUIRING_PACKET_FOR_FMP4 = new Set(["ac3", "eac3"]);
+const MEDIA_SEGMENT = /^seg-0-(\d{6})\.m4s$/;
+// The web player waits for the producer only up to AHEAD_CATCHUP_S (20 s) past the playlist end and
+// for AHEAD_CATCHUP_MS (8 s); a position further out, or a wait long past, says nothing more.
+const WAITING_AHEAD_S = 20;
+const WAITING_FOR_MS = 30_000;
 const IDLE_MS = 5 * 60_000;
 // If the start finishes after the client gave up, the session and its FFmpeg hang around for
 // five minutes, reading from the source the whole time. An unclaimed session has nothing to wait for.
@@ -340,6 +376,14 @@ const UNCLAIMED_MS = 45_000;
  *  pings every thirty, so silence this long means it is gone -- and FFmpeg would otherwise convert
  *  and pull at the source for the whole idle limit with no one to show it to. */
 const ORPHAN_MS = 90_000;
+const DEFAULT_PAUSED_RELEASE_MINUTES = 30;
+
+function pausedReleaseMs(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_PAUSED_RELEASE_MINUTES * 60_000;
+  const minutes = Number(raw);
+  if (!Number.isFinite(minutes) || minutes < 0) return DEFAULT_PAUSED_RELEASE_MINUTES * 60_000;
+  return minutes * 60_000;
+}
 // Requests sent just before a transcode restart arrive at the new generation. hls.js treats a 404
 // on a playlist as fatal, so the old generation is kept around for a while.
 const RETIRED_MS = 15_000;
@@ -395,6 +439,8 @@ export class PlaybackManager {
   /** Conversions this manager SIGKILLed after they timed out. Their exit event can lag behind the
    *  retry, and a process already sent SIGKILL is not one the purge has to protect. */
   private readonly abandoned = new WeakSet<ChildProcess>();
+  private readonly leadCapHigh: number;
+  private readonly leadCapLow: number;
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private inspecting = new Map<string, Promise<MediaInfo | undefined>>();
   private readonly cancelableInspecting = new Map<string, CancelableInspection>();
@@ -428,12 +474,26 @@ export class PlaybackManager {
   /** An LGPL build, like the one the desktop app carries, has no libx264: hardware is all there is. */
   private softwareEncoder = true;
   private ffmpegVersion?: string;
+  private readonly pausedReleaseMs: number;
 
   constructor(
     dataDir = process.env.DATA_DIR ?? "/data",
     private onStop: (id: string) => void = () => {},
     playbackDir = process.env.PLAYBACK_DIR,
   ) {
+    this.pausedReleaseMs = pausedReleaseMs(process.env.PLAYBACK_PAUSED_RELEASE_MINUTES);
+    const configuredLead = process.env.PLAYBACK_LEAD_CAP_SECONDS;
+    const lead = configuredLead === undefined ? Number.NaN : Number(configuredLead);
+    if (process.platform === "win32") {
+      this.leadCapHigh = 0;
+      this.leadCapLow = 0;
+      if (configuredLead !== undefined) {
+        log("WARN", "The conversion lead cap needs SIGSTOP, which this platform lacks; it stays off");
+      }
+    } else {
+      this.leadCapHigh = Number.isFinite(lead) && lead > 0 ? lead : 0;
+      this.leadCapLow = Math.round(this.leadCapHigh * 0.6);
+    }
     this.fallbackRoot = path.join(dataDir, "playback");
     const configured = playbackDir?.trim();
     // FFmpeg runs with the session folder as its working directory and is also given that folder
@@ -534,19 +594,27 @@ export class PlaybackManager {
    *  is a start the client never took up, and has no reason to wait out the whole idle limit. */
   private reap() {
     for (const session of [...this.sessions.values()]) {
-      const unattended = Date.now() - (session.clientAt ?? session.startedAt);
+      const now = Date.now();
+      if (this.pausedReleaseMs > 0 && session.mode !== "direct" && session.pausedSince !== undefined
+        && now - session.pausedSince > this.pausedReleaseMs) {
+        log("INFO", "Paused session released", {
+          id: session.id, mode: session.mode, minutes: Math.round((now - session.pausedSince) / 60_000),
+        });
+        void this.stop(session.id, "paused"); continue;
+      }
+      const unattended = now - (session.clientAt ?? session.startedAt);
       if (session.claimed && unattended > ORPHAN_MS) {
         log("INFO", "No player has asked for this session, closing it", { id: session.id, mode: session.mode, seconds: Math.round(unattended / 1000) });
-        void this.stop(session.id); continue;
+        void this.stop(session.id, "orphaned"); continue;
       }
       const idle = Date.now() - session.lastAccess;
       if (!session.claimed && session.mode !== "direct" && idle > UNCLAIMED_MS) {
         log("INFO", "Unclaimed session closed", { id: session.id, mode: session.mode, seconds: Math.round(idle / 1000) });
-        void this.stop(session.id); continue;
+        void this.stop(session.id, "unclaimed"); continue;
       }
       if (idle > IDLE_MS) {
         log("INFO", "Idle session closed", { id: session.id, mode: session.mode, idleMinutes: Math.round(idle / 60_000) });
-        void this.stop(session.id);
+        void this.stop(session.id, "idle");
       }
     }
   }
@@ -685,7 +753,7 @@ export class PlaybackManager {
     const quality = options.quality != null && QUALITY_BITRATE[options.quality] ? options.quality : null;
     const session: Session = {
       id, stream, capabilities, info, mode: "direct", generation: 0, offset: 0, hardware: false,
-      audioTrack, subtitleTrack, quality, startedAt: Date.now(), lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false,
+      audioTrack, subtitleTrack, quality, startedAt: Date.now(), lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false, suspendedMs: 0,
     };
     this.sessions.set(id, session);
     const summary = {
@@ -697,7 +765,7 @@ export class PlaybackManager {
     // has answered the session belongs to the player, not to the response that asked for it.
     let stopping: Promise<void> | undefined;
     let reason = "";
-    const abort = () => { stopping ??= this.stop(id).catch(() => undefined); };
+    const abort = () => { stopping ??= this.stop(id, "failed").catch(() => undefined); };
     signal?.addEventListener("abort", abort, { once: true });
     try {
       if (signal?.aborted) signal.throwIfAborted();
@@ -729,7 +797,7 @@ export class PlaybackManager {
     } catch (error) {
       if (!signal?.aborted) log("ERROR", "Playback could not be started", { id, mode: session.mode, plan: reason, error });
       // Wait for the stop the abort already started, so nothing is left running behind the throw.
-      await (stopping ?? this.stop(id));
+      await (stopping ?? this.stop(id, "failed"));
       throw error;
     } finally {
       signal?.removeEventListener("abort", abort);
@@ -739,6 +807,7 @@ export class PlaybackManager {
   /** A seek outside the part already produced: FFmpeg restarts from the new position and the client shifts its timeline. */
   async seek(id: string, time: number) {
     const session = this.require(id);
+    session.pausedSince = undefined;
     return session.operations.run(() => this.restart(session, time, "Playback seek", true));
   }
 
@@ -756,6 +825,7 @@ export class PlaybackManager {
    * and the session starts again as a real transcode. */
   async escalate(id: string, time: number) {
     const session = this.require(id);
+    session.pausedSince = undefined;
     return session.operations.run(() => {
       const first = !session.copyRejected;
       session.copyRejected = true;
@@ -766,6 +836,7 @@ export class PlaybackManager {
   /** Switching a track or the quality means new mappings or filters, so a restart from the current position. */
   async track(id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time?: number }) {
     const session = this.require(id);
+    session.pausedSince = undefined;
     return session.operations.run(async () => {
       this.assertActive(session);
       const before = { audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality };
@@ -810,6 +881,8 @@ export class PlaybackManager {
 
   private async restart(session: Session, time: number, message: string, restoreSeek = false, restoreOnFailure?: () => void) {
     const previous = session.process;
+    session.restarting = (session.restarting ?? 0) + 1;
+    this.resume(session);
     try { return await this.restartConversion(session, time, message, restoreSeek); }
     catch (error) {
       if (!session.stopped) restoreOnFailure?.();
@@ -818,6 +891,8 @@ export class PlaybackManager {
     } finally {
       session.fallback = undefined;
       if (session.stopped) await this.killChild(previous);
+      session.restarting = Math.max(0, (session.restarting ?? 1) - 1);
+      this.evaluateLead(session);
     }
   }
 
@@ -833,6 +908,7 @@ export class PlaybackManager {
     this.assertActive(session);
     // What is playing is worth more than the seek: the film keeps running while the new position
     // is opened, so a source that refuses the connection costs the viewer a jump, not the film.
+    const playingMonitor = this.monitors.get(id);
     const playing = { process: session.process, generation: session.generation, directory: session.directory, offset: session.offset, mode: session.mode, retired: session.retired, hardware: session.hardware, error: session.error };
     if (playing.directory) session.fallback = { generation: playing.generation, directory: playing.directory };
     if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
@@ -848,6 +924,9 @@ export class PlaybackManager {
       catch (again) {
         if (await this.usableFallback(playing)) {
           Object.assign(session, playing);
+          if (playingMonitor) this.monitors.set(id, playingMonitor);
+          else this.monitors.delete(id);
+          this.evaluateLead(session);
           log("WARN", "The new position could not be opened, the film carries on where it was", { id, wanted: Math.round(target), playing: Math.round(playing.offset) });
           if (restoreSeek && !session.stopped) {
             if (session.subtitleTrack !== null) this.extractSidecar(session);
@@ -901,17 +980,43 @@ export class PlaybackManager {
     if (session) { session.clientAt = Date.now(); session.lastAccess = Date.now(); session.claimed = true; }
   }
 
-  async stop(id: string) {
+  ping(id: string, paused: boolean | undefined): void {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    if (paused === true) session.pausedSince ??= Date.now();
+    else if (paused === false) session.pausedSince = undefined;
+  }
+
+  async stop(id: string, reason: StopReason = "closed") {
     this.previews.stop(id);
     const session = this.sessions.get(id);
     if (!session) return;
     log("DEBUG", "Playback session stopped", { id, mode: session.mode, generation: session.generation, position: Math.round(session.offset) });
     session.stopped = true;
+    this.resume(session);
     this.sessions.delete(id);
     await Promise.all([this.sidecars.stop(id), this.kill(session)]);
     this.onStop(id);
     await session.operations.wait();
     await this.kill(session);
+    await this.settleLedger(session);
+    if (session.ledger) {
+      const generations = [...session.ledger.generations.values()];
+      session.ledger.mode = session.mode;
+      const producedSeconds = Math.round(generations.reduce((sum, entry) => sum + (entry.producedSeconds ?? 0), 0));
+      const fetchedSeconds = Math.round(generations.reduce((sum, entry) => sum + (entry.fetchedSeconds ?? 0), 0));
+      log("INFO", "Conversion summary", {
+        id,
+        mode: session.mode,
+        generations: generations.length,
+        producedSeconds,
+        fetchedSeconds,
+        unfetchedSeconds: Math.max(0, producedSeconds - fetchedSeconds),
+        bytesWritten: Math.round(generations.reduce((sum, entry) => sum + (entry.bytes ?? 0), 0)),
+        suspendedSeconds: Math.round((session.suspendedMs ?? 0) / 1000),
+        ended: reason,
+      });
+    }
     await this.purgeNow(path.join(this.root, id));
   }
 
@@ -961,6 +1066,122 @@ export class PlaybackManager {
     session.claimed = true;
     session.lastAccess = Date.now();
     return directory;
+  }
+
+  fetched(id: string, generation: string, file: string): void {
+    const index = Number(MEDIA_SEGMENT.exec(file)?.[1]);
+    if (!Number.isInteger(index)) return;
+    const session = this.sessions.get(id);
+    const entry = session?.ledger?.generations.get(Number(generation));
+    if (!session || !entry || index <= entry.furthestSegment) return;
+    session.pausedSince = undefined;
+    if (!this.leadCapHigh) {
+      entry.furthestSegment = index;
+      return;
+    }
+    entry.fetchedRead = (entry.fetchedRead ?? Promise.resolve()).then(async () => {
+      if (index <= entry.furthestSegment) return;
+      const fetchedSeconds = await this.readFetchedPrefix(entry, index);
+      if (fetchedSeconds === undefined) return;
+      entry.furthestSegment = Math.max(entry.furthestSegment, index);
+      entry.fetchedSeconds = fetchedSeconds;
+      this.evaluateLead(session);
+    }).catch(() => undefined);
+  }
+
+  waitingFor(id: string, absolute: number): void {
+    if (!this.leadCapHigh || !Number.isFinite(absolute) || absolute < 0) return;
+    const session = this.playing(id);
+    const entry = session?.ledger?.generations.get(session.generation);
+    if (!session || !entry) return;
+    const produced = this.monitors.get(session.id)?.progress.latest?.outTime ?? 0;
+    entry.waitingFloor = {
+      seconds: Math.min(Math.max(0, absolute - session.offset), produced + WAITING_AHEAD_S),
+      until: Date.now() + WAITING_FOR_MS,
+    };
+    this.evaluateLead(session);
+  }
+
+  private async readFetchedPrefix(entry: GenerationLedger, index: number): Promise<number | undefined> {
+    const prefix = entry.fetchedPrefix ??= { lines: 0, seconds: 0, through: -1 };
+    if (index <= prefix.through) return prefix.seconds;
+    const directory = entry.directory;
+    if (!directory) return undefined;
+    const playlist = await readFile(path.join(directory, "index-0.m3u8"), "utf8");
+    const lines = playlist.split(/\r?\n/);
+    for (; prefix.lines < lines.length; prefix.lines += 1) {
+      const line = lines[prefix.lines]!.trim();
+      const extinf = /^#EXTINF:([0-9]+(?:\.[0-9]+)?)/.exec(line);
+      if (extinf) {
+        prefix.duration = Number(extinf[1]);
+        continue;
+      }
+      const segment = MEDIA_SEGMENT.exec(line);
+      if (!segment) continue;
+      const segmentIndex = Number(segment[1]);
+      if (!Number.isInteger(segmentIndex)) continue;
+      prefix.seconds += prefix.duration ?? 0;
+      prefix.duration = undefined;
+      prefix.through = Math.max(prefix.through, segmentIndex);
+      if (segmentIndex >= index) {
+        prefix.lines += 1;
+        return prefix.seconds;
+      }
+    }
+    return prefix.through >= index ? prefix.seconds : undefined;
+  }
+
+  private evaluateLead(session: Session) {
+    const child = session.process;
+    const entry = session.ledger?.generations.get(session.generation);
+    const produced = this.monitors.get(session.id)?.progress.latest?.outTime;
+    if (entry?.waitingFloor && (entry.waitingFloor.until <= Date.now()
+      || (entry.fetchedSeconds ?? 0) >= entry.waitingFloor.seconds)) entry.waitingFloor = undefined;
+    const floor = entry?.waitingFloor?.seconds;
+    const fetched = entry?.fetchedSeconds === undefined ? floor
+      : floor === undefined ? entry.fetchedSeconds
+        : Math.max(entry.fetchedSeconds, floor);
+    const lead = produced !== undefined && fetched !== undefined ? produced - fetched : undefined;
+
+    if (child && mediaChildSuspended(child) && session.suspendedSince !== undefined) {
+      if (session.stopped || child.exitCode !== null || child.signalCode !== null
+        || (session.restarting ?? 0) > 0 || lead === undefined || lead < this.leadCapLow) {
+        this.resume(session);
+      }
+      return;
+    }
+    if (!this.leadCapHigh || session.stopped || !child
+      || child.exitCode !== null || child.signalCode !== null
+      || (session.restarting ?? 0) > 0 || !entry || entry.furthestSegment < 0 || lead === undefined) return;
+    if (lead <= this.leadCapHigh || !suspendMediaChild(child)) return;
+
+    session.suspendedSince = Date.now();
+    this.monitors.get(session.id)?.suspend();
+    log("DEBUG", "Conversion suspended", {
+      id: session.id, generation: session.generation, produced, fetched, lead,
+    });
+  }
+
+  private resume(session: Session) {
+    const child = session.process;
+    if (!child || !mediaChildSuspended(child)) return;
+    const at = Date.now();
+    resumeMediaChild(child);
+    const since = session.suspendedSince ?? at;
+    session.suspendedMs = (session.suspendedMs ?? 0) + Math.max(0, at - since);
+    session.suspendedSince = undefined;
+    this.monitors.get(session.id)?.resume();
+    log("DEBUG", "Conversion resumed", {
+      id: session.id,
+      generation: session.generation,
+      produced: this.monitors.get(session.id)?.progress.latest?.outTime,
+      fetched: session.ledger?.generations.get(session.generation)?.fetchedSeconds,
+      lead: (() => {
+        const produced = this.monitors.get(session.id)?.progress.latest?.outTime;
+        const fetched = session.ledger?.generations.get(session.generation)?.fetchedSeconds;
+        return produced !== undefined && fetched !== undefined ? produced - fetched : undefined;
+      })(),
+    });
   }
 
   private require(id: string) {
@@ -1401,6 +1622,48 @@ export class PlaybackManager {
     return copyVideo && copyAudio && !(offset > 0 && AUDIO_REQUIRING_PACKET_FOR_FMP4.has(codec));
   }
 
+  private async settleLedger(session: Session) {
+    if (!session.ledger) return;
+    await Promise.all([...session.ledger.generations.values()].map((entry) =>
+      this.settleGeneration(entry, path.join(this.root, session.id, String(entry.generation)))));
+  }
+
+  private async settleGeneration(entry: GenerationLedger, directory: string) {
+    if (entry.producedSeconds !== undefined) return;
+    entry.producedSeconds = 0;
+    entry.fetchedSeconds = 0;
+    entry.bytes = 0;
+
+    try {
+      const playlist = await readFile(path.join(directory, "index-0.m3u8"), "utf8");
+      let duration = 0;
+      let produced = 0;
+      let fetched = 0;
+      for (const raw of playlist.split(/\r?\n/)) {
+        const line = raw.trim();
+        const extinf = /^#EXTINF:([0-9]+(?:\.[0-9]+)?)/.exec(line);
+        if (extinf) {
+          duration = Number(extinf[1]);
+          produced += duration;
+          continue;
+        }
+        if (!line || line.startsWith("#")) continue;
+        const index = Number(MEDIA_SEGMENT.exec(line)?.[1]);
+        if (Number.isInteger(index) && index <= entry.furthestSegment) fetched += duration;
+        duration = 0;
+      }
+      entry.producedSeconds = produced;
+      entry.fetchedSeconds = fetched;
+    } catch { /* A failed attempt may have left no playlist. */ }
+
+    try {
+      const names = await readdir(directory);
+      const sizes = await Promise.all(names.map((name) =>
+        stat(path.join(directory, name)).then((value) => value.isFile() ? value.size : 0, () => 0)));
+      entry.bytes = sizes.reduce((sum, size) => sum + size, 0);
+    } catch { /* A missing generation has no bytes to count. */ }
+  }
+
   private retire(session: Session, directory: string, generation: number, process?: ChildProcess) {
     const retired = { generation, directory, until: Date.now() + RETIRED_MS };
     session.retired = retired;
@@ -1411,6 +1674,8 @@ export class PlaybackManager {
       await sleep(Math.max(0, retired.until - Date.now()));
       if (session.retired === retired) session.retired = undefined;
       if (session.directory !== directory && session.fallback?.directory !== directory) {
+        const ledger = session.ledger?.generations.get(generation);
+        if (ledger) await this.settleGeneration(ledger, directory);
         await this.purge(directory, "a generation that was replaced");
       }
     });
@@ -1429,6 +1694,14 @@ export class PlaybackManager {
 
     const { copyVideo } = this.plan(session);
     session.mode = copyVideo ? "remux" : "transcode";
+    const ledger = session.ledger ??= { generations: new Map(), mode: session.mode };
+    ledger.mode = session.mode;
+    ledger.generations.set(session.generation, {
+      generation: session.generation,
+      offset,
+      furthestSegment: -1,
+      directory,
+    });
     // Decided once: a concurrent session can switch a path off while this one awaits, and the
     // failure below has to be charged to the path this attempt actually used.
     const accelerator = this.accelerator();
@@ -1492,6 +1765,8 @@ export class PlaybackManager {
       }
     }
     await this.killChild(session.process);
+    const generation = session.ledger?.generations.get(session.generation);
+    if (generation) await this.settleGeneration(generation, directory);
     await this.purge(directory, "a conversion that failed");
     this.assertActive(session);
     throw new AppError(session.error || "The video conversion could not be started.", "err.conversionFailed");
@@ -1518,6 +1793,9 @@ export class PlaybackManager {
     const monitor = new ConversionMonitor({
       id: session.id, generation, offset, mode: session.mode, hardware, pid: child.pid,
       source: () => sourcePace.read(session.id),
+      onProgress: () => {
+        if (session.process === child && session.generation === generation) this.evaluateLead(session);
+      },
     });
     this.monitors.set(session.id, monitor);
     monitor.start();
@@ -1577,7 +1855,7 @@ export class PlaybackManager {
     }, 10_000);
     const output = await waitForHlsOutput(directory, () => finished, () => session.stopped, undefined, handoverSegments(session.mode)).finally(() => clearTimeout(slow));
     if (session.stopped) {
-      child.kill("SIGTERM");
+      killMediaChild(child, "SIGTERM");
       log("DEBUG", "Conversion abandoned, the session is gone", { id: session.id, generation: session.generation, ms: Date.now() - startedAt });
       return undefined;
     }
@@ -1588,7 +1866,7 @@ export class PlaybackManager {
       return url;
     }
     if (!finished) {
-      child.kill("SIGKILL");
+      killMediaChild(child);
       // exitCode/signalCode stay null until the child's exit event, which can come after the
       // retry's purge: remembered here, the purge knows this one is no longer writing.
       this.abandoned.add(child);
@@ -1795,10 +2073,10 @@ export class PlaybackManager {
     if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
     this.stopping.add(child);
     return new Promise((resolve) => {
-      const force = setTimeout(() => child.kill("SIGKILL"), 3000);
+      const force = setTimeout(() => killMediaChild(child), 3000);
       const giveUp = setTimeout(() => resolve(), 6000);
       child.once("exit", () => { clearTimeout(force); clearTimeout(giveUp); resolve(); });
-      child.kill("SIGTERM");
+      killMediaChild(child, "SIGTERM");
     });
   }
 

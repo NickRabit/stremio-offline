@@ -39,6 +39,7 @@ private enum class ReportEvent(val wire: String) {
 }
 
 private const val SHORT_END_PROGRESS_S = 60.0
+private const val RECOVERED_PROGRESS_S = 30.0
 
 private data class ReportedPlay(val context: RemoteItemContext, val playId: String)
 
@@ -56,6 +57,7 @@ interface PlaybackApi {
     /** True when the viewer turned subtitles off: the server is told so explicitly, because an
      *  absent field would let the account's own subtitle language put one back. */
     subtitleOff: Boolean = false,
+    quality: Int? = null,
   ): PlaybackDescriptorDto
 
   suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto
@@ -64,7 +66,7 @@ interface PlaybackApi {
 
   suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto
 
-  suspend fun pingPlayback(id: String)
+  suspend fun pingPlayback(id: String, paused: Boolean? = null)
 
   suspend fun playbackStatus(id: String): PlaybackStatusDto? = null
 
@@ -241,6 +243,7 @@ class PlaybackController(
     /** The native remote identity this session plays, or null for a filesystem or addon play. */
     val remote: RemoteItemContext? = null,
     val shuffle: Boolean = false,
+    val quality: Int? = null,
   )
 
   private var plan: StartPlan? = null
@@ -253,6 +256,8 @@ class PlaybackController(
   /** The viewer's own escalate from the Quality panel; a decoder error never sets it. */
   private var escalatedByViewer = false
   private var recovered = false
+  private var recoveredFrom: Double? = null
+  private var deadWhilePaused = false
   private var shortEnds = 0
   private var shortRestartFrom: Double? = null
   private var stopped = true
@@ -433,6 +438,8 @@ class PlaybackController(
         audioPreference = audioPreference,
         subtitlePreference = subtitlePreference,
         carrySubtitle = _state.value.subtitle,
+        trackChoice = current.trackChoice ?: trackPreferences(),
+        quality = quality,
       ),
     )
   }
@@ -469,6 +476,8 @@ class PlaybackController(
     escalated = false
     escalatedByViewer = false
     recovered = false
+    recoveredFrom = null
+    deadWhilePaused = false
     shortEnds = 0
     shortRestartFrom = null
     stopped = false
@@ -516,6 +525,7 @@ class PlaybackController(
           audioLanguage = choice?.audio,
           subtitleLanguage = choice?.subtitle,
           subtitleOff = choice?.subtitleOff == true,
+          quality = next.quality,
         )
       }.getOrElse { error ->
         if (mine == generation) _state.update { it.copy(loading = false, error = errorOf(error)) }
@@ -576,6 +586,11 @@ class PlaybackController(
       shortEnds = 0
       shortRestartFrom = null
     }
+    val recoveredAt = recoveredFrom
+    if (recovered && recoveredAt != null && current >= recoveredAt + RECOVERED_PROGRESS_S) {
+      recovered = false
+      recoveredFrom = null
+    }
     // Before the player has prepared the item the position is meaningless, so it is kept for the
     // display but never saved; a seek answer confirms one of its own below.
     if (ready) hasPosition = true
@@ -587,9 +602,26 @@ class PlaybackController(
   }
 
   fun onPlaying() {
+    if (deadWhilePaused) {
+      deadWhilePaused = false
+      playing = true
+      retry()
+      return
+    }
     val changed = !playing
     playing = true
+    val recoveredAt = recoveredFrom
+    if (recovered && recoveredAt != null && position >= recoveredAt + RECOVERED_PROGRESS_S) {
+      recovered = false
+      recoveredFrom = null
+    }
     if (changed && !stopped) report(ReportEvent.Progress, reported, position, paused = false)
+  }
+
+  fun onPlayRequested() {
+    if (!deadWhilePaused) return
+    deadWhilePaused = false
+    retry()
   }
 
   fun onPaused() {
@@ -891,8 +923,10 @@ class PlaybackController(
       _state.update { it.copy(error = PlaybackError.Session) }
       return
     }
-    recovered = true
+    val from = position
     retry()
+    recovered = true
+    recoveredFrom = from
   }
 
   /** Leaving the player: a final save, then the delete. Both are best-effort and never throw. */
@@ -967,11 +1001,18 @@ class PlaybackController(
       while (isActive) {
         delay(PING_INTERVAL_MS)
         try {
-          api.pingPlayback(id)
+          api.pingPlayback(id, paused = !playing)
           _state.update { it.copy(lastPingAt = clock()) }
         } catch (error: Throwable) {
           if (isDead(error)) {
-            if (generation == currentGenerationFor(id)) onDeadSession()
+            if (generation == currentGenerationFor(id)) {
+              if (!playing) {
+                deadWhilePaused = true
+                AppLog.info("Session released while paused")
+              } else {
+                onDeadSession()
+              }
+            }
             return@launch
           }
         }
@@ -1072,7 +1113,6 @@ class PlaybackController(
       plan != null -> descriptor.subtitleTrack?.let { SubtitleChoice.Embedded(it) } ?: SubtitleChoice.Off
       else -> _state.value.subtitle
     }
-    recovered = false
     lastPosition = target - offset
     // Subtitles offered while the start was under way are on the current plan, not on the copy
     // the start began with.

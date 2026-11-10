@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
@@ -45,6 +45,10 @@ interface Harness {
   attended: string[];
   errors: unknown[];
   stopped: string[];
+  stopReasons: string[];
+  pings: Array<{ id: string; paused: boolean | undefined }>;
+  fetched: Array<{ id: string; generation: string; file: string }>;
+  waitingFor: Array<{ id: string; absolute: number }>;
   mediaSources: MediaServerSources;
   playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string }>;
   /** The manager the routes call; a test can replace one method to hold a preparation open. */
@@ -61,6 +65,10 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
   const attended: string[] = [];
   const errors: unknown[] = [];
   const stopped: string[] = [];
+  const stopReasons: string[] = [];
+  const pings: Array<{ id: string; paused: boolean | undefined }> = [];
+  const fetched: Array<{ id: string; generation: string; file: string }> = [];
+  const waitingFor: Array<{ id: string; absolute: number }> = [];
   let source = { url: "https://example.test/video.mp4" } as StreamItem;
   const sessions = { ada: ADA, bob: BOB };
   const userOf = (req: express.Request) => (req.header("x-user") === "bob" ? "bob" : "ada");
@@ -80,7 +88,10 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
 
   const playback: Record<string, any> = {
     attended: (id: string) => { attended.push(id); },
-    stop: async (id: string) => { stopped.push(id); },
+    stop: async (id: string, reason = "closed") => { stopped.push(id); stopReasons.push(reason); },
+    ping: (id: string, paused: boolean | undefined) => { pings.push({ id, paused }); },
+    fetched: (id: string, generation: string, file: string) => { fetched.push({ id, generation, file }); },
+    waitingFor: (id: string, absolute: number) => { waitingFor.push({ id, absolute }); },
     directory: () => "/tmp/session-generation",
     preview: async () => undefined,
     sidecar: async () => undefined,
@@ -162,6 +173,10 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     attended,
     errors,
     stopped,
+    stopReasons,
+    pings,
+    fetched,
+    waitingFor,
     mediaSources,
     playbackOwners,
     playback,
@@ -280,6 +295,26 @@ test("the owner reads a playback status and another account cannot", async (t) =
   assert.equal(other.status, 404);
 });
 
+test("the ping hands a finite waiting position to the playback manager", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: { waitingFor: 123.5 } });
+  assert.equal(response.status, 204);
+  assert.deepEqual(harness.waitingFor, [{ id: ID, absolute: 123.5 }]);
+});
+
+test("the ping ignores waiting positions that are not finite non-negative numbers", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  for (const waitingFor of ["123", -1, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+    const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: { waitingFor } });
+    assert.equal(response.status, 204);
+  }
+  assert.deepEqual(harness.waitingFor, []);
+});
+
 test("the guard lets the owner through, makes the frame uncacheable and marks the session attended", async (t) => {
   const harness = await mount();
   t.after(harness.close);
@@ -289,6 +324,26 @@ test("the guard lets the owner through, makes the frame uncacheable and marks th
   assert.equal(response.status, 204);
   assert.equal(response.headers.get("cache-control"), "private, no-store", "one viewer's frames are never cached for another");
   assert.deepEqual(harness.attended, [ID], "attended() is what stops a live session being reaped");
+});
+
+test("a paused ping body reaches PlaybackManager.ping", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: { paused: true } });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(harness.pings, [{ id: ID, paused: true }]);
+});
+
+test("an empty ping body reaches ping without a paused flag", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: {} });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(harness.pings, [{ id: ID, paused: undefined }]);
 });
 
 test("an AirPlay grant for the session passes the guard where another person's plain session does not", async (t) => {
@@ -318,6 +373,7 @@ test("DELETE /api/playback/:id stops the session and logs who closed it", async 
 
   assert.equal(response.status, 204);
   assert.deepEqual(harness.stopped, [ID]);
+  assert.deepEqual(harness.stopReasons, ["closed"]);
   await flushLog();
   const written = await readLog({ level: "INFO" });
   assert.match(written, /Playback session closed by the player/);
@@ -336,6 +392,21 @@ test("GET /api/playback/:id/:generation/:file refuses a filename with a slash or
   assert.equal(slash.status, 400);
 });
 
+test("a segment request reaches the playback ledger", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "routes-playback-segment-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(path.join(directory, "seg-0-000002.m4s"), "segment");
+  const harness = await mount();
+  t.after(harness.close);
+  harness.playback.directory = () => directory;
+
+  const response = await api(harness.base, `/api/playback/${ID}/7/seg-0-000002.m4s`, { user: "ada" });
+
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "segment");
+  assert.deepEqual(harness.fetched, [{ id: ID, generation: "7", file: "seg-0-000002.m4s" }]);
+});
+
 test("a session whose media resource was removed is refused and stopped, while a sibling continues", async (t) => {
   const harness = await mount();
   t.after(harness.close);
@@ -349,6 +420,7 @@ test("a session whose media resource was removed is refused and stopped, while a
   const denied = await api(harness.base, "/api/playback/pb_doomed/preview", { user: "ada" });
   assert.equal(denied.status, 404);
   assert.ok(harness.stopped.includes("pb_doomed"), "the leaked session is stopped");
+  assert.ok(harness.stopReasons.includes("revoked"), "a lost right is recorded as revocation");
 
   const ok = await api(harness.base, "/api/playback/pb_alive/preview", { user: "ada" });
   assert.equal(ok.status, 204, "the unrelated session is untouched");
@@ -550,7 +622,10 @@ const addonHost = async (
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   const ranges: string[] = [];
   const held: Array<() => void> = [];
+  let resolveClosed = () => {};
+  const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
   const server = http.createServer((req, res) => {
+    res.once("close", resolveClosed);
     ranges.push(String(req.headers.range ?? ""));
     const match = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? ""));
     if (!match) { res.writeHead(200, { "content-type": contentType, "content-length": body.length }); return void res.end(body); }
@@ -568,6 +643,7 @@ const addonHost = async (
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/film.avi`,
     ranges,
+    closed,
     releaseHeld: () => held.shift()?.(),
   };
 };
@@ -591,6 +667,33 @@ test("a direct-play read of an addon source goes straight to the host", async (t
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), file);
   assert.deepEqual(host.ranges, ["bytes=0-"]);
   assert.equal(remoteReadAhead.size, 0);
+});
+
+test("a response destroyed during backpressure stops the source transfer instead of waiting for drain", { timeout: 10_000 }, async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const host = await addonHost(t, filmBytes(32 * 1024 * 1024));
+  const resourceId = registry.mediaStream({ url: host.url } as StreamItem, ADA).resourceId;
+  const url = new URL(harness.base);
+  const response = new Promise<http.IncomingMessage>((resolve, reject) => {
+    const request = http.request({
+      host: url.hostname,
+      port: url.port,
+      path: `/api/media/${resourceId}`,
+      headers: { "x-user": "ada" },
+    }, resolve);
+    request.once("error", reject);
+    request.end();
+  });
+  const reply = await response;
+  await new Promise<void>((resolve) => reply.once("data", () => { reply.pause(); resolve(); }));
+  reply.destroy();
+
+  const timeout = new Promise<never>((_, reject) => {
+    const timer = setTimeout(() => reject(new Error("the source transfer stayed open")), 2_000);
+    timer.unref();
+  });
+  await Promise.race([host.closed, timeout]);
 });
 
 test("an addon film probed by jumping between its header and its index asks the host a few times, not once per jump", async (t) => {
@@ -1142,6 +1245,7 @@ test("a canceled playback request stops a descriptor that raced the disconnect",
 
   assert.ok(seen?.aborted, "the manager was handed the request's own signal");
   assert.deepEqual(harness.stopped, ["pb_raced"], "the raced session was stopped, never registered");
+  assert.deepEqual(harness.stopReasons, ["failed"], "a start that lost its client is recorded as failed");
   assert.equal(harness.playbackOwners.has("pb_raced"), false, "the response closed before registration");
   assert.deepEqual(removed, [minted[0].resourceId], "the prepared resource was released");
   assert.equal(harness.errors.length, 0, "ordinary client cancellation does not enter error logging");

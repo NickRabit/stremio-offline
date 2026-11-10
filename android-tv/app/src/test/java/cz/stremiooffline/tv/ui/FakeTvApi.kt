@@ -885,6 +885,7 @@ open class FakeTvApi : TvApi {
     audioLanguage: String?,
     subtitleLanguage: String?,
     subtitleOff: Boolean,
+    quality: Int?,
   ): PlaybackDescriptorDto {
     startedSources += sourceId
     startedTimes += time
@@ -1012,7 +1013,7 @@ open class FakeTvApi : TvApi {
     )
   }
 
-  override suspend fun pingPlayback(id: String) {}
+  override suspend fun pingPlayback(id: String, paused: Boolean?) {}
 
   override suspend fun deletePlayback(id: String) {
     deletedIds += id

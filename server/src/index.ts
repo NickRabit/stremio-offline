@@ -723,7 +723,7 @@ const revocations = new Revocations({
   playbackOwners,
   activeMedia,
   deviceTickets: deviceDownloadTickets,
-  stopPlayback: (id) => playback.stop(id),
+  stopPlayback: (id) => playback.stop(id, "revoked"),
   queue,
   follows: followStore,
 });
@@ -921,7 +921,7 @@ setInterval(() => {
     // Playback outliving the sign-in that started it is the one teardown nobody asked for.
     // Its late reads answer 410 like any other closed session, so said here or not at all.
     log("INFO", "Playback stopped, the viewer's session had expired", { id });
-    void playback.stop(id);
+    void playback.stop(id, "revoked");
   }
 }, 1000).unref();
 

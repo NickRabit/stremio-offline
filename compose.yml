@@ -67,6 +67,12 @@ services:
       VAAPI_QP: "${VAAPI_QP:-23}"
       FFMPEG_READRATE: "${FFMPEG_READRATE:-1.5}"
       FFMPEG_READRATE_REMUX: "${FFMPEG_READRATE_REMUX:-3}"
+      # Seconds a conversion may run ahead of what the player fetched before it is paused
+      # (SIGSTOP) and resumed under 60 % of it. 0 = off: the conversion runs to the end.
+      PLAYBACK_LEAD_CAP_SECONDS: "${PLAYBACK_LEAD_CAP_SECONDS:-0}"
+      # Minutes a converted session may stay paused before the server releases it; the player
+      # starts a new one at the same position on play. 0 = never.
+      PLAYBACK_PAUSED_RELEASE_MINUTES: "${PLAYBACK_PAUSED_RELEASE_MINUTES:-30}"
       VAAPI_DEVICE: "${VAAPI_DEVICE:-}"
       # Group that owns the render node. Without it, after switching to
       # PUID/PGID the process cannot open /dev/dri; in the container

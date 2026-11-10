@@ -19,17 +19,42 @@ export function ffprobePath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 const running = new Set<ChildProcess>();
+const suspended = new WeakSet<ChildProcess>();
 let stopping = false;
 
 /** Whether the server is on its way out, so an FFmpeg that died is not a failure to record. */
 export const mediaStopping = () => stopping;
+
+export function suspendMediaChild(child: ChildProcess): boolean {
+  try {
+    if (!child.kill("SIGSTOP")) return false;
+    suspended.add(child);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const mediaChildSuspended = (child: ChildProcess) => suspended.has(child);
+
+export function resumeMediaChild(child: ChildProcess): boolean {
+  if (!suspended.delete(child)) return false;
+  try { child.kill("SIGCONT"); } catch { /* the process may have exited while stopped */ }
+  return true;
+}
+
+export function killMediaChild(child: ChildProcess, signal: NodeJS.Signals = "SIGKILL"): boolean {
+  resumeMediaChild(child);
+  try { return child.kill(signal); }
+  catch { return false; }
+}
 
 /** A long-lived FFmpeg the shutdown has to take down with it. Nothing ends a child when its parent
  *  exits, so without this a conversion outlived the desktop's local backend by minutes. */
 export function trackMedia<T extends ChildProcess>(child: T): T {
   if (child.exitCode !== null || child.signalCode !== null) return child;
   // A queue or a retry that starts another one during the shutdown would leave it behind.
-  if (stopping) { child.kill("SIGKILL"); return child; }
+  if (stopping) { killMediaChild(child); return child; }
   running.add(child);
   child.once("exit", () => running.delete(child));
   return child;
@@ -50,7 +75,7 @@ export const runMedia = ((...args: Parameters<typeof execFileAsync>) => {
 export function killRunningMedia(): number {
   stopping = true;
   const count = running.size;
-  for (const child of running) child.kill("SIGKILL");
+  for (const child of running) killMediaChild(child);
   running.clear();
   return count;
 }
