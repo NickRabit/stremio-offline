@@ -226,7 +226,8 @@ interface GenerationLedger {
     duration?: number;
   };
   fetchedRead?: Promise<void>;
-  waitingFloor?: number;
+  /** Where the client waits for the producer, counted as fetched until it gets there or expires. */
+  waitingFloor?: { seconds: number; until: number };
   producedSeconds?: number;
   fetchedSeconds?: number;
   bytes?: number;
@@ -361,6 +362,10 @@ export const nvencBusy = (error: string | undefined) =>
   /OpenEncodeSessionEx failed|out of memory|No capable devices found|incompatible client key|CUDA_ERROR_OUT_OF_MEMORY/i.test(error ?? "");
 const AUDIO_REQUIRING_PACKET_FOR_FMP4 = new Set(["ac3", "eac3"]);
 const MEDIA_SEGMENT = /^seg-0-(\d{6})\.m4s$/;
+// The web player waits for the producer only up to AHEAD_CATCHUP_S (20 s) past the playlist end and
+// for AHEAD_CATCHUP_MS (8 s); a position further out, or a wait long past, says nothing more.
+const WAITING_AHEAD_S = 20;
+const WAITING_FOR_MS = 30_000;
 const IDLE_MS = 5 * 60_000;
 // If the start finishes after the client gave up, the session and its FFmpeg hang around for
 // five minutes, reading from the source the whole time. An unclaimed session has nothing to wait for.
@@ -1058,7 +1063,11 @@ export class PlaybackManager {
     const session = this.playing(id);
     const entry = session?.ledger?.generations.get(session.generation);
     if (!session || !entry) return;
-    entry.waitingFloor = Math.max(0, absolute - session.offset);
+    const produced = this.monitors.get(session.id)?.progress.latest?.outTime ?? 0;
+    entry.waitingFloor = {
+      seconds: Math.min(Math.max(0, absolute - session.offset), produced + WAITING_AHEAD_S),
+      until: Date.now() + WAITING_FOR_MS,
+    };
     this.evaluateLead(session);
   }
 
@@ -1095,9 +1104,12 @@ export class PlaybackManager {
     const child = session.process;
     const entry = session.ledger?.generations.get(session.generation);
     const produced = this.monitors.get(session.id)?.progress.latest?.outTime;
-    const fetched = entry?.fetchedSeconds === undefined ? entry?.waitingFloor
-      : entry.waitingFloor === undefined ? entry.fetchedSeconds
-        : Math.max(entry.fetchedSeconds, entry.waitingFloor);
+    if (entry?.waitingFloor && (entry.waitingFloor.until <= Date.now()
+      || (entry.fetchedSeconds ?? 0) >= entry.waitingFloor.seconds)) entry.waitingFloor = undefined;
+    const floor = entry?.waitingFloor?.seconds;
+    const fetched = entry?.fetchedSeconds === undefined ? floor
+      : floor === undefined ? entry.fetchedSeconds
+        : Math.max(entry.fetchedSeconds, floor);
     const lead = produced !== undefined && fetched !== undefined ? produced - fetched : undefined;
 
     if (child && mediaChildSuspended(child) && session.suspendedSince !== undefined) {
