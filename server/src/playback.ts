@@ -768,44 +768,51 @@ export class PlaybackManager {
     const session = this.require(id);
     return session.operations.run(async () => {
       this.assertActive(session);
-      if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
-      if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
-      if (changes.quality !== undefined) session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
-      // A native direct session plays the new track as it is: no restart while the container and
-      // the new codec are still among those the client declared.
-      if (session.mode === "direct" && native(session.capabilities) && changes.quality === undefined
-        && (changes.audio !== undefined || changes.subtitle !== undefined) && this.directAllowed(session).ok) {
-        if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
-        else await this.sidecars.stop(id);
-        log("INFO", "Direct play track switched", { id, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
-        return this.describe(session, this.proxyPath(session.stream));
+      const before = { audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality };
+      try {
+        if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
+        if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
+        if (changes.quality !== undefined) session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
+        // A native direct session plays the new track as it is: no restart while the container and
+        // the new codec are still among those the client declared.
+        if (session.mode === "direct" && native(session.capabilities) && changes.quality === undefined
+          && (changes.audio !== undefined || changes.subtitle !== undefined) && this.directAllowed(session).ok) {
+          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+          else await this.sidecars.stop(id);
+          log("INFO", "Direct play track switched", { id, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
+          return this.describe(session, this.proxyPath(session.stream));
+        }
+        // Subtitles never ride in the conversion, they are read beside it. Restarting FFmpeg
+        // for them would interrupt the picture and ask the source for another connection --
+        // which is the one thing these hosts tend to refuse.
+        if (changes.subtitle !== undefined && changes.audio === undefined && changes.quality === undefined) {
+          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+          else await this.sidecars.stop(id);
+          log("INFO", "Subtitle track switched", { id, subtitleTrack: session.subtitleTrack, offset: Math.round(session.offset) });
+          return this.describe(session, this.currentUrl(session));
+        }
+        // Going back to the original may satisfy the conditions for direct play again.
+        if (this.directAllowed(session).ok) {
+          session.pendingKill = this.kill(session);
+          session.mode = "direct"; session.offset = 0;
+          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+          else await this.sidecars.stop(id);
+          log("INFO", "Back to direct play", { id });
+          return this.describe(session, this.proxyPath(session.stream));
+        }
+        return await this.restart(session, changes.time ?? session.offset, "Track or quality switched", false, () => Object.assign(session, before));
+      } catch (error) {
+        if (!session.stopped) Object.assign(session, before);
+        throw error;
       }
-      // Subtitles never ride in the conversion, they are read beside it. Restarting FFmpeg
-      // for them would interrupt the picture and ask the source for another connection --
-      // which is the one thing these hosts tend to refuse.
-      if (changes.subtitle !== undefined && changes.audio === undefined && changes.quality === undefined) {
-        if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
-        else await this.sidecars.stop(id);
-        log("INFO", "Subtitle track switched", { id, subtitleTrack: session.subtitleTrack, offset: Math.round(session.offset) });
-        return this.describe(session, this.currentUrl(session));
-      }
-      // Going back to the original may satisfy the conditions for direct play again.
-      if (this.directAllowed(session).ok) {
-        session.pendingKill = this.kill(session);
-        session.mode = "direct"; session.offset = 0;
-        if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
-        else await this.sidecars.stop(id);
-        log("INFO", "Back to direct play", { id });
-        return this.describe(session, this.proxyPath(session.stream));
-      }
-      return this.restart(session, changes.time ?? session.offset, "Track or quality switched");
     });
   }
 
-  private async restart(session: Session, time: number, message: string, restoreSeek = false) {
+  private async restart(session: Session, time: number, message: string, restoreSeek = false, restoreOnFailure?: () => void) {
     const previous = session.process;
     try { return await this.restartConversion(session, time, message, restoreSeek); }
     catch (error) {
+      if (!session.stopped) restoreOnFailure?.();
       if (!session.stopped && session.subtitleTrack !== null) this.extractSidecar(session);
       throw error;
     } finally {

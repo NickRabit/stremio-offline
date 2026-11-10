@@ -2193,6 +2193,85 @@ test("a position the source will not open costs the seek, not the film", async (
   assert.notEqual(moved.url, playing.url);
 });
 
+test("a failed audio change keeps the old track in the session and conversion", async () => {
+  const manager = new PlaybackManager(tmp("test-failed-audio-switch")) as any;
+  const session = remuxSession(manager, {
+    info: {
+      container: "matroska,webm", duration: 3600,
+      video: { codec: "h264" }, audio: { codec: "aac" },
+      audioTracks: [{ index: 0, codec: "aac", language: "en" }, { index: 1, codec: "aac", language: "cs" }],
+      subtitleTracks: [],
+    },
+  });
+  manager.killChild = async () => {};
+  let fail = true;
+  const audioMaps: string[] = [];
+  manager.spawnAt = async (target: any, offset: number) => {
+    target.generation += 1;
+    target.directory = path.join(manager.root, target.id, String(target.generation));
+    target.offset = offset;
+    if (fail) throw new Error("The source could not be opened");
+    const args = manager.args(target, offset, target.directory, false) as string[];
+    audioMaps.push(...args.filter((arg) => /^0:a:\d+\?$/.test(arg)));
+    return `/api/playback/${target.id}/${target.generation}/master.m3u8`;
+  };
+
+  await assert.rejects(manager.track(session.id, { audio: 1, time: 100 }), /could not be opened/);
+  assert.equal(session.audioTrack, 0);
+
+  fail = false;
+  const seek = await manager.seek(session.id, 200);
+  assert.equal(seek.audioTrack, 0);
+  assert.deepEqual(audioMaps, ["0:a:0?"]);
+});
+
+test("a failed quality change keeps the old quality in the session and conversion", async () => {
+  const manager = new PlaybackManager(tmp("test-failed-quality-switch")) as any;
+  const session = remuxSession(manager, {
+    info: {
+      container: "matroska,webm", duration: 3600,
+      video: { codec: "h264", width: 1920, height: 1080 }, audio: { codec: "aac" }, bitrate: 10_000_000,
+      audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [],
+    },
+  });
+  manager.killChild = async () => {};
+  let fail = true;
+  let laterArgs: string[] = [];
+  manager.spawnAt = async (target: any, offset: number) => {
+    target.generation += 1;
+    target.directory = path.join(manager.root, target.id, String(target.generation));
+    target.offset = offset;
+    if (fail) throw new Error("The source could not be opened");
+    laterArgs = manager.args(target, offset, target.directory, false) as string[];
+    return `/api/playback/${target.id}/${target.generation}/master.m3u8`;
+  };
+
+  await assert.rejects(manager.track(session.id, { quality: 720, time: 100 }), /could not be opened/);
+  assert.equal(session.quality, null);
+
+  fail = false;
+  const seek = await manager.seek(session.id, 200);
+  assert.equal(seek.quality, null);
+  assert.equal(laterArgs.includes("-maxrate"), false);
+});
+
+test("a failed subtitle-only change keeps the old subtitle track", async () => {
+  const manager = new PlaybackManager(tmp("test-failed-subtitle-switch")) as any;
+  const session = remuxSession(manager, {
+    info: {
+      container: "matroska,webm", duration: 3600,
+      video: { codec: "h264" }, audio: { codec: "aac" },
+      audioTracks: [{ index: 0, codec: "aac" }],
+      subtitleTracks: [{ index: 0, codec: "subrip", language: "en" }, { index: 1, codec: "subrip", language: "cs" }],
+    },
+    subtitleTrack: 0,
+  });
+  manager.sidecars.stop = async () => { throw new Error("The subtitle reader could not be stopped"); };
+
+  await assert.rejects(manager.track(session.id, { subtitle: null, time: 100 }), /could not be stopped/);
+  assert.equal(session.subtitleTrack, 0);
+});
+
 for (const row of [
   { name: "running old process", exitCode: null, operation: "seek", keepsFilm: true },
   { name: "cleanly finished old process", exitCode: 0, operation: "seek", keepsFilm: true },
