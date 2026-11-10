@@ -439,6 +439,11 @@ test("a job paused for a library while its admission write is held still gets wa
     },
   });
   await queue.load();
+  // Each tick of the watcher starts one wake-up that reads library state and writes the queue;
+  // the test awaits that work itself rather than a number of event-loop turns.
+  let wake: Promise<unknown> | undefined;
+  const wakeLibraries = (queue as any).wakeLibraries.bind(queue);
+  (queue as any).wakeLibraries = () => (wake = wakeLibraries());
   try {
     // A slow write already in flight holds the admission's own write -- and the job's way into
     // the list -- behind it, as on the Windows runner.
@@ -455,9 +460,10 @@ test("a job paused for a library while its admission write is held still gets wa
     await slow;
     const job = await adding;
     assert.equal(job.status, "paused");
-    for (let tick = 0; tick < 50 && queue.list()[0]?.pauseReason === "library"; tick++) {
+    for (let tick = 0; tick < 5 && queue.list()[0]?.pauseReason === "library"; tick++) {
+      wake = undefined;
       t.mock.timers.tick(20);
-      await new Promise((resolve) => setImmediate(resolve));
+      await wake;
     }
     assert.notEqual(queue.list()[0]?.pauseReason, "library", "past the deadline the job takes the default library");
   } finally {
