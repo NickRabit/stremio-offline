@@ -125,6 +125,7 @@ save.targetAutomatic
 save.queued
 player.play
 player.seekRestored
+player.trackKept
 favorite.add
 favorite.remove
 episodes.seasonNumber

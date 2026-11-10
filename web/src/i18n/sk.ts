@@ -310,6 +310,7 @@ export const sk: Catalog = {
   "player.lowerQualityTo": "Pokles na {height}p",
   "player.hideHint": "Odmietnuť",
   "player.seekRestored": "Nepodarilo sa preskočiť. Zostáva predchádzajúca pozícia.",
+  "player.trackKept": "Stopu sa nepodarilo prepnúť. Zostáva pôvodná.",
   "player.playbackFailed": "Prehrávanie zlyhalo: {details} ({type})",
   "player.noHls": "Tento prehliadač nedokáže prehrávať HLS.",
   "player.browserRefused": "Prehliadač nemohol prehrať tento stream.",

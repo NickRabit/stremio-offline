@@ -126,6 +126,7 @@
   <string name="save_queued">Queued</string>
   <string name="player_play">Play</string>
   <string name="player_seek_restored">Could not seek. Kept the previous position.</string>
+  <string name="player_track_kept">Could not switch the track. Kept the current one.</string>
   <string name="favorite_add">Add to favorites</string>
   <string name="favorite_remove">Remove from favorites</string>
   <string name="episodes_season_number">Season %1$s</string>

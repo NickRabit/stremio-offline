@@ -51,6 +51,8 @@ class PlaybackControllerTest {
     var stored: ProgressDto? = null
     var failSave = false
     var failStart = false
+    var seekFailure: Throwable? = null
+    var trackFailure: Throwable? = null
     var startDelayMs = 0L
     var descriptor = PlaybackDescriptorDto(id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 1_000.0)
 
@@ -81,11 +83,13 @@ class PlaybackControllerTest {
 
     override suspend fun trackPlayback(id: String, change: TrackChange): PlaybackDescriptorDto {
       tracks += change
+      trackFailure?.let { throw it }
       return trackAnswer ?: descriptor
     }
 
     override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto {
       seeks += time
+      seekFailure?.let { throw it }
       return descriptor.copy(mode = "remux", url = "playlist-$time.m3u8", offset = time, playlist = true, copy = CopyDto(video = true, audio = true))
     }
 
@@ -408,6 +412,77 @@ class PlaybackControllerTest {
     runCurrent()
 
     assertEquals(1, controller.state.value.seekKept)
+  }
+
+  @Test
+  fun `a failed seek reports the notice and leaves the playing position alone`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "old.m3u8", offset = 0.0, duration = 1_000.0, playlist = true,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(100.0)
+    val revision = controller.state.value.revision
+
+    api.seekFailure = ApiError(ApiFailure.Generic)
+    controller.seekTo(900.0)
+    advanceTimeBy(601L)
+    runCurrent()
+
+    assertEquals(1, controller.state.value.seekKept)
+    assertEquals(100.0, controller.position, 0.001)
+    assertEquals(revision, controller.state.value.revision)
+  }
+
+  @Test
+  fun `a failed track change reports the notice and keeps the playing audio`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "old.m3u8", offset = 0.0, duration = 1_000.0, playlist = true,
+      audioTracks = trackList(
+        """[{"index":0,"language":"en","codec":"aac","channels":2},
+            {"index":1,"language":"cs","codec":"aac","channels":2}]""",
+      ),
+      audioTrack = 1,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(100.0)
+
+    api.trackFailure = ApiError(ApiFailure.Generic)
+    controller.selectAudio(0)
+    runCurrent()
+
+    assertEquals(1, controller.state.value.trackKept)
+    assertEquals(1, controller.state.value.audioTrackIndex)
+  }
+
+  @Test
+  fun `a dead session seek still asks for a restart`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "old.m3u8", offset = 0.0, duration = 1_000.0, playlist = true,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(100.0)
+
+    api.seekFailure = ApiError(ApiFailure.NotFound)
+    controller.seekTo(900.0)
+    advanceTimeBy(601L)
+    runCurrent()
+
+    assertEquals(2, api.started.size)
   }
 
   @Test

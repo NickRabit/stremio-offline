@@ -837,9 +837,7 @@ export class PlaybackManager {
       this.assertActive(session);
       try { url = await this.spawnAt(session, target); }
       catch (again) {
-        // Put the session back on what it was playing, which is still running and still has the
-        // one connection the source did give us.
-        if (playing.process && playing.process.exitCode === null && playing.process.signalCode === null) {
+        if (await this.usableFallback(playing)) {
           Object.assign(session, playing);
           log("WARN", "The new position could not be opened, the film carries on where it was", { id, wanted: Math.round(target), playing: Math.round(playing.offset) });
           if (restoreSeek && !session.stopped) {
@@ -858,6 +856,18 @@ export class PlaybackManager {
     // nothing looks the same in the log as one that quietly fell back to the processor.
     log("INFO", message, { id, offset: Math.round(target), mode: session.mode, hardware: session.hardware, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, ms: Date.now() - requestedAt });
     return this.describe(session, url);
+  }
+
+  private async usableFallback(playing: Pick<Session, "process" | "directory">): Promise<boolean> {
+    if (!playing.process || !playing.directory) return false;
+    if (playing.process.exitCode === null && playing.process.signalCode === null) return true;
+    if (playing.process.exitCode !== 0 || playing.process.signalCode !== null) return false;
+    try {
+      await stat(path.join(playing.directory, "master.m3u8"));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async preview(id: string, time: number, signal: AbortSignal) {

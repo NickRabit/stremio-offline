@@ -310,6 +310,7 @@ export const de: Catalog = {
   "player.lowerQualityTo": "Auf {height}p absenken",
   "player.hideHint": "Entlassen",
   "player.seekRestored": "Springen nicht möglich. Die vorherige Position wurde beibehalten.",
+  "player.trackKept": "Die Spur konnte nicht gewechselt werden. Die bisherige wurde beibehalten.",
   "player.playbackFailed": "Wiedergabe fehlgeschlagen: {details} ({type})",
   "player.noHls": "Dieser Browser kann HLS nicht abspielen.",
   "player.browserRefused": "Der Browser konnte diesen Stream nicht abspielen.",

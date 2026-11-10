@@ -2143,9 +2143,11 @@ test("a position the source will not open costs the seek, not the film", async (
   const alive = { exitCode: null, signalCode: null, kill: () => {}, once: () => {} };
   let refuse = false;
   manager.spawnAt = async (session: any, offset: number) => {
-    if (refuse) throw new Error("The source could not be opened: it did not answer, or it refused the connection.");
-    session.offset = offset; session.generation += 1; session.process = alive;
+    session.generation += 1;
     session.directory = tmp(`test-seek-keeps-playing/${session.generation}`);
+    session.offset = offset;
+    if (refuse) throw new Error("The source could not be opened: it did not answer, or it refused the connection.");
+    session.process = alive;
     return `/api/playback/${session.id}/${session.generation}/master.m3u8`;
   };
   manager.killChild = async () => {};
@@ -2170,6 +2172,61 @@ test("a position the source will not open costs the seek, not the film", async (
   assert.equal(moved.offset, 4000);
   assert.notEqual(moved.url, playing.url);
 });
+
+for (const row of [
+  { name: "running old process", exitCode: null, operation: "seek", keepsFilm: true },
+  { name: "cleanly finished old process", exitCode: 0, operation: "seek", keepsFilm: true },
+  { name: "clean finish without a master playlist", exitCode: 0, operation: "seek", keepsFilm: false, removeMaster: true },
+  { name: "old process that died", exitCode: 1, operation: "seek", keepsFilm: false },
+  { name: "cleanly finished old process during a track change", exitCode: 0, operation: "track", keepsFilm: true },
+  { name: "cleanly finished old process during an escalate", exitCode: 0, operation: "escalate", keepsFilm: true },
+] as const) {
+  test(`a failed restart with a ${row.name} ${row.keepsFilm ? "keeps the film" : "cannot keep the film"}`, async (t) => {
+    const oldDirectory = await mkdtemp(path.join(os.tmpdir(), "playback-restart-fallback-"));
+    t.after(() => rm(oldDirectory, { recursive: true, force: true }));
+    const master = path.join(oldDirectory, "master.m3u8");
+    await writeFile(master, "#EXTM3U\n");
+    if ("removeMaster" in row) await rm(master);
+
+    const manager = new PlaybackManager(tmp(`test-restart-fallback-${row.operation}`)) as any;
+    const oldGeneration = 7;
+    const oldOffset = 300;
+    const session = remuxSession(manager, {
+      generation: oldGeneration,
+      directory: oldDirectory,
+      offset: oldOffset,
+      process: { exitCode: row.exitCode, signalCode: null },
+    });
+    manager.killChild = async () => {};
+    let attempts = 0;
+    manager.spawnAt = async (target: any, offset: number) => {
+      attempts += 1;
+      target.generation += 1;
+      target.directory = path.join(manager.root, target.id, String(target.generation));
+      target.offset = offset;
+      throw new Error("The source could not be opened: it did not answer, or it refused the connection.");
+    };
+
+    const invoke = () => row.operation === "seek"
+      ? manager.seek(session.id, 1200)
+      : row.operation === "track"
+        ? manager.track(session.id, { audio: 0, time: 1200 })
+        : manager.escalate(session.id, 1200);
+    const rejected = row.operation !== "seek" || !row.keepsFilm;
+    if (rejected) await assert.rejects(invoke(), /could not be opened/);
+    else {
+      const result = await invoke();
+      assert.equal(result.seekRestored, true);
+    }
+
+    assert.equal(attempts, 2);
+    assert.equal(manager.directory(session.id, String(oldGeneration)), row.keepsFilm ? oldDirectory : undefined);
+    if (row.keepsFilm) {
+      assert.equal(session.generation, oldGeneration);
+      assert.equal(session.offset, oldOffset);
+    }
+  });
+}
 
 test("cleanup never deletes the generation a conversion is writing into", async () => {
   const manager = new PlaybackManager(tmp("test-purge-guard")) as any;
@@ -2452,7 +2509,12 @@ test("a player closed during a hardware seek does not count against the GPU", as
 
   // A seek whose hardware attempts really failed, once and once more on the retry, still switches it off.
   close = false;
-  const failing = remuxSession(manager, { id: "failing", mode: "transcode", process: { exitCode: null, signalCode: null } });
+  const failing = remuxSession(manager, {
+    id: "failing",
+    mode: "transcode",
+    directory: tmp("test-close-hardware-seek/failing"),
+    process: { exitCode: null, signalCode: null },
+  });
   assert.equal((await manager.seek(failing.id, 1200)).seekRestored, true);
   assert.equal(manager.vaapiFailures, 2);
   assert.equal(manager.vaapiDevice, undefined);

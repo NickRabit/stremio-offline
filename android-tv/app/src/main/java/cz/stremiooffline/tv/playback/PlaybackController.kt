@@ -157,6 +157,8 @@ data class PlaybackState(
   val startedAt: Long = 0L,
   /** Bumped when the server refused a seek; the screen shows the message for a few seconds. */
   val seekKept: Int = 0,
+  /** Bumped when the server refused a track change; the screen shows the message for a few seconds. */
+  val trackKept: Int = 0,
   val lastPingAt: Long? = null,
   val error: PlaybackError? = null,
 ) {
@@ -657,7 +659,16 @@ class PlaybackController(
       val stamp = ++sequence
       val id = sessionId ?: return@launch
       val descriptor = runCatching { api.seekPlayback(id, target) }.getOrElse { error ->
-        if (mine == generation && isDead(error)) onDeadSession()
+        if (mine == generation) {
+          if (isDead(error)) onDeadSession()
+          else {
+            AppLog.warn("Seek failed", mapOf(
+              "source" to (sourceId ?: ""),
+              "error" to (error.message ?: error.javaClass.simpleName),
+            ))
+            _state.update { it.copy(seekKept = it.seekKept + 1) }
+          }
+        }
         return@launch
       }
       if (stopped || mine != generation || stamp != sequence) return@launch
@@ -777,7 +788,16 @@ class PlaybackController(
     trackJob?.cancel()
     trackJob = scope.launch {
       val descriptor = runCatching { api.trackPlayback(id, change) }.getOrElse { error ->
-        if (mine == generation && isDead(error)) onDeadSession()
+        if (mine == generation) {
+          if (isDead(error)) onDeadSession()
+          else {
+            AppLog.warn("Track switch failed", mapOf(
+              "change" to request.javaClass.simpleName,
+              "error" to (error.message ?: error.javaClass.simpleName),
+            ))
+            _state.update { it.copy(trackKept = it.trackKept + 1) }
+          }
+        }
         return@launch
       }
       if (stopped || mine != generation || stamp != sequence) return@launch

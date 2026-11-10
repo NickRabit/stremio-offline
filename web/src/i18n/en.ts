@@ -350,6 +350,7 @@ export const en = {
   "player.lowerQualityTo": "Drop to {height}p",
   "player.hideHint": "Dismiss",
   "player.seekRestored": "Could not seek. Kept the previous position.",
+  "player.trackKept": "Could not switch the track. Kept the current one.",
   "player.playbackFailed": "Playback failed: {details} ({type})",
   "player.noHls": "This browser cannot play HLS.",
   "player.browserRefused": "The browser could not play this stream.",
