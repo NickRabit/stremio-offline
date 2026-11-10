@@ -1848,18 +1848,32 @@ const remuxSession = (manager: any, overrides: Record<string, unknown> = {}) => 
 
 const FAKE_FFMPEG_SKIP = process.platform === "win32" ? "Windows cannot run a script as the FFmpeg binary" : false;
 
-const runToCleanExit = async (t: TestContext, duration: number | undefined, outTimeSeconds: number, exitCode = 0) => {
+const runToCleanExit = async (
+  t: TestContext,
+  duration: number | undefined,
+  outTimeSeconds: number,
+  exitCode = 0,
+  options: { id?: string; segments?: number } = {},
+) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "playback-clean-exit-"));
   const fake = path.join(directory, "ffmpeg");
+  const segments = options.segments ?? 2;
+  const durations = Array.from({ length: segments }, () => 2);
+  const contents = Array.from({ length: segments }, (_, index) => `segment-${index}`);
   await writeFile(fake, `#!/usr/bin/env node
 const fs = require("fs"), path = require("path");
 const output = process.argv[process.argv.length - 1];
 const folder = path.dirname(output);
-const segment = (n) => "#EXTINF:2.000,\\nseg-0-00000" + n + ".m4s\\n";
+const durations = ${JSON.stringify(durations)};
+const contents = ${JSON.stringify(contents)};
+const segment = (n) => "#EXTINF:" + durations[n].toFixed(3) + ",\\nseg-0-" + String(n).padStart(6, "0") + ".m4s\\n";
 fs.writeFileSync(path.join(folder, "init.mp4"), "init");
-fs.writeFileSync(path.join(folder, "seg-0-000000.m4s"), "zero");
-fs.writeFileSync(path.join(folder, "seg-0-000001.m4s"), "one");
-fs.writeFileSync(path.join(folder, "index-0.m3u8"), '#EXTM3U\\n#EXT-X-VERSION:7\\n#EXT-X-TARGETDURATION:2\\n#EXT-X-MAP:URI="init.mp4"\\n' + segment(0) + segment(1));
+let playlist = '#EXTM3U\\n#EXT-X-VERSION:7\\n#EXT-X-TARGETDURATION:2\\n#EXT-X-MAP:URI="init.mp4"\\n';
+for (let n = 0; n < durations.length; n += 1) {
+  fs.writeFileSync(path.join(folder, "seg-0-" + String(n).padStart(6, "0") + ".m4s"), contents[n]);
+  playlist += segment(n);
+}
+fs.writeFileSync(path.join(folder, "index-0.m3u8"), playlist);
 process.stdout.write("out_time_us=${Math.round(outTimeSeconds * 1_000_000)}\\nprogress=end\\n");
 process.exitCode = ${exitCode};
 `);
@@ -1876,7 +1890,7 @@ process.exitCode = ${exitCode};
   t.after(() => rm(directory, { recursive: true, force: true }));
   const manager = new PlaybackManager(root) as any;
   const session = remuxSession(manager, {
-    id: `clean-${outTimeSeconds}-${exitCode}`,
+    id: options.id ?? `clean-${outTimeSeconds}-${exitCode}`,
     generation: 0,
     info: {
       container: "matroska,webm", duration,
@@ -1887,6 +1901,24 @@ process.exitCode = ${exitCode};
   await manager.spawnAt(session, 0);
   if (session.process.exitCode === null) await once(session.process, "close");
   return { manager, session, status: manager.status(session.id) };
+};
+
+const directoryBytes = async (directory: string) => {
+  const names = await readdir(directory);
+  const sizes = await Promise.all(names.map((name) => stat(path.join(directory, name)).then((value) => value.size, () => 0)));
+  return sizes.reduce((sum, size) => sum + size, 0);
+};
+
+const conversionSummaries = async (id: string) => {
+  await flushLog();
+  const written = await readLog({ level: "INFO", search: "Conversion summary" });
+  return written.split("\n").filter((line) => line.includes(`"id":"${id}"`)).map((line) => JSON.parse(line.slice(line.indexOf("{"))));
+};
+
+const conversionSummary = async (id: string) => {
+  const summaries = await conversionSummaries(id);
+  assert.equal(summaries.length, 1, "a converted session writes exactly one summary");
+  return summaries[0];
 };
 
 test("shortConversion uses the larger of thirty seconds and two percent", () => {
@@ -1938,6 +1970,131 @@ test("a failed conversion that reached the end is complete", { skip: FAKE_FFMPEG
 test("a conversion that fails without a known duration is not judged and ends as before", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
   const { manager, session } = await runToCleanExit(t, undefined, 60, 1);
   assert.equal(manager.status(session.id).conversion, "complete");
+});
+
+test("conversion summary reports what was produced and fetched", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, undefined, 60, 0, { id: "summary-fetched", segments: 5 });
+  const bytesWritten = await directoryBytes(session.directory);
+  for (let index = 0; index <= 2; index += 1) {
+    manager.fetched(session.id, String(session.generation), `seg-0-${String(index).padStart(6, "0")}.m4s`);
+  }
+
+  await manager.stop(session.id);
+
+  assert.deepEqual(await conversionSummary(session.id), {
+    id: session.id,
+    mode: "remux",
+    generations: 1,
+    producedSeconds: 10,
+    fetchedSeconds: 6,
+    unfetchedSeconds: 4,
+    bytesWritten,
+    ended: "closed",
+  });
+});
+
+test("conversion summary counts a retired generation before it is purged", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, undefined, 60, 0, { id: "summary-seek", segments: 5 });
+  manager.fetched(session.id, String(session.generation), "seg-0-000002.m4s");
+  const firstDirectory = session.directory;
+  const firstBytes = await directoryBytes(firstDirectory);
+
+  const settledAtPurge: Array<number | undefined> = [];
+  let settling = false;
+  let purged!: () => void;
+  const firstPurged = new Promise<void>((resolve) => { purged = resolve; });
+  const settleGeneration = manager.settleGeneration.bind(manager);
+  manager.settleGeneration = (entry: any, directory: string) => {
+    if (directory === firstDirectory) settling = true;
+    return settleGeneration(entry, directory);
+  };
+  const purgeNow = manager.purgeNow.bind(manager);
+  manager.purgeNow = async (directory: string) => {
+    if (directory === firstDirectory) {
+      settledAtPurge.push(session.ledger.generations.get(1)?.producedSeconds);
+    }
+    await purgeNow(directory);
+    if (directory === firstDirectory) purged();
+  };
+  manager.run = async (target: any, _offset: number, directory: string) => {
+    let playlist = '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI="init.mp4"\n';
+    await writeFile(path.join(directory, "init.mp4"), "init");
+    for (let index = 0; index < 5; index += 1) {
+      const name = `seg-0-${String(index).padStart(6, "0")}.m4s`;
+      await writeFile(path.join(directory, name), `segment-${index}`);
+      playlist += `#EXTINF:2.000,\n${name}\n`;
+    }
+    await writeFile(path.join(directory, "index-0.m3u8"), playlist);
+    target.process = { exitCode: 0, signalCode: null };
+    return `/api/playback/${target.id}/${target.generation}/master.m3u8`;
+  };
+
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  await manager.seek(session.id, 60);
+  const secondDirectory = session.directory;
+  for (let index = 0; index < 5; index += 1) {
+    manager.fetched(session.id, String(session.generation), `seg-0-${String(index).padStart(6, "0")}.m4s`);
+  }
+  const secondBytes = await directoryBytes(secondDirectory);
+
+  // Only the retire delay runs on the mocked clock; once it has fired, the settle and the purge
+  // are real file work, waited for as the event it is rather than a number of turns.
+  while (!settling) {
+    await flushPlayback();
+    t.mock.timers.tick(1_000);
+  }
+  await firstPurged;
+  assert.deepEqual(settledAtPurge, [10], "the retired playlist was read before its directory was removed");
+
+  await manager.stop(session.id);
+  assert.deepEqual(await conversionSummary(session.id), {
+    id: session.id,
+    mode: "remux",
+    generations: 2,
+    producedSeconds: 20,
+    fetchedSeconds: 16,
+    unfetchedSeconds: 4,
+    bytesWritten: firstBytes + secondBytes,
+    ended: "closed",
+  });
+});
+
+test("a reaped orphan records that it was orphaned", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, undefined, 60, 0, { id: "summary-orphan" });
+  session.claimed = true;
+  session.clientAt = Date.now() - 91_000;
+
+  manager.reap();
+  let summaries: Array<Record<string, unknown>> = [];
+  for (let attempt = 0; attempt < 100 && summaries.length === 0; attempt += 1) {
+    await pause(5);
+    summaries = await conversionSummaries(session.id);
+  }
+
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0].ended, "orphaned");
+});
+
+test("a direct session writes no conversion summary", async (t) => {
+  const manager = new PlaybackManager(tmp("test-summary-direct")) as any;
+  const session = remuxSession(manager, { id: "summary-direct", mode: "direct" });
+
+  await manager.stop(session.id);
+
+  assert.deepEqual(await conversionSummaries(session.id), []);
+});
+
+test("fetched ignores names FFmpeg does not write as video segments", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, undefined, 60, 0, { id: "summary-fetched-filters", segments: 5 });
+  const generation = String(session.generation);
+  manager.fetched(session.id, generation, "seg-0-000001.m4s");
+  for (const file of ["init.mp4", "master.m3u8", "index-0.m3u8", "seg-1-000004.m4s", "seg-0-4.m4s", "other-0-000004.m4s"]) {
+    manager.fetched(session.id, generation, file);
+  }
+
+  await manager.stop(session.id);
+
+  assert.equal((await conversionSummary(session.id)).fetchedSeconds, 4);
 });
 
 test("a new generation is running while the previous generation ended short", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
