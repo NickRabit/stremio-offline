@@ -94,6 +94,8 @@ let pingRequests: string[];
 let pingBodies: unknown[];
 let pingStatus: number;
 let pingBody: unknown;
+/** Client diagnostics posted to the server (`report()`). */
+let clientLogs: Array<{ level?: string; message?: string }>;
 /** Every segment lookup sent for the playback on screen. */
 let introRequests: string[];
 /** What the next segment lookup answers. */
@@ -141,6 +143,7 @@ beforeEach(() => {
   pingBodies = [];
   pingStatus = 204;
   pingBody = null;
+  clientLogs = [];
   introRequests = [];
   introAnswer = {};
   progressReads = [];
@@ -202,6 +205,10 @@ beforeEach(() => {
     if (path === "/api/intro-segments") {
       introRequests.push(`${path}${url.search}`);
       return Promise.resolve(json(introAnswer));
+    }
+    if (path === "/api/client-log" && init?.method === "POST") {
+      clientLogs.push(JSON.parse(String(init.body)) as { level?: string; message?: string });
+      return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (path.startsWith("/api/progress")) return Promise.resolve(json(null));
     return Promise.resolve(json(null));
@@ -993,6 +1000,90 @@ describe("Player lost playback session", () => {
 
       expect(playbackPosts).toHaveLength(3);
       expect(host.querySelector(".player-error")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a released-while-paused session once and stops pinging until the viewer plays", async () => {
+    hlsMock.enabled = false;
+    sessionShape = {};
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      await render();
+      const video = await at(42);
+      await act(async () => { video.dispatchEvent(new Event("playing")); });
+      Object.defineProperty(video, "paused", { configurable: true, get: () => false });
+      await click(host.querySelector(".play-toggle")!);
+
+      await act(async () => { vi.advanceTimersByTime(30_000); });
+      await flushAll();
+
+      expect(playbackPosts).toHaveLength(1);
+      expect(host.querySelector(".player-error")).toBeNull();
+      const released = () => clientLogs.filter((entry) => entry.message === "The playback session was released while paused");
+      expect(released()).toHaveLength(1);
+      expect(pingRequests).toHaveLength(1);
+
+      await act(async () => { vi.advanceTimersByTime(30_000); });
+      await flushAll();
+      await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+      await flushAll();
+
+      expect(pingRequests).toHaveLength(1);
+      expect(released()).toHaveLength(1);
+
+      Object.defineProperty(video, "paused", { configurable: true, get: () => true });
+      await click(host.querySelector(".play-toggle")!);
+      await flushAll();
+
+      expect(playbackPosts).toHaveLength(2);
+      expect(playbackPosts[1]!.time).toBeCloseTo(42, 1);
+      expect(host.querySelector(".player-error")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not play leftover buffer when resuming a session released while paused", async () => {
+    hlsMock.enabled = false;
+    sessionShape = {};
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await render();
+      const video = await at(42);
+      await act(async () => { video.dispatchEvent(new Event("playing")); });
+      Object.defineProperty(video, "paused", { configurable: true, get: () => false });
+      await click(host.querySelector(".play-toggle")!);
+
+      await act(async () => { vi.advanceTimersByTime(30_000); });
+      await flushAll();
+      expect(playbackPosts).toHaveLength(1);
+
+      let releaseStart: ((value: Response) => void) | undefined;
+      const inner = globalThis.fetch as typeof fetch;
+      vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = new URL(String(input), "http://localhost").pathname;
+        if (path === "/api/playback" && init?.method === "POST") {
+          playbackPosts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+          return new Promise<Response>((resolve) => { releaseStart = resolve; });
+        }
+        return inner(input, init);
+      }));
+
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockClear();
+      Object.defineProperty(video, "paused", { configurable: true, get: () => true });
+      await click(host.querySelector(".play-toggle")!);
+      await flushAll();
+
+      expect(playbackPosts).toHaveLength(2);
+      expect(playbackPosts[1]!.time).toBeCloseTo(42, 1);
+      expect(play).not.toHaveBeenCalled();
+
+      await act(async () => { releaseStart?.(json(session())); });
+      await flushAll();
+      expect(play).toHaveBeenCalled();
+      play.mockRestore();
     } finally {
       vi.useRealTimers();
     }

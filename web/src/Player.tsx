@@ -954,8 +954,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const recoverLostSession = (reason: string, failed: string) => {
     if (abandonedRef.current || seekInFlightRef.current) return;
     if (reason !== "resume" && userPausedRef.current) {
-      lostWhilePausedRef.current = true;
-      report("WARN", "The playback session was released while paused", { ...context(), reason });
+      if (!lostWhilePausedRef.current) {
+        lostWhilePausedRef.current = true;
+        report("WARN", "The playback session was released while paused", { ...context(), reason });
+      }
       return;
     }
     if (reason !== "resume") {
@@ -1228,6 +1230,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   useEffect(() => {
     if (!open) return;
     const checkSession = async () => {
+      if (lostWhilePausedRef.current) return;
       const id = sessionRef.current;
       if (!id) return;
       try {
@@ -1269,7 +1272,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (video.paused) {
       setUserPaused(false);
       userPausedRef.current = false;
-      resumeLostWhilePaused();
+      if (lostWhilePausedRef.current) {
+        resumeLostWhilePaused();
+        return;
+      }
       void video.play().catch(() => undefined);
     }
     else { setUserPaused(true); video.pause(); }
@@ -1578,15 +1584,17 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }}>
       <video ref={videoRef} playsInline disableRemotePlayback x-webkit-airplay="deny"
         onPlay={() => {
+          if (lostWhilePausedRef.current) {
+            videoRef.current?.pause();
+            setUserPaused(false);
+            userPausedRef.current = false;
+            resumeLostWhilePaused();
+            return;
+          }
           setPaused(false);
           // A failed seek or track change leaves the lock off. Playing again means it recovered.
           setPlaybackFailed(false);
           cancelNext();
-          if (lostWhilePausedRef.current) {
-            setUserPaused(false);
-            userPausedRef.current = false;
-            resumeLostWhilePaused();
-          }
         }} onPause={() => setPaused(true)} onSeeking={cancelNext} onSeeked={reportSeek}
         onEnded={() => { void playbackEnded(); }}
         onTimeUpdate={(event) => {
