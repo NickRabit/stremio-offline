@@ -60,6 +60,24 @@ a failed track, quality or escalation restart restores the old generation too,
 but still reports the failure to the client. A dead process or incomplete output
 does not qualify, so the restart failure propagates unchanged.
 
+## Lead cap
+
+`PLAYBACK_LEAD_CAP_SECONDS` limits how far a conversion may run ahead of the
+furthest segment the player has fetched. It is off by default (`0` or unset).
+When enabled, FFmpeg is suspended with `SIGSTOP` once it is more than the high
+mark ahead, and resumed with `SIGCONT` when the lead falls below 60% of that
+mark. For example, `300` suspends above 300 seconds ahead and resumes below 180.
+
+The produced position is checked on every FFmpeg progress update, not by a
+timer, so the burst `-readrate` makes after a resume is stopped again promptly.
+A generation is never suspended before the player fetches its first segment or
+while a seek, track change or conversion escalation is starting. Stopping the
+session or starting a restart resumes the process first.
+
+Windows has no `SIGSTOP`, so the cap stays off there and logs a warning if the
+variable is set. Subtitle extraction and preview processes are independent and
+are not suspended.
+
 ## Conversion summary
 
 Each remux or transcode session writes one `INFO` line, `Conversion summary`, when
@@ -74,6 +92,7 @@ it stops. Direct play writes no summary.
 | `fetchedSeconds` | Whole seconds up to the furthest video segment the client requested in each generation |
 | `unfetchedSeconds` | Produced seconds the client did not fetch |
 | `bytesWritten` | Total size of the files left in the generation directories when they were settled |
+| `suspendedSeconds` | Whole seconds the conversion spent suspended by the lead cap |
 | `ended` | `closed`, `orphaned`, `unclaimed`, `idle`, `failed`, `revoked`, `shutdown`, or `paused` |
 
 ### AC-3 after a seek

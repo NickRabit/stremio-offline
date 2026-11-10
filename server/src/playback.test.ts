@@ -1848,6 +1848,278 @@ const remuxSession = (manager: any, overrides: Record<string, unknown> = {}) => 
 
 const FAKE_FFMPEG_SKIP = process.platform === "win32" ? "Windows cannot run a script as the FFmpeg binary" : false;
 
+const leadDurations = Array.from({ length: 220 }, (_, index) => index < 100 ? 2 : 10);
+
+const leadCapFixture = async (t: TestContext, high: string | undefined, id: string) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "playback-lead-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "playback-lead-root-"));
+  const fake = path.join(directory, "ffmpeg");
+  const control = path.join(directory, "control.json");
+  const durations = leadDurations;
+  const segment = (index: number) => `#EXTINF:${durations[index]!.toFixed(3)},\nseg-0-${String(index).padStart(6, "0")}.m4s\n`;
+  const playlist = `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:3\n#EXT-X-MAP:URI="init.mp4"\n${durations.map((_, index) => segment(index)).join("")}`;
+  await writeFile(fake, `#!/usr/bin/env node
+const fs = require("fs"), path = require("path");
+const control = ${JSON.stringify(control)};
+const output = path.dirname(process.argv[process.argv.length - 1]);
+const playlist = ${JSON.stringify(playlist)};
+fs.writeFileSync(path.join(output, "init.mp4"), "init");
+for (let index = 0; index < ${durations.length}; index += 1) {
+  fs.writeFileSync(path.join(output, "seg-0-" + String(index).padStart(6, "0") + ".m4s"), "segment-" + index);
+}
+fs.writeFileSync(path.join(output, "index-0.m3u8"), playlist);
+fs.writeFileSync(path.join(output, "master.m3u8"), "#EXTM3U\\n");
+process.stdout.write("out_time_us=2000000\\nprogress=continue\\n");
+process.on("SIGUSR1", () => {
+  const command = JSON.parse(fs.readFileSync(control, "utf8"));
+  const ended = command.end === true ? "end" : "continue";
+  process.stdout.write("out_time_us=" + Math.round(command.outTime * 1000000) + "\\nprogress=" + ended + "\\n", () => {
+    if (command.end === true) process.exit(0);
+  });
+});
+setInterval(() => {}, 1000);
+`);
+  await chmod(fake, 0o755);
+
+  const originalBinary = process.env.FFMPEG_PATH;
+  const originalCap = process.env.PLAYBACK_LEAD_CAP_SECONDS;
+  process.env.FFMPEG_PATH = fake;
+  if (high === undefined) delete process.env.PLAYBACK_LEAD_CAP_SECONDS;
+  else process.env.PLAYBACK_LEAD_CAP_SECONDS = high;
+  const manager = new PlaybackManager(root) as any;
+  manager.softwareEncoder = true;
+  const session = remuxSession(manager, {
+    id,
+    generation: 0,
+    info: {
+      container: "matroska,webm", duration: durations.reduce((sum, value) => sum + value, 0),
+      video: { codec: "h264" }, audio: { codec: "aac" },
+      audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [],
+    },
+  });
+  await manager.spawnAt(session, 0);
+  const signals: string[] = [];
+  const signalEvents = new EventEmitter();
+  const originalKill = session.process.kill.bind(session.process);
+  session.process.kill = (signal?: NodeJS.Signals | number) => {
+    if (signal !== undefined) {
+      signals.push(String(signal));
+      signalEvents.emit("signal", String(signal));
+    }
+    return originalKill(signal);
+  };
+
+  const nextSignal = () => new Promise<string>((resolve) => signalEvents.once("signal", resolve));
+  const produce = async (outTime: number, end = false, output?: ReturnType<typeof once>) => {
+    await writeFile(control, JSON.stringify({ outTime, end }));
+    process.kill(session.process.pid!, "SIGUSR1");
+    if (output) await output;
+  };
+
+  t.after(async () => {
+    try { session.process?.kill("SIGKILL"); } catch { /* already gone */ }
+    if (originalBinary === undefined) delete process.env.FFMPEG_PATH;
+    else process.env.FFMPEG_PATH = originalBinary;
+    if (originalCap === undefined) delete process.env.PLAYBACK_LEAD_CAP_SECONDS;
+    else process.env.PLAYBACK_LEAD_CAP_SECONDS = originalCap;
+    await Promise.all([
+      rm(directory, { recursive: true, force: true }),
+      rm(root, { recursive: true, force: true }),
+    ]);
+  });
+  return { manager, session, signals, nextSignal, produce };
+};
+
+const waitForLedger = async (session: any, condition: () => boolean) => {
+  for (let attempt = 0; attempt < 100 && !condition(); attempt += 1) await flushPlayback();
+  assert.equal(condition(), true, "the ledger read settled");
+};
+
+test("the lead cap suspends at the high mark, resumes at the low mark, and stops a resume burst", { timeout: 20_000, skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session, signals, nextSignal, produce } = await leadCapFixture(t, "300", "lead-cap");
+  manager.fetched(session.id, String(session.generation), "seg-0-000000.m4s");
+  await waitForLedger(session, () => session.ledger.generations.get(session.generation)?.fetchedSeconds === 2);
+
+  const suspended = nextSignal();
+  await produce(362);
+  assert.equal(await suspended, "SIGSTOP");
+  assert.equal(manager.status(session.id).conversion, "running");
+  assert.equal(await manager.usableFallback(session), true, "a suspended process is still a usable fallback");
+  assert.equal(session.suspendedSince !== undefined, true);
+
+  const resumed = nextSignal();
+  manager.fetched(session.id, String(session.generation), "seg-0-000180.m4s");
+  assert.equal(await resumed, "SIGCONT");
+  assert.equal(session.ledger.generations.get(session.generation).fetchedSeconds, 1010,
+    "playlist durations are summed instead of multiplying the segment index");
+
+  const suspendedAgain = nextSignal();
+  await produce(1400);
+  assert.equal(await suspendedAgain, "SIGSTOP");
+
+  const finalResume = nextSignal();
+  manager.fetched(session.id, String(session.generation), "seg-0-000219.m4s");
+  await waitForLedger(session, () => (session.ledger.generations.get(session.generation)?.fetchedSeconds ?? 0) > 1010);
+  assert.equal(await finalResume, "SIGCONT");
+  assert.equal(session.ledger.generations.get(session.generation).fetchedSeconds, 1400);
+
+  const closed = once(session.process, "close");
+  await produce(1400, true);
+  await closed;
+  assert.equal(manager.status(session.id).conversion, "complete");
+  assert.deepEqual(signals, ["SIGSTOP", "SIGCONT", "SIGSTOP", "SIGCONT"]);
+
+  session.suspendedMs = 12_400;
+  await manager.stop(session.id);
+  const summary = await conversionSummary(session.id);
+  assert.equal(summary.suspendedSeconds, 12);
+});
+
+test("the lead cap never suspends before the first segment of the generation is fetched", { timeout: 20_000, skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session, signals, nextSignal, produce } = await leadCapFixture(t, "300", "lead-first-segment");
+  const output = once(session.process.stdout!, "data");
+  await produce(900, false, output);
+  assert.equal(signals.includes("SIGSTOP"), false);
+
+  const stopped = nextSignal();
+  manager.fetched(session.id, String(session.generation), "seg-0-000000.m4s");
+  await waitForLedger(session, () => session.ledger.generations.get(session.generation)?.fetchedSeconds === 2);
+  assert.equal(await stopped, "SIGSTOP", "the existing production is evaluated after the first fetch");
+
+  const resumed = nextSignal();
+  manager.fetched(session.id, String(session.generation), "seg-0-000219.m4s");
+  assert.equal(await resumed, "SIGCONT");
+  const closed = once(session.process, "close");
+  await produce(1400, true);
+  await closed;
+  await manager.stop(session.id);
+});
+
+for (const row of [
+  { name: "unset", high: undefined },
+  { name: "zero", high: "0" },
+] as const) {
+  test(`the lead cap stays off when ${row.name}`, { timeout: 20_000, skip: FAKE_FFMPEG_SKIP }, async (t) => {
+    const { manager, session, signals, produce } = await leadCapFixture(t, row.high, `lead-off-${row.name}`);
+    const output = once(session.process.stdout!, "data");
+    await produce(900, false, output);
+    manager.fetched(session.id, String(session.generation), "seg-0-000180.m4s");
+    await waitForLedger(session, () => session.ledger.generations.get(session.generation)?.furthestSegment === 180);
+    assert.equal(session.ledger.generations.get(session.generation).fetchedSeconds, undefined, "the playlist is not read while the cap is off");
+    await flushPlayback();
+
+    const closed = once(session.process, "close");
+    await produce(1400, true);
+    await closed;
+    assert.deepEqual(signals, []);
+    await manager.stop(session.id);
+  });
+}
+
+test("a failure to start a seek resumes and re-evaluates the restored generation", { timeout: 20_000, skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session, signals, nextSignal, produce } = await leadCapFixture(t, "300", "lead-failed-seek");
+  manager.fetched(session.id, String(session.generation), "seg-0-000000.m4s");
+  await waitForLedger(session, () => session.ledger.generations.get(session.generation)?.fetchedSeconds === 2);
+  const suspended = nextSignal();
+  await produce(900);
+  assert.equal(await suspended, "SIGSTOP");
+  const previousGeneration = session.generation;
+  const resumed = nextSignal();
+  manager.fetched(session.id, String(session.generation), "seg-0-000219.m4s");
+
+  manager.spawnAt = async () => { throw new Error("The source could not be opened"); };
+  const result = await manager.seek(session.id, 1200);
+
+  assert.equal(await resumed, "SIGCONT");
+  assert.equal(result.seekRestored, true);
+  assert.equal(manager.status(session.id).conversion, "running");
+  assert.equal(session.generation, previousGeneration);
+  assert.deepEqual(signals, ["SIGSTOP", "SIGCONT"], "the restored generation stays running at the client's edge");
+  await manager.stop(session.id);
+});
+
+for (const operation of ["stop", "seek", "track", "escalate"] as const) {
+  test(`${operation} while suspended resumes before terminating and removes the old generation`, { timeout: 25_000, skip: FAKE_FFMPEG_SKIP }, async (t) => {
+    const { manager, session, signals, nextSignal, produce } = await leadCapFixture(t, "300", `lead-${operation}`);
+    manager.fetched(session.id, String(session.generation), "seg-0-000000.m4s");
+    await waitForLedger(session, () => session.ledger.generations.get(session.generation)?.fetchedSeconds === 2);
+    const suspended = nextSignal();
+    await produce(900);
+    assert.equal(await suspended, "SIGSTOP");
+
+    const oldProcess = session.process;
+    const oldDirectory = session.directory;
+    const oldGeneration = session.generation;
+    if (operation === "stop") {
+      const closed = once(oldProcess, "close");
+      await manager.stop(session.id);
+      await closed;
+      assert.deepEqual(signals, ["SIGSTOP", "SIGCONT", "SIGTERM"]);
+      assert.equal(existsSync(oldDirectory), false);
+      return;
+    }
+
+    const nextDirectory = path.join(manager.root, session.id, String(oldGeneration + 1));
+    await mkdir(nextDirectory, { recursive: true });
+    await writeFile(path.join(nextDirectory, "init.mp4"), "init");
+    await writeFile(path.join(nextDirectory, "seg-0-000000.m4s"), "segment-0");
+    await writeFile(path.join(nextDirectory, "seg-0-000001.m4s"), "segment-1");
+    await writeFile(path.join(nextDirectory, "index-0.m3u8"),
+      "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:2.000,\nseg-0-000000.m4s\n#EXTINF:2.000,\nseg-0-000001.m4s\n");
+    await writeFile(path.join(nextDirectory, "master.m3u8"), "#EXTM3U\n");
+    const purged: string[] = [];
+    const purge = manager.purge.bind(manager);
+    manager.purge = async (directory: string, why?: string) => { purged.push(directory); return purge(directory, why); };
+    const purgedNow: string[] = [];
+    const purgeNow = manager.purgeNow.bind(manager);
+    let purgeSettled: Promise<void> | undefined;
+    manager.purgeNow = (directory: string) => {
+      purgedNow.push(directory);
+      purgeSettled = purgeNow(directory);
+      return purgeSettled;
+    };
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+    const closed = once(oldProcess, "close");
+    if (operation === "seek") await manager.seek(session.id, 1200);
+    else if (operation === "track") await manager.track(session.id, { audio: 0, time: 1200 });
+    else await manager.escalate(session.id, 1200);
+    await closed;
+
+    assert.deepEqual(signals.slice(0, 3), ["SIGSTOP", "SIGCONT", "SIGTERM"]);
+    assert.ok(session.generation > oldGeneration, "the new generation starts");
+    assert.notEqual(session.process, oldProcess);
+    assert.equal(oldProcess.exitCode !== null || oldProcess.signalCode !== null, true);
+    for (let attempt = 0; attempt < 100 && !purgedNow.includes(oldDirectory); attempt += 1) {
+      await flushPlayback();
+      t.mock.timers.tick(1_000);
+    }
+    assert.deepEqual(purged, [oldDirectory]);
+    await purgeSettled;
+    assert.equal(existsSync(oldDirectory), false);
+    t.mock.timers.reset();
+    await manager.stop(session.id);
+  });
+}
+
+test("the lead cap is off on Windows and warns once when configured", async (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  const originalCap = process.env.PLAYBACK_LEAD_CAP_SECONDS;
+  Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+  process.env.PLAYBACK_LEAD_CAP_SECONDS = "300";
+  t.after(() => {
+    if (descriptor) Object.defineProperty(process, "platform", descriptor);
+    if (originalCap === undefined) delete process.env.PLAYBACK_LEAD_CAP_SECONDS;
+    else process.env.PLAYBACK_LEAD_CAP_SECONDS = originalCap;
+  });
+
+  const manager = new PlaybackManager(tmp("test-lead-windows")) as any;
+  assert.equal(manager.leadCapHigh, 0);
+  await flushLog();
+  const lines = (await readLog({ level: "WARN", search: "The conversion lead cap needs SIGSTOP" }))
+    .split("\n").filter(Boolean);
+  assert.equal(lines.length, 1);
+});
+
 const runToCleanExit = async (
   t: TestContext,
   duration: number | undefined,
@@ -1990,6 +2262,7 @@ test("conversion summary reports what was produced and fetched", { skip: FAKE_FF
     unfetchedSeconds: 4,
     bytesWritten,
     ended: "closed",
+    suspendedSeconds: 0,
   });
 });
 
@@ -2044,6 +2317,7 @@ test("conversion summary counts a retired generation before it is purged", { ski
     unfetchedSeconds: 4,
     bytesWritten: firstBytes + secondBytes,
     ended: "closed",
+    suspendedSeconds: 0,
   });
 });
 

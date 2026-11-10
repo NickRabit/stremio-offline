@@ -147,6 +147,22 @@ const sniffPlaylist = async (body: ReadableStream<Uint8Array>, signal: AbortSign
 
 const rangeStartsAtZero = (range: string) => !range || /^\s*bytes=0-\d*\s*$/.test(range);
 
+const waitForDrainOrClose = (res: express.Response): Promise<boolean> => {
+  if (res.destroyed) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const done = (open: boolean) => {
+      res.off("drain", onDrain);
+      res.off("close", onClose);
+      resolve(open && !res.destroyed);
+    };
+    const onDrain = () => done(true);
+    const onClose = () => done(false);
+    res.once("drain", onDrain);
+    res.once("close", onClose);
+    if (res.destroyed) done(false);
+  });
+};
+
 const readAheadPrefix = async (readAhead: RemoteReadAhead, first: ReadAheadBlock): Promise<Buffer> => {
   const chunks: Buffer[] = [];
   const end = Math.min(first.end, first.start + UTF8_BOM.length + PLAYLIST_PREFIX.length);
@@ -706,7 +722,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       for (const [name, value] of Object.entries(held.headers)) {
         res.setHeader(name, name.toLowerCase() === "content-type" ? servedMediaType(value) : value);
       }
-      if (!res.write(held.bytes)) await once(res, "drain");
+      if (!res.write(held.bytes) && !await waitForDrainOrClose(res)) return;
       alreadySent = held.bytes.length;
       log("DEBUG", "Served a read the source had already answered", { req: req.id, range: askedRange || "whole file", bytes: alreadySent, whole: held.complete });
       if (held.complete) return void res.end();
@@ -853,7 +869,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
             kept += piece.length;
             if (kept > rangeCache.limit) keep = undefined; else keep.push(Buffer.from(piece));
           }
-          if (piece.length && !res.write(piece)) await once(res, "drain");
+          if (piece.length && !res.write(piece) && !await waitForDrainOrClose(res)) return;
           // Which side this transfer waits on tells a slow source from an FFmpeg that cannot keep up.
           const taken = performance.now();
           const paced = ownerNow();
