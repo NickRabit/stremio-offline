@@ -863,15 +863,16 @@ describe("Player lost playback session", () => {
     expect(hls.recoverMediaErrorCalls).toBe(1);
   });
 
-  it("carries the chosen audio track and quality into the new session", async () => {
-    sessionShape = { ...sessionShape, audioTracks: [{ index: 0, language: "cze" }, { index: 1, language: "eng" }], audioTrack: 1, quality: 720 };
+  it("carries the chosen audio track, subtitle track and quality into the new session", async () => {
+    sessionShape = { ...sessionShape, audioTracks: [{ index: 0, language: "cze" }, { index: 1, language: "eng" }], audioTrack: 1, quality: 720,
+      subtitleTracks: [{ index: 0, language: "cze" }, { index: 1, language: "eng" }], subtitleTrack: 1 };
     await render();
     await at(42);
 
     await fatalHlsError();
 
     expect(playbackPosts).toHaveLength(2);
-    expect(playbackPosts[1]).toMatchObject({ audioTrack: 1, quality: 720 });
+    expect(playbackPosts[1]).toMatchObject({ audioTrack: 1, quality: 720, subtitleTrack: 1 });
   });
 
   it("keeps hls.js retries and then fails when the session is still alive", async () => {

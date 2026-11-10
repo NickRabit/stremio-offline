@@ -890,7 +890,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId), {
             audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current,
             // The same file, so the same track numbers: what the viewer picked by hand comes along.
-            ...(currentSessionRef.current ? { audioTrack: currentSessionRef.current.audioTrack, quality: currentSessionRef.current.quality } : {}),
+            ...(currentSessionRef.current ? {
+              audioTrack: currentSessionRef.current.audioTrack,
+              subtitleTrack: currentSessionRef.current.subtitleTrack,
+              quality: currentSessionRef.current.quality,
+            } : {}),
           });
           id = next.id; started = next.id;
           if (next.mode === "direct") recoveredDirectAt = requested;
