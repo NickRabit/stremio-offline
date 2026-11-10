@@ -77,7 +77,10 @@ session or starting a restart resumes the process first.
 When the web player waits for a position just past the produced edge, its ping
 carries that absolute position as `waitingFor`. The server treats it as fetched
 for the cap decision while the player waits, so the conversion resumes without
-waiting for the eight-second seek fallback.
+waiting for the eight-second seek fallback. The position counts for at most 20
+seconds past the produced edge, for 30 seconds, and only until the player has
+fetched up to it; a viewer who jumps elsewhere meanwhile costs at most that much
+extra lead.
 
 Windows has no `SIGSTOP`, so the cap stays off there and logs a warning if the
 variable is set. Subtitle extraction and preview processes are independent and

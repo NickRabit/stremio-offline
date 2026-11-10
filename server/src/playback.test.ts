@@ -2023,10 +2023,53 @@ test("the player waiting near the produced edge resumes the suspended conversion
   const resumed = nextSignal();
   manager.waitingFor(session.id, 850);
   assert.equal(await resumed, "SIGCONT");
-  assert.equal(session.ledger.generations.get(session.generation).waitingFloor, 850);
+  assert.equal(session.ledger.generations.get(session.generation).waitingFloor.seconds, 850);
   assert.equal(session.ledger.generations.get(session.generation).fetchedSeconds, 2,
     "the wait floor is only for the cap, not the measured summary");
   assert.deepEqual(signals, ["SIGSTOP", "SIGCONT"]);
+
+  await manager.stop(session.id);
+});
+
+test("a waiting position is bounded to the produced edge and lapses", { timeout: 20_000, skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session, nextSignal, produce } = await leadCapFixture(t, "300", "lead-waiting-bounded");
+  manager.fetched(session.id, String(session.generation), "seg-0-000000.m4s");
+  await waitForLedger(session, () => session.ledger.generations.get(session.generation)?.fetchedSeconds === 2);
+  const suspended = nextSignal();
+  await produce(900);
+  assert.equal(await suspended, "SIGSTOP");
+  const entry = session.ledger.generations.get(session.generation);
+
+  // A position far past what exists cannot switch the cap off for the generation.
+  const resumed = nextSignal();
+  manager.waitingFor(session.id, 1_000_000);
+  assert.equal(await resumed, "SIGCONT");
+  assert.equal(entry.waitingFloor.seconds, 920);
+
+  // Once the wait is long past, the cap measures what the client really fetched again.
+  entry.waitingFloor.until = Date.now() - 1;
+  const again = nextSignal();
+  await produce(1000);
+  assert.equal(await again, "SIGSTOP");
+  assert.equal(entry.waitingFloor, undefined);
+
+  await manager.stop(session.id);
+});
+
+test("a waiting position is dropped once the client fetched up to it", { timeout: 20_000, skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session, nextSignal, produce } = await leadCapFixture(t, "300", "lead-waiting-reached");
+  manager.fetched(session.id, String(session.generation), "seg-0-000000.m4s");
+  await waitForLedger(session, () => session.ledger.generations.get(session.generation)?.fetchedSeconds === 2);
+  const suspended = nextSignal();
+  await produce(900);
+  assert.equal(await suspended, "SIGSTOP");
+  const resumed = nextSignal();
+  manager.waitingFor(session.id, 850);
+  assert.equal(await resumed, "SIGCONT");
+
+  manager.fetched(session.id, String(session.generation), "seg-0-000165.m4s");
+  await waitForLedger(session, () => (session.ledger.generations.get(session.generation)?.fetchedSeconds ?? 0) >= 850);
+  assert.equal(session.ledger.generations.get(session.generation).waitingFloor, undefined);
 
   await manager.stop(session.id);
 });
