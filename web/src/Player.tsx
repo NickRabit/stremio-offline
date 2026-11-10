@@ -227,6 +227,8 @@ const nativeVideoFullscreen = (video: HTMLVideoElement, overlay: HTMLElement | n
 
 /** Keys the player claims for itself. Anything else (Escape) leaves focus alone. */
 const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f"]);
+const SHORT_END_RESTARTS = 3;
+const SHORT_END_PROGRESS_S = 60;
 
 /** Target transcode qualities; the values must match QUALITY_BITRATE on the server. */
 const QUALITIES = [1080, 720, 480];
@@ -386,6 +388,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const seekEpochRef = useRef(0);
   const catchupRef = useRef(0);
   const decodeRecoversRef = useRef<number[]>([]);
+  const shortEndsRef = useRef(0);
+  const shortRestartFromRef = useRef<number | null>(null);
+  const shortRestartRef = useRef(false);
   const recoverFromDecodeRef = useRef<(reason: string) => void>(() => undefined);
   /** Once playback is given up, the element and hls.js must stop, or they keep failing
    * every few seconds and flood the log with the same error until the window is closed. */
@@ -708,7 +713,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
+    decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there. A start-over
     // never reads the store and never writes to it -- the saved position simply stays.
@@ -798,7 +803,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   }, [session?.sidecarUrl]);
 
   /** Inside the produced part we seek at once; otherwise the conversion restarts at the new position. */
-  const seekTo = async (target: number, forceRestart = false) => {
+  const seekTo = async (target: number, forceRestart = false, autoplayOverride?: boolean) => {
     const video = videoRef.current; if (!video) return;
     cancelEarlyStall();
     const bounded = Math.max(0, duration ? Math.min(target, duration - 1) : target);
@@ -827,7 +832,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (seekInFlightRef.current) return;
     let id = sessionRef.current; if (!id) return;
     const epoch = seekEpochRef.current;
-    const autoplay = !video.paused;
+    const autoplay = autoplayOverride ?? !video.paused;
     // Keep the last frame. The previous HLS generation stays served for a few
     // seconds, so destroying it here only produced a black screen and bufferStalledError.
     seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); setPlaybackFailed(false); setSeekKept(false);
@@ -863,7 +868,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           hlsRef.current?.startLoad(video.currentTime);
           if (autoplay) void video.play().catch(() => undefined);
         } else applySession(next, autoplay);
-        if (next.seekRestored) setSeekKept(true);
+        if (next.seekRestored) {
+          if (shortRestartRef.current) {
+            abandon(t("player.sourceStoppedEarly"));
+            return;
+          }
+          setSeekKept(true);
+        }
         if (recoveredDirectAt !== null) {
           const moveDirect = () => { const current = videoRef.current; if (current) current.currentTime = recoveredDirectAt!; showTime(recoveredDirectAt!); };
           if (videoRef.current && videoRef.current.readyState >= 1) moveDirect();
@@ -882,6 +893,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       if (started && started !== sessionRef.current) void api.stopPlayback(started).catch(() => undefined);
       if (epoch === seekEpochRef.current) { pendingSeekRef.current = null; seekInFlightRef.current = false; seekingRef.current = false; setBuffering(false); }
     }
+  };
+
+  const restartHere = (autoplay: boolean) => {
+    shortRestartRef.current = true;
+    return seekTo(timeRef.current, true, autoplay).finally(() => { shortRestartRef.current = false; });
   };
 
   recoverFromDecodeRef.current = (reason: string) => {
@@ -1353,6 +1369,44 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }, 80);
   };
 
+  // Nothing plays on by itself, so the film is over: the player steps aside and leaves the detail
+  // view on screen instead of sitting on the last frame. A film with another file beside it offers
+  // that file on the transport, but never plays it on its own.
+  const finishPlayback = () => {
+    if (!onNext || !autoNext) return closePlayer();
+    setSettingsOpen(false); setUpNextSeconds(5); setUpNext(true); revealControls();
+  };
+
+  const playbackEnded = async () => {
+    const id = sessionRef.current;
+    if (modeRef.current === "direct" || !id) {
+      finishPlayback();
+      return;
+    }
+    const epoch = seekEpochRef.current;
+    let status;
+    try {
+      status = await api.playbackStatus(id);
+    } catch {
+      if (!openRef.current || sessionRef.current !== id || seekEpochRef.current !== epoch) return;
+      finishPlayback();
+      return;
+    }
+    if (!openRef.current || sessionRef.current !== id || seekEpochRef.current !== epoch) return;
+    if (status.conversion !== "short" && status.conversion !== "failed") {
+      finishPlayback();
+      return;
+    }
+    shortEndsRef.current += 1;
+    if (shortEndsRef.current > SHORT_END_RESTARTS) {
+      abandon(t("player.sourceStoppedEarly"));
+      return;
+    }
+    shortRestartFromRef.current = timeRef.current;
+    report("WARN", "The conversion ended before the film did, restarting", { ...context(), reached: status.reached });
+    void restartHere(true);
+  };
+
   // The screen stays on for as long as the viewer means to watch, and goes back to sleeping on a
   // pause, a failed session or the player closing. A browser with no API, or one that refuses the
   // request, changes nothing about playback.
@@ -1433,15 +1487,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           setPlaybackFailed(false);
           cancelNext();
         }} onPause={() => setPaused(true)} onSeeking={cancelNext} onSeeked={reportSeek}
-        onEnded={() => {
-          // Nothing plays on by itself, so the film is over: the player steps aside and leaves
-          // the detail view on screen instead of sitting on the last frame. A film with another
-          // file beside it offers that file on the transport, but never plays it on its own.
-          if (!onNext || !autoNext) return closePlayer();
-          setSettingsOpen(false); setUpNextSeconds(5); setUpNext(true); revealControls();
-        }}
+        onEnded={() => { void playbackEnded(); }}
         onTimeUpdate={(event) => {
           const absolute = offsetRef.current + event.currentTarget.currentTime;
+          if (shortRestartFromRef.current !== null && absolute >= shortRestartFromRef.current + SHORT_END_PROGRESS_S) {
+            shortEndsRef.current = 0;
+            shortRestartFromRef.current = null;
+          }
           const previousPosition = previousPositionRef.current;
           const currentSegment = activeSegment(segments, absolute);
           if (skipSegmentsAuto && !pausedRef.current && currentSegment

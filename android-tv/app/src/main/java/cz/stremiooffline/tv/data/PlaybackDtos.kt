@@ -148,3 +148,11 @@ data class PlaybackDescriptorDto(
   /** `POST /api/playback` maps each offered addon subtitle id to the id this session must use. */
   val subtitleIds: Map<String, String> = emptyMap(),
 )
+
+@Serializable
+data class PlaybackStatusDto(
+  val generation: Int,
+  /** `direct`, `running`, `complete`, `short`, or `failed`. */
+  val conversion: String,
+  val reached: Double? = null,
+)

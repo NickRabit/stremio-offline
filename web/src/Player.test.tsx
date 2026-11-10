@@ -38,6 +38,9 @@ let host: HTMLDivElement;
 let progressPosts: Array<Record<string, unknown>>;
 let remotePosts: Array<Record<string, unknown>>;
 let playbackReports: Array<Record<string, unknown>>;
+let playbackStatusRequests: string[];
+let playbackStatusAnswer: unknown;
+let seekRequests: Array<{ path: string; time: number }>;
 /** Every segment lookup sent for the playback on screen. */
 let introRequests: string[];
 /** What the next segment lookup answers. */
@@ -77,6 +80,9 @@ beforeEach(() => {
   progressPosts = [];
   remotePosts = [];
   playbackReports = [];
+  playbackStatusRequests = [];
+  playbackStatusAnswer = { generation: 1, conversion: "running" };
+  seekRequests = [];
   introRequests = [];
   introAnswer = {};
   progressReads = [];
@@ -98,6 +104,15 @@ beforeEach(() => {
     }
     if (/^\/api\/playback\/[^/]+$/.test(path) && init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
     if (/^\/api\/playback\/[^/]+\/ping$/.test(path)) return Promise.resolve(new Response(null, { status: 204 }));
+    if (/^\/api\/playback\/[^/]+\/status$/.test(path)) {
+      playbackStatusRequests.push(path.slice("/api/playback/".length, -"/status".length));
+      return Promise.resolve(json(playbackStatusAnswer));
+    }
+    if (/^\/api\/playback\/[^/]+\/seek$/.test(path) && init?.method === "POST") {
+      const time = Number((JSON.parse(String(init.body)) as { time?: number }).time);
+      seekRequests.push({ path, time });
+      return Promise.resolve(json({ ...session(), offset: time }));
+    }
     if (/^\/api\/progress\/[^/]+$/.test(path)) {
       const key = decodeURIComponent(path.slice("/api/progress/".length));
       progressReads.push(key);
@@ -829,9 +844,9 @@ describe("Player chapters, segments and next episode", () => {
     expect(card).not.toBeNull();
   });
 
-  const endVideo = () => act(async () => {
+  const endVideo = async () => { await act(async () => {
     host.querySelector("video")!.dispatchEvent(new Event("ended"));
-  });
+  }); await flush(); };
 
   it("closes at the end of a film even when another file sits beside it", async () => {
     const value = await render({ onNext: vi.fn(async () => true), autoNext: false });
@@ -861,6 +876,116 @@ describe("Player chapters, segments and next episode", () => {
     await startPlaying();
     await videoAt(3599);
     expect(host.querySelector(".player-up-next")).toBeNull();
+  });
+
+  it("restarts a converted stream that ended short instead of closing or offering the next episode", async () => {
+    sessionShape = { mode: "remux", url: "/api/playback/sess1/1/master.m3u8", playlist: true };
+    playbackStatusAnswer = { generation: 1, conversion: "short", reached: 1800 };
+    const native = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
+    try {
+      const value = await render({ onNext: vi.fn(async () => true), autoNext: true, upNextAt: "end" });
+      await startPlaying();
+      await videoAt(1800);
+      await endVideo();
+
+      expect(playbackStatusRequests).toEqual(["sess1"]);
+      expect(seekRequests).toHaveLength(1);
+      expect(seekRequests[0]!.time).toBeCloseTo(1800, 1);
+      expect(value.onClose).not.toHaveBeenCalled();
+      expect(value.onNext).not.toHaveBeenCalled();
+      expect(host.querySelector(".player-up-next")).toBeNull();
+      expect(progressPosts.some(({ final }) => final === true)).toBe(false);
+    } finally {
+      HTMLMediaElement.prototype.canPlayType = native;
+    }
+  });
+
+  it("keeps the ordinary end behaviour for a complete conversion", async () => {
+    sessionShape = { mode: "remux", url: "/api/playback/sess1/1/master.m3u8", playlist: true };
+    playbackStatusAnswer = { generation: 1, conversion: "complete" };
+    const native = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
+    try {
+      const value = await render({ onNext: vi.fn(async () => true), autoNext: true, upNextAt: "end" });
+      await startPlaying();
+      await endVideo();
+
+      expect(playbackStatusRequests).toEqual(["sess1"]);
+      expect(host.querySelector(".player-up-next")).not.toBeNull();
+      expect(value.onClose).not.toHaveBeenCalled();
+    } finally {
+      HTMLMediaElement.prototype.canPlayType = native;
+    }
+  });
+
+  it("gives up after the third short-end restart", async () => {
+    sessionShape = { mode: "remux", url: "/api/playback/sess1/1/master.m3u8", playlist: true };
+    playbackStatusAnswer = { generation: 1, conversion: "short", reached: 1800 };
+    const native = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
+    try {
+      await render({ onNext: vi.fn(async () => true), autoNext: true, upNextAt: "end" });
+      await startPlaying();
+      await videoAt(1800);
+      for (let attempt = 0; attempt < 4; attempt += 1) await endVideo();
+
+      expect(playbackStatusRequests).toHaveLength(4);
+      expect(seekRequests).toHaveLength(3);
+      expect(host.querySelector(".player-error")?.textContent).toBe("The source stopped sending the film before its end.");
+      expect(host.querySelector(".player-up-next")).toBeNull();
+    } finally {
+      HTMLMediaElement.prototype.canPlayType = native;
+    }
+  });
+
+  it("allows another restart after playback made progress following the last short end", async () => {
+    sessionShape = { mode: "remux", url: "/api/playback/sess1/1/master.m3u8", playlist: true };
+    playbackStatusAnswer = { generation: 1, conversion: "short", reached: 1800 };
+    const native = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
+    try {
+      await render({ onNext: vi.fn(async () => true), autoNext: true, upNextAt: "end" });
+      await startPlaying();
+      await videoAt(1800);
+      for (let attempt = 0; attempt < 3; attempt += 1) await endVideo();
+      await videoAt(61);
+      await endVideo();
+
+      expect(playbackStatusRequests).toHaveLength(4);
+      expect(seekRequests).toHaveLength(4);
+      expect(host.querySelector(".player-error")).toBeNull();
+    } finally {
+      HTMLMediaElement.prototype.canPlayType = native;
+    }
+  });
+
+  it("restarts a conversion the server reported as failed", async () => {
+    sessionShape = { mode: "remux", url: "/api/playback/sess1/1/master.m3u8", playlist: true };
+    playbackStatusAnswer = { generation: 1, conversion: "failed", reached: 1800 };
+    const native = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
+    try {
+      await render({ onNext: vi.fn(async () => true), autoNext: true, upNextAt: "end" });
+      await startPlaying();
+      await videoAt(1800);
+      await endVideo();
+
+      expect(seekRequests).toHaveLength(1);
+      expect(seekRequests[0]!.time).toBeCloseTo(1800, 1);
+      expect(host.querySelector(".player-error")).toBeNull();
+    } finally {
+      HTMLMediaElement.prototype.canPlayType = native;
+    }
+  });
+
+  it("does not ask for a conversion status during direct play", async () => {
+    const value = await render({});
+    await startPlaying();
+    await endVideo();
+
+    expect(playbackStatusRequests).toEqual([]);
+    expect(value.onClose).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { EventEmitter } from "node:events";
+import test, { type TestContext } from "node:test";
+import { EventEmitter, once } from "node:events";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { DOLBY_VISION_UNITS_FILTER, PlaybackManager, fitsQuality, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
+import { DOLBY_VISION_UNITS_FILTER, PlaybackManager, fitsQuality, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, shortConversion, sourceReachable, nvencBusy } from "./playback.js";
 import { mediaResources as registry, type ResourceOwner } from "./media-resources.js";
 import { setFetchTransport } from "./security.js";
 import { flushLog, initLogger, readLog, setLevel } from "./logger.js";
@@ -1746,6 +1746,115 @@ const remuxSession = (manager: any, overrides: Record<string, unknown> = {}) => 
   manager.sessions.set(session.id, session);
   return session;
 };
+
+const FAKE_FFMPEG_SKIP = process.platform === "win32" ? "Windows cannot run a script as the FFmpeg binary" : false;
+
+const runToCleanExit = async (t: TestContext, duration: number | undefined, outTimeSeconds: number, exitCode = 0) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "playback-clean-exit-"));
+  const fake = path.join(directory, "ffmpeg");
+  await writeFile(fake, `#!/usr/bin/env node
+const fs = require("fs"), path = require("path");
+const output = process.argv[process.argv.length - 1];
+const folder = path.dirname(output);
+const segment = (n) => "#EXTINF:2.000,\\nseg-0-00000" + n + ".m4s\\n";
+fs.writeFileSync(path.join(folder, "init.mp4"), "init");
+fs.writeFileSync(path.join(folder, "seg-0-000000.m4s"), "zero");
+fs.writeFileSync(path.join(folder, "seg-0-000001.m4s"), "one");
+fs.writeFileSync(path.join(folder, "index-0.m3u8"), '#EXTM3U\\n#EXT-X-VERSION:7\\n#EXT-X-TARGETDURATION:2\\n#EXT-X-MAP:URI="init.mp4"\\n' + segment(0) + segment(1));
+process.stdout.write("out_time_us=${Math.round(outTimeSeconds * 1_000_000)}\\nprogress=end\\n");
+process.exitCode = ${exitCode};
+`);
+  await chmod(fake, 0o755);
+  const originalBinary = process.env.FFMPEG_PATH;
+  process.env.FFMPEG_PATH = fake;
+  t.after(() => {
+    if (originalBinary === undefined) delete process.env.FFMPEG_PATH;
+    else process.env.FFMPEG_PATH = originalBinary;
+  });
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "playback-clean-root-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const manager = new PlaybackManager(root) as any;
+  const session = remuxSession(manager, {
+    id: `clean-${outTimeSeconds}-${exitCode}`,
+    generation: 0,
+    info: {
+      container: "matroska,webm", duration,
+      video: { codec: "h264" }, audio: { codec: "aac" },
+      audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [],
+    },
+  });
+  await manager.spawnAt(session, 0);
+  if (session.process.exitCode === null) await once(session.process, "close");
+  return { manager, session, status: manager.status(session.id) };
+};
+
+test("shortConversion uses the larger of thirty seconds and two percent", () => {
+  assert.equal(shortConversion(3540, 3600), false);
+  assert.equal(shortConversion(3500, 3600), true);
+  assert.equal(shortConversion(575, 600), false);
+  assert.equal(shortConversion(560, 600), true);
+  assert.equal(shortConversion(60, undefined), false);
+  assert.equal(shortConversion(60, 0), false);
+  assert.equal(shortConversion(60, Number.NaN), false);
+  assert.equal(shortConversion(undefined, 120), false);
+});
+
+test("a clean conversion that stopped during the film is reported as short", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, 120, 60);
+  assert.deepEqual(manager.status(session.id), {
+    generation: session.generation,
+    conversion: "short",
+    reached: 60,
+  });
+  await flushLog();
+  assert.match(await readLog({ level: "WARN", search: "The conversion stopped before the end of the film" }), /WARN/);
+});
+
+test("a clean conversion near the end is complete", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, 120, 119);
+  assert.equal(manager.status(session.id).conversion, "complete");
+});
+
+test("a clean conversion without a known duration is complete", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, undefined, 60);
+  assert.equal(manager.status(session.id).conversion, "complete");
+});
+
+test("a failed conversion that stopped during the film is reported as failed", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, 120, 60, 1);
+  assert.deepEqual(manager.status(session.id), {
+    generation: session.generation,
+    conversion: "failed",
+    reached: 60,
+  });
+});
+
+test("a failed conversion that reached the end is complete", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, 120, 119, 1);
+  assert.equal(manager.status(session.id).conversion, "complete");
+});
+
+test("a conversion that fails without a known duration is not judged and ends as before", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, undefined, 60, 1);
+  assert.equal(manager.status(session.id).conversion, "complete");
+});
+
+test("a new generation is running while the previous generation ended short", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, 120, 60);
+  manager.run = async (target: any) => {
+    target.process = { exitCode: null, signalCode: null };
+    return "/new-generation";
+  };
+
+  await manager.seek(session.id, 60);
+
+  assert.deepEqual(manager.status(session.id), {
+    generation: session.generation,
+    conversion: "running",
+  });
+});
 
 /** The real spawnAt settles the mode from the current plan; the stub has to do the same. */
 const stubSpawn = (manager: any, session: Record<string, any>, spawned: number[] = []) => {

@@ -126,6 +126,7 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/settings"],
   ["POST", "/inspect"],
   ["POST", "/playback"],
+  ["GET", "/playback/abc/status"],
   ["POST", "/playback/abc/ping"],
   ["POST", "/playback/abc/seek"],
   ["POST", "/playback/abc/escalate"],

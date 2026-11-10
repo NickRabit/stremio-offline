@@ -69,6 +69,7 @@
   <string name="tv_path_remux">Remux · ничего не перекодируется</string>
   <string name="tv_path_transcode">Преобразуется на сервере</string>
   <string name="tv_player_error">Не удалось воспроизвести это видео.</string>
+  <string name="player_source_stopped_early">Источник перестал передавать фильм до его конца.</string>
   <string name="tv_load_error">Не удалось загрузить библиотеку.</string>
   <string name="tv_back">Назад</string>
   <string name="tv_detail_eyebrow_movie">Фильм · %1$s</string>

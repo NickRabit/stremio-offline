@@ -311,6 +311,7 @@ export const ru: Catalog = {
   "player.hideHint": "Уволить",
   "player.seekRestored": "Не удалось перемотать. Сохранена предыдущая позиция.",
   "player.playbackFailed": "Не удалось воспроизвести: {details} ({type})",
+  "player.sourceStoppedEarly": "Источник перестал передавать фильм до его конца.",
   "player.noHls": "Этот браузер не может воспроизводить HLS.",
   "player.browserRefused": "Браузеру не удалось воспроизвести этот поток.",
   "player.subtitleSwitchFailed": "Субтитры не удалось переключить.",

@@ -351,6 +351,7 @@ export const en = {
   "player.hideHint": "Dismiss",
   "player.seekRestored": "Could not seek. Kept the previous position.",
   "player.playbackFailed": "Playback failed: {details} ({type})",
+  "player.sourceStoppedEarly": "The source stopped sending the film before its end.",
   "player.noHls": "This browser cannot play HLS.",
   "player.browserRefused": "The browser could not play this stream.",
   "player.subtitleSwitchFailed": "The subtitles could not be switched.",

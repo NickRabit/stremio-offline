@@ -346,6 +346,7 @@ export const cs: Catalog = {
   "player.hideHint": "Skrýt",
   "player.seekRestored": "Nepodařilo se přeskočit. Zůstává předchozí pozice.",
   "player.playbackFailed": "Přehrávání selhalo: {details} ({type})",
+  "player.sourceStoppedEarly": "Zdroj přestal posílat film před jeho koncem.",
   "player.noHls": "Tento prohlížeč neumí přehrát HLS.",
   "player.browserRefused": "Prohlížeč tenhle stream nepřehrál.",
   "player.subtitleSwitchFailed": "Titulky se nepodařilo přepnout.",

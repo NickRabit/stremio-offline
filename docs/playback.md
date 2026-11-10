@@ -53,6 +53,22 @@ browser.
 Because remux copies video, playback starts at the nearest keyframe before the
 requested time — usually a few seconds off. Emby and Jellyfin do the same.
 
+## A conversion that ends short
+
+A dropped source can make FFmpeg finish its playlist with `#EXT-X-ENDLIST` and
+exit successfully well before the probed duration. The server treats that as
+short only when the reached position is more than `max(30 seconds, 2%)` from the
+end; the tolerance absorbs normal timestamp and keyframe differences. Without a
+probed duration it cannot judge the end and reports a normal completion.
+A conversion that exits with an error before the end is reported as failed and
+handled the same way; one that exits with an error but reached the end, or one
+without a probed duration, is a normal completion.
+
+The clients read `GET /api/playback/:id/status` when converted playback ends. A
+short result restarts conversion at the reached position, at most three times
+per opened source; the fourth short end is a network failure. Direct play never
+makes this call.
+
 ## Player controls
 
 The picture fills the available player area without cropping. The header and

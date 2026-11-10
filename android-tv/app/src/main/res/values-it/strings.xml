@@ -69,6 +69,7 @@
   <string name="tv_path_remux">Remux · nulla viene riconvertito</string>
   <string name="tv_path_transcode">Convertito sul server</string>
   <string name="tv_player_error">Impossibile riprodurre questo video.</string>
+  <string name="player_source_stopped_early">La sorgente ha smesso di inviare il film prima della fine.</string>
   <string name="tv_load_error">Impossibile caricare la libreria.</string>
   <string name="tv_back">Indietro</string>
   <string name="tv_detail_eyebrow_movie">Film · %1$s</string>

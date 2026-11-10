@@ -311,6 +311,7 @@ export const sk: Catalog = {
   "player.hideHint": "Odmietnuť",
   "player.seekRestored": "Nepodarilo sa preskočiť. Zostáva predchádzajúca pozícia.",
   "player.playbackFailed": "Prehrávanie zlyhalo: {details} ({type})",
+  "player.sourceStoppedEarly": "Zdroj prestal posielať film pred jeho koncom.",
   "player.noHls": "Tento prehliadač nedokáže prehrávať HLS.",
   "player.browserRefused": "Prehliadač nemohol prehrať tento stream.",
   "player.subtitleSwitchFailed": "Titulky sa nepodarilo prepnúť.",

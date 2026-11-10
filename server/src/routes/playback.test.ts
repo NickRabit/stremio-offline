@@ -21,6 +21,7 @@ import { MediaServerError } from "../media-server-types.js";
 import type { PlaybackManager } from "../playback.js";
 import { RangeCache } from "../range-cache.js";
 import { RemoteReadAhead } from "../remote-read-ahead.js";
+import { isUserAllowed } from "../roles.js";
 import type { StatsLog } from "../stats.js";
 import { defaultPrefs, type Store } from "../store.js";
 import type { StreamItem } from "../types.js";
@@ -83,6 +84,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     directory: () => "/tmp/session-generation",
     preview: async () => undefined,
     sidecar: async () => undefined,
+    status: () => ({ generation: 1, conversion: "short", reached: 60 }),
     seek: async () => ({ id: ID, url: "u" }),
     escalate: async () => ({ id: ID, url: "u" }),
     track: async () => ({ id: ID, url: "u" }),
@@ -263,6 +265,19 @@ test("the ownership guard answers somebody else's session with a bare 404", asyn
   assert.equal(response.status, 404, "404, so the answer does not confirm the session exists");
   assert.deepEqual(await response.json(), { error: "The playback session no longer exists.", messageKey: "err.playbackSessionGone", code: "RESOURCE_NOT_FOUND" });
   assert.deepEqual(harness.attended, [], "a refused request never keeps the session alive");
+});
+
+test("the owner reads a playback status and another account cannot", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const owner = await api(harness.base, `/api/playback/${ID}/status`, { user: "ada" });
+  assert.equal(owner.status, 200);
+  assert.deepEqual(await owner.json(), { generation: 1, conversion: "short", reached: 60 });
+  assert.equal(isUserAllowed("GET", `/playback/${ID}/status`), true);
+
+  const other = await api(harness.base, `/api/playback/${ID}/status`, { user: "bob" });
+  assert.equal(other.status, 404);
 });
 
 test("the guard lets the owner through, makes the frame uncacheable and marks the session attended", async (t) => {

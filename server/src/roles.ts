@@ -134,6 +134,7 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/settings$/ },
   { method: "POST", pattern: /^\/inspect$/ },
   { method: "POST", pattern: /^\/playback$/ },
+  { method: "GET", pattern: /^\/playback\/[^/]+\/status$/ },
   { method: "POST", pattern: /^\/playback\/[^/]+\/(ping|seek|escalate|track)$/ },
   { method: "GET", pattern: /^\/playback\/[^/]+\/preview$/ },
   { method: "GET", pattern: /^\/playback\/[^/]+\/sidecar\.vtt$/ },

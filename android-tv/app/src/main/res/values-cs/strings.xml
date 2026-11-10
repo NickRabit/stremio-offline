@@ -69,6 +69,7 @@
   <string name="tv_path_remux">Remux · nic se nepřekódovává</string>
   <string name="tv_path_transcode">Převádí se na serveru</string>
   <string name="tv_player_error">Video se nepodařilo přehrát.</string>
+  <string name="player_source_stopped_early">Zdroj přestal posílat film před jeho koncem.</string>
   <string name="tv_load_error">Knihovnu se nepodařilo načíst.</string>
   <string name="tv_back">Zpět</string>
   <string name="tv_detail_eyebrow_movie">Film · %1$s</string>

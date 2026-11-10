@@ -311,6 +311,7 @@ export const es: Catalog = {
   "player.hideHint": "Descartar",
   "player.seekRestored": "No se pudo cambiar de posición. Se mantuvo la posición anterior.",
   "player.playbackFailed": "Error de reproducción: {details} ({type})",
+  "player.sourceStoppedEarly": "La fuente dejó de enviar la película antes del final.",
   "player.noHls": "Este navegador no puede reproducir HLS.",
   "player.browserRefused": "El navegador no pudo reproducir esta transmisión.",
   "player.subtitleSwitchFailed": "Los subtítulos no se pudieron cambiar.",
