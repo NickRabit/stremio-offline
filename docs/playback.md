@@ -60,6 +60,9 @@ exit successfully well before the probed duration. The server treats that as
 short only when the reached position is more than `max(30 seconds, 2%)` from the
 end; the tolerance absorbs normal timestamp and keyframe differences. Without a
 probed duration it cannot judge the end and reports a normal completion.
+A conversion that exits with an error before the end is reported as failed and
+handled the same way; one that exits with an error but reached the end, or one
+without a probed duration, is a normal completion.
 
 The clients read `GET /api/playback/:id/status` when converted playback ends. A
 short result restarts conversion at the reached position, at most three times

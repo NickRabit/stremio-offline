@@ -1836,6 +1836,11 @@ test("a failed conversion that reached the end is complete", { skip: FAKE_FFMPEG
   assert.equal(manager.status(session.id).conversion, "complete");
 });
 
+test("a conversion that fails without a known duration is not judged and ends as before", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, undefined, 60, 1);
+  assert.equal(manager.status(session.id).conversion, "complete");
+});
+
 test("a new generation is running while the previous generation ended short", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
   const { manager, session } = await runToCleanExit(t, 120, 60);
   manager.run = async (target: any) => {

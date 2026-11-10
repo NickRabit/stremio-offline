@@ -1520,7 +1520,8 @@ export class PlaybackManager {
       } else {
         monitor.finish(asked || signal !== null ? "stopped" : "failed");
         if (code !== null && code !== 0 && signal === null && !asked) {
-          if (duration !== undefined && reached !== undefined && !shortConversion(reached, expected)) {
+          // Without a probed duration there is nothing to compare with, the same as for a clean exit.
+          if (duration === undefined || (reached !== undefined && !shortConversion(reached, expected))) {
             session.ending = { generation, short: false };
           } else {
             session.ending = { generation, short: true, failed: true, reached: offset + (reached ?? 0) };
