@@ -722,7 +722,7 @@ export class PlaybackManager {
       if (subtitleTrack !== null) this.extractSidecar(session);
       log("INFO", "Conversion started", {
         id, mode: session.mode, reason, hardware: session.hardware,
-        copyVideo: plan.copyVideo, copyAudio: plan.copyAudio,
+        copyVideo: plan.copyVideo, copyAudio: this.audioCopied(session, startTime),
         audioTrack, subtitleTrack, quality, startTime: Math.round(startTime), ...summary,
       });
       return this.describe(session, url);
@@ -983,9 +983,11 @@ export class PlaybackManager {
   private describe(session: Session, url: string): PlaybackDescriptor {
     const copy = session.mode === "direct" ? undefined : this.plan(session);
     const videoCopied = session.mode === "direct" || Boolean(copy?.copyVideo);
-    const audioCopied = session.mode === "direct" || Boolean(copy?.copyAudio);
+    const audioCopied = session.mode === "direct" || this.audioCopied(session, session.offset);
     const video = session.info?.video;
-    const audio = session.info?.audioTracks?.[session.audioTrack] ?? session.info?.audio;
+    const audio = session.mode === "direct"
+      ? session.info?.audioTracks?.[session.audioTrack] ?? session.info?.audio
+      : this.selectedAudio(session).track;
     const quality = session.quality;
     const sourceResolution = videoResolutionClass(video?.width, video?.height);
     const scaledWidth = quality !== null && video?.width !== undefined && video.height !== undefined
@@ -1024,7 +1026,7 @@ export class PlaybackManager {
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
       sidecarUrl: session.subtitleTrack !== null && !this.clientRendersSubtitle(session) ? this.sidecarUrl(session) : undefined,
-      copy: copy ? { video: copy.copyVideo, audio: copy.copyAudio } : undefined,
+      copy: copy ? { video: copy.copyVideo, audio: audioCopied } : undefined,
       ...(chapters?.length ? { chapters } : {}),
       ...(Object.values(playing).some((value) => value !== undefined) ? { playing } : {}),
       playlist: session.mode === "direct" ? isPlaylistSource(session.stream, session.info) : true,
@@ -1386,6 +1388,19 @@ export class PlaybackManager {
     return { copyVideo, copyAudio };
   }
 
+  private selectedAudio(session: Session) {
+    const audioCount = session.info?.audioTracks.length ?? 1;
+    const index = Math.min(session.audioTrack, Math.max(0, audioCount - 1));
+    return { index, track: session.info?.audioTracks[index] ?? session.info?.audio };
+  }
+
+  private audioCopied(session: Session, offset: number): boolean {
+    if (session.mode === "direct") return false;
+    const { copyVideo, copyAudio } = this.plan(session);
+    const codec = this.selectedAudio(session).track?.codec ?? "";
+    return copyVideo && copyAudio && !(offset > 0 && AUDIO_REQUIRING_PACKET_FOR_FMP4.has(codec));
+  }
+
   private retire(session: Session, directory: string, generation: number, process?: ChildProcess) {
     const retired = { generation, directory, until: Date.now() + RETIRED_MS };
     session.retired = retired;
@@ -1591,7 +1606,7 @@ export class PlaybackManager {
   }
 
   private args(session: Session, offset: number, directory: string, hardware: boolean, playlist: string[] = []) {
-    const { copyVideo, copyAudio } = this.plan(session);
+    const { copyVideo } = this.plan(session);
     const quality = session.quality;
     const bitrate = quality !== null ? QUALITY_BITRATE[quality] : undefined;
     // Read here, after the awaits that came before: a path switched off meanwhile gives the
@@ -1602,7 +1617,7 @@ export class PlaybackManager {
     // in -map drops a missing track quietly, but the hls muxer then looks for it in vain and dies on the header.
     const audioCount = session.info?.audioTracks.length ?? 1;
     const hasAudio = !session.info || audioCount > 0;
-    const audioIndex = Math.min(session.audioTrack, Math.max(0, audioCount - 1));
+    const { index: audioIndex, track: selectedAudio } = this.selectedAudio(session);
     const crf = process.env.FFMPEG_CRF ?? "23";
     // VAAPI CQP and libx264 CRF are different modes. Compatibility with the single original
     // value stays, but new installs can tune them independently.
@@ -1737,9 +1752,8 @@ export class PlaybackManager {
     // Audio passthrough makes sense only for a remux. While the picture is transcoded, copied
     // E-AC-3 in particular can block fMP4 HLS initialisation ("codec frame size is not set").
     // AAC is the most reliable for web clients and converting it costs the NAS almost nothing.
-    const selectedAudioCodec = session.info?.audioTracks[audioIndex]?.codec ?? session.info?.audio?.codec ?? "";
-    const passthroughAudio = copyVideo && copyAudio
-      && !(offset > 0 && AUDIO_REQUIRING_PACKET_FOR_FMP4.has(selectedAudioCodec));
+    const selectedAudioCodec = selectedAudio?.codec ?? "";
+    const passthroughAudio = this.audioCopied(session, offset);
     // AAC arrives from an HLS source in ADTS frames, and fMP4 wants it in ASC. Copied through
     // unchanged the muxer refuses every packet -- "Malformed AAC bitstream detected", then
     // "Error submitting a packet to the muxer" -- and FFmpeg dies before it writes the stream

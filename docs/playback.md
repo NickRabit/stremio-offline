@@ -60,6 +60,14 @@ a failed track, quality or escalation restart restores the old generation too,
 but still reports the failure to the client. A dead process or incomplete output
 does not qualify, so the restart failure propagates unchanged.
 
+### AC-3 after a seek
+
+AC-3 and E-AC-3 are copied only when a remux starts at zero; from any later
+position, or during a transcode, the audio is stereo AAC. The descriptor reports
+the codec and channels actually sent. The stereo fallback is kept because the
+original failure was seen on a real file, and no synthetic reproduction or
+muxer option was found that made the copy reliable.
+
 ## A session the server closed
 
 The server closes a playback session after 90 seconds without a player request.
