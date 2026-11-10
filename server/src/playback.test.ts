@@ -1930,8 +1930,10 @@ setInterval(() => {}, 1000);
   return { manager, session, signals, nextSignal, produce };
 };
 
+/** The playlist read behind a forward fetch is a chain of promises on the generation's ledger:
+ *  waiting for that chain is waiting for the read itself, however slow the disk is. */
 const waitForLedger = async (session: any, condition: () => boolean) => {
-  for (let attempt = 0; attempt < 100 && !condition(); attempt += 1) await flushPlayback();
+  for (const entry of session.ledger.generations.values()) await entry.fetchedRead;
   assert.equal(condition(), true, "the ledger read settled");
 };
 
