@@ -69,6 +69,7 @@
   <string name="tv_path_remux">Remux · nic nie jest ponownie kodowane</string>
   <string name="tv_path_transcode">Konwertowane na serwerze</string>
   <string name="tv_player_error">Nie udało się odtworzyć tego wideo.</string>
+  <string name="player_source_stopped_early">Źródło przestało wysyłać film przed jego końcem.</string>
   <string name="tv_load_error">Nie udało się wczytać biblioteki.</string>
   <string name="tv_back">Wstecz</string>
   <string name="tv_detail_eyebrow_movie">Film · %1$s</string>

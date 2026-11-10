@@ -150,4 +150,9 @@ data class PlaybackDescriptorDto(
 )
 
 @Serializable
-data class PlaybackStatusDto(val generation: Int, val conversion: String, val reached: Double? = null)
+data class PlaybackStatusDto(
+  val generation: Int,
+  /** `direct`, `running`, `complete`, `short`, or `failed`. */
+  val conversion: String,
+  val reached: Double? = null,
+)

@@ -69,6 +69,7 @@
   <string name="tv_path_remux">Remux · nada se recodifica</string>
   <string name="tv_path_transcode">Se convierte en el servidor</string>
   <string name="tv_player_error">No se pudo reproducir este vídeo.</string>
+  <string name="player_source_stopped_early">La fuente dejó de enviar la película antes del final.</string>
   <string name="tv_load_error">No se pudo cargar la biblioteca.</string>
   <string name="tv_back">Atrás</string>
   <string name="tv_detail_eyebrow_movie">Película · %1$s</string>

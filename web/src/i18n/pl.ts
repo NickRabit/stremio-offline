@@ -311,6 +311,7 @@ export const pl: Catalog = {
   "player.hideHint": "Odrzuć",
   "player.seekRestored": "Nie udało się przewinąć. Zachowano poprzednią pozycję.",
   "player.playbackFailed": "Odtwarzanie nie powiodło się: {details} ({type})",
+  "player.sourceStoppedEarly": "Źródło przestało wysyłać film przed jego końcem.",
   "player.noHls": "Ta przeglądarka nie może odtwarzać plików HLS.",
   "player.browserRefused": "Przeglądarka nie mogła odtworzyć tego strumienia.",
   "player.subtitleSwitchFailed": "Nie można było przełączyć napisów.",

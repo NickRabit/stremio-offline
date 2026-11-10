@@ -311,6 +311,7 @@ export const it: Catalog = {
   "player.hideHint": "Ignora",
   "player.seekRestored": "Impossibile cambiare posizione. È stata mantenuta la posizione precedente.",
   "player.playbackFailed": "Riproduzione non riuscita: {details} ({type})",
+  "player.sourceStoppedEarly": "La sorgente ha smesso di inviare il film prima della fine.",
   "player.noHls": "Questo browser non può riprodurre HLS.",
   "player.browserRefused": "Il browser non è riuscito a riprodurre questo flusso.",
   "player.subtitleSwitchFailed": "Non è stato possibile cambiare i sottotitoli.",

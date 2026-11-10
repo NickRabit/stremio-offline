@@ -278,7 +278,7 @@ export const api = {
   startPlayback: (stream: Stream, capabilities: Capabilities, time = 0, subtitleIds: string[] = [], preferences?: { audioLanguage?: string; subtitleLanguage?: string | null }) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ sourceId: stream.sourceId, capabilities, time, subtitleIds, ...preferences }), timeoutMs: PLAYBACK_START_MS }),
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes), timeoutMs: PLAYBACK_RESTART_MS }),
   seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
-  playbackStatus: (id: string) => request<PlaybackStatus>(`/api/playback/${id}/status`),
+  playbackStatus: (id: string) => request<PlaybackStatus>(`/api/playback/${id}/status`, { timeoutMs: 5_000 }),
   /** The browser refused the stream: the server stops copying and really transcodes. */
   escalatePlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/escalate`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
   pingPlayback: (id: string) => request<void>(`/api/playback/${id}/ping`, { method: "POST" }),

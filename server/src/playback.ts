@@ -140,8 +140,9 @@ export interface PlaybackDescriptor {
 export interface PlaybackStatus {
   generation: number;
   /** "direct": nothing is converted; "running": the current generation has not exited cleanly (yet);
-   *  "complete": it exited cleanly at the end; "short": it exited cleanly well before the end. */
-  conversion: "direct" | "running" | "complete" | "short";
+   *  "complete": it reached the end; "short": it stopped well before the end;
+   *  "failed": it exited with an error before the end. */
+  conversion: "direct" | "running" | "complete" | "short" | "failed";
   /** Absolute film time the short conversion reached. */
   reached?: number;
 }
@@ -229,7 +230,7 @@ interface Session {
   retired?: { generation: number; directory: string; until: number };
   /** The client refused the copied stream, so this session must never copy again. */
   copyRejected?: boolean;
-  ending?: { generation: number; short: boolean; reached?: number };
+  ending?: { generation: number; short: boolean; failed?: boolean; reached?: number };
 }
 
 /** Main and Main 10 are two different codecs to a browser. A ten-bit stream must not be copied
@@ -746,6 +747,7 @@ export class PlaybackManager {
     if (session.mode === "direct") return { generation: session.generation, conversion: "direct" };
     const ending = session.ending?.generation === session.generation ? session.ending : undefined;
     if (!ending) return { generation: session.generation, conversion: "running" };
+    if (ending.failed) return { generation: session.generation, conversion: "failed", reached: ending.reached };
     if (!ending.short) return { generation: session.generation, conversion: "complete" };
     return { generation: session.generation, conversion: "short", reached: ending.reached };
   }
@@ -1498,10 +1500,10 @@ export class PlaybackManager {
       // Our own SIGTERM comes back as a plain exit, and taking it for a failure would leave the
       // session carrying an error that never happened -- and the log claiming one.
       const asked = this.stopping.has(child);
+      const reached = monitor.progress.latest?.outTime;
+      const duration = session.info?.duration;
+      const expected = duration !== undefined ? duration - offset : undefined;
       if (code === 0 && signal === null && !asked) {
-        const reached = monitor.progress.latest?.outTime;
-        const duration = session.info?.duration;
-        const expected = duration !== undefined ? duration - offset : undefined;
         if (duration !== undefined && reached !== undefined && shortConversion(reached, expected)) {
           monitor.finish("short");
           session.ending = { generation, short: true, reached: offset + reached };
@@ -1517,6 +1519,13 @@ export class PlaybackManager {
         }
       } else {
         monitor.finish(asked || signal !== null ? "stopped" : "failed");
+        if (code !== null && code !== 0 && signal === null && !asked) {
+          if (duration !== undefined && reached !== undefined && !shortConversion(reached, expected)) {
+            session.ending = { generation, short: false };
+          } else {
+            session.ending = { generation, short: true, failed: true, reached: offset + (reached ?? 0) };
+          }
+        }
       }
       if (this.monitors.get(session.id) === monitor) this.monitors.delete(session.id);
       if (code !== 0 && signal === null && !asked) session.error = describeFailure(stderr, code);

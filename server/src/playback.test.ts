@@ -1749,7 +1749,7 @@ const remuxSession = (manager: any, overrides: Record<string, unknown> = {}) => 
 
 const FAKE_FFMPEG_SKIP = process.platform === "win32" ? "Windows cannot run a script as the FFmpeg binary" : false;
 
-const runToCleanExit = async (t: TestContext, duration: number | undefined, outTimeSeconds: number) => {
+const runToCleanExit = async (t: TestContext, duration: number | undefined, outTimeSeconds: number, exitCode = 0) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "playback-clean-exit-"));
   const fake = path.join(directory, "ffmpeg");
   await writeFile(fake, `#!/usr/bin/env node
@@ -1762,6 +1762,7 @@ fs.writeFileSync(path.join(folder, "seg-0-000000.m4s"), "zero");
 fs.writeFileSync(path.join(folder, "seg-0-000001.m4s"), "one");
 fs.writeFileSync(path.join(folder, "index-0.m3u8"), '#EXTM3U\\n#EXT-X-VERSION:7\\n#EXT-X-TARGETDURATION:2\\n#EXT-X-MAP:URI="init.mp4"\\n' + segment(0) + segment(1));
 process.stdout.write("out_time_us=${Math.round(outTimeSeconds * 1_000_000)}\\nprogress=end\\n");
+process.exitCode = ${exitCode};
 `);
   await chmod(fake, 0o755);
   const originalBinary = process.env.FFMPEG_PATH;
@@ -1776,7 +1777,7 @@ process.stdout.write("out_time_us=${Math.round(outTimeSeconds * 1_000_000)}\\npr
   t.after(() => rm(directory, { recursive: true, force: true }));
   const manager = new PlaybackManager(root) as any;
   const session = remuxSession(manager, {
-    id: `clean-${outTimeSeconds}`,
+    id: `clean-${outTimeSeconds}-${exitCode}`,
     generation: 0,
     info: {
       container: "matroska,webm", duration,
@@ -1818,6 +1819,20 @@ test("a clean conversion near the end is complete", { skip: FAKE_FFMPEG_SKIP }, 
 
 test("a clean conversion without a known duration is complete", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
   const { manager, session } = await runToCleanExit(t, undefined, 60);
+  assert.equal(manager.status(session.id).conversion, "complete");
+});
+
+test("a failed conversion that stopped during the film is reported as failed", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, 120, 60, 1);
+  assert.deepEqual(manager.status(session.id), {
+    generation: session.generation,
+    conversion: "failed",
+    reached: 60,
+  });
+});
+
+test("a failed conversion that reached the end is complete", { skip: FAKE_FFMPEG_SKIP }, async (t) => {
+  const { manager, session } = await runToCleanExit(t, 120, 119, 1);
   assert.equal(manager.status(session.id).conversion, "complete");
 });
 

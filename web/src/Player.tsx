@@ -228,6 +228,7 @@ const nativeVideoFullscreen = (video: HTMLVideoElement, overlay: HTMLElement | n
 /** Keys the player claims for itself. Anything else (Escape) leaves focus alone. */
 const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f"]);
 const SHORT_END_RESTARTS = 3;
+const SHORT_END_PROGRESS_S = 60;
 
 /** Target transcode qualities; the values must match QUALITY_BITRATE on the server. */
 const QUALITIES = [1080, 720, 480];
@@ -388,6 +389,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const catchupRef = useRef(0);
   const decodeRecoversRef = useRef<number[]>([]);
   const shortEndsRef = useRef(0);
+  const shortRestartFromRef = useRef<number | null>(null);
   const shortRestartRef = useRef(false);
   const recoverFromDecodeRef = useRef<(reason: string) => void>(() => undefined);
   /** Once playback is given up, the element and hls.js must stop, or they keep failing
@@ -711,7 +713,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartRef.current = false; abandonedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
+    decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there. A start-over
     // never reads the store and never writes to it -- the saved position simply stays.
@@ -868,7 +870,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         } else applySession(next, autoplay);
         if (next.seekRestored) {
           if (shortRestartRef.current) {
-            abandon(t("player.playbackFailed", { details: "sourceStoppedEarly", type: "networkError" }));
+            abandon(t("player.sourceStoppedEarly"));
             return;
           }
           setSeekKept(true);
@@ -1391,15 +1393,16 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       return;
     }
     if (!openRef.current || sessionRef.current !== id || seekEpochRef.current !== epoch) return;
-    if (status.conversion !== "short") {
+    if (status.conversion !== "short" && status.conversion !== "failed") {
       finishPlayback();
       return;
     }
     shortEndsRef.current += 1;
     if (shortEndsRef.current > SHORT_END_RESTARTS) {
-      abandon(t("player.playbackFailed", { details: "sourceStoppedEarly", type: "networkError" }));
+      abandon(t("player.sourceStoppedEarly"));
       return;
     }
+    shortRestartFromRef.current = timeRef.current;
     report("WARN", "The conversion ended before the film did, restarting", { ...context(), reached: status.reached });
     void restartHere(true);
   };
@@ -1487,6 +1490,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         onEnded={() => { void playbackEnded(); }}
         onTimeUpdate={(event) => {
           const absolute = offsetRef.current + event.currentTarget.currentTime;
+          if (shortRestartFromRef.current !== null && absolute >= shortRestartFromRef.current + SHORT_END_PROGRESS_S) {
+            shortEndsRef.current = 0;
+            shortRestartFromRef.current = null;
+          }
           const previousPosition = previousPositionRef.current;
           const currentSegment = activeSegment(segments, absolute);
           if (skipSegmentsAuto && !pausedRef.current && currentSegment

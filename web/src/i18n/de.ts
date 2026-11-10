@@ -311,6 +311,7 @@ export const de: Catalog = {
   "player.hideHint": "Entlassen",
   "player.seekRestored": "Springen nicht möglich. Die vorherige Position wurde beibehalten.",
   "player.playbackFailed": "Wiedergabe fehlgeschlagen: {details} ({type})",
+  "player.sourceStoppedEarly": "Die Quelle hat den Film vor seinem Ende nicht mehr gesendet.",
   "player.noHls": "Dieser Browser kann HLS nicht abspielen.",
   "player.browserRefused": "Der Browser konnte diesen Stream nicht abspielen.",
   "player.subtitleSwitchFailed": "Die Untertitel konnten nicht umgeschaltet werden.",
