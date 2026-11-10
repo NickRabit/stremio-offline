@@ -33,6 +33,7 @@ enum class ApiFailure {
 
 /** A playback call waits for FFmpeg, not for a plain API answer. */
 internal const val PLAYBACK_READ_TIMEOUT_S = 60L
+internal const val STATUS_TIMEOUT_S = 5L
 
 class ApiError(
   val failure: ApiFailure,
@@ -94,6 +95,10 @@ class ApiClient(
    *  seconds every other call may wait. The playback calls get their own read timeout. */
   private val playbackClient = client.newBuilder()
     .readTimeout(PLAYBACK_READ_TIMEOUT_S, TimeUnit.SECONDS)
+    .build()
+  private val statusClient = client.newBuilder()
+    .readTimeout(STATUS_TIMEOUT_S, TimeUnit.SECONDS)
+    .callTimeout(STATUS_TIMEOUT_S, TimeUnit.SECONDS)
     .build()
 
   /** The one HTTP client of the session: images and the player share it so they share the cookie. */
@@ -426,7 +431,7 @@ class ApiClient(
   }
 
   override suspend fun playbackStatus(id: String): PlaybackStatusDto? =
-    request(Request.Builder().url(address.resolve("/api/playback/$id/status")).get().build(), playbackClient)
+    request(Request.Builder().url(address.resolve("/api/playback/$id/status")).get().build(), statusClient)
       .decode<PlaybackStatusDto>()
 
   override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto {

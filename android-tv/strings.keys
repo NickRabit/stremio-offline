@@ -68,6 +68,7 @@ tv.pathAudio
 tv.pathRemux
 tv.pathTranscode
 tv.playerError
+player.sourceStoppedEarly
 tv.loadError
 tv.back
 tv.detailEyebrowMovie

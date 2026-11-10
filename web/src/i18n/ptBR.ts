@@ -312,6 +312,7 @@ export const ptBR: Catalog = {
   "player.seekRestored": "Não foi possível mudar de posição. A posição anterior foi mantida.",
   "player.trackKept": "Não foi possível trocar a faixa. A atual foi mantida.",
   "player.playbackFailed": "Falha na reprodução: {details} ({type})",
+  "player.sourceStoppedEarly": "A fonte parou de enviar o filme antes do fim.",
   "player.noHls": "Este navegador não pode reproduzir HLS.",
   "player.browserRefused": "O navegador não conseguiu reproduzir esta transmissão.",
   "player.subtitleSwitchFailed": "As legendas não puderam ser trocadas.",

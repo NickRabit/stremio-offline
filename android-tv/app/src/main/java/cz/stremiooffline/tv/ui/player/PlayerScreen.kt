@@ -1232,10 +1232,14 @@ fun PlayerScreen(
         }
       }
 
-      state.error?.let {
+      state.error?.let { error ->
         val failed = switchTarget
         val previous = previousTarget
         ErrorPanel(
+          message = when (error) {
+            PlaybackError.SourceStopped -> stringResource(R.string.player_source_stopped_early)
+            else -> stringResource(R.string.tv_player_error)
+          },
           onRetry = {
             // Try again always re-reads the account: the addon subtitle ids are minted per sign-in
             // session and short-lived, so a started session cannot reuse the ones it began with.

@@ -118,7 +118,7 @@ fun LoadingOverlay(title: String) {
 }
 
 @Composable
-fun ErrorPanel(onRetry: () -> Unit, onBack: () -> Unit, onBackToSource: (() -> Unit)? = null) {
+fun ErrorPanel(message: String, onRetry: () -> Unit, onBack: () -> Unit, onBackToSource: (() -> Unit)? = null) {
   val retryFocus = remember { FocusRequester() }
   androidx.activity.compose.BackHandler { onBack() }
   androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -149,7 +149,7 @@ fun ErrorPanel(onRetry: () -> Unit, onBack: () -> Unit, onBackToSource: (() -> U
       ) {
         Text("!", color = Tokens.Red, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
       }
-      Text(stringResource(R.string.tv_player_error), color = Tokens.Muted, fontSize = 12.sp)
+      Text(message, color = Tokens.Muted, fontSize = 12.sp)
       Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         FocusButton(
           stringResource(R.string.tv_try_again),

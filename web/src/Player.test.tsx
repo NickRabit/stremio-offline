@@ -932,8 +932,48 @@ describe("Player chapters, segments and next episode", () => {
 
       expect(playbackStatusRequests).toHaveLength(4);
       expect(seekRequests).toHaveLength(3);
-      expect(host.querySelector(".player-error")?.textContent).toContain("sourceStoppedEarly");
+      expect(host.querySelector(".player-error")?.textContent).toBe("The source stopped sending the film before its end.");
       expect(host.querySelector(".player-up-next")).toBeNull();
+    } finally {
+      HTMLMediaElement.prototype.canPlayType = native;
+    }
+  });
+
+  it("allows another restart after playback made progress following the last short end", async () => {
+    sessionShape = { mode: "remux", url: "/api/playback/sess1/1/master.m3u8", playlist: true };
+    playbackStatusAnswer = { generation: 1, conversion: "short", reached: 1800 };
+    const native = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
+    try {
+      await render({ onNext: vi.fn(async () => true), autoNext: true, upNextAt: "end" });
+      await startPlaying();
+      await videoAt(1800);
+      for (let attempt = 0; attempt < 3; attempt += 1) await endVideo();
+      await videoAt(61);
+      await endVideo();
+
+      expect(playbackStatusRequests).toHaveLength(4);
+      expect(seekRequests).toHaveLength(4);
+      expect(host.querySelector(".player-error")).toBeNull();
+    } finally {
+      HTMLMediaElement.prototype.canPlayType = native;
+    }
+  });
+
+  it("restarts a conversion the server reported as failed", async () => {
+    sessionShape = { mode: "remux", url: "/api/playback/sess1/1/master.m3u8", playlist: true };
+    playbackStatusAnswer = { generation: 1, conversion: "failed", reached: 1800 };
+    const native = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
+    try {
+      await render({ onNext: vi.fn(async () => true), autoNext: true, upNextAt: "end" });
+      await startPlaying();
+      await videoAt(1800);
+      await endVideo();
+
+      expect(seekRequests).toHaveLength(1);
+      expect(seekRequests[0]!.time).toBeCloseTo(1800, 1);
+      expect(host.querySelector(".player-error")).toBeNull();
     } finally {
       HTMLMediaElement.prototype.canPlayType = native;
     }

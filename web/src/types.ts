@@ -599,8 +599,9 @@ export interface PlaybackSession {
 export interface PlaybackStatus {
   generation: number;
   /** "direct": nothing is converted; "running": the current generation has not exited cleanly (yet);
-   *  "complete": it exited cleanly at the end; "short": it exited cleanly well before the end. */
-  conversion: "direct" | "running" | "complete" | "short";
+   *  "complete": it reached the end; "short": it stopped well before the end;
+   *  "failed": it exited with an error before the end. */
+  conversion: "direct" | "running" | "complete" | "short" | "failed";
   /** Absolute film time the short conversion reached. */
   reached?: number;
 }

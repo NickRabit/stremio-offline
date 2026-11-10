@@ -38,6 +38,8 @@ private enum class ReportEvent(val wire: String) {
   Stop("stop"),
 }
 
+private const val SHORT_END_PROGRESS_S = 60.0
+
 private data class ReportedPlay(val context: RemoteItemContext, val playId: String)
 
 /** The playback calls of one server, taken straight off [cz.stremiooffline.tv.data.ApiClient]. */
@@ -95,6 +97,7 @@ sealed interface PlaybackError {
   data object Decoder : PlaybackError
   data object Network : PlaybackError
   data object Session : PlaybackError
+  data object SourceStopped : PlaybackError
   /** The server no longer knows the listed source id: the list it came from has to be read again. */
   data object Expired : PlaybackError
 }
@@ -251,6 +254,7 @@ class PlaybackController(
   private var escalatedByViewer = false
   private var recovered = false
   private var shortEnds = 0
+  private var shortRestartFrom: Double? = null
   private var stopped = true
   /** The screen is gone for good; a late answer must not start a session, however long it took. */
   private var released = false
@@ -466,6 +470,7 @@ class PlaybackController(
     escalatedByViewer = false
     recovered = false
     shortEnds = 0
+    shortRestartFrom = null
     stopped = false
     playlist = false
     offset = 0.0
@@ -565,6 +570,12 @@ class PlaybackController(
 
   fun onPlayerPosition(seconds: Double) {
     lastPosition = seconds
+    val current = position
+    val restartFrom = shortRestartFrom
+    if (restartFrom != null && current >= restartFrom + SHORT_END_PROGRESS_S) {
+      shortEnds = 0
+      shortRestartFrom = null
+    }
     // Before the player has prepared the item the position is meaningless, so it is kept for the
     // display but never saved; a seek answer confirms one of its own below.
     if (ready) hasPosition = true
@@ -597,20 +608,28 @@ class PlaybackController(
     }
     val mine = generation
     scope.launch {
-      val status = runCatching { api.playbackStatus(id) }.getOrNull()
+      val status = try {
+        api.playbackStatus(id)
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: Throwable) {
+        null
+      }
       if (stopped || mine != generation) return@launch
-      if (status?.conversion == "short") {
+      if (status?.conversion == "short" || status?.conversion == "failed") {
         shortEnds += 1
         if (shortEnds > 3) {
           AppLog.error("Conversion ended short repeatedly")
-          _state.update { it.copy(error = PlaybackError.Network) }
+          _state.update { it.copy(error = PlaybackError.SourceStopped) }
           return@launch
         }
         AppLog.warn("Conversion ended short, restarting", mapOf(
           "source" to (sourceId ?: ""),
           "reached" to (status.reached?.let(::round)?.toLong()?.toString() ?: ""),
         ))
-        restartAt(restartPosition)
+        val target = restartPosition
+        shortRestartFrom = target
+        restartAt(target)
         return@launch
       }
       saveNow(final = true)
@@ -623,14 +642,15 @@ class PlaybackController(
     val stamp = ++sequence
     val id = sessionId ?: return
     val descriptor = runCatching { api.seekPlayback(id, target) }.getOrElse { error ->
+      if (error is CancellationException) throw error
       if (stopped || mine != generation) return
       if (isDead(error)) onDeadSession()
-      else _state.update { it.copy(error = PlaybackError.Network) }
+      else _state.update { it.copy(error = PlaybackError.SourceStopped) }
       return
     }
     if (stopped || mine != generation || stamp != sequence) return
     if (descriptor.seekRestored) {
-      _state.update { it.copy(error = PlaybackError.Network) }
+      _state.update { it.copy(error = PlaybackError.SourceStopped) }
       return
     }
     apply(descriptor, target = target)

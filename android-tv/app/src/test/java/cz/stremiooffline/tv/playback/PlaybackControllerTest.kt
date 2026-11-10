@@ -116,10 +116,13 @@ class PlaybackControllerTest {
 
     override suspend fun playbackStatus(id: String): PlaybackStatusDto? {
       statusCalls += id
+      statusFailure?.let { throw it }
       return status
     }
 
     var pingFailure: Throwable? = null
+    var statusFailure: Throwable? = null
+    var seekFailure: Throwable? = null
 
     override suspend fun deletePlayback(id: String) {
       calls += "delete"
@@ -1165,8 +1168,112 @@ class PlaybackControllerTest {
     }
 
     assertEquals(3, api.seeks.size)
-    assertEquals(PlaybackError.Network, controller.state.value.error)
+    assertEquals(PlaybackError.SourceStopped, controller.state.value.error)
     assertEquals(0, ended)
+  }
+
+  @Test
+  fun `a fourth short conversion restarts after playback made progress`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1",
+      mode = "remux",
+      url = "master.m3u8",
+      duration = 1_000.0,
+      playlist = true,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    playing(controller, 900.0)
+    api.status = PlaybackStatusDto(1, "short", 900.0)
+    var ended = 0
+
+    repeat(3) {
+      controller.onEnded { ended++ }
+      runCurrent()
+    }
+    controller.onPlayerPosition(61.0)
+    controller.onEnded { ended++ }
+    runCurrent()
+
+    assertEquals(4, api.seeks.size)
+    assertEquals(null, controller.state.value.error)
+    assertEquals(0, ended)
+  }
+
+  @Test
+  fun `a failed conversion restarts like a short one`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1",
+      mode = "remux",
+      url = "master.m3u8",
+      duration = 1_000.0,
+      playlist = true,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    playing(controller, 900.0)
+    api.status = PlaybackStatusDto(1, "failed", 900.0)
+    var ended = 0
+
+    controller.onEnded { ended++ }
+    runCurrent()
+
+    assertEquals(listOf(900.0), api.seeks)
+    assertEquals(0, ended)
+    assertEquals(null, controller.state.value.error)
+  }
+
+  @Test
+  fun `cancelling the status read does not end or count the conversion`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1",
+      mode = "remux",
+      url = "master.m3u8",
+      duration = 1_000.0,
+      playlist = true,
+    )
+    api.statusFailure = kotlinx.coroutines.CancellationException("cancelled")
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    playing(controller, 900.0)
+    api.savedFinals.clear()
+    var ended = 0
+
+    controller.onEnded { ended++ }
+    runCurrent()
+
+    assertEquals(0, ended)
+    assertEquals(emptyList<Boolean>(), api.savedFinals)
+    assertEquals(null, controller.state.value.error)
+  }
+
+  @Test
+  fun `cancelling the short-end restart does not show an error`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1",
+      mode = "remux",
+      url = "master.m3u8",
+      duration = 1_000.0,
+      playlist = true,
+    )
+    api.status = PlaybackStatusDto(1, "short", 900.0)
+    api.seekFailure = kotlinx.coroutines.CancellationException("cancelled")
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    playing(controller, 900.0)
+
+    controller.onEnded {}
+    runCurrent()
+
+    assertEquals(null, controller.state.value.error)
   }
 
   @Test

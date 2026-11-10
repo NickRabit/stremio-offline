@@ -69,6 +69,7 @@
   <string name="tv_path_remux">Remux · nothing re-encoded</string>
   <string name="tv_path_transcode">Converted on the server</string>
   <string name="tv_player_error">This video could not be played.</string>
+  <string name="player_source_stopped_early">The source stopped sending the film before its end.</string>
   <string name="tv_load_error">The library could not be loaded.</string>
   <string name="tv_back">Back</string>
   <string name="tv_detail_eyebrow_movie">Movie · %1$s</string>
