@@ -2000,12 +2000,21 @@ test("conversion summary counts a retired generation before it is purged", { ski
   const firstBytes = await directoryBytes(firstDirectory);
 
   const settledAtPurge: Array<number | undefined> = [];
+  let settling = false;
+  let purged!: () => void;
+  const firstPurged = new Promise<void>((resolve) => { purged = resolve; });
+  const settleGeneration = manager.settleGeneration.bind(manager);
+  manager.settleGeneration = (entry: any, directory: string) => {
+    if (directory === firstDirectory) settling = true;
+    return settleGeneration(entry, directory);
+  };
   const purgeNow = manager.purgeNow.bind(manager);
   manager.purgeNow = async (directory: string) => {
     if (directory === firstDirectory) {
       settledAtPurge.push(session.ledger.generations.get(1)?.producedSeconds);
     }
     await purgeNow(directory);
+    if (directory === firstDirectory) purged();
   };
   manager.run = async (target: any, _offset: number, directory: string) => {
     let playlist = '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI="init.mp4"\n';
@@ -2028,10 +2037,13 @@ test("conversion summary counts a retired generation before it is purged", { ski
   }
   const secondBytes = await directoryBytes(secondDirectory);
 
-  for (let attempt = 0; attempt < 50 && settledAtPurge.length === 0; attempt += 1) {
+  // Only the retire delay runs on the mocked clock; once it has fired, the settle and the purge
+  // are real file work, waited for as the event it is rather than a number of turns.
+  while (!settling) {
     await flushPlayback();
     t.mock.timers.tick(1_000);
   }
+  await firstPurged;
   assert.deepEqual(settledAtPurge, [10], "the retired playlist was read before its directory was removed");
 
   await manager.stop(session.id);
