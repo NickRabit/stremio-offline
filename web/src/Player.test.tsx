@@ -841,6 +841,39 @@ describe("Player lost playback session", () => {
     expect(host.querySelector(".player-error")).toBeNull();
   });
 
+  it("still handles an ordinary fatal network error", async () => {
+    await render();
+    await at(42);
+    const hls = hlsMock.instances.at(-1)!;
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => { hls.emit("error", { fatal: true, type: "networkError", details: "fragLoadTimeOut" }); });
+      await flushAll();
+    }
+    expect(hls.startLoadCalls).toBe(2);
+    expect(playbackPosts).toHaveLength(1);
+    expect(host.querySelector(".player-error")?.textContent ?? "").toContain("fragLoadTimeOut");
+  });
+
+  it("still recovers a fatal media error", async () => {
+    await render();
+    await at(42);
+    const hls = hlsMock.instances.at(-1)!;
+    await act(async () => { hls.emit("error", { fatal: true, type: "mediaError", details: "bufferAppendError" }); });
+    await flushAll();
+    expect(hls.recoverMediaErrorCalls).toBe(1);
+  });
+
+  it("carries the chosen audio track and quality into the new session", async () => {
+    sessionShape = { ...sessionShape, audioTracks: [{ index: 0, language: "cze" }, { index: 1, language: "eng" }], audioTrack: 1, quality: 720 };
+    await render();
+    await at(42);
+
+    await fatalHlsError();
+
+    expect(playbackPosts).toHaveLength(2);
+    expect(playbackPosts[1]).toMatchObject({ audioTrack: 1, quality: 720 });
+  });
+
   it("keeps hls.js retries and then fails when the session is still alive", async () => {
     pingStatus = 204;
     seekGone = false;

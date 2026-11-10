@@ -411,6 +411,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   /** What the viewer dialled in: a positive delay holds the cues back against the picture. */
   const [subtitleDelay, setSubtitleDelay] = useState(0);
   const [session, setSession] = useState<PlaybackSession | null>(null);
+  /** The session on screen, for handlers created by an earlier render (hls.js, the ping loop). */
+  const currentSessionRef = useRef(session);
+  currentSessionRef.current = session;
   const [addonSubtitle, setAddonSubtitle] = useState<Subtitle | null>(null);
   const [offset, setOffset] = useState(0);
   const [paused, setPaused] = useState(true);
@@ -697,6 +700,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           return;
         }
         if (checkingSession) { if (data.fatal) failureWhileChecking = handleFailure; return; }
+        handleFailure();
       });
       hls.loadSource(url); hls.attachMedia(video);
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) { video.src = url; if (autoplay) void video.play().catch(() => undefined); }
@@ -883,7 +887,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           if (escalating) { abandon(t("player.browserRefused")); return; }
           // The server may have restarted in the meantime, or cleaned up an idle session.
           // A new HLS session starts at the target; a direct stream is moved by the browser.
-          next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current });
+          next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId), {
+            audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current,
+            // The same file, so the same track numbers: what the viewer picked by hand comes along.
+            ...(currentSessionRef.current ? { audioTrack: currentSessionRef.current.audioTrack, quality: currentSessionRef.current.quality } : {}),
+          });
           id = next.id; started = next.id;
           if (next.mode === "direct") recoveredDirectAt = requested;
         }

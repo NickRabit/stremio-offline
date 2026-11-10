@@ -64,8 +64,8 @@ does not qualify, so the restart failure propagates unchanged.
 
 The server closes a playback session after 90 seconds without a player request.
 When the web player later finds that session gone, it starts a new one at the
-current position once, preserving the paused state, audio and subtitle choices,
-and subtitle delay. Another loss before playback succeeds is reported as an
+current position once, preserving the paused state, the audio track, the
+subtitle choice, the chosen quality and the subtitle delay. Another loss before playback succeeds is reported as an
 ordinary failure.
 
 ## A conversion that ends short
