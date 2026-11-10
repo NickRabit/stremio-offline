@@ -21,8 +21,12 @@ const longBrowserVideoReady = promisify(execFile)("ffmpeg", ["-v", "error", "-st
   .then(() => longBrowserVideo);
 longBrowserVideoReady.catch(() => undefined);
 const travelVideo = path.join(os.tmpdir(), `stremio-e2e-travel-${process.pid}.mp4`);
+// Matroska: the browser cannot play it as it is, so the server has to convert it -- the lead cap
+// only acts on a conversion.
+const leadCapVideo = path.join(os.tmpdir(), `stremio-e2e-lead-cap-${process.pid}.mkv`);
 const execFileAsync = promisify(execFile);
 let travelVideoReady;
+let leadCapVideoReady;
 
 const prepareTravelVideo = () => {
   travelVideoReady ??= execFileAsync("ffmpeg", [
@@ -41,6 +45,18 @@ const prepareTravelVideo = () => {
     "-y", travelVideo,
   ]).then(() => travelVideo);
   return travelVideoReady;
+};
+
+const prepareLeadCapVideo = () => {
+  leadCapVideoReady ??= execFileAsync("ffmpeg", [
+    "-v", "error",
+    "-stream_loop", "59",
+    "-i", videoFile,
+    "-t", "120",
+    "-c", "copy",
+    "-y", leadCapVideo,
+  ]).then(() => leadCapVideo);
+  return leadCapVideoReady;
 };
 
 export const TRAVEL_VIDEO_ID = "tt-e2e-travel-episode";
@@ -120,6 +136,7 @@ const streamsFor = (id, provider = MANIFEST.id) => id === TRAVEL_VIDEO_ID ? [{
   subtitles: [{ url: `http://127.0.0.1:${port}/proxy-subtitle?token=subtitle-canary`, lang: "cs" }],
   extra: { url: "https://unknown-canary.test/secret" },
 }] : proxyMode === "browser" ? [{ name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video.webm` }]
+  : proxyMode === "leadcap" ? [{ name: "E2E lead cap", url: `http://127.0.0.1:${port}/leadcap-video.mkv` }]
   : proxyMode === "browser-long" ? [{ name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video-long.webm` }] : [
   { name: provider === SECONDARY_PROVIDER ? "E2E secondary 1080p" : "E2E 1080p", title: `Czech \u{1F1E8}\u{1F1FF} 2.4 GB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4${provider === SECONDARY_PROVIDER ? "?provider=secondary" : ""}` },
   { name: provider === SECONDARY_PROVIDER ? "E2E secondary 720p" : "E2E 720p", title: `English \u{1F1EC}\u{1F1E7} 900 MB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4${provider === SECONDARY_PROVIDER ? "?provider=secondary" : ""}` },
@@ -143,7 +160,7 @@ async function serveVideo(req, res, file = videoFile) {
   catch { res.writeHead(404).end(); return; }
 
   const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
-  const headers = { "content-type": file.endsWith(".webm") ? "video/webm" : "video/mp4", "accept-ranges": "bytes" };
+  const headers = { "content-type": file.endsWith(".webm") ? "video/webm" : file.endsWith(".mkv") ? "video/x-matroska" : "video/mp4", "accept-ranges": "bytes" };
   if (!range) {
     res.writeHead(200, { ...headers, "content-length": info.size });
     return req.method === "HEAD" ? res.end() : createReadStream(file).pipe(res);
@@ -169,6 +186,14 @@ const server = createServer(async (req, res) => {
 
   if (pathname === "/browser-video.webm") return void serveVideo(req, res, browserVideo);
   if (pathname === "/browser-video-long.webm") return void serveVideo(req, res, await longBrowserVideoReady);
+  if (pathname === "/leadcap-video.mkv") {
+    try {
+      return void serveVideo(req, res, await prepareLeadCapVideo());
+    } catch {
+      res.writeHead(500, { "content-type": "text/plain" });
+      return res.end("lead cap fixture media could not be generated");
+    }
+  }
   if (pathname === "/travel-video.mp4") {
     try {
       return void serveVideo(req, res, await prepareTravelVideo());

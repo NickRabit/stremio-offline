@@ -19,6 +19,7 @@ datacenter/
 *.tsbuildinfo
 e2e/.tmp/
 e2e/.tmp-restricted/
+e2e/.tmp-leadcap/
 test-results/
 playwright-report/
 coverage/

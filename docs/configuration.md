@@ -259,6 +259,7 @@ Details in [Playback](playback.md) and
 | `FFMPEG_CRF` | `23` | `libx264` quality. Lower means better and heavier. Software fallback only. |
 | `FFMPEG_PATH` | *(unset)* | Full path to the `ffmpeg` executable to run. Unset or empty, `ffmpeg` from `PATH` is used. |
 | `FFPROBE_PATH` | *(unset)* | The same for `ffprobe`. |
+| `PLAYBACK_LEAD_CAP_SECONDS` | `0` | High mark, in seconds, for the conversion lead over the furthest segment the player fetched. `0`, a negative value or a non-number turns the cap off. POSIX conversion processes are suspended at this mark and resumed below 60% of it. Windows lacks `SIGSTOP`, so the cap stays off there. |
 | `VAAPI_QP` | `23` | Hardware CQP quality. Lower means better and more bitrate. |
 | `VAAPI_DEVICE` | *(unset)* | Render node, usually `/dev/dri/renderD128`. |
 | `VIDEOTOOLBOX` | `1` | macOS only. `0` stops the desktop backend probing or using VideoToolbox. |

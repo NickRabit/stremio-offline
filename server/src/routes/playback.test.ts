@@ -47,6 +47,7 @@ interface Harness {
   stopped: string[];
   stopReasons: string[];
   fetched: Array<{ id: string; generation: string; file: string }>;
+  waitingFor: Array<{ id: string; absolute: number }>;
   mediaSources: MediaServerSources;
   playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string }>;
   /** The manager the routes call; a test can replace one method to hold a preparation open. */
@@ -65,6 +66,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
   const stopped: string[] = [];
   const stopReasons: string[] = [];
   const fetched: Array<{ id: string; generation: string; file: string }> = [];
+  const waitingFor: Array<{ id: string; absolute: number }> = [];
   let source = { url: "https://example.test/video.mp4" } as StreamItem;
   const sessions = { ada: ADA, bob: BOB };
   const userOf = (req: express.Request) => (req.header("x-user") === "bob" ? "bob" : "ada");
@@ -86,6 +88,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     attended: (id: string) => { attended.push(id); },
     stop: async (id: string, reason = "closed") => { stopped.push(id); stopReasons.push(reason); },
     fetched: (id: string, generation: string, file: string) => { fetched.push({ id, generation, file }); },
+    waitingFor: (id: string, absolute: number) => { waitingFor.push({ id, absolute }); },
     directory: () => "/tmp/session-generation",
     preview: async () => undefined,
     sidecar: async () => undefined,
@@ -169,6 +172,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     stopped,
     stopReasons,
     fetched,
+    waitingFor,
     mediaSources,
     playbackOwners,
     playback,
@@ -285,6 +289,26 @@ test("the owner reads a playback status and another account cannot", async (t) =
 
   const other = await api(harness.base, `/api/playback/${ID}/status`, { user: "bob" });
   assert.equal(other.status, 404);
+});
+
+test("the ping hands a finite waiting position to the playback manager", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: { waitingFor: 123.5 } });
+  assert.equal(response.status, 204);
+  assert.deepEqual(harness.waitingFor, [{ id: ID, absolute: 123.5 }]);
+});
+
+test("the ping ignores waiting positions that are not finite non-negative numbers", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  for (const waitingFor of ["123", -1, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+    const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: { waitingFor } });
+    assert.equal(response.status, 204);
+  }
+  assert.deepEqual(harness.waitingFor, []);
 });
 
 test("the guard lets the owner through, makes the frame uncacheable and marks the session attended", async (t) => {
@@ -574,7 +598,10 @@ const addonHost = async (
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   const ranges: string[] = [];
   const held: Array<() => void> = [];
+  let resolveClosed = () => {};
+  const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
   const server = http.createServer((req, res) => {
+    res.once("close", resolveClosed);
     ranges.push(String(req.headers.range ?? ""));
     const match = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? ""));
     if (!match) { res.writeHead(200, { "content-type": contentType, "content-length": body.length }); return void res.end(body); }
@@ -592,6 +619,7 @@ const addonHost = async (
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/film.avi`,
     ranges,
+    closed,
     releaseHeld: () => held.shift()?.(),
   };
 };
@@ -615,6 +643,33 @@ test("a direct-play read of an addon source goes straight to the host", async (t
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), file);
   assert.deepEqual(host.ranges, ["bytes=0-"]);
   assert.equal(remoteReadAhead.size, 0);
+});
+
+test("a response destroyed during backpressure stops the source transfer instead of waiting for drain", { timeout: 10_000 }, async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const host = await addonHost(t, filmBytes(32 * 1024 * 1024));
+  const resourceId = registry.mediaStream({ url: host.url } as StreamItem, ADA).resourceId;
+  const url = new URL(harness.base);
+  const response = new Promise<http.IncomingMessage>((resolve, reject) => {
+    const request = http.request({
+      host: url.hostname,
+      port: url.port,
+      path: `/api/media/${resourceId}`,
+      headers: { "x-user": "ada" },
+    }, resolve);
+    request.once("error", reject);
+    request.end();
+  });
+  const reply = await response;
+  await new Promise<void>((resolve) => reply.once("data", () => { reply.pause(); resolve(); }));
+  reply.destroy();
+
+  const timeout = new Promise<never>((_, reject) => {
+    const timer = setTimeout(() => reject(new Error("the source transfer stayed open")), 2_000);
+    timer.unref();
+  });
+  await Promise.race([host.closed, timeout]);
 });
 
 test("an addon film probed by jumping between its header and its index asks the host a few times, not once per jump", async (t) => {

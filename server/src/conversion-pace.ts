@@ -102,6 +102,7 @@ export interface MonitorOptions {
   intervalMs?: number;
   now?: () => number;
   cpu?: (pid: number | undefined) => Promise<number | undefined>;
+  onProgress?: (outTime: number) => void;
 }
 
 /** Watches one FFmpeg run and says in the log when, and probably why, it is slower than playback. */
@@ -112,8 +113,11 @@ export class ConversionMonitor {
   private window?: PaceSnapshot;
   private timer?: NodeJS.Timeout;
   private slowChecks = 0;
+  private slowStreak = 0;
   private starting = false;
   private warnedAt?: number;
+  private suspendedAt?: number;
+  private suspendedMs = 0;
   private readonly startedAt: number;
   private readonly now: () => number;
   private readonly cpu: (pid: number | undefined) => Promise<number | undefined>;
@@ -125,7 +129,9 @@ export class ConversionMonitor {
   }
 
   push(chunk: string) {
+    const previous = this.progress.latest;
     this.progress.push(chunk);
+    if (this.progress.latest && this.progress.latest !== previous) this.options.onProgress?.(this.progress.latest.outTime);
     // The window starts at the first thing written, so a stall reported early already has one to show.
     if (!this.starting && !this.last && this.progress.latest) { this.starting = true; void this.check(); }
   }
@@ -144,7 +150,9 @@ export class ConversionMonitor {
   /** The first reading is taken once FFmpeg has written something, so opening the source and
    *  seeking in it do not count against the pace. */
   async check() {
+    if (this.suspendedAt !== undefined) return;
     const reading = await this.read();
+    if (this.suspendedAt !== undefined) return;
     if (!reading || this.progress.latest?.ended) return;
     const previous = this.last;
     this.last = reading;
@@ -154,13 +162,32 @@ export class ConversionMonitor {
     this.window = this.describe(previous, reading);
     if ((this.window.pace ?? 1) >= BEHIND) return;
     this.slowChecks += 1;
+    this.slowStreak += 1;
     const at = this.now();
     if (this.warnedAt !== undefined && at - this.warnedAt < REPEAT_MS) return;
     this.warnedAt = at;
     log("WARN", "The conversion is falling behind playback", {
       id: this.options.id, generation: this.options.generation, mode: this.options.mode, hardware: this.options.hardware,
-      ...this.window, slowChecks: this.slowChecks,
+      ...this.window, slowChecks: this.slowStreak,
     });
+  }
+
+  suspend() {
+    if (this.suspendedAt !== undefined) return;
+    this.suspendedAt = this.now();
+    this.first = undefined;
+    this.last = undefined;
+    this.window = undefined;
+  }
+
+  resume() {
+    if (this.suspendedAt === undefined) return;
+    this.suspendedMs += this.now() - this.suspendedAt;
+    this.suspendedAt = undefined;
+    this.first = undefined;
+    this.last = undefined;
+    this.window = undefined;
+    this.slowStreak = 0;
   }
 
   private describe(from: Reading, to: Reading): PaceSnapshot {
@@ -190,9 +217,10 @@ export class ConversionMonitor {
     clearInterval(this.timer);
     const { first, last } = this;
     const summary = first && last && last.at > first.at ? this.describe(first, last) : undefined;
+    const suspendedMs = this.suspendedMs + (this.suspendedAt === undefined ? 0 : this.now() - this.suspendedAt);
     log(this.slowChecks > 0 ? "INFO" : "DEBUG", "Conversion ended", {
       id: this.options.id, generation: this.options.generation, outcome,
-      ranSeconds: Math.round((this.now() - this.startedAt) / 1000),
+      ranSeconds: Math.round((this.now() - this.startedAt - suspendedMs) / 1000),
       produced: Math.round(this.progress.latest?.outTime ?? 0),
       ...(summary ? { averagePace: summary.pace, sourceMBps: summary.sourceMBps, waitingOnSource: summary.waitingOnSource, ffmpegCpu: summary.ffmpegCpu, likelyCause: summary.likelyCause } : {}),
       slowChecks: this.slowChecks,

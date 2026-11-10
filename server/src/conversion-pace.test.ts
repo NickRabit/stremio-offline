@@ -90,3 +90,57 @@ test("a conversion that keeps up stays quiet", async () => {
   assert.equal(lines.some((entry) => entry.message === "The conversion is falling behind playback"), false);
   assert.equal(lines.find((entry) => entry.message === "Conversion ended")?.level, "DEBUG");
 });
+
+test("the monitor reports every progress update to its caller", async () => {
+  const clock = { now: 3_000_000 };
+  const pace = new SourcePace();
+  const updates: number[] = [];
+  const monitor = new ConversionMonitor({
+    id: "progress-callback", generation: 1, offset: 0, mode: "remux", hardware: false,
+    source: () => pace.read("progress-callback"), now: () => clock.now, cpu: async () => undefined,
+    onProgress: (outTime) => updates.push(outTime),
+  });
+
+  monitor.push("out_time_us=2000000\nprogress=continue\n");
+  monitor.push("out_time_us=6500000\nprogress=continue\n");
+
+  assert.deepEqual(updates, [2, 6.5]);
+});
+
+test("a suspended monitor measures no pace and does not warn", async () => {
+  const clock = { now: 4_000_000 };
+  const pace = new SourcePace();
+  const monitor = new ConversionMonitor({
+    id: "suspended-monitor", generation: 1, offset: 0, mode: "transcode", hardware: false,
+    source: () => pace.read("suspended-monitor"), now: () => clock.now, cpu: async () => undefined,
+  });
+  monitor.push("out_time_us=0\nprogress=continue\n");
+  await monitor.check();
+  clock.now += 10_000;
+  pace.note("suspended-monitor", 9_000, 1_000, 10_000_000);
+  monitor.push("out_time_us=9500000\nprogress=continue\n");
+  await monitor.check();
+  assert.equal(monitor.snapshot()?.pace, 0.95);
+
+  monitor.suspend();
+  clock.now += 30_000;
+  pace.note("suspended-monitor", 30_000, 0, 20_000_000);
+  monitor.push("out_time_us=1000000\nprogress=continue\n");
+  await monitor.check();
+  assert.equal(monitor.snapshot(), undefined, "the suspended interval has no pace");
+
+  monitor.resume();
+  clock.now += 10_000;
+  monitor.push("out_time_us=19500000\nprogress=continue\n");
+  await monitor.check();
+  assert.equal(monitor.snapshot(), undefined, "the first reading after resume only starts a new window");
+  clock.now += 10_000;
+  monitor.push("out_time_us=29500000\nprogress=continue\n");
+  await monitor.check();
+  assert.equal(monitor.snapshot()?.pace, 1);
+
+  monitor.finish("stopped");
+  const lines = await entries("suspended-monitor");
+  assert.equal(lines.some((entry) => entry.message === "The conversion is falling behind playback"), false);
+  assert.equal(lines.find((entry) => entry.message === "Conversion ended")?.context?.ranSeconds, 30);
+});
