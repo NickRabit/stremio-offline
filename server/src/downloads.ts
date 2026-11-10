@@ -2389,6 +2389,9 @@ export class DownloadQueue {
     } finally {
       this.admitting.delete(job.id);
     }
+    // The watcher started by `pauseForLibrary` may have ticked and stopped while the job was
+    // not yet in the list; a paused job that nobody watches would wait for ever.
+    if (job.status === "paused" && job.pauseReason === "library") this.watchLibraries();
   }
   private saveSoon() {
     if (this.saveTimer) return;

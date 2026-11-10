@@ -414,6 +414,58 @@ test("a save rule sends the file into the library it names", async () => {
   }
 });
 
+
+test("a job paused for a library while its admission write is held still gets watched", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloadDir = path.join(directory, "downloads");
+  const downloads = downloadLibrary(downloadDir);
+  let hold = false;
+  let entered!: () => void;
+  const writing = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  let asked!: () => void;
+  const libraryAsked = new Promise<void>((resolve) => { asked = resolve; });
+  // The interval is driven by hand, so the tick lands exactly while the admission write waits.
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
+    libraryRetryMs: 20, libraryWaitMs: 0,
+    libraries: () => [downloads],
+    defaultLibrary: () => downloads,
+    libraryState: async (libraryId) => { if (libraryId === "lib_99999999") asked(); return undefined; },
+    writeState: async (file, data) => {
+      if (hold) { entered(); await released; }
+      await writeFile(file, data);
+    },
+  });
+  await queue.load();
+  try {
+    // A slow write already in flight holds the admission's own write -- and the job's way into
+    // the list -- behind it, as on the Windows runner.
+    hold = true;
+    const slow = queue.clearCompleted();
+    await writing;
+    const adding = queue.add("Other", { url: "http://127.0.0.1:9/other.mp4" }, undefined, { subfolder: "", layout: "structured", libraryId: "lib_99999999" });
+    await libraryAsked;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(queue.list().length, 0, "the job is still being admitted");
+    t.mock.timers.tick(20);
+    hold = false;
+    release();
+    await slow;
+    const job = await adding;
+    assert.equal(job.status, "paused");
+    for (let tick = 0; tick < 50 && queue.list()[0]?.pauseReason === "library"; tick++) {
+      t.mock.timers.tick(20);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.notEqual(queue.list()[0]?.pauseReason, "library", "past the deadline the job takes the default library");
+  } finally {
+    t.mock.timers.reset();
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 test("a rule whose library is away waits for it instead of landing somewhere else", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const downloadDir = path.join(directory, "downloads");
