@@ -1,0 +1,44 @@
+name: Coverage
+
+on:
+  workflow_dispatch:
+  # A pull request runs it only when the report itself changes; every other change is
+  # measured once it reaches main, so the unit suites do not run twice per pull request.
+  pull_request:
+    paths:
+      - ".github/workflows/coverage.yml"
+      - "scripts/coverage-report.mjs"
+      - "web/vite.config.ts"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build -w @stremio-offline/source-selection
+      - run: npm run test:coverage
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage/
+          retention-days: 30

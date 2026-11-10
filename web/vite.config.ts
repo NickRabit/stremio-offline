@@ -16,5 +16,12 @@ export default defineConfig({
     restoreMocks: true,
     setupFiles: ["src/test-setup.ts"],
     testTimeout: 120_000,
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.ts", "src/**/*.tsx"],
+      exclude: ["src/**/*.test.ts", "src/**/*.test.tsx", "src/test-setup.ts", "src/i18n/{cs,de,en,es,fr,it,pl,ptBR,ru,sk}.ts"],
+      reporter: ["text-summary", "html", "json", "json-summary", "lcovonly"],
+      reportsDirectory: "../coverage/web",
+    },
   },
 });
