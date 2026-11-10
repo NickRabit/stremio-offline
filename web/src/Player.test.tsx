@@ -91,6 +91,7 @@ let playbackStatusAnswer: unknown;
 let seekRequests: Array<{ path: string; time: number }>;
 let seekGone: boolean;
 let pingRequests: string[];
+let pingBodies: unknown[];
 let pingStatus: number;
 let pingBody: unknown;
 /** Every segment lookup sent for the playback on screen. */
@@ -137,6 +138,7 @@ beforeEach(() => {
   seekRequests = [];
   seekGone = false;
   pingRequests = [];
+  pingBodies = [];
   pingStatus = 204;
   pingBody = null;
   introRequests = [];
@@ -163,6 +165,7 @@ beforeEach(() => {
     if (/^\/api\/playback\/[^/]+$/.test(path) && init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
     if (/^\/api\/playback\/[^/]+\/ping$/.test(path)) {
       pingRequests.push(path);
+      pingBodies.push(init?.body === undefined ? undefined : JSON.parse(String(init.body)) as unknown);
       return Promise.resolve(pingStatus === 204 ? new Response(null, { status: 204 }) : json(pingBody, pingStatus));
     }
     if (/^\/api\/playback\/[^/]+\/status$/.test(path)) {
@@ -839,6 +842,29 @@ describe("Player lost playback session", () => {
     expect(playbackPosts).toHaveLength(1);
     expect(hls.startLoadCalls).toBe(0);
     expect(host.querySelector(".player-error")).toBeNull();
+  });
+
+  it("tells the server which position a short catch-up wait is waiting for", async () => {
+    pingStatus = 204;
+    seekGone = false;
+    await render();
+    const video = await at(5);
+    Object.defineProperty(video, "seekable", {
+      configurable: true,
+      get: () => ({ length: 1, start: () => 0, end: () => 10 }),
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+        await Promise.resolve();
+      });
+      expect(pingRequests).toEqual(["/api/playback/sess1/ping"]);
+      expect(pingBodies).toEqual([{ waitingFor: 15 }]);
+      await act(async () => { vi.advanceTimersByTime(8_000); await Promise.resolve(); });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("still handles an ordinary fatal network error", async () => {

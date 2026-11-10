@@ -850,6 +850,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (plan === "wait") {
       const epoch = seekEpochRef.current;
       showBufferSoon();
+      const id = sessionRef.current;
+      if (id) void api.pingPlayback(id, { waitingFor: bounded }).catch(() => undefined);
       const covered = await waitForSeekable(
         () => video.seekable.length ? video.seekable.end(video.seekable.length - 1) : 0,
         relative, AHEAD_CATCHUP_MS,
