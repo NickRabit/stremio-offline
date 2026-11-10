@@ -60,6 +60,22 @@ a failed track, quality or escalation restart restores the old generation too,
 but still reports the failure to the client. A dead process or incomplete output
 does not qualify, so the restart failure propagates unchanged.
 
+## Conversion summary
+
+Each remux or transcode session writes one `INFO` line, `Conversion summary`, when
+it stops. Direct play writes no summary.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Playback session id |
+| `mode` | The session's final playback mode |
+| `generations` | Number of conversion generations started, including failed attempts |
+| `producedSeconds` | Whole seconds written across all generation playlists |
+| `fetchedSeconds` | Whole seconds up to the furthest video segment the client requested in each generation |
+| `unfetchedSeconds` | Produced seconds the client did not fetch |
+| `bytesWritten` | Total size of the files left in the generation directories when they were settled |
+| `ended` | `closed`, `orphaned`, `unclaimed`, `idle`, `failed`, `revoked`, or `shutdown` |
+
 ### AC-3 after a seek
 
 AC-3 and E-AC-3 are copied only when a remux starts at zero; from any later

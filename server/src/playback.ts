@@ -44,6 +44,7 @@ export async function sourceReachable(stream: StreamItem, timeoutMs = REACHABILI
 
 /** direct = the browser plays the file as is, remux = repackaging without re-encoding video, transcode = a real conversion. */
 export type PlaybackMode = "direct" | "remux" | "transcode";
+export type StopReason = "closed" | "orphaned" | "unclaimed" | "idle" | "failed" | "revoked" | "shutdown";
 
 export interface ClientCapabilities {
   h264?: boolean; hevc?: boolean; hevc10?: boolean; vp8?: boolean; vp9?: boolean; av1?: boolean;
@@ -213,6 +214,20 @@ export class SerialOperations {
   wait() { return this.tail; }
 }
 
+interface GenerationLedger {
+  generation: number;
+  offset: number;
+  furthestSegment: number;
+  producedSeconds?: number;
+  fetchedSeconds?: number;
+  bytes?: number;
+}
+
+interface ConversionLedger {
+  generations: Map<number, GenerationLedger>;
+  mode: PlaybackMode;
+}
+
 interface Session {
   id: string; stream: StreamItem; capabilities: ClientCapabilities; info?: MediaInfo;
   mode: PlaybackMode; generation: number; offset: number; hardware: boolean;
@@ -231,6 +246,7 @@ interface Session {
   /** The client refused the copied stream, so this session must never copy again. */
   copyRejected?: boolean;
   ending?: { generation: number; short: boolean; failed?: boolean; reached?: number };
+  ledger?: ConversionLedger;
 }
 
 /** Main and Main 10 are two different codecs to a browser. A ten-bit stream must not be copied
@@ -332,6 +348,7 @@ export async function waitForHlsOutput(directory: string, finished: () => boolea
 export const nvencBusy = (error: string | undefined) =>
   /OpenEncodeSessionEx failed|out of memory|No capable devices found|incompatible client key|CUDA_ERROR_OUT_OF_MEMORY/i.test(error ?? "");
 const AUDIO_REQUIRING_PACKET_FOR_FMP4 = new Set(["ac3", "eac3"]);
+const MEDIA_SEGMENT = /^seg-0-(\d{6})\.m4s$/;
 const IDLE_MS = 5 * 60_000;
 // If the start finishes after the client gave up, the session and its FFmpeg hang around for
 // five minutes, reading from the source the whole time. An unclaimed session has nothing to wait for.
@@ -537,16 +554,16 @@ export class PlaybackManager {
       const unattended = Date.now() - (session.clientAt ?? session.startedAt);
       if (session.claimed && unattended > ORPHAN_MS) {
         log("INFO", "No player has asked for this session, closing it", { id: session.id, mode: session.mode, seconds: Math.round(unattended / 1000) });
-        void this.stop(session.id); continue;
+        void this.stop(session.id, "orphaned"); continue;
       }
       const idle = Date.now() - session.lastAccess;
       if (!session.claimed && session.mode !== "direct" && idle > UNCLAIMED_MS) {
         log("INFO", "Unclaimed session closed", { id: session.id, mode: session.mode, seconds: Math.round(idle / 1000) });
-        void this.stop(session.id); continue;
+        void this.stop(session.id, "unclaimed"); continue;
       }
       if (idle > IDLE_MS) {
         log("INFO", "Idle session closed", { id: session.id, mode: session.mode, idleMinutes: Math.round(idle / 60_000) });
-        void this.stop(session.id);
+        void this.stop(session.id, "idle");
       }
     }
   }
@@ -697,7 +714,7 @@ export class PlaybackManager {
     // has answered the session belongs to the player, not to the response that asked for it.
     let stopping: Promise<void> | undefined;
     let reason = "";
-    const abort = () => { stopping ??= this.stop(id).catch(() => undefined); };
+    const abort = () => { stopping ??= this.stop(id, "failed").catch(() => undefined); };
     signal?.addEventListener("abort", abort, { once: true });
     try {
       if (signal?.aborted) signal.throwIfAborted();
@@ -729,7 +746,7 @@ export class PlaybackManager {
     } catch (error) {
       if (!signal?.aborted) log("ERROR", "Playback could not be started", { id, mode: session.mode, plan: reason, error });
       // Wait for the stop the abort already started, so nothing is left running behind the throw.
-      await (stopping ?? this.stop(id));
+      await (stopping ?? this.stop(id, "failed"));
       throw error;
     } finally {
       signal?.removeEventListener("abort", abort);
@@ -901,7 +918,7 @@ export class PlaybackManager {
     if (session) { session.clientAt = Date.now(); session.lastAccess = Date.now(); session.claimed = true; }
   }
 
-  async stop(id: string) {
+  async stop(id: string, reason: StopReason = "closed") {
     this.previews.stop(id);
     const session = this.sessions.get(id);
     if (!session) return;
@@ -912,6 +929,23 @@ export class PlaybackManager {
     this.onStop(id);
     await session.operations.wait();
     await this.kill(session);
+    await this.settleLedger(session);
+    if (session.ledger) {
+      const generations = [...session.ledger.generations.values()];
+      session.ledger.mode = session.mode;
+      const producedSeconds = Math.round(generations.reduce((sum, entry) => sum + (entry.producedSeconds ?? 0), 0));
+      const fetchedSeconds = Math.round(generations.reduce((sum, entry) => sum + (entry.fetchedSeconds ?? 0), 0));
+      log("INFO", "Conversion summary", {
+        id,
+        mode: session.mode,
+        generations: generations.length,
+        producedSeconds,
+        fetchedSeconds,
+        unfetchedSeconds: Math.max(0, producedSeconds - fetchedSeconds),
+        bytesWritten: Math.round(generations.reduce((sum, entry) => sum + (entry.bytes ?? 0), 0)),
+        ended: reason,
+      });
+    }
     await this.purgeNow(path.join(this.root, id));
   }
 
@@ -961,6 +995,13 @@ export class PlaybackManager {
     session.claimed = true;
     session.lastAccess = Date.now();
     return directory;
+  }
+
+  fetched(id: string, generation: string, file: string): void {
+    const index = Number(MEDIA_SEGMENT.exec(file)?.[1]);
+    if (!Number.isInteger(index)) return;
+    const entry = this.sessions.get(id)?.ledger?.generations.get(Number(generation));
+    if (entry) entry.furthestSegment = Math.max(entry.furthestSegment, index);
   }
 
   private require(id: string) {
@@ -1401,6 +1442,48 @@ export class PlaybackManager {
     return copyVideo && copyAudio && !(offset > 0 && AUDIO_REQUIRING_PACKET_FOR_FMP4.has(codec));
   }
 
+  private async settleLedger(session: Session) {
+    if (!session.ledger) return;
+    await Promise.all([...session.ledger.generations.values()].map((entry) =>
+      this.settleGeneration(entry, path.join(this.root, session.id, String(entry.generation)))));
+  }
+
+  private async settleGeneration(entry: GenerationLedger, directory: string) {
+    if (entry.producedSeconds !== undefined) return;
+    entry.producedSeconds = 0;
+    entry.fetchedSeconds = 0;
+    entry.bytes = 0;
+
+    try {
+      const playlist = await readFile(path.join(directory, "index-0.m3u8"), "utf8");
+      let duration = 0;
+      let produced = 0;
+      let fetched = 0;
+      for (const raw of playlist.split(/\r?\n/)) {
+        const line = raw.trim();
+        const extinf = /^#EXTINF:([0-9]+(?:\.[0-9]+)?)/.exec(line);
+        if (extinf) {
+          duration = Number(extinf[1]);
+          produced += duration;
+          continue;
+        }
+        if (!line || line.startsWith("#")) continue;
+        const index = Number(MEDIA_SEGMENT.exec(line)?.[1]);
+        if (Number.isInteger(index) && index <= entry.furthestSegment) fetched += duration;
+        duration = 0;
+      }
+      entry.producedSeconds = produced;
+      entry.fetchedSeconds = fetched;
+    } catch { /* A failed attempt may have left no playlist. */ }
+
+    try {
+      const names = await readdir(directory);
+      const sizes = await Promise.all(names.map((name) =>
+        stat(path.join(directory, name)).then((value) => value.isFile() ? value.size : 0, () => 0)));
+      entry.bytes = sizes.reduce((sum, size) => sum + size, 0);
+    } catch { /* A missing generation has no bytes to count. */ }
+  }
+
   private retire(session: Session, directory: string, generation: number, process?: ChildProcess) {
     const retired = { generation, directory, until: Date.now() + RETIRED_MS };
     session.retired = retired;
@@ -1411,6 +1494,8 @@ export class PlaybackManager {
       await sleep(Math.max(0, retired.until - Date.now()));
       if (session.retired === retired) session.retired = undefined;
       if (session.directory !== directory && session.fallback?.directory !== directory) {
+        const ledger = session.ledger?.generations.get(generation);
+        if (ledger) await this.settleGeneration(ledger, directory);
         await this.purge(directory, "a generation that was replaced");
       }
     });
@@ -1429,6 +1514,13 @@ export class PlaybackManager {
 
     const { copyVideo } = this.plan(session);
     session.mode = copyVideo ? "remux" : "transcode";
+    const ledger = session.ledger ??= { generations: new Map(), mode: session.mode };
+    ledger.mode = session.mode;
+    ledger.generations.set(session.generation, {
+      generation: session.generation,
+      offset,
+      furthestSegment: -1,
+    });
     // Decided once: a concurrent session can switch a path off while this one awaits, and the
     // failure below has to be charged to the path this attempt actually used.
     const accelerator = this.accelerator();
@@ -1492,6 +1584,8 @@ export class PlaybackManager {
       }
     }
     await this.killChild(session.process);
+    const generation = session.ledger?.generations.get(session.generation);
+    if (generation) await this.settleGeneration(generation, directory);
     await this.purge(directory, "a conversion that failed");
     this.assertActive(session);
     throw new AppError(session.error || "The video conversion could not be started.", "err.conversionFailed");

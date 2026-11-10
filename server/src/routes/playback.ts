@@ -302,7 +302,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });
       if (req.body.capabilities?.airplay === true) airplayAccess.create(started.id, owner, prepared.resourceId);
     } catch (error) {
-      try { if (started) await playback.stop(started.id); }
+      try { if (started) await playback.stop(started.id, controller.signal.aborted ? "failed" : "revoked"); }
       finally { mediaResources.remove(prepared.resourceId); }
       if (controller.signal.aborted && res.destroyed) return;
       throw error;
@@ -324,7 +324,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       try { guardOwned(id); }
       catch {
         // The session's own right is gone: stop it so no converter or reader is left behind.
-        void playback.stop(id).catch(() => undefined);
+        void playback.stop(id, "revoked").catch(() => undefined);
         return res.status(404).json({ error: "The playback session no longer exists.", messageKey: "err.playbackSessionGone", code: "RESOURCE_NOT_FOUND" });
       }
       // A remote session's control, preview, converted segment and sidecar responses are
@@ -409,6 +409,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // for that, but repeated 404s on a live session mean playback has fallen apart.
     if (!directory) { log("DEBUG", "Segment from an unknown session or generation", { req: req.id, id: req.params.id, generation: req.params.generation, file: req.params.file }); return res.status(404).end(); }
     const file = String(req.params.file);
+    playback.fetched(sessionId, String(req.params.generation), file);
     const grant = airplayRequest(req);
     const receiverPlaylist = (text: string) => grant ? rewritePlaylist(text, (uri) => {
       if (!/^[A-Za-z0-9_-]{1,64}\.(m3u8|mp4|m4s|vtt)$/.test(uri)) throw new Error("Unsupported AirPlay playlist resource.");
