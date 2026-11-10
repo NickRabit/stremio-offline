@@ -14,6 +14,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const videoFile = path.join(here, "media", "sample.mp4");
 const browserVideo = path.join(os.tmpdir(), `stremio-e2e-${process.pid}.webm`);
 execFileSync("ffmpeg", ["-v", "error", "-i", videoFile, "-c:v", "libvpx-vp9", "-c:a", "libopus", "-y", browserVideo]);
+// The same clip looped to a minute: a journey that switches to it and keeps working in the
+// player must not race the two-second original to its end, which closes the player.
+const longBrowserVideo = path.join(os.tmpdir(), `stremio-e2e-long-${process.pid}.webm`);
+const longBrowserVideoReady = promisify(execFile)("ffmpeg", ["-v", "error", "-stream_loop", "29", "-i", browserVideo, "-c", "copy", "-y", longBrowserVideo])
+  .then(() => longBrowserVideo);
+longBrowserVideoReady.catch(() => undefined);
 const travelVideo = path.join(os.tmpdir(), `stremio-e2e-travel-${process.pid}.mp4`);
 const execFileAsync = promisify(execFile);
 let travelVideoReady;
@@ -113,7 +119,8 @@ const streamsFor = (id, provider = MANIFEST.id) => id === TRAVEL_VIDEO_ID ? [{
   behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer header-canary" } } },
   subtitles: [{ url: `http://127.0.0.1:${port}/proxy-subtitle?token=subtitle-canary`, lang: "cs" }],
   extra: { url: "https://unknown-canary.test/secret" },
-}] : proxyMode === "browser" ? [{ name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video.webm` }] : [
+}] : proxyMode === "browser" ? [{ name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video.webm` }]
+  : proxyMode === "browser-long" ? [{ name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video-long.webm` }] : [
   { name: provider === SECONDARY_PROVIDER ? "E2E secondary 1080p" : "E2E 1080p", title: `Czech \u{1F1E8}\u{1F1FF} 2.4 GB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4${provider === SECONDARY_PROVIDER ? "?provider=secondary" : ""}` },
   { name: provider === SECONDARY_PROVIDER ? "E2E secondary 720p" : "E2E 720p", title: `English \u{1F1EC}\u{1F1E7} 900 MB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4${provider === SECONDARY_PROVIDER ? "?provider=secondary" : ""}` },
 ];
@@ -161,6 +168,7 @@ const server = createServer(async (req, res) => {
   const parts = route(pathname);
 
   if (pathname === "/browser-video.webm") return void serveVideo(req, res, browserVideo);
+  if (pathname === "/browser-video-long.webm") return void serveVideo(req, res, await longBrowserVideoReady);
   if (pathname === "/travel-video.mp4") {
     try {
       return void serveVideo(req, res, await prepareTravelVideo());

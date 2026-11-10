@@ -47,7 +47,8 @@ test.describe("the player's sources for a library file", () => {
   // Chromium in the test image has no H.264, so the addon hands out its VP9 copy and a switch
   // really plays; the mode is shared with the other specs in the run.
   test.beforeEach(async ({ request }) => {
-    await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
+    // The long clip: the journeys switch to the addon row and keep using the player there.
+    await request.get(new URL("/proxy-control?mode=browser-long", addonManifest).href);
   });
   test.afterEach(async ({ request }) => {
     await request.get(new URL("/proxy-control?mode=video", addonManifest).href);
