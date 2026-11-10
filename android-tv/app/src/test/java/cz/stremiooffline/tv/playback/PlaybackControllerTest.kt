@@ -122,7 +122,6 @@ class PlaybackControllerTest {
 
     var pingFailure: Throwable? = null
     var statusFailure: Throwable? = null
-    var seekFailure: Throwable? = null
 
     override suspend fun deletePlayback(id: String) {
       calls += "delete"
