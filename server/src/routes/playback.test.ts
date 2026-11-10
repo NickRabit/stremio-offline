@@ -574,7 +574,10 @@ const addonHost = async (
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   const ranges: string[] = [];
   const held: Array<() => void> = [];
+  let resolveClosed = () => {};
+  const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
   const server = http.createServer((req, res) => {
+    res.once("close", resolveClosed);
     ranges.push(String(req.headers.range ?? ""));
     const match = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? ""));
     if (!match) { res.writeHead(200, { "content-type": contentType, "content-length": body.length }); return void res.end(body); }
@@ -592,6 +595,7 @@ const addonHost = async (
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/film.avi`,
     ranges,
+    closed,
     releaseHeld: () => held.shift()?.(),
   };
 };
@@ -615,6 +619,33 @@ test("a direct-play read of an addon source goes straight to the host", async (t
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), file);
   assert.deepEqual(host.ranges, ["bytes=0-"]);
   assert.equal(remoteReadAhead.size, 0);
+});
+
+test("a response destroyed during backpressure stops the source transfer instead of waiting for drain", { timeout: 10_000 }, async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const host = await addonHost(t, filmBytes(32 * 1024 * 1024));
+  const resourceId = registry.mediaStream({ url: host.url } as StreamItem, ADA).resourceId;
+  const url = new URL(harness.base);
+  const response = new Promise<http.IncomingMessage>((resolve, reject) => {
+    const request = http.request({
+      host: url.hostname,
+      port: url.port,
+      path: `/api/media/${resourceId}`,
+      headers: { "x-user": "ada" },
+    }, resolve);
+    request.once("error", reject);
+    request.end();
+  });
+  const reply = await response;
+  await new Promise<void>((resolve) => reply.once("data", () => { reply.pause(); resolve(); }));
+  reply.destroy();
+
+  const timeout = new Promise<never>((_, reject) => {
+    const timer = setTimeout(() => reject(new Error("the source transfer stayed open")), 2_000);
+    timer.unref();
+  });
+  await Promise.race([host.closed, timeout]);
 });
 
 test("an addon film probed by jumping between its header and its index asks the host a few times, not once per jump", async (t) => {

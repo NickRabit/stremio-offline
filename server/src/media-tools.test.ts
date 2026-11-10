@@ -59,13 +59,21 @@ test("a tracked FFmpeg is killed at shutdown, and one that already ended is forg
   skip: process.platform === "win32" ? "a kill is not a signal there: the child reports an exit code" : false,
 }, async () => {
   const { spawn } = await import("node:child_process");
-  const { killRunningMedia, trackMedia } = await import("./media-tools.js");
+  const { killRunningMedia, suspendMediaChild, trackMedia } = await import("./media-tools.js");
   const done = trackMedia(spawn(process.execPath, ["-e", ""]));
   await new Promise((resolve) => done.once("exit", resolve));
   const running = trackMedia(spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]));
+  const signals: string[] = [];
+  const kill = running.kill.bind(running);
+  running.kill = (signal?: NodeJS.Signals | number) => {
+    signals.push(String(signal));
+    return kill(signal);
+  };
   const exited = new Promise((resolve) => running.once("exit", (_code, signal) => resolve(signal)));
+  assert.equal(suspendMediaChild(running), true);
   assert.equal(killRunningMedia(), 1);
   assert.equal(await exited, "SIGKILL");
+  assert.deepEqual(signals, ["SIGSTOP", "SIGCONT", "SIGKILL"]);
   assert.equal(killRunningMedia(), 0);
 });
 
