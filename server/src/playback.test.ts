@@ -1346,6 +1346,105 @@ test("a 720p transcode reports the scaled SDR H.264 and stereo AAC output", asyn
   assert.deepEqual(started.chapters, safeChapters);
 });
 
+test("an AC-3 remux reports copied 5.1 at the start and stereo AAC after a seek", async () => {
+  const manager = new PlaybackManager(tmp("test-playback-facts-ac3")) as any;
+  manager.inspect = async () => ({
+    container: "matroska,webm",
+    duration: 3600,
+    video: { codec: "h264", pixelFormat: "yuv420p" },
+    audio: { codec: "ac3", channels: 6 },
+    audioTracks: [{ index: 0, codec: "ac3", channels: 6 }],
+    subtitleTracks: [],
+  });
+  manager.spawnAt = async (session: any, time: number) => {
+    session.offset = time;
+    session.mode = manager.plan(session).copyVideo ? "remux" : "transcode";
+    return "/hls";
+  };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, { h264: true, ac3: true });
+  const session = manager.sessions.get(started.id);
+
+  assert.deepEqual(started.copy, { video: true, audio: true });
+  assert.equal(started.playing?.audioCodec, "ac3");
+  assert.equal(started.playing?.audioChannels, 6);
+  const initialArgs = manager.args(session, 0, tmp("output"), false) as string[];
+  assert.equal(initialArgs[initialArgs.indexOf("-c:a") + 1], "copy");
+
+  const seeked = await manager.seek(started.id, 600);
+  assert.deepEqual(seeked.copy, { video: true, audio: false });
+  assert.equal(seeked.playing?.audioCodec, "aac");
+  assert.equal(seeked.playing?.audioChannels, 2);
+  const seekedArgs = manager.args(session, 600, tmp("output"), false) as string[];
+  assert.deepEqual(seekedArgs.slice(seekedArgs.indexOf("-c:a"), seekedArgs.indexOf("-c:a") + 5), [
+    "-c:a", "aac", "-ac", "2", "-b:a",
+  ]);
+});
+
+test("a seek converts copied E-AC-3 but still copies AAC 5.1", async () => {
+  const startRemux = async (codec: "eac3" | "aac") => {
+    const manager = new PlaybackManager(tmp(`test-playback-facts-${codec}`)) as any;
+    manager.inspect = async () => ({
+      container: "matroska,webm",
+      duration: 3600,
+      video: { codec: "h264", pixelFormat: "yuv420p" },
+      audio: { codec, channels: 6 },
+      audioTracks: [{ index: 0, codec, channels: 6 }],
+      subtitleTracks: [],
+    });
+    manager.spawnAt = async (session: any, time: number) => {
+      session.offset = time;
+      session.mode = manager.plan(session).copyVideo ? "remux" : "transcode";
+      return "/hls";
+    };
+    const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, { h264: true, [codec]: true });
+    const seeked = await manager.seek(started.id, 600);
+    return { manager, session: manager.sessions.get(started.id), seeked };
+  };
+
+  const eac3 = await startRemux("eac3");
+  assert.deepEqual(eac3.seeked.copy, { video: true, audio: false });
+  assert.equal(eac3.seeked.playing?.audioCodec, "aac");
+  assert.equal(eac3.seeked.playing?.audioChannels, 2);
+  const eac3Args = eac3.manager.args(eac3.session, 600, tmp("output"), false) as string[];
+  assert.equal(eac3Args[eac3Args.indexOf("-c:a") + 1], "aac");
+
+  const aac = await startRemux("aac");
+  assert.deepEqual(aac.seeked.copy, { video: true, audio: true });
+  assert.equal(aac.seeked.playing?.audioCodec, "aac");
+  assert.equal(aac.seeked.playing?.audioChannels, 6);
+  const aacArgs = aac.manager.args(aac.session, 600, tmp("output"), false) as string[];
+  assert.equal(aacArgs[aacArgs.indexOf("-c:a") + 1], "copy");
+});
+
+test("a transcode with AC-3 audio reports stereo AAC", async () => {
+  const manager = new PlaybackManager(tmp("test-playback-facts-ac3-transcode")) as any;
+  manager.inspect = async () => ({
+    container: "matroska,webm",
+    duration: 3600,
+    video: { codec: "hevc", profile: "Main 10", pixelFormat: "yuv420p10le" },
+    audio: { codec: "ac3", channels: 6 },
+    audioTracks: [{ index: 0, codec: "ac3", channels: 6 }],
+    subtitleTracks: [],
+  });
+  manager.spawnAt = async (session: any, time: number) => {
+    session.offset = time;
+    session.mode = manager.plan(session).copyVideo ? "remux" : "transcode";
+    return "/hls";
+  };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, { hevc: true, hevc10: false, ac3: true });
+  const session = manager.sessions.get(started.id);
+
+  assert.equal(started.mode, "transcode");
+  assert.deepEqual(started.copy, { video: false, audio: false });
+  assert.equal(started.playing?.audioCodec, "aac");
+  assert.equal(started.playing?.audioChannels, 2);
+  const args = manager.args(session, 0, tmp("output"), false) as string[];
+  assert.equal(args[args.indexOf("-c:a") + 1], "aac");
+  assert.equal(args[args.indexOf("-ac") + 1], "2");
+});
+
 test("hlsCanStart waits for the segments asked for unless the playlist has ended", () => {
   const head = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n";
   const one = `${head}#EXTINF:2.000,\nseg-0-000000.m4s\n`;
