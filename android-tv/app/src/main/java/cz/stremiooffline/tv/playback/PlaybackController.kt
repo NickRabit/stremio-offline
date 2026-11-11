@@ -427,11 +427,14 @@ class PlaybackController(
     subtitles: List<AddonSubtitleDto> = plan?.subtitles ?: emptyList(),
     audioPreference: String? = plan?.audioPreference,
     subtitlePreference: String? = plan?.subtitlePreference,
+    /** The id the same row has now, when the server no longer knows the one the plan was made with. */
+    sourceId: String? = null,
   ) {
     if (released) return
     val current = plan ?: return
     begin(
       current.copy(
+        sourceId = sourceId ?: current.sourceId,
         explicitTime = restartPosition,
         resume = false,
         subtitles = subtitles,
@@ -528,7 +531,7 @@ class PlaybackController(
           quality = next.quality,
         )
       }.getOrElse { error ->
-        if (mine == generation) _state.update { it.copy(loading = false, error = errorOf(error)) }
+        if (mine == generation) _state.update { it.copy(loading = false, error = startErrorOf(error)) }
         return@launch
       }
       if (mine != generation) {
@@ -1179,6 +1182,11 @@ class PlaybackController(
   }
 
   private fun isDead(error: Throwable): Boolean = (error as? ApiError)?.failure == ApiFailure.NotFound
+
+  /** A start names nothing but its source, so a 404 is the id the server forgot altogether, as it
+   *  does when it restarts: the row has to be looked up again exactly like an expired one. */
+  private fun startErrorOf(error: Throwable): PlaybackError =
+    if ((error as? ApiError)?.status == 404) PlaybackError.Expired else errorOf(error)
 
   private fun errorOf(error: Throwable): PlaybackError {
     val failure = (error as? ApiError)?.failure

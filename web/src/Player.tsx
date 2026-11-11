@@ -256,6 +256,11 @@ const SEGMENT_KINDS = ["intro", "recap", "outro"] as const;
 const isSessionGone = (value: unknown): boolean =>
   value instanceof ApiError && (value.code === "RESOURCE_NOT_FOUND" || value.messageKey === "err.playbackSessionGone");
 
+/** A start names nothing but its source: the server either let the id expire or, after a restart,
+ *  never heard of it. Either way the row has to be found again in a fresh list. */
+const sourceIdGone = (value: unknown): boolean =>
+  value instanceof ApiError && (value.code === "RESOURCE_EXPIRED" || value.code === "RESOURCE_NOT_FOUND");
+
 const SEGMENT_KEY: Record<SegmentKind, Key> = {
   intro: "player.segmentIntro",
   recap: "player.segmentRecap",
@@ -788,7 +793,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       if (disposed) return;
       const switched = switchedRef.current;
       const refind = sources?.panel?.refind;
-      if (value instanceof ApiError && value.code === "RESOURCE_EXPIRED" && refind && switched && !switched.renewed && switched.row.sourceId === stream?.sourceId) {
+      if (sourceIdGone(value) && refind && switched && !switched.renewed && switched.row.sourceId === stream?.sourceId) {
         switched.renewed = true;
         report("WARN", "Chosen source expired; reading its group again", { ...context(), phase: "start" });
         void refind(switched.row).then(async (fresh) => {
@@ -890,15 +895,29 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           if (escalating) { abandon(t("player.browserRefused")); return; }
           // The server may have restarted in the meantime, or cleaned up an idle session.
           // A new HLS session starts at the target; a direct stream is moved by the browser.
-          next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId), {
-            audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current,
-            // The same file, so the same track numbers: what the viewer picked by hand comes along.
-            ...(currentSessionRef.current ? {
-              audioTrack: currentSessionRef.current.audioTrack,
-              subtitleTrack: currentSessionRef.current.subtitleTrack,
-              quality: currentSessionRef.current.quality,
-            } : {}),
-          });
+          try {
+            next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId), {
+              audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current,
+              // The same file, so the same track numbers: what the viewer picked by hand comes along.
+              ...(currentSessionRef.current ? {
+                audioTrack: currentSessionRef.current.audioTrack,
+                subtitleTrack: currentSessionRef.current.subtitleTrack,
+                quality: currentSessionRef.current.quality,
+              } : {}),
+            });
+          } catch (refused) {
+            // The session was listed long ago, and so was its source: the server dropped both. The
+            // same version is found in a fresh list and started where this one stopped.
+            const refind = sources?.panel?.refind;
+            if (!sourceIdGone(refused) || !refind || !stream) throw refused;
+            report("WARN", "Playing source expired; reading its group again", { ...context(), phase: "seek" });
+            const fresh = await refind(stream);
+            if (epoch !== seekEpochRef.current) return;
+            if (!fresh) throw refused;
+            switchedRef.current = { row: fresh, at: requested, renewed: true };
+            await sources!.onSwitch(fresh, requested);
+            return;
+          }
           id = next.id; started = next.id;
           if (next.mode === "direct") recoveredDirectAt = requested;
         }
