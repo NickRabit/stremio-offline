@@ -47,6 +47,35 @@ export interface ShuffleStep { item: ShuffleItem; hasNext: boolean; hasPrevious:
 export interface ShuffleStart extends ShuffleStep { id: string; total: number; capped?: true }
 
 const inFlightGets = new Map<string, Promise<unknown>>();
+const earlyGets = new Map<string, Promise<unknown>>();
+const EARLY_GET_MS = 10_000;
+
+export const STARTUP_GETS = ["/api/auth/me", "/api/status", "/api/settings"] as const;
+
+/** The start-up reads. Settings needs a session, so it waits for /api/auth/me to name an account:
+ *  a signed-out start must not cost a refused request and a server log line. */
+export function startStartupGets(): void {
+  startEarlyGets(["/api/auth/me", "/api/status"]);
+  void earlyGets.get("/api/auth/me")?.then((status) => {
+    if (typeof status === "object" && status !== null && typeof (status as { username?: unknown }).username === "string") startEarlyGets(["/api/settings"]);
+  }, () => undefined);
+}
+
+/** Starts GETs the first render will need, before it exists. Each answer is handed to its
+ *  first reader only; it is not a cache. */
+export function startEarlyGets(urls: readonly string[]): void {
+  for (const url of urls) {
+    if (earlyGets.has(url)) continue;
+    const pending = performRequest(url);
+    earlyGets.set(url, pending);
+    void pending.catch(() => {
+      if (earlyGets.get(url) === pending) earlyGets.delete(url);
+    });
+    setTimeout(() => {
+      if (earlyGets.get(url) === pending) earlyGets.delete(url);
+    }, EARLY_GET_MS);
+  }
+}
 
 /** Every call gets a deadline. A stalled connection would otherwise be held until the
  * operating system gives up, which takes minutes, and six of those exhaust the browser's
@@ -57,10 +86,20 @@ async function request<T>(url: string, options?: RequestInit & { timeoutMs?: num
   const read = method === undefined || method === "GET";
   // A write -- sign-in and sign-out included -- may change what any read returns: a read asked
   // after it must not join one that left before it, and never another account's.
-  if (!read) inFlightGets.clear();
+  if (!read) {
+    inFlightGets.clear();
+    earlyGets.clear();
+  }
   const coalescible = read && options?.body == null && options?.signal === undefined;
   if (!coalescible) return performRequest<T>(url, options);
 
+  if (options?.timeoutMs === undefined || options.timeoutMs === 30_000) {
+    const early = earlyGets.get(url);
+    if (early) {
+      earlyGets.delete(url);
+      return early as Promise<T>;
+    }
+  }
   const key = `${url}\n${timeoutMs}`;
   const existing = inFlightGets.get(key);
   if (existing) return existing as Promise<T>;

@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { startStartupGets } from "./api";
 import { App } from "./App";
 import "./style.css";
 import { classifyClientError, report } from "./diagnostics";
@@ -19,6 +20,7 @@ window.addEventListener("unhandledrejection", (event) => {
   if (level) report(level, `Unhandled rejection: ${message}`, { stack });
 });
 
+startStartupGets();
 void i18nReady.then(() => createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>));
 
 // hls.js stays off the first load but is fetched as soon as the page is idle, so starting or
