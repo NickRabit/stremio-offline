@@ -238,7 +238,7 @@ describe("early startup GETs", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not hand out an early GET that answered 401 and reports no unhandled rejection", async () => {
+  it("hands an early 401 to its first reader without asking twice, and reports no unhandled rejection", async () => {
     const { api, startEarlyGets } = await isolatedApi();
     fetchMock
       .mockResolvedValueOnce(json({ error: "Not signed in" }, 401))
@@ -251,6 +251,8 @@ describe("early startup GETs", () => {
       startEarlyGets(["/api/auth/me"]);
       await new Promise((resolve) => setTimeout(resolve, 0));
 
+      await expect(api.me()).rejects.toMatchObject({ status: 401 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       await expect(api.me()).resolves.toMatchObject({ username: "alice" });
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(unhandled).toEqual([]);

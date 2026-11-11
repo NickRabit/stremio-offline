@@ -62,15 +62,14 @@ export function startStartupGets(): void {
 }
 
 /** Starts GETs the first render will need, before it exists. Each answer is handed to its
- *  first reader only; it is not a cache. */
+ *  first reader only, a failure included; it is not a cache. */
 export function startEarlyGets(urls: readonly string[]): void {
   for (const url of urls) {
     if (earlyGets.has(url)) continue;
     const pending = performRequest(url);
     earlyGets.set(url, pending);
-    void pending.catch(() => {
-      if (earlyGets.get(url) === pending) earlyGets.delete(url);
-    });
+    // A refusal is handed out like an answer: a signed-out start must not ask /api/auth/me twice.
+    void pending.catch(() => undefined);
     setTimeout(() => {
       if (earlyGets.get(url) === pending) earlyGets.delete(url);
     }, EARLY_GET_MS);
