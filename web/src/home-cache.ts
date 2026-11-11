@@ -27,7 +27,7 @@ const CARD_FIELDS: Record<HomeCard["kind"], Record<string, FieldType>> = {
   confirm: { key: "str", libraryId: "str", library: "str", label: "str", path: "str", candidate: "candidate" },
 };
 
-const OPTIONAL_STRINGS = ["poster", "wide", "subtitle", "year", "seriesPath", "seriesName", "series", "episodeName", "addonKey", "mediaSourceId"];
+const OPTIONAL_STRINGS = ["poster", "wide", "subtitle", "seriesPath", "seriesName", "series", "episodeName", "addonKey", "mediaSourceId"];
 const OPTIONAL_NUMBERS = ["season", "episode"];
 
 const validProgress = (value: unknown): boolean =>
@@ -50,6 +50,8 @@ function validCard(item: unknown): boolean {
   }
   if (item.progress !== undefined && !validProgress(item.progress)) return false;
   if (OPTIONAL_STRINGS.some((name) => item[name] !== undefined && typeof item[name] !== "string")) return false;
+  // An addon may send its year as a number; the caption prints either, so it must not cost the stored Home.
+  if (item.year !== undefined && typeof item.year !== "string" && typeof item.year !== "number") return false;
   return OPTIONAL_NUMBERS.every((name) => item[name] === undefined || typeof item[name] === "number");
 }
 

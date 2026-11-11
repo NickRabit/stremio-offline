@@ -98,6 +98,13 @@ describe("home cache", () => {
     expect(readHomeCache("alice")).toBeNull();
     plant([{ ...card, season: "2" }]);
     expect(readHomeCache("alice")).toBeNull();
+    plant([{ ...card, year: { value: 2024 } }]);
+    expect(readHomeCache("alice")).toBeNull();
+  });
+
+  it("keeps a stored Home whose card carries its year as a number", () => {
+    plant([{ kind: "discovery", key: "movie:tt1", type: "movie", id: "tt1", name: "Film", title: "Film", year: 2024 }]);
+    expect(readHomeCache("alice")?.rows.resume?.items).toHaveLength(1);
 
     const { progress: _progress, ...withoutProgress } = card;
     plant([withoutProgress]);
