@@ -332,3 +332,20 @@ test("a listing hands out the stable handle of every source, the same one in eve
   assert.equal(byId!.stableKey, listed[2]);
   assert.equal(byId!.stableKey, stableSourceKey({ url: "file://Films/Heat/Heat.mkv" }, "library"));
 });
+
+test("a source that is being played outlives its listing, for its own session only", () => {
+  let now = 0;
+  const registry = new MediaResources(() => now);
+  const played = registry.publicStream({ url: "https://provider.test/played.mkv" }, owner).sourceId;
+  const idle = registry.publicStream({ url: "https://provider.test/idle.mkv" }, owner).sourceId;
+  now = 25 * 60_000;
+  registry.keep(played, "another-session");
+  registry.keep(played, owner.sid);
+  now = 40 * 60_000;
+  assert.equal(registry.get(played, owner.sid, "source").stream.url, "https://provider.test/played.mkv");
+  assert.throws(() => registry.get(idle, owner.sid, "source"), { status: 410 });
+  // Nothing keeps it once the pings stop, and a dropped id is never revived.
+  now = 70 * 60_000;
+  registry.keep(played, owner.sid);
+  assert.throws(() => registry.get(played, owner.sid, "source"), { status: 410 });
+});
