@@ -96,6 +96,16 @@ interface PlaybackApi {
 enum class PlaybackMode { Direct, Remux, Transcode }
 
 sealed interface PlaybackError {
+  /** A stable name for the logs: a release build minifies class names, so `Expired` reached the
+   *  server as `yl3`. */
+  val wire: String get() = when (this) {
+    Decoder -> "decoder"
+    Network -> "network"
+    Session -> "session"
+    SourceStopped -> "source-stopped"
+    Expired -> "expired"
+  }
+
   data object Decoder : PlaybackError
   data object Network : PlaybackError
   data object Session : PlaybackError
@@ -834,7 +844,7 @@ class PlaybackController(
   /** One `/track` round trip; the answer is kept only when it is still the current generation. */
   private fun track(request: TrackChange, addon: AddonSubtitleDto?) {
     val id = sessionId ?: return
-    AppLog.info("Track switch", mapOf("change" to request.javaClass.simpleName))
+    AppLog.info("Track switch", mapOf("change" to request.wire))
     val mine = generation
     val stamp = ++sequence
     // A seek that has been asked for but not answered yet is the position the viewer wants; a track
@@ -849,7 +859,7 @@ class PlaybackController(
           if (isDead(error)) onDeadSession()
           else {
             AppLog.warn("Track switch failed", mapOf(
-              "change" to request.javaClass.simpleName,
+              "change" to request.wire,
               "error" to (error.message ?: error.javaClass.simpleName),
             ))
             _state.update { it.copy(trackKept = it.trackKept + 1) }
