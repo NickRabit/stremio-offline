@@ -2364,6 +2364,40 @@ test("a single-stream transfer paused by the window resumes by Range", async () 
   }
 });
 
+test("a rule-picked transfer paused by the window resumes by Range instead of from zero", async () => {
+  const clock = { value: windowAt(12) };
+  const window = { start: "01:00", end: "07:00" };
+  const { directory, queue, downloads } = await tempQueue(windowHooks(clock, () => window));
+  const { server, port, requests } = await rangeServer({ total: 8 * MB });
+  try {
+    const job = await queue.add("Rule picked", { url: `http://127.0.0.1:${port}/film.mkv` });
+    const stored = (queue as unknown as { jobs: DownloadJob[] }).jobs.find((item) => item.id === job.id)!;
+    stored.sourceAdmission = queueAdmission();
+    stored.source = { type: "movie", videoId: "tt-window", tried: [] };
+    clock.value = windowAt(1);
+    queue.changed();
+    await waitFor(queue, () => queue.get(job.id)?.received! > 256 * 1024, 30_000);
+    clock.value = windowAt(7);
+    queue.changed();
+    await waitFor(queue, () => queue.get(job.id)?.pauseReason === "schedule", 5_000);
+    await settled(queue, job.id);
+    const partialSize = (await stat(queuedFile(downloads, `${job.target}.part`))).size;
+    assert.ok(partialSize > 0, "bytes already written stay in the part file");
+
+    const before = requests().length;
+    clock.value = windowAt(1);
+    queue.changed();
+    await waitFor(queue, () => queue.get(job.id)?.status === "completed", 30_000);
+    const resumed = requests().slice(before).find((range) => range.startsWith("bytes="));
+    assert.ok(resumed, `the resumed transfer should ask for a range: ${requests().slice(before).join(", ")}`);
+    assert.ok(Number(/^bytes=(\d+)-/.exec(resumed!)?.[1]) > 0, `the transfer restarted from zero: ${resumed}`);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a segmented transfer keeps its plan and offsets across the window", async () => {
   const clock = { value: windowAt(1) };
   const window = { start: "01:00", end: "07:00" };
@@ -4423,6 +4457,40 @@ test("a finished run keeps the jobs cleared during the run in its drain", async 
     const all = queue.drainFor({ id: "admin", admin: true });
     assert.equal(all?.completed, 2);
     assert.equal(all?.failed, 1);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a later run for another account does not take the earlier account's notice away", async () => {
+  const clock = { value: Date.parse("2026-11-12T01:00:00.000Z") };
+  const { directory, queue } = await tempQueue({ now: () => clock.value });
+  const internal = queue as unknown as { jobs: DownloadJob[]; save(): Promise<void> };
+  const alice = drainJob("alice-film", "alice");
+  const bob = drainJob("bob-film", "bob");
+  try {
+    internal.jobs.push(alice);
+    await internal.save();
+    clock.value += 1_000;
+    alice.status = "completed";
+    alice.completedAt = new Date(clock.value).toISOString();
+    await internal.save();
+    const aliceNotice = queue.drainFor({ id: "alice", admin: false });
+    assert.equal(aliceNotice?.completed, 1);
+
+    clock.value += 1_000;
+    internal.jobs.push(bob);
+    await internal.save();
+    clock.value += 1_000;
+    bob.status = "completed";
+    bob.completedAt = new Date(clock.value).toISOString();
+    await internal.save();
+
+    assert.deepEqual(queue.drainFor({ id: "alice", admin: false }), aliceNotice, "Alice has not read hers yet");
+    assert.equal(queue.drainFor({ id: "bob", admin: false })?.completed, 1);
+    assert.notEqual(queue.drainFor({ id: "bob", admin: false })?.id, aliceNotice?.id);
+    assert.equal(queue.drainFor({ id: "admin", admin: true })?.completed, 1, "the administrator sees the latest run");
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });

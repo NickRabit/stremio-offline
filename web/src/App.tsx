@@ -4502,7 +4502,7 @@ export function App() {
       follow={{ create: { metaId: followStart.id, name: followStart.name, poster: followStart.poster, ...(followStart.addonKey ? { addonKey: followStart.addonKey } : {}) }, onFollowed: (follow) => followed(followStart, follow) }} onClose={() => setFollowStart(null)}/>}
     {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
     {pairLink && !restricted && <PairDeviceDialog session={session!} initialCode={pairLink} onClose={() => setPairLink(null)} onNotify={notify}/>}
-    {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
+    {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button aria-label={t("common.close")} title={t("common.close")} onClick={() => {setError("");setMessage("");}}><X aria-hidden="true"/></button></div>}
   </div>
   </TitleExtrasActions.Provider>;
 }

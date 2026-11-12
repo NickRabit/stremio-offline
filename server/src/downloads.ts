@@ -832,6 +832,9 @@ export class DownloadQueue {
   private lastBusy?: boolean;
   private run?: DrainRun;
   private lastDrain?: QueueDrain;
+  /** Each account's latest run, so a later run for somebody else does not take an unread
+   *  notice away. One entry per account, in memory only. */
+  private ownerDrains = new Map<string, QueueDrain>();
   private saveFailing = false;
   private persistenceFrozen = false;
   private readonly saveRetryMs: number;
@@ -1272,7 +1275,7 @@ export class DownloadQueue {
   }
 
   drainFor(viewer: { id?: string; admin: boolean }): DownloadDrainView | null {
-    const drain = this.lastDrain;
+    const drain = viewer.admin ? this.lastDrain : viewer.id === undefined ? undefined : this.ownerDrains.get(viewer.id);
     if (!drain) return null;
     const at = Date.parse(drain.at);
     if (!Number.isFinite(at) || this.now() - at > 24 * 60 * 60_000) return null;
@@ -2767,6 +2770,9 @@ export class DownloadQueue {
               && (job.pauseReason === "user" || job.pauseReason === "library" || job.pauseReason === "permission"))
             .map((job) => ({ id: job.id, owner: this.ownerOf(job) })),
         };
+        for (const entry of [...run.completed.values(), ...run.failed.values()]) {
+          if (entry.owner !== undefined) this.ownerDrains.set(entry.owner, this.lastDrain);
+        }
       }
     }
     this.lastBusy = busy;
@@ -3976,7 +3982,9 @@ export class DownloadQueue {
       const target = path.join(located.root, located.relative);
       const partial = `${target}.part`;
       await mkdir(path.dirname(target), { recursive: true });
-      if (job.sourceAdmission) await unlink(partial).catch(() => undefined);
+      // A fresh rule pick must not inherit a stray part file; a selection that already received
+      // bytes (paused by the window, say) keeps them, as `discardProfileSelection` resets both.
+      if (job.sourceAdmission && job.received === 0 && !job.segments) await unlink(partial).catch(() => undefined);
       if (job.sourceAdmission && !await this.permissionStillHeld(job, controller.signal)) return;
       await this.prepareSubtitle(job, controller);
       if (job.sourceAdmission && !await this.permissionStillHeld(job, controller.signal)) return;

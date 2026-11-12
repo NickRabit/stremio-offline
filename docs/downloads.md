@@ -190,7 +190,9 @@ in-app notice with its own counts. The notice also names that account's jobs
 that are still paused for a person or an outside change. It appears on the next
 page load as well, stays available for 24 hours, and is never written to disk.
 Jobs removed after finishing still count because ownership is captured when
-the run ends.
+the run ends. Each account keeps its own latest notice, so a later run that
+only touched somebody else's downloads does not take an unread one away; an
+administrator sees the latest run over everybody's jobs.
 
 ### Seasons and whole shows
 
