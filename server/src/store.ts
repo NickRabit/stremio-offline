@@ -24,6 +24,7 @@ import {
 } from "./source-profiles.js";
 import { claimLegacyData, emptyUserData, type EnvReset, envResetApplied, envResetPending, findUser, type MigratableState, migrateUsers, newUserId, type UserData, type UserRecord } from "./users.js";
 import type { AppDatabase, Statement } from "./storage/app-database.js";
+import type { DownloadWindow } from "./api-types.js";
 
 /** `state.json` shape version. 2 is the libraries shape, 3 the accounts one; a state
  *  without a version predates both and is migrated on the way in. */
@@ -81,6 +82,8 @@ export interface InstanceSettings {
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
   /** Hours between automatic addon manifest refreshes; 0 leaves it to the buttons. */
   addonRefreshHours: number;
+  /** Local wall-clock hours during which new transfers may start. Absent means any time. */
+  downloadWindow?: DownloadWindow;
   /** Where a download lands when the addon rule names no library. An empty id falls
    *  back to the first enabled library of the kind, then to the first `mixed` one. */
   defaultMovieLibrary: string; defaultSeriesLibrary: string;

@@ -18,6 +18,7 @@ import type { SourceAdmissionSnapshotV1 } from "../source-admission.js";
 import { defaultTemplateParameters, RULE_PRESETS, SOURCE_PROFILE_IDS, type SourceProfileTemplate } from "../source-profiles.js";
 import type { Store, StoredSourceProfile, UserPrefs } from "../store.js";
 import type { AddonDownloadSettings, DownloadTargetSettings, StreamItem } from "../types.js";
+import type { DownloadWindowState } from "../api-types.js";
 import type { UserRecord } from "../users.js";
 import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
 
@@ -127,6 +128,8 @@ const mount = async (
     activeEpisodeIn?: (input: { type: string; videoId: string; libraryId: string; seriesFolder: string; season: number; episode: number }) => boolean;
     pendingOutcomes?: Array<"queued" | "alreadyQueued" | "presentLocally" | "unresolved">;
     now?: () => number;
+    window?: DownloadWindowState | null;
+    downloadNowError?: (id: string) => AppError | undefined;
   } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
@@ -157,7 +160,7 @@ const mount = async (
     actions.push(`${name}:${id}`);
   };
   const queue = {
-    snapshot: () => ({ jobs, halt: null }),
+    snapshot: () => ({ jobs, halt: null, window: options.window ?? null }),
     list: () => jobs,
     add: async (title: string, stream: StreamItem, media: MediaInfo | undefined, settings: DownloadTargetSettings, ownerUserId?: string, remoteDownload?: RemoteDownloadReference) => {
       added.push({ title, ownerUserId, settings, stream, media, remoteDownload });
@@ -183,6 +186,11 @@ const mount = async (
     pause: async (id: string) => { require("pause", id); },
     resume: async (id: string) => { require("resume", id); },
     retry: async (id: string) => { require("retry", id); },
+    startNow: async (id: string) => {
+      require("now", id);
+      const error = options.downloadNowError?.(id);
+      if (error) throw error;
+    },
     move: async (id: string, direction: number) => { moves.push({ id, direction }); },
     remove: async (id: string) => { require("remove", id); },
     clearCompleted: async () => undefined,
@@ -338,6 +346,53 @@ test("GET /api/downloads returns the snapshot with every job passed through jobV
   assert.equal(body.halt, null);
   assert.deepEqual(body.jobs.map((job) => job.viewed), [true, true]);
   assert.deepEqual(harness.viewed.map((job) => job.id), ["job-1", "job-2"]);
+});
+
+test("GET /api/downloads carries the window state for administrators and ordinary users", async (t) => {
+  const window: DownloadWindowState = { start: "01:00", end: "07:00", open: false, timeZone: "Europe/Prague" };
+  for (const viewer of [admin, ordinary]) {
+    const harness = await mount([streamAddon("stream-addon")], { viewer, jobs: [{ id: "job-1", ownerUserId: BOB }], window });
+    t.after(harness.close);
+    const body = await (await api(harness.base, "/api/downloads")).json() as { window: DownloadWindowState | null };
+    assert.deepEqual(body.window, window);
+  }
+});
+
+test("POST /api/downloads/:id/now is available to the owner and an administrator", async (t) => {
+  const jobs = [{ id: "job-ada", ownerUserId: ADA }, { id: "job-bob", ownerUserId: BOB }];
+  const user = await mount(undefined, { viewer: ordinary, jobs });
+  t.after(user.close);
+  assert.equal((await api(user.base, "/api/downloads/job-bob/now", { method: "POST" })).status, 204);
+  assert.deepEqual(user.actions, ["now:job-bob"]);
+
+  const administrator = await mount(undefined, { viewer: admin, jobs });
+  t.after(administrator.close);
+  assert.equal((await api(administrator.base, "/api/downloads/job-bob/now", { method: "POST" })).status, 204);
+  assert.deepEqual(administrator.actions, ["now:job-bob"]);
+});
+
+test("POST /api/downloads/:id/now hides another account's job and passes through the waiting conflict", async (t) => {
+  const forbidden = await mount(undefined, {
+    viewer: ordinary,
+    jobs: [{ id: "job-ada", ownerUserId: ADA }],
+  });
+  t.after(forbidden.close);
+  const missing = await api(forbidden.base, "/api/downloads/job-ada/now", { method: "POST" });
+  assert.equal(missing.status, 404);
+  assert.equal(await keyOf(missing), "err.itemNotFound");
+  assert.deepEqual(forbidden.actions, []);
+
+  const conflict = await mount(undefined, {
+    viewer: ordinary,
+    jobs: [{ id: "job-bob", ownerUserId: BOB }],
+    downloadNowError: (id) => id === "job-bob"
+      ? new AppError("Only a download that waits for the window can be started now.", "err.downloadNowNotWaiting", 409)
+      : undefined,
+  });
+  t.after(conflict.close);
+  const refused = await api(conflict.base, "/api/downloads/job-bob/now", { method: "POST" });
+  assert.equal(refused.status, 409);
+  assert.equal(await keyOf(refused), "err.downloadNowNotWaiting");
 });
 
 test("GET /api/downloads shows an ordinary user only their own device transfers", async (t) => {
@@ -1234,6 +1289,7 @@ test("acting on somebody else's job answers exactly like an id that is not there
     { method: "POST", path: "/api/downloads/job-1/pause" },
     { method: "POST", path: "/api/downloads/job-1/resume" },
     { method: "POST", path: "/api/downloads/job-1/retry" },
+    { method: "POST", path: "/api/downloads/job-1/now" },
     { method: "POST", path: "/api/downloads/job-1/move", body: { direction: 1 } },
     { method: "DELETE", path: "/api/downloads/job-1" },
   ];

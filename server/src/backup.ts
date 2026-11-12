@@ -14,6 +14,7 @@ import {
 import { parseDownloadRules } from "./download-rules.js";
 import type { StoredSourceProfile } from "./store.js";
 import { STREAM_SORTS } from "./stream-sort.js";
+import { parseDownloadWindow } from "./download-window.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 /** 2 adds the library roster, so a rule that names a library survives the trip to another
@@ -132,6 +133,7 @@ function parseSettings(value: unknown): Settings {
   // A personal Home arrangement rides in the backup like every other personal setting; a
   // shape that is not the three arrays is dropped rather than failing the whole import.
   const homeLayout = parseHomeLayout(source.homeLayout);
+  const downloadWindow = parseDownloadWindow(source.downloadWindow);
   return {
     concurrentDownloads: number("concurrentDownloads", 8),
     parallelPerProvider: number("parallelPerProvider", 8),
@@ -149,6 +151,7 @@ function parseSettings(value: unknown): Settings {
     libraryScanPauseOnDownload: boolean("libraryScanPauseOnDownload"),
     secureMode: boolean("secureMode"),
     addonRefreshHours: normalizeRefreshHours(source.addonRefreshHours ?? fallback.addonRefreshHours),
+    ...(downloadWindow === undefined || downloadWindow === "invalid" ? {} : { downloadWindow }),
     tileSize: TILE_SIZES.has(tileSize) ? tileSize as Settings["tileSize"] : fallback.tileSize,
     catalogTileShape: TILE_SHAPES.has(catalogTileShape) ? catalogTileShape as Settings["catalogTileShape"] : fallback.catalogTileShape,
     libraryTileShape: TILE_SHAPES.has(libraryTileShape) ? libraryTileShape as Settings["libraryTileShape"] : fallback.libraryTileShape,

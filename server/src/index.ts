@@ -399,6 +399,7 @@ const existingLocalCopyDeps = (): ExistingLocalCopyDeps => ({
 });
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, {
   segments: () => store.settings().downloadSegments ?? 1,
+  downloadWindow: () => store.settings().downloadWindow,
   libraries: () => store.libraries(),
   defaultLibrary: downloadDefaultLibrary,
   legacyOwnerId: migratedAdminId,

@@ -50,6 +50,7 @@ interface Harness {
   pendingWrites(): number;
   /** How many writes the route made in total, so a test can prove they landed together. */
   writes(): number;
+  queueChanges(): number;
   holdWrites(): void;
   releaseWrites(): void;
   close(): Promise<void>;
@@ -105,6 +106,7 @@ const mount = async (options: MountOptions = {}): Promise<Harness> => {
   let held: Array<() => void> = [];
   let holding = false;
   let writes = 0;
+  let queueChanges = 0;
   const exportedConnection = { id: `mconn_${"1".repeat(32)}`, provider: "jellyfin" as const, name: "Home", baseUrl: "http://media.example", allowLan: false, allowLoopback: false, serverId: "server-1", accountId: "account-1" };
   const exportedLibrary = { id: `rlib_${"2".repeat(32)}`, connectionId: exportedConnection.id, remoteId: "remote-1", name: "Films", type: "movie" as const, order: 0, showOnHome: true, showInContinueWatching: true };
   // The media-server half of the settings surface, reduced to what these routes ask of it: a
@@ -172,7 +174,7 @@ const mount = async (options: MountOptions = {}): Promise<Harness> => {
       current.userData = { ...(current.userData ?? {}), [id]: data };
     },
     prefsOf,
-    queue: { changed: () => undefined } as unknown as DownloadQueue,
+    queue: { changed: () => { queueChanges += 1; } } as unknown as DownloadQueue,
     streamCache: new Map(),
     publicAddonView: options.publicAddonView ?? ((addon) => publicAddon(addon)),
   };
@@ -189,6 +191,7 @@ const mount = async (options: MountOptions = {}): Promise<Harness> => {
   harness.base = `http://127.0.0.1:${port}`;
   harness.pendingWrites = () => held.length;
   harness.writes = () => writes;
+  harness.queueChanges = () => queueChanges;
   harness.holdWrites = () => { holding = true; };
   harness.releaseWrites = () => { const waiting = held; held = []; for (const run of waiting) run(); };
   harness.close = async () => {
@@ -258,6 +261,71 @@ test("GET /api/settings tells an ordinary account nothing about the instance it 
   assert.equal(ada.concurrentDownloads, harness.state.settings.concurrentDownloads, "an administrator still reads it all");
   assert.equal(ada.addonRefreshHours, harness.state.settings.addonRefreshHours);
   assert.equal(ada.tmdbConfigured, true);
+  assert.equal(typeof ada.serverTimeZone, "string");
+  assert.equal("serverTimeZone" in carol, false);
+});
+
+test("PATCH /api/settings stores, reads and clears the download window for administrators", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const stored = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "ada",
+    body: { downloadWindow: { start: "22:00", end: "06:00" } },
+  });
+  assert.equal(stored.status, 200);
+  assert.deepEqual(harness.state.settings.downloadWindow, { start: "22:00", end: "06:00" });
+  const read = await (await api(harness.base, "/api/settings", { user: "ada" })).json() as Record<string, unknown>;
+  assert.deepEqual(read.downloadWindow, { start: "22:00", end: "06:00" });
+  assert.equal(typeof read.serverTimeZone, "string");
+
+  const ordinary = await (await api(harness.base, "/api/settings", { user: "carol" })).json() as Record<string, unknown>;
+  assert.equal("downloadWindow" in ordinary, false);
+
+  const cleared = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "ada",
+    body: { downloadWindow: null },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal("downloadWindow" in harness.state.settings, false);
+  assert.equal(harness.queueChanges(), 2, "the queue applies each boundary immediately");
+});
+
+test("PATCH /api/settings refuses an invalid download window before writing", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const before = harness.writes();
+  for (const downloadWindow of [
+    { start: "01:00", end: "01:00" },
+    { start: "25:00", end: "07:00" },
+    { start: "01:00" },
+  ]) {
+    const response = await api(harness.base, "/api/settings", {
+      method: "PATCH",
+      user: "ada",
+      body: { downloadWindow },
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.downloadWindowInvalid");
+  }
+  assert.equal(harness.writes(), before, "nothing reaches store.update");
+  assert.equal(harness.state.settings.downloadWindow, undefined);
+});
+
+test("PATCH /api/settings refuses downloadWindow for an ordinary account", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const before = harness.writes();
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: { downloadWindow: { start: "01:00", end: "07:00" } },
+  });
+  assert.equal(response.status, 403);
+  assert.equal(harness.writes(), before);
+  assert.equal(harness.state.settings.downloadWindow, undefined);
 });
 
 test("PATCH /api/settings answers an ordinary account with the same narrowed view", async (t) => {

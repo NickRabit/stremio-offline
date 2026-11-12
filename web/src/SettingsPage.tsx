@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, CirclePlay, Download, FileJson, HardDrive, Heart, KeyRound, Languages, Library, ListFilter, PackagePlus, Server, ShieldCheck, Trash2, Upload, Users } from "lucide-react";
 import { api } from "./api";
 import { DiagnosticsSection } from "./DiagnosticsPanel";
@@ -120,6 +120,60 @@ const SETTINGS_TAB_LABEL: Record<SettingsTab, Key> = {
 };
 const isSettingsTab = (value: string | null): value is SettingsTab => SETTINGS_TABS.includes(value as SettingsTab);
 
+const DOWNLOAD_WINDOW_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function DownloadWindowSettings({ settings, restricted, onSave }: { settings: AppSettings; restricted: boolean; onSave: (patch: SettingsPatch) => Promise<void> }) {
+  const { t } = useI18n();
+  const [start, setStart] = useState(settings.downloadWindow?.start ?? "01:00");
+  const [end, setEnd] = useState(settings.downloadWindow?.end ?? "07:00");
+  useEffect(() => {
+    setStart(settings.downloadWindow?.start ?? "01:00");
+    setEnd(settings.downloadWindow?.end ?? "07:00");
+  }, [settings.downloadWindow?.start, settings.downloadWindow?.end]);
+  const configured = Boolean(settings.downloadWindow);
+  const saveTimes = (nextStart: string, nextEnd: string) => {
+    if (!DOWNLOAD_WINDOW_TIME.test(nextStart) || !DOWNLOAD_WINDOW_TIME.test(nextEnd) || nextStart === nextEnd) return;
+    void onSave({ downloadWindow: { start: nextStart, end: nextEnd } });
+  };
+  return <SettingControl
+    title={t("settings.downloadWindow")}
+    text={t("settings.downloadWindowHint", { zone: settings.serverTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone })}
+  >
+    <div className="download-window-setting">
+      <select
+        aria-label={t("settings.downloadWindow")}
+        disabled={restricted}
+        value={configured ? "set" : "any"}
+        onChange={(event) => {
+          if (event.target.value === "any") void onSave({ downloadWindow: null });
+          else saveTimes(start, end);
+        }}
+      >
+        <option value="any">{t("settings.downloadWindowAny")}</option>
+        <option value="set">{t("settings.downloadWindowSet")}</option>
+      </select>
+      {configured && <div className="download-window-times">
+        <input
+          type="time"
+          step={60}
+          aria-label={t("settings.downloadWindowFrom")}
+          disabled={restricted}
+          value={start}
+          onChange={(event) => { setStart(event.target.value); saveTimes(event.target.value, end); }}
+        />
+        <input
+          type="time"
+          step={60}
+          aria-label={t("settings.downloadWindowTo")}
+          disabled={restricted}
+          value={end}
+          onChange={(event) => { setEnd(event.target.value); saveTimes(start, event.target.value); }}
+        />
+      </div>}
+    </div>
+  </SettingControl>;
+}
+
 export function SettingsPage({ build, restricted = false, settings, search, onSearch, languages, libraries = [], session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError, sourceProfiles, onSourceProfilesChanged }: { onSourceProfilesChanged?: () => void; build: BuildInfo | null; restricted?: boolean; settings: AppSettings; search: SearchState | null; onSearch: (state: SearchState) => void; languages: Array<{ code: string; name: string }>; libraries?: LibraryView[]; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void; sourceProfiles: SourceProfile[] | null }) {
   const { t, locale, setLocale } = useI18n();
   // An ordinary user decides only what is personal, and the panels the instance owns are
@@ -225,7 +279,8 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
         {admin && <SettingControl title={t("settings.segments")} text={t("settings.segmentsHint")}>
           <select aria-label={t("settings.segments")} disabled={restricted || !admin} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>
             {[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}
-          </select></SettingControl>}</section>
+          </select></SettingControl>}
+        {admin && <DownloadWindowSettings settings={settings} restricted={restricted} onSave={onSave}/>}</section>
       </>}
       {tab === "sources" && <>
       <section className="panel settings-section source-defaults-section">

@@ -280,6 +280,11 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     return id;
   };
 
+  app.post("/api/downloads/:id/now", asyncRoute(async (req, res) => {
+    await queue.startNow(requireOwnJob(req, String(req.params.id)));
+    res.status(204).end();
+  }));
+
   app.get("/api/downloads", asyncRoute(async (req, res) => {
     const viewer = viewerOf(currentUser(req));
     const snapshot = queue.snapshot();

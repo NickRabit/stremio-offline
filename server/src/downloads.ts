@@ -40,7 +40,8 @@ import {
 import { readMediaBytes } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 import { subtitleVtt } from "./subtitle-text.js";
-import type { DownloadOrigin, DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
+import type { DownloadOrigin, DownloadSnapshot, DownloadStatus, DownloadWindow, DownloadWindowState, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
+import { parseDownloadWindow, serverTimeZone, windowOpen } from "./download-window.js";
 import type {
   ExistingLocalCopyLookupResult,
   ExistingLocalCopyReference,
@@ -176,6 +177,8 @@ export interface DownloadJob {
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
   /** Set only when a queued profile job finishes by pointing at an adequate existing file. */
   reusedLocalCopy?: true;
+  /** A one-off Download now instruction that outlives pauses but not the job itself. */
+  windowExempt?: true;
 }
 
 /** The names a viewer may see for where a job's file comes from. */
@@ -417,6 +420,9 @@ type PendingSource = {
 
 export interface QueueHooks {
   now?: () => number;
+  downloadWindow?: () => DownloadWindow | undefined;
+  timeZone?: () => string;
+  windowCheckMs?: number;
   /** Every configured library, so a qualified target can be turned back into a root. */
   libraries?: () => LibraryRecord[];
   /** Where a rule that names no library goes: the default for the kind. */
@@ -802,6 +808,7 @@ export class DownloadQueue {
   private saveTimer?: NodeJS.Timeout;
   private retryTimer?: NodeJS.Timeout;
   private saveRetryTimer?: NodeJS.Timeout;
+  private windowTimer?: NodeJS.Timeout;
   private saveFailing = false;
   private persistenceFrozen = false;
   private readonly saveRetryMs: number;
@@ -841,6 +848,10 @@ export class DownloadQueue {
   private readonly stallTransferMs: number;
   private readonly spaceCheckMs: number;
   private readonly segments: () => number;
+  private readonly downloadWindow?: () => DownloadWindow | undefined;
+  private readonly timeZone: () => string;
+  private readonly windowCheckMs: number;
+  private lastWindowOpen?: boolean;
   private readonly retryDelay: (retryCount: number, retryAfterMs?: number) => number;
   private debrid?: DebridEngine;
   private readonly rememberDebridReady?: QueueHooks["rememberDebridReady"];
@@ -891,6 +902,9 @@ export class DownloadQueue {
     this.stallTransferMs = hooks.stallTransferMs ?? 30_000;
     this.spaceCheckMs = hooks.spaceCheckMs ?? 30_000;
     this.segments = hooks.segments ?? (() => 1);
+    this.downloadWindow = hooks.downloadWindow;
+    this.timeZone = hooks.timeZone ?? serverTimeZone;
+    this.windowCheckMs = hooks.windowCheckMs ?? 30_000;
     this.retryDelay = hooks.retryDelay ?? retryDelayMs;
     this.debrid = hooks.debrid;
     this.rememberDebridReady = hooks.rememberDebridReady;
@@ -930,7 +944,8 @@ export class DownloadQueue {
     if (this.saveRetryTimer) clearTimeout(this.saveRetryTimer);
     if (this.spaceWatch) clearInterval(this.spaceWatch);
     if (this.libraryWatch) clearInterval(this.libraryWatch);
-    this.saveTimer = undefined; this.retryTimer = undefined; this.saveRetryTimer = undefined; this.spaceWatch = undefined; this.libraryWatch = undefined;
+    if (this.windowTimer) clearInterval(this.windowTimer);
+    this.saveTimer = undefined; this.retryTimer = undefined; this.saveRetryTimer = undefined; this.spaceWatch = undefined; this.libraryWatch = undefined; this.windowTimer = undefined;
     for (const timer of this.debridTimers.values()) clearTimeout(timer);
     this.debridTimers.clear();
     for (const controller of this.active.values()) controller.abort();
@@ -1210,13 +1225,23 @@ export class DownloadQueue {
       this.ensureSpaceWatch();
     }
     await this.save();
+    await this.applyWindow();
     this.pump();
     for (const job of this.jobs) if (job.status === "waiting") this.scheduleDebrid(job.id);
     if (this.jobs.some((job) => job.status === "paused" && job.pauseReason === "library")) this.watchLibraries();
   }
 
   list(): PublicDownload[] { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
-  snapshot(): DownloadSnapshot { return { jobs: this.list(), halt: this.haltInfo() }; }
+  snapshot(): DownloadSnapshot { return { jobs: this.list(), halt: this.haltInfo(), window: this.windowState() }; }
+
+  windowState(): DownloadWindowState | null {
+    const configured = this.downloadWindow?.();
+    if (configured === undefined) return null;
+    const parsed = parseDownloadWindow(configured);
+    if (parsed === undefined || parsed === "invalid") return null;
+    const timeZone = this.timeZone();
+    return { ...parsed, open: windowOpen(parsed, this.now(), timeZone), timeZone };
+  }
   /** Whether any job is moving bytes right now, so the desktop shell can keep the Mac awake. */
   transferring(): boolean {
     return this.jobs.some((job) => job.status === "downloading" || job.status === "checking");
@@ -1809,6 +1834,27 @@ export class DownloadQueue {
     for (let attempt = 0; attempt < 100 && this.active.has(id); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 25));
   }
 
+  async startNow(id: string): Promise<void> {
+    if (this.active.has(id)) await this.runningById.get(id);
+    const job = this.require(id);
+    if (job.status === "paused" && job.pauseReason === "schedule") {
+      job.status = "queued";
+      job.pauseReason = undefined;
+      job.notBefore = undefined;
+      this.setError(job);
+      job.updatedAt = new Date(this.now()).toISOString();
+    } else if (job.status !== "queued") {
+      throw new AppError(
+        "Only a download that waits for the window can be started now.",
+        "err.downloadNowNotWaiting",
+        409,
+      );
+    }
+    job.windowExempt = true;
+    await this.save();
+    this.pump();
+  }
+
   /** Pauses the queued and running jobs a named cause takes away. A transfer in flight is
    *  aborted rather than left running behind a paused row: the sweep that calls this is the
    *  answer to work that keeps going on its own. A job already paused, failed or finished is
@@ -2204,7 +2250,12 @@ export class DownloadQueue {
       revert: () => { this.jobs = before.filter((job) => completed.includes(job) || this.jobs.includes(job)); },
     });
   }
-  changed() { this.pump(); }
+  changed() {
+    void this.applyWindow().then(
+      () => this.pump(),
+      () => this.pump(),
+    );
+  }
 
   async setTravelCursor(id: string, cursor?: TravelContinuationCursorV1): Promise<void> {
     const job = this.require(id);
@@ -2456,6 +2507,71 @@ export class DownloadQueue {
     }
   }
 
+  private syncWindowTimer(window: DownloadWindow | undefined) {
+    if (this.stopped || window === undefined) {
+      if (this.windowTimer) clearInterval(this.windowTimer);
+      this.windowTimer = undefined;
+      return;
+    }
+    if (this.windowTimer) return;
+    this.windowTimer = setInterval(() => { void this.applyWindow(); }, this.windowCheckMs);
+    this.windowTimer.unref?.();
+  }
+
+  /** Applies whichever side of the configured wall-clock boundary the queue is on now. */
+  private async applyWindow() {
+    if (this.stopped) return;
+    const configured = this.downloadWindow?.();
+    const parsed = configured === undefined ? undefined : parseDownloadWindow(configured);
+    this.syncWindowTimer(parsed === "invalid" ? undefined : parsed);
+    const timeZone = this.timeZone();
+    const open = parsed === undefined || parsed === "invalid" || windowOpen(parsed, this.now(), timeZone);
+    const previous = this.lastWindowOpen ?? true;
+    this.lastWindowOpen = open;
+    let changed = false;
+
+    if (open) {
+      for (const job of this.jobs) {
+        if (job.status !== "paused" || job.pauseReason !== "schedule" || this.active.has(job.id)) continue;
+        job.status = "queued";
+        job.pauseReason = undefined;
+        job.notBefore = undefined;
+        this.setError(job);
+        job.updatedAt = new Date(this.now()).toISOString();
+        changed = true;
+      }
+    } else {
+      for (const job of this.jobs) {
+        if (!this.active.has(job.id) || job.windowExempt || (job.status !== "checking" && job.status !== "downloading")) continue;
+        this.pauseRequested.add(job.id);
+        job.status = "paused";
+        job.pauseReason = "schedule";
+        job.speed = 0;
+        this.active.get(job.id)?.abort();
+        changed = true;
+      }
+    }
+
+    if (previous !== open) {
+      log("INFO", open ? "The download window opened" : "The download window closed, running downloads paused");
+    }
+    if (!changed) {
+      if (previous !== open && open) this.pump();
+      return;
+    }
+    await this.save();
+    if (open) this.pump();
+  }
+
+  private windowAllows(job: DownloadJob, at: number): boolean {
+    if (job.windowExempt) return true;
+    const configured = this.downloadWindow?.();
+    if (configured === undefined) return true;
+    const parsed = parseDownloadWindow(configured);
+    if (parsed === undefined || parsed === "invalid") return true;
+    return windowOpen(parsed, at, this.timeZone());
+  }
+
   private async haltForStorage(reason: { message: string; key: string }) {
     this.halt = { reason: "storage", at: new Date().toISOString(), message: reason.message, messageKey: reason.key };
     for (const job of this.jobs) {
@@ -2516,7 +2632,8 @@ export class DownloadQueue {
         const job = this.jobs.find((item) => {
           const provider = this.provider(item);
           const providerLimit = this.providerLimit(item, perProvider);
-          return item.status === "queued" && !this.active.has(item.id) && !this.admitting.has(item.id) && (item.notBefore ?? 0) <= now && (taken.get(provider) ?? 0) < providerLimit;
+          return this.windowAllows(item, now)
+            && item.status === "queued" && !this.active.has(item.id) && !this.admitting.has(item.id) && (item.notBefore ?? 0) <= now && (taken.get(provider) ?? 0) < providerLimit;
         });
         if (!job) break;
         const key = this.provider(job); taken.set(key, (taken.get(key) ?? 0) + 1);
@@ -4027,6 +4144,7 @@ export class DownloadQueue {
       this.pauseRequested.delete(job.id);
       job.updatedAt = new Date().toISOString();
       this.active.delete(job.id);
+      await this.applyWindow();
       await this.save();
       if (!retryScheduled) this.pump();
     }

@@ -120,6 +120,41 @@ describe("SettingsPage tabs", () => {
     expect([...host.querySelectorAll('.section-filter [role="tab"]')].some((candidate) => candidate.textContent === "Services")).toBe(false);
   });
 
+  it("configures the download window for an administrator only", async () => {
+    stubSourceProfiles();
+    const { onSave } = await render({ serverTimeZone: "Europe/Prague" }, false, "admin");
+    await selectTab("Downloads");
+    const mode = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.downloadWindow"]}"]`)!;
+    expect(mode).not.toBeNull();
+    expect(host.textContent).toContain("Europe/Prague");
+    await act(async () => { mode.value = "set"; mode.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(onSave).toHaveBeenCalledWith({ downloadWindow: { start: "01:00", end: "07:00" } });
+
+    const configured = await render({
+      downloadWindow: { start: "01:00", end: "07:00" },
+      serverTimeZone: "Europe/Prague",
+    }, false, "admin");
+    const from = host.querySelector<HTMLInputElement>(`input[aria-label="${en["settings.downloadWindowFrom"]}"]`)!;
+    expect(from.type).toBe("time");
+    expect(from.step).toBe("60");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(from, "02:00");
+      from.dispatchEvent(new Event("input", { bubbles: true }));
+      from.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(configured.onSave).toHaveBeenCalledWith({ downloadWindow: { start: "02:00", end: "07:00" } });
+    const nextMode = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.downloadWindow"]}"]`)!;
+    await act(async () => { nextMode.value = "any"; nextMode.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(configured.onSave).toHaveBeenCalledWith({ downloadWindow: null });
+  });
+
+  it("does not show the download window to an ordinary account", async () => {
+    await render({}, false, "user");
+    await selectTab("Downloads");
+    expect(host.querySelector(`select[aria-label="${en["settings.downloadWindow"]}"]`)).toBeNull();
+    expect(host.querySelector(`input[aria-label="${en["settings.downloadWindowFrom"]}"]`)).toBeNull();
+  });
+
   it("opens a stored Services tab on Libraries for an ordinary account", async () => {
     sessionStorage.setItem("stremio-offline-settings-tab", "services");
     await render();

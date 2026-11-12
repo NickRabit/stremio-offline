@@ -1,5 +1,6 @@
 import type { Locale } from "./i18n";
-import type { DownloadSnapshot as ServerDownloadSnapshot, PublicDownload } from "../../server/src/api-types";
+import type { DownloadSnapshot as ServerDownloadSnapshot, DownloadWindow, DownloadWindowState, PublicDownload } from "../../server/src/api-types";
+export type { DownloadWindow, DownloadWindowState } from "../../server/src/api-types";
 import type { HomeLayout } from "../../server/src/home";
 import type { MediaServerConfigurationExport } from "../../server/src/media-server-store";
 import type { DownloadRules as ServerDownloadRules, RulePreference, RuleResolution } from "../../server/src/download-rules";
@@ -543,6 +544,10 @@ export interface Settings {
   /** What the server writes down, as opposed to what the log view filters back out. */
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
   addonRefreshHours: number;
+  /** Local wall-clock start and end of the administrator's download window. */
+  downloadWindow?: DownloadWindow | null;
+  /** The server process's IANA time zone; returned to administrators only. */
+  serverTimeZone?: string;
   tileSize: TileSize;
   catalogTileShape: TileShape; libraryTileShape: TileShape; favoritesTileShape: TileShape;
   resumeTileShape: TileShape; followingTileShape: TileShape; homeTileShape: TileShape; searchTileShape: TileShape;
@@ -560,12 +565,13 @@ export interface Settings {
  *  only what the ordinary interface behaves on: `secureMode` and `realDebridConfigured`. */
 type AdminOnlySetting =
   | "concurrentDownloads" | "parallelPerProvider" | "downloadSegments"
+  | "downloadWindow" | "serverTimeZone"
   | "libraryAutoScan" | "libraryScanPauseOnDownload" | "logLevel"
   | "addonRefreshHours" | "tmdbConfigured";
 /** What GET and PATCH /api/settings answer. An administrator receives every key; everybody
  *  else is missing the ones above, and the interface keeps its own defaults for them. */
 export type SettingsView = Omit<Settings, AdminOnlySetting> & Partial<Pick<Settings, AdminOnlySetting>>;
-export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured" | "homeLayout" | "downloadSourceProfile" | "followSourceProfile">> & { homeLayout?: HomeLayout | null; downloadSourceProfile?: string | null; followSourceProfile?: string | null; realDebridToken?: string; tmdbApiKey?: string };
+export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured" | "homeLayout" | "downloadWindow" | "serverTimeZone" | "downloadSourceProfile" | "followSourceProfile">> & { homeLayout?: HomeLayout | null; downloadWindow?: DownloadWindow | null; downloadSourceProfile?: string | null; followSourceProfile?: string | null; realDebridToken?: string; tmdbApiKey?: string };
 /** The media-server metadata a version 3 backup adds: the server's own metadata-only export,
  *  reused so a credential, generation or grant can never reach a settings file. */
 export type SettingsBackupMediaServers = MediaServerConfigurationExport;

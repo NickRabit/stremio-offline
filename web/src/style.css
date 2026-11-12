@@ -940,6 +940,7 @@ html.dialog-locked,html.dialog-locked body{overflow:hidden;overscroll-behavior:n
 .settings-page .setting-control strong{font-size:13px}
 .settings-page .setting-control select,.settings-page .setting-control button{font-size:13px;min-height:42px}
 .settings-page .setting-control input{min-height:42px}
+.download-window-setting{display:grid;gap:8px}.download-window-times{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .settings-page .playback-settings{display:block}
 .settings-page .storage-path{margin-top:10px;flex-direction:row;align-items:center}
 .settings-page .storage-section p,.settings-page .backup-section>p,.settings-page .setting-note{font-size:12px}
