@@ -22,6 +22,8 @@ test("library cards and folder navigation", async ({ page }, testInfo) => {
   // up under the header; close it the way a person would whenever it is in the way.
   await page.addLocatorHandler(page.locator(".toast"), async (toast) => {
     await toast.getByRole("button", { name: "Zavřít", exact: true }).click();
+    // The pointer would otherwise rest on whatever card sits under the closed toast.
+    await page.mouse.move(0, 0);
   });
   await page.route("**/api/library/browse?*", (route) => {
     const path = new URL(route.request().url()).searchParams.get("path") || "";
