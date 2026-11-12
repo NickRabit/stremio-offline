@@ -1027,8 +1027,7 @@ fun PlayerScreen(
   // the full buffer travels with the next diagnostics bundle from Settings.
   LaunchedEffect(state.error) {
     val error = state.error ?: return@LaunchedEffect
-    val kind = error::class.simpleName.orEmpty()
-    if (AppLog.allowWarn("player:$kind")) api.clientLog("WARN", "Player error: $kind")
+    if (AppLog.allowWarn("player:${error.wire}")) api.clientLog("WARN", "Player error: ${error.wire}")
   }
 
   DisposableEffect(Unit) {
