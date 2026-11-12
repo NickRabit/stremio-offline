@@ -1,5 +1,6 @@
 import { AppError, messageKeyOf } from "./errors.js";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createWriteStream as fsCreateWriteStream } from "node:fs";
 import { mkdir, open, rename, stat, statfs, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
@@ -40,7 +41,7 @@ import {
 import { readMediaBytes } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 import { subtitleVtt } from "./subtitle-text.js";
-import type { DownloadOrigin, DownloadSnapshot, DownloadStatus, DownloadWindow, DownloadWindowState, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
+import type { DownloadDrainView, DownloadOrigin, DownloadSnapshot, DownloadStatus, DownloadWindow, DownloadWindowState, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
 import { ByteRateLimiter, BYTES_PER_MBIT } from "./byte-rate.js";
 import { parseDownloadWindow, serverTimeZone, windowOpen } from "./download-window.js";
 import type {
@@ -396,6 +397,22 @@ export interface QueuedExistingLocalCopyLookup {
   media: MediaInfo | undefined;
   sourceAdmission: SourceAdmissionSnapshotV1;
 }
+
+type DrainEntry = { id: string; owner: string | undefined };
+
+type DrainRun = {
+  startedAt: string;
+  completed: Map<string, DrainEntry>;
+  failed: Map<string, DrainEntry>;
+};
+
+type QueueDrain = {
+  id: string;
+  at: string;
+  completed: DrainEntry[];
+  failed: DrainEntry[];
+  paused: DrainEntry[];
+};
 
 export type PendingDownloadOutcome =
   | { outcome: "queued"; job: Omit<PublicDownload, "order"> }
@@ -812,6 +829,9 @@ export class DownloadQueue {
   private retryTimer?: NodeJS.Timeout;
   private saveRetryTimer?: NodeJS.Timeout;
   private windowTimer?: NodeJS.Timeout;
+  private lastBusy?: boolean;
+  private run?: DrainRun;
+  private lastDrain?: QueueDrain;
   private saveFailing = false;
   private persistenceFrozen = false;
   private readonly saveRetryMs: number;
@@ -1236,6 +1256,7 @@ export class DownloadQueue {
     this.pump();
     for (const job of this.jobs) if (job.status === "waiting") this.scheduleDebrid(job.id);
     if (this.jobs.some((job) => job.status === "paused" && job.pauseReason === "library")) this.watchLibraries();
+    this.trackRun();
   }
 
   list(): PublicDownload[] { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
@@ -1246,6 +1267,25 @@ export class DownloadQueue {
       halt: this.haltInfo(),
       window: this.windowState(),
       speedLimitMbps: bytesPerSecond > 0 ? bytesPerSecond / BYTES_PER_MBIT : null,
+      drain: null,
+    };
+  }
+
+  drainFor(viewer: { id?: string; admin: boolean }): DownloadDrainView | null {
+    const drain = this.lastDrain;
+    if (!drain) return null;
+    const at = Date.parse(drain.at);
+    if (!Number.isFinite(at) || this.now() - at > 24 * 60 * 60_000) return null;
+    const visible = (entry: DrainEntry) => viewer.admin || entry.owner === viewer.id;
+    const completed = drain.completed.filter(visible).length;
+    const failed = drain.failed.filter(visible).length;
+    if (completed === 0 && failed === 0) return null;
+    return {
+      id: drain.id,
+      at: drain.at,
+      completed,
+      failed,
+      paused: drain.paused.filter(visible).length,
     };
   }
 
@@ -2370,6 +2410,7 @@ export class DownloadQueue {
     const run = this.saveChain.then(async () => {
       if (this.unreadable) return;
       await change?.apply();
+      this.trackRun();
       try {
         if (this.database) {
           const statements: Statement[] = [];
@@ -2637,7 +2678,10 @@ export class DownloadQueue {
     this.pumpScheduled = true;
     queueMicrotask(() => {
       this.pumpScheduled = false;
-      if (this.halt || this.stopped) return;
+      if (this.halt || this.stopped) {
+        this.trackRun();
+        return;
+      }
       const limit = Math.max(1, Math.min(8, this.concurrency()));
       const perProvider = Math.max(1, Math.min(8, this.perProvider()));
       const taken = new Map<string, number>();
@@ -2667,7 +2711,65 @@ export class DownloadQueue {
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, Math.max(0, nextAt - this.now()));
       }
+      this.trackRun();
     });
+  }
+
+  private queueBusy(): boolean {
+    return this.jobs.some((job) =>
+      job.status === "queued"
+      || job.status === "waiting"
+      || job.status === "checking"
+      || job.status === "downloading"
+      || (job.status === "paused" && (job.pauseReason === "storage" || job.pauseReason === "schedule")));
+  }
+
+  private trackFinishedJobs(run: DrainRun): void {
+    const startedAt = Date.parse(run.startedAt);
+    for (const job of this.jobs) {
+      const entry = { id: job.id, owner: this.ownerOf(job) };
+      if (job.status === "completed" && job.completedAt) {
+        const completedAt = Date.parse(job.completedAt);
+        if (Number.isFinite(completedAt) && completedAt >= startedAt) {
+          run.failed.delete(job.id);
+          run.completed.set(job.id, entry);
+        }
+      } else if (job.status === "failed" && !run.completed.has(job.id)) {
+        const updatedAt = Date.parse(job.updatedAt);
+        if (Number.isFinite(updatedAt) && updatedAt >= startedAt) run.failed.set(job.id, entry);
+      }
+    }
+  }
+
+  private trackRun(): void {
+    const busy = this.queueBusy();
+    if (busy) {
+      if (!this.lastBusy) {
+        this.run = {
+          startedAt: new Date(this.now()).toISOString(),
+          completed: new Map(),
+          failed: new Map(),
+        };
+      }
+      if (this.run) this.trackFinishedJobs(this.run);
+    } else if (this.lastBusy && this.run) {
+      this.trackFinishedJobs(this.run);
+      const run = this.run;
+      this.run = undefined;
+      if (run.completed.size || run.failed.size) {
+        this.lastDrain = {
+          id: randomUUID(),
+          at: new Date(this.now()).toISOString(),
+          completed: [...run.completed.values()],
+          failed: [...run.failed.values()],
+          paused: this.jobs
+            .filter((job) => job.status === "paused"
+              && (job.pauseReason === "user" || job.pauseReason === "library" || job.pauseReason === "permission"))
+            .map((job) => ({ id: job.id, owner: this.ownerOf(job) })),
+        };
+      }
+    }
+    this.lastBusy = busy;
   }
 
   /** The addons are asked for streams only here, right before one particular episode is downloaded,

@@ -1150,6 +1150,8 @@ export const fr: Catalog = {
   "downloads.pausedLibrary": "En attendant la bibliothèque vers laquelle ce téléchargement va. Cela continue tout seul au retour de la bibliothèque.",
   "downloads.windowClosed": "Les téléchargements ont lieu uniquement entre {start} et {end} ({zone}). Le reste attend dans la file.",
   "downloads.speedLimited": "La vitesse de téléchargement est limitée à {limit} Mbit/s.",
+  "downloads.queueFinished": "La file de téléchargement est terminée : {completed} téléchargés, {failed} échoués.",
+  "downloads.queueFinishedWithPaused": "La file de téléchargement est terminée : {completed} téléchargés, {failed} échoués, {paused} toujours en pause.",
   "downloads.waitingForWindow": "En attente de la plage horaire de téléchargement.",
   "downloads.downloadNow": "Télécharger maintenant",
   "download.pausedNoPermission": "En pause : l'autorisation pour ce téléchargement a disparu.",

@@ -1150,6 +1150,8 @@ export const de: Catalog = {
   "downloads.pausedLibrary": "Warten auf die Bibliothek, an die dieser Download geht. Es läuft von alleine weiter, wenn die Bibliothek wieder da ist.",
   "downloads.windowClosed": "Downloads laufen nur zwischen {start} und {end} ({zone}). Der Rest wartet in der Warteschlange.",
   "downloads.speedLimited": "Die Download-Geschwindigkeit ist auf {limit} Mbit/s begrenzt.",
+  "downloads.queueFinished": "Die Download-Warteschlange ist fertig: {completed} heruntergeladen, {failed} fehlgeschlagen.",
+  "downloads.queueFinishedWithPaused": "Die Download-Warteschlange ist fertig: {completed} heruntergeladen, {failed} fehlgeschlagen, {paused} weiterhin pausiert.",
   "downloads.waitingForWindow": "Wartet auf das Download-Zeitfenster.",
   "downloads.downloadNow": "Jetzt herunterladen",
   "download.pausedNoPermission": "Angehalten: Die Berechtigung für diesen Download ist weg.",

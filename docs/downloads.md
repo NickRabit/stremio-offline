@@ -177,6 +177,21 @@ file to a browser) or Real-Debrid's own remote caching while a job is
 the playlist through the server's internal address, and there is no per-byte
 hook on that path.
 
+### When the queue finishes
+
+A queue run starts when work becomes active and ends when nothing is left that
+can continue on its own. Jobs waiting in the queue, downloading, checking, or
+paused for storage or the download window keep the run open. Pauses set by a
+person, a missing library, or a missing permission do not: they wait for
+something outside the queue.
+
+When a run finishes, every account whose jobs completed or failed gets one
+in-app notice with its own counts. The notice also names that account's jobs
+that are still paused for a person or an outside change. It appears on the next
+page load as well, stays available for 24 hours, and is never written to disk.
+Jobs removed after finishing still count because ownership is captured when
+the run ends.
+
 ### Seasons and whole shows
 
 **To library** on a single source saves exactly that file. Downloading a season

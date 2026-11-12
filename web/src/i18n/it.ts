@@ -1150,6 +1150,8 @@ export const it: Catalog = {
   "downloads.pausedLibrary": "In attesa della libreria a cui va questo download. Continua da solo quando la biblioteca è tornata.",
   "downloads.windowClosed": "I download vengono eseguiti solo tra {start} e {end} ({zone}). Il resto attende in coda.",
   "downloads.speedLimited": "La velocità di download è limitata a {limit} Mbit/s.",
+  "downloads.queueFinished": "La coda dei download è terminata: {completed} scaricati, {failed} non riusciti.",
+  "downloads.queueFinishedWithPaused": "La coda dei download è terminata: {completed} scaricati, {failed} non riusciti, {paused} ancora in pausa.",
   "downloads.waitingForWindow": "In attesa della fascia oraria dei download.",
   "downloads.downloadNow": "Scarica ora",
   "download.pausedNoPermission": "In pausa: l'autorizzazione per questo download è scomparsa.",

@@ -1150,6 +1150,8 @@ export const ru: Catalog = {
   "downloads.pausedLibrary": "Ожидание библиотеки, в которую будет отправлена загрузка. Это продолжится само по себе, когда библиотека вернется.",
   "downloads.windowClosed": "Загрузки выполняются только между {start} и {end} ({zone}). Остальное ждет в очереди.",
   "downloads.speedLimited": "Скорость загрузки ограничена до {limit} Мбит/с.",
+  "downloads.queueFinished": "Очередь загрузок завершена: загружено {completed}, не удалось {failed}.",
+  "downloads.queueFinishedWithPaused": "Очередь загрузок завершена: загружено {completed}, не удалось {failed}, {paused} всё ещё приостановлено.",
   "downloads.waitingForWindow": "Ожидает окна времени для загрузок.",
   "downloads.downloadNow": "Скачать сейчас",
   "download.pausedNoPermission": "Приостановлено: разрешение на эту загрузку пропало.",

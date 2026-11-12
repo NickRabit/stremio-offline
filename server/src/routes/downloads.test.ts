@@ -18,7 +18,7 @@ import type { SourceAdmissionSnapshotV1 } from "../source-admission.js";
 import { defaultTemplateParameters, RULE_PRESETS, SOURCE_PROFILE_IDS, type SourceProfileTemplate } from "../source-profiles.js";
 import type { Store, StoredSourceProfile, UserPrefs } from "../store.js";
 import type { AddonDownloadSettings, DownloadTargetSettings, StreamItem } from "../types.js";
-import type { DownloadWindowState } from "../api-types.js";
+import type { DownloadDrainView, DownloadWindowState } from "../api-types.js";
 import type { UserRecord } from "../users.js";
 import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
 
@@ -38,6 +38,7 @@ interface Harness {
   pending: Array<{ type?: string; videoId?: string; selection?: DownloadSelection; media?: MediaInfo; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1; remoteItem?: { libraryId: string; connectionId: string; itemId: string } }>;
   seriesBulkCalls: Array<{ ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }>;
   seriesIdentityCalls: Array<{ ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }>;
+  drainViewers: Array<{ id?: string; admin: boolean }>;
   setAddonAllowedUsers(key: string, allowedUsers: string[]): void;
   setLibraryVisibleTo(id: string, visibleTo: string[]): void;
   close(): Promise<void>;
@@ -129,6 +130,7 @@ const mount = async (
     pendingOutcomes?: Array<"queued" | "alreadyQueued" | "presentLocally" | "unresolved">;
     now?: () => number;
     window?: DownloadWindowState | null;
+    drainFor?: (viewer: { id?: string; admin: boolean }) => DownloadDrainView | null;
     downloadNowError?: (id: string) => AppError | undefined;
   } = {},
 ): Promise<Harness> => {
@@ -145,6 +147,7 @@ const mount = async (
   const pending: Harness["pending"] = [];
   const seriesIdentityCalls: Harness["seriesIdentityCalls"] = [];
   const seriesBulkCalls: Harness["seriesBulkCalls"] = [];
+  const drainViewers: Harness["drainViewers"] = [];
   const profiles = options.profiles ?? (["recommended", "providerPriority", "travel"] as const).map((template) => ({
     id: SOURCE_PROFILE_IDS[template],
     revision: 1,
@@ -161,6 +164,10 @@ const mount = async (
   };
   const queue = {
     snapshot: () => ({ jobs, halt: null, window: options.window ?? null }),
+    drainFor: (viewer: { id?: string; admin: boolean }) => {
+      drainViewers.push(viewer);
+      return options.drainFor?.(viewer) ?? null;
+    },
     list: () => jobs,
     add: async (title: string, stream: StreamItem, media: MediaInfo | undefined, settings: DownloadTargetSettings, ownerUserId?: string, remoteDownload?: RemoteDownloadReference) => {
       added.push({ title, ownerUserId, settings, stream, media, remoteDownload });
@@ -288,6 +295,7 @@ const mount = async (
     pending,
     seriesBulkCalls,
     seriesIdentityCalls,
+    drainViewers,
     setAddonAllowedUsers: (key, allowedUsers) => {
       const addon = addons.find((entry) => (entry as { key?: unknown }).key === key) as { allowedUsers?: string[] } | undefined;
       if (addon) addon.allowedUsers = allowedUsers;
@@ -356,6 +364,34 @@ test("GET /api/downloads carries the window state for administrators and ordinar
     const body = await (await api(harness.base, "/api/downloads")).json() as { window: DownloadWindowState | null };
     assert.deepEqual(body.window, window);
   }
+});
+
+test("GET /api/downloads asks the queue for the viewer's drain counts", async (t) => {
+  const drainFor = (viewer: { id?: string; admin: boolean }): DownloadDrainView => ({
+    id: "drain-1",
+    at: "2026-11-12T01:00:00.000Z",
+    completed: viewer.admin ? 3 : 1,
+    failed: viewer.admin ? 2 : 0,
+    paused: viewer.admin ? 4 : 1,
+  });
+  const administrator = await mount(undefined, { viewer: admin, drainFor });
+  t.after(administrator.close);
+  const all = await (await api(administrator.base, "/api/downloads")).json() as { drain?: DownloadDrainView };
+  assert.deepEqual(all.drain, drainFor({ id: ADA, admin: true }));
+  assert.deepEqual(administrator.drainViewers, [{ id: ADA, admin: true }]);
+
+  const user = await mount(undefined, { viewer: ordinary, drainFor });
+  t.after(user.close);
+  const mine = await (await api(user.base, "/api/downloads")).json() as { drain?: DownloadDrainView };
+  assert.deepEqual(mine.drain, drainFor({ id: BOB, admin: false }));
+  assert.deepEqual(user.drainViewers, [{ id: BOB, admin: false }]);
+});
+
+test("GET /api/downloads carries a null drain for an account without finished jobs", async (t) => {
+  const harness = await mount(undefined, { viewer: ordinary, drainFor: () => null });
+  t.after(harness.close);
+  const body = await (await api(harness.base, "/api/downloads")).json() as { drain?: DownloadDrainView | null };
+  assert.equal(body.drain, null);
 });
 
 test("POST /api/downloads/:id/now is available to the owner and an administrator", async (t) => {

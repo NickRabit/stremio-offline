@@ -1213,6 +1213,8 @@ export const en = {
   "downloads.pausedLibrary": "Waiting for the library this download goes to. It continues on its own when the library is back.",
   "downloads.windowClosed": "Downloads run only between {start} and {end} ({zone}). The rest waits in the queue.",
   "downloads.speedLimited": "Download speed is limited to {limit} Mbit/s.",
+  "downloads.queueFinished": "The download queue has finished: {completed} downloaded, {failed} failed.",
+  "downloads.queueFinishedWithPaused": "The download queue has finished: {completed} downloaded, {failed} failed, {paused} still paused.",
   "downloads.waitingForWindow": "Waits for the download window.",
   "downloads.downloadNow": "Download now",
   "download.pausedNoPermission": "Paused: the permission for this download is gone.",

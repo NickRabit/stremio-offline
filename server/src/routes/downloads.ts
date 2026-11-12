@@ -289,7 +289,12 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const viewer = viewerOf(currentUser(req));
     const snapshot = queue.snapshot();
     const jobs = snapshot.jobs.filter((job) => viewer.role === "admin" || job.ownerUserId === viewer.id);
-    res.json({ ...snapshot, jobs: await Promise.all(jobs.map((job) => jobView({ ...job, mine: job.ownerUserId === viewer.id }))), deviceTransfers: deviceTransfers.list(viewer) });
+    res.json({
+      ...snapshot,
+      jobs: await Promise.all(jobs.map((job) => jobView({ ...job, mine: job.ownerUserId === viewer.id }))),
+      deviceTransfers: deviceTransfers.list(viewer),
+      drain: queue.drainFor({ id: viewer.id, admin: viewer.role === "admin" }),
+    });
   }));
   app.post("/api/downloads", asyncRoute(async (req, res) => {
     const owner = currentUser(req);

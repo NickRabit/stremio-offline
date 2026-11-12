@@ -1150,6 +1150,8 @@ export const sk: Catalog = {
   "downloads.pausedLibrary": "Čaká sa na knižnicu, do ktorej prejde toto sťahovanie. Pokračuje samostatne, keď sa knižnica vráti.",
   "downloads.windowClosed": "Sťahuje sa iba medzi {start} a {end} ({zone}). Zvyšok čaká vo fronte.",
   "downloads.speedLimited": "Rýchlosť sťahovania je obmedzená na {limit} Mbit/s.",
+  "downloads.queueFinished": "Fronta sťahovania skončila: stiahnuté {completed}, neúspešné {failed}.",
+  "downloads.queueFinishedWithPaused": "Fronta sťahovania skončila: stiahnuté {completed}, neúspešné {failed}, {paused} stále pozastavených.",
   "downloads.waitingForWindow": "Čaká na časové okno na sťahovanie.",
   "downloads.downloadNow": "Stiahnuť teraz",
   "download.pausedNoPermission": "Pozastavené: povolenie na toto sťahovanie je preč.",

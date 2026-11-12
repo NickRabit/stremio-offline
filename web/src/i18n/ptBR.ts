@@ -1150,6 +1150,8 @@ export const ptBR: Catalog = {
   "downloads.pausedLibrary": "Aguardando a biblioteca para onde esse download vai. Ele continua sozinho quando a biblioteca volta.",
   "downloads.windowClosed": "Os downloads só são executados entre {start} e {end} ({zone}). O restante aguarda na fila.",
   "downloads.speedLimited": "A velocidade de download está limitada a {limit} Mbit/s.",
+  "downloads.queueFinished": "A fila de downloads terminou: {completed} baixados, {failed} falharam.",
+  "downloads.queueFinishedWithPaused": "A fila de downloads terminou: {completed} baixados, {failed} falharam, {paused} ainda pausados.",
   "downloads.waitingForWindow": "Aguarda a janela de downloads.",
   "downloads.downloadNow": "Baixar agora",
   "download.pausedNoPermission": "Pausado: a permissão para este download desapareceu.",

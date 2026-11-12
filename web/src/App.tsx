@@ -81,7 +81,30 @@ import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
 import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
-import type { DownloadWindowState } from "../../server/src/api-types";
+import type { DownloadDrainView, DownloadWindowState } from "../../server/src/api-types";
+
+export const queueDrainNotice = (
+  drain: DownloadDrainView | null,
+  username: string,
+  lastNotified: { current: string | null },
+  storage?: Pick<Storage, "getItem" | "setItem">,
+): string | null => {
+  if (!drain || lastNotified.current === drain.id) return null;
+  const key = `downloads-drain-seen:${username}`;
+  try {
+    if ((storage ?? localStorage).getItem(key) === drain.id) {
+      lastNotified.current = drain.id;
+      return null;
+    }
+  } catch { /* storage may be unavailable */ }
+  lastNotified.current = drain.id;
+  try { (storage ?? localStorage).setItem(key, drain.id); } catch { /* storage may be unavailable */ }
+  return t(drain.paused > 0 ? "downloads.queueFinishedWithPaused" : "downloads.queueFinished", {
+    completed: drain.completed,
+    failed: drain.failed,
+    paused: drain.paused,
+  });
+};
 
 /** The library choices this browser kept before they moved onto the account. Read once and
  *  handed to the visible libraries; private mode may forbid storage, hence the try/catch. */
@@ -1362,7 +1385,8 @@ export function App() {
   };
   const downloadsSeen = useRef(false);
   const jobStatus = useRef(new Map<string, DownloadJob["status"]>());
-  const applyDownloads = (snapshot: { jobs?: DownloadJob[]; halt?: QueueHalt | null; window?: DownloadWindowState | null; speedLimitMbps?: number | null; deviceTransfers?: DeviceTransfer[] } | DownloadJob[]) => {
+  const lastDrainNotified = useRef<string | null>(null);
+  const applyDownloads = (snapshot: { jobs?: DownloadJob[]; halt?: QueueHalt | null; window?: DownloadWindowState | null; speedLimitMbps?: number | null; deviceTransfers?: DeviceTransfer[]; drain?: DownloadDrainView | null } | DownloadJob[]) => {
     const jobs = Array.isArray(snapshot) ? snapshot : snapshot.jobs ?? [];
     if (downloadsSeen.current) {
       for (const job of jobs) {
@@ -1379,6 +1403,10 @@ export function App() {
         }
       }
     }
+    const drainNotice = Array.isArray(snapshot)
+      ? null
+      : session ? queueDrainNotice(snapshot.drain ?? null, session.username, lastDrainNotified) : null;
+    if (drainNotice) notify(drainNotice);
     downloadsSeen.current = true;
     jobStatus.current = new Map(jobs.map((job) => [job.id, job.status]));
     setDownloads(jobs);

@@ -1208,6 +1208,8 @@ export const cs: Catalog = {
   "downloads.pausedLibrary": "Čeká se na knihovnu, do které se stahuje. Jakmile bude dostupná, stahování pokračuje samo.",
   "downloads.windowClosed": "Stahuje se jen mezi {start} a {end} ({zone}). Ostatní čeká ve frontě.",
   "downloads.speedLimited": "Rychlost stahování je omezena na {limit} Mbit/s.",
+  "downloads.queueFinished": "Fronta stahování doběhla: staženo {completed}, nepovedlo se {failed}.",
+  "downloads.queueFinishedWithPaused": "Fronta stahování doběhla: staženo {completed}, nepovedlo se {failed}, pozastaveno {paused}.",
   "downloads.waitingForWindow": "Čeká na časové okno pro stahování.",
   "downloads.downloadNow": "Stáhnout hned",
   "download.pausedNoPermission": "Pozastaveno: oprávnění pro toto stahování zmizelo.",

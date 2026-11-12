@@ -156,4 +156,13 @@ export interface DownloadSnapshot {
   window: DownloadWindowState | null;
   /** The shared cap in Mbit/s. Null when downloads are not limited. */
   speedLimitMbps: number | null;
+  drain: DownloadDrainView | null;
+}
+
+export interface DownloadDrainView {
+  id: string;
+  at: string;
+  completed: number;
+  failed: number;
+  paused: number;
 }

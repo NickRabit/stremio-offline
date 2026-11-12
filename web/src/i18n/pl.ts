@@ -1150,6 +1150,8 @@ export const pl: Catalog = {
   "downloads.pausedLibrary": "Czekam na bibliotekę, do której trafia ten plik do pobrania. Akcja będzie kontynuowana po powrocie biblioteki.",
   "downloads.windowClosed": "Pobieranie działa tylko między {start} a {end} ({zone}). Reszta czeka w kolejce.",
   "downloads.speedLimited": "Prędkość pobierania jest ograniczona do {limit} Mbit/s.",
+  "downloads.queueFinished": "Kolejka pobierania zakończyła pracę: pobrano {completed}, nie udało się {failed}.",
+  "downloads.queueFinishedWithPaused": "Kolejka pobierania zakończyła pracę: pobrano {completed}, nie udało się {failed}, {paused} nadal wstrzymanych.",
   "downloads.waitingForWindow": "Czeka na okno czasowe pobierania.",
   "downloads.downloadNow": "Pobierz teraz",
   "download.pausedNoPermission": "Wstrzymano: pozwolenie na pobieranie zniknęło.",
