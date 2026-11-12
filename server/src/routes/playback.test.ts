@@ -50,7 +50,7 @@ interface Harness {
   fetched: Array<{ id: string; generation: string; file: string }>;
   waitingFor: Array<{ id: string; absolute: number }>;
   mediaSources: MediaServerSources;
-  playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string }>;
+  playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string; sourceId?: string }>;
   /** The manager the routes call; a test can replace one method to hold a preparation open. */
   playback: Record<string, any>;
   useSource(stream: StreamItem): void;
@@ -73,7 +73,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
   const sessions = { ada: ADA, bob: BOB };
   const userOf = (req: express.Request) => (req.header("x-user") === "bob" ? "bob" : "ada");
   const ownerOf = (req: express.Request) => sessions[userOf(req)];
-  const playbackOwners = new Map([[ID, { owner: ADA, resourceId: RESOURCE }]]);
+  const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string; sourceId?: string }>([[ID, { owner: ADA, resourceId: RESOURCE }]]);
   const mediaCloses = new Map<string, { seen: number; waiters: Array<() => void> }>();
   const resources = new MediaResources();
   const mediaSources = new MediaServerSources(
@@ -302,6 +302,17 @@ test("the ping hands a finite waiting position to the playback manager", async (
   const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: { waitingFor: 123.5 } });
   assert.equal(response.status, 204);
   assert.deepEqual(harness.waitingFor, [{ id: ID, absolute: 123.5 }]);
+});
+
+test("the ping keeps the source the session plays alive", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const kept = t.mock.method(registry, "keep");
+  harness.playbackOwners.set(ID, { owner: ADA, resourceId: RESOURCE, sourceId: "listed-source" });
+
+  const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada" });
+  assert.equal(response.status, 204);
+  assert.deepEqual(kept.mock.calls.map((call) => call.arguments), [["listed-source", ADA.sid]]);
 });
 
 test("the ping ignores waiting positions that are not finite non-negative numbers", async (t) => {

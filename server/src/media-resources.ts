@@ -277,6 +277,14 @@ export class MediaResources {
     return record;
   }
 
+  /** A source that is being played is still wanted, so it lives as long as a new listing of it
+   *  would: a session that has to be opened again late in a long play finds its source. */
+  keep(id: string, sid: string) {
+    const record = this.entries.get(id);
+    if (!record || record.owner.sid !== sid || record.scope !== "source" || record.expiresAt <= this.now()) return;
+    record.expiresAt = this.expiryOf(record.owner, record.scope, record.parent);
+  }
+
   remove(id: string, expired = false) {
     const record = this.entries.get(id);
     if (!record) return;

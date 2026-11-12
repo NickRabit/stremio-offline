@@ -943,6 +943,40 @@ describe("Player lost playback session", () => {
     expect(host.querySelector(".player-error")?.textContent).toBe("The browser could not play this stream.");
   });
 
+  it("finds the playing source again when the recovery is refused for an expired id", async () => {
+    hlsMock.enabled = false;
+    sessionShape = {};
+    const playing = { sourceId: "addon-1", kind: "remote", playable: true, name: "4K", addonKey: "cinema", addonName: "Cinema", stableKey: "cinema-4k" } as Stream;
+    const fresh = { ...playing, sourceId: "addon-1b" };
+    const refind = vi.fn(async () => fresh);
+    const onSwitch = vi.fn(async (_row: Stream, _at: number) => undefined);
+    const sources = { lead: [playing], leadLabel: "Sources", groups: [], onOpen: vi.fn(), onSwitch, panel: { groups: [], retry: vi.fn(), refind } };
+    await render({ stream: playing, sources });
+    const video = await at(42);
+    await act(async () => { video.dispatchEvent(new Event("playing")); });
+    // The session is gone and, this late in the play, so is the id its source was listed under.
+    const base = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/api/playback" && init?.method === "POST") {
+        playbackPosts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return Promise.resolve(json({ error: "Media resource expired or unavailable. Select the source again.", code: "RESOURCE_EXPIRED" }, 410));
+      }
+      return base(input, init);
+    }));
+    Object.defineProperty(video, "error", { configurable: true, get: () => ({ code: 4, message: "" }) });
+
+    await act(async () => { video.dispatchEvent(new Event("error")); });
+    await flushAll();
+
+    expect(playbackPosts).toHaveLength(2);
+    expect(refind).toHaveBeenCalledWith(playing);
+    expect(onSwitch).toHaveBeenCalledTimes(1);
+    expect(onSwitch.mock.calls[0]![0]).toBe(fresh);
+    expect(onSwitch.mock.calls[0]![1]).toBeCloseTo(42, 1);
+    expect(host.querySelector(".player-error")).toBeNull();
+  });
+
   it("the 30 s ping sends the viewer's paused flag", async () => {
     hlsMock.enabled = false;
     sessionShape = {};
