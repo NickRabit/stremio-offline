@@ -71,6 +71,9 @@ test("library cards and folder navigation", async ({ page }, testInfo) => {
   await expect(page.locator(".browse-actions")).toHaveCount(0);
   await page.getByRole("button", { name: /Seriály.*Otevřít složku/ }).click();
   await expect(page.getByRole("button", { name: /Dlouhý název.*Otevřít titul/ })).toBeVisible();
+  // The seed's finished download raises the queue-finished toast, which covers this button
+  // on a short landscape screen.
+  for (const toast of await page.locator(".toast").all()) await toast.evaluate((element) => element.remove());
   await page.getByRole("button", { name: "O složku zpět" }).click();
   await page.getByRole("button", { name: "Zobrazit po řádcích" }).click();
   await expect(page.locator(".browse-rows .library-open")).toHaveCount(3);
