@@ -148,6 +148,25 @@ describe("SettingsPage tabs", () => {
     expect(configured.onSave).toHaveBeenCalledWith({ downloadWindow: null });
   });
 
+  it("saves times sent with seconds and says when the window cannot be saved", async () => {
+    stubSourceProfiles();
+    const { onSave } = await render({ downloadWindow: { start: "01:00", end: "07:00" }, serverTimeZone: "Europe/Prague" }, false, "admin");
+    await selectTab("Downloads");
+    const setValue = async (input: HTMLInputElement, value: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const from = host.querySelector<HTMLInputElement>(`input[aria-label="${en["settings.downloadWindowFrom"]}"]`)!;
+    await setValue(from, "02:30:00");
+    expect(onSave).toHaveBeenLastCalledWith({ downloadWindow: { start: "02:30", end: "07:00" } });
+    expect(host.textContent).not.toContain(en["err.downloadWindowInvalid"]);
+    onSave.mockClear();
+    await setValue(from, "07:00");
+    expect(onSave).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(en["err.downloadWindowInvalid"]);
+  });
+
   it("sets the download speed limit for an administrator", async () => {
     stubSourceProfiles();
     const { onSave } = await render({}, false, "admin");

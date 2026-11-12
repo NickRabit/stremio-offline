@@ -132,9 +132,12 @@ function DownloadWindowSettings({ settings, restricted, onSave }: { settings: Ap
     setEnd(settings.downloadWindow?.end ?? "07:00");
   }, [settings.downloadWindow?.start, settings.downloadWindow?.end]);
   const configured = Boolean(settings.downloadWindow);
+  // A browser may send seconds; the server takes `HH:MM:00` as `HH:MM`, and so does this.
+  const minutes = (value: string) => /^\d\d:\d\d:00$/.test(value) ? value.slice(0, 5) : value;
+  const savable = (from: string, to: string) => DOWNLOAD_WINDOW_TIME.test(minutes(from)) && DOWNLOAD_WINDOW_TIME.test(minutes(to)) && minutes(from) !== minutes(to);
   const saveTimes = (nextStart: string, nextEnd: string) => {
-    if (!DOWNLOAD_WINDOW_TIME.test(nextStart) || !DOWNLOAD_WINDOW_TIME.test(nextEnd) || nextStart === nextEnd) return;
-    void onSave({ downloadWindow: { start: nextStart, end: nextEnd } });
+    if (!savable(nextStart, nextEnd)) return;
+    void onSave({ downloadWindow: { start: minutes(nextStart), end: minutes(nextEnd) } });
   };
   return <SettingControl
     title={t("settings.downloadWindow")}
@@ -171,6 +174,7 @@ function DownloadWindowSettings({ settings, restricted, onSave }: { settings: Ap
           onChange={(event) => { setEnd(event.target.value); saveTimes(start, event.target.value); }}
         />
       </div>}
+      {configured && !savable(start, end) && <small className="setting-note" role="alert">{t("err.downloadWindowInvalid")}</small>}
     </div>
   </SettingControl>;
 }

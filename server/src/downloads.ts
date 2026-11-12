@@ -1893,7 +1893,14 @@ export class DownloadQueue {
   }
 
   async startNow(id: string): Promise<void> {
-    if (this.active.has(id)) await this.runningById.get(id);
+    const waiting = this.require(id);
+    if (this.active.has(id)) {
+      // Only a transfer the window just aborted is worth waiting for; a running one is refused now.
+      if (waiting.status !== "paused" || waiting.pauseReason !== "schedule") {
+        throw new AppError("Only a download that waits for the window can be started now.", "err.downloadNowNotWaiting", 409);
+      }
+      await this.runningById.get(id);
+    }
     const job = this.require(id);
     if (job.status === "paused" && job.pauseReason === "schedule") {
       job.status = "queued";
@@ -1975,6 +1982,9 @@ export class DownloadQueue {
   }
 
   async resume(id: string) {
+    // A row can read paused while its aborted transfer still settles; resuming under it would
+    // take away the pause mark the transfer reads, and the abort would count as a dropped line.
+    if (this.active.has(id)) await this.runningById.get(id);
     const job = this.require(id);
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
     const pausedLibraryId = job.libraryId;
@@ -2740,6 +2750,9 @@ export class DownloadQueue {
       } else if (job.status === "failed" && !run.completed.has(job.id)) {
         const updatedAt = Date.parse(job.updatedAt);
         if (Number.isFinite(updatedAt) && updatedAt >= startedAt) run.failed.set(job.id, entry);
+      } else {
+        // Retried after failing: it is not a failure any more. A removed row keeps counting.
+        run.failed.delete(job.id);
       }
     }
   }

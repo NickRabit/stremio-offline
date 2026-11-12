@@ -315,8 +315,8 @@ new location; ambiguous cases stay untouched.
 
 ### Queue controls
 
-A night-only window and an aggregate speed limit have shipped. A notice when the
-queue drains remains. Existing concurrency settings limit simultaneous jobs.
+A download window, an aggregate speed limit and an in-app notice when the queue
+finishes have shipped. Existing concurrency settings limit simultaneous jobs.
 Notices outside the browser are proposed under [Notifications](#notifications).
 
 ### Storage

@@ -2540,6 +2540,60 @@ test("removing the window while an aborted transfer settles releases it without 
   }
 });
 
+test("resuming a job the window paused while its transfer settles does not count a dropped connection", async () => {
+  const clock = { value: windowAt(1) };
+  const window = { start: "01:00", end: "07:00" };
+  let hold: Promise<void> | undefined;
+  let release = () => {};
+  const { directory, queue } = await tempQueue({
+    ...windowHooks(clock, () => window),
+    libraryState: async () => { await hold; return undefined; },
+  });
+  const { server, port } = await rangeServer({ total: 8 * MB });
+  try {
+    const job = await queue.add("Resume race", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.get(job.id)?.received! > 128 * 1024, 30_000);
+    clock.value = windowAt(7);
+    queue.changed();
+    await waitFor(queue, () => queue.get(job.id)?.pauseReason === "schedule", 5_000);
+    // The row already reads paused, but its aborted transfer has not settled: hold that
+    // settling (it asks for the library) while a person presses Resume.
+    const resuming = queue.resume(job.id);
+    hold = new Promise<void>((done) => { release = done; });
+    setTimeout(() => release(), 100);
+    await resuming;
+    await settled(queue, job.id);
+    const after = queue.get(job.id)!;
+    assert.equal(after.status, "queued", "the window is still closed, so the resumed job waits");
+    assert.equal(after.errorKey, undefined, `no dropped connection is reported: ${after.error ?? ""}`);
+    assert.ok(!after.retryCount, `no retry is spent: ${after.retryCount}`);
+  } finally {
+    release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Download now refuses a running transfer at once instead of waiting for it", async () => {
+  const clock = { value: windowAt(1) };
+  const { directory, queue } = await tempQueue(windowHooks(clock, () => ({ start: "01:00", end: "07:00" })));
+  const { server, port } = await rangeServer({ total: 64 * MB });
+  try {
+    const job = await queue.add("Running", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.get(job.id)?.status === "downloading" && queue.get(job.id)!.received > 0, 30_000);
+    const started = Date.now();
+    await assert.rejects(queue.startNow(job.id), (error: unknown) => (error as { messageKey?: string }).messageKey === "err.downloadNowNotWaiting");
+    assert.ok(Date.now() - started < 1_000, `the refusal waited ${Date.now() - started} ms`);
+    assert.equal(queue.get(job.id)?.status, "downloading");
+    assert.equal(queue.get(job.id)?.windowExempt, undefined);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a waiting Real-Debrid job is not paused by the download window", async () => {
   const clock = { value: windowAt(12) };
   const { directory, queue } = await tempQueue({
@@ -4491,6 +4545,40 @@ test("a later run for another account does not take the earlier account's notice
     assert.equal(queue.drainFor({ id: "bob", admin: false })?.completed, 1);
     assert.notEqual(queue.drainFor({ id: "bob", admin: false })?.id, aliceNotice?.id);
     assert.equal(queue.drainFor({ id: "admin", admin: true })?.completed, 1, "the administrator sees the latest run");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a job that failed, was retried and then paused counts only as paused", async () => {
+  const clock = { value: Date.parse("2026-11-12T01:00:00.000Z") };
+  const { directory, queue } = await tempQueue({ now: () => clock.value });
+  const internal = queue as unknown as { jobs: DownloadJob[]; save(): Promise<void> };
+  const flaky = drainJob("flaky", "alice");
+  const other = drainJob("other", "alice");
+  try {
+    internal.jobs.push(flaky, other);
+    await internal.save();
+    clock.value += 1_000;
+    flaky.status = "failed";
+    flaky.updatedAt = new Date(clock.value).toISOString();
+    await internal.save();
+    clock.value += 1_000;
+    flaky.status = "queued";
+    await internal.save();
+    flaky.status = "paused";
+    flaky.pauseReason = "user";
+    await internal.save();
+    clock.value += 1_000;
+    other.status = "completed";
+    other.completedAt = new Date(clock.value).toISOString();
+    await internal.save();
+
+    const drain = queue.drainFor({ id: "alice", admin: false });
+    assert.equal(drain?.completed, 1);
+    assert.equal(drain?.failed, 0, "the retried job is no longer a failure");
+    assert.equal(drain?.paused, 1);
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });
