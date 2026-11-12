@@ -96,6 +96,16 @@ interface PlaybackApi {
 enum class PlaybackMode { Direct, Remux, Transcode }
 
 sealed interface PlaybackError {
+  /** A stable name for the logs: a release build minifies class names, so `Expired` reached the
+   *  server as `yl3`. */
+  val wire: String get() = when (this) {
+    Decoder -> "decoder"
+    Network -> "network"
+    Session -> "session"
+    SourceStopped -> "source-stopped"
+    Expired -> "expired"
+  }
+
   data object Decoder : PlaybackError
   data object Network : PlaybackError
   data object Session : PlaybackError
@@ -427,11 +437,14 @@ class PlaybackController(
     subtitles: List<AddonSubtitleDto> = plan?.subtitles ?: emptyList(),
     audioPreference: String? = plan?.audioPreference,
     subtitlePreference: String? = plan?.subtitlePreference,
+    /** The id the same row has now, when the server no longer knows the one the plan was made with. */
+    sourceId: String? = null,
   ) {
     if (released) return
     val current = plan ?: return
     begin(
       current.copy(
+        sourceId = sourceId ?: current.sourceId,
         explicitTime = restartPosition,
         resume = false,
         subtitles = subtitles,
@@ -528,7 +541,7 @@ class PlaybackController(
           quality = next.quality,
         )
       }.getOrElse { error ->
-        if (mine == generation) _state.update { it.copy(loading = false, error = errorOf(error)) }
+        if (mine == generation) _state.update { it.copy(loading = false, error = startErrorOf(error)) }
         return@launch
       }
       if (mine != generation) {
@@ -831,7 +844,7 @@ class PlaybackController(
   /** One `/track` round trip; the answer is kept only when it is still the current generation. */
   private fun track(request: TrackChange, addon: AddonSubtitleDto?) {
     val id = sessionId ?: return
-    AppLog.info("Track switch", mapOf("change" to request.javaClass.simpleName))
+    AppLog.info("Track switch", mapOf("change" to request.wire))
     val mine = generation
     val stamp = ++sequence
     // A seek that has been asked for but not answered yet is the position the viewer wants; a track
@@ -846,7 +859,7 @@ class PlaybackController(
           if (isDead(error)) onDeadSession()
           else {
             AppLog.warn("Track switch failed", mapOf(
-              "change" to request.javaClass.simpleName,
+              "change" to request.wire,
               "error" to (error.message ?: error.javaClass.simpleName),
             ))
             _state.update { it.copy(trackKept = it.trackKept + 1) }
@@ -1179,6 +1192,11 @@ class PlaybackController(
   }
 
   private fun isDead(error: Throwable): Boolean = (error as? ApiError)?.failure == ApiFailure.NotFound
+
+  /** A start names nothing but its source, so a 404 is the id the server forgot altogether, as it
+   *  does when it restarts: the row has to be looked up again exactly like an expired one. */
+  private fun startErrorOf(error: Throwable): PlaybackError =
+    if ((error as? ApiError)?.status == 404) PlaybackError.Expired else errorOf(error)
 
   private fun errorOf(error: Throwable): PlaybackError {
     val failure = (error as? ApiError)?.failure
