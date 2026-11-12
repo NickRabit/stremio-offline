@@ -546,6 +546,8 @@ export interface Settings {
   addonRefreshHours: number;
   /** Local wall-clock start and end of the administrator's download window. */
   downloadWindow?: DownloadWindow | null;
+  /** Shared cap for every queued transfer, in Mbit/s. Absent means no limit. */
+  downloadSpeedLimitMbps?: number;
   /** The server process's IANA time zone; returned to administrators only. */
   serverTimeZone?: string;
   tileSize: TileSize;
@@ -565,7 +567,7 @@ export interface Settings {
  *  only what the ordinary interface behaves on: `secureMode` and `realDebridConfigured`. */
 type AdminOnlySetting =
   | "concurrentDownloads" | "parallelPerProvider" | "downloadSegments"
-  | "downloadWindow" | "serverTimeZone"
+  | "downloadWindow" | "downloadSpeedLimitMbps" | "serverTimeZone"
   | "libraryAutoScan" | "libraryScanPauseOnDownload" | "logLevel"
   | "addonRefreshHours" | "tmdbConfigured";
 /** What GET and PATCH /api/settings answer. An administrator receives every key; everybody

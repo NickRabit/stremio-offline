@@ -16,6 +16,7 @@ import { SourceProfilesSettings } from "./SourceProfilesSettings";
 import { SourceSortOptions } from "./source-rows";
 import { UserManager } from "./UserManager";
 import { resolveStreamSort } from "./streams";
+import { DOWNLOAD_SPEED_LIMITS } from "../../server/src/byte-rate";
 
 export function TmdbSettings({ configured, onSave, onError, restricted = false }: { configured: boolean; onSave: (patch: SettingsPatch) => Promise<void>; onError: (error: unknown) => void; restricted?: boolean }) {
   const [apiKey, setApiKey] = useState("");
@@ -280,7 +281,12 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           <select aria-label={t("settings.segments")} disabled={restricted || !admin} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>
             {[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}
           </select></SettingControl>}
-        {admin && <DownloadWindowSettings settings={settings} restricted={restricted} onSave={onSave}/>}</section>
+        {admin && <DownloadWindowSettings settings={settings} restricted={restricted} onSave={onSave}/>}
+        {admin && <SettingControl title={t("settings.speedLimit")} text={t("settings.speedLimitHint")}>
+          <select aria-label={t("settings.speedLimit")} disabled={restricted} value={settings.downloadSpeedLimitMbps ?? 0} onChange={(event) => void onSave({ downloadSpeedLimitMbps: Number(event.target.value) })}>
+            {DOWNLOAD_SPEED_LIMITS.map((limit) => <option key={limit} value={limit}>{limit === 0 ? t("settings.speedLimitOff") : t("settings.speedLimitValue", { limit })}</option>)}
+          </select>
+        </SettingControl>}</section>
       </>}
       {tab === "sources" && <>
       <section className="panel settings-section source-defaults-section">

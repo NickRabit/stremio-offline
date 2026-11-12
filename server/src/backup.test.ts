@@ -62,6 +62,23 @@ test("a download window survives backup and an invalid one is dropped", () => {
   }
 });
 
+test("a speed limit survives backup and an invalid one is dropped", () => {
+  const settings = { ...defaultSettings(), downloadSpeedLimitMbps: 50 };
+  const backup = createSettingsBackup(settings, []);
+  assert.equal(backup.settings.downloadSpeedLimitMbps, 50);
+  assert.equal(parseSettingsBackup(JSON.parse(JSON.stringify(backup))).settings.downloadSpeedLimitMbps, 50);
+
+  for (const downloadSpeedLimitMbps of [0, 8, -5, "fast", 1.5, null]) {
+    const parsed = parseSettingsBackup({
+      format: "stremio-offline-settings",
+      version: 2,
+      settings: { downloadSpeedLimitMbps },
+      addons: [],
+    });
+    assert.equal("downloadSpeedLimitMbps" in parsed.settings, false);
+  }
+});
+
 test("a backup distinguishes same-name providers by URL and omits installation-local addon keys", () => {
   const addons = [
     {

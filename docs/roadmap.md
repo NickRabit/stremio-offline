@@ -28,7 +28,7 @@ metadata store, or scheduler for each platform.
 
 | Order | Current opportunity | What remains |
 | --- | --- | --- |
-| 4 | Queue controls | Download window shipped; speed limit and completion notice remain. |
+| 4 | Queue controls | Download window and speed limit shipped; completion notice remains. |
 | 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. Quick switching between household members with a PIN, as Plex Home does, belongs to the same design. |
 | Then | Search by cast and crew | A person in the title detail opens what that person made, not a text search for the name: TMDB filmography when a key is set, the owned copies first. See [Search by cast and crew](#search-by-cast-and-crew). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
@@ -315,10 +315,9 @@ new location; ambiguous cases stay untouched.
 
 ### Queue controls
 
-Optional: a night-only window, an aggregate speed limit, and a notice when the
-queue drains. Existing concurrency settings limit simultaneous jobs; they do
-not provide a time window or bandwidth cap. Notices outside the browser are
-proposed under [Notifications](#notifications).
+A night-only window and an aggregate speed limit have shipped. A notice when the
+queue drains remains. Existing concurrency settings limit simultaneous jobs.
+Notices outside the browser are proposed under [Notifications](#notifications).
 
 ### Storage
 

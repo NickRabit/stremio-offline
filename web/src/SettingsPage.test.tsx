@@ -148,6 +148,26 @@ describe("SettingsPage tabs", () => {
     expect(configured.onSave).toHaveBeenCalledWith({ downloadWindow: null });
   });
 
+  it("sets the download speed limit for an administrator", async () => {
+    stubSourceProfiles();
+    const { onSave } = await render({}, false, "admin");
+    await selectTab("Downloads");
+    const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.speedLimit"]}"]`)!;
+    expect(select).not.toBeNull();
+    expect(select.value).toBe("0");
+    await act(async () => { select.value = "20"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(onSave).toHaveBeenCalledWith({ downloadSpeedLimitMbps: 20 });
+
+    await render({ downloadSpeedLimitMbps: 50 }, false, "admin");
+    expect(host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.speedLimit"]}"]`)!.value).toBe("50");
+  });
+
+  it("does not show the speed limit to an ordinary account", async () => {
+    await render({}, false, "user");
+    await selectTab("Downloads");
+    expect(host.querySelector(`select[aria-label="${en["settings.speedLimit"]}"]`)).toBeNull();
+  });
+
   it("does not show the download window to an ordinary account", async () => {
     await render({}, false, "user");
     await selectTab("Downloads");

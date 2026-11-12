@@ -154,4 +154,6 @@ export interface DownloadSnapshot {
   jobs: PublicDownload[];
   halt: QueueHalt | null;
   window: DownloadWindowState | null;
+  /** The shared cap in Mbit/s. Null when downloads are not limited. */
+  speedLimitMbps: number | null;
 }

@@ -328,6 +328,68 @@ test("PATCH /api/settings refuses downloadWindow for an ordinary account", async
   assert.equal(harness.state.settings.downloadWindow, undefined);
 });
 
+test("PATCH /api/settings stores and clears the download speed limit for administrators", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const stored = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "ada",
+    body: { downloadSpeedLimitMbps: 20 },
+  });
+  assert.equal(stored.status, 200);
+  assert.equal(harness.state.settings.downloadSpeedLimitMbps, 20);
+  const read = await (await api(harness.base, "/api/settings", { user: "ada" })).json() as Record<string, unknown>;
+  assert.equal(read.downloadSpeedLimitMbps, 20);
+  const ordinary = await (await api(harness.base, "/api/settings", { user: "carol" })).json() as Record<string, unknown>;
+  assert.equal("downloadSpeedLimitMbps" in ordinary, false);
+
+  const cleared = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "ada",
+    body: { downloadSpeedLimitMbps: 0 },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal("downloadSpeedLimitMbps" in harness.state.settings, false);
+});
+
+test("PATCH /api/settings refuses a speed limit outside the offered values before writing", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const seeded = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "ada",
+    body: { downloadSpeedLimitMbps: 20 },
+  });
+  assert.equal(seeded.status, 200);
+  const before = harness.writes();
+  for (const downloadSpeedLimitMbps of [8, -5, "fast"]) {
+    const response = await api(harness.base, "/api/settings", {
+      method: "PATCH",
+      user: "ada",
+      body: { downloadSpeedLimitMbps },
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.downloadSpeedLimitInvalid");
+  }
+  assert.equal(harness.writes(), before, "nothing reaches store.update");
+  assert.equal(harness.state.settings.downloadSpeedLimitMbps, 20);
+});
+
+test("PATCH /api/settings refuses the speed limit for an ordinary account", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const before = harness.writes();
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: { downloadSpeedLimitMbps: 20 },
+  });
+  assert.equal(response.status, 403);
+  assert.equal(harness.writes(), before);
+  assert.equal(harness.state.settings.downloadSpeedLimitMbps, undefined);
+});
+
 test("PATCH /api/settings answers an ordinary account with the same narrowed view", async (t) => {
   const harness = await mount();
   t.after(harness.close);

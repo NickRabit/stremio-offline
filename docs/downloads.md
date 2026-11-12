@@ -161,6 +161,22 @@ not sent bytes to this machine yet; once one becomes `queued`, it follows the
 same window rules. A playlist assembled by FFmpeg has to restart from zero
 after a window pause because playlists never resume from a partial offset.
 
+### Speed limit
+
+An administrator can cap the queue in **Settings → Downloads**, in Mbit/s.
+The cap is one budget shared by every transfer the queue runs at the same
+time: all jobs, and all segments of a job. Playback is never limited. Changing
+the cap applies to transfers that are already running, within about a second,
+without restarting them.
+
+The limit covers ordinary HTTP sources, Real-Debrid links once they are
+ordinary HTTP, and Jellyfin or Emby remote copies, which use that same
+single-stream path. It does not cover device transfers (the server sending a
+file to a browser) or Real-Debrid's own remote caching while a job is
+`waiting`. A playlist assembled by FFmpeg is not limited either: FFmpeg reads
+the playlist through the server's internal address, and there is no per-byte
+hook on that path.
+
 ### Seasons and whole shows
 
 **To library** on a single source saves exactly that file. Downloading a season

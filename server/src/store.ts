@@ -84,6 +84,8 @@ export interface InstanceSettings {
   addonRefreshHours: number;
   /** Local wall-clock hours during which new transfers may start. Absent means any time. */
   downloadWindow?: DownloadWindow;
+  /** Shared cap for every queued transfer, in Mbit/s. Absent means no limit. */
+  downloadSpeedLimitMbps?: number;
   /** Where a download lands when the addon rule names no library. An empty id falls
    *  back to the first enabled library of the kind, then to the first `mixed` one. */
   defaultMovieLibrary: string; defaultSeriesLibrary: string;

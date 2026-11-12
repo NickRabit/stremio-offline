@@ -52,7 +52,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const render = async (jobs: Download[], window: DownloadWindowState | null, refresh = vi.fn(() => Promise.resolve())) => {
+const render = async (jobs: Download[], window: DownloadWindowState | null, refresh = vi.fn(() => Promise.resolve()), speedLimitMbps: number | null = null) => {
   await act(async () => {
     root.render(<Downloads
       jobs={jobs}
@@ -60,6 +60,7 @@ const render = async (jobs: Download[], window: DownloadWindowState | null, refr
       libraries={[]}
       halt={null}
       queueWindow={window}
+      speedLimitMbps={speedLimitMbps}
       admin={false}
       refresh={refresh}
       onError={vi.fn()}
@@ -104,5 +105,17 @@ describe("Downloads download window", () => {
     await act(async () => { button.click(); await Promise.resolve(); });
     expect(now).toHaveBeenCalledWith("job-1", "now");
     expect(refresh).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Downloads speed limit", () => {
+  it("shows the shared cap while one is set", async () => {
+    await render([], null, vi.fn(() => Promise.resolve()), 20);
+    expect(host.textContent).toContain("Download speed is limited to 20 Mbit/s.");
+  });
+
+  it("says nothing while downloads are not limited", async () => {
+    await render([], null);
+    expect(host.textContent).not.toContain("Download speed is limited");
   });
 });

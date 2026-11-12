@@ -41,6 +41,7 @@ import { readMediaBytes } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 import { subtitleVtt } from "./subtitle-text.js";
 import type { DownloadOrigin, DownloadSnapshot, DownloadStatus, DownloadWindow, DownloadWindowState, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
+import { ByteRateLimiter, BYTES_PER_MBIT } from "./byte-rate.js";
 import { parseDownloadWindow, serverTimeZone, windowOpen } from "./download-window.js";
 import type {
   ExistingLocalCopyLookupResult,
@@ -448,6 +449,8 @@ export interface QueueHooks {
   spaceCheckMs?: number;
   /** How many connections one file is split across. */
   segments?: () => number;
+  /** Bytes per second shared by every running transfer. `0` or absent means no limit. */
+  speedLimit?: () => number;
   /** The backend a remote original copy runs on. Absent means no remote copy can be admitted
    *  or run, which is what every queue built before this feature had. */
   remoteDownload?: RemoteDownloadBackend;
@@ -848,6 +851,8 @@ export class DownloadQueue {
   private readonly stallTransferMs: number;
   private readonly spaceCheckMs: number;
   private readonly segments: () => number;
+  private readonly speedLimit?: () => number;
+  private readonly rate: ByteRateLimiter;
   private readonly downloadWindow?: () => DownloadWindow | undefined;
   private readonly timeZone: () => string;
   private readonly windowCheckMs: number;
@@ -902,6 +907,8 @@ export class DownloadQueue {
     this.stallTransferMs = hooks.stallTransferMs ?? 30_000;
     this.spaceCheckMs = hooks.spaceCheckMs ?? 30_000;
     this.segments = hooks.segments ?? (() => 1);
+    this.speedLimit = hooks.speedLimit;
+    this.rate = new ByteRateLimiter(() => this.speedLimit?.() ?? 0);
     this.downloadWindow = hooks.downloadWindow;
     this.timeZone = hooks.timeZone ?? serverTimeZone;
     this.windowCheckMs = hooks.windowCheckMs ?? 30_000;
@@ -1232,7 +1239,15 @@ export class DownloadQueue {
   }
 
   list(): PublicDownload[] { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
-  snapshot(): DownloadSnapshot { return { jobs: this.list(), halt: this.haltInfo(), window: this.windowState() }; }
+  snapshot(): DownloadSnapshot {
+    const bytesPerSecond = this.speedLimit?.() ?? 0;
+    return {
+      jobs: this.list(),
+      halt: this.haltInfo(),
+      window: this.windowState(),
+      speedLimitMbps: bytesPerSecond > 0 ? bytesPerSecond / BYTES_PER_MBIT : null,
+    };
+  }
 
   windowState(): DownloadWindowState | null {
     const configured = this.downloadWindow?.();
@@ -3464,6 +3479,7 @@ export class DownloadQueue {
         // A source that ignores the end of the range would otherwise write over the next segment.
         const room = segment.end + 1 - position;
         const piece = chunk.length > room ? chunk.subarray(0, room) : chunk;
+        await this.rate.take(piece.length, controller.signal);
         await handle.write(piece, 0, piece.length, position);
         position += piece.length; segment.received += piece.length;
         note(piece.length);
@@ -3477,7 +3493,9 @@ export class DownloadQueue {
    * Assembles a playlist into one file with ffmpeg, copying the streams rather
    * than re-encoding, and renames it in when ffmpeg is done. There is no
    * resuming and no expected size: a playlist states neither, so progress is
-   * the size of the file as it grows.
+   * the size of the file as it grows. The speed limit does not apply: FFmpeg
+   * reads the playlist through the server's internal address, and there is no
+   * per-byte hook on that path.
    */
   private async downloadPlaylist(job: DownloadJob, stream: StreamItem, partial: string, target: string, controller: AbortController) {
     await unlink(partial).catch(() => undefined);
@@ -3983,10 +4001,11 @@ export class DownloadQueue {
         lastProgressAt = this.now();
         watchStall(() => lastProgressAt);
         const guard = this.startRemoteGuard(job, controller, () => { remoteStopped = true; });
-        const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => {
+        const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: async (chunk, output) => {
           // A remote copy re-checks the owner, the grant and the target before every chunk, so a
           // revocation that lands mid-transfer stops the bytes rather than finishing the file.
           if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
+          await this.rate.take(chunk.byteLength, controller.signal);
           note(chunk.byteLength);
           output.enqueue(chunk);
         } });

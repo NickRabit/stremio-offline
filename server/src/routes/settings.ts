@@ -35,6 +35,7 @@ import { clearTrailerCache } from "../trailers.js";
 import type { AddonRecord } from "../types.js";
 import { PERSONAL_SETTINGS, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
+import { DOWNLOAD_SPEED_LIMITS } from "../byte-rate.js";
 import { parseDownloadWindow, serverTimeZone } from "../download-window.js";
 
 /** The instance settings, one person's own preferences and the backup that carries both. */
@@ -449,6 +450,17 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     if (postedDownloadWindow === "invalid") {
       throw new AppError("The download window is not valid.", "err.downloadWindowInvalid", 400);
     }
+    const postedSpeedLimit = req.body.downloadSpeedLimitMbps;
+    let speedLimitTouched = false;
+    let speedLimitUpdate = 0;
+    if (postedSpeedLimit !== undefined) {
+      if (typeof postedSpeedLimit !== "number" || !Number.isFinite(postedSpeedLimit)
+        || !(DOWNLOAD_SPEED_LIMITS as readonly number[]).includes(postedSpeedLimit)) {
+        throw new AppError("The speed limit is not valid.", "err.downloadSpeedLimitInvalid", 400);
+      }
+      speedLimitTouched = true;
+      speedLimitUpdate = postedSpeedLimit;
+    }
     let realDebridToken: string | undefined;
     if (req.body.realDebridToken !== undefined) {
       realDebridToken = normalizeToken(req.body.realDebridToken);
@@ -512,6 +524,10 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.downloadWindow !== undefined) {
         if (postedDownloadWindow === undefined) delete state.settings.downloadWindow;
         else state.settings.downloadWindow = postedDownloadWindow;
+      }
+      if (speedLimitTouched) {
+        if (speedLimitUpdate === 0) delete state.settings.downloadSpeedLimitMbps;
+        else state.settings.downloadSpeedLimitMbps = speedLimitUpdate;
       }
       if (req.body.uiLanguage !== undefined && isUiLanguage(req.body.uiLanguage)) prefs.uiLanguage = req.body.uiLanguage;
       if (req.body.audioLanguage !== undefined) prefs.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? prefs.audioLanguage;
