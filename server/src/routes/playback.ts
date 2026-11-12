@@ -44,7 +44,7 @@ export interface PlaybackDeps extends RouteContext {
   ownerOf(req: express.Request): ResourceOwner;
   playback: PlaybackManager;
   playbackMeta(stream: StreamItem): TrafficMeta;
-  playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string }>;
+  playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string; sourceId?: string }>;
   playbackResponse: <T extends { id: string; url: string }>(value: T) => T;
   prefsOf(req?: express.Request): UserPrefs;
   quietSources: Map<string, number>;
@@ -315,7 +315,9 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         await authorizeShared(stream, owner, controller.signal);
         controller.signal.throwIfAborted();
       }
-      playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });
+      const sourceId = String(req.body?.sourceId ?? "");
+      playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId, sourceId });
+      mediaResources.keep(sourceId, owner.sid);
       if (req.body.capabilities?.airplay === true) airplayAccess.create(started.id, owner, prepared.resourceId);
     } catch (error) {
       try { if (started) await playback.stop(started.id, controller.signal.aborted ? "failed" : "revoked"); }
@@ -366,6 +368,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
   app.post("/api/playback/:id/ping", (req, res) => {
     const id = String(req.params.id);
     guardOwned(id);
+    const owned = playbackOwners.get(id);
+    if (owned?.sourceId) mediaResources.keep(owned.sourceId, owned.owner.sid);
     const paused = req.body?.paused;
     playback.ping(id, typeof paused === "boolean" ? paused : undefined);
     const waitingFor = req.body?.waitingFor;
