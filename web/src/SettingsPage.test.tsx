@@ -120,6 +120,80 @@ describe("SettingsPage tabs", () => {
     expect([...host.querySelectorAll('.section-filter [role="tab"]')].some((candidate) => candidate.textContent === "Services")).toBe(false);
   });
 
+  it("configures the download window for an administrator only", async () => {
+    stubSourceProfiles();
+    const { onSave } = await render({ serverTimeZone: "Europe/Prague" }, false, "admin");
+    await selectTab("Downloads");
+    const mode = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.downloadWindow"]}"]`)!;
+    expect(mode).not.toBeNull();
+    expect(host.textContent).toContain("Europe/Prague");
+    await act(async () => { mode.value = "set"; mode.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(onSave).toHaveBeenCalledWith({ downloadWindow: { start: "01:00", end: "07:00" } });
+
+    const configured = await render({
+      downloadWindow: { start: "01:00", end: "07:00" },
+      serverTimeZone: "Europe/Prague",
+    }, false, "admin");
+    const from = host.querySelector<HTMLInputElement>(`input[aria-label="${en["settings.downloadWindowFrom"]}"]`)!;
+    expect(from.type).toBe("time");
+    expect(from.step).toBe("60");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(from, "02:00");
+      from.dispatchEvent(new Event("input", { bubbles: true }));
+      from.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(configured.onSave).toHaveBeenCalledWith({ downloadWindow: { start: "02:00", end: "07:00" } });
+    const nextMode = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.downloadWindow"]}"]`)!;
+    await act(async () => { nextMode.value = "any"; nextMode.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(configured.onSave).toHaveBeenCalledWith({ downloadWindow: null });
+  });
+
+  it("saves times sent with seconds and says when the window cannot be saved", async () => {
+    stubSourceProfiles();
+    const { onSave } = await render({ downloadWindow: { start: "01:00", end: "07:00" }, serverTimeZone: "Europe/Prague" }, false, "admin");
+    await selectTab("Downloads");
+    const setValue = async (input: HTMLInputElement, value: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const from = host.querySelector<HTMLInputElement>(`input[aria-label="${en["settings.downloadWindowFrom"]}"]`)!;
+    await setValue(from, "02:30:00");
+    expect(onSave).toHaveBeenLastCalledWith({ downloadWindow: { start: "02:30", end: "07:00" } });
+    expect(host.textContent).not.toContain(en["err.downloadWindowInvalid"]);
+    onSave.mockClear();
+    await setValue(from, "07:00");
+    expect(onSave).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(en["err.downloadWindowInvalid"]);
+  });
+
+  it("sets the download speed limit for an administrator", async () => {
+    stubSourceProfiles();
+    const { onSave } = await render({}, false, "admin");
+    await selectTab("Downloads");
+    const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.speedLimit"]}"]`)!;
+    expect(select).not.toBeNull();
+    expect(select.value).toBe("0");
+    await act(async () => { select.value = "20"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(onSave).toHaveBeenCalledWith({ downloadSpeedLimitMbps: 20 });
+
+    await render({ downloadSpeedLimitMbps: 50 }, false, "admin");
+    expect(host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.speedLimit"]}"]`)!.value).toBe("50");
+  });
+
+  it("does not show the speed limit to an ordinary account", async () => {
+    await render({}, false, "user");
+    await selectTab("Downloads");
+    expect(host.querySelector(`select[aria-label="${en["settings.speedLimit"]}"]`)).toBeNull();
+  });
+
+  it("does not show the download window to an ordinary account", async () => {
+    await render({}, false, "user");
+    await selectTab("Downloads");
+    expect(host.querySelector(`select[aria-label="${en["settings.downloadWindow"]}"]`)).toBeNull();
+    expect(host.querySelector(`input[aria-label="${en["settings.downloadWindowFrom"]}"]`)).toBeNull();
+  });
+
   it("opens a stored Services tab on Libraries for an ordinary account", async () => {
     sessionStorage.setItem("stremio-offline-settings-tab", "services");
     await render();

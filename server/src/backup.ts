@@ -14,6 +14,8 @@ import {
 import { parseDownloadRules } from "./download-rules.js";
 import type { StoredSourceProfile } from "./store.js";
 import { STREAM_SORTS } from "./stream-sort.js";
+import { DOWNLOAD_SPEED_LIMITS } from "./byte-rate.js";
+import { parseDownloadWindow } from "./download-window.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 /** 2 adds the library roster, so a rule that names a library survives the trip to another
@@ -102,6 +104,12 @@ export function createSettingsBackup(
   };
 }
 
+/** `0` and anything outside the offered caps restore as absent, which means no limit. */
+function parseDownloadSpeedLimit(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value === 0) return undefined;
+  return (DOWNLOAD_SPEED_LIMITS as readonly number[]).includes(value) ? value : undefined;
+}
+
 function parseSettings(value: unknown): Settings {
   const source = object(value);
   const fallback = defaultSettings();
@@ -132,6 +140,8 @@ function parseSettings(value: unknown): Settings {
   // A personal Home arrangement rides in the backup like every other personal setting; a
   // shape that is not the three arrays is dropped rather than failing the whole import.
   const homeLayout = parseHomeLayout(source.homeLayout);
+  const downloadWindow = parseDownloadWindow(source.downloadWindow);
+  const downloadSpeedLimitMbps = parseDownloadSpeedLimit(source.downloadSpeedLimitMbps);
   return {
     concurrentDownloads: number("concurrentDownloads", 8),
     parallelPerProvider: number("parallelPerProvider", 8),
@@ -149,6 +159,8 @@ function parseSettings(value: unknown): Settings {
     libraryScanPauseOnDownload: boolean("libraryScanPauseOnDownload"),
     secureMode: boolean("secureMode"),
     addonRefreshHours: normalizeRefreshHours(source.addonRefreshHours ?? fallback.addonRefreshHours),
+    ...(downloadWindow === undefined || downloadWindow === "invalid" ? {} : { downloadWindow }),
+    ...(typeof downloadSpeedLimitMbps === "number" ? { downloadSpeedLimitMbps } : {}),
     tileSize: TILE_SIZES.has(tileSize) ? tileSize as Settings["tileSize"] : fallback.tileSize,
     catalogTileShape: TILE_SHAPES.has(catalogTileShape) ? catalogTileShape as Settings["catalogTileShape"] : fallback.catalogTileShape,
     libraryTileShape: TILE_SHAPES.has(libraryTileShape) ? libraryTileShape as Settings["libraryTileShape"] : fallback.libraryTileShape,

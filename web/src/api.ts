@@ -244,7 +244,7 @@ export const api = {
     method: "POST",
     body: JSON.stringify({ title, type, episodes, selection, media, ...(target ? { target } : {}), ...(origin ? { origin } : {}) }),
   }),
-  downloadAction: (id: string, action: "pause" | "resume" | "retry") => request<void>(`/api/downloads/${id}/${action}`, { method: "POST" }),
+  downloadAction: (id: string, action: "pause" | "resume" | "retry" | "now") => request<void>(`/api/downloads/${id}/${action}`, { method: "POST" }),
   moveDownload: (id: string, direction: -1 | 1) => request<void>(`/api/downloads/${id}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
   removeDownload: (id: string) => request<void>(`/api/downloads/${id}`, { method: "DELETE" }),
   clearCompleted: () => request<void>("/api/downloads", { method: "DELETE" }),
