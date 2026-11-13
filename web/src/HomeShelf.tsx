@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronRight, Shuffle, TriangleAlert } from "lucide-react";
 import { HomeCard, type HomeCardActions } from "./HomeCard";
 import { showAllTarget, type ShowAllTarget } from "./home-cards";
@@ -56,13 +56,13 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
   const strip = useRef<HTMLDivElement>(null);
   const [near, setNear] = useState(false);
   const cards = state?.items.length ?? 0;
-  // How many cards get their picture before the shelf is moved: those the strip shows, and two
-  // more. The rest come once it is scrolled, touched or focused.
+  // How many cards a far shelf mounts, and how many get their picture before the shelf is moved.
+  // Measured before paint, so a strip wider than EAGER_CARDS cards never shows a gap filling in.
   const [shown, setShown] = useState(EAGER_CARDS);
   const [moved, setMoved] = useState(false);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = strip.current;
-    if (!near || !element) return;
+    if (!element) return;
     const card = element.firstElementChild as HTMLElement | null;
     const width = card?.getBoundingClientRect().width ?? 0;
     if (width > 0) setShown(Math.ceil(element.clientWidth / width) + 2);
@@ -123,7 +123,7 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
             ? skeleton
             : <div ref={strip} className={`resume-strip${state.status === "loading" ? " refreshing" : ""}`} aria-busy={state.status === "loading" || undefined} data-shape={shape}
                 onScroll={move} onPointerDown={move} onFocus={move}>
-                {state.items.map((card, index) => <HomeCard key={card.key} card={card} shape={shape} actions={actions}
+                {(near ? state.items : state.items.slice(0, shown)).map((card, index) => <HomeCard key={card.key} card={card} shape={shape} actions={actions}
                   eager={near && index < EAGER_CARDS} art={near && (moved || index < shown)}/>)}
               </div>}
         </>}

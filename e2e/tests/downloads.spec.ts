@@ -19,9 +19,12 @@ test("queues a source and the job reaches the download list", async ({ page }) =
   const detail = page.locator(".detail-panel");
   await expect(detail.getByRole("heading", { name: "Zdroje" })).toBeVisible();
   await detail.locator(".stream-list button").first().click();
+  // The file is tiny, so the queue-finished toast can replace "Přidáno do fronty." at once;
+  // the admission answer is what says the job was queued.
+  const queued = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/downloads");
   await detail.getByRole("button", { name: "Do knihovny" }).click();
 
-  await expect(page.getByText("Přidáno do fronty.")).toBeVisible();
+  expect((await queued).ok()).toBe(true);
 
   await page.getByRole("button", { name: "Stahování", exact: true }).click();
   await page.locator(".queue-history-toggle").click();
