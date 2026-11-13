@@ -948,6 +948,25 @@ test("a refused remembered addon source falls back and replaces the record", asy
   ]);
 });
 
+test("another session of the same link asks the remembered address at once", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.avi" }); return void res.end(); }
+    answerPart(req, res, file);
+  });
+  const earlier = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+  await (await fetch(`${harness.base}/api/media/${earlier}`, { headers: { "x-user": "ada", range: "bytes=0-127" } })).arrayBuffer();
+  const later = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+  assert.notEqual(later, earlier);
+
+  const read = await fetch(`${harness.base}/api/media/${later}`, { headers: { "x-user": "ada", range: "bytes=128-255" } });
+  assert.equal(read.status, 206);
+  assert.deepEqual(Buffer.from(await read.arrayBuffer()), file.subarray(128, 256));
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.avi", "/film.avi"]);
+});
+
 test("a remembered addon source answering with a page falls back and replaces the record", async (t) => {
   const harness = await mount();
   t.after(harness.close);

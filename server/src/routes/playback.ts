@@ -640,7 +640,9 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     const sourceUrl = await validateRemoteUrl(raw);
     countBytes(res, playbackMeta(stream), ownerNow);
     const cacheKey = `${resource.parent ?? resource.id}:${typeof req.params.signed === "string" ? req.params.signed : ""}`;
-    const landingKey = typeof req.params.signed === "string" ? undefined : cacheKey;
+    // Kept under the link itself, not the session's resource: the film's header is read by the
+    // probe, then by the player, and again by the next session, and each would follow the redirect.
+    const landingKey = typeof req.params.signed === "string" ? undefined : raw;
     const rememberLanding = (url: string) => {
       if (!landingKey) return;
       if (!url || url === sourceUrl.toString()) sourceLanding.forget(landingKey);
