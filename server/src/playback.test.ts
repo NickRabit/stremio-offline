@@ -1866,13 +1866,8 @@ const fs = require("fs"), path = require("path");
 const control = ${JSON.stringify(control)};
 const output = path.dirname(process.argv[process.argv.length - 1]);
 const playlist = ${JSON.stringify(playlist)};
-fs.writeFileSync(path.join(output, "init.mp4"), "init");
-for (let index = 0; index < ${durations.length}; index += 1) {
-  fs.writeFileSync(path.join(output, "seg-0-" + String(index).padStart(6, "0") + ".m4s"), "segment-" + index);
-}
-fs.writeFileSync(path.join(output, "index-0.m3u8"), playlist);
-fs.writeFileSync(path.join(output, "master.m3u8"), "#EXTM3U\\n");
-process.stdout.write("out_time_us=2000000\\nprogress=continue\\n");
+// The test signals as soon as the playlist is out: the handler must already be there, or the
+// default SIGUSR1 action kills the process.
 process.on("SIGUSR1", () => {
   const command = JSON.parse(fs.readFileSync(control, "utf8"));
   const ended = command.end === true ? "end" : "continue";
@@ -1880,6 +1875,18 @@ process.on("SIGUSR1", () => {
     if (command.end === true) process.exit(0);
   });
 });
+// Written aside and renamed: a restart may read files a test placed here while this rewrites them.
+const write = (name, content) => {
+  fs.writeFileSync(path.join(output, name + ".tmp"), content);
+  fs.renameSync(path.join(output, name + ".tmp"), path.join(output, name));
+};
+write("init.mp4", "init");
+for (let index = 0; index < ${durations.length}; index += 1) {
+  write("seg-0-" + String(index).padStart(6, "0") + ".m4s", "segment-" + index);
+}
+write("index-0.m3u8", playlist);
+write("master.m3u8", "#EXTM3U\\n");
+process.stdout.write("out_time_us=2000000\\nprogress=continue\\n");
 setInterval(() => {}, 1000);
 `);
   await chmod(fake, 0o755);
