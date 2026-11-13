@@ -280,6 +280,8 @@ class PlaybackController(
   private var seekJob: Job? = null
   private var trackJob: Job? = null
   private var pendingSeek: Double? = null
+  private var shownSeekTarget: Double? = null
+  private var shownSeekToken = 0L
   private var sequence = 0
   /** Bumped by every start and stop, so a late answer from a superseded request is dropped. */
   private var generation = 0
@@ -289,6 +291,10 @@ class PlaybackController(
 
   /** The absolute position, converted through the HLS offset the way the spec defines it. */
   val position: Double get() = absolute(lastPosition)
+
+  /** Where the timeline stands for the viewer: the target of a seek the server has not answered
+   *  yet, otherwise [position]. Only the screen's timeline reads it. */
+  val shownPosition: Double get() = shownSeekTarget ?: position
 
   /** Where a restart goes: the place it began at, or the position the player is at now. */
   private val restartPosition: Double get() = restartAt ?: position
@@ -714,18 +720,22 @@ class PlaybackController(
       report(ReportEvent.Progress, reported, position, paused = !playing)
       return
     }
+    val token = ++shownSeekToken
+    shownSeekTarget = absolute
     pendingSeek = absolute
     seekJob?.cancel()
+    val mine = generation
     seekJob = scope.launch {
       delay(SEEK_DEBOUNCE_MS)
+      if (stopped || mine != generation || token != shownSeekToken) return@launch
       val target = pendingSeek ?: return@launch
       pendingSeek = null
-      val mine = generation
       val stamp = ++sequence
       val id = sessionId ?: return@launch
       val descriptor = runCatching { api.seekPlayback(id, target) }.getOrElse { error ->
         if (error is CancellationException) throw error
-        if (mine == generation) {
+        if (mine == generation && token == shownSeekToken) {
+          shownSeekTarget = null
           if (isDead(error)) onDeadSession()
           else {
             AppLog.warn("Seek failed", mapOf(
@@ -737,9 +747,15 @@ class PlaybackController(
         }
         return@launch
       }
-      if (stopped || mine != generation || stamp != sequence) return@launch
+      if (stopped || mine != generation || token != shownSeekToken) return@launch
+      // A track change overtook the answer: the seek is dropped, and so is its target.
+      if (stamp != sequence) {
+        shownSeekTarget = null
+        return@launch
+      }
       // The server kept the stream it had: the player must not move, and the position stays put.
       if (descriptor.seekRestored && descriptor.id == id && descriptor.url == _state.value.url) {
+        shownSeekTarget = null
         _state.update { it.copy(seekKept = it.seekKept + 1) }
         return@launch
       }
@@ -1055,6 +1071,7 @@ class PlaybackController(
     seekJob?.cancel(); seekJob = null
     trackJob?.cancel(); trackJob = null
     pendingSeek = null
+    shownSeekTarget = null
   }
 
   private fun deleteSession(id: String) {
@@ -1100,6 +1117,7 @@ class PlaybackController(
     /** True only for a `/track` answer to a subtitle the viewer picked. */
     subtitleChange: Boolean = false,
   ) {
+    shownSeekTarget = null
     sessionId = descriptor.id
     restartAt = null
     playlist = descriptor.playlist

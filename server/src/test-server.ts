@@ -10,6 +10,8 @@ export interface SpawnedServer {
   base: string;
   /** Everything the server wrote to stderr, for assertion messages. */
   log(): string;
+  /** Resolves once the server has written [text]: a log line can trail the response it describes. */
+  logged(text: string, timeout?: number): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -24,7 +26,14 @@ export async function spawnServer(env: Record<string, string>, timeout = 30_000)
     env: { ...process.env, ...env, PORT: "0", HOST: "127.0.0.1", LOG_LEVEL: "INFO", LOG_STDOUT: "1" },
   });
   let log = "";
-  child.stderr?.on("data", (chunk) => { log += String(chunk); });
+  const watchers = new Set<() => void>();
+  child.stderr?.on("data", (chunk) => { log += String(chunk); for (const check of [...watchers]) check(); });
+  const logged = (text: string, wait = 10_000) => new Promise<void>((resolve, reject) => {
+    if (log.includes(text)) return resolve();
+    const check = () => { if (log.includes(text)) { clearTimeout(timer); watchers.delete(check); resolve(); } };
+    const timer = setTimeout(() => { watchers.delete(check); reject(new Error(`The server never logged ${JSON.stringify(text)}\n${log}`)); }, wait);
+    watchers.add(check);
+  });
 
   const stop = async () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
@@ -54,5 +63,5 @@ export async function spawnServer(env: Record<string, string>, timeout = 30_000)
     child.stdout?.on("data", onData);
   }).catch(async (error) => { await stop(); throw error; });
 
-  return { child, base: `http://127.0.0.1:${port}`, log: () => log, stop };
+  return { child, base: `http://127.0.0.1:${port}`, log: () => log, logged, stop };
 }
