@@ -91,6 +91,7 @@ says who or what is holding it.
 | `paused` (`storage`) | A disk filled up. The whole queue halts until every halted job's disk has room again. |
 | `paused` (`library`) | The library the rule or the chosen destination names is switched off, read-only or away; a removed library waits with a deadline. |
 | `paused` (`permission`) | The account behind the job may no longer queue downloads. Its place is kept for when the right returns. |
+| `paused` (`schedule`) | The configured download window closed while the job was running. Its partial transfer is kept for the next window; a person, storage or an access rule can still hold it separately. |
 | `completed` | The transfer finished and the file was published into the library. |
 | `failed` | The job gave up: an error that will not get better, or the retry budget is spent. |
 
@@ -115,12 +116,14 @@ says who or what is holding it.
 | `downloading` | `paused` (`storage`) | A write hits a full disk | The whole queue halts, and the halted rows resume together once every disk they write to has room. |
 | `downloading` | `paused` (`library`) | The target library went away or its record is gone | The transfer stops; the `.part` is kept and the job waits for the library, with a deadline for a removed one. |
 | `downloading`/`checking` | `paused` (`permission`) | The account behind the job is disabled, or loses the right to queue it (its download permission revoked, or a source addon or library it used withdrawn) | The job drops out of the running set but keeps its place; Resume re-checks the right. |
+| `downloading`/`checking` | `paused` (`schedule`) | The configured download window closes | The transfer is aborted; its `.part`, received size and segment offsets are kept. |
 | `downloading`/`checking` | `failed` | An error that will not get better, or the retries are spent | The `.part` is kept, so Retry can resume where it stopped. |
 | `paused` (`user`) / `failed` | `queued` (or `waiting` for a torrent) | **Resume** / **Retry** | The job re-enters the queue; Retry clears the retry counter and re-reads the rule's selection. |
 | `paused` (`permission`) | `queued` | **Resume** once the right is back | The right is read again; a job that is still refused stays paused. |
 | `paused` (`library`) | `queued`/`waiting` | The library is usable again (checked on a timer) | The job continues where it was; a removed library past its deadline falls back to the default for its kind. |
 | `paused` (`library`) | `failed` | A chosen destination library is gone past its deadline, or no library takes the kind | A destination picked by hand is never redirected; a rule with no home fails rather than landing somewhere unasked for. |
 | `paused` (`storage`) | `queued` | The disk has room again | The whole halted group resumes. |
+| `paused` (`schedule`) | `queued` | The next download window opens, or **Download now** is chosen | The job waits for a free slot; **Download now** also makes that one job exempt from later window boundaries. |
 | `queued`/`waiting`/`checking`/`downloading`/`paused`/`failed` | — | **Remove** on an unfinished job | It leaves the queue; its `.part` and subtitle `.part` are deleted; a follow that queued it records a skip. |
 | `completed` | — | **Remove** on a finished row | Only the history row goes; the published file stays. |
 | any unfinished | — | The owning account is deleted | Its unfinished jobs and their `.part` files are removed; completed files stay in the library. |
@@ -136,6 +139,60 @@ Three things are easy to confuse with a state but are not:
   `waiting` job resumes polling Real-Debrid, a `paused` job keeps its reason (a
   storage halt is rebuilt), and every `.part` is kept, so the transfer resumes
   by Range from where it stopped.
+
+### Download window
+
+An administrator can set a local wall-clock window in **Settings → Downloads**.
+Outside it the queue starts no new transfer, and a running single-stream or
+segmented transfer pauses with reason `schedule`; its `.part`, received bytes
+and segment offsets are kept. It continues by itself when the window opens
+again. A window whose start is later than its end crosses midnight.
+
+The times use the server process's time zone, shown next to the setting. The
+queue compares the current local hour and minute on a short timer, so daylight
+saving changes simply make the same wall-clock window run for one hour less in
+spring or one hour longer in autumn.
+
+**Download now** marks one waiting job as exempt, starts it even while the
+window is closed and keeps it running through later closing boundaries.
+Concurrency limits still apply. A job paused by a person remains theirs; the
+window never resumes it. `waiting` jobs are untouched because Real-Debrid has
+not sent bytes to this machine yet; once one becomes `queued`, it follows the
+same window rules. A playlist assembled by FFmpeg has to restart from zero
+after a window pause because playlists never resume from a partial offset.
+
+### Speed limit
+
+An administrator can cap the queue in **Settings → Downloads**, in Mbit/s.
+The cap is one budget shared by every transfer the queue runs at the same
+time: all jobs, and all segments of a job. Playback is never limited. Changing
+the cap applies to transfers that are already running, within about a second,
+without restarting them.
+
+The limit covers ordinary HTTP sources, Real-Debrid links once they are
+ordinary HTTP, and Jellyfin or Emby remote copies, which use that same
+single-stream path. It does not cover device transfers (the server sending a
+file to a browser) or Real-Debrid's own remote caching while a job is
+`waiting`. A playlist assembled by FFmpeg is not limited either: FFmpeg reads
+the playlist through the server's internal address, and there is no per-byte
+hook on that path.
+
+### When the queue finishes
+
+A queue run starts when work becomes active and ends when nothing is left that
+can continue on its own. Jobs waiting in the queue, downloading, checking, or
+paused for storage or the download window keep the run open. Pauses set by a
+person, a missing library, or a missing permission do not: they wait for
+something outside the queue.
+
+When a run finishes, every account whose jobs completed or failed gets one
+in-app notice with its own counts. The notice also names that account's jobs
+that are still paused for a person or an outside change. It appears on the next
+page load as well, stays available for 24 hours, and is never written to disk.
+Jobs removed after finishing still count because ownership is captured when
+the run ends. Each account keeps its own latest notice, so a later run that
+only touched somebody else's downloads does not take an unread one away; an
+administrator sees the latest run over everybody's jobs.
 
 ### Seasons and whole shows
 

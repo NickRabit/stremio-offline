@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -243,6 +244,9 @@ fun PlayerScreen(
   // The row a switch asked for, so a refusal for an expired id can find it again in a fresh list.
   var switchStream by remember { mutableStateOf<StreamDto?>(null) }
   var expiredRetried by remember { mutableStateOf(false) }
+  // The row the session last played. A start that fails names no source, and a renewed list no
+  // longer carries the old id, so the row itself is what a fresh list is searched for.
+  var playedStream by remember { mutableStateOf<StreamDto?>(null) }
   // The correction lives with this playback, not beyond it.
   var delaySeconds by remember(target.key) { mutableDoubleStateOf(0.0) }
   var cues by remember { mutableStateOf<List<VttCue>>(emptyList()) }
@@ -610,6 +614,7 @@ fun PlayerScreen(
   // because an addon source chosen over a library file leaves that file's path on the session.
   val playingSource = offeredSources.firstOrNull { it.sourceId.isNotBlank() && it.sourceId == state.sourceId }
     ?: offeredSources.firstOrNull { Streams.isLocalStream(it) && it.localPath != null && it.localPath == currentTarget.path }
+  SideEffect { if (playingSource != null) playedStream = playingSource }
   val filters = sourceFilters.filters(settings.streamSort)
   val lists = remember(offeredSources, sourceAddons, filters, settings, currentTarget.remoteItem) {
     playerSourceLists(
@@ -702,16 +707,41 @@ fun PlayerScreen(
     }
   }
 
+  /** A restart of the playing row the server refused the same way: coming back from standby, or a
+   *  recovery late in a long play, resends an id listed when the play began. The same version is
+   *  found in a fresh list and resumed where the player left off. */
+  fun renewPlaying() {
+    val from = currentTarget
+    val played = playedStream
+    val stableKey = from.stableKey?.takeIf { it.isNotBlank() }
+    scope.launch {
+      // A library file is minted from its path; every other row is found in a fresh list.
+      val sourceId = from.path?.let { path -> runCatching { api.librarySource(path) }.getOrNull()?.sourceId } ?: run {
+        if (played == null && stableKey == null) return@launch
+        renewSources().join()
+        val fresh = renewedSources?.streams?.firstOrNull { row ->
+          played?.let { sameSource(it, row) } ?: (row.stableKey == stableKey)
+        }
+        if (fresh != null) playedStream = fresh
+        fresh?.sourceId
+      }
+      if (sourceId.isNullOrBlank() || currentTarget !== from || switchTarget != null) return@launch
+      readAccount()
+      controller.retry(addonSubtitles, settings.audioLanguage, settings.subtitleLanguage, sourceId = sourceId)
+    }
+  }
+
   LaunchedEffect(state.error) {
-    if (state.error == PlaybackError.Expired && switchTarget != null && !expiredRetried) {
+    if (state.error == PlaybackError.Expired && !expiredRetried) {
       expiredRetried = true
-      renewSwitch()
+      if (switchTarget != null) renewSwitch() else renewPlaying()
     }
   }
 
   // Once a session has landed, the switch it came from is no longer something to go back from.
   LaunchedEffect(state.started) {
     if (state.started) {
+      expiredRetried = false
       switchTarget = null
       previousTarget = null
       switchStream = null
@@ -997,8 +1027,7 @@ fun PlayerScreen(
   // the full buffer travels with the next diagnostics bundle from Settings.
   LaunchedEffect(state.error) {
     val error = state.error ?: return@LaunchedEffect
-    val kind = error::class.simpleName.orEmpty()
-    if (AppLog.allowWarn("player:$kind")) api.clientLog("WARN", "Player error: $kind")
+    if (AppLog.allowWarn("player:${error.wire}")) api.clientLog("WARN", "Player error: ${error.wire}")
   }
 
   DisposableEffect(Unit) {
@@ -1253,6 +1282,8 @@ fun PlayerScreen(
             if (failed != null) {
               // An expired id would only be refused again: the row is looked up under its new one.
               if (state.error == PlaybackError.Expired) renewSwitch() else startSwitch(failed, switchAt)
+            } else if (state.error == PlaybackError.Expired) {
+              renewPlaying()
             } else {
               scope.launch {
                 playerRetry(

@@ -606,6 +606,17 @@ describe("useLibrarySources: rows the server may have dropped", () => {
     expect(latest!.streams.some((row) => row.sourceId === found!.sourceId)).toBe(true);
   });
 
+  it("asks every answered group for a row that stands in none of them under its old id", async () => {
+    await render({ open: true });
+    const listed = latest!.streams.find((row) => row.stableKey === "key-b")!;
+    const handedOver = { ...listed, sourceId: "listed-before-the-play" };
+    let found: Stream | null = null;
+    await act(async () => { found = await latest!.refind(handedOver); });
+    expect(calls.addon).toHaveLength(4);
+    expect(found!.stableKey).toBe("key-b");
+    expect(found!.sourceId).not.toBe(listed.sourceId);
+  });
+
   it("answers null when the group no longer lists the row", async () => {
     await render({ open: true });
     const old = latest!.streams.find((row) => row.stableKey === "key-a")!;

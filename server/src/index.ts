@@ -259,7 +259,7 @@ await remoteImages.load();
 void images.preheat();
 void preheatFileSnaps(fileSnaps, artworks.hotFiles());
 void remoteImages.preheat();
-const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
+const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string; sourceId?: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
 /** Where a download with no library of its own goes: the default for the kind, resolved the
  *  one way the door, a follow's automatic rule and the queue all resolve it. */
@@ -399,6 +399,8 @@ const existingLocalCopyDeps = (): ExistingLocalCopyDeps => ({
 });
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, {
   segments: () => store.settings().downloadSegments ?? 1,
+  downloadWindow: () => store.settings().downloadWindow,
+  speedLimit: () => (store.settings().downloadSpeedLimitMbps ?? 0) * 125_000,
   libraries: () => store.libraries(),
   defaultLibrary: downloadDefaultLibrary,
   legacyOwnerId: migratedAdminId,
