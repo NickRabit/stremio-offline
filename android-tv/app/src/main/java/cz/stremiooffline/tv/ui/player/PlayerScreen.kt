@@ -1105,7 +1105,12 @@ fun PlayerScreen(
     seekKept = state.seekKept,
     trackKept = state.trackKept,
     modal = tracksOpen || diagnosticsOpen || sourcesOpen || qualityOpen || chaptersOpen || nextCard || state.error != null,
-    onSeek = { controller.seekTo(it) },
+    // The timeline takes the target at once: a press inside the next poll would otherwise be
+    // counted from the old place.
+    onSeek = {
+      controller.seekTo(it)
+      timelinePosition = controller.shownPosition
+    },
     onTogglePause = {
       if (exoPlayer.playWhenReady) exoPlayer.pause()
       else {

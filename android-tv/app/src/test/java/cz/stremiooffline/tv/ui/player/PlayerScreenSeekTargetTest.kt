@@ -121,7 +121,6 @@ class PlayerScreenSeekTargetTest {
 
     compose.onNode(isFocused()).performKeyInput { pressKey(Key.DirectionRight) }
     advanceUntil { api.seekTimes.isNotEmpty() }
-    advance(300)
     waitForPosition("01:50")
     assertEquals(listOf(110.0), api.seekTimes)
 
