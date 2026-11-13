@@ -200,6 +200,98 @@ describe("request", () => {
   });
 });
 
+describe("early startup GETs", () => {
+  const isolatedApi = async () => {
+    vi.resetModules();
+    return import("./api");
+  };
+
+  it("asks settings early only once /api/auth/me names an account", async () => {
+    const { startStartupGets } = await isolatedApi();
+    const urls = () => fetchMock.mock.calls.map((call) => String(call[0]));
+    fetchMock.mockImplementation(async (url: string) => url === "/api/auth/me" ? json({ setup: true, language: "en" }) : json({}));
+    startStartupGets();
+    await vi.waitFor(() => expect(urls()).toEqual(expect.arrayContaining(["/api/auth/me", "/api/status"])));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(urls()).not.toContain("/api/settings");
+
+    const second = await isolatedApi();
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async (url: string) => url === "/api/auth/me" ? json({ username: "alice", role: "admin" }) : json({}));
+    second.startStartupGets();
+    await vi.waitFor(() => expect(urls()).toContain("/api/settings"));
+  });
+
+  it("hands an early GET to one reader and then fetches again", async () => {
+    const { api, startEarlyGets } = await isolatedApi();
+    fetchMock
+      .mockResolvedValueOnce(json({ username: "alice", role: "admin", language: "en" }))
+      .mockResolvedValueOnce(json({ username: "alice", role: "admin", language: "en" }));
+
+    startEarlyGets(["/api/auth/me"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await expect(api.me()).resolves.toMatchObject({ username: "alice" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await expect(api.me()).resolves.toMatchObject({ username: "alice" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands an early 401 to its first reader without asking twice, and reports no unhandled rejection", async () => {
+    const { api, startEarlyGets } = await isolatedApi();
+    fetchMock
+      .mockResolvedValueOnce(json({ error: "Not signed in" }, 401))
+      .mockResolvedValueOnce(json({ username: "alice", role: "admin", language: "en" }));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      startEarlyGets(["/api/auth/me"]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      await expect(api.me()).rejects.toMatchObject({ status: 401 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await expect(api.me()).resolves.toMatchObject({ username: "alice" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("does not hand out an early GET asked before a write", async () => {
+    const { api, startEarlyGets } = await isolatedApi();
+    fetchMock
+      .mockResolvedValueOnce(json({ username: "alice", role: "admin", language: "en" }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(json({ username: "alice", role: "admin", language: "en" }));
+
+    startEarlyGets(["/api/auth/me"]);
+    await api.logout();
+    await expect(api.me()).resolves.toMatchObject({ username: "alice" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("drops an early GET nobody takes within ten seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const { api, startEarlyGets } = await isolatedApi();
+      fetchMock
+        .mockResolvedValueOnce(json({ username: "alice", role: "admin", language: "en" }))
+        .mockResolvedValueOnce(json({ username: "alice", role: "admin", language: "en" }));
+
+      startEarlyGets(["/api/auth/me"]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(api.me()).resolves.toMatchObject({ username: "alice" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("query building", () => {
   const url = (call = 0) => fetchMock.mock.calls[call][0] as string;
   const catalog = { addonKey: "alpha", addonName: "Alpha", type: "movie", id: "top" };

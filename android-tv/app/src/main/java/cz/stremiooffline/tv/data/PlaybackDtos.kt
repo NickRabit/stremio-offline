@@ -81,6 +81,12 @@ data class ShuffleNextDto(
 /** One `POST /api/playback/:id/track` change, with the absolute position it applies at. */
 sealed interface TrackChange {
   val time: Double
+  /** A stable name for the logs; class names do not survive a release build's minification. */
+  val wire: String get() = when (this) {
+    is Audio -> "audio"
+    is Subtitle -> "subtitle"
+    is Quality -> "quality"
+  }
   /** [subtitleOff] also clears the server's own subtitle, so a conversion restart cannot take an
    *  app-drawn addon subtitle with it. */
   data class Audio(val index: Int, override val time: Double, val subtitleOff: Boolean = false) : TrackChange

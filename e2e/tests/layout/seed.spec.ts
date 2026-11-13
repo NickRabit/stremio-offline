@@ -34,8 +34,11 @@ test("the screens are taken against the fixture titles", async ({ page, request 
     await page.getByRole("button", { name: /Zkušební film/ }).click();
     const detail = page.locator(".detail-panel");
     await detail.locator(".stream-list button").first().click();
+    // The file is tiny, so the queue-finished toast can replace "Přidáno do fronty." at once;
+    // the admission answer is what says the job was queued.
+    const queued = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/downloads");
     await detail.getByRole("button", { name: "Do knihovny" }).click();
-    await expect(page.getByText("Přidáno do fronty.")).toBeVisible();
+    expect((await queued).ok()).toBe(true);
     await expect.poll(landed, { timeout: 60_000, message: "the queued download never landed in the library" }).toBeGreaterThanOrEqual(1);
   }
 

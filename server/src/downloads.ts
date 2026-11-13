@@ -1,5 +1,6 @@
 import { AppError, messageKeyOf } from "./errors.js";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createWriteStream as fsCreateWriteStream } from "node:fs";
 import { mkdir, open, rename, stat, statfs, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
@@ -40,7 +41,9 @@ import {
 import { readMediaBytes } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 import { subtitleVtt } from "./subtitle-text.js";
-import type { DownloadOrigin, DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
+import type { DownloadDrainView, DownloadOrigin, DownloadSnapshot, DownloadStatus, DownloadWindow, DownloadWindowState, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
+import { ByteRateLimiter, BYTES_PER_MBIT } from "./byte-rate.js";
+import { parseDownloadWindow, serverTimeZone, windowOpen } from "./download-window.js";
 import type {
   ExistingLocalCopyLookupResult,
   ExistingLocalCopyReference,
@@ -176,6 +179,8 @@ export interface DownloadJob {
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
   /** Set only when a queued profile job finishes by pointing at an adequate existing file. */
   reusedLocalCopy?: true;
+  /** A one-off Download now instruction that outlives pauses but not the job itself. */
+  windowExempt?: true;
 }
 
 /** The names a viewer may see for where a job's file comes from. */
@@ -393,6 +398,22 @@ export interface QueuedExistingLocalCopyLookup {
   sourceAdmission: SourceAdmissionSnapshotV1;
 }
 
+type DrainEntry = { id: string; owner: string | undefined };
+
+type DrainRun = {
+  startedAt: string;
+  completed: Map<string, DrainEntry>;
+  failed: Map<string, DrainEntry>;
+};
+
+type QueueDrain = {
+  id: string;
+  at: string;
+  completed: DrainEntry[];
+  failed: DrainEntry[];
+  paused: DrainEntry[];
+};
+
 export type PendingDownloadOutcome =
   | { outcome: "queued"; job: Omit<PublicDownload, "order"> }
   | { outcome: "presentLocally"; copy: ExistingLocalCopyReference }
@@ -417,6 +438,9 @@ type PendingSource = {
 
 export interface QueueHooks {
   now?: () => number;
+  downloadWindow?: () => DownloadWindow | undefined;
+  timeZone?: () => string;
+  windowCheckMs?: number;
   /** Every configured library, so a qualified target can be turned back into a root. */
   libraries?: () => LibraryRecord[];
   /** Where a rule that names no library goes: the default for the kind. */
@@ -442,6 +466,8 @@ export interface QueueHooks {
   spaceCheckMs?: number;
   /** How many connections one file is split across. */
   segments?: () => number;
+  /** Bytes per second shared by every running transfer. `0` or absent means no limit. */
+  speedLimit?: () => number;
   /** The backend a remote original copy runs on. Absent means no remote copy can be admitted
    *  or run, which is what every queue built before this feature had. */
   remoteDownload?: RemoteDownloadBackend;
@@ -802,6 +828,13 @@ export class DownloadQueue {
   private saveTimer?: NodeJS.Timeout;
   private retryTimer?: NodeJS.Timeout;
   private saveRetryTimer?: NodeJS.Timeout;
+  private windowTimer?: NodeJS.Timeout;
+  private lastBusy?: boolean;
+  private run?: DrainRun;
+  private lastDrain?: QueueDrain;
+  /** Each account's latest run, so a later run for somebody else does not take an unread
+   *  notice away. One entry per account, in memory only. */
+  private ownerDrains = new Map<string, QueueDrain>();
   private saveFailing = false;
   private persistenceFrozen = false;
   private readonly saveRetryMs: number;
@@ -841,6 +874,12 @@ export class DownloadQueue {
   private readonly stallTransferMs: number;
   private readonly spaceCheckMs: number;
   private readonly segments: () => number;
+  private readonly speedLimit?: () => number;
+  private readonly rate: ByteRateLimiter;
+  private readonly downloadWindow?: () => DownloadWindow | undefined;
+  private readonly timeZone: () => string;
+  private readonly windowCheckMs: number;
+  private lastWindowOpen?: boolean;
   private readonly retryDelay: (retryCount: number, retryAfterMs?: number) => number;
   private debrid?: DebridEngine;
   private readonly rememberDebridReady?: QueueHooks["rememberDebridReady"];
@@ -891,6 +930,11 @@ export class DownloadQueue {
     this.stallTransferMs = hooks.stallTransferMs ?? 30_000;
     this.spaceCheckMs = hooks.spaceCheckMs ?? 30_000;
     this.segments = hooks.segments ?? (() => 1);
+    this.speedLimit = hooks.speedLimit;
+    this.rate = new ByteRateLimiter(() => this.speedLimit?.() ?? 0);
+    this.downloadWindow = hooks.downloadWindow;
+    this.timeZone = hooks.timeZone ?? serverTimeZone;
+    this.windowCheckMs = hooks.windowCheckMs ?? 30_000;
     this.retryDelay = hooks.retryDelay ?? retryDelayMs;
     this.debrid = hooks.debrid;
     this.rememberDebridReady = hooks.rememberDebridReady;
@@ -930,7 +974,8 @@ export class DownloadQueue {
     if (this.saveRetryTimer) clearTimeout(this.saveRetryTimer);
     if (this.spaceWatch) clearInterval(this.spaceWatch);
     if (this.libraryWatch) clearInterval(this.libraryWatch);
-    this.saveTimer = undefined; this.retryTimer = undefined; this.saveRetryTimer = undefined; this.spaceWatch = undefined; this.libraryWatch = undefined;
+    if (this.windowTimer) clearInterval(this.windowTimer);
+    this.saveTimer = undefined; this.retryTimer = undefined; this.saveRetryTimer = undefined; this.spaceWatch = undefined; this.libraryWatch = undefined; this.windowTimer = undefined;
     for (const timer of this.debridTimers.values()) clearTimeout(timer);
     this.debridTimers.clear();
     for (const controller of this.active.values()) controller.abort();
@@ -1210,13 +1255,51 @@ export class DownloadQueue {
       this.ensureSpaceWatch();
     }
     await this.save();
+    await this.applyWindow();
     this.pump();
     for (const job of this.jobs) if (job.status === "waiting") this.scheduleDebrid(job.id);
     if (this.jobs.some((job) => job.status === "paused" && job.pauseReason === "library")) this.watchLibraries();
+    this.trackRun();
   }
 
   list(): PublicDownload[] { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
-  snapshot(): DownloadSnapshot { return { jobs: this.list(), halt: this.haltInfo() }; }
+  snapshot(): DownloadSnapshot {
+    const bytesPerSecond = this.speedLimit?.() ?? 0;
+    return {
+      jobs: this.list(),
+      halt: this.haltInfo(),
+      window: this.windowState(),
+      speedLimitMbps: bytesPerSecond > 0 ? bytesPerSecond / BYTES_PER_MBIT : null,
+      drain: null,
+    };
+  }
+
+  drainFor(viewer: { id?: string; admin: boolean }): DownloadDrainView | null {
+    const drain = viewer.admin ? this.lastDrain : viewer.id === undefined ? undefined : this.ownerDrains.get(viewer.id);
+    if (!drain) return null;
+    const at = Date.parse(drain.at);
+    if (!Number.isFinite(at) || this.now() - at > 24 * 60 * 60_000) return null;
+    const visible = (entry: DrainEntry) => viewer.admin || entry.owner === viewer.id;
+    const completed = drain.completed.filter(visible).length;
+    const failed = drain.failed.filter(visible).length;
+    if (completed === 0 && failed === 0) return null;
+    return {
+      id: drain.id,
+      at: drain.at,
+      completed,
+      failed,
+      paused: drain.paused.filter(visible).length,
+    };
+  }
+
+  windowState(): DownloadWindowState | null {
+    const configured = this.downloadWindow?.();
+    if (configured === undefined) return null;
+    const parsed = parseDownloadWindow(configured);
+    if (parsed === undefined || parsed === "invalid") return null;
+    const timeZone = this.timeZone();
+    return { ...parsed, open: windowOpen(parsed, this.now(), timeZone), timeZone };
+  }
   /** Whether any job is moving bytes right now, so the desktop shell can keep the Mac awake. */
   transferring(): boolean {
     return this.jobs.some((job) => job.status === "downloading" || job.status === "checking");
@@ -1809,6 +1892,34 @@ export class DownloadQueue {
     for (let attempt = 0; attempt < 100 && this.active.has(id); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 25));
   }
 
+  async startNow(id: string): Promise<void> {
+    const waiting = this.require(id);
+    if (this.active.has(id)) {
+      // Only a transfer the window just aborted is worth waiting for; a running one is refused now.
+      if (waiting.status !== "paused" || waiting.pauseReason !== "schedule") {
+        throw new AppError("Only a download that waits for the window can be started now.", "err.downloadNowNotWaiting", 409);
+      }
+      await this.runningById.get(id);
+    }
+    const job = this.require(id);
+    if (job.status === "paused" && job.pauseReason === "schedule") {
+      job.status = "queued";
+      job.pauseReason = undefined;
+      job.notBefore = undefined;
+      this.setError(job);
+      job.updatedAt = new Date(this.now()).toISOString();
+    } else if (job.status !== "queued") {
+      throw new AppError(
+        "Only a download that waits for the window can be started now.",
+        "err.downloadNowNotWaiting",
+        409,
+      );
+    }
+    job.windowExempt = true;
+    await this.save();
+    this.pump();
+  }
+
   /** Pauses the queued and running jobs a named cause takes away. A transfer in flight is
    *  aborted rather than left running behind a paused row: the sweep that calls this is the
    *  answer to work that keeps going on its own. A job already paused, failed or finished is
@@ -1871,6 +1982,14 @@ export class DownloadQueue {
   }
 
   async resume(id: string) {
+    // A row can read paused while its aborted transfer still settles; resuming under it would
+    // take away the pause mark the transfer reads, and the abort would count as a dropped line.
+    // Only a paused row is worth waiting for; a running one is refused now, or a stale click
+    // would hang and later undo a pause the person made in the meantime.
+    if (this.active.has(id)) {
+      if (this.require(id).status !== "paused") throw new AppError("This item cannot be resumed.", "err.cannotResume");
+      await this.runningById.get(id);
+    }
     const job = this.require(id);
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
     const pausedLibraryId = job.libraryId;
@@ -2204,7 +2323,12 @@ export class DownloadQueue {
       revert: () => { this.jobs = before.filter((job) => completed.includes(job) || this.jobs.includes(job)); },
     });
   }
-  changed() { this.pump(); }
+  changed() {
+    void this.applyWindow().then(
+      () => this.pump(),
+      () => this.pump(),
+    );
+  }
 
   async setTravelCursor(id: string, cursor?: TravelContinuationCursorV1): Promise<void> {
     const job = this.require(id);
@@ -2304,6 +2428,7 @@ export class DownloadQueue {
     const run = this.saveChain.then(async () => {
       if (this.unreadable) return;
       await change?.apply();
+      this.trackRun();
       try {
         if (this.database) {
           const statements: Statement[] = [];
@@ -2456,6 +2581,71 @@ export class DownloadQueue {
     }
   }
 
+  private syncWindowTimer(window: DownloadWindow | undefined) {
+    if (this.stopped || window === undefined) {
+      if (this.windowTimer) clearInterval(this.windowTimer);
+      this.windowTimer = undefined;
+      return;
+    }
+    if (this.windowTimer) return;
+    this.windowTimer = setInterval(() => { void this.applyWindow(); }, this.windowCheckMs);
+    this.windowTimer.unref?.();
+  }
+
+  /** Applies whichever side of the configured wall-clock boundary the queue is on now. */
+  private async applyWindow() {
+    if (this.stopped) return;
+    const configured = this.downloadWindow?.();
+    const parsed = configured === undefined ? undefined : parseDownloadWindow(configured);
+    this.syncWindowTimer(parsed === "invalid" ? undefined : parsed);
+    const timeZone = this.timeZone();
+    const open = parsed === undefined || parsed === "invalid" || windowOpen(parsed, this.now(), timeZone);
+    const previous = this.lastWindowOpen ?? true;
+    this.lastWindowOpen = open;
+    let changed = false;
+
+    if (open) {
+      for (const job of this.jobs) {
+        if (job.status !== "paused" || job.pauseReason !== "schedule" || this.active.has(job.id)) continue;
+        job.status = "queued";
+        job.pauseReason = undefined;
+        job.notBefore = undefined;
+        this.setError(job);
+        job.updatedAt = new Date(this.now()).toISOString();
+        changed = true;
+      }
+    } else {
+      for (const job of this.jobs) {
+        if (!this.active.has(job.id) || job.windowExempt || (job.status !== "checking" && job.status !== "downloading")) continue;
+        this.pauseRequested.add(job.id);
+        job.status = "paused";
+        job.pauseReason = "schedule";
+        job.speed = 0;
+        this.active.get(job.id)?.abort();
+        changed = true;
+      }
+    }
+
+    if (previous !== open) {
+      log("INFO", open ? "The download window opened" : "The download window closed, running downloads paused");
+    }
+    if (!changed) {
+      if (previous !== open && open) this.pump();
+      return;
+    }
+    await this.save();
+    if (open) this.pump();
+  }
+
+  private windowAllows(job: DownloadJob, at: number): boolean {
+    if (job.windowExempt) return true;
+    const configured = this.downloadWindow?.();
+    if (configured === undefined) return true;
+    const parsed = parseDownloadWindow(configured);
+    if (parsed === undefined || parsed === "invalid") return true;
+    return windowOpen(parsed, at, this.timeZone());
+  }
+
   private async haltForStorage(reason: { message: string; key: string }) {
     this.halt = { reason: "storage", at: new Date().toISOString(), message: reason.message, messageKey: reason.key };
     for (const job of this.jobs) {
@@ -2506,7 +2696,10 @@ export class DownloadQueue {
     this.pumpScheduled = true;
     queueMicrotask(() => {
       this.pumpScheduled = false;
-      if (this.halt || this.stopped) return;
+      if (this.halt || this.stopped) {
+        this.trackRun();
+        return;
+      }
       const limit = Math.max(1, Math.min(8, this.concurrency()));
       const perProvider = Math.max(1, Math.min(8, this.perProvider()));
       const taken = new Map<string, number>();
@@ -2516,7 +2709,8 @@ export class DownloadQueue {
         const job = this.jobs.find((item) => {
           const provider = this.provider(item);
           const providerLimit = this.providerLimit(item, perProvider);
-          return item.status === "queued" && !this.active.has(item.id) && !this.admitting.has(item.id) && (item.notBefore ?? 0) <= now && (taken.get(provider) ?? 0) < providerLimit;
+          return this.windowAllows(item, now)
+            && item.status === "queued" && !this.active.has(item.id) && !this.admitting.has(item.id) && (item.notBefore ?? 0) <= now && (taken.get(provider) ?? 0) < providerLimit;
         });
         if (!job) break;
         const key = this.provider(job); taken.set(key, (taken.get(key) ?? 0) + 1);
@@ -2535,7 +2729,71 @@ export class DownloadQueue {
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, Math.max(0, nextAt - this.now()));
       }
+      this.trackRun();
     });
+  }
+
+  private queueBusy(): boolean {
+    return this.jobs.some((job) =>
+      job.status === "queued"
+      || job.status === "waiting"
+      || job.status === "checking"
+      || job.status === "downloading"
+      || (job.status === "paused" && (job.pauseReason === "storage" || job.pauseReason === "schedule")));
+  }
+
+  private trackFinishedJobs(run: DrainRun): void {
+    const startedAt = Date.parse(run.startedAt);
+    for (const job of this.jobs) {
+      const entry = { id: job.id, owner: this.ownerOf(job) };
+      if (job.status === "completed" && job.completedAt) {
+        const completedAt = Date.parse(job.completedAt);
+        if (Number.isFinite(completedAt) && completedAt >= startedAt) {
+          run.failed.delete(job.id);
+          run.completed.set(job.id, entry);
+        }
+      } else if (job.status === "failed" && !run.completed.has(job.id)) {
+        const updatedAt = Date.parse(job.updatedAt);
+        if (Number.isFinite(updatedAt) && updatedAt >= startedAt) run.failed.set(job.id, entry);
+      } else {
+        // Retried after failing: it is not a failure any more. A removed row keeps counting.
+        run.failed.delete(job.id);
+      }
+    }
+  }
+
+  private trackRun(): void {
+    const busy = this.queueBusy();
+    if (busy) {
+      if (!this.lastBusy) {
+        this.run = {
+          startedAt: new Date(this.now()).toISOString(),
+          completed: new Map(),
+          failed: new Map(),
+        };
+      }
+      if (this.run) this.trackFinishedJobs(this.run);
+    } else if (this.lastBusy && this.run) {
+      this.trackFinishedJobs(this.run);
+      const run = this.run;
+      this.run = undefined;
+      if (run.completed.size || run.failed.size) {
+        this.lastDrain = {
+          id: randomUUID(),
+          at: new Date(this.now()).toISOString(),
+          completed: [...run.completed.values()],
+          failed: [...run.failed.values()],
+          paused: this.jobs
+            .filter((job) => job.status === "paused"
+              && (job.pauseReason === "user" || job.pauseReason === "library" || job.pauseReason === "permission"))
+            .map((job) => ({ id: job.id, owner: this.ownerOf(job) })),
+        };
+        for (const entry of [...run.completed.values(), ...run.failed.values()]) {
+          if (entry.owner !== undefined) this.ownerDrains.set(entry.owner, this.lastDrain);
+        }
+      }
+    }
+    this.lastBusy = busy;
   }
 
   /** The addons are asked for streams only here, right before one particular episode is downloaded,
@@ -3347,6 +3605,7 @@ export class DownloadQueue {
         // A source that ignores the end of the range would otherwise write over the next segment.
         const room = segment.end + 1 - position;
         const piece = chunk.length > room ? chunk.subarray(0, room) : chunk;
+        await this.rate.take(piece.length, controller.signal);
         await handle.write(piece, 0, piece.length, position);
         position += piece.length; segment.received += piece.length;
         note(piece.length);
@@ -3360,7 +3619,9 @@ export class DownloadQueue {
    * Assembles a playlist into one file with ffmpeg, copying the streams rather
    * than re-encoding, and renames it in when ffmpeg is done. There is no
    * resuming and no expected size: a playlist states neither, so progress is
-   * the size of the file as it grows.
+   * the size of the file as it grows. The speed limit does not apply: FFmpeg
+   * reads the playlist through the server's internal address, and there is no
+   * per-byte hook on that path.
    */
   private async downloadPlaylist(job: DownloadJob, stream: StreamItem, partial: string, target: string, controller: AbortController) {
     await unlink(partial).catch(() => undefined);
@@ -3739,7 +4000,9 @@ export class DownloadQueue {
       const target = path.join(located.root, located.relative);
       const partial = `${target}.part`;
       await mkdir(path.dirname(target), { recursive: true });
-      if (job.sourceAdmission) await unlink(partial).catch(() => undefined);
+      // A fresh rule pick must not inherit a stray part file; a selection that already received
+      // bytes (paused by the window, say) keeps them, as `discardProfileSelection` resets both.
+      if (job.sourceAdmission && job.received === 0 && !job.segments) await unlink(partial).catch(() => undefined);
       if (job.sourceAdmission && !await this.permissionStillHeld(job, controller.signal)) return;
       await this.prepareSubtitle(job, controller);
       if (job.sourceAdmission && !await this.permissionStillHeld(job, controller.signal)) return;
@@ -3866,10 +4129,11 @@ export class DownloadQueue {
         lastProgressAt = this.now();
         watchStall(() => lastProgressAt);
         const guard = this.startRemoteGuard(job, controller, () => { remoteStopped = true; });
-        const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => {
+        const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: async (chunk, output) => {
           // A remote copy re-checks the owner, the grant and the target before every chunk, so a
           // revocation that lands mid-transfer stops the bytes rather than finishing the file.
           if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
+          await this.rate.take(chunk.byteLength, controller.signal);
           note(chunk.byteLength);
           output.enqueue(chunk);
         } });
@@ -4027,6 +4291,7 @@ export class DownloadQueue {
       this.pauseRequested.delete(job.id);
       job.updatedAt = new Date().toISOString();
       this.active.delete(job.id);
+      await this.applyWindow();
       await this.save();
       if (!retryScheduled) this.pump();
     }

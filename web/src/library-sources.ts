@@ -410,14 +410,20 @@ export function useLibrarySources(options: LibrarySourcesOptions): LibrarySource
 
   const refind = useCallback(async (row: Stream): Promise<Stream | null> => {
     if (stateRef.current.scope !== scopeRef.current) return null;
-    const group = stateRef.current.groups.find((entry) => entry.status === "loaded" && entry.streams.some((stream) => stream.sourceId === row.sourceId));
-    if (!group) return null;
-    const answer = new Promise<Stream[] | null>((resolve) => {
+    const loaded = stateRef.current.groups.filter((entry) => entry.kind !== "discovery" && entry.status === "loaded");
+    const own = loaded.filter((entry) => entry.streams.some((stream) => stream.sourceId === row.sourceId));
+    // The row a play started with is handed over by the host and may stand in no group under the
+    // id it had then, so every answered group is asked for it.
+    const asked = own.length ? own : loaded;
+    const answers = asked.map((group) => new Promise<Stream[] | null>((resolve) => {
       waiters.current.set(group.key, [...(waiters.current.get(group.key) ?? []), resolve]);
-    });
-    reread(group.key);
+    }));
+    for (const group of asked) reread(group.key);
     pump();
-    return (await answer)?.find((stream) => sameSource(row, stream)) ?? null;
+    const rows = (await Promise.all(answers)).flatMap((answer) => answer ?? []);
+    // Across several groups the server's own handle decides before the looser comparison may.
+    return (row.stableKey ? rows.find((stream) => stream.stableKey === row.stableKey) : undefined)
+      ?? rows.find((stream) => sameSource(row, stream)) ?? null;
   }, []);
 
   return {

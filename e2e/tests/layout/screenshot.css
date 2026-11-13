@@ -1,0 +1,3 @@
+/* A toast is transient feedback drawn over the page; whether one is up when the shot is taken
+   depends on what the server finished just before, not on the layout under test. */
+.toast { visibility: hidden !important; }
