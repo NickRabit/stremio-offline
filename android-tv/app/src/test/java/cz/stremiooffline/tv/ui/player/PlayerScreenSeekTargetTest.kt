@@ -23,6 +23,7 @@ import androidx.media3.test.utils.FakeTimeline
 import androidx.media3.test.utils.TestExoPlayerBuilder
 import cz.stremiooffline.tv.data.CopyDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
+import cz.stremiooffline.tv.playback.PlaybackController
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import java.time.Duration
@@ -120,8 +121,11 @@ class PlayerScreenSeekTargetTest {
     compose.onNodeWithTag(TAG_OSD_PLAY).assertDoesNotExist()
 
     compose.onNode(isFocused()).performKeyInput { pressKey(Key.DirectionRight) }
-    advanceUntil { api.seekTimes.isNotEmpty() }
+    // Read while the strip is still up: the presses have stopped and the overlay has handed the
+    // seek over, which is the moment the timeline used to fall back to the old place.
+    advance(PlaybackController.SEEK_DEBOUNCE_MS + 100)
     waitForPosition("01:50")
+    advanceUntil { api.seekTimes.isNotEmpty() }
     assertEquals(listOf(110.0), api.seekTimes)
 
     compose.onNode(isFocused()).performKeyInput { pressKey(Key.DirectionRight) }
