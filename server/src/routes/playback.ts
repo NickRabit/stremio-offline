@@ -670,8 +670,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
           signal: AbortSignal.any([signal, phase.signal]),
         });
         // A link that has run out is often answered with a page saying so, and with 200.
-        const page = servedMediaType(response.headers.get("content-type") ?? "") === "application/octet-stream"
-          || /^application\/json\b/i.test(response.headers.get("content-type") ?? "");
+        const answered = response.headers.get("content-type") ?? "";
+        const page = servedMediaType(answered) !== answered || /^application\/json\b/i.test(answered);
         if ([200, 206].includes(response.status) && !page) {
           if (recordSuccess) rememberLanding(response.url);
           return response;

@@ -967,6 +967,26 @@ test("another session of the same link asks the remembered address at once", asy
   assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.avi", "/film.avi"]);
 });
 
+test("a remembered address that serves the film as a plain download is still used", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.bin" }); return void res.end(); }
+    const [, from, to] = /^bytes=(\d+)-(\d+)$/.exec(String(req.headers.range)) ?? [];
+    res.writeHead(206, { "content-type": "application/octet-stream", "accept-ranges": "bytes", "content-range": `bytes ${from}-${to}/${file.length}`, "content-length": Number(to) - Number(from) + 1 });
+    res.end(file.subarray(Number(from), Number(to) + 1));
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  for (const range of ["bytes=0-127", "bytes=128-255", "bytes=256-383"]) {
+    const read = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range } });
+    assert.equal(read.status, 206);
+    await read.arrayBuffer();
+  }
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.bin", "/film.bin", "/film.bin"]);
+});
+
 test("a remembered addon source answering with a page falls back and replaces the record", async (t) => {
   const harness = await mount();
   t.after(harness.close);
