@@ -136,5 +136,6 @@ test("an unknown exception carries a reference equal to the sent request id", as
   assert.equal(body.category, "internal");
   assert.equal(body.retry, "manual");
   assert.equal(body.reference, requestId);
-  assert.ok(server.log().includes(requestId), "the id also appears in the log line");
+  // The line is written to a pipe and may reach this process after the response has.
+  await server.logged(requestId);
 });
