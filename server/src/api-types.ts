@@ -43,7 +43,15 @@ export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" |
  *  waits for it rather than landing somewhere the user did not ask for. `permission` is not a
  *  fault either: the account behind the job may no longer queue it, and the job keeps its
  *  place until the right is back. */
-export type PauseReason = "user" | "storage" | "library" | "permission";
+export type PauseReason = "user" | "storage" | "library" | "permission" | "schedule";
+
+/** A local wall-clock download window. */
+export interface DownloadWindow { start: string; end: string }
+
+export interface DownloadWindowState extends DownloadWindow {
+  open: boolean;
+  timeZone: string;
+}
 
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings {
@@ -138,10 +146,23 @@ export interface PublicDownload {
   debridProgress?: number;
   /** How many connections the file is split across; missing while it runs over one. */
   segments?: number;
+  windowExempt?: true;
   order: number;
 }
 
 export interface DownloadSnapshot {
   jobs: PublicDownload[];
   halt: QueueHalt | null;
+  window: DownloadWindowState | null;
+  /** The shared cap in Mbit/s. Null when downloads are not limited. */
+  speedLimitMbps: number | null;
+  drain: DownloadDrainView | null;
+}
+
+export interface DownloadDrainView {
+  id: string;
+  at: string;
+  completed: number;
+  failed: number;
+  paused: number;
 }

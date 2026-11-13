@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { OMIT_IDLE_MS, SCROLLING_MS } from "./home-omit";
 import { Home } from "./Home";
+import { EAGER_CARDS } from "./HomeShelf";
 import { setLocale } from "./i18n";
 import type { HomeRowState, HomeRows } from "./home-state";
 import type { HomeCard, HomeOrderEntry } from "../../server/src/home";
@@ -249,6 +250,57 @@ describe("Home", () => {
     expect(pictures()).toHaveLength(0);
     await act(async () => { strips.get(row("episodes")!.querySelector(".resume-strip")!)!([{ isIntersecting: true }]); });
     expect([...pictures()].map((picture) => picture.getAttribute("loading"))).toEqual(Array(6).fill("eager"));
+  });
+
+  it("mounts only the first cards of a far shelf and keeps them when the rest arrive", async () => {
+    const strips = new Map<Element, (entries: Array<{ isIntersecting: boolean }>) => void>();
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+      observe = (element: Element) => { if (element.classList.contains("resume-strip")) strips.set(element, this.callback); };
+      disconnect = vi.fn();
+    });
+    const items = Array.from({ length: 20 }, (_, index) => ({ ...episodeCard(), key: `episode:f:${index}` }));
+    await render({ rows: allEmpty({ episodes: rowState({ items }) }) });
+    const strip = row("episodes")!.querySelector(".resume-strip")!;
+    const mounted = () => [...row("episodes")!.querySelectorAll<HTMLElement>(".home-card")];
+    const first = mounted();
+    expect(first).toHaveLength(EAGER_CARDS);
+    const showAll = row("episodes")!.querySelector<HTMLButtonElement>(".resume-show-all");
+    expect(showAll).not.toBeNull();
+    expect(showAll!.tabIndex).toBe(0);
+
+    await act(async () => { strips.get(strip)!([{ isIntersecting: true }]); });
+    const all = mounted();
+    expect(all).toHaveLength(20);
+    first.forEach((card, index) => { expect(all[index]).toBe(card); });
+  });
+
+  it("mounts all of a near shelf's cards at once", async () => {
+    const strips = new Map<Element, (entries: Array<{ isIntersecting: boolean }>) => void>();
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+      observe = (element: Element) => { if (element.classList.contains("resume-strip")) strips.set(element, this.callback); };
+      disconnect = vi.fn();
+    });
+    const items = Array.from({ length: 20 }, (_, index) => ({ ...episodeCard(), key: `episode:f:${index}` }));
+    await render({ rows: allEmpty({ episodes: rowState({ items }) }) });
+    const strip = row("episodes")!.querySelector(".resume-strip")!;
+    await act(async () => { strips.get(strip)!([{ isIntersecting: true }]); });
+    expect(row("episodes")!.querySelectorAll(".home-card")).toHaveLength(20);
+  });
+
+  it("measures how many cards a far shelf mounts from its strip width", async () => {
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      disconnect() {}
+    });
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("resume-strip") ? 450 : 0; });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      return { width: this.classList.contains("home-card") ? 100 : 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+    const items = Array.from({ length: 20 }, (_, index) => ({ ...episodeCard(), key: `episode:f:${index}` }));
+    await render({ rows: allEmpty({ episodes: rowState({ items }) }) });
+    expect(row("episodes")!.querySelectorAll(".home-card")).toHaveLength(7);
   });
 
   it("fits the shown cards to the strip's width, plus two", async () => {

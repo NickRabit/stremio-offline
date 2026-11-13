@@ -41,7 +41,7 @@ export default defineConfig({
   // safe but hides exactly the changes worth catching: a 4px font bump across a
   // row of tiles stayed under a 1% ratio. Runs in the container are stable, so
   // the small fixed budget only absorbs renderer noise.
-  expect: { toHaveScreenshot: { maxDiffPixels: 120, animations: "disabled", caret: "hide", scale: "css" } },
+  expect: { toHaveScreenshot: { maxDiffPixels: 120, animations: "disabled", caret: "hide", scale: "css", stylePath: "e2e/tests/layout/screenshot.css" } },
   projects: [
     { name: "setup", testMatch: /setup\.spec\.ts/ },
     {

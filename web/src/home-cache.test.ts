@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { version } from "../package.json";
 import { homeCatalogRowId } from "../../server/src/home";
 import type { HomeCard, HomeOrderEntry } from "../../server/src/home";
 import type { HomeRows, HomeRowState } from "./home-state";
-import { clearHomeCache, HOME_CACHE_MAX_BYTES, HOME_CACHE_PREFIX, readHomeCache, writeHomeCache } from "./home-cache";
+import { clearHomeCache, HOME_CACHE_FORMAT, HOME_CACHE_MAX_BYTES, HOME_CACHE_PREFIX, readHomeCache, writeHomeCache } from "./home-cache";
 
 const at = "2026-01-01T00:00:00.000Z";
 const movie = homeCatalogRowId("cinemeta", "movie", "top");
@@ -11,6 +10,19 @@ const card: HomeCard = {
   kind: "resume-file", key: "file:a", title: "A", path: "Films/A.mkv",
   progress: { position: 1, duration: 4 }, updatedAt: at, forgetKeys: ["file:a"],
 };
+const samples: HomeCard[] = [
+  { kind: "remote", key: "remote:1", title: "R", provider: "jellyfin", libraryId: "rlib", libraryName: "Server", itemId: "i1", itemType: "movie", updatedAt: at },
+  card,
+  { kind: "resume-catalogue", key: "movie:tt1", title: "C", type: "movie", id: "tt1", name: "C", updatedAt: at, forgetKeys: ["movie:tt1"] },
+  { kind: "completed", key: "c", title: "Done", path: "Films/D.mkv", completedAt: at },
+  { kind: "favorite", key: "f", path: "Films/F", itemKind: "folder", label: "Fav" },
+  { kind: "favorite-catalogue", key: "series:tt2", type: "series", id: "tt2", name: "Show" },
+  { kind: "recent", key: "r", path: "Films/R.mkv", label: "Recent", addedAt: at, libraryId: "lib" },
+  { kind: "episode", key: "e", followId: "f", type: "series", metaId: "tt2", name: "Show", released: at, season: 2, episode: 4 },
+  { kind: "discovery", key: "d", type: "movie", id: "tt3", name: "Disc", title: "Disc" },
+  { kind: "tonight", key: "t", path: "Films/T.mkv", itemKind: "file", label: "Tonight", libraryId: "lib" },
+  { kind: "confirm", key: "s", libraryId: "lib", library: "Films", label: "guess.mkv", path: "Films/guess.mkv", candidate: { name: "Real" } },
+];
 const ok = (items: HomeCard[]): HomeRowState => ({ status: "ok", items, hasMore: false, partial: false, request: 4 });
 const rows = (items: HomeCard[] = [card]): HomeRows => ({
   resume: ok(items),
@@ -19,6 +31,11 @@ const rows = (items: HomeCard[] = [card]): HomeRows => ({
 });
 const order: HomeOrderEntry[] = [{ id: "resume" }, { id: movie, title: "Cinemeta · Top" }];
 const stored = (account = "alice") => localStorage.getItem(`${HOME_CACHE_PREFIX}${account}`);
+const plant = (items: unknown[]) => {
+  localStorage.setItem(`${HOME_CACHE_PREFIX}alice`, JSON.stringify({
+    format: HOME_CACHE_FORMAT, order: [{ id: "resume" }], rows: { resume: { items, hasMore: false, partial: false } },
+  }));
+};
 
 beforeEach(() => { localStorage.clear(); });
 afterEach(() => { localStorage.clear(); });
@@ -39,10 +56,26 @@ describe("home cache", () => {
     expect(readHomeCache("bob")).toBeNull();
   });
 
-  it("ignores another app version", () => {
+  it("reads a written Home even when the stored payload also carries a version", () => {
     writeHomeCache("alice", order, rows());
     const value = JSON.parse(stored()!);
-    localStorage.setItem(`${HOME_CACHE_PREFIX}alice`, JSON.stringify({ ...value, version: `${version}-other` }));
+    expect(value.format).toBe(HOME_CACHE_FORMAT);
+    expect(value).not.toHaveProperty("version");
+    localStorage.setItem(`${HOME_CACHE_PREFIX}alice`, JSON.stringify({ ...value, version: "0.0.1" }));
+    expect(readHomeCache("alice")?.rows.resume?.items).toEqual([card]);
+  });
+
+  it("ignores another format", () => {
+    writeHomeCache("alice", order, rows());
+    const value = JSON.parse(stored()!);
+    localStorage.setItem(`${HOME_CACHE_PREFIX}alice`, JSON.stringify({ ...value, format: HOME_CACHE_FORMAT + 1 }));
+    expect(readHomeCache("alice")).toBeNull();
+  });
+
+  it("ignores an old-style payload with no format", () => {
+    localStorage.setItem(`${HOME_CACHE_PREFIX}alice`, JSON.stringify({
+      version: "0.0.1", order, rows: { resume: { items: [card], hasMore: false, partial: false } },
+    }));
     expect(readHomeCache("alice")).toBeNull();
   });
 
@@ -51,9 +84,57 @@ describe("home cache", () => {
     expect(readHomeCache("alice")).toBeNull();
 
     localStorage.setItem(`${HOME_CACHE_PREFIX}alice`, JSON.stringify({
-      version, order: [{ id: "resume" }], rows: { resume: { items: [{ kind: "resume-file" }], hasMore: false, partial: false } },
+      format: HOME_CACHE_FORMAT, order: [{ id: "resume" }], rows: { resume: { items: [{ kind: "resume-file" }], hasMore: false, partial: false } },
     }));
     expect(readHomeCache("alice")).toBeNull();
+  });
+
+  it("returns null when a stored card fails validation", () => {
+    plant([{ ...card, kind: "unknown" }]);
+    expect(readHomeCache("alice")).toBeNull();
+    plant([{ ...card, kind: "constructor" }]);
+    expect(readHomeCache("alice")).toBeNull();
+    plant([{ ...card, poster: { url: "x" } }]);
+    expect(readHomeCache("alice")).toBeNull();
+    plant([{ ...card, season: "2" }]);
+    expect(readHomeCache("alice")).toBeNull();
+    plant([{ ...card, year: { value: 2024 } }]);
+    expect(readHomeCache("alice")).toBeNull();
+  });
+
+  it("keeps a stored Home whose card carries its year as a number", () => {
+    plant([{ kind: "discovery", key: "movie:tt1", type: "movie", id: "tt1", name: "Film", title: "Film", year: 2024 }]);
+    expect(readHomeCache("alice")?.rows.resume?.items).toHaveLength(1);
+
+    const { progress: _progress, ...withoutProgress } = card;
+    plant([withoutProgress]);
+    expect(readHomeCache("alice")).toBeNull();
+
+    plant([{ ...card, progress: { position: "1", duration: 4 } }]);
+    expect(readHomeCache("alice")).toBeNull();
+
+    const episode = samples.find((item) => item.kind === "episode")!;
+    const { season: _season, ...withoutSeason } = episode;
+    plant([withoutSeason]);
+    expect(readHomeCache("alice")).toBeNull();
+
+    const confirm = samples.find((item) => item.kind === "confirm")!;
+    const { candidate: _candidate, ...withoutCandidate } = confirm;
+    plant([withoutCandidate]);
+    expect(readHomeCache("alice")).toBeNull();
+
+    const remote = samples.find((item) => item.kind === "remote")!;
+    const { itemId: _itemId, ...withoutItemId } = remote;
+    plant([withoutItemId]);
+    expect(readHomeCache("alice")).toBeNull();
+  });
+
+  it("round-trips one valid card of each kind", () => {
+    expect(new Set(samples.map((item) => item.kind)).size).toBe(11);
+    for (const item of samples) {
+      writeHomeCache("alice", order, rows([item]));
+      expect(readHomeCache("alice")?.rows.resume?.items, item.kind).toEqual([item]);
+    }
   });
 
   it("clears every Home entry and leaves the rest", () => {

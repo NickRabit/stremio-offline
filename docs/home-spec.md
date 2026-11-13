@@ -38,6 +38,15 @@ Opening Home fetches every carousel of the account in the background, and a
 warm-up at start and every 20 minutes keeps them filled while Home has been
 opened within the last 12 hours.
 
+A Home shelf with cards that has not come within 800px of the screen mounts only
+the cards its strip shows plus two, and mounts the rest when it comes near.
+
+The stored Home is drawn only after `/api/auth/me` has confirmed the account,
+never before. Drawing it earlier would save one request at start, but on a
+shared browser whose session expired on the server it would show the previous
+account's Home until the sign-in screen replaced it; no other account's data
+may reach the screen, even for a moment.
+
 A catalog that lists bare names without artwork (Torrentio's debrid downloads,
 for example) has the first 100 such titles looked up through the add-on's own
 `meta` resource; the artwork found is kept for a day.
@@ -251,6 +260,11 @@ it was computed over the complete eligible set after visibility and identity
 resolution; otherwise return `hasMore` and omit it. `?rows=resume` re-requests
 one row. Local and catalogue sources are fetched independently so a slow addon
 cannot hold the page.
+
+The client keeps the last Home per account in `localStorage` under
+`home-cache:<account>`, tagged with `HOME_CACHE_FORMAT` rather than the app
+version, so it survives releases. The number is raised when the stored shape
+changes. A card that fails validation discards the stored Home.
 
 No aggregation cache at first. If measurement asks for one, key it by account and
 permissions version and invalidate it on a progress write, a download completing,

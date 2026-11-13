@@ -53,7 +53,7 @@ test("Safari holds overlay fullscreen until the first touch after a rotation", a
       state.fullscreenAttempts = (state.fullscreenAttempts ?? 0) + 1;
       return Promise.resolve();
     };
-    Object.defineProperty(Document.prototype, "fullscreenEnabled", { configurable: true, get: () => true });
+    Object.defineProperty(document, "fullscreenEnabled", { configurable: true, get: () => true });
     Object.defineProperty(HTMLElement.prototype, "requestFullscreen", { configurable: true, value: request });
   });
   const attempts = () => page.evaluate(() => (window as typeof window & { fullscreenAttempts?: number }).fullscreenAttempts ?? 0);
@@ -66,6 +66,8 @@ test("Safari holds overlay fullscreen until the first touch after a rotation", a
   await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
   await expect(page.locator(".player-overlay")).toBeVisible();
+  // The fixture lasts two seconds, and a finished film closes the player before the tap below.
+  await page.locator(".player-overlay video").evaluate((video: HTMLVideoElement) => video.pause());
 
   await page.setViewportSize({ width: 844, height: 390 });
   await expect(page.locator(".player-overlay.mobile-landscape")).toBeVisible();
@@ -79,7 +81,7 @@ test("Safari holds overlay fullscreen until the first touch after a rotation", a
 test("Safari leaves the player alone where no element fullscreen exists", async ({ page }) => {
   await page.addInitScript(() => {
     // What an iPhone actually offers: no element fullscreen, only the native video one.
-    Object.defineProperty(Document.prototype, "fullscreenEnabled", { configurable: true, get: () => false });
+    Object.defineProperty(document, "fullscreenEnabled", { configurable: true, get: () => false });
     const prototype = HTMLElement.prototype as unknown as Record<string, unknown>;
     delete prototype.requestFullscreen;
     delete prototype.webkitRequestFullscreen;

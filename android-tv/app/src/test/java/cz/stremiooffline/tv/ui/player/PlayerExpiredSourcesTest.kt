@@ -4,6 +4,7 @@ package cz.stremiooffline.tv.ui.player
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.input.key.Key
+import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -22,6 +23,7 @@ import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.sourceRowTag
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -45,6 +47,8 @@ class PlayerExpiredSourcesTest {
   private val beta = StreamDto(sourceId = "srcB", kind = "remote", playable = true, name = "big", title = "Czech 8 GB", addonKey = "beta", addonName = "Beta", stableKey = "keyB")
   private var now = 1_000_000L
 
+  @After fun reset() { PlayerLeave.requested = false }
+
   /** A title whose addon now lists the alpha row under a new id, as the server does once the old one expired. */
   private open class RelistingApi : FakeTvApi() {
     init {
@@ -59,7 +63,14 @@ class PlayerExpiredSourcesTest {
   }
 
   /** Every id in [expired] is refused the way the server refuses an id it dropped. */
-  private class ExpiringApi(private val expired: Set<String>) : RelistingApi() {
+  private class ExpiringApi(val expired: MutableSet<String>, private val status: Int = 410) : RelistingApi() {
+    fun relistBeta(id: String) {
+      streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("alpha", "Alpha"), StreamSourceDto("beta", "Beta"))
+      addonStreams["movie:tt1|beta"] = listOf(
+        StreamDto(sourceId = id, kind = "remote", playable = true, name = "big", title = "Czech 8 GB", addonKey = "beta", addonName = "Beta", stableKey = "keyB"),
+      )
+    }
+
     override suspend fun startPlayback(
       sourceId: String,
       capabilities: ClientCapabilitiesDto,
@@ -72,9 +83,18 @@ class PlayerExpiredSourcesTest {
     ): PlaybackDescriptorDto {
       startedSources += sourceId
       startedTimes += time
-      if (sourceId in expired) throw ApiError(ApiFailure.NotFound, serverMessage = "Media resource expired or unavailable. Select the source again.", status = 410)
+      if (sourceId in expired) throw ApiError(ApiFailure.NotFound, serverMessage = "Media resource expired or unavailable. Select the source again.", status = status)
       return PlaybackDescriptorDto(id = "p$sourceId", url = "stream.mp4")
     }
+  }
+
+  /** The TV going to standby and waking: the player gives its session up and asks for a new one. */
+  private fun standbyAndBack() {
+    PlayerLeave.requested = true
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.waitForIdle()
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    compose.waitForIdle()
   }
 
   private fun mount(api: FakeTvApi) {
@@ -168,7 +188,7 @@ class PlayerExpiredSourcesTest {
 
   @Test
   fun `a switch refused as expired reads the list again and starts the same row once more`() {
-    val api = ExpiringApi(expired = setOf("srcA")).apply { relist("srcA2") }
+    val api = ExpiringApi(expired = mutableSetOf("srcA")).apply { relist("srcA2") }
     mount(api)
 
     openSources()
@@ -183,7 +203,7 @@ class PlayerExpiredSourcesTest {
 
   @Test
   fun `an expired switch is retried on its own only once, and Try again looks the row up again`() {
-    val api = ExpiringApi(expired = setOf("srcA", "srcA2")).apply { relist("srcA2") }
+    val api = ExpiringApi(expired = mutableSetOf("srcA", "srcA2")).apply { relist("srcA2") }
     mount(api)
 
     openSources()
@@ -200,5 +220,52 @@ class PlayerExpiredSourcesTest {
     compose.waitForIdle()
 
     assertEquals(listOf("srcB", "srcA", "srcA2", "srcA3"), api.startedSources)
+  }
+
+  @Test
+  fun `coming back from standby late in a play finds the playing row again and resumes it`() {
+    val api = ExpiringApi(expired = mutableSetOf()).apply { relist("srcA2"); relistBeta("srcB2") }
+    mount(api)
+    api.expired += "srcB"
+
+    standbyAndBack()
+    compose.waitUntil(5_000) { api.startedSources.size == 3 }
+    compose.waitForIdle()
+
+    assertEquals(listOf("srcB", "srcB", "srcB2"), api.startedSources)
+    assertEquals(listOf("movie:tt1"), api.streamSourcesRequests)
+    assertEquals(0, compose.onAllNodesWithText("Try again").fetchSemanticsNodes().size)
+  }
+
+  @Test
+  fun `an id the server forgot altogether is looked up again like an expired one`() {
+    val api = ExpiringApi(expired = mutableSetOf(), status = 404).apply { relist("srcA2"); relistBeta("srcB2") }
+    mount(api)
+    api.expired += "srcB"
+
+    standbyAndBack()
+    compose.waitUntil(5_000) { api.startedSources.size == 3 }
+
+    assertEquals(listOf("srcB", "srcB", "srcB2"), api.startedSources)
+  }
+
+  @Test
+  fun `a playing row the fresh list lost leaves the error, and Try again looks it up again`() {
+    val api = ExpiringApi(expired = mutableSetOf()).apply { relist("srcA2") }
+    mount(api)
+    api.expired += "srcB"
+
+    standbyAndBack()
+    compose.waitUntil(5_000) { api.streamsCompleted.isNotEmpty() }
+    compose.waitForIdle()
+    assertEquals(listOf("srcB", "srcB"), api.startedSources)
+    assertEquals(1, compose.onAllNodesWithText("Try again").fetchSemanticsNodes().size)
+
+    api.relistBeta("srcB3")
+    compose.onNodeWithText("Try again").assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.startedSources.size == 3 }
+
+    assertEquals(listOf("srcB", "srcB", "srcB3"), api.startedSources)
   }
 }

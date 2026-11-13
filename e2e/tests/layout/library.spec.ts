@@ -17,6 +17,14 @@ const favoriteFile = { kind: "library", path: "Film.mkv", label: "Cesta za obzor
 const favoriteCatalog = { kind: "catalog", type: "movie", id: "tt9", name: "Cesta za obzor", poster: poster("#936347"), year: "2024" };
 
 test("library cards and folder navigation", async ({ page }, testInfo) => {
+  // The seed's finished download raises the queue-finished toast. On a short landscape screen
+  // it spans the bottom edge, and a tap behind it scrolls the page so far that the toolbar ends
+  // up under the header; close it the way a person would whenever it is in the way.
+  await page.addLocatorHandler(page.locator(".toast"), async (toast) => {
+    await toast.getByRole("button", { name: "Zavřít", exact: true }).click();
+    // The pointer would otherwise rest on whatever card sits under the closed toast.
+    await page.mouse.move(0, 0);
+  });
   await page.route("**/api/library/browse?*", (route) => {
     const path = new URL(route.request().url()).searchParams.get("path") || "";
     return route.fulfill({ json: { path, items: path ? [episode] : [folder, file, { ...file, path: "other.mkv", label: "Film bez plakátu", poster: undefined, favorite: false, description: undefined, year: undefined }], total: path ? 1 : 3, pending: false } });
