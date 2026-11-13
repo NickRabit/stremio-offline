@@ -855,6 +855,7 @@ const partOf = (file: Buffer, range: string) => {
 };
 
 interface TrackedRequest {
+  method: string;
   path: string;
   headers: http.IncomingHttpHeaders;
 }
@@ -866,7 +867,7 @@ const trackedHost = async (
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   const requests: TrackedRequest[] = [];
   const server = http.createServer((req, res) => {
-    requests.push({ path: String(req.url ?? "/"), headers: req.headers });
+    requests.push({ method: String(req.method), path: String(req.url ?? "/"), headers: req.headers });
     answer(req, res, requests.length - 1);
   });
   server.listen(0, "127.0.0.1");
@@ -965,6 +966,24 @@ test("another session of the same link asks the remembered address at once", asy
   assert.equal(read.status, 206);
   assert.deepEqual(Buffer.from(await read.arrayBuffer()), file.subarray(128, 256));
   assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.avi", "/film.avi"]);
+});
+
+test("a playlist told apart only by its first bytes is not remembered from a HEAD or a later range", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const playlist = Buffer.from("#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:4,\nseg-1.ts\n#EXT-X-ENDLIST\n");
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/stream" }); return void res.end(); }
+    res.writeHead(200, { "content-type": "text/plain", "content-length": playlist.length });
+    res.end(req.method === "HEAD" ? undefined : playlist);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  await fetch(`${harness.base}/api/media/${resourceId}`, { method: "HEAD", headers: { "x-user": "ada" } });
+  const read = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada" } });
+  assert.match(await read.text(), /^#EXTM3U/);
+
+  assert.deepEqual(host.requests.map((request) => `${request.method} ${request.path}`), ["HEAD /go", "HEAD /stream", "GET /go", "GET /stream"]);
 });
 
 test("a remembered address that serves the film as a plain download is still used", async (t) => {

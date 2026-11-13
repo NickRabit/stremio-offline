@@ -643,11 +643,22 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // Kept under the link itself, not the session's resource: the film's header is read by the
     // probe, then by the player, and again by the next session, and each would follow the redirect.
     const landingKey = typeof req.params.signed === "string" ? undefined : raw;
-    const rememberLanding = (url: string) => {
+    // Only an answer that was looked at and found to be a file may start a record: a playlist
+    // told apart by its first bytes looks like any other answer to a HEAD or a read further in.
+    // An answer that was not looked at may still keep a record it came from alive.
+    const rememberLanding = (url: string, looked: boolean) => {
       if (!landingKey) return;
+      if (!looked) {
+        if (url && sourceLanding.get(landingKey) === url) sourceLanding.put(landingKey, url);
+        return;
+      }
       if (!url || url === sourceUrl.toString()) sourceLanding.forget(landingKey);
       else sourceLanding.put(landingKey, url);
     };
+    const forgetLanding = () => { if (landingKey) sourceLanding.forget(landingKey); };
+    // The link had a record when this read began, so it has been seen to be a file: what the
+    // source answers after that record ran out may replace it without being looked at again.
+    const knownFile = landingKey !== undefined && sourceLanding.get(landingKey) !== undefined;
     const fetchSource = async (
       init: RequestInit,
       signal: AbortSignal,
@@ -673,7 +684,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         const answered = response.headers.get("content-type") ?? "";
         const page = servedMediaType(answered) !== answered || /^application\/json\b/i.test(answered);
         if ([200, 206].includes(response.status) && !page) {
-          if (recordSuccess) rememberLanding(response.url);
+          rememberLanding(response.url, recordSuccess || knownFile);
           return response;
         }
         if (response.status === 416) return response;
@@ -740,7 +751,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         if (start === 0 && rangeStartsAtZero(askedRange)
           && playlistPrefixState(await readAheadPrefix(remoteReadAhead, first)) === "playlist") throw new UnexpectedAnswer();
         landingIsFile = true;
-        rememberLanding(first.url);
+        rememberLanding(first.url, true);
       } catch (error) {
         if (error instanceof RangeNotSatisfiable) {
           if (error.contentRange && /^bytes \*\/\d+$/.test(error.contentRange)) res.setHeader("content-range", error.contentRange);
@@ -750,6 +761,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
           if (unblockable.size >= 1024) unblockable.clear();
           unblockable.add(cacheKey);
           remoteReadAhead.forget(key);
+          forgetLanding();
         }
         if (silent) throw quietNow(error);
         // Anything else -- a dropped connection, a refused read -- is left to the ordinary
@@ -893,6 +905,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     }
     const playlistResponse = (body: BodyInit, status: number) => new Response(body, { status, headers: upstream.headers });
     const explicitPlaylist = /mpegurl/i.test(contentType) || new URL(upstream.url).pathname.toLowerCase().endsWith(".m3u8");
+    if (explicitPlaylist) forgetLanding();
     if (req.method !== "HEAD" && explicitPlaylist) {
       sendRewrittenPlaylist(await readMediaText(upstream, 2 * 1024 * 1024, controller.signal), upstream.url, upstream.status);
       return;
@@ -901,13 +914,14 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     if (req.method === "GET" && !alreadySent && !explicitPlaylist && rangeStartsAtZero(askedRange) && upstream.body) {
       const sniffed = await sniffPlaylist(upstream.body, controller.signal);
       if (sniffed.playlist) {
+        forgetLanding();
         const response = playlistResponse(sniffed.stream, upstream.status);
         sendRewrittenPlaylist(await readMediaText(response, 2 * 1024 * 1024, controller.signal), upstream.url, upstream.status);
         return;
       }
       body = Readable.fromWeb(sniffed.stream as never);
     }
-    if (!explicitPlaylist) rememberLanding(upstream.url);
+    if (!explicitPlaylist) rememberLanding(upstream.url, body !== null || knownFile);
     if (!alreadySent) {
       res.status(upstream.status);
       for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
@@ -991,17 +1005,15 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       log("WARN", "The transfer broke off, picking it up where it stopped", { req: req.id, url: raw, at: from + delivered, delivered, expected, resumed });
       await sleep(SOURCE_RETRY_MS * resumed);
       const resumeRange = `bytes=${from + delivered}-${until !== undefined ? until : ""}`;
-      const resumeWait = new AbortController();
-      const resumeWaitMs = quiet ? SOURCE_QUIET_HEADER_MS : SOURCE_HEADER_MS;
-      const resumeDeadline = Date.now() + resumeWaitMs;
-      const resumeTimer = setTimeout(() => resumeWait.abort(), resumeWaitMs);
+      // The pick-up waits on the viewer alone, as it always has; only the remembered address is
+      // given a bounded turn before the source itself is asked.
       const next = await fetchSource(
         { headers: { ...headers, range: resumeRange } },
-        AbortSignal.any([controller.signal, resumeWait.signal]),
+        controller.signal,
         () => res.destroyed || res.writableEnded || controller.signal.aborted,
-        Math.max(0, resumeDeadline - Date.now()),
-        true,
-      ).catch(() => undefined).finally(() => clearTimeout(resumeTimer));
+        SOURCE_HEADER_MS,
+        false,
+      ).catch(() => undefined);
       // Only the very next bytes, reaching the end already promised, may be spliced in.
       const resumed206 = /^bytes (\d+)-(\d+)\//.exec(next?.headers.get("content-range") ?? "");
       if (!next || next.status !== 206 || !next.body || !resumed206 || Number(resumed206[1]) !== from + delivered || Number(resumed206[2]) < from + expected - 1) {
