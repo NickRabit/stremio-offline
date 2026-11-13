@@ -261,6 +261,11 @@ resolution; otherwise return `hasMore` and omit it. `?rows=resume` re-requests
 one row. Local and catalogue sources are fetched independently so a slow addon
 cannot hold the page.
 
+The client keeps the last Home per account in `localStorage` under
+`home-cache:<account>`, tagged with `HOME_CACHE_FORMAT` rather than the app
+version, so it survives releases. The number is raised when the stored shape
+changes. A card that fails validation discards the stored Home.
+
 No aggregation cache at first. If measurement asks for one, key it by account and
 permissions version and invalidate it on a progress write, a download completing,
 a library change and a grant change.

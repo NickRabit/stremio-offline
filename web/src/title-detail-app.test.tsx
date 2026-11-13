@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { STARTUP_GETS, startStartupGets } from "./api";
 import { App } from "./App";
 import { setLocale } from "./i18n";
 import { clearTitleExtras } from "./title-extras";
@@ -460,6 +461,17 @@ describe("title detail from the catalogue", () => {
     await until(() => localStorage.getItem("start-view") === "home"
       && ["/api/follows", "/api/follows/new-episodes", "/api/downloads", "/api/watchlist", "/api/searchable"]
         .every((path) => requestCounts.get(path) === 1));
+  });
+
+  it("asks the early start-up endpoints once when main.tsx started them", async () => {
+    settings.startView = "home";
+    startStartupGets();
+
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector('nav button[aria-label="Home"].active') !== null);
+    await until(() => STARTUP_GETS.every((path) => requestCounts.get(path) === 1));
+
+    expect(STARTUP_GETS.map((path) => requestCounts.get(path))).toEqual([1, 1, 1]);
   });
 
   it("draws the first frame with the remembered tile layout and keeps the server's one", async () => {
