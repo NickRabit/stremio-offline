@@ -183,6 +183,9 @@ fun PlayerScreen(
   // The set stays awake for as long as the viewer means to be watching and nothing has failed.
   KeepScreenOn(enabled = wantsPlay && state.error == null)
   var position by remember { mutableDoubleStateOf(0.0) }
+  // What the timeline draws: the target of a seek the server has not answered yet. Subtitle cues,
+  // segment skips and the next-episode point follow the picture, so they keep [position].
+  var timelinePosition by remember { mutableDoubleStateOf(0.0) }
   // Set once the session has been released. Coming back starts a fresh one, paused, at the
   // position left behind. A screensaver does not set this: the same session stays.
   var parked by remember { mutableStateOf(false) }
@@ -835,7 +838,8 @@ fun PlayerScreen(
   LaunchedEffect(exoPlayer) {
     while (isActive) {
       controller.onPlayerPosition(exoPlayer.currentPosition / 1000.0)
-      position = controller.shownPosition
+      position = controller.position
+      timelinePosition = controller.shownPosition
       delay(250)
     }
   }
@@ -1088,7 +1092,7 @@ fun PlayerScreen(
   val qualityShown = state.started
 
   PlayerOverlayShell(
-    position = position,
+    position = timelinePosition,
     duration = state.duration,
     playing = playing,
     facts = state.playing,
