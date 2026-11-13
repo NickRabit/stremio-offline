@@ -1984,7 +1984,12 @@ export class DownloadQueue {
   async resume(id: string) {
     // A row can read paused while its aborted transfer still settles; resuming under it would
     // take away the pause mark the transfer reads, and the abort would count as a dropped line.
-    if (this.active.has(id)) await this.runningById.get(id);
+    // Only a paused row is worth waiting for; a running one is refused now, or a stale click
+    // would hang and later undo a pause the person made in the meantime.
+    if (this.active.has(id)) {
+      if (this.require(id).status !== "paused") throw new AppError("This item cannot be resumed.", "err.cannotResume");
+      await this.runningById.get(id);
+    }
     const job = this.require(id);
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
     const pausedLibraryId = job.libraryId;

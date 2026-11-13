@@ -2575,6 +2575,27 @@ test("resuming a job the window paused while its transfer settles does not count
   }
 });
 
+test("a stale Resume on a running transfer is refused at once and cannot undo a later pause", async () => {
+  const { directory, queue } = await tempQueue();
+  const { server, port } = await rangeServer({ total: 64 * MB });
+  try {
+    const job = await queue.add("Running", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.get(job.id)?.status === "downloading" && queue.get(job.id)!.received > 0, 30_000);
+    const stale = queue.resume(job.id).then(() => "resumed", (error: unknown) => (error as { messageKey?: string }).messageKey);
+    const outcome = await Promise.race([stale, new Promise((resolve) => setTimeout(() => resolve("still waiting"), 500))]);
+    await queue.pause(job.id);
+    await settled(queue, job.id);
+    await stale;
+    assert.equal(outcome, "err.cannotResume");
+    assert.equal(queue.get(job.id)?.status, "paused");
+    assert.equal(queue.get(job.id)?.pauseReason, "user", "the person's pause stands");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Download now refuses a running transfer at once instead of waiting for it", async () => {
   const clock = { value: windowAt(1) };
   const { directory, queue } = await tempQueue(windowHooks(clock, () => ({ start: "01:00", end: "07:00" })));
