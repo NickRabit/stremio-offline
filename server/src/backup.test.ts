@@ -38,6 +38,47 @@ test("a backup keeps the settings, the order and the addon's sensitive URL", () 
   assert.deepEqual(parseSettingsBackup(backup).addons, backup.addons);
 });
 
+test("a download window survives backup and an invalid one is dropped", () => {
+  const settings = { ...defaultSettings(), downloadWindow: { start: "22:00", end: "06:00" } };
+  const backup = createSettingsBackup(settings, []);
+  assert.deepEqual(backup.settings.downloadWindow, { start: "22:00", end: "06:00" });
+  assert.deepEqual(parseSettingsBackup(JSON.parse(JSON.stringify(backup))).settings.downloadWindow, {
+    start: "22:00",
+    end: "06:00",
+  });
+
+  for (const downloadWindow of [
+    { start: "7:00", end: "07:00" },
+    { start: "01:00", end: "01:00" },
+    { start: "25:00", end: "07:00" },
+  ]) {
+    const parsed = parseSettingsBackup({
+      format: "stremio-offline-settings",
+      version: 2,
+      settings: { downloadWindow },
+      addons: [],
+    });
+    assert.equal("downloadWindow" in parsed.settings, false);
+  }
+});
+
+test("a speed limit survives backup and an invalid one is dropped", () => {
+  const settings = { ...defaultSettings(), downloadSpeedLimitMbps: 50 };
+  const backup = createSettingsBackup(settings, []);
+  assert.equal(backup.settings.downloadSpeedLimitMbps, 50);
+  assert.equal(parseSettingsBackup(JSON.parse(JSON.stringify(backup))).settings.downloadSpeedLimitMbps, 50);
+
+  for (const downloadSpeedLimitMbps of [0, 8, -5, "fast", 1.5, null]) {
+    const parsed = parseSettingsBackup({
+      format: "stremio-offline-settings",
+      version: 2,
+      settings: { downloadSpeedLimitMbps },
+      addons: [],
+    });
+    assert.equal("downloadSpeedLimitMbps" in parsed.settings, false);
+  }
+});
+
 test("a backup distinguishes same-name providers by URL and omits installation-local addon keys", () => {
   const addons = [
     {

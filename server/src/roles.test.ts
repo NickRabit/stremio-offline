@@ -154,6 +154,7 @@ const ALLOWED: Array<[string, string]> = [
   ["POST", "/downloads/job-1/pause"],
   ["POST", "/downloads/job-1/resume"],
   ["POST", "/downloads/job-1/retry"],
+  ["POST", "/downloads/job-1/now"],
   ["DELETE", "/downloads/job-1"],
   ["PATCH", "/settings"],
 ];

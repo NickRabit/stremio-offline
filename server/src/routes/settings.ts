@@ -35,6 +35,8 @@ import { clearTrailerCache } from "../trailers.js";
 import type { AddonRecord } from "../types.js";
 import { PERSONAL_SETTINGS, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
+import { DOWNLOAD_SPEED_LIMITS } from "../byte-rate.js";
+import { parseDownloadWindow, serverTimeZone } from "../download-window.js";
 
 /** The instance settings, one person's own preferences and the backup that carries both. */
 export interface SettingsDeps extends RouteContext {
@@ -201,7 +203,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const instance = publicSettings(store.settings());
     const prefs = prefsOf(req);
     return {
-      ...(currentUser(req)?.role === "admin" ? instance : memberSettings(instance)),
+      ...(currentUser(req)?.role === "admin" ? { ...instance, serverTimeZone: serverTimeZone() } : memberSettings(instance)),
       ...prefs,
       streamSort: normalizeStreamSort(prefs.streamSort, store.sourceProfiles(), prefs.defaultRulesProfileId),
     };
@@ -442,6 +444,23 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     // it would answer nobody for an account switched off or signed out while they ran.
     const actor = currentUser(req);
     if (actor?.role !== "admin" && touchesInstance) throw new ForbiddenError();
+    const postedDownloadWindow = req.body.downloadWindow === undefined
+      ? undefined
+      : parseDownloadWindow(req.body.downloadWindow);
+    if (postedDownloadWindow === "invalid") {
+      throw new AppError("The download window is not valid.", "err.downloadWindowInvalid", 400);
+    }
+    const postedSpeedLimit = req.body.downloadSpeedLimitMbps;
+    let speedLimitTouched = false;
+    let speedLimitUpdate = 0;
+    if (postedSpeedLimit !== undefined) {
+      if (typeof postedSpeedLimit !== "number" || !Number.isFinite(postedSpeedLimit)
+        || !(DOWNLOAD_SPEED_LIMITS as readonly number[]).includes(postedSpeedLimit)) {
+        throw new AppError("The speed limit is not valid.", "err.downloadSpeedLimitInvalid", 400);
+      }
+      speedLimitTouched = true;
+      speedLimitUpdate = postedSpeedLimit;
+    }
     let realDebridToken: string | undefined;
     if (req.body.realDebridToken !== undefined) {
       realDebridToken = normalizeToken(req.body.realDebridToken);
@@ -502,6 +521,14 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
       if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
       if (req.body.downloadSegments !== undefined) state.settings.downloadSegments = Math.max(1, Math.min(8, Number(req.body.downloadSegments) || 1));
+      if (req.body.downloadWindow !== undefined) {
+        if (postedDownloadWindow === undefined) delete state.settings.downloadWindow;
+        else state.settings.downloadWindow = postedDownloadWindow;
+      }
+      if (speedLimitTouched) {
+        if (speedLimitUpdate === 0) delete state.settings.downloadSpeedLimitMbps;
+        else state.settings.downloadSpeedLimitMbps = speedLimitUpdate;
+      }
       if (req.body.uiLanguage !== undefined && isUiLanguage(req.body.uiLanguage)) prefs.uiLanguage = req.body.uiLanguage;
       if (req.body.audioLanguage !== undefined) prefs.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? prefs.audioLanguage;
       if (req.body.subtitleLanguage !== undefined) prefs.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? prefs.subtitleLanguage;
