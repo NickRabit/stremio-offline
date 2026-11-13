@@ -23,6 +23,7 @@ import type { PlaybackManager, PlaybackOptions } from "../playback.js";
 import type { RangeCache } from "../range-cache.js";
 import { RangeNotSatisfiable, ReadAheadFull, UnexpectedAnswer, type OpenRange, type ReadAheadBlock, type RemoteReadAhead } from "../remote-read-ahead.js";
 import { redirectedHeaders, safeFetch, validateRemoteUrl } from "../security.js";
+import { SourceLanding } from "../source-landing.js";
 import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { UserPrefs } from "../store.js";
 import type { StreamItem } from "../types.js";
@@ -76,6 +77,7 @@ const READ_AHEAD_GRACE_MS = 50;
 /** Addon sources whose answer to a bounded read was not a plain file part: a playlist, or a host
  *  that ignores ranges. They keep the ordinary transfer. */
 const unblockable = new Set<string>();
+const sourceLanding = new SourceLanding();
 const PLAYLIST_TYPE = /mpegurl|dash\+xml/i;
 const DOCUMENT_MEDIA_TYPES = new Set([
   "text/html",
@@ -635,9 +637,59 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         if (error && !res.headersSent) res.status(404).end();
       });
     }
-    await validateRemoteUrl(raw);
+    const sourceUrl = await validateRemoteUrl(raw);
     countBytes(res, playbackMeta(stream), ownerNow);
     const cacheKey = `${resource.parent ?? resource.id}:${typeof req.params.signed === "string" ? req.params.signed : ""}`;
+    const landingKey = typeof req.params.signed === "string" ? undefined : cacheKey;
+    const rememberLanding = (url: string) => {
+      if (!landingKey) return;
+      if (!url || url === sourceUrl.toString()) sourceLanding.forget(landingKey);
+      else sourceLanding.put(landingKey, url);
+    };
+    const fetchSource = async (
+      init: RequestInit,
+      signal: AbortSignal,
+      abortedByClient: () => boolean,
+      waitMs: number,
+      recordSuccess: boolean,
+    ): Promise<Response> => {
+      const landed = landingKey ? sourceLanding.get(landingKey) : undefined;
+      if (!landed || landed === raw) {
+        if (landed && landingKey) sourceLanding.forget(landingKey);
+        return safeFetch(raw, { ...init, signal });
+      }
+      log("DEBUG", "Asking where the source last redirected to", { req: req.id, range: (init.headers && new Headers(init.headers).get("range")) ?? "whole file" });
+      const phase = new AbortController();
+      const timer = setTimeout(() => phase.abort(), Math.max(1, Math.ceil(waitMs / 2)));
+      try {
+        const response = await safeFetch(landed, {
+          ...init,
+          headers: redirectedHeaders(init.headers ?? {}, sourceUrl, new URL(landed)),
+          signal: AbortSignal.any([signal, phase.signal]),
+        });
+        // A link that has run out is often answered with a page saying so, and with 200.
+        const page = servedMediaType(response.headers.get("content-type") ?? "") === "application/octet-stream"
+          || /^application\/json\b/i.test(response.headers.get("content-type") ?? "");
+        if ([200, 206].includes(response.status) && !page) {
+          if (recordSuccess) rememberLanding(response.url);
+          return response;
+        }
+        if (response.status === 416) return response;
+        await response.body?.cancel().catch(() => undefined);
+        sourceLanding.forget(landingKey!);
+        log("INFO", "The remembered address stopped answering, asking the source again", { req: req.id, status: response.status, ...(page ? { answer: "a page, not a file" } : {}) });
+      } catch (error) {
+        if (abortedByClient()) throw error;
+        sourceLanding.forget(landingKey!);
+        const reason = error instanceof Error && error.name === "AbortError"
+          ? "timed out waiting for headers"
+          : "the request failed before headers";
+        log("INFO", "The remembered address stopped answering, asking the source again", { req: req.id, reason });
+      } finally {
+        clearTimeout(timer);
+      }
+      return safeFetch(raw, { ...init, signal });
+    };
     const askedRange = String(req.headers.range ?? "");
     let alreadySent = 0;
     // An internal ranged read is served from bounded blocks: a demuxer jumping between a film's
@@ -653,6 +705,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       const key = `addon:${cacheKey}`;
       const proxyHeaders = stream.behaviorHints?.proxyHeaders?.request ?? {};
       let silent = false;
+      let landingIsFile = false;
       const quietNow = (error: unknown): unknown => {
         noteSourceQuiet(resource.parent ?? resource.id);
         log("WARN", "The source did not respond", { req: req.id, url: raw, range: askedRange, reason: `no response within ${SOURCE_HEADER_MS / 1000} s`, attempts: 1 });
@@ -661,9 +714,18 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       // The same header wait as the ordinary transfer: a host that never answers is given up on
       // once, and marked quiet, rather than waited out here and then again below.
       const open: OpenRange = async (range, signal) => {
+        const deadline = Date.now() + SOURCE_HEADER_MS;
         const waiting = new AbortController();
         const timer = setTimeout(() => { silent = true; waiting.abort(); }, SOURCE_HEADER_MS);
-        try { return await safeFetch(raw, { method: "GET", headers: { ...proxyHeaders, range }, signal: AbortSignal.any([signal, waiting.signal]) }); }
+        try {
+          return await fetchSource(
+            { method: "GET", headers: { ...proxyHeaders, range } },
+            AbortSignal.any([signal, waiting.signal]),
+            () => res.destroyed || res.writableEnded,
+            Math.max(0, deadline - Date.now()),
+            landingIsFile,
+          );
+        }
         finally { clearTimeout(timer); }
       };
       const start = Number(wanted[1]);
@@ -675,6 +737,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         if ((first.contentType && PLAYLIST_TYPE.test(first.contentType)) || /\.(m3u8|mpd)$/i.test(new URL(first.url || raw).pathname)) throw new UnexpectedAnswer();
         if (start === 0 && rangeStartsAtZero(askedRange)
           && playlistPrefixState(await readAheadPrefix(remoteReadAhead, first)) === "playlist") throw new UnexpectedAnswer();
+        landingIsFile = true;
+        rememberLanding(first.url);
       } catch (error) {
         if (error instanceof RangeNotSatisfiable) {
           if (error.contentRange && /^bytes \*\/\d+$/.test(error.contentRange)) res.setHeader("content-range", error.contentRange);
@@ -741,6 +805,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // Handed on from where the cached start left off, so the source is asked only for the rest.
     if (alreadySent) headers.range = `bytes=${Number(/bytes=(\d*)-/.exec(askedRange)?.[1] || 0) + alreadySent}-${/bytes=\d*-(\d+)/.exec(askedRange)?.[1] ?? ""}`;
     const controller = new AbortController();
+    const headerWait = new AbortController();
+    const requestSignal = AbortSignal.any([controller.signal, headerWait.signal]);
     // How many reads one film has open at the source at once is what a host that counts
     // connections reacts to, and nothing else in the log says it.
     const sourceKey = resource.parent ?? resource.id;
@@ -754,7 +820,9 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     log("DEBUG", "Asking the source", { req: req.id, range: headers.range ?? "whole file", open: open() });
     let headerTimedOut = false;
     const quiet = sourceIsQuiet(resource.parent ?? resource.id);
-    const headerTimeout = setTimeout(() => { headerTimedOut = true; controller.abort(); }, quiet ? SOURCE_QUIET_HEADER_MS : SOURCE_HEADER_MS);
+    const headerTimeoutMs = quiet ? SOURCE_QUIET_HEADER_MS : SOURCE_HEADER_MS;
+    const headerDeadline = Date.now() + headerTimeoutMs;
+    const headerTimeout = setTimeout(() => { headerTimedOut = true; headerWait.abort(); }, headerTimeoutMs);
     // Seek and stop close the previous Range. Without aborting here the old
     // upstream keeps downloading from the debrid host and starves the new one.
     //
@@ -770,7 +838,16 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     let upstream: Response;
     let attempt = 1;
     for (; ; attempt += 1) {
-      try { upstream = await safeFetch(raw, { method: req.method === "HEAD" ? "HEAD" : "GET", headers, signal: controller.signal }); break; }
+      try {
+        upstream = await fetchSource(
+          { method: req.method === "HEAD" ? "HEAD" : "GET", headers },
+          requestSignal,
+          () => res.destroyed || res.writableEnded || controller.signal.aborted,
+          Math.max(0, headerDeadline - Date.now()),
+          false,
+        );
+        break;
+      }
       catch (error) {
         if (res.destroyed || res.writableEnded) {
           clearTimeout(headerTimeout);
@@ -828,6 +905,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       }
       body = Readable.fromWeb(sniffed.stream as never);
     }
+    if (!explicitPlaylist) rememberLanding(upstream.url);
     if (!alreadySent) {
       res.status(upstream.status);
       for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
@@ -911,7 +989,17 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       log("WARN", "The transfer broke off, picking it up where it stopped", { req: req.id, url: raw, at: from + delivered, delivered, expected, resumed });
       await sleep(SOURCE_RETRY_MS * resumed);
       const resumeRange = `bytes=${from + delivered}-${until !== undefined ? until : ""}`;
-      const next = await safeFetch(raw, { headers: { ...headers, range: resumeRange }, signal: controller.signal }).catch(() => undefined);
+      const resumeWait = new AbortController();
+      const resumeWaitMs = quiet ? SOURCE_QUIET_HEADER_MS : SOURCE_HEADER_MS;
+      const resumeDeadline = Date.now() + resumeWaitMs;
+      const resumeTimer = setTimeout(() => resumeWait.abort(), resumeWaitMs);
+      const next = await fetchSource(
+        { headers: { ...headers, range: resumeRange } },
+        AbortSignal.any([controller.signal, resumeWait.signal]),
+        () => res.destroyed || res.writableEnded || controller.signal.aborted,
+        Math.max(0, resumeDeadline - Date.now()),
+        true,
+      ).catch(() => undefined).finally(() => clearTimeout(resumeTimer));
       // Only the very next bytes, reaching the end already promised, may be spliced in.
       const resumed206 = /^bytes (\d+)-(\d+)\//.exec(next?.headers.get("content-range") ?? "");
       if (!next || next.status !== 206 || !next.body || !resumed206 || Number(resumed206[1]) !== from + delivered || Number(resumed206[2]) < from + expected - 1) {
