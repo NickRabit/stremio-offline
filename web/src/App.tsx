@@ -79,6 +79,30 @@ import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
 import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { DownloadDrainView, DownloadWindowState } from "../../server/src/api-types";
+
+export const queueDrainNotice = (
+  drain: DownloadDrainView | null,
+  username: string,
+  lastNotified: { current: string | null },
+  storage?: Pick<Storage, "getItem" | "setItem">,
+): string | null => {
+  if (!drain || lastNotified.current === drain.id) return null;
+  const key = `downloads-drain-seen:${username}`;
+  try {
+    if ((storage ?? localStorage).getItem(key) === drain.id) {
+      lastNotified.current = drain.id;
+      return null;
+    }
+  } catch { /* storage may be unavailable */ }
+  lastNotified.current = drain.id;
+  try { (storage ?? localStorage).setItem(key, drain.id); } catch { /* storage may be unavailable */ }
+  return t(drain.paused > 0 ? "downloads.queueFinishedWithPaused" : "downloads.queueFinished", {
+    completed: drain.completed,
+    failed: drain.failed,
+    paused: drain.paused,
+  });
+};
 
 const RemoteLibraryBrowser = lazyScreen(() => import("./RemoteLibraryBrowser").then((module) => module.RemoteLibraryBrowser));
 const StatsPanel = lazyScreen(() => import("./Stats").then((module) => module.StatsPanel));
@@ -289,7 +313,7 @@ export function App() {
   const [season, setSeason] = useState<number | null>(null);
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: Record<string, unknown>; exactSource?: { stream: Stream; label: string; preferred: boolean }; detail?: CatalogueDetailTarget } | null>(null);
   const [seriesBulk, setSeriesBulk] = useState<SeriesBulkRequest | null>(null);
-  const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
+  const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [queueWindow, setQueueWindow] = useState<DownloadWindowState | null>(null); const [speedLimitMbps, setSpeedLimitMbps] = useState<number | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
   const [settings, setSettings] = useState<AppSettings>(() => ({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, upNextAt: "end", skipSegmentsAuto: false, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false, ...rememberedLayout() }));
   // Only what the server said is remembered: the guess above must not overwrite the last answer.
@@ -1400,7 +1424,8 @@ export function App() {
   };
   const downloadsSeen = useRef(false);
   const jobStatus = useRef(new Map<string, DownloadJob["status"]>());
-  const applyDownloads = (snapshot: { jobs?: DownloadJob[]; halt?: QueueHalt | null; deviceTransfers?: DeviceTransfer[] } | DownloadJob[]) => {
+  const lastDrainNotified = useRef<string | null>(null);
+  const applyDownloads = (snapshot: { jobs?: DownloadJob[]; halt?: QueueHalt | null; window?: DownloadWindowState | null; speedLimitMbps?: number | null; deviceTransfers?: DeviceTransfer[]; drain?: DownloadDrainView | null } | DownloadJob[]) => {
     const jobs = Array.isArray(snapshot) ? snapshot : snapshot.jobs ?? [];
     if (downloadsSeen.current) {
       for (const job of jobs) {
@@ -1417,10 +1442,16 @@ export function App() {
         }
       }
     }
+    const drainNotice = Array.isArray(snapshot)
+      ? null
+      : session ? queueDrainNotice(snapshot.drain ?? null, session.username, lastDrainNotified) : null;
+    if (drainNotice) notify(drainNotice);
     downloadsSeen.current = true;
     jobStatus.current = new Map(jobs.map((job) => [job.id, job.status]));
     setDownloads(jobs);
     setQueueHalt(Array.isArray(snapshot) ? null : snapshot.halt ?? null);
+    setQueueWindow(Array.isArray(snapshot) ? null : snapshot.window ?? null);
+    setSpeedLimitMbps(Array.isArray(snapshot) ? null : snapshot.speedLimitMbps ?? null);
     setDeviceTransfers(Array.isArray(snapshot) ? [] : snapshot.deviceTransfers ?? []);
   };
   const loadDownloads = () => api.downloads().then(applyDownloads).catch(fail);
@@ -4371,7 +4402,7 @@ export function App() {
         onRemove={(item) => void removeFavorite(item)}
         hasMore={favorites.length < favoritesTotal} loadingMore={favoritesLoadingMore}
         onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>}
-      {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
+      {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} queueWindow={queueWindow} speedLimitMbps={speedLimitMbps} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <LazyScreenBoundary><Suspense fallback={null}><StatsPanel.Screen key={statsReset} onError={fail}/></Suspense></LazyScreenBoundary>}
       {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} libraries={libraries} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
       {view === "settings" && <LazyScreenBoundary><Suspense fallback={null}><SettingsPage.Screen build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSourceProfilesChanged={reloadSourceRules} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
@@ -4510,7 +4541,7 @@ export function App() {
       follow={{ create: { metaId: followStart.id, name: followStart.name, poster: followStart.poster, ...(followStart.addonKey ? { addonKey: followStart.addonKey } : {}) }, onFollowed: (follow) => followed(followStart, follow) }} onClose={() => setFollowStart(null)}/>}
     {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
     {pairLink && !restricted && <PairDeviceDialog session={session!} initialCode={pairLink} onClose={() => setPairLink(null)} onNotify={notify}/>}
-    {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
+    {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button aria-label={t("common.close")} title={t("common.close")} onClick={() => {setError("");setMessage("");}}><X aria-hidden="true"/></button></div>}
   </div>
   </TitleExtrasActions.Provider>;
 }
