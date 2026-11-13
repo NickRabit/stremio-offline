@@ -127,7 +127,9 @@ const openLibrary = async () => {
     .find((button) => button.textContent?.trim() === "Library");
   expect(libraryButton).toBeTruthy();
   await act(async () => { libraryButton!.click(); });
-  await flush();
+  // The library browser is a separate chunk. The view stays put until that import settles.
+  for (let step = 0; step < 30 && host.querySelector("main.view-library .browse-bar") === null; step += 1) await flush();
+  expect(host.querySelector("main.view-library .browse-bar")).toBeTruthy();
 };
 
 const searchButton = () => [...host.querySelectorAll<HTMLButtonElement>(".browse-tools button")]

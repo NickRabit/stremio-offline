@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, Suspense, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { genreLabel } from "./genres";
 import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
@@ -12,7 +12,6 @@ import { TrailerPlayer } from "./TrailerPlayer";
 import { IdentifyDialog } from "./IdentifyDialog";
 import { AddonManager } from "./AddonManager";
 import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
-import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { LocalLibraryDetail, type AlternativePlay } from "./LocalLibraryDetail";
 import { EpisodePicker } from "./EpisodePicker";
 import { chosenEpisode as chosenLocalEpisode, episodeName, useLocalSeries } from "./LocalSeriesDetail";
@@ -31,7 +30,6 @@ import { SeriesBulkDialog } from "./SeriesBulkDialog";
 import { FollowDialog, toEpisodes } from "./FollowDialog";
 import { FollowingPage } from "./FollowingPage";
 import { ResumeView } from "./ResumeView";
-import { StatsPanel } from "./Stats";
 import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
@@ -74,7 +72,7 @@ import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { MediaGallery } from "./MediaGallery";
 import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage } from "./gallery-images";
 import { loadTitleGallery, useCatalogueStills, type CatalogueRef } from "./title-enrichment";
-import { SettingsPage } from "./SettingsPage";
+import { lazyScreen, LazyScreenBoundary } from "./lazy-screen";
 import { rememberedStartView, rememberStartView, resolveStartView } from "./start-view";
 import { layoutKey, rememberedLayout, rememberLayout } from "./layout-memory";
 import { useLibrarySources } from "./library-sources";
@@ -105,6 +103,10 @@ export const queueDrainNotice = (
     paused: drain.paused,
   });
 };
+
+const RemoteLibraryBrowser = lazyScreen(() => import("./RemoteLibraryBrowser").then((module) => module.RemoteLibraryBrowser));
+const StatsPanel = lazyScreen(() => import("./Stats").then((module) => module.StatsPanel));
+const SettingsPage = lazyScreen(() => import("./SettingsPage").then((module) => module.SettingsPage));
 
 /** The library choices this browser kept before they moved onto the account. Read once and
  *  handed to the visible libraries; private mode may forbid storage, hence the try/catch. */
@@ -171,8 +173,28 @@ const orderedVideos = (videos: Video[]) => videos.map((video, index) => ({ video
 }).map(({ video }) => video);
 export function App() {
   const { t } = useI18n();
-  const [view, setView] = useState<View>(() => rememberedStartView()); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
+  const [view, setViewState] = useState<View>(() => rememberedStartView()); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
   const firstView = useRef<View>(view);
+  // The Library is this visit's first page: start its chunk during this render, alongside
+  // the requests the effects below fire, rather than with the idle prefetch.
+  const preloadStartLibrary = useRef(firstView.current === "library");
+  if (preloadStartLibrary.current) {
+    preloadStartLibrary.current = false;
+    void RemoteLibraryBrowser.preload();
+  }
+  useEffect(() => {
+    const prefetch = () => {
+      void RemoteLibraryBrowser.preload();
+      void StatsPanel.preload();
+      void SettingsPage.preload();
+    };
+    if ("requestIdleCallback" in window) {
+      const handle = window.requestIdleCallback(prefetch, { timeout: 3000 });
+      return () => window.cancelIdleCallback(handle);
+    }
+    const handle = setTimeout(prefetch, 1500);
+    return () => clearTimeout(handle);
+  }, []);
   // Until the first answer, an empty list means "not read yet", not "no addon installed".
   const [catalogsKnown, setCatalogsKnown] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -187,6 +209,9 @@ export function App() {
   /** True once the person has chosen a view themselves, so the start-page switch never
    *  drags them away from where they went on purpose. Reset on a fresh sign-in. */
   const navigated = useRef(false);
+  const openViewTicket = useRef(0);
+  // Every view change, whichever path makes it, outdates a navigation still waiting for its chunk.
+  const setView = useCallback((next: View) => { openViewTicket.current += 1; setViewState(next); }, []);
   const startupViewTransition = useRef(false);
   const startupPersonalRefresh = useRef(false);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
@@ -1334,7 +1359,7 @@ export function App() {
   };
   /** Clicking the section we are already in resets it; otherwise the last filters
    * and the page position are restored. */
-  const openView = (target: View) => {
+  const openViewNow = (target: View) => {
     navigated.current = true;
     setSearchReturn(false);
     // A shared detail is drawn over the section that opened it, and the menu is a way out of it:
@@ -1369,6 +1394,20 @@ export function App() {
     const list = target === "catalog" ? gridRef.current : null;
     if (list) list.scrollTop = 0;
     window.scrollTo(0, 0);
+  };
+  const openView = (target: View) => {
+    const ticket = ++openViewTicket.current;
+    const lazyTarget = target === "settings" ? SettingsPage : target === "stats" ? StatsPanel : target === "library" ? RemoteLibraryBrowser : null;
+    if (lazyTarget && !lazyTarget.ready()) {
+      // Before the chunk arrives, so the start-page effect does not treat the click as
+      // "nobody has navigated" and send them somewhere else while the import is in flight.
+      navigated.current = true;
+      void lazyTarget.preload().then(() => {
+        if (ticket === openViewTicket.current) openViewNow(target);
+      });
+      return;
+    }
+    openViewNow(target);
   };
   const toggleSidebar = () => setSidebarCollapsed((current) => {
     const next = !current;
@@ -4075,7 +4114,7 @@ export function App() {
       {view === "library" && <section ref={libraryPageRef} hidden={catalogueDetail ? true : undefined} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
         <Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
-        <RemoteLibraryBrowser onRootPresenceChange={setRemoteRootsPresent} hideRoots={Boolean(browsePath) || Boolean(localDetail)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
+        <LazyScreenBoundary><Suspense fallback={null}><RemoteLibraryBrowser.Screen onRootPresenceChange={setRemoteRootsPresent} hideRoots={Boolean(browsePath) || Boolean(localDetail)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
           sourceProfiles={sourceProfiles} defaultSort={defaultStreamSort}
           libraryTileShape={settings.libraryTileShape} onToggleLibraryShape={() => void toggleShape("libraryTileShape")}
           views={views} onPersistPrefs={persistRemotePrefs}
@@ -4089,7 +4128,7 @@ export function App() {
           {...(bulkDownloadAllowed ? { onSeriesBulk: setSeriesBulk } : {})}
           onNotify={notify}
           accountScope={session!.username} addons={addons} realDebridConfigured={settings.realDebridConfigured}
-         />
+         /></Suspense></LazyScreenBoundary>
         {!remoteOpen && <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
@@ -4364,9 +4403,9 @@ export function App() {
         hasMore={favorites.length < favoritesTotal} loadingMore={favoritesLoadingMore}
         onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>}
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} queueWindow={queueWindow} speedLimitMbps={speedLimitMbps} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
-      {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
+      {view === "stats" && <LazyScreenBoundary><Suspense fallback={null}><StatsPanel.Screen key={statsReset} onError={fail}/></Suspense></LazyScreenBoundary>}
       {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} libraries={libraries} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
-      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSourceProfilesChanged={reloadSourceRules} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
+      {view === "settings" && <LazyScreenBoundary><Suspense fallback={null}><SettingsPage.Screen build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSourceProfilesChanged={reloadSourceRules} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
         rememberChosenStartView(restored.settings.startView);
@@ -4375,7 +4414,7 @@ export function App() {
         // instance's own, or at the default; say how many had to move.
         if (restored.remapped) notify(t("settings.importRemapped", { count: restored.remapped }));
         await refresh(true);
-      }} onNotify={notify} onError={fail}/>}
+      }} onNotify={notify} onError={fail}/></Suspense></LazyScreenBoundary>}
       </>}
     </main>
     <TrailerPlayer trailer={trailerOpen} onClose={() => setTrailerOpen(null)}/>

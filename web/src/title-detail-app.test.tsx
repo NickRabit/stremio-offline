@@ -3,6 +3,31 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { STARTUP_GETS, startStartupGets } from "./api";
 import { App } from "./App";
+
+const settingsChunk = vi.hoisted(() => {
+  let resolveHeld: (() => void) | null = null;
+  let held: Promise<void> | null = null;
+  return {
+    hold() {
+      if (held) return;
+      held = new Promise<void>((resolve) => { resolveHeld = resolve; });
+    },
+    release() {
+      const resolve = resolveHeld;
+      resolveHeld = null;
+      held = null;
+      resolve?.();
+    },
+    pending() {
+      return held ?? Promise.resolve();
+    },
+  };
+});
+
+vi.mock("./SettingsPage", async () => {
+  await settingsChunk.pending();
+  return vi.importActual<typeof import("./SettingsPage")>("./SettingsPage");
+});
 import { setLocale } from "./i18n";
 import { clearTitleExtras } from "./title-extras";
 import type { Meta, SearchSnapshot, Settings } from "./types";
@@ -329,6 +354,7 @@ let heldReleases: Array<() => void> = [];
 const held = () => new Promise<void>((resolve) => { heldReleases.push(resolve); });
 
 afterEach(async () => {
+  settingsChunk.release();
   for (const release of heldReleases) release();
   heldReleases = [];
   await flush();
@@ -370,6 +396,32 @@ const typeInto = async (input: HTMLInputElement, value: string) => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 };
+
+describe("lazy settings navigation", () => {
+  it("keeps the current page on screen until the Settings chunk loads", async () => {
+    settingsChunk.hold();
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector("main.view-catalog") !== null);
+    const main = host.querySelector("main");
+    await clickNav("Settings");
+    expect(host.querySelector("main")).toBe(main);
+    expect(main!.classList.contains("view-catalog")).toBe(true);
+    expect(host.querySelector("main.view-settings")).toBeNull();
+    expect(host.querySelector("#settings-tab-home")).toBeNull();
+    // Another way out while the chunk is on its way wins over the navigation still waiting.
+    await act(async () => { (host.querySelector("button.brand-home") as HTMLButtonElement).click(); });
+    settingsChunk.release();
+    for (let step = 0; step < 20; step += 1) await flush();
+    expect(host.querySelector("main.view-catalog")).not.toBeNull();
+    expect(host.querySelector("#settings-tab-home")).toBeNull();
+    await clickNav("Settings");
+    // importActual of SettingsPage is the whole settings graph. Under a full run that
+    // transform takes longer than the shared 30-flush helper, so this wait has its own budget.
+    const deadline = Date.now() + 8_000;
+    while (host.querySelector("#settings-tab-home") === null && Date.now() < deadline) await flush();
+    await until(() => host.querySelector("#settings-tab-home") !== null);
+  });
+});
 
 describe("title detail from the catalogue", () => {
   it("starts a film's addon sources without waiting for subtitles", async () => {
