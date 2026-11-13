@@ -16,10 +16,13 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,7 +35,7 @@ class PlaybackControllerTest {
     audioDecode = listOf("ac3"),
   )
 
-  private class FakeApi : PlaybackApi {
+  private open class FakeApi : PlaybackApi {
     val started = mutableListOf<Triple<String, ClientCapabilitiesDto, Double>>()
     val seeks = mutableListOf<Double>()
     val escalates = mutableListOf<Double>()
@@ -53,6 +56,8 @@ class PlaybackControllerTest {
     var failSave = false
     var failStart = false
     var seekFailure: Throwable? = null
+    var seekAnswer: PlaybackDescriptorDto? = null
+    var seekGate: CompletableDeferred<Unit>? = null
     var trackFailure: Throwable? = null
     var seekDelayMs = 0L
     var trackDelayMs = 0L
@@ -95,8 +100,9 @@ class PlaybackControllerTest {
     override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto {
       seeks += time
       if (seekDelayMs > 0) delay(seekDelayMs)
+      seekGate?.await()
       seekFailure?.let { throw it }
-      return descriptor.copy(mode = "remux", url = "playlist-$time.m3u8", offset = time, playlist = true, copy = CopyDto(video = true, audio = true))
+      return seekAnswer ?: descriptor.copy(mode = "remux", url = "playlist-$time.m3u8", offset = time, playlist = true, copy = CopyDto(video = true, audio = true))
     }
 
     override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto {
@@ -274,6 +280,117 @@ class PlaybackControllerTest {
   }
 
   @Test
+  fun `an unanswered hls seek is shown at its target without moving the real position`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "old.m3u8", offset = 0.0, duration = 1_000.0,
+      playlist = true, copy = CopyDto(video = true, audio = true),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerPosition(100.0)
+
+    val answer = CompletableDeferred<Unit>()
+    api.seekGate = answer
+    controller.seekTo(900.0)
+    assertEquals(900.0, controller.shownPosition, 0.001)
+    assertEquals(100.0, controller.position, 0.001)
+
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    assertEquals(listOf(900.0), api.seeks)
+    assertEquals(900.0, controller.shownPosition, 0.001)
+    assertEquals(100.0, controller.position, 0.001)
+
+    answer.complete(Unit)
+    runCurrent()
+    assertEquals(900.0, controller.shownPosition, 0.001)
+    assertEquals(900.0, controller.position, 0.001)
+  }
+
+  @Test
+  fun `the old player position does not move an unanswered seek target`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "old.m3u8", offset = 0.0, duration = 1_000.0,
+      playlist = true, copy = CopyDto(video = true, audio = true),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerPosition(100.0)
+    controller.seekTo(900.0)
+
+    controller.onPlayerPosition(100.0)
+
+    assertEquals(900.0, controller.shownPosition, 0.001)
+    assertEquals(100.0, controller.position, 0.001)
+  }
+
+  @Test
+  fun `kept and failed hls seeks return the shown position to the playing position`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "old.m3u8", offset = 0.0, duration = 1_000.0,
+      playlist = true, copy = CopyDto(video = true, audio = true),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerPosition(100.0)
+
+    api.seekAnswer = api.descriptor.copy(seekRestored = true)
+    controller.seekTo(900.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    assertEquals(100.0, controller.shownPosition, 0.001)
+    assertEquals(100.0, controller.position, 0.001)
+
+    api.seekAnswer = null
+    api.seekFailure = ApiError(ApiFailure.Generic)
+    controller.seekTo(800.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    assertEquals(100.0, controller.shownPosition, 0.001)
+    assertEquals(100.0, controller.position, 0.001)
+  }
+
+  @Test
+  fun `a replaced hls seek cannot drop the newer target`() = runTest {
+    val api = object : FakeApi() {
+      private val answers = mutableListOf<kotlin.coroutines.Continuation<PlaybackDescriptorDto>>()
+
+      override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto {
+        seeks += time
+        return suspendCoroutine { answers += it }
+      }
+
+      fun answer(index: Int, descriptor: PlaybackDescriptorDto) {
+        answers[index].resume(descriptor)
+      }
+    }
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "old.m3u8", offset = 0.0, duration = 1_000.0,
+      playlist = true, copy = CopyDto(video = true, audio = true),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerPosition(100.0)
+
+    controller.seekTo(500.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    controller.seekTo(700.0)
+    api.answer(0, api.descriptor.copy(offset = 500.0, url = "playlist-500.m3u8"))
+    runCurrent()
+
+    assertEquals(700.0, controller.shownPosition, 0.001)
+    assertEquals(100.0, controller.position, 0.001)
+  }
+
+  @Test
   fun `a direct seek never hits the server`() = runTest {
     val api = FakeApi()
     val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
@@ -287,6 +404,7 @@ class PlaybackControllerTest {
 
     assertTrue(api.seeks.isEmpty())
     assertEquals(50.0, controller.position, 0.001)
+    assertEquals(controller.position, controller.shownPosition, 0.001)
   }
 
   @Test

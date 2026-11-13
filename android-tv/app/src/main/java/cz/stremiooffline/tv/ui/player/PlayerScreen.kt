@@ -835,7 +835,7 @@ fun PlayerScreen(
   LaunchedEffect(exoPlayer) {
     while (isActive) {
       controller.onPlayerPosition(exoPlayer.currentPosition / 1000.0)
-      position = controller.position
+      position = controller.shownPosition
       delay(250)
     }
   }
