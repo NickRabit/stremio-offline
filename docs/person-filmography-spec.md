@@ -1,7 +1,8 @@
 # Filmography of a person
 
-Status: proposed design contract, not implemented. Decided with the owner on
-2026-11-14, after two independent readings of the code at `e0ccabd8` (0.7.104).
+Status: implemented in 0.7.105 on the server, the web and Android TV.
+Decided with the owner on 2026-11-14, after two independent readings of the
+code at `e0ccabd8` (0.7.104).
 The execution order is in
 [person-filmography-agent-task.md](person-filmography-agent-task.md).
 

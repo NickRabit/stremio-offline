@@ -11,9 +11,10 @@ The visual study is in [title-detail-prototype](title-detail-prototype/README.md
 
 A viewer who opens a title sees who is in it and who made it, a row of
 similar titles, the age rating, the original title and, for a series, when
-the next episode airs, without leaving the app. Selecting a person searches
-the catalogues and libraries for that name; selecting a similar title opens
-its detail.
+the next episode airs, without leaving the app. Selecting a person opens
+that person's filmography when TMDB knows them, and otherwise searches the
+catalogues and libraries for the name; selecting a similar title opens its
+detail.
 
 All three clients read one server answer. No client calls TMDB, and secure
 mode never hands a client an upstream image address.
@@ -29,7 +30,9 @@ mode never hands a client an upstream image address.
   line (the line with the rating, the year and the genres), and only where it
   does not push or shorten the description. Nothing in the panel is removed
   or replaced.
-- No person pages, filmographies or biographies. A person is a search.
+- No person biographies. Since 0.7.105 a person with a TMDB id opens a
+  filmography ([person-filmography-spec.md](person-filmography-spec.md));
+  a person without one is a search.
 - No new metadata store. Extras are cached in memory and fetched again after
   a restart.
 - Jellyfin/Emby `People` are not read in this work. A remote title gets the
@@ -115,9 +118,12 @@ simply absent when the answer is empty or failed — no error message. Without
 a TMDB key the cast row shows the addon's names without photos and the
 similar row is not drawn.
 
-Selecting a person closes the detail and opens Search with the name as the
-query, already submitted (Search everywhere, or the older catalogue search
-where the instance runs that one). Selecting a similar title opens its
+Selecting a person closes the detail. A person TMDB knows (one with an `id`)
+opens the person view with their filmography; see
+[person-filmography-spec.md](person-filmography-spec.md). Any other person
+opens Search with the name as the query, already submitted (Search
+everywhere, or the older catalogue search where the instance runs that one),
+under a line saying it was searched by name. Selecting a similar title opens its
 catalogue full detail; Back returns to the title the viewer came from: the
 app keeps a stack of up to ten previous catalogue titles.
 Opened from a Jellyfin/Emby title, that catalogue detail asks the
@@ -167,8 +173,9 @@ TMDB again for a title it has seen.
   way and the column scrolls back.
 - The focused portrait or poster gets the white focus ring and the scale the
   other TV cards use.
-- OK on a person closes the detail overlay and opens the global search with
-  the name as the query, started. OK on a similar title opens its catalogue
+- OK on a person closes the detail overlay. A person with a TMDB id opens the
+  person screen; any other opens the global search with the name as the
+  query, started. OK on a similar title opens its catalogue
   detail; Back returns to this title (a stack of up to ten) with the focus
   on the card that was opened.
 - The facts line gains the age-rating badge; the original title line and the
