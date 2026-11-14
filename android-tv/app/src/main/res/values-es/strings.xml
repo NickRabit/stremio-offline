@@ -527,4 +527,23 @@
   <string name="genre_war">Bélica</string>
   <string name="genre_war_politics">Guerra y política</string>
   <string name="genre_western">Western</string>
+  <string name="profiles_switch">Cambiar de perfil</string>
+  <string name="profiles_current">Actual</string>
+  <string name="profiles_needs_pin">Se abre con un PIN</string>
+  <string name="profiles_needs_password">Se abre con la contraseña</string>
+  <string name="profiles_pin_for">PIN de %1$s</string>
+  <string name="profiles_password_for">Contraseña de %1$s</string>
+  <string name="profiles_use_password">Usar la contraseña</string>
+  <string name="profiles_pin_locked">El PIN está bloqueado tras demasiados intentos fallidos. Introduce la contraseña.</string>
+  <string name="profiles_submit">Cambiar</string>
+  <string name="profiles_back">Volver a los perfiles</string>
+  <string name="profiles_pin_delete">Borrar</string>
+  <string name="profiles_pin_confirm">Confirmar</string>
+  <string name="profiles_empty">No hay ningún perfil al que cambiar. Un administrador añade las cuentas al cambio de perfil.</string>
+  <string name="common_close">Cerrar</string>
+  <string name="err_bad_pin">PIN incorrecto.</string>
+  <string name="err_pin_locked">Demasiados PIN incorrectos. Usa la contraseña.</string>
+  <string name="err_profile_unavailable">Ese perfil no está disponible.</string>
+  <string name="err_bad_credentials">Nombre de usuario o contraseña incorrectos.</string>
+  <string name="err_too_many_attempts">Demasiados intentos fallidos. Inténtalo de nuevo en %1$s s.</string>
 </resources>

@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, BulkDownloadOrigin, BulkPrepareResponse, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, CatalogSearchPollResult, CatalogSearchRequest, CatalogSearchSnapshot, Download, DownloadRules, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, IntroSegments, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, PairingApproved, PairingInspection, PairingStart, ProfileSelection, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, PlaybackStatus, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, SourceProfile, AdminSourceProfile, Stream, Subtitle, TitleExtras, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, BulkDownloadOrigin, BulkPrepareResponse, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, CatalogSearchPollResult, CatalogSearchRequest, CatalogSearchSnapshot, Download, DownloadRules, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, IntroSegments, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, PairingApproved, PairingInspection, PairingStart, ProfileEntry, ProfileSelection, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, PlaybackStatus, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, SourceProfile, AdminSourceProfile, Stream, Subtitle, TitleExtras, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
@@ -139,7 +139,11 @@ async function performRequest<T>(url: string, options?: RequestInit & { timeoutM
     }
     if (!response.ok) {
       const body = await response.json().catch(() => ({} as { error?: string; code?: string; messageKey?: string; vars?: Record<string, string | number>; category?: string; retry?: string; reference?: string }));
-      throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code, body.messageKey, body.vars, body.category, body.retry, body.reference);
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const vars = response.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0 && body.vars?.seconds === undefined
+        ? { ...body.vars, seconds: retryAfter }
+        : body.vars;
+      throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code, body.messageKey, vars, body.category, body.retry, body.reference);
     }
     if (response.status === 204) return undefined as T;
     try {
@@ -459,16 +463,23 @@ export const api = {
   login: (username: string, password: string, remember: boolean) => request<Session>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, remember }) }),
   logout: (everywhere = false) => request<void>("/api/auth/logout", { method: "POST", body: JSON.stringify({ everywhere }) }),
   changeCredentials: (payload: { username?: string; currentPassword?: string; newPassword: string }) => request<Session>("/api/auth/password", { method: "PATCH", body: JSON.stringify(payload) }),
+  profiles: () => request<{ profiles: ProfileEntry[] }>("/api/profiles"),
+  switchProfile: (body: { id: string; pin?: string; password?: string }) =>
+    request<Session>("/api/profiles/switch", { method: "POST", body: JSON.stringify(body) }),
+  setOwnPin: (body: { currentPassword: string; pin: string | null }) =>
+    request<{ hasPin: boolean }>("/api/auth/pin", { method: "PATCH", body: JSON.stringify(body) }),
   /** The accounts an administrator manages. The grants themselves live on the resource:
    *  a library tick writes `visibleTo` through `updateLibrary`, an addon tick
    *  `allowedUsers` through `updateAddon`. */
   users: () => request<UserAccount[]>("/api/users"),
   createUser: (body: { username: string; password: string; role?: UserRole; permissions?: Partial<UserPermissions> }) =>
     request<UserAccount>("/api/users", { method: "POST", body: JSON.stringify(body) }),
-  updateUser: (id: string, patch: { role?: UserRole; disabled?: boolean; permissions?: Partial<UserPermissions> }) =>
+  updateUser: (id: string, patch: { role?: UserRole; disabled?: boolean; permissions?: Partial<UserPermissions>; switcher?: boolean; unlock?: "none" | "pin" | "password" }) =>
     request<UserAccount>(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   setUserPassword: (id: string, password: string) =>
     request<UserAccount>(`/api/users/${encodeURIComponent(id)}/password`, { method: "PATCH", body: JSON.stringify({ password }) }),
+  setUserPin: (id: string, pin: string | null) =>
+    request<UserAccount>(`/api/users/${encodeURIComponent(id)}/pin`, { method: "PATCH", body: JSON.stringify({ pin }) }),
   deleteUser: (id: string) => request<void>(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   // Media-server administration. Every identifier travels percent-encoded; the remote

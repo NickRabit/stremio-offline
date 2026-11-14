@@ -1,0 +1,72 @@
+<!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Profile switching TV prototype</title>
+<style>
+/* Android TV tokens from ui/theme/Theme.kt; 1 dp is drawn as 2 px on a 1920x1080 screen. */
+:root{--bg:#0b0e13;--panel:#141922;--panel2:#1b222d;--line:#29313e;--text:#f1f4f8;--muted:#929eae;--accent:#ff5b38;--accent2:#ff795c;--green:#42ce91;--red:#f06a76}
+*{box-sizing:border-box}body{margin:0;background:#05070a;font-family:Inter,ui-sans-serif,-apple-system,"Segoe UI",sans-serif;color:var(--text)}
+.switch{position:fixed;z-index:5;left:8px;top:8px;display:flex;gap:4px}.switch a{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:3px 9px;text-decoration:none;background:#0b0e13}.switch a.on{color:var(--text);border-color:var(--accent)}
+.shot .switch{display:none}
+.stage{height:100vh;position:relative;overflow:hidden}
+.tv{width:1920px;height:1080px;position:absolute;left:50%;top:50%;overflow:hidden;background:radial-gradient(circle at 78% -10%,#252031 0,transparent 40%),var(--bg);transform-origin:center}
+.screen{position:absolute;inset:0;display:grid;justify-items:center;align-content:center;gap:28px;padding:80px 120px}
+.eyebrow{color:var(--accent);font-size:20px;font-weight:700;letter-spacing:3.6px}
+h1{margin:0;font-size:64px;letter-spacing:-1.6px;font-weight:800}
+.hint{font-size:24px;color:var(--muted);margin:0}
+.profiles{display:flex;gap:56px;margin-top:36px}
+.profile{width:240px;display:grid;justify-items:center;gap:30px;text-align:center;position:relative}
+.face{width:200px;height:200px;border-radius:50%;display:grid;place-items:center;font-size:84px;font-weight:800;color:#fff;border:4px solid transparent;transition:transform .2s}
+.a{background:linear-gradient(145deg,var(--accent),#a83c79)}.b{background:linear-gradient(145deg,#3a8f7a,#235a8c)}.c{background:linear-gradient(145deg,#b98a2e,#a84f2c)}.d{background:linear-gradient(145deg,#6a5acd,#a83c79)}
+.profile strong{font-size:30px}.profile small{font-size:21px;color:var(--muted);display:flex;align-items:center;gap:8px;min-height:28px}
+.profile small svg{width:22px;height:22px}
+.profile.current{opacity:.45}.profile.current small{color:var(--green)}
+.profile.focus .face{transform:scale(1.1);box-shadow:0 0 0 6px var(--bg),0 0 0 12px var(--accent)}
+.profile.focus strong{color:var(--accent2)}
+.unlock{display:grid;grid-template-columns:auto auto;gap:120px;align-items:center}
+.who{display:grid;justify-items:center;gap:20px;text-align:center}
+.who .face{width:220px;height:220px;font-size:92px}
+.who strong{font-size:40px}
+.dots{display:flex;gap:22px;height:34px;margin-top:10px}.dots i{width:30px;height:30px;border-radius:50%;border:3px solid var(--muted)}.dots i.on{background:var(--text);border-color:var(--text)}
+.error{font-size:22px;color:var(--red);min-height:28px;margin:0}
+.pad{display:grid;grid-template-columns:repeat(3,128px);gap:18px}
+.key{height:104px;border-radius:20px;border:2px solid var(--line);background:var(--panel2);display:grid;place-items:center;font-size:44px;font-weight:700}
+.key.fn{font-size:24px;color:var(--muted)}.key.ok{background:linear-gradient(135deg,var(--accent),var(--accent2));border-color:transparent;color:#fff}
+.key.focus{box-shadow:0 0 0 5px var(--bg),0 0 0 10px var(--accent);transform:scale(1.06)}
+.under svg{width:28px;height:28px}.under{grid-column:1/-1;height:76px;border-radius:16px;border:2px solid var(--line);background:transparent;display:flex;align-items:center;justify-content:center;gap:12px;font-size:24px;font-weight:700;color:var(--muted)}
+.settings{position:absolute;inset:0;padding:110px 160px;display:grid;align-content:start;gap:18px}
+.settings h1{font-size:54px;margin-bottom:22px}
+.item{height:96px;border-radius:18px;border:2px solid var(--line);background:var(--panel);display:flex;align-items:center;justify-content:space-between;padding:0 36px;font-size:28px;font-weight:700;max-width:1100px}
+.item span{color:var(--muted);font-weight:500;font-size:23px}
+.item.focus{border-color:var(--accent);box-shadow:0 0 0 4px var(--accent);transform:scale(1.02);transform-origin:left center}
+.legend{position:absolute;left:0;right:0;bottom:44px;text-align:center;font-size:21px;color:var(--muted)}
+</style></head>
+<body><div class="switch" id="switch"></div><div class="stage"><div class="tv" id="tv"></div></div>
+<script>
+// Static study: names and states are illustrative. Add ?shot to hide the state switcher.
+const svg = (path) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+const lock = svg('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>');
+const key = svg('<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3"/>');
+const P = [["Ondra", "a", "Právě přihlášen", "current"], ["Jana", "b", `${lock} PIN`, "focus"], ["Děti", "c", "", ""], ["Babička", "d", `${lock} PIN`, ""]];
+const choose = () => `<div class="screen"><div class="eyebrow">PROFILY</div><h1>Kdo se bude dívat?</h1>
+  <div class="profiles">${P.map(([name, tone, note, state]) => `<div class="profile ${state}"><div class="face ${tone}">${name[0]}</div><strong>${name}</strong><small>${note}</small></div>`).join("")}</div>
+  <div class="legend">◀ ▶ výběr · OK otevřít · Zpět zavřít</div></div>`;
+const pad = (focus) => ["1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "OK"].map((label) =>
+  `<div class="key${/\d/.test(label) ? "" : label === "OK" ? " ok" : " fn"}${label === focus ? " focus" : ""}">${label}</div>`).join("");
+const pin = (count, focus, error) => `<div class="screen"><div class="unlock">
+  <div class="who"><div class="face b">J</div><strong>Jana</strong><p class="hint">Zadejte PIN profilu</p>
+    <div class="dots">${'<i class="on"></i>'.repeat(count)}</div><p class="error">${error || ""}</p></div>
+  <div class="pad">${pad(focus)}<div class="under">${key} Použít heslo</div></div></div>
+  <div class="legend">Číslice jdou psát i tlačítky ovladače · Zpět se vrátí na výběr</div></div>`;
+const settings = () => `<div class="settings"><div class="eyebrow">NASTAVENÍ</div><h1>Účet</h1>
+  <div class="item">Přihlášen <span>Ondra · správce</span></div><div class="item">Jazyk rozhraní <span>Čeština</span></div>
+  <div class="item focus">Přepnout profil <span>Jana, Děti, Babička</span></div><div class="item">Odhlásit</div></div>`;
+const STATES = { choose: ["Výběr", choose], pin: ["PIN", () => pin(2, "5")], error: ["Špatný PIN", () => pin(0, "5", "Špatný PIN. Zkuste to znovu.")], settings: ["Vstup z Nastavení", settings] };
+if (new URLSearchParams(location.search).has("shot")) document.body.classList.add("shot");
+const tv = document.getElementById("tv");
+const fit = () => { tv.style.transform = `translate(-50%,-50%) scale(${Math.min(innerWidth / 1920, innerHeight / 1080)})`; };
+const render = () => {
+  const id = location.hash.slice(1) in STATES ? location.hash.slice(1) : "choose";
+  tv.innerHTML = STATES[id][1]();
+  document.getElementById("switch").innerHTML = Object.entries(STATES).map(([name, [label]]) => `<a href="#${name}"${name === id ? ' class="on"' : ""}>${label}</a>`).join("");
+  fit();
+};
+addEventListener("hashchange", render); addEventListener("resize", fit); render();
+</script></body></html>

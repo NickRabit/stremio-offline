@@ -7,12 +7,13 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { AirPlayAccess } from "../airplay-access.js";
-import { createSession, parseCookies, readSession, SESSION_COOKIE, sessionUserId, verifyPassword, type SessionInfo } from "../auth.js";
+import { createSession, hashPassword, parseCookies, readSession, SESSION_COOKIE, sessionUserId, verifyPassword, type SessionInfo } from "../auth.js";
 import { DownloadQueue, type DownloadJob } from "../downloads.js";
 import { messageKeyOf } from "../errors.js";
 import type { LibraryRecord } from "../libraries.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "../media-server-types.js";
 import { MediaResources, type DeviceDownloadTicket, type ResourceOwner } from "../media-resources.js";
+import { profileAttempts } from "../profile-attempts.js";
 import { Revocations, type ActiveTransfer, type RevocationQueue } from "../revocation.js";
 import { roleMiddleware } from "../roles.js";
 import { defaultInstanceSettings, Store, type State } from "../store.js";
@@ -290,7 +291,8 @@ test("GET /api/users lists every account with its grants and none of its secrets
   assert.deepEqual(body[1], {
     id: BOB, username: "bob", role: "user", disabled: false, mustChangePassword: false,
     createdAt: "2026-01-01T00:00:00.000Z",
-    permissions: newUserPermissions(), libraries: 1, addons: 1, remoteLibraries: 0,
+    permissions: newUserPermissions(), switcher: false, unlock: "password", hasPin: false,
+    libraries: 1, addons: 1, remoteLibraries: 0,
   });
   assert.deepEqual(body[0]!.libraries, 0, "an administrator is granted nothing by a list");
   const wire = JSON.stringify(body);
@@ -300,7 +302,7 @@ test("GET /api/users lists every account with its grants and none of its secrets
   // Every response goes through publicUser, not just the list.
   const created = await api(harness.base, "/api/users", { method: "POST", body: { username: "carol", password: "hunter2" } });
   const createdBody = await created.json() as Record<string, unknown>;
-  assert.deepEqual(Object.keys(createdBody).sort(), ["addons", "createdAt", "disabled", "id", "libraries", "mustChangePassword", "permissions", "remoteLibraries", "role", "username"]);
+  assert.deepEqual(Object.keys(createdBody).sort(), ["addons", "createdAt", "disabled", "hasPin", "id", "libraries", "mustChangePassword", "permissions", "remoteLibraries", "role", "switcher", "unlock", "username"]);
 });
 
 test("POST /api/users creates an account with the defaults of a new user", async (t) => {
@@ -322,6 +324,25 @@ test("POST /api/users creates an account with the defaults of a new user", async
   // nothing has been watched, queued or reordered yet.
   assert.deepEqual({ ...harness.store.userData(record.id), prefs: undefined }, { ...emptyUserData(), prefs: undefined });
   assert.equal(harness.store.users().length, 2);
+});
+
+test("POST /api/users ignores profile-switcher fields", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/users", {
+    method: "POST",
+    body: { username: "Carol", password: "hunter2", role: "admin", switcher: true, unlock: "none" },
+  });
+  assert.equal(response.status, 201);
+  const created = findUser(harness.store.users(), "Carol")!;
+  assert.equal(created.switcher, undefined);
+  assert.equal(created.unlock, undefined);
+  assert.equal(created.pinHash, undefined);
+  assert.deepEqual(await response.json().then((body) => {
+    const view = body as { switcher: boolean; unlock: string; hasPin: boolean };
+    return [view.switcher, view.unlock, view.hasPin];
+  }), [false, "password", false]);
 });
 
 test("POST /api/users refuses a name or a password under the bounds the model sets", async (t) => {
@@ -430,6 +451,81 @@ test("promoting an account leaves its grants where they are", async (t) => {
   assert.deepEqual(harness.store.addons()[0]?.allowedUsers, [BOB, CAROL], "the grant lies dormant on the addon");
   const promoted = await response.json() as { libraries: number; addons: number };
   assert.deepEqual([promoted.libraries, promoted.addons], [0, 0], "a dormant list is not counted as a grant");
+});
+
+test("PATCH /api/users/:id refuses unlock none for an administrator", async (t) => {
+  const harness = await mount({ users: [admin, bob] });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/users/${ADA}`, { method: "PATCH", body: { unlock: "none" } });
+  assert.equal(response.status, 400);
+  assert.equal(await keyOf(response), "err.invalidRequest");
+  assert.equal(findUserById(harness.store.users(), ADA)?.unlock, undefined);
+});
+
+test("promotion repairs unlock none in the same write", async (t) => {
+  const harness = await mount({ users: [admin, { ...bob, unlock: "none" }] });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { role: "admin" } });
+  assert.equal(response.status, 200);
+  const promoted = findUserById(harness.store.users(), BOB)!;
+  assert.equal(promoted.role, "admin");
+  assert.equal(promoted.unlock, "password");
+});
+
+test("PATCH /api/users/:id refuses PIN unlock until the account has a PIN", async (t) => {
+  const harness = await mount({ users: [admin, bob] });
+  t.after(harness.close);
+
+  const missing = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { unlock: "pin" } });
+  assert.equal(missing.status, 400);
+  assert.equal(await keyOf(missing), "err.pinRequired");
+});
+
+test("changing switcher and unlock does not bump permissionsVersion", async (t) => {
+  const harness = await mount({ users: [admin, { ...bob, pinHash: await hashPassword("1234") }] });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/users/${BOB}`, {
+    method: "PATCH", body: { switcher: true, unlock: "pin" },
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { switcher: boolean; unlock: string; hasPin: boolean };
+  assert.deepEqual([body.switcher, body.unlock, body.hasPin], [true, "pin", true]);
+  const updated = findUserById(harness.store.users(), BOB)!;
+  assert.equal(updated.permissionsVersion, 0);
+  assert.equal(updated.switcher, true);
+  assert.equal(updated.unlock, "pin");
+});
+
+test("PATCH /api/users/:id/pin sets and removes a PIN and clears its attempt lock", async (t) => {
+  const harness = await mount({ users: [admin, bob] });
+  t.after(harness.close);
+
+  const set = await api(harness.base, `/api/users/${BOB}/pin`, { method: "PATCH", body: { pin: "2468" } });
+  assert.equal(set.status, 200);
+  const setBody = await set.json() as { hasPin: boolean };
+  assert.equal(setBody.hasPin, true);
+  const stored = findUserById(harness.store.users(), BOB)!;
+  assert.equal(await verifyPassword("2468", stored.pinHash!), true);
+
+  for (let count = 0; count < 10; count += 1) profileAttempts.fail(BOB);
+  assert.equal(profileAttempts.pinLocked(BOB), true);
+  const replaced = await api(harness.base, `/api/users/${BOB}/pin`, { method: "PATCH", body: { pin: "1357" } });
+  assert.equal(replaced.status, 200);
+  assert.equal(profileAttempts.pinLocked(BOB), false, "a new administrator-set PIN clears the lock");
+
+  await harness.store.update((state) => {
+    state.users = (state.users ?? []).map((user) => user.id === BOB ? { ...user, unlock: "pin" } : user);
+  });
+  const removed = await api(harness.base, `/api/users/${BOB}/pin`, { method: "PATCH", body: { pin: null } });
+  assert.equal(removed.status, 200);
+  assert.equal((await removed.json() as { hasPin: boolean }).hasPin, false);
+  const updated = findUserById(harness.store.users(), BOB)!;
+  assert.equal(updated.pinHash, undefined);
+  assert.equal(updated.unlock, "password");
+  assert.equal(profileAttempts.pinLocked(BOB), false);
 });
 
 test("a promotion and a demotion leave the account with the grants it had", async (t) => {

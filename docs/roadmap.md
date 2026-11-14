@@ -29,7 +29,7 @@ metadata store, or scheduler for each platform.
 | Order | Current opportunity | What remains |
 | --- | --- | --- |
 | Implemented | Queue controls: download window, speed limit, queue-finished notice | Runs only inside an administrator's window, shares one speed cap and reports one in-memory in-app notice per account when a run finishes. |
-| 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. Quick switching between household members with a PIN, as Plex Home does, belongs to the same design. |
+| 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. Quick switching between household accounts with a PIN shipped in 0.7.104 ([users.md](users.md#switching-profiles)); kids mode builds on it. |
 | Then | Search by cast and crew | A person in the title detail opens what that person made, not a text search for the name: TMDB filmography when a key is set, the owned copies first. See [Search by cast and crew](#search-by-cast-and-crew). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
@@ -199,6 +199,10 @@ library permissions:
   optional convenience only after its server-side policy is designed;
 - make repeated taps harmless and always show immediate feedback for actions
   that take noticeable time.
+
+Switching between accounts on a signed-in device, with a PIN where the
+administrator wants one, shipped in 0.7.104: see
+[Switching profiles](users.md#switching-profiles). Kids mode builds on it.
 
 The MVP uses a dedicated restricted child account, with enforcement on the
 server as well as a simplified interface. Hiding buttons in an adult session is
@@ -892,8 +896,9 @@ account/household profiles below.
 ### Access and multi-instance
 
 - Richer profiles beyond the initial kids mode: several profiles under one
-  account, optional age-aware filtering where trustworthy metadata exists, and
-  fast profile switching without weakening the account boundary.
+  account and optional age-aware filtering where trustworthy metadata exists.
+  Fast switching is covered by [Profile switching](profile-switching-spec.md),
+  where a profile is an account.
 - Configurable LAN IP/host for the running container. The web client should try
   that address first so playback on the home network does not hairpin through a
   reverse proxy or Cloudflare Tunnel. Fail closed: never treat an unauthenticated

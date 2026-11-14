@@ -551,4 +551,23 @@
   <string name="genre_war">Военный</string>
   <string name="genre_war_politics">Война и политика</string>
   <string name="genre_western">Вестерн</string>
+  <string name="profiles_switch">Сменить профиль</string>
+  <string name="profiles_current">Текущий</string>
+  <string name="profiles_needs_pin">Открывается PIN-кодом</string>
+  <string name="profiles_needs_password">Открывается паролем</string>
+  <string name="profiles_pin_for">PIN-код для %1$s</string>
+  <string name="profiles_password_for">Пароль для %1$s</string>
+  <string name="profiles_use_password">Ввести пароль</string>
+  <string name="profiles_pin_locked">PIN-код заблокирован после слишком многих неверных попыток. Введите пароль.</string>
+  <string name="profiles_submit">Сменить</string>
+  <string name="profiles_back">Назад к профилям</string>
+  <string name="profiles_pin_delete">Стереть</string>
+  <string name="profiles_pin_confirm">Подтвердить</string>
+  <string name="profiles_empty">Нет профиля, на который можно переключиться. Учётные записи в переключение профилей добавляет администратор.</string>
+  <string name="common_close">Закрыть</string>
+  <string name="err_bad_pin">Неверный PIN-код.</string>
+  <string name="err_pin_locked">Слишком много неверных PIN-кодов. Используйте пароль.</string>
+  <string name="err_profile_unavailable">Этот профиль недоступен.</string>
+  <string name="err_bad_credentials">Неверное имя пользователя или пароль.</string>
+  <string name="err_too_many_attempts">Слишком много неудачных попыток. Повторите попытку через %1$s сек.</string>
 </resources>
