@@ -478,7 +478,7 @@ export const api = {
   users: () => request<UserAccount[]>("/api/users"),
   createUser: (body: { username: string; password: string; role?: UserRole; permissions?: Partial<UserPermissions> }) =>
     request<UserAccount>("/api/users", { method: "POST", body: JSON.stringify(body) }),
-  updateUser: (id: string, patch: { role?: UserRole; disabled?: boolean; permissions?: Partial<UserPermissions>; switcher?: boolean; unlock?: "none" | "pin" | "password" }) =>
+  updateUser: (id: string, patch: { role?: UserRole; disabled?: boolean; permissions?: Partial<UserPermissions>; switcher?: boolean; unlock?: "none" | "pin" | "password"; child?: boolean; catalogue?: boolean }) =>
     request<UserAccount>(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   setUserPassword: (id: string, password: string) =>
     request<UserAccount>(`/api/users/${encodeURIComponent(id)}/password`, { method: "PATCH", body: JSON.stringify({ password }) }),

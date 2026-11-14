@@ -311,6 +311,33 @@ it("writes the switcher mark and unlock choice and marks the account in the list
   expect(writes).toContainEqual({ unlock: "pin" });
 });
 
+it("marks an ordinary account as a child and only then offers catalogue browsing", async () => {
+  const writes: Array<Record<string, unknown>> = [];
+  let row = account({ id: "usr_00000002", username: "bob", role: "user" });
+  await mount({
+    session: admin,
+    users: [row, account()],
+    onWrite: (_url, body) => {
+      writes.push(body);
+      row = account({ ...row, ...body });
+      return row;
+    },
+  });
+  await clickText("Edit");
+  expect(host.textContent).not.toContain("Catalogue browsing");
+  await clickBox("Child account");
+  expect(writes).toContainEqual({ child: true });
+  expect(host.querySelector(".user-admin-row")?.textContent).toContain("Child");
+  await clickBox("Catalogue browsing");
+  expect(writes).toContainEqual({ catalogue: true });
+});
+
+it("does not offer a child account to an administrator", async () => {
+  await mount({ session: admin, users: [account()] });
+  await clickText("Edit");
+  expect(host.textContent).not.toContain("Child account");
+});
+
 it("does not offer Nothing to an administrator", async () => {
   await mount({ session: admin, users: [account({ switcher: true })] });
   await clickText("Edit");

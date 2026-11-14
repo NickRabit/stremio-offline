@@ -117,6 +117,7 @@ export function UserManager({ session, restricted = false, onChanged, onAccounts
           <small className="user-admin-state">
             {roleLabel(account.role)}
             {account.switcher && <i className="library-badge profile-marker" title={t("users.inSwitcherHint")}>{t("users.inSwitcherBadge")}</i>}
+            {account.child && <i className="library-badge profile-marker" title={t("users.childHint")}>{t("users.childBadge")}</i>}
             {account.disabled && <i className="library-badge off">{t("users.disabled")}</i>}
             {account.mustChangePassword && <i className="library-badge warn">{t("users.mustChangePassword")}</i>}
           </small>
@@ -228,7 +229,7 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
   const locked = Boolean(account && isLastAdmin(account, accounts));
   const self = Boolean(account && sameName(account.username, session.username));
 
-  const patch = (body: { role?: UserRole; disabled?: boolean; permissions?: Partial<UserPermissions>; switcher?: boolean; unlock?: "none" | "pin" | "password" }) => {
+  const patch = (body: { role?: UserRole; disabled?: boolean; permissions?: Partial<UserPermissions>; switcher?: boolean; unlock?: "none" | "pin" | "password"; child?: boolean; catalogue?: boolean }) => {
     if (!account) return Promise.resolve();
     return run(async () => { onUpdated(await api.updateUser(account.id, body)); });
   };
@@ -399,6 +400,11 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
           </div>
           {account && switchFor(t("users.enabled"), "", !account.disabled, locked, (value) => void patch({ disabled: !value }))}
           {locked && <p className="identify-hint">{t("users.lastAdminHint")}</p>}
+          {account && currentRole === "user" && <>
+            {switchFor(t("users.child"), t("users.childHint"), Boolean(account.child), false, (value) => void patch({ child: value }))}
+            {account.child && switchFor(t("users.catalogue"), t("users.catalogueHint"), Boolean(account.catalogue), false,
+              (value) => void patch({ catalogue: value }))}
+          </>}
           <div className="user-edit-password">
             <label className="user-edit-field"><span>{t(creating ? "auth.password" : "users.password")}</span>
               <input type="password" value={password} autoComplete="new-password" aria-label={t(creating ? "auth.password" : "users.password")}
