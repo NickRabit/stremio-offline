@@ -143,6 +143,51 @@ When typing, O counts as 0 and I or L as 1. The QR link uses the address the TV
 was given, so a phone that reaches the server under another name has to enter
 the code by hand. There is no server discovery or device inventory yet.
 
+## Switching profiles
+
+A signed-in device can change to another household account without signing out.
+The administrator decides which accounts take part: **Settings → Users →**
+account → **Profile switching → In the profile switcher**. The mark works both
+ways. Accounts in the switcher see each other and can switch among themselves;
+an account outside it — a guest's, a friend's — sees no profiles and cannot
+switch, and the server answers it as if no other account existed. Every account
+starts outside.
+
+For each account the administrator also chooses what entering it takes:
+**Nothing**, a **PIN** or the **Password** (the default). An administrator
+account can never be set to Nothing, and promoting an account that was set to
+Nothing moves it to the password. The account's own password is always accepted
+instead of its PIN.
+
+A PIN is 4 to 8 digits. The administrator can set or remove it in the account
+dialog without ever seeing it; the account can set, change or remove its own in
+**Settings → Account → Profile PIN**, confirmed with its current password.
+Removing a PIN from an account that opens with one moves it back to the
+password. A PIN protects against a slip, not against somebody who watched it
+being typed.
+
+Where to switch:
+
+- **Web and desktop:** the account name in the top bar, or **More → Switch
+  profile** on a phone.
+- **Android TV:** **Settings → Switch profile**, or hold OK on the account item
+  in the rail.
+
+A switch never extends a sign-in: the new session expires when the previous one
+would have, and the previous one is revoked with its playback and device
+downloads stopped, exactly like a sign-out of that device. The web page reloads
+so nothing of the previous account is drawn; the TV rebuilds its session.
+
+Failed attempts are counted per target account, whatever device or address they
+come from. The first five cost nothing; after that each attempt waits, from 30
+seconds doubling up to 15 minutes. After ten failures without a success the PIN
+is locked and the profile takes only its password, until the account signs in
+or switches with its password, or an administrator sets a new PIN. The counter
+lives in memory, so a restart clears it. Somebody in the household can lock a
+relative's PIN on purpose; the cost is typing that password once.
+
+Restricted mode lists no profiles and refuses the switch.
+
 ## Disabling and deleting
 
 - **Disable** stops the account signing in and keeps everything it has: its

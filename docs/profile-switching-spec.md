@@ -1,7 +1,7 @@
 # Profile switching
 
-Status: proposed design contract, not implemented. Decided with the owner on
-2026-11-14. The execution order is in
+Status: implemented in 0.7.104; the behaviour as shipped is described in
+[users.md](users.md#switching-profiles). Decided with the owner on 2026-11-14. The execution order is in
 [profile-switching-agent-task.md](profile-switching-agent-task.md); the visual
 study is in [profile-switching-prototype](profile-switching-prototype/README.md).
 Where the prototype disagrees with this document, this document wins.
