@@ -34,6 +34,8 @@ import androidx.tv.material3.Text
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.focusGroup
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.ui.components.FocusButton
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.ProfileDto
 import cz.stremiooffline.tv.ui.components.outlineIcon
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -46,6 +48,7 @@ const val TagPinUsePassword = "pin_use_password"
 const val TagProfilePassword = "profile_password"
 const val TagProfileSubmit = "profile_submit"
 const val TagProfileError = "profile_error"
+const val TagProfilesRetry = "profiles_retry"
 
 fun profileTag(id: String): String = "profile_$id"
 
@@ -72,7 +75,9 @@ fun ProfileSwitcherScreen(
     when (val step = viewModel.step) {
       SwitcherStep.Choose -> ChooseStep(
         profiles = viewModel.profiles,
+        failure = viewModel.loadFailure,
         onChoose = viewModel::choose,
+        onRetry = viewModel::load,
       )
       is SwitcherStep.Pin -> PinPad(
         profile = step.profile,
@@ -112,8 +117,12 @@ private fun switcherErrorText(error: SwitcherError?, waitSeconds: Int): String? 
 }
 
 @Composable
-private fun ChooseStep(profiles: List<ProfileDto>, onChoose: (ProfileDto) -> Unit) {
+private fun ChooseStep(profiles: List<ProfileDto>, failure: ApiFailure?, onChoose: (ProfileDto) -> Unit, onRetry: () -> Unit) {
   val firstFocus = remember { FocusRequester() }
+  val retryFocus = remember { FocusRequester() }
+  LaunchedEffect(failure) {
+    if (failure != null) runCatching { retryFocus.requestFocus() }
+  }
   val firstSelectable = profiles.indexOfFirst { !it.current }
   LaunchedEffect(firstSelectable) {
     if (firstSelectable >= 0) runCatching { firstFocus.requestFocus() }
@@ -129,6 +138,19 @@ private fun ChooseStep(profiles: List<ProfileDto>, onChoose: (ProfileDto) -> Uni
       fontWeight = FontWeight.ExtraBold,
       letterSpacing = (-0.8).sp,
     )
+    if (failure != null) {
+      Text(
+        stringResource(if (failure == ApiFailure.Unreachable) R.string.tv_err_unreachable else R.string.tv_err_generic),
+        color = Tokens.Red,
+        fontSize = 16.sp,
+        modifier = Modifier.testTag(TagProfileError),
+      )
+      FocusButton(
+        text = stringResource(R.string.common_retry),
+        onClick = onRetry,
+        modifier = Modifier.focusRequester(retryFocus).testTag(TagProfilesRetry),
+      )
+    }
     Row(
       modifier = Modifier.focusGroup(),
       horizontalArrangement = Arrangement.spacedBy(28.dp),

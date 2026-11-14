@@ -30,6 +30,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import androidx.compose.ui.test.assertIsDisplayed
+import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.ApiError
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -89,6 +92,18 @@ class ProfileSwitcherScreenTest {
     press(Key.DirectionRight)
     compose.onNodeWithTag(profileTag("usr_kids")).assertIsFocused()
     press(Key.DirectionLeft)
+    compose.onNodeWithTag(profileTag("usr_jana")).assertIsFocused()
+  }
+
+  @Test
+  fun `a list that cannot be read says so and OK on Try again reads it again`() {
+    val api = FakeProfileApi(household).apply { profilesError = ApiError(ApiFailure.Unreachable) }
+    mount(api)
+    compose.onNodeWithTag(TagProfileError).assertIsDisplayed()
+    compose.onNodeWithTag(TagProfilesRetry).assertIsFocused()
+    api.profilesError = null
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagProfileError).assertDoesNotExist()
     compose.onNodeWithTag(profileTag("usr_jana")).assertIsFocused()
   }
 

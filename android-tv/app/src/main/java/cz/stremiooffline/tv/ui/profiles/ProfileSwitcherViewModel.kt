@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.ProfileApi
 import cz.stremiooffline.tv.data.ProfileDto
@@ -47,11 +48,24 @@ class ProfileSwitcherViewModel(
   private var resumeStep: SwitcherStep = SwitcherStep.Choose
   private var waitJob: Job? = null
 
+  /** Why the list could not be read; an empty row with nothing said is no answer. */
+  var loadFailure by mutableStateOf<ApiFailure?>(null)
+    private set
+
   init {
+    load()
+  }
+
+  fun load() {
     viewModelScope.launch {
+      loadFailure = null
       profiles = try {
         api.profiles()
+      } catch (error: ApiError) {
+        loadFailure = error.failure
+        emptyList()
       } catch (_: Exception) {
+        loadFailure = ApiFailure.Generic
         emptyList()
       }
     }

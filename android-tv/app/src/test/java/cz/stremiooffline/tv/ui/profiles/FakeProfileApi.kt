@@ -11,7 +11,9 @@ class FakeProfileApi(
   val switchCalls = mutableListOf<Triple<String, String?, String?>>()
   var switchResults: ArrayDeque<SwitchOutcome> = ArrayDeque()
 
-  override suspend fun profiles(): List<ProfileDto> = profilesValue
+  var profilesError: Throwable? = null
+
+  override suspend fun profiles(): List<ProfileDto> = profilesError?.let { throw it } ?: profilesValue
 
   override suspend fun switchProfile(id: String, pin: String?, password: String?): SwitchOutcome {
     switchCalls += Triple(id, pin, password)

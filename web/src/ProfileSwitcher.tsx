@@ -107,6 +107,7 @@ export function ProfileSwitcher({ onClose, confirmStop, onSwitched = () => {
   };
 
   const choose = (profile: ProfileEntry) => {
+    setRemaining(0);
     setError("");
     setSelected(profile);
     setSecret("");
@@ -136,6 +137,7 @@ export function ProfileSwitcher({ onClose, confirmStop, onSwitched = () => {
   };
 
   const back = () => {
+    setRemaining(0);
     setStep("choose");
     setSelected(null);
     setSecret("");

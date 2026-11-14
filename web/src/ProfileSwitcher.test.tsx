@@ -129,6 +129,23 @@ describe("ProfileSwitcher", () => {
     expect(button("Switch")?.disabled).toBe(false);
   });
 
+  it("forgets a wait when going back, since it belongs to the profile that was refused", async () => {
+    switchMock.mockRejectedValue(new ApiError("Too many", 429, undefined, "err.tooManyAttempts", { seconds: 5 }));
+    await mount();
+    await choose("Alice");
+    await fill("2468");
+    await act(async () => { button("Switch")!.click(); await flush(); });
+    expect(document.body.textContent).toContain("Try again in 5 s");
+
+    await act(async () => { document.body.querySelector<HTMLButtonElement>('[aria-label="Back to profiles"]')!.click(); await flush(); });
+    await act(async () => { await new Promise((done) => setTimeout(done, 1100)); });
+    expect(document.body.textContent).not.toContain("Try again");
+
+    await choose("Alice");
+    await fill("2468");
+    expect(button("Switch")?.disabled).toBe(false);
+  });
+
   it("opens a locked PIN directly with the password field and an explanation", async () => {
     profilesMock.mockResolvedValue({ profiles: profiles({ pinLocked: true }) });
     await mount();
