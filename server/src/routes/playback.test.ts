@@ -854,9 +854,386 @@ const partOf = (file: Buffer, range: string) => {
   return { start, end, headers: { "content-type": "video/x-msvideo", "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${file.length}` } };
 };
 
+interface TrackedRequest {
+  method: string;
+  path: string;
+  headers: http.IncomingHttpHeaders;
+}
+
+const trackedHost = async (
+  t: { after(fn: () => unknown): unknown },
+  answer: (req: http.IncomingMessage, res: http.ServerResponse, index: number) => void,
+) => {
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  const requests: TrackedRequest[] = [];
+  const server = http.createServer((req, res) => {
+    requests.push({ method: String(req.method), path: String(req.url ?? "/"), headers: req.headers });
+    answer(req, res, requests.length - 1);
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const close = async () => {
+    if (!server.listening) return;
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  };
+  t.after(async () => {
+    delete process.env.ALLOW_PRIVATE_ADDONS;
+    await close();
+  });
+  return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests, close };
+};
+
+const answerPart = (req: http.IncomingMessage, res: http.ServerResponse, file: Buffer, contentType = "video/x-msvideo") => {
+  const range = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? ""));
+  if (!range) {
+    res.writeHead(200, { "content-type": contentType, "content-length": file.length });
+    return void res.end(file);
+  }
+  const part = partOf(file, String(req.headers.range));
+  res.writeHead(206, { ...part.headers, "content-type": contentType });
+  res.end(file.subarray(part.start, part.end + 1));
+};
+
 /** The body a client really received, or null when the transfer was cut rather than answered. */
 const bodyOf = async (response: Response): Promise<Buffer | null> => Buffer.from(await response.arrayBuffer().catch(() => new ArrayBuffer(0)))
   .subarray(0) as Buffer;
+
+test("a redirected addon source is asked directly on the next read", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.avi" }); return void res.end(); }
+    answerPart(req, res, file);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  const first = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-127" } });
+  assert.equal(first.status, 206);
+  assert.deepEqual(Buffer.from(await first.arrayBuffer()), file.subarray(0, 128));
+  const second = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=128-255" } });
+  assert.equal(second.status, 206);
+  assert.deepEqual(Buffer.from(await second.arrayBuffer()), file.subarray(128, 256));
+
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.avi", "/film.avi"]);
+});
+
+test("a refused remembered addon source falls back and replaces the record", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  let fileRequests = 0;
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.avi" }); return void res.end(); }
+    fileRequests += 1;
+    if (fileRequests === 2) return void res.writeHead(403).end();
+    answerPart(req, res, file);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  const first = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-127" } });
+  assert.equal(first.status, 206);
+  await first.arrayBuffer();
+  const second = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=128-255" } });
+  assert.equal(second.status, 206);
+  assert.deepEqual(Buffer.from(await second.arrayBuffer()), file.subarray(128, 256));
+  const third = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=256-383" } });
+  assert.equal(third.status, 206);
+  await third.arrayBuffer();
+
+  assert.deepEqual(host.requests.map((request) => request.path), [
+    "/go", "/film.avi",
+    "/film.avi", "/go", "/film.avi",
+    "/film.avi",
+  ]);
+});
+
+test("another session of the same link asks the remembered address at once", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.avi" }); return void res.end(); }
+    answerPart(req, res, file);
+  });
+  const earlier = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+  await (await fetch(`${harness.base}/api/media/${earlier}`, { headers: { "x-user": "ada", range: "bytes=0-127" } })).arrayBuffer();
+  const later = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+  assert.notEqual(later, earlier);
+
+  const read = await fetch(`${harness.base}/api/media/${later}`, { headers: { "x-user": "ada", range: "bytes=128-255" } });
+  assert.equal(read.status, 206);
+  assert.deepEqual(Buffer.from(await read.arrayBuffer()), file.subarray(128, 256));
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.avi", "/film.avi"]);
+});
+
+test("a playlist told apart only by its first bytes is not remembered from a HEAD or a later range", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const playlist = Buffer.from("#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:4,\nseg-1.ts\n#EXT-X-ENDLIST\n");
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/stream" }); return void res.end(); }
+    res.writeHead(200, { "content-type": "text/plain", "content-length": playlist.length });
+    res.end(req.method === "HEAD" ? undefined : playlist);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  await fetch(`${harness.base}/api/media/${resourceId}`, { method: "HEAD", headers: { "x-user": "ada" } });
+  const read = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada" } });
+  assert.match(await read.text(), /^#EXTM3U/);
+
+  assert.deepEqual(host.requests.map((request) => `${request.method} ${request.path}`), ["HEAD /go", "HEAD /stream", "GET /go", "GET /stream"]);
+});
+
+test("a remembered address that serves the film as a plain download is still used", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.bin" }); return void res.end(); }
+    const [, from, to] = /^bytes=(\d+)-(\d+)$/.exec(String(req.headers.range)) ?? [];
+    res.writeHead(206, { "content-type": "application/octet-stream", "accept-ranges": "bytes", "content-range": `bytes ${from}-${to}/${file.length}`, "content-length": Number(to) - Number(from) + 1 });
+    res.end(file.subarray(Number(from), Number(to) + 1));
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  for (const range of ["bytes=0-127", "bytes=128-255", "bytes=256-383"]) {
+    const read = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range } });
+    assert.equal(read.status, 206);
+    await read.arrayBuffer();
+  }
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.bin", "/film.bin", "/film.bin"]);
+});
+
+test("a remembered addon source answering with a page falls back and replaces the record", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  let fileRequests = 0;
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.avi" }); return void res.end(); }
+    fileRequests += 1;
+    if (fileRequests === 2) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return void res.end("<html>This link has expired.</html>"); }
+    answerPart(req, res, file);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  const first = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-127" } });
+  await first.arrayBuffer();
+  const second = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=128-255" } });
+  assert.equal(second.status, 206);
+  assert.deepEqual(Buffer.from(await second.arrayBuffer()), file.subarray(128, 256));
+
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.avi", "/film.avi", "/go", "/film.avi"]);
+});
+
+test("an unreachable remembered addon source falls back and replaces the record", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const dead = await trackedHost(t, (req, res) => answerPart(req, res, file));
+  let redirect = true;
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") {
+      res.writeHead(302, { location: redirect ? `${dead.base}/film.avi` : "/replacement.avi" });
+      return void res.end();
+    }
+    answerPart(req, res, file);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  const first = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-127" } });
+  assert.equal(first.status, 206);
+  await first.arrayBuffer();
+  await dead.close();
+  redirect = false;
+
+  const second = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=128-255" } });
+  assert.equal(second.status, 206);
+  assert.deepEqual(Buffer.from(await second.arrayBuffer()), file.subarray(128, 256));
+  const third = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=256-383" } });
+  assert.equal(third.status, 206);
+  await third.arrayBuffer();
+
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/go", "/replacement.avi", "/replacement.avi"]);
+});
+
+test("a remembered addon source on another origin receives no addon request headers", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const target = await trackedHost(t, (req, res) => answerPart(req, res, file));
+  const resolver = await trackedHost(t, (_req, res) => {
+    res.writeHead(302, { location: `${target.base}/film.avi` });
+    res.end();
+  });
+  const resourceId = registry.mediaStream({
+    url: `${resolver.base}/go`,
+    behaviorHints: { proxyHeaders: { request: { authorization: "Bearer addon-secret" } } },
+  } as StreamItem, ADA).resourceId;
+
+  for (const range of ["bytes=0-127", "bytes=128-255"]) {
+    const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range } });
+    assert.equal(response.status, 206);
+    await response.arrayBuffer();
+  }
+
+  assert.equal(resolver.requests.length, 1, "the landing is used instead of asking the resolver again");
+  assert.equal(target.requests.length, 2);
+  assert.ok(target.requests.every((request) => request.headers.authorization === undefined));
+});
+
+test("a non-redirecting addon source keeps its request count", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const host = await trackedHost(t, (req, res) => answerPart(req, res, file));
+  const resourceId = registry.mediaStream({ url: `${host.base}/film.avi` } as StreamItem, ADA).resourceId;
+
+  for (const range of ["bytes=0-127", "bytes=128-255"]) {
+    const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range } });
+    assert.equal(response.status, 206);
+    await response.arrayBuffer();
+  }
+
+  assert.deepEqual(host.requests.map((request) => request.path), ["/film.avi", "/film.avi"]);
+});
+
+test("a redirected addon playlist is not remembered", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const playlist = Buffer.from("#EXTM3U\n#EXTINF:4,\nsegment-1.ts\n");
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/index.m3u8" }); return void res.end(); }
+    res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "content-length": playlist.length });
+    res.end(playlist);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-" } });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /\/api\/media\//);
+  }
+
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/index.m3u8", "/go", "/index.m3u8"]);
+});
+
+test("a remembered addon source is used by bounded read-ahead", async (t) => {
+  const harness = await mount(new RemoteReadAhead(64), { internalMediaRequest: () => true });
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.avi" }); return void res.end(); }
+    answerPart(req, res, file);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  const first = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-31" } });
+  assert.equal(first.status, 206);
+  assert.deepEqual(Buffer.from(await first.arrayBuffer()), file.subarray(0, 32));
+  const second = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=128-159" } });
+  assert.equal(second.status, 206);
+  assert.deepEqual(Buffer.from(await second.arrayBuffer()), file.subarray(128, 160));
+
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.avi", "/film.avi"]);
+});
+
+test("a remembered addon source is used when a broken transfer resumes", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(256);
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.avi" }); return void res.end(); }
+    const part = partOf(file, String(req.headers.range));
+    res.writeHead(206, part.headers);
+    if (host.requests.filter((request) => request.path === "/film.avi").length === 1) {
+      res.write(file.subarray(part.start, part.start + 100));
+      setTimeout(() => res.destroy(), 10);
+      return;
+    }
+    res.end(file.subarray(part.start, part.end + 1));
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-255" } });
+  assert.equal(response.status, 206);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), file);
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.avi", "/film.avi"]);
+});
+
+test("a remembered addon source that redirects again replaces the record without asking the original", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/old.avi" }); return void res.end(); }
+    if (req.url === "/old.avi") { res.writeHead(302, { location: "/new.avi" }); return void res.end(); }
+    answerPart(req, res, file);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  for (const range of ["bytes=0-127", "bytes=128-255", "bytes=256-383"]) {
+    const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range } });
+    assert.equal(response.status, 206);
+    await response.arrayBuffer();
+  }
+
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/old.avi", "/new.avi", "/new.avi", "/new.avi"]);
+});
+
+test("a remembered addon source that times out falls back within the shared header wait", async (t) => {
+  const harness = await mount(new RemoteReadAhead(), { SOURCE_HEADER_MS: 400, SOURCE_QUIET_HEADER_MS: 100 });
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.avi" }); return void res.end(); }
+    const fileRequest = host.requests.filter((request) => request.path === "/film.avi").length;
+    if (fileRequest === 2) return;
+    answerPart(req, res, file);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  const first = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-127" } });
+  assert.equal(first.status, 206);
+  await first.arrayBuffer();
+  const started = Date.now();
+  const second = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=128-255" } });
+  assert.equal(second.status, 206);
+  assert.deepEqual(Buffer.from(await second.arrayBuffer()), file.subarray(128, 256));
+  assert.ok(Date.now() - started < 500, "the fallback does not get another full header wait");
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.avi", "/film.avi", "/go", "/film.avi"]);
+});
+
+test("a remembered addon source answering 416 is passed through without a fallback", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(1_024);
+  let fileRequests = 0;
+  const host = await trackedHost(t, (req, res) => {
+    if (req.url === "/go") { res.writeHead(302, { location: "/film.avi" }); return void res.end(); }
+    fileRequests += 1;
+    if (fileRequests === 2) {
+      res.writeHead(416, { "content-range": `bytes */${file.length}` });
+      return void res.end();
+    }
+    answerPart(req, res, file);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/go` } as StreamItem, ADA).resourceId;
+
+  const first = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-127" } });
+  assert.equal(first.status, 206);
+  await first.arrayBuffer();
+  const refused = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=2048-" } });
+  assert.equal(refused.status, 416);
+  assert.equal(refused.headers.get("content-range"), `bytes */${file.length}`);
+  const third = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=128-255" } });
+  assert.equal(third.status, 206);
+  await third.arrayBuffer();
+
+  assert.deepEqual(host.requests.map((request) => request.path), ["/go", "/film.avi", "/film.avi", "/film.avi"]);
+});
 
 test("an addon hand-over that answers the wrong part never reaches the viewer as the range promised", async (t) => {
   const harness = await mount(new RemoteReadAhead(64), { internalMediaRequest: () => true });

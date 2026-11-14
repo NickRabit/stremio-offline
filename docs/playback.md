@@ -17,6 +17,12 @@ neither start on a keyframe nor repeat the stream headers, and the browser can t
 play from the start but not after a seek. FFmpeg reads the headers once and copies
 the picture through.
 
+For ten minutes after a web source redirects, the media proxy asks the address the
+last successful read landed on. It still validates that address and sends only the
+headers a redirect would have forwarded. A remembered address that stops answering
+is forgotten, with the original source asked again in the same request. Playlists
+and signed child reads are not remembered.
+
 The current mode is shown in the player header; the real source codecs appear
 in playback settings.
 
