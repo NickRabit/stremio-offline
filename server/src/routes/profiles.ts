@@ -113,6 +113,10 @@ export function registerProfilesRoutes(app: express.Application, ctx: RouteConte
     await ctx.store.update((state) => {
       const liveCaller = findUserById(state.users ?? [], caller.id);
       const liveTarget = findUserById(state.users ?? [], target.id);
+      // A sign-out or another switch of this same session landed while the secret was hashed:
+      // the session no longer exists, and entering a second profile from it would leave the
+      // device holding two.
+      if (liveCaller?.revoked?.[info.sid]) throw new AppError("Not signed in.", "err.notSignedIn", 401);
       if (!liveCaller || !liveTarget
         || liveCaller.secret !== caller.secret
         || !switcherGroup(state.users ?? [], liveCaller.id).some((user) => user.id === liveTarget.id)

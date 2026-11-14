@@ -155,6 +155,9 @@ Body: `{ "id": "usr_…", "pin"?: "1234", "password"?: "…" }`.
    - re-check that the caller is still in the group and that the target is
      still listed, enabled, not owing a password change and that its secret
      is the one the hash was checked against;
+   - refuse with `401 err.notSignedIn` if the caller's session id is already in
+     the ledger: a sign-out or another switch of the same session landed
+     first, and one session must not enter two profiles;
    - add the caller's session id to the caller's `revoked` ledger;
    - set the target's `lastSeenAt`.
 6. Issue a session for the target signed with the target's secret, with the

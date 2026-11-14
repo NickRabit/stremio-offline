@@ -416,6 +416,50 @@ test("a caller removed from the group between the secret check and the write is 
   assert.equal(findUserById(harness.store.users(), ALICE)?.revoked?.["sid-removed"], undefined);
 });
 
+test("a session revoked between the secret check and the write is not switched", async (t) => {
+  const alice = await account({ id: ALICE, username: "alice" });
+  const bob = await account({ id: BOB, username: "bob", unlock: "none" });
+  const harness = await mount([alice, bob]);
+  t.after(harness.close);
+  const original = harness.store.update.bind(harness.store);
+  // What a sign-out or another switch of the same session does while this one waits its turn.
+  harness.beforeNextUpdate(async () => {
+    await original((state) => {
+      state.users = (state.users ?? []).map((user) => user.id === ALICE
+        ? { ...user, revoked: { "sid-gone": Date.now() + 120_000 } }
+        : user);
+    });
+  });
+
+  const response = await api(harness.base, "/api/profiles/switch", {
+    method: "POST", cookie: cookieFor(alice, "sid-gone"), body: { id: BOB },
+  });
+  assert.equal(response.status, 401);
+  assert.equal(await keyOf(response), "err.notSignedIn");
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.deepEqual(harness.stopped, []);
+  assert.equal(findUserById(harness.store.users(), BOB)?.lastSeenAt, undefined);
+});
+
+test("one session switched to two PIN profiles at once enters only one", async (t) => {
+  const alice = await account({ id: ALICE, username: "alice" });
+  const bob = await account({ id: BOB, username: "bob", unlock: "pin", pinHash: await hashPassword("1234") });
+  const carol = await account({ id: CAROL, username: "carol", unlock: "pin", pinHash: await hashPassword("1234") });
+  const harness = await mount([alice, bob, carol]);
+  t.after(harness.close);
+  for (const id of [BOB, CAROL]) {
+    profileAttempts.succeed(id);
+    t.after(() => profileAttempts.succeed(id));
+  }
+
+  const cookie = cookieFor(alice, "sid-twice");
+  const answers = await Promise.all([BOB, CAROL].map((id) => api(harness.base, "/api/profiles/switch", {
+    method: "POST", cookie, body: { id, pin: "1234" },
+  })));
+  assert.deepEqual(answers.map((response) => response.status).sort(), [200, 401]);
+  assert.equal(answers.filter((response) => response.headers.get("set-cookie")).length, 1);
+});
+
 test("a target PIN changed while its hash is checked is refused", async (t) => {
   const alice = await account({ id: ALICE, username: "alice" });
   const bob = await account({ id: BOB, username: "bob", unlock: "pin", pinHash: await hashPassword("1234") });
