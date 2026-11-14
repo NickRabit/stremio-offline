@@ -4,9 +4,13 @@ import { clearedCookie, createSession, DECOY_HASH, hashPassword, LoginThrottle, 
 import { AppError } from "../errors.js";
 import { isUiLanguage } from "../language.js";
 import { log } from "../logger.js";
-import { logoutDenied, RestrictedError } from "../restricted.js";
+import { profileAttempts } from "../profile-attempts.js";
+import { logoutDenied, RestrictedError, restrictedMode } from "../restricted.js";
 import type { State } from "../store.js";
-import { claimLegacyData, emptyUserData, findUser, findUserById, type MigratableState, newUserId, USERNAME_MIN, type UserRecord } from "../users.js";
+import {
+  claimLegacyData, emptyUserData, findUser, findUserById, type MigratableState, newUserId, PIN_PATTERN,
+  switcherGroup, USERNAME_MIN, type UserRecord,
+} from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
 const logins = new LoginThrottle();
@@ -33,7 +37,14 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     // The flag travels, because the gate that enforces it is invisible from the outside: the
     // interface would otherwise render the whole app and watch every call it makes come back
     // refused, with nothing to say why or what to do about it.
-    res.json({ username: user.username, role: user.role, language, mustChangePassword: Boolean(user.mustChangePassword) });
+    res.json({
+      username: user.username,
+      role: user.role,
+      language,
+      mustChangePassword: Boolean(user.mustChangePassword),
+      canSwitch: switcherGroup(ctx.store.users(), user.id).some((profile) => profile.id !== user.id) && !restrictedMode(),
+      hasPin: Boolean(user.pinHash),
+    });
   });
 
   const isLoopbackSocket = (address: string | undefined) => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address ?? "");
@@ -124,6 +135,7 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     // the sign-in and not every request: writing the state file on each call would be a real
     // cost for a value nobody reads that way.
     await ctx.store.update((state) => withUser(state, signIn.id, (user) => ({ ...user, lastSeenAt: new Date().toISOString() })));
+    profileAttempts.succeed(signIn.id);
     log("INFO", "Sign-in", { username: signIn.username, remember });
     res.json({ username: signIn.username, role: signIn.role, mustChangePassword: Boolean(signIn.mustChangePassword) });
   }));
@@ -178,5 +190,37 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     await ctx.stopUserSessions(account.id);
     log("INFO", "Credentials changed", { username });
     res.json({ username, role: account.role, mustChangePassword: false });
+  }));
+  app.patch("/api/auth/pin", asyncRoute(async (req, res) => {
+    const account = ctx.currentUser(req);
+    if (!account) throw new AppError("Not signed in.", "err.notSignedIn", 401);
+    if (!await verifyPassword(String(req.body?.currentPassword ?? ""), account.passwordHash)) {
+      throw new AppError("The current password is wrong.", "err.wrongCurrentPassword");
+    }
+    const pin = req.body?.pin;
+    if (pin !== null && (typeof pin !== "string" || !PIN_PATTERN.test(pin))) {
+      throw new AppError("A PIN is 4 to 8 digits.", "err.pinFormat", 400);
+    }
+    const pinHash = pin === null ? undefined : await hashPassword(pin);
+    await ctx.store.update((state) => {
+      const user = findUserById(state.users ?? [], account.id);
+      if (!user || user.secret !== account.secret) throw new AppError("Not signed in.", "err.notSignedIn", 401);
+      withUser(state, account.id, (current) => {
+        const { pinHash: _removed, ...rest } = current;
+        return {
+          ...rest,
+          ...(pinHash ? { pinHash } : {}),
+          ...(pin === null && current.unlock === "pin" ? { unlock: "password" as const } : {}),
+        };
+      });
+    });
+    profileAttempts.succeed(account.id);
+    log("INFO", pin === null ? "PIN removed" : "PIN set", {
+      actor: account.username,
+      actorId: account.id,
+      username: account.username,
+      userId: account.id,
+    });
+    res.json({ hasPin: pin !== null });
   }));
 }

@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { hashPassword } from "./auth.js";
 import {
   assertAdminRemains, bumpPermissions, dormantGrants, emptyUserData, enabledAdmins, envResetApplied, envResetPending, findUser, findUserById, forEachUserData,
-  migrateUsers, newUserPermissions, newUserId, normalizeUsername, PASSWORD_MIN, PERSONAL_SETTINGS, publicUser, USER_ID,
+  effectiveUnlock, migrateUsers, newUserPermissions, newUserId, normalizeUsername, PASSWORD_MIN, PERSONAL_SETTINGS, PIN_PATTERN,
+  publicUser, switcherGroup, USER_ID,
   USERNAME_MIN, usersToBump, type MigratableState, type UserData, type UserRecord,
 } from "./users.js";
 
@@ -53,10 +54,11 @@ test("a name finds its record whichever spelling was typed", () => {
 
 test("the public shape of an account carries neither the hash, the secret nor the ledger", () => {
   const view = publicUser(user({ revoked: { "sid-1": 4102444800000 }, disabled: true, mustChangePassword: true, lastSeenAt: "2026-02-01T00:00:00.000Z" }));
-  assert.deepEqual(Object.keys(view).sort(), ["createdAt", "disabled", "id", "lastSeenAt", "mustChangePassword", "permissions", "role", "username"]);
+  assert.deepEqual(Object.keys(view).sort(), ["createdAt", "disabled", "hasPin", "id", "lastSeenAt", "mustChangePassword", "permissions", "role", "switcher", "unlock", "username"]);
   assert.equal("passwordHash" in view, false);
   assert.equal("secret" in view, false);
   assert.equal("revoked" in view, false);
+  assert.equal("pinHash" in view, false);
   assert.deepEqual(view, {
     id: "usr_a1b2c3d4",
     username: "ondra",
@@ -66,6 +68,9 @@ test("the public shape of an account carries neither the hash, the secret nor th
     createdAt: "2026-01-01T00:00:00.000Z",
     lastSeenAt: "2026-02-01T00:00:00.000Z",
     permissions: { downloadToLibrary: false, downloadToDevice: true },
+    switcher: false,
+    unlock: "password",
+    hasPin: false,
   });
 });
 
@@ -73,9 +78,40 @@ test("the public shape states the flags a fresh account does not carry", () => {
   const view = publicUser(admin());
   assert.equal(view.disabled, false);
   assert.equal(view.mustChangePassword, false);
+  assert.equal(view.switcher, false);
+  assert.equal(view.unlock, "password");
+  assert.equal(view.hasPin, false);
   assert.equal("lastSeenAt" in view, false, "an account that was never seen has no such row");
-  assert.deepEqual(Object.keys(view).sort(), ["createdAt", "disabled", "id", "mustChangePassword", "permissions", "role", "username"]);
+  assert.deepEqual(Object.keys(view).sort(), ["createdAt", "disabled", "hasPin", "id", "mustChangePassword", "permissions", "role", "switcher", "unlock", "username"]);
   assert.notEqual(view.permissions, admin().permissions, "the rights are copied, not handed out live");
+});
+
+test("PINs are four to eight ASCII digits", () => {
+  for (const pin of ["1234", "12345678"]) assert.equal(PIN_PATTERN.test(pin), true, pin);
+  for (const pin of ["123", "123456789", "123a", "１２３４", " 1234"]) assert.equal(PIN_PATTERN.test(pin), false, pin);
+});
+
+test("effective unlock defaults to password and repairs impossible stored combinations", () => {
+  const base = { role: "user" as const, pinHash: "scrypt$aa$bb" };
+  assert.equal(effectiveUnlock(base), "password");
+  assert.equal(effectiveUnlock({ ...base, unlock: "none" }), "none");
+  assert.equal(effectiveUnlock({ ...base, unlock: "pin" }), "pin");
+  assert.equal(effectiveUnlock({ ...base, unlock: "password" }), "password");
+  assert.equal(effectiveUnlock({ ...base, unlock: "pin", pinHash: undefined }), "password");
+  assert.equal(effectiveUnlock({ ...base, role: "admin", unlock: "none" }), "password");
+});
+
+test("the switcher group is closed, ordered and excludes accounts that cannot be entered", () => {
+  const caller = user({ switcher: true });
+  const other = user({ id: "usr_00000002", username: "petr", switcher: true, unlock: "none" });
+  const guest = user({ id: "usr_00000003", username: "host", switcher: false });
+  const disabled = user({ id: "usr_00000004", username: "off", switcher: true, disabled: true });
+  const changing = user({ id: "usr_00000005", username: "change", switcher: true, mustChangePassword: true });
+
+  assert.deepEqual(switcherGroup([caller, other, guest, disabled, changing], caller.id).map((entry) => entry.id), [caller.id, other.id]);
+  assert.deepEqual(switcherGroup([{ ...caller, switcher: false }, other], caller.id), []);
+  assert.deepEqual(switcherGroup([{ ...caller, disabled: true }, other], caller.id), []);
+  assert.deepEqual(switcherGroup([{ ...caller, mustChangePassword: true }, other], caller.id), []);
 });
 
 test("the last enabled administrator cannot be demoted, disabled or deleted", () => {

@@ -3,6 +3,8 @@ import { verifyPassword } from "./auth.js";
 import { AppError } from "./errors.js";
 
 export type Role = "admin" | "user";
+export type UnlockMethod = "none" | "pin" | "password";
+export const PIN_PATTERN = /^[0-9]{4,8}$/;
 
 export interface UserPermissions {
   /** Queue a download onto the NAS. A new user: false. */
@@ -33,6 +35,9 @@ export interface UserRecord {
    *  visibleTo / allowedUsers list this user enters or leaves. A request
    *  captures it and re-checks it before it issues a resource. */
   permissionsVersion: number;
+  switcher?: boolean;
+  unlock?: UnlockMethod;
+  pinHash?: string;
 }
 
 /** The choices the follow wizard remembers for one account, so its next run opens where
@@ -96,6 +101,24 @@ export interface PublicUser {
   createdAt: string;
   lastSeenAt?: string;
   permissions: UserPermissions;
+  switcher: boolean;
+  unlock: UnlockMethod;
+  hasPin: boolean;
+}
+
+/** Absent means "password". The stored combinations this repairs are refused by every write,
+ *  so the fallback only keeps an older or manually edited state usable. */
+export function effectiveUnlock(user: Pick<UserRecord, "unlock" | "pinHash" | "role">): UnlockMethod {
+  if (user.unlock === "none") return user.role === "admin" ? "password" : "none";
+  if (user.unlock === "pin" && user.pinHash) return "pin";
+  return "password";
+}
+
+/** The closed group a member may list and enter, in account-list order. */
+export function switcherGroup(users: UserRecord[], callerId: string): UserRecord[] {
+  const caller = findUserById(users, callerId);
+  if (!caller?.switcher || caller.disabled || caller.mustChangePassword) return [];
+  return users.filter((user) => user.switcher === true && !user.disabled && !user.mustChangePassword);
 }
 
 export function publicUser(record: UserRecord): PublicUser {
@@ -108,6 +131,9 @@ export function publicUser(record: UserRecord): PublicUser {
     createdAt: record.createdAt,
     ...(record.lastSeenAt ? { lastSeenAt: record.lastSeenAt } : {}),
     permissions: { ...record.permissions },
+    switcher: Boolean(record.switcher),
+    unlock: effectiveUnlock(record),
+    hasPin: Boolean(record.pinHash),
   };
 }
 

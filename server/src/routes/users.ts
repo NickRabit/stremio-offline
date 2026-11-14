@@ -3,13 +3,14 @@ import { randomBytes } from "node:crypto";
 import { hashPassword } from "../auth.js";
 import { AppError } from "../errors.js";
 import { log } from "../logger.js";
+import { profileAttempts } from "../profile-attempts.js";
 import { assertStillAdmin } from "../roles.js";
 import { ResourceError } from "../media-resources.js";
 import type { State } from "../store.js";
 import {
-  assertAdminRemains, emptyUserData, findUser, findUserById, newUserPermissions, newUserId,
-  PASSWORD_MIN, publicUser, USERNAME_MIN,
-  type Role, type UserPermissions, type UserRecord,
+  assertAdminRemains, effectiveUnlock, emptyUserData, findUser, findUserById, newUserPermissions, newUserId,
+  PASSWORD_MIN, PIN_PATTERN, publicUser, USERNAME_MIN,
+  type Role, type UnlockMethod, type UserPermissions, type UserRecord,
 } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
@@ -148,6 +149,12 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     requireUser(id);
     const role = req.body?.role === undefined ? undefined : roleOf(req.body.role);
     const disabled = req.body?.disabled === undefined ? undefined : flagOf(req.body.disabled, "disabled");
+    const switcher = req.body?.switcher === undefined ? undefined : flagOf(req.body.switcher, "switcher");
+    const unlockValue = req.body?.unlock;
+    if (unlockValue !== undefined && unlockValue !== "none" && unlockValue !== "pin" && unlockValue !== "password") {
+      throw new AppError("The unlock method is none, pin or password.", "err.invalidRequest", 400);
+    }
+    const unlock = unlockValue as UnlockMethod | undefined;
     // The body's rights are refused here; a key it leaves out keeps the value the record has
     // when the write lands, so the fallback is taken from the record inside the mutator.
     if (req.body?.permissions !== undefined) permissionsOf(req.body.permissions, newUserPermissions());
@@ -156,6 +163,7 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     // sweep below needs the transition that really happened, not an earlier read.
     let before!: UserRecord;
     let after!: UserRecord;
+    let profileChanged = false;
     await store.update((state) => {
       const current = findUserById(state.users ?? [], id);
       if (!current) throw new AppError("That account does not exist.", "err.unknownUser", 404);
@@ -166,6 +174,18 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
       if (role === "user") assertAdminRemains(state.users ?? [], { kind: "demote", id });
       if (disabled ?? Boolean(current.disabled)) assertAdminRemains(state.users ?? [], { kind: "disable", id });
       withUser(state, id, (user) => {
+        const nextRole = role ?? user.role;
+        const requestedUnlock = unlock ?? user.unlock;
+        let nextUnlock = requestedUnlock;
+        if (nextRole === "admin" && requestedUnlock === "none") {
+          if (unlock === "none") {
+            throw new AppError("An administrator cannot be opened without a secret.", "err.invalidRequest", 400);
+          }
+          nextUnlock = "password";
+        }
+        if (nextUnlock === "pin" && !user.pinHash) {
+          throw new AppError("Set a PIN first.", "err.pinRequired", 400);
+        }
         const permissions = permissionsOf(req.body?.permissions, user.permissions);
         // Switching an account off rotates its secret, so every token it holds stops working
         // for good. Without that the refusal lasts exactly as long as the switch: the old
@@ -176,23 +196,32 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
           ...user,
           ...(role ? { role } : {}),
           ...(disabled === undefined ? {} : { disabled }),
+          ...(switcher === undefined ? {} : { switcher }),
+          ...(nextUnlock === undefined ? {} : { unlock: nextUnlock }),
           ...(cutOff ? { secret: randomBytes(32).toString("hex"), revoked: {} } : {}),
           permissions,
         };
+        profileChanged = Boolean(next.switcher) !== Boolean(user.switcher)
+          || (next.unlock ?? "password") !== (user.unlock ?? "password");
         changed = next.role !== user.role
           || Boolean(next.disabled) !== Boolean(user.disabled)
           || next.permissions.downloadToLibrary !== user.permissions.downloadToLibrary
           || next.permissions.downloadToDevice !== user.permissions.downloadToDevice;
-        return changed ? { ...next, permissionsVersion: user.permissionsVersion + 1 } : user;
+        return changed ? { ...next, permissionsVersion: user.permissionsVersion + 1 } : next;
       });
       after = findUserById(state.users ?? [], id)!;
     });
-    if (!changed) return res.json(view(after));
-    await permissionsChanged(before, after);
+    if (changed) await permissionsChanged(before, after);
     if (role && role !== before.role) audit("Account role changed", actor, after, { from: before.role, to: after.role });
     if (disabled !== undefined && disabled !== Boolean(before.disabled)) audit(disabled ? "Account disabled" : "Account enabled", actor, after);
     if (after.permissions.downloadToLibrary !== before.permissions.downloadToLibrary || after.permissions.downloadToDevice !== before.permissions.downloadToDevice) {
       audit("Account permissions changed", actor, after, { permissions: after.permissions });
+    }
+    if (profileChanged) {
+      audit("Profile switcher changed", actor, after, {
+        switcher: Boolean(after.switcher),
+        unlock: effectiveUnlock(after),
+      });
     }
     res.json(view(after));
   }));
@@ -222,6 +251,33 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     await stopUserSessions(id);
     audit("Account password reset", actor, before);
     res.json(view(requireUser(id)));
+  }));
+
+  app.patch("/api/users/:id/pin", asyncRoute(async (req, res) => {
+    const actor = actorOf(req);
+    const id = String(req.params.id);
+    requireUser(id);
+    const pin = req.body?.pin;
+    if (pin !== null && (typeof pin !== "string" || !PIN_PATTERN.test(pin))) {
+      throw new AppError("A PIN is 4 to 8 digits.", "err.pinFormat", 400);
+    }
+    const pinHash = pin === null ? undefined : await hashPassword(pin);
+    await store.update((state) => {
+      assertStillAdmin(state.users ?? [], actor);
+      if (!findUserById(state.users ?? [], id)) throw new AppError("That account does not exist.", "err.unknownUser", 404);
+      withUser(state, id, (user) => {
+        const { pinHash: _removed, ...rest } = user;
+        return {
+          ...rest,
+          ...(pinHash ? { pinHash } : {}),
+          ...(pin === null && user.unlock === "pin" ? { unlock: "password" as const } : {}),
+        };
+      });
+    });
+    profileAttempts.succeed(id);
+    const updated = findUserById(store.users(), id)!;
+    audit(pin === null ? "PIN removed" : "PIN set", actor, updated);
+    res.json(view(updated));
   }));
 
   app.delete("/api/users/:id", asyncRoute(async (req, res) => {
