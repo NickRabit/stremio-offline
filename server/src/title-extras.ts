@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, scryptSync } from "node:crypto";
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FetchLike } from "./debrid.js";
@@ -191,7 +191,18 @@ const throwIfCancelled = (signal?: AbortSignal) => {
   if (signal?.aborted) throw new OutboundError("cancelled");
 };
 
-export const keyFingerprint = (apiKey: string) => createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
+const fingerprints = new Map<string, string>();
+/** Names an API key inside cache keys. The key is a secret, so it goes through a slow
+ *  derivation rather than a plain digest, once per key and process. */
+export const keyFingerprint = (apiKey: string): string => {
+  let fingerprint = fingerprints.get(apiKey);
+  if (!fingerprint) {
+    fingerprint = scryptSync(apiKey, "stremio-offline:tmdb-key", 6).toString("hex");
+    if (fingerprints.size >= 8) fingerprints.clear();
+    fingerprints.set(apiKey, fingerprint);
+  }
+  return fingerprint;
+};
 const diskName = (key: string) => `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`;
 const reasonOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 

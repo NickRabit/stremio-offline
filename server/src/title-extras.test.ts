@@ -11,6 +11,7 @@ import {
   clearTitleExtrasCache,
   detachTitleExtrasDisk,
   flushTitleExtrasDisk,
+  keyFingerprint,
   setTitleExtrasCacheLimitForTests,
   titleExtras,
   type TitleExtrasDeps,
@@ -866,7 +867,7 @@ test("an addon id without IMDb finds TMDB through the meta's imdb_id", async (t)
 test("a disk file with malformed entries is a miss, not a failure", async (t) => {
   fresh(t);
   const dir = await diskCache(t);
-  const key = `movie:tmdb:41:cs:${createHash("sha256").update(config.apiKey).digest("hex").slice(0, 12)}`;
+  const key = `movie:tmdb:41:cs:${keyFingerprint(config.apiKey)}`;
   const name = `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`;
   await writeFile(path.join(dir, name), JSON.stringify({
     version: 1, key, at: 1_000, value: { people: [], related: [null], videos: [] },
@@ -883,7 +884,7 @@ test("a disk file with malformed entries is a miss, not a failure", async (t) =>
 test("a version-1 disk entry is ignored and rebuilt", async (t) => {
   fresh(t);
   const dir = await diskCache(t);
-  const key = `movie:tmdb:43:cs:${createHash("sha256").update(config.apiKey).digest("hex").slice(0, 12)}`;
+  const key = `movie:tmdb:43:cs:${keyFingerprint(config.apiKey)}`;
   const name = `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`;
   await writeFile(path.join(dir, name), JSON.stringify({
     version: 1,
