@@ -14,7 +14,7 @@ const ordinary: Session = { username: "bob", role: "user" };
 const account = (over: Partial<UserAccount> = {}): UserAccount => ({
   id: "usr_00000001", username: "ada", role: "admin", disabled: false, mustChangePassword: false,
   createdAt: "2026-01-01T00:00:00.000Z", permissions: { downloadToLibrary: true, downloadToDevice: true },
-  libraries: 0, addons: 0, ...over,
+  switcher: false, unlock: "password", hasPin: false, libraries: 0, addons: 0, ...over,
 });
 const library = (over: Partial<LibraryView> = {}): LibraryView => ({
   id: "lib_ab12cd34", name: "Films", type: "movie", root: "/downloads/Films",
@@ -275,6 +275,91 @@ it("the account dialog keeps a new account's name editable and an existing one r
 
   await clickText("Edit");
   expect(host.querySelector<HTMLInputElement>('input[aria-label="Username"]')?.readOnly).toBe(true);
+});
+
+it("does not show profile switching while creating an account", async () => {
+  await mount({ session: admin, users: [account()] });
+  await clickText("Add account");
+  expect(host.textContent).not.toContain("Profile switching");
+});
+
+it("disables the unlock choice while the account is outside the switcher", async () => {
+  await mount({ session: admin, users: [account({ switcher: false })] });
+  await clickText("Edit");
+  expect(host.querySelector<HTMLSelectElement>('select[aria-label="To open this profile"]')?.disabled).toBe(true);
+});
+
+it("writes the switcher mark and unlock choice and marks the account in the list", async () => {
+  const writes: Array<Record<string, unknown>> = [];
+  const row = account({ id: "usr_00000002", username: "bob", role: "user", hasPin: true });
+  await mount({
+    session: admin,
+    users: [row, account()],
+    onWrite: (_url, body) => {
+      writes.push(body);
+      return account({ ...row, ...body });
+    },
+  });
+  await clickText("Edit");
+  await clickBox("In the profile switcher");
+  expect(writes).toContainEqual({ switcher: true });
+  expect(host.querySelector(".user-admin-row .profile-marker")?.textContent).toBe("Switcher");
+
+  await choose("To open this profile", "pin");
+  expect(writes).toContainEqual({ unlock: "pin" });
+});
+
+it("does not offer Nothing to an administrator", async () => {
+  await mount({ session: admin, users: [account({ switcher: true })] });
+  await clickText("Edit");
+  const choices = [...host.querySelectorAll<HTMLOptionElement>('select[aria-label="To open this profile"] option')]
+    .map((option) => option.textContent);
+  expect(choices).toEqual(["PIN", "Password"]);
+});
+
+it("disables PIN until the account has one", async () => {
+  await mount({ session: admin, users: [account({ switcher: true, hasPin: false })] });
+  await clickText("Edit");
+  const pin = [...host.querySelectorAll<HTMLOptionElement>('select[aria-label="To open this profile"] option')]
+    .find((option) => option.textContent === "PIN");
+  expect(pin?.disabled).toBe(true);
+});
+
+it("sets and removes a profile PIN through the administrator route", async () => {
+  const writes: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const row = account({ id: "usr_00000002", username: "bob", role: "user", hasPin: false });
+  await mount({
+    session: admin, users: [row, account()],
+    onWrite: (url, body) => {
+      writes.push({ url, body });
+      return account({ ...row, hasPin: body.pin !== null, unlock: body.pin === null ? "password" : "pin" });
+    },
+  });
+  await clickText("Edit");
+  await clickText("Set PIN");
+  await fill("New PIN (4 to 8 digits)", "2468");
+  await clickText("Confirm");
+
+  expect(writes).toContainEqual({ url: "/api/users/usr_00000002/pin", body: { pin: "2468" } });
+  expect(host.textContent).toContain("PIN is set");
+  await clickText("Remove");
+  expect(writes).toContainEqual({ url: "/api/users/usr_00000002/pin", body: { pin: null } });
+});
+
+it("refuses a malformed PIN before sending it", async () => {
+  const writes: string[] = [];
+  await mount({
+    session: admin,
+    users: [account({ id: "usr_00000002", username: "bob", role: "user" })],
+    onWrite: (url) => { writes.push(url); return {}; },
+  });
+  await clickText("Edit");
+  await clickText("Set PIN");
+  await fill("New PIN (4 to 8 digits)", "12x4");
+  await clickText("Confirm");
+
+  expect(host.textContent).toContain("A PIN is 4 to 8 digits.");
+  expect(writes).toEqual([]);
 });
 
 it("creates an account with the role and the download permissions the dialog was set to", async () => {

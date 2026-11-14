@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { KeyRound, Plus, RefreshCw, Trash2, Users, X } from "lucide-react";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { api } from "./api";
@@ -113,6 +113,7 @@ export function UserManager({ session, restricted = false, onChanged, onNotify, 
           <strong>{account.username}</strong>
           <small className="user-admin-state">
             {roleLabel(account.role)}
+            {account.switcher && <i className="profile-marker" title={t("users.inSwitcherBadge")}>{t("users.inSwitcherBadge")}</i>}
             {account.disabled && <i className="library-badge off">{t("users.disabled")}</i>}
             {account.mustChangePassword && <i className="library-badge warn">{t("users.mustChangePassword")}</i>}
           </small>
@@ -180,6 +181,9 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
   const [role, setRole] = useState<UserRole>("user");
   const [permissions, setPermissions] = useState<UserPermissions>({ downloadToLibrary: false, downloadToDevice: true });
   const [busy, setBusy] = useState(false);
+  const [pinEditing, setPinEditing] = useState(false);
+  const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState("");
   /** What a new account will be granted the moment it exists. Everything switched on is
    *  ticked to begin with, because an account that can see nothing is a support call rather
    *  than a safe default -- but the ticks are shown and can be cleared, so the grant is the
@@ -221,9 +225,35 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
   const locked = Boolean(account && isLastAdmin(account, accounts));
   const self = Boolean(account && sameName(account.username, session.username));
 
-  const patch = (body: { role?: UserRole; disabled?: boolean; permissions?: Partial<UserPermissions> }) => {
+  const patch = (body: { role?: UserRole; disabled?: boolean; permissions?: Partial<UserPermissions>; switcher?: boolean; unlock?: "none" | "pin" | "password" }) => {
     if (!account) return Promise.resolve();
     return run(async () => { onUpdated(await api.updateUser(account.id, body)); });
+  };
+  const setProfilePin = () => {
+    if (!account) return;
+    if (!/^[0-9]{4,8}$/.test(pin)) {
+      setPinError(t("err.pinFormat"));
+      return;
+    }
+    void run(async () => {
+      const updated = await api.setUserPin(account.id, pin);
+      onUpdated(updated);
+      setPin("");
+      setPinEditing(false);
+      setPinError("");
+      onNotify(t("profiles.pinSaved"));
+    });
+  };
+  const removeProfilePin = () => {
+    if (!account) return;
+    void run(async () => {
+      const updated = await api.setUserPin(account.id, null);
+      onUpdated(updated);
+      setPin("");
+      setPinEditing(false);
+      setPinError("");
+      onNotify(t("profiles.pinRemoved"));
+    });
   };
   const canApply = () => password.length >= 6 && (!creating || (grantsReady && name.trim().length >= 3));
   const applyPassword = () => void run(async () => {
@@ -376,6 +406,40 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
               onClick={applyPassword}>{t(creating ? "auth.createAccount" : "users.password")}</button>
           </div>
           <p className="identify-hint">{t(creating ? "users.newAccountHint" : "users.passwordHint")}</p>
+          {account && <section className="profile-block">
+            <h3><Users/> {t("users.profileSwitching")}</h3>
+            {switchFor(t("users.inSwitcher"), t("users.inSwitcherHint"), account.switcher, false,
+              (value) => void patch({ switcher: value }))}
+            <label className="user-edit-field profile-unlock-select">
+              <span>{t("users.unlock")}</span>
+              <select aria-label={t("users.unlock")} value={account.unlock} disabled={busy || !account.switcher}
+                onChange={(event) => void patch({ unlock: event.target.value as "none" | "pin" | "password" })}>
+                {currentRole !== "admin" && <option value="none">{t("users.unlockNone")}</option>}
+                <option value="pin" disabled={!account.hasPin}>{t("users.unlockPin")}</option>
+                <option value="password">{t("users.unlockPassword")}</option>
+              </select>
+            </label>
+            <div className="profile-pin-state">
+              <span><KeyRound/> {t(account.hasPin ? "profiles.pinIsSet" : "profiles.pinNone")}</span>
+              {!pinEditing && <>
+                <button type="button" disabled={busy} onClick={() => { setPinEditing(true); setPinError(""); }}>{t(account.hasPin ? "profiles.changePin" : "profiles.setPin")}</button>
+                {account.hasPin && <button type="button" disabled={busy} onClick={removeProfilePin}>{t("common.remove")}</button>}
+              </>}
+            </div>
+            {pinEditing && <div className="profile-pin-edit">
+              <label className="user-edit-field">
+                <span>{t("profiles.newPin")}</span>
+                <input aria-label={t("profiles.newPin")} type="password" inputMode="numeric" autoComplete="off" maxLength={8}
+                  value={pin} onChange={(event) => { setPin(event.target.value); setPinError(""); }}/>
+              </label>
+              {pinError && <p className="login-error" role="alert">{pinError}</p>}
+              <div className="setting-actions">
+                <button type="button" disabled={busy} onClick={() => { setPinEditing(false); setPin(""); setPinError(""); }}>{t("common.cancel")}</button>
+                <button type="button" className="primary" disabled={busy} onClick={setProfilePin}>{t("profiles.pinConfirm")}</button>
+              </div>
+            </div>}
+            <p className="identify-hint">{t("profiles.pinHint")}</p>
+          </section>}
           {/* An administrator has no grant panes, so the account pane is where the dialog says
               why: otherwise the tabs simply vanish on promotion with nothing in their place. */}
           {currentRole === "admin" && <p className="identify-hint">{t("users.seesEverything")}</p>}
