@@ -205,6 +205,32 @@ class CatalogApiTest {
   }
 
   @Test
+  fun `a person asks the filmography route with the interface language`() = runTest {
+    server.enqueue(
+      MockResponse().setBody(
+        """{"id":138,"name":"Quentin Tarantino","sections":[{"key":"crew","titles":[""" +
+          """{"type":"movie","tmdbId":680,"id":"tt0110912","name":"Pulp Fiction","year":"1994","inLibrary":true}]}]}""",
+      ),
+    )
+    val person = client(start()).person(138, "cs")
+
+    assertEquals("/api/person/138?language=cs", server.takeRequest().path)
+    val title = person.sections.single().titles.single()
+    assertEquals("tt0110912", title.id)
+    assertTrue(title.inLibrary)
+  }
+
+  @Test
+  fun `a person title asks its resolution route`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"id":"tmdb:680","imdb":"none"}"""))
+    val resolved = client(start()).personTitle("movie", 680)
+
+    assertEquals("/api/person/title/movie/680", server.takeRequest().path)
+    assertEquals("tmdb:680", resolved.id)
+    assertEquals("none", resolved.imdb)
+  }
+
+  @Test
   fun `streamSources lists the addons that offer a source`() = runTest {
     server.enqueue(MockResponse().setBody("""[{"key":"alpha","name":"Alpha"}]"""))
     val sources = client(start()).streamSources("movie", "tt1")

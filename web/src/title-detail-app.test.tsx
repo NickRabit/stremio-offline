@@ -60,7 +60,11 @@ const show: Meta = {
 const plain: Meta = { id: "tt4", type: "movie", name: "Plain", description: "Nothing else like it." };
 const otherFilm: Meta = { id: "tt6", type: "movie", name: "Other Film", description: "A remote cousin." };
 const extrasFor = (id: string) => id === "tt1" ? {
-  people: [{ name: "Michael Mann", role: "director" }, { name: "Ada Lovelace", role: "cast", character: "Ada", photo: "/ada.jpg" }],
+  people: [
+    { name: "Michael Mann", role: "director" },
+    { name: "Ada Lovelace", role: "cast", character: "Ada", photo: "/ada.jpg" },
+    { name: "Brad Pitt", role: "cast", id: 287, character: "Tyler" },
+  ],
   related: [{ type: "movie", id: "tt2", name: "The Town", year: "2010", poster: "/town.jpg" }],
   ageRating: "R",
   originalTitle: "Heat",
@@ -290,6 +294,18 @@ beforeEach(() => {
     if (path === "/api/library/trailer") return json({ trailer: null });
     if (path === "/api/library/gallery") return json({ images: [] });
     if (path === "/api/library/scan") return json({ status: "idle", total: 0, done: 0, matched: 0, skipped: 0, failed: 0 });
+    if (path.startsWith("/api/person/title/")) return json({ id: "tt2" });
+    if (/^\/api\/person\/\d+$/.test(path)) {
+      return json({
+        id: Number(path.split("/")[3]),
+        name: "Brad Pitt",
+        photo: "/brad.jpg",
+        sections: [
+          { key: "acting", titles: [{ type: "movie", tmdbId: 49047, id: "tt2", name: "The Town", year: "2010", poster: "/town.jpg", role: "Doug" }] },
+          { key: "crew", titles: [{ type: "movie", tmdbId: 1, id: "tt4", name: "Plain", year: "2012", role: "Director" }] },
+        ],
+      });
+    }
     if (path.endsWith("/extras")) {
       extrasCalls.push(path);
       const id = decodeURIComponent(path.split("/")[4] ?? "");
@@ -701,6 +717,9 @@ describe("title detail from the catalogue", () => {
     expect(startBodies.map((body) => body.query)).toEqual(["Ada Lovelace"]);
     expect(host.querySelector<HTMLInputElement>("[data-search-input]")!.value).toBe("Ada Lovelace");
     expect(host.querySelector(".view-title-detail")).toBeNull();
+    const notice = host.querySelector(".person-name-search")!;
+    expect(notice.getAttribute("role")).toBe("note");
+    expect(notice.textContent).toBe("Searched by name. This may not be everything the person made.");
   });
 
   it("runs the catalogue search when search everywhere is off", async () => {
@@ -717,6 +736,35 @@ describe("title detail from the catalogue", () => {
     expect(searchQueries).toContain("Ada Lovelace");
     expect(startBodies).toEqual([]);
     expect(host.querySelector(".view-title-detail")).toBeNull();
+    const notice = host.querySelector(".person-name-search")!;
+    expect(notice.getAttribute("role")).toBe("note");
+    expect(notice.textContent).toBe("Searched by name. This may not be everything the person made.");
+  });
+
+  it("opens the person view for a person with an id and returns to it after a title", async () => {
+    await openCatalog();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".poster-card")!.click(); });
+    await until(() => host.querySelector(".detail-panel .age-badge") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>(".detail-info")!.click(); });
+    await until(() => host.querySelector(".view-title-detail .person") !== null);
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>(".view-title-detail .person")].find((button) => button.textContent?.includes("Brad Pitt"))!.click(); });
+    await until(() => host.querySelector(".person-view .person-section") !== null);
+    expect(host.querySelector(".person-view h2")!.textContent).toBe("Brad Pitt");
+    expect(host.querySelector(".view-title-detail")).toBeNull();
+    const sections = [...host.querySelectorAll(".person-section")];
+    expect(sections.map((section) => section.getAttribute("data-section"))).toEqual(["acting", "crew"]);
+    expect(sections[0]!.querySelector("h3")!.textContent).toBe("Acting");
+    expect(sections[1]!.querySelector("h3")!.textContent).toBe("Directing and writing");
+
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>(".person-view .browse-item")].find((button) => button.textContent?.includes("The Town"))!.click(); });
+    await until(() => detailTitle() === "The Town");
+    expect(host.querySelector(".person-view")!.hasAttribute("hidden")).toBe(true);
+
+    await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .library-back")!.click(); });
+    await until(() => host.querySelector(".view-title-detail") === null);
+    expect(host.querySelector(".person-view")!.hasAttribute("hidden")).toBe(false);
+    expect(host.querySelector(".person-view h2")!.textContent).toBe("Brad Pitt");
+    expect(host.querySelector(".person-section[data-section='acting']")).not.toBeNull();
   });
 
   it("restores the chosen episode and the scroll of the title a similar title was opened from", async () => {

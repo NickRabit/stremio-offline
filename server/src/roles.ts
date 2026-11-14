@@ -118,6 +118,8 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/searchable$/ },
   { method: "GET", pattern: /^\/meta\/[^/]+\/[^/]+$/ },
   { method: "GET", pattern: /^\/meta\/[^/]+\/[^/]+\/extras$/ },
+  { method: "GET", pattern: /^\/person\/\d+$/ },
+  { method: "GET", pattern: /^\/person\/title\/(?:movie|series)\/\d+$/ },
   { method: "GET", pattern: /^\/links\/[^/]+\/[^/]+$/ },
   { method: "GET", pattern: /^\/trailer\/[^/]+\/[^/]+$/ },
   // Public intro timings for the player, keyed by catalogue id: nothing of any account.

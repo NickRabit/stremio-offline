@@ -94,7 +94,7 @@ class CatalogDetailTest {
   private fun mount(
     api: FakeTvApi,
     args: CatalogDetailArgs,
-    onSearchPerson: (String) -> Unit = {},
+    onSearchPerson: (TitlePersonDto) -> Unit = {},
     onOpenRelated: (RelatedTitleDto) -> Unit = {},
   ) {
     compose.setContent {
@@ -1525,6 +1525,27 @@ class CatalogDetailTest {
 
     press(Key.DirectionUp)
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+  }
+
+  @Test
+  fun `OK on a person passes the TMDB identity through`() {
+    var opened: TitlePersonDto? = null
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.titleExtrasValue = TitleExtrasDto(
+      people = listOf(TitlePersonDto(id = 31, name = "Tom Hanks", role = "cast", character = "Woody")),
+    )
+    mount(api, movieArgs(), onSearchPerson = { opened = it })
+    compose.waitUntil(5_000) { api.titleExtrasRequests.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(titlePersonTag("Tom Hanks"))
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    assertEquals(31L, opened?.id)
+    assertEquals("Tom Hanks", opened?.name)
   }
 
   @Test

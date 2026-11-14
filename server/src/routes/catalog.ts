@@ -13,6 +13,7 @@ import { localCopySummary } from "../library-file-facts.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
 import { readMediaBytes } from "../media-playlist.js";
+import { composePerson, personCredits } from "../person-filmography.js";
 import type { MediaInfo } from "../probe.js";
 import { isRemoteMediaStream } from "../media-server-reference.js";
 import type { MediaServerSources } from "../media-server-sources.js";
@@ -23,7 +24,8 @@ import { cancelResponseBody } from "../response-body.js";
 import type { UserPrefs } from "../store.js";
 import { trailerFor } from "../trailers.js";
 import { titleExtras } from "../title-extras.js";
-import { tmdbGallery } from "../tmdb.js";
+import { tmdbExternalIdResult, tmdbGallery } from "../tmdb.js";
+import { tmdbIds } from "../tmdb-ids.js";
 import type { MetaItem, StreamItem } from "../types.js";
 import { subtitleVtt } from "../subtitle-text.js";
 import { shiftVtt } from "../vtt.js";
@@ -46,6 +48,8 @@ export interface CatalogDeps extends RouteContext {
   libraryKey(value: string): string;
   /** The caller's library copies of one catalogue title or episode, in answer order. */
   localCopies(type: string, id: string, viewer: Viewer): Promise<Array<{ key: string; libraryId: string; libraryName: string; path: string; size: number; modified: string }>>;
+  /** `${type}:${tmdbId}` of the titles in the libraries this viewer may see. */
+  ownedTitles(viewer: Viewer): ReadonlySet<string>;
   /** What ffprobe read out of each copy, and the languages of the subtitle files beside it. A
    *  copy not read yet is missing, and is read behind the answer for the next one. */
   localCopyFacts(copies: ReadonlyArray<{ key: string; size: number; modified: string }>): Promise<Map<string, { info: MediaInfo; subtitleSidecars: Array<string | undefined> }>>;
@@ -64,9 +68,13 @@ export interface CatalogDeps extends RouteContext {
 const SUBTITLE_MAX_BYTES = 2 * 1024 * 1024;
 const SUBTITLE_DEADLINE_MS = 20_000;
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+const TMDB_ID = /^[1-9]\d{0,9}$/;
+
+const malformedPersonRequest = () =>
+  new AppError("The request was not understood.", "err.invalidRequest", 400);
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
-  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, localCopyFacts, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, ownedTitles, localCopyFacts, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
   const imageProxy = deps.imageProxy ?? images;
 
   /** The addons this caller may use, read once per request. A disabled addon is left out
@@ -195,6 +203,66 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       });
       if (disconnect.signal.aborted) return;
       res.json(imageProxy.rewriteExtras(extras));
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
+    }
+  }));
+  app.get("/api/person/:tmdbId", asyncRoute(async (req, res) => {
+    const rawId = String(req.params.tmdbId);
+    if (!TMDB_ID.test(rawId)) throw malformedPersonRequest();
+    const tmdbId = Number(rawId);
+    const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      if (disconnect.signal.aborted) return;
+      const apiKey = store.settings().tmdbApiKey;
+      if (!apiKey) throw new AppError("Nothing is known about this person.", "err.personUnavailable", 404);
+      const lookup = await personCredits(tmdbId, language, {
+        tmdb: { apiKey, language },
+        signal: disconnect.signal,
+      });
+      if (disconnect.signal.aborted) return;
+      if (lookup.status === "missing") {
+        throw new AppError("Nothing is known about this person.", "err.personUnavailable", 404);
+      }
+      if (lookup.status === "failed") {
+        throw new AppError("The filmography could not be loaded.", "err.personLookupFailed", 502);
+      }
+      const viewer = viewerOf(currentUser(req));
+      const person = composePerson(lookup.credits, {
+        owned: ownedTitles(viewer),
+        imdbOf: (type, id) => tmdbIds.imdbOf(type, id),
+      });
+      res.json(imageProxy.rewritePerson(person));
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
+    }
+  }));
+  app.get("/api/person/title/:type/:tmdbId", asyncRoute(async (req, res) => {
+    const type = String(req.params.type);
+    const rawId = String(req.params.tmdbId);
+    if ((type !== "movie" && type !== "series") || !TMDB_ID.test(rawId)) throw malformedPersonRequest();
+    const tmdbId = Number(rawId);
+    const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      if (disconnect.signal.aborted) return;
+      const apiKey = store.settings().tmdbApiKey;
+      if (!apiKey) throw new AppError("Nothing is known about this person.", "err.personUnavailable", 404);
+      const result = await tmdbExternalIdResult(type, tmdbId, { apiKey, language }, undefined, disconnect.signal);
+      if (disconnect.signal.aborted) return;
+      if (result.status === "failed") {
+        throw new AppError("The filmography could not be loaded.", "err.personLookupFailed", 502);
+      }
+      res.json(result.status === "found"
+        ? { id: result.imdb }
+        : { id: `tmdb:${tmdbId}`, imdb: "none" });
     } catch (error) {
       if (disconnect.signal.aborted) return;
       throw error;

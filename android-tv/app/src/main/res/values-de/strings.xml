@@ -546,4 +546,18 @@
   <string name="err_profile_unavailable">Dieses Profil ist nicht verfügbar.</string>
   <string name="err_bad_credentials">Falscher Benutzername oder Passwort.</string>
   <string name="err_too_many_attempts">Zu viele gescheiterte Versuche. Versuchen Sie es in %1$s Sekunden erneut.</string>
+  <string name="person_acting">Schauspiel</string>
+  <string name="person_crew">Regie und Drehbuch</string>
+  <string name="person_empty">TMDB führt für diese Person keine Filme oder Serien.</string>
+  <string name="person_loading">Filmografie wird geladen…</string>
+  <string name="person_retry">Erneut versuchen</string>
+  <string name="person_movie">Film</string>
+  <string name="person_series">Serie</string>
+  <string name="person_no_imdb">TMDB kennt für diesen Titel keine IMDb-ID. Manche Quellen fehlen eventuell.</string>
+  <string name="person_opening">Wird geöffnet…</string>
+  <string name="person_in_library">In deiner Bibliothek</string>
+  <string name="person_label">Filmografie von %1$s</string>
+  <string name="person_hint_tv">OK zeigt, woran die Person mitgewirkt hat</string>
+  <string name="err_person_unavailable">Über diese Person ist nichts bekannt.</string>
+  <string name="err_person_lookup_failed">Die Filmografie konnte nicht geladen werden. Versuche es später erneut.</string>
 </resources>

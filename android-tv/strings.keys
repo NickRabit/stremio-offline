@@ -517,3 +517,19 @@ err.pinLocked
 err.profileUnavailable
 err.badCredentials
 err.tooManyAttempts
+
+# Person
+person.acting
+person.crew
+person.empty
+person.loading
+person.retry
+person.movie
+person.series
+person.noImdb
+person.opening
+person.inLibrary
+person.label
+person.hintTv
+err.personUnavailable
+err.personLookupFailed

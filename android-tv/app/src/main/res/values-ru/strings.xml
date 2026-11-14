@@ -570,4 +570,18 @@
   <string name="err_profile_unavailable">Этот профиль недоступен.</string>
   <string name="err_bad_credentials">Неверное имя пользователя или пароль.</string>
   <string name="err_too_many_attempts">Слишком много неудачных попыток. Повторите попытку через %1$s сек.</string>
+  <string name="person_acting">Актёрские работы</string>
+  <string name="person_crew">Режиссура и сценарии</string>
+  <string name="person_empty">TMDB не указывает фильмов или сериалов этого человека.</string>
+  <string name="person_loading">Загрузка фильмографии…</string>
+  <string name="person_retry">Повторить</string>
+  <string name="person_movie">Фильм</string>
+  <string name="person_series">Сериал</string>
+  <string name="person_no_imdb">TMDB не знает IMDb ID этого названия. Некоторых источников может не быть.</string>
+  <string name="person_opening">Открытие…</string>
+  <string name="person_in_library">В вашей библиотеке</string>
+  <string name="person_label">Фильмография: %1$s</string>
+  <string name="person_hint_tv">OK покажет, в чём участвовал этот человек</string>
+  <string name="err_person_unavailable">Об этом человеке ничего не известно.</string>
+  <string name="err_person_lookup_failed">Не удалось загрузить фильмографию. Попробуйте позже.</string>
 </resources>

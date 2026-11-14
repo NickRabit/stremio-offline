@@ -72,6 +72,7 @@ import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.playback.VersionProgress
@@ -255,7 +256,7 @@ fun CatalogDetailScreen(
   onSources: (OfferedSources) -> Unit = {},
   /** Opens one local file's folder in the Library view. */
   onShowInLibrary: (String) -> Unit = {},
-  onSearchPerson: (String) -> Unit = {},
+  onSearchPerson: (TitlePersonDto) -> Unit = {},
   onOpenRelated: (RelatedTitleDto) -> Unit = {},
   /** The player above asks here for the episode after the one it plays. */
   nextBridge: CatalogueNextBridge? = null,

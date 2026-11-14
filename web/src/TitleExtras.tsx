@@ -14,7 +14,7 @@ export interface TitleExtrasTarget {
 }
 
 export interface TitleExtrasActionsValue {
-  searchPerson: (name: string) => void;
+  searchPerson: (person: { name: string; id?: number }) => void;
   /** `remoteFirst`: opened from a Jellyfin/Emby title, so that server's copy leads Play. */
   openTitle: (title: TitleExtrasTarget, options?: { remoteFirst?: boolean }) => void;
 }
@@ -225,9 +225,9 @@ export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer
   };
   return <section className="title-extras">
     {people.length > 0 && <div className="extras-row">
-      <h3>{translate("detail.people")} <small>{translate("detail.peopleHint")}</small></h3>
+      <h3>{translate("detail.people")} <small>{translate(strip.some((person) => person.id != null) ? "person.hint" : "detail.peopleHint")}</small></h3>
       <ExtrasStrip>{strip.map((person, index) => <button type="button" className="person" key={`${person.name}:${person.role}:${index}`}
-        title={translate("detail.searchPerson", { name: person.name })} onClick={() => actions.searchPerson(person.name)}>
+        title={translate(person.id != null ? "person.label" : "detail.searchPerson", { name: person.name })} onClick={() => actions.searchPerson({ name: person.name, ...(person.id != null ? { id: person.id } : {}) })}>
         <PersonFace name={person.name} photo={person.photo}/>
         <strong>{person.name}</strong>
         {person.role === "cast"

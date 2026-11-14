@@ -570,4 +570,18 @@
   <string name="err_profile_unavailable">Tento profil není k dispozici.</string>
   <string name="err_bad_credentials">Nesprávné jméno nebo heslo.</string>
   <string name="err_too_many_attempts">Příliš mnoho neúspěšných pokusů. Zkuste to za %1$s s.</string>
+  <string name="person_acting">Herectví</string>
+  <string name="person_crew">Režie a scénář</string>
+  <string name="person_empty">TMDB u této osoby neuvádí žádné filmy ani seriály.</string>
+  <string name="person_loading">Načítá se filmografie…</string>
+  <string name="person_retry">Zkusit znovu</string>
+  <string name="person_movie">Film</string>
+  <string name="person_series">Seriál</string>
+  <string name="person_no_imdb">TMDB pro tento titul nezná IMDb ID. Některé zdroje mohou chybět.</string>
+  <string name="person_opening">Otevírá se…</string>
+  <string name="person_in_library">Ve vaší knihovně</string>
+  <string name="person_label">Filmografie: %1$s</string>
+  <string name="person_hint_tv">OK ukáže, na čem se osoba podílela</string>
+  <string name="err_person_unavailable">O této osobě nejsou žádné údaje.</string>
+  <string name="err_person_lookup_failed">Filmografii se nepodařilo načíst. Zkuste to později.</string>
 </resources>

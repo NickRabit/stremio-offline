@@ -675,6 +675,24 @@ class ApiClient(
     ).decode() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  override suspend fun person(tmdbId: Long, language: String?): PersonFilmographyDto {
+    val suffix = if (!language.isNullOrEmpty()) "?language=" + encode(language) else ""
+    return request(
+      Request.Builder()
+        .url(address.resolve("/api/person/$tmdbId$suffix"))
+        .get()
+        .build(),
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun personTitle(type: String, tmdbId: Long): PersonTitleResolutionDto =
+    request(
+      Request.Builder()
+        .url(address.resolve("/api/person/title/" + encode(type) + "/$tmdbId"))
+        .get()
+        .build(),
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
+
   /** The source addons of one video, in the caller's own order. */
   override suspend fun streamSources(type: String, id: String): List<StreamSourceDto> =
     request(Request.Builder().url(address.resolve("/api/stream-sources/" + encode(type) + "/" + encode(id))).get().build()).decode()

@@ -70,14 +70,14 @@ export function CrewLine({ people }: { people?: TitlePerson[] }) {
   const { t: translate } = useI18n();
   const groups = LINE_ROLES.map((role) => {
     const seen = new Set<string>();
-    const names: string[] = [];
+    const names: Array<{ name: string; id?: number }> = [];
     for (const person of people ?? []) {
       if (person.role !== role) continue;
       const trimmed = person.name.trim();
       const key = trimmed.toLocaleLowerCase();
       if (!key || seen.has(key)) continue;
       seen.add(key);
-      names.push(trimmed);
+      names.push({ name: trimmed, ...(person.id != null ? { id: person.id } : {}) });
       if (names.length === 3) break;
     }
     return { role, names };
@@ -86,9 +86,9 @@ export function CrewLine({ people }: { people?: TitlePerson[] }) {
   return <p className="detail-crew">{groups.map((group, index) => <span key={group.role}>
     {index > 0 ? " · " : null}
     {translate(`detail.role.${group.role}`)}{" "}
-    {group.names.map((name, nameIndex) => <span key={name}>
+    {group.names.map((entry, nameIndex) => <span key={entry.name}>
       {nameIndex > 0 ? ", " : null}
-      <button type="button" title={translate("detail.searchPerson", { name })} onClick={() => actions.searchPerson(name)}><b>{name}</b></button>
+      <button type="button" title={translate(entry.id != null ? "person.label" : "detail.searchPerson", { name: entry.name })} onClick={() => actions.searchPerson({ name: entry.name, ...(entry.id != null ? { id: entry.id } : {}) })}><b>{entry.name}</b></button>
     </span>)}
   </span>)}</p>;
 }

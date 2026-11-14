@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { setLocale } from "./i18n";
+import { CrewLine } from "./detail-copy";
 import { isTagLine, synopsisOf, TitleExtraFacts, TitleExtrasActions, TitleExtrasRows, trailerFromExtras, type TitleExtrasActionsValue } from "./TitleExtras";
 import type { TitleExtras } from "./types";
 
@@ -120,14 +121,32 @@ describe("TitleExtrasRows", () => {
     const actions = mount(<TitleExtrasRows extras={cast} loading={false}/>);
     const portrait = [...host.querySelectorAll<HTMLButtonElement>(".person")].find((button) => button.textContent?.includes("Grace Hopper"))!;
     act(() => { portrait.click(); });
-    expect(actions.searchPerson).toHaveBeenCalledWith("Grace Hopper");
+    expect(actions.searchPerson).toHaveBeenCalledWith({ name: "Grace Hopper" });
     const writer = [...host.querySelectorAll<HTMLButtonElement>(".person")].find((button) => button.textContent?.includes("Aaron Sorkin"))!;
     act(() => { writer.click(); });
-    expect(actions.searchPerson).toHaveBeenCalledWith("Aaron Sorkin");
+    expect(actions.searchPerson).toHaveBeenCalledWith({ name: "Aaron Sorkin" });
     act(() => { host.querySelector<HTMLButtonElement>(".related")!.click(); });
     expect(actions.openTitle).toHaveBeenCalledWith({ type: "movie", id: "tt2", name: "When Harry Met Sally", poster: "/sally.jpg" });
     act(() => { host.querySelectorAll<HTMLButtonElement>(".related")[1]!.click(); });
     expect(actions.openTitle).toHaveBeenCalledWith({ type: "series", id: "tt3", name: "Plain Show", poster: undefined });
+  });
+
+  it("passes a TMDB id when a cast card or crew-line name has one", () => {
+    const extras = {
+      ...cast,
+      people: [
+        { name: "Brad Pitt", role: "cast" as const, id: 287, character: "Tyler" },
+        { name: "Quentin Tarantino", role: "director" as const, id: 138 },
+        { name: "Quentin Tarantino", role: "director" as const, id: 999 },
+      ],
+    };
+    const actions = mount(<><TitleExtrasRows extras={extras} loading={false}/><CrewLine people={extras.people}/></>);
+    const portrait = [...host.querySelectorAll<HTMLButtonElement>(".person")].find((button) => button.textContent?.includes("Brad Pitt"))!;
+    act(() => { portrait.click(); });
+    expect(actions.searchPerson).toHaveBeenCalledWith({ name: "Brad Pitt", id: 287 });
+    const crew = [...host.querySelectorAll<HTMLButtonElement>(".detail-crew button")].find((button) => button.textContent?.includes("Quentin Tarantino"))!;
+    act(() => { crew.click(); });
+    expect(actions.searchPerson).toHaveBeenCalledWith({ name: "Quentin Tarantino", id: 138 });
   });
 
   it("asks for the media server's copy first when the rows sit on a Jellyfin/Emby title", () => {

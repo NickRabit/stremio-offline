@@ -11,6 +11,7 @@ import {
   clearTitleExtrasCache,
   detachTitleExtrasDisk,
   flushTitleExtrasDisk,
+  keyFingerprint,
   setTitleExtrasCacheLimitForTests,
   titleExtras,
   type TitleExtrasDeps,
@@ -64,18 +65,19 @@ test("movie extras map ordered cast, bounded crew, IMDb recommendations and the 
   fresh(t);
   const calls: string[] = [];
   const cast = Array.from({ length: 22 }, (_, index) => ({
+    id: 1000 + index,
     name: `Actor ${index}`,
     character: `Character ${index}`,
     profile_path: `/actor-${index}.jpg`,
     order: index,
   })).reverse();
   const crew = [
-    { name: "Alice", job: "Director", profile_path: "/alice.jpg" },
-    { name: "Alice", job: "Director" },
-    { name: "Bob", job: "Screenplay" },
-    { name: "Cara", job: "Writer" },
-    { name: "Dan", job: "Teleplay" },
-    { name: "Eve", job: "Novel" },
+    { id: 2001, name: "Alice", job: "Director", profile_path: "/alice.jpg" },
+    { id: 2001, name: "Alice", job: "Director" },
+    { id: 2002, name: "Bob", job: "Screenplay" },
+    { id: 2003, name: "Cara", job: "Writer" },
+    { id: 2004, name: "Dan", job: "Teleplay" },
+    { id: 2005, name: "Eve", job: "Novel" },
     { name: "Producer", job: "Producer" },
     { name: "Composer", job: "Original Music Composer" },
     { name: "Frank", job: "Director" },
@@ -135,7 +137,9 @@ test("movie extras map ordered cast, bounded crew, IMDb recommendations and the 
     ],
   );
   assert.equal(result.people[0]?.photo, "https://image.tmdb.org/t/p/w185/actor-0.jpg");
+  assert.equal(result.people[0]?.id, 1000);
   assert.equal(result.people[0]?.character, "Character 0");
+  assert.equal(result.people.find((person) => person.name === "Alice")?.id, 2001);
   assert.equal(result.related.length, 12);
   assert.deepEqual(result.related[0], {
     type: "movie",
@@ -163,17 +167,17 @@ test("series extras put creators first and use aggregate roles and TV ratings", 
         original_name: "Breaking Bad",
         original_language: "en",
         created_by: [
-          { name: "Vince Gilligan", profile_path: "/vince.jpg" },
-          { name: "Second Creator" },
+          { id: 66633, name: "Vince Gilligan", profile_path: "/vince.jpg" },
+          { id: 3001, name: "Second Creator" },
         ],
         aggregate_credits: {
           cast: [
-            { name: "Second Actor", order: 2, roles: [{ character: "Second" }] },
-            { name: "First Actor", order: 1, roles: [{ character: "First" }] },
+            { id: 3003, name: "Second Actor", order: 2, roles: [{ character: "Second" }] },
+            { id: 3002, name: "First Actor", order: 1, roles: [{ character: "First" }] },
           ],
           crew: [
-            { name: "Director", jobs: [{ job: "Director" }], profile_path: "/director.jpg" },
-            { name: "Writer", jobs: [{ job: "Writer" }, { job: "Writer" }] },
+            { id: 3004, name: "Director", jobs: [{ job: "Director" }], profile_path: "/director.jpg" },
+            { id: 3005, name: "Writer", jobs: [{ job: "Writer" }, { job: "Writer" }] },
           ],
         },
         recommendations: { results: [] },
@@ -193,10 +197,10 @@ test("series extras put creators first and use aggregate roles and TV ratings", 
   }));
 
   assert.deepEqual(result.people.slice(0, 4), [
-    { name: "Vince Gilligan", role: "creator", photo: "https://image.tmdb.org/t/p/w185/vince.jpg" },
-    { name: "Second Creator", role: "creator" },
-    { name: "First Actor", role: "cast", character: "First" },
-    { name: "Second Actor", role: "cast", character: "Second" },
+    { id: 66633, name: "Vince Gilligan", role: "creator", photo: "https://image.tmdb.org/t/p/w185/vince.jpg" },
+    { id: 3001, name: "Second Creator", role: "creator" },
+    { id: 3002, name: "First Actor", role: "cast", character: "First" },
+    { id: 3003, name: "Second Actor", role: "cast", character: "Second" },
   ]);
   // A series' directors and writers are those of single episodes: only its creators stand for it.
   assert.deepEqual(result.people.slice(4), []);
@@ -863,7 +867,7 @@ test("an addon id without IMDb finds TMDB through the meta's imdb_id", async (t)
 test("a disk file with malformed entries is a miss, not a failure", async (t) => {
   fresh(t);
   const dir = await diskCache(t);
-  const key = `movie:tmdb:41:cs:${createHash("sha256").update(config.apiKey).digest("hex").slice(0, 12)}`;
+  const key = `movie:tmdb:41:cs:${keyFingerprint(config.apiKey)}`;
   const name = `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`;
   await writeFile(path.join(dir, name), JSON.stringify({
     version: 1, key, at: 1_000, value: { people: [], related: [null], videos: [] },
@@ -875,6 +879,34 @@ test("a disk file with malformed entries is a miss, not a failure", async (t) =>
   }, { now: () => 1_000 }));
   assert.equal(details, 1, "the broken file is rebuilt from TMDB");
   assert.deepEqual(result.related, []);
+});
+
+test("a version-1 disk entry is ignored and rebuilt", async (t) => {
+  fresh(t);
+  const dir = await diskCache(t);
+  const key = `movie:tmdb:43:cs:${keyFingerprint(config.apiKey)}`;
+  const name = `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`;
+  await writeFile(path.join(dir, name), JSON.stringify({
+    version: 1,
+    key,
+    at: 1_000,
+    value: {
+      people: [{ id: 7, name: "Old person", role: "cast" }],
+      related: [],
+      videos: [],
+    },
+  }));
+  let details = 0;
+  const result = await titleExtras("movie", "tmdb:43", "cs", deps(async () => {
+    details += 1;
+    return json({
+      credits: { cast: [{ id: 8, name: "Fresh person", order: 0 }], crew: [] },
+      recommendations: { results: [] },
+      release_dates: { results: [] },
+    });
+  }, { now: () => 1_000 }));
+  assert.equal(details, 1);
+  assert.deepEqual(result.people, [{ id: 8, name: "Fresh person", role: "cast" }]);
 });
 
 test("a request cancelled before it joins leaves no unobserved rejection", async (t) => {

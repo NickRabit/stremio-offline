@@ -361,7 +361,7 @@ export function SearchResults({ search, shape, onOpenMember, onOpenCanonical, on
   </div>;
 }
 
-export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical }: {
+export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical, nameSearchNotice = false }: {
   search: SearchEverywhereController;
   shape: TileShape;
   onToggleShape: () => void;
@@ -374,6 +374,8 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   onRefreshRecent: () => void;
   onOpenMember: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
   onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
+  /** A person without a TMDB id was searched by name. */
+  nameSearchNotice?: boolean;
   /** Returns to the Library place Search was opened from. */
 }) {
   const root = useRef<HTMLElement>(null);
@@ -526,6 +528,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
         </div>
       </details>
     </div>}
+    {nameSearchNotice && <p className="person-name-search" role="note">{t("person.nameSearch")}</p>}
     <SearchResults search={search} shape={shape} onOpenMember={onOpenMember} onOpenCanonical={onOpenCanonical} onRecord={onRecord}/>
   </section>;
 }

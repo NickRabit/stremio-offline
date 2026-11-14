@@ -570,4 +570,18 @@
   <string name="err_profile_unavailable">Tento profil nie je k dispozícii.</string>
   <string name="err_bad_credentials">Nesprávne používateľské meno alebo heslo.</string>
   <string name="err_too_many_attempts">Príliš veľa neúspešných pokusov. Skúste to znova o %1$s s.</string>
+  <string name="person_acting">Herectvo</string>
+  <string name="person_crew">Réžia a scenár</string>
+  <string name="person_empty">TMDB pri tejto osobe neuvádza žiadne filmy ani seriály.</string>
+  <string name="person_loading">Načítava sa filmografia…</string>
+  <string name="person_retry">Skúsiť znova</string>
+  <string name="person_movie">Film</string>
+  <string name="person_series">Seriál</string>
+  <string name="person_no_imdb">TMDB pre tento titul nepozná IMDb ID. Niektoré zdroje môžu chýbať.</string>
+  <string name="person_opening">Otvára sa…</string>
+  <string name="person_in_library">Vo vašej knižnici</string>
+  <string name="person_label">Filmografia: %1$s</string>
+  <string name="person_hint_tv">OK ukáže, na čom sa osoba podieľala</string>
+  <string name="err_person_unavailable">O tejto osobe nie sú žiadne údaje.</string>
+  <string name="err_person_lookup_failed">Filmografiu sa nepodarilo načítať. Skúste to neskôr.</string>
 </resources>

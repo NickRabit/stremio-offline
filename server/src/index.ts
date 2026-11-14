@@ -45,6 +45,7 @@ import { advanceTorrent } from "./debrid.js";
 import { DebridReadyStore } from "./debrid-ready.js";
 import { tmdbExternalIdResult, tmdbGallery, tmdbMeta, tmdbMovieReleases, tmdbSeasonAirDates, type TmdbConfig } from "./tmdb.js";
 import { tmdbIds } from "./tmdb-ids.js";
+import { ownedTitleKeys } from "./person-filmography.js";
 import { attachTitleExtrasDisk } from "./title-extras.js";
 import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
@@ -1493,6 +1494,13 @@ registerCatalogRoutes(app, {
       key: copy.key, libraryId: copy.libraryId, libraryName: names.get(copy.libraryId) ?? "",
       path: wirePath(copy.key), size: copy.size, modified: copy.modified,
     }));
+  },
+  ownedTitles: (viewer) => {
+    const visibleIds = new Set(visibleLibraries(store.libraries(), viewer).map((library) => library.id));
+    const records = Object.entries(metaStore.qualifiedMeta())
+      .filter(([key]) => visibleIds.has(parseLibraryPath(key)?.libraryId ?? ""))
+      .map(([, record]) => record);
+    return ownedTitleKeys(records, (kind, imdb) => tmdbIds.tmdbOf(kind, imdb));
   },
   localCopyFacts: async (copies) => {
     const read = await libraryFileFacts.read(copies);
