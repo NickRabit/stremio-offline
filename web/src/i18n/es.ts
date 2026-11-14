@@ -419,6 +419,7 @@ export const es: Catalog = {
   "person.opening": "Abriendo…",
   "person.inLibrary": "En tu biblioteca",
   "person.label": "Filmografía de {name}",
+  "person.hintTv": "OK muestra en qué ha trabajado la persona",
   "detail.willPlay": "Se reproducirá",
   "detail.willPlayChoose": "eliges al pulsar Reproducir: la regla de fuentes no admitió ninguna versión",
   "detail.originalLanguage": "Idioma original {language}",

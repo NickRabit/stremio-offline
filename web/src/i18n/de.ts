@@ -419,6 +419,7 @@ export const de: Catalog = {
   "person.opening": "Wird geöffnet…",
   "person.inLibrary": "In deiner Bibliothek",
   "person.label": "Filmografie von {name}",
+  "person.hintTv": "OK zeigt, woran die Person mitgewirkt hat",
   "detail.willPlay": "Wird abgespielt",
   "detail.willPlayChoose": "Sie wählen nach „Abspielen“ — die Quellenregel hat keine Version zugelassen",
   "detail.originalLanguage": "Originalsprache {language}",

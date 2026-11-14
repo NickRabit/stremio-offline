@@ -110,6 +110,8 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/meta/movie/tt1254207"],
   ["GET", "/meta/movie/tt1254207/extras"],
   ["GET", "/meta/series/tt1254207/extras"],
+  ["GET", "/person/138"],
+  ["GET", "/person/title/movie/680"],
   ["GET", "/links/movie/tt1254207"],
   ["GET", "/trailer/movie/tt1254207"],
   ["GET", "/intro-segments"],
@@ -200,6 +202,8 @@ const REFUSED: Array<[string, string]> = [
   ["POST", "/library/mosaic"],
   ["POST", "/library/gallery"],
   ["POST", "/meta/movie/tt1254207/extras"],
+  ["POST", "/person/138"],
+  ["POST", "/person/title/movie/680"],
   ["GET", "/logs"],
   ["GET", "/diagnostics"],
   ["GET", "/client-logs"],
@@ -403,7 +407,7 @@ const ADMIN_ONLY = new Set([
 ]);
 
 /** A concrete value for a route parameter whose rule accepts only some values. */
-const SAMPLE_PARAMS: Record<string, string> = { imageType: "Primary" };
+const SAMPLE_PARAMS: Record<string, string> = { imageType: "Primary", tmdbId: "138", type: "movie" };
 
 const registeredRoutes = async (): Promise<string[]> => {
   const root = path.dirname(fileURLToPath(import.meta.url));

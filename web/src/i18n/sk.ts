@@ -419,6 +419,7 @@ export const sk: Catalog = {
   "person.opening": "Otvára sa…",
   "person.inLibrary": "Vo vašej knižnici",
   "person.label": "Filmografia: {name}",
+  "person.hintTv": "OK ukáže, na čom sa osoba podieľala",
   "detail.willPlay": "Prehrá sa",
   "detail.willPlayChoose": "vyberiete po stlačení Prehrať — pravidlo pre zdroje nepustilo žiadnu verziu",
   "detail.originalLanguage": "Pôvodný jazyk {language}",

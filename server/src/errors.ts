@@ -141,6 +141,8 @@ const TABLE: Record<string, ErrorClassification> = {
   "err.manifestIncomplete": { category: "addon", retry: "action" },
   "err.manifestExists": { category: "addon", retry: "permanent" },
   "err.essentialAddon": { category: "addon", retry: "permanent" },
+  "err.personUnavailable": { category: "configuration", retry: "permanent" },
+  "err.personLookupFailed": { category: "network", retry: "manual" },
 
   // A source host the breaker is holding back: it retries on its own once the cooldown ends.
   "err.hostUnavailable": { category: "network", retry: "manual" },

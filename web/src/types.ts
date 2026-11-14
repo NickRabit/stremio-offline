@@ -40,6 +40,7 @@ export interface Meta {
   addonName?: string; sources?: string[]; [key: string]: unknown;
 }
 export interface TitlePerson {
+  id?: number;
   name: string;
   role: "cast" | "director" | "creator" | "writer" | "novel";
   character?: string;

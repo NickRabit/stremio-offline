@@ -297,6 +297,94 @@ export async function tmdbExternalId(
   return result.status === "found" ? result.imdb : null;
 }
 
+export interface TmdbPersonCredit {
+  id?: number;
+  media_type?: string;
+  adult?: boolean;
+  title?: string;
+  name?: string;
+  release_date?: string;
+  first_air_date?: string;
+  poster_path?: string | null;
+  popularity?: number;
+  genre_ids?: number[];
+  character?: string;
+  job?: string;
+  episode_count?: number;
+}
+
+export interface TmdbPersonResponse {
+  id?: number;
+  name?: string;
+  profile_path?: string | null;
+  known_for_department?: string;
+  combined_credits?: { cast?: TmdbPersonCredit[]; crew?: TmdbPersonCredit[] };
+}
+
+export type TmdbPersonResult =
+  | { status: "found"; person: TmdbPersonResponse }
+  | { status: "missing" }
+  | { status: "failed" };
+
+export async function tmdbPerson(
+  tmdbId: number,
+  config: TmdbConfig,
+  fetchImpl?: FetchLike,
+  signal?: AbortSignal,
+): Promise<TmdbPersonResult> {
+  if (!Number.isInteger(tmdbId) || tmdbId <= 0) return { status: "failed" };
+  throwIfCancelled(signal);
+  let reply: TmdbReply<TmdbPersonResponse>;
+  try {
+    reply = await tmdbReply<TmdbPersonResponse>(
+      `/person/${tmdbId}`,
+      {
+        api_key: config.apiKey,
+        language: config.language,
+        append_to_response: "combined_credits",
+      },
+      fetchImpl,
+      signal,
+    );
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    log("WARN", "TMDB person lookup failed", {
+      operation: "person",
+      id: tmdbId,
+      reason: reasonOf(error, config.apiKey),
+    });
+    return { status: "failed" };
+  }
+  const { response } = reply;
+  throwIfCancelled(signal);
+  if (response.status === 404) return { status: "missing" };
+  if (!response.ok) {
+    log("WARN", "TMDB person lookup failed", {
+      operation: "person",
+      id: tmdbId,
+      status: response.status,
+      retryAfterMs: tmdbRetryAfterMs(response),
+    });
+    return { status: "failed" };
+  }
+  let body: TmdbPersonResponse;
+  try {
+    if (reply.parseError) throw reply.parseError;
+    body = reply.body ?? await readTmdbJson<TmdbPersonResponse>(response, signal);
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("TMDB person response is not an object.");
+    throwIfCancelled(signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    log("WARN", "TMDB answered with malformed JSON", {
+      operation: "person",
+      id: tmdbId,
+      reason: reasonOf(error, config.apiKey),
+    });
+    return { status: "failed" };
+  }
+  return { status: "found", person: body };
+}
+
 /** Alternate artwork of one chosen title, deduplicated and bounded. Only called once a
  *  binding has been picked: a per-candidate request would multiply the search cost. */
 export async function tmdbGallery(
@@ -572,9 +660,9 @@ export interface TmdbTitleExtras {
   originalLanguage?: string;
   voteAverage?: number;
   voteCount?: number;
-  createdBy: Array<{ name: string; profilePath?: string }>;
-  cast: Array<{ name: string; character?: string; profilePath?: string; order: number }>;
-  crew: Array<{ name: string; job: string; profilePath?: string }>;
+  createdBy: Array<{ id?: number; name: string; profilePath?: string }>;
+  cast: Array<{ id?: number; name: string; character?: string; profilePath?: string; order: number }>;
+  crew: Array<{ id?: number; name: string; job: string; profilePath?: string }>;
   recommendations: Array<{ tmdbId: number; name: string; date?: string; posterPath?: string }>;
   videos: Array<{ key: string; name: string; type: string; site: string; official?: boolean; language?: string }>;
   /** Certifications by ISO 3166-1 region, first non-empty one per region. */
@@ -582,6 +670,7 @@ export interface TmdbTitleExtras {
 }
 
 interface TmdbExtraCredit {
+  id?: number;
   name?: string;
   character?: string;
   job?: string;
@@ -630,6 +719,9 @@ const profilePath = (value: unknown): string | undefined => text(value);
 
 const finiteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+const personId = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 
 /** One request: the title details with every extras section TMDB can append. */
 export async function tmdbTitleExtras(
@@ -705,6 +797,7 @@ export async function tmdbTitleExtras(
     const character = type === "movie" ? text(row.character) : text(row.roles?.[0]?.character);
     return [{
       name,
+      ...(personId(row.id) ? { id: personId(row.id) } : {}),
       ...(character ? { character } : {}),
       ...(profilePath(row.profile_path) ? { profilePath: profilePath(row.profile_path) } : {}),
       order: typeof row.order === "number" && Number.isFinite(row.order) ? row.order : Number.MAX_SAFE_INTEGER,
@@ -719,6 +812,7 @@ export async function tmdbTitleExtras(
     return jobs.map((job) => ({
       name,
       job,
+      ...(personId(row.id) ? { id: personId(row.id) } : {}),
       ...(profilePath(row.profile_path) ? { profilePath: profilePath(row.profile_path) } : {}),
     }));
   });
@@ -728,6 +822,7 @@ export async function tmdbTitleExtras(
       if (!name) return [];
       return [{
         name,
+        ...(personId(row.id) ? { id: personId(row.id) } : {}),
         ...(profilePath(row.profile_path) ? { profilePath: profilePath(row.profile_path) } : {}),
       }];
     })

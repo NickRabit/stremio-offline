@@ -17,6 +17,7 @@ import {
 } from "./tmdb.js";
 
 export interface TitlePerson {
+  id?: number;
   name: string;
   role: "cast" | "director" | "creator" | "writer" | "novel";
   /** The character for cast; absent for crew. */
@@ -95,7 +96,7 @@ const SUCCESS_TTL_MS = 24 * 60 * 60_000;
 const PARTIAL_TTL_MS = 30 * 60_000;
 const FAILURE_TTL_MS = 10 * 60_000;
 const DEFAULT_CACHE_LIMIT = 500;
-const DISK_VERSION = 1;
+const DISK_VERSION = 2;
 const DISK_LIMIT = 2_000;
 const PRUNE_INTERVAL_MS = 60 * 60_000;
 let cacheLimit = DEFAULT_CACHE_LIMIT;
@@ -140,7 +141,7 @@ let lastPruneAt = 0;
 const diskWrites = new Map<string, Promise<void>>();
 
 interface DiskEntry {
-  version: 1;
+  version: 2;
   key: string;
   at: number;
   value: CachedTmdbExtras;
@@ -190,7 +191,7 @@ const throwIfCancelled = (signal?: AbortSignal) => {
   if (signal?.aborted) throw new OutboundError("cancelled");
 };
 
-const keyFingerprint = (apiKey: string) => createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
+export const keyFingerprint = (apiKey: string) => createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
 const diskName = (key: string) => `${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`;
 const reasonOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -310,6 +311,7 @@ function tmdbPeople(data: TmdbTitleExtras, type: "movie" | "series"): TitlePerso
     .map((person) => {
       const photo = tmdbImage(person.profilePath, "w185");
       return {
+        ...(person.id ? { id: person.id } : {}),
         name: person.name,
         role: "cast" as const,
         ...(person.character ? { character: person.character } : {}),
@@ -326,7 +328,7 @@ function tmdbPeople(data: TmdbTitleExtras, type: "movie" | "series"): TitlePerso
   };
   for (const person of data.createdBy) {
     const photo = tmdbImage(person.profilePath, "w185");
-    addCrew({ name: person.name, role: "creator", ...(photo ? { photo } : {}) });
+    addCrew({ ...(person.id ? { id: person.id } : {}), name: person.name, role: "creator", ...(photo ? { photo } : {}) });
   }
   for (const person of data.crew) {
     const role = CREW_ROLE[person.job];
@@ -334,7 +336,7 @@ function tmdbPeople(data: TmdbTitleExtras, type: "movie" | "series"): TitlePerso
     // A series' directors and writers are those of single episodes; its creators stand for it.
     if (type === "series" && role !== "novel") continue;
     const photo = tmdbImage(person.profilePath, "w185");
-    addCrew({ name: person.name, role, ...(photo ? { photo } : {}) });
+    addCrew({ ...(person.id ? { id: person.id } : {}), name: person.name, role, ...(photo ? { photo } : {}) });
   }
   return [
     ...crew.filter((person) => person.role === "creator"),

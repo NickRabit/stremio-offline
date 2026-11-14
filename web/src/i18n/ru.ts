@@ -419,6 +419,7 @@ export const ru: Catalog = {
   "person.opening": "Открытие…",
   "person.inLibrary": "В вашей библиотеке",
   "person.label": "Фильмография: {name}",
+  "person.hintTv": "OK покажет, в чём участвовал этот человек",
   "detail.willPlay": "Будет воспроизведено",
   "detail.willPlayChoose": "выберете после нажатия «Воспроизвести» — правило источников не пропустило ни одной версии",
   "detail.originalLanguage": "Оригинальный язык {language}",

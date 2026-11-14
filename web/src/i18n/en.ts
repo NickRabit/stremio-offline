@@ -463,6 +463,7 @@ export const en = {
   "person.opening": "Opening…",
   "person.inLibrary": "In your library",
   "person.label": "Filmography of {name}",
+  "person.hintTv": "OK shows what the person made",
   "detail.willPlay": "Will play",
   "detail.willPlayChoose": "you choose when you press Play — the source rule allowed no version",
   "detail.originalLanguage": "Original language {language}",

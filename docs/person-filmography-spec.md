@@ -278,13 +278,20 @@ edit the generated resources.
 
 ## Open points
 
-To be settled by the implementer with a real TMDB key before the server slice
-is called done, and recorded here:
+Settled on 2026-11-14 from real TMDB answers committed in
+`server/test-fixtures/tmdb-person/`:
 
-- whether `combined_credits` crew rows carry `Creator` for the series a person
-  created, or whether creators only appear in a series' own `created_by`;
-- whether TV cast rows always carry `episode_count`, and what a typical guest
-  appearance looks like, so a later version can filter them.
+- `combined_credits.crew` rows carry `job: "Creator"` for series the person
+  created. `Creator` remains in the kept jobs.
+- Every TV cast and crew row carries `episode_count`; a `Creator` row has none.
+  Guest appearances commonly carry `episode_count: 1`, but guest filtering is
+  not part of this version.
+- One series can have several cast rows with different characters. They are
+  merged by `media_type` and `id`, and the characters are joined without
+  repeats.
+- `media_type` is either `movie` or `tv`.
+- Self appearances include `Self`, `Self - Guest`, `Self - Host`,
+  `Self - Narrator (voice)` and `Self - "Walter White"`. Some have no genres.
 
 ## Acceptance
 

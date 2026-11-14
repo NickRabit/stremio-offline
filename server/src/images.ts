@@ -546,6 +546,24 @@ export class ImageProxy {
     };
   }
 
+  rewritePerson<T extends {
+    photo?: string;
+    sections: Array<{ titles: Array<{ poster?: string }> }>;
+  }>(person: T): T {
+    if (!secureMode()) return person;
+    return {
+      ...person,
+      photo: typeof person.photo === "string" ? this.proxied(person.photo) : person.photo,
+      sections: person.sections.map((section) => ({
+        ...section,
+        titles: section.titles.map((title) => ({
+          ...title,
+          poster: typeof title.poster === "string" ? this.proxied(title.poster) : title.poster,
+        })),
+      })),
+    };
+  }
+
   private path(id: string, ext: string) { return path.join(this.dir, `${id}.${ext}`); }
 
   private warned = new Map<string, number>();

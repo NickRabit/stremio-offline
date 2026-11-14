@@ -98,6 +98,7 @@ data class TitleVideoDto(
 
 @Serializable
 data class TitlePersonDto(
+  val id: Long? = null,
   val name: String = "",
   val role: String = "",
   val character: String? = null,
