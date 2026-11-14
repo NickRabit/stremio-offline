@@ -419,6 +419,7 @@ export const it: Catalog = {
   "person.opening": "Apertura…",
   "person.inLibrary": "Nella tua libreria",
   "person.label": "Filmografia di {name}",
+  "person.hint": "Seleziona un nome per vedere a cosa ha lavorato la persona",
   "person.hintTv": "OK mostra a cosa ha lavorato la persona",
   "detail.willPlay": "In riproduzione",
   "detail.willPlayChoose": "scegli premendo Riproduci: la regola delle fonti non ha ammesso alcuna versione",

@@ -458,6 +458,7 @@ export const cs: Catalog = {
   "person.opening": "Otevírá se…",
   "person.inLibrary": "Ve vaší knihovně",
   "person.label": "Filmografie: {name}",
+  "person.hint": "Vyberte jméno a uvidíte, na čem se osoba podílela",
   "person.hintTv": "OK ukáže, na čem se osoba podílela",
   "detail.willPlay": "Přehraje se",
   "detail.willPlayChoose": "vyberete po stisku Přehrát — pravidlo pro zdroje nepustilo žádnou verzi",

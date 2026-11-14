@@ -419,6 +419,7 @@ export const ptBR: Catalog = {
   "person.opening": "Abrindo…",
   "person.inLibrary": "Na sua biblioteca",
   "person.label": "Filmografia de {name}",
+  "person.hint": "Selecione um nome para ver em que a pessoa trabalhou",
   "person.hintTv": "OK mostra em que a pessoa trabalhou",
   "detail.willPlay": "Vai reproduzir",
   "detail.willPlayChoose": "você escolhe ao apertar Reproduzir — a regra de fontes não aceitou nenhuma versão",

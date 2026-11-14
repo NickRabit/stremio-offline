@@ -46,6 +46,23 @@ export interface TitlePerson {
   character?: string;
   photo?: string;
 }
+export type PersonSectionKey = "acting" | "crew";
+export interface PersonTitle {
+  type: "movie" | "series";
+  tmdbId: number;
+  id: string;
+  name: string;
+  year?: string;
+  poster?: string;
+  role?: string;
+  inLibrary?: true;
+}
+export interface PersonFilmography {
+  id: number;
+  name: string;
+  photo?: string;
+  sections: Array<{ key: PersonSectionKey; titles: PersonTitle[] }>;
+}
 export interface RelatedTitle {
   type: "movie" | "series";
   id: string;

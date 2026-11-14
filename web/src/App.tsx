@@ -62,6 +62,7 @@ import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
 import { clearHomeCache } from "./home-cache";
 import { SearchEverywhere } from "./SearchEverywhere";
+import { PersonView } from "./PersonView";
 import { useSearchEverywhere } from "./useSearchEverywhere";
 import { CatalogSearchStartNotFound, catalogSearchHasMore, catalogSearchSession, newCatalogSearchSlot, runCatalogSearch, type CatalogSearchCursor } from "./catalog-search-session";
 import type { HomeCardActions } from "./HomeCard";
@@ -129,7 +130,7 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 };
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
-type View = "home" | "catalog" | "library" | "search" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings";
+type View = "home" | "catalog" | "library" | "search" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings" | "person";
 /** One accessible remote library and the sources it reported for the title on screen. */
 type RemoteGroup = { libraryId: string; name: string; provider: MediaServerProvider; order: number; streams: Stream[]; error: string };
 type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
@@ -881,6 +882,9 @@ export function App() {
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamOrder>("recommended");
   useEffect(() => { setStreamSort(defaultStreamSort); }, [defaultStreamSort]);
   const [submittedQuery, setSubmittedQuery] = useState(""); const [searchScopeValue, setSearchScopeValue] = useState(""); const [searchable, setSearchable] = useState<SearchableCatalog[]>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default"); const [searchSort, setSearchSort] = useState("default");
+  const [personTarget, setPersonTarget] = useState<{ id: number; name: string } | null>(null);
+  const personReturn = useRef<View | null>(null);
+  const [personNameSearch, setPersonNameSearch] = useState<string | null>(null);
   const [liveState, setLiveState] = useState<LiveSearchState>("idle");
   // One debounce controller for the searchbox. It commits the draft to `submittedQuery`
   // itself, so nothing else has to watch keystrokes.
@@ -1491,6 +1495,14 @@ export function App() {
     active: view === "search",
     covered: (view === "library" && searchReturn) || (view === "search" && catalogueDetail !== null),
   });
+  useEffect(() => {
+    if (!personNameSearch) return;
+    if (buildInfo?.searchEverywhere) {
+      if (view !== "search" || searchEverywhere.committed !== personNameSearch) setPersonNameSearch(null);
+      return;
+    }
+    if (view !== "catalog" || submittedQuery !== personNameSearch) setPersonNameSearch(null);
+  }, [view, submittedQuery, searchEverywhere.committed, personNameSearch, buildInfo?.searchEverywhere]);
   /** The query is selected as well, so whatever is typed next starts a new search. */
   const focusSearchInput = () => {
     window.requestAnimationFrame(() => {
@@ -3435,7 +3447,8 @@ export function App() {
     setCatalogueDetail(previous.target);
   };
   /** A name from the cast row: leave whichever detail is covering the page, then search for it. */
-  const searchPerson = (name: string) => {
+  const searchPersonByName = (name: string) => {
+    setPersonNameSearch(name);
     closeLocalDetail();
     if (!buildInfo?.searchEverywhere) {
       navigated.current = true;
@@ -3452,6 +3465,18 @@ export function App() {
       return;
     }
     openSearch(name);
+  };
+  const searchPerson = (person: { name: string; id?: number }) => {
+    if (person.id) {
+      closeLocalDetail();
+      if (catalogueDetail) closeCatalogueDetail();
+      if (view !== "person") personReturn.current = view;
+      setPersonNameSearch(null);
+      setPersonTarget({ id: person.id, name: person.name });
+      setView("person");
+      return;
+    }
+    searchPersonByName(person.name);
   };
   // Back on the section the detail covered, its position is given back. The listing is read again
   // as the section mounts, so the offset is chased for as long as it may still be filling.
@@ -3936,7 +3961,7 @@ export function App() {
       </section>}
       {/* The library stays mounted under a catalogue detail opened from it: a remote title lives
           in the browser, and unmounting it would land Back on the list instead of that title. */}
-      {(!catalogueDetail || view === "library") && <>
+      {(!catalogueDetail || view === "library" || view === "person") && <>
       {view === "home" && buildKnown && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
@@ -4032,6 +4057,7 @@ export function App() {
             }}><SlidersHorizontal/></button>
           </div></div></div>
           <div className="catalog-layout"><section className={`panel result-panel${staleGrid ? " refreshing" : ""}`}><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t(hasMore ? "catalog.itemCountMore" : "catalog.itemCount", { count: visibleItems.length })}</span></div>
+            {personNameSearch && !buildInfo?.searchEverywhere && <p className="person-name-search" role="note">{t("person.nameSearch")}</p>}
             <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
               <ArtworkProximity scroller={gridRef}>
               {visibleItems.map((item) => {
@@ -4119,7 +4145,8 @@ export function App() {
       </section>}
       {view === "search" && buildInfo?.searchEverywhere && <SearchEverywhere search={searchEverywhere} shape={settings.searchTileShape} onToggleShape={() => void toggleShape("searchTileShape")}
         searchable={searchable} recent={searchState?.saveHistory ? searchState.recent.map((entry) => entry.query) : []}
-        onRecord={recordSearch} onForget={forgetSearch} onRefreshRecent={() => void loadSearchState()} onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}/>}
+        onRecord={recordSearch} onForget={forgetSearch} onRefreshRecent={() => void loadSearchState()} onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}
+        nameSearchNotice={Boolean(personNameSearch)}/>}
       {view === "library" && <section ref={libraryPageRef} hidden={catalogueDetail ? true : undefined} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
         <Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
@@ -4414,6 +4441,24 @@ export function App() {
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} queueWindow={queueWindow} speedLimitMbps={speedLimitMbps} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <LazyScreenBoundary><Suspense fallback={null}><StatsPanel.Screen key={statsReset} onError={fail}/></Suspense></LazyScreenBoundary>}
       {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} libraries={libraries} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
+      {view === "person" && personTarget && <PersonView key={personTarget.id} person={personTarget} language={settings.uiLanguage} shape={settings.catalogTileShape}
+        hidden={catalogueDetail ? true : undefined}
+        onBack={() => {
+          const previous = personReturn.current ?? "catalog";
+          personReturn.current = null;
+          setPersonTarget(null);
+          setView(previous);
+        }}
+        onUnavailable={(name) => {
+          personReturn.current = null;
+          setPersonTarget(null);
+          searchPersonByName(name);
+        }}
+        onOpenTitle={(title, notice) => {
+          if (notice === "noImdb") notify(t("person.noImdb"));
+          openCatalogueDetail({ type: title.type, id: title.id, name: title.name, ...(title.poster ? { poster: title.poster } : {}) });
+        }}
+        onNotify={notify}/>}
       {view === "settings" && <LazyScreenBoundary><Suspense fallback={null}><SettingsPage.Screen build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSourceProfilesChanged={reloadSourceRules} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);

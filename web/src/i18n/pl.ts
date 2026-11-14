@@ -419,6 +419,7 @@ export const pl: Catalog = {
   "person.opening": "Otwieranie…",
   "person.inLibrary": "W Twojej bibliotece",
   "person.label": "Filmografia: {name}",
+  "person.hint": "Wybierz nazwisko, aby zobaczyć, przy czym ta osoba pracowała",
   "person.hintTv": "OK pokazuje, przy czym ta osoba pracowała",
   "detail.willPlay": "Do odtworzenia",
   "detail.willPlayChoose": "wybierzesz po naciśnięciu Odtwórz — reguła źródeł nie dopuściła żadnej wersji",
