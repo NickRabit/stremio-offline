@@ -19,6 +19,8 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -50,6 +52,7 @@ import cz.stremiooffline.tv.ui.theme.Tokens
 
 private val PadKeys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "delete", "0", "confirm")
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PinPad(
   profile: ProfileDto,
@@ -63,7 +66,8 @@ fun PinPad(
 ) {
   val fiveFocus = remember { FocusRequester() }
   LaunchedEffect(Unit) { runCatching { fiveFocus.requestFocus() } }
-  Row(
+  // Wraps: on a narrow screen the pad goes under the name instead of off the edge.
+  FlowRow(
     modifier = Modifier
       .testTag(TagPinPad)
       .onPreviewKeyEvent { event ->
@@ -91,10 +95,11 @@ fun PinPad(
       }
       .focusGroup()
       .padding(horizontal = 48.dp),
-    horizontalArrangement = Arrangement.spacedBy(60.dp),
-    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(60.dp, Alignment.CenterHorizontally),
+    verticalArrangement = Arrangement.spacedBy(24.dp),
   ) {
     Column(
+      modifier = Modifier.align(Alignment.CenterVertically),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {

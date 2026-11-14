@@ -6,6 +6,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -152,7 +155,7 @@ private fun ChooseStep(profiles: List<ProfileDto>, failure: ApiFailure?, onChoos
       )
     }
     Row(
-      modifier = Modifier.focusGroup(),
+      modifier = Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 24.dp).focusGroup(),
       horizontalArrangement = Arrangement.spacedBy(28.dp),
       verticalAlignment = Alignment.Top,
     ) {
