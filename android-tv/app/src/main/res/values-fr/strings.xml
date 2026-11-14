@@ -527,4 +527,23 @@
   <string name="genre_war">Guerre</string>
   <string name="genre_war_politics">Guerre et politique</string>
   <string name="genre_western">Western</string>
+  <string name="profiles_switch">Changer de profil</string>
+  <string name="profiles_current">Actuel</string>
+  <string name="profiles_needs_pin">S’ouvre avec un code PIN</string>
+  <string name="profiles_needs_password">S’ouvre avec le mot de passe</string>
+  <string name="profiles_pin_for">Code PIN de %1$s</string>
+  <string name="profiles_password_for">Mot de passe de %1$s</string>
+  <string name="profiles_use_password">Utiliser le mot de passe</string>
+  <string name="profiles_pin_locked">Le code PIN est bloqué après trop d’essais erronés. Saisissez le mot de passe.</string>
+  <string name="profiles_submit">Changer</string>
+  <string name="profiles_back">Retour aux profils</string>
+  <string name="profiles_pin_delete">Effacer</string>
+  <string name="profiles_pin_confirm">Valider</string>
+  <string name="profiles_empty">Aucun profil vers lequel basculer. Un administrateur ajoute les comptes au changement de profil.</string>
+  <string name="common_close">Fermer</string>
+  <string name="err_bad_pin">Code PIN incorrect.</string>
+  <string name="err_pin_locked">Trop de codes PIN erronés. Utilisez le mot de passe.</string>
+  <string name="err_profile_unavailable">Ce profil n’est pas disponible.</string>
+  <string name="err_bad_credentials">Mauvais nom d\'utilisateur ou mot de passe.</string>
+  <string name="err_too_many_attempts">Trop de tentatives infructueuses. Réessayez dans %1$s s.</string>
 </resources>

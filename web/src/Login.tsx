@@ -25,7 +25,9 @@ export function LoginScreen({ setup, onSession }: { setup: boolean; onSession: (
         if (password !== repeat) throw new Error(t("auth.passwordMismatch"));
         onSession(await api.setup(username.trim(), password, locale));
       } else {
-        onSession(await api.login(username.trim(), password, remember));
+        const signedIn = await api.login(username.trim(), password, remember);
+        const current = await api.me().catch(() => null);
+        onSession(current && !("setup" in current) && current.username === signedIn.username ? current : signedIn);
       }
     } catch (value) { setError(describeError(value)); }
     finally { setBusy(false); }
@@ -126,6 +128,9 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
   const [newPassword, setNewPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [pairing, setPairing] = useState(false);
+  const [pinPassword, setPinPassword] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [pinBusy, setPinBusy] = useState(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -142,6 +147,34 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
   const signOut = async (everywhere: boolean) => {
     if (everywhere && !confirm(t("auth.signOutEverywhereConfirm"))) return;
     try { await api.logout(everywhere); } finally { location.reload(); }
+  };
+
+  const savePin = async () => {
+    if (!/^[0-9]{4,8}$/.test(newPin)) {
+      onError(new Error(t("err.pinFormat")));
+      return;
+    }
+    setPinBusy(true);
+    try {
+      const answer = await api.setOwnPin({ currentPassword: pinPassword, pin: newPin });
+      onSession({ ...session, hasPin: answer.hasPin });
+      setPinPassword("");
+      setNewPin("");
+      onNotify(t("profiles.pinSaved"));
+    } catch (error) { onError(error); }
+    finally { setPinBusy(false); }
+  };
+
+  const removePin = async () => {
+    setPinBusy(true);
+    try {
+      const answer = await api.setOwnPin({ currentPassword: pinPassword, pin: null });
+      onSession({ ...session, hasPin: answer.hasPin });
+      setPinPassword("");
+      setNewPin("");
+      onNotify(t("profiles.pinRemoved"));
+    } catch (error) { onError(error); }
+    finally { setPinBusy(false); }
   };
 
   return <>
@@ -166,6 +199,23 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
       </div>
       {!restricted && <small className="setting-note">{t("auth.sessionNote")}</small>}
     </form>
+    {!restricted && (session.canSwitch || session.hasPin) && <section className="panel settings-section profile-own-pin">
+      <SettingsSectionHead icon={<KeyRound/>} title={t("profiles.ownPin")} text={t("profiles.ownPinHint")}/>
+      <SettingControl title={t("auth.currentPassword")} text={t("auth.currentPasswordHint")}>
+        <input type="password" value={pinPassword} onChange={(event) => setPinPassword(event.target.value)} autoComplete="current-password"/>
+      </SettingControl>
+      <SettingControl title={t("profiles.newPin")} text={t("profiles.pinHint")}>
+        <input type="password" inputMode="numeric" autoComplete="off" maxLength={8} value={newPin} onChange={(event) => setNewPin(event.target.value)}/>
+      </SettingControl>
+      <div className="setting-actions">
+        <button type="button" className="primary" disabled={pinBusy || !pinPassword || !newPin} onClick={() => void savePin()}>
+          {t(session.hasPin ? "profiles.changePin" : "profiles.setPin")}
+        </button>
+        {session.hasPin && <button type="button" className="danger" disabled={pinBusy || !pinPassword} onClick={() => void removePin()}>
+          {t("profiles.removePin")}
+        </button>}
+      </div>
+    </section>}
     {!restricted && pairing && <PairDeviceDialog session={session} onClose={() => setPairing(false)} onNotify={onNotify}/>}
   </>;
 }

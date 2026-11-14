@@ -527,4 +527,23 @@
   <string name="genre_war">Kriegsfilm</string>
   <string name="genre_war_politics">Krieg &amp; Politik</string>
   <string name="genre_western">Western</string>
+  <string name="profiles_switch">Profil wechseln</string>
+  <string name="profiles_current">Aktuell</string>
+  <string name="profiles_needs_pin">Öffnet mit einer PIN</string>
+  <string name="profiles_needs_password">Öffnet mit dem Passwort</string>
+  <string name="profiles_pin_for">PIN für %1$s</string>
+  <string name="profiles_password_for">Passwort für %1$s</string>
+  <string name="profiles_use_password">Stattdessen Passwort verwenden</string>
+  <string name="profiles_pin_locked">Die PIN ist nach zu vielen Fehlversuchen gesperrt. Gib das Passwort ein.</string>
+  <string name="profiles_submit">Wechseln</string>
+  <string name="profiles_back">Zurück zu den Profilen</string>
+  <string name="profiles_pin_delete">Löschen</string>
+  <string name="profiles_pin_confirm">Bestätigen</string>
+  <string name="profiles_empty">Es gibt kein Profil, zu dem gewechselt werden kann. Konten nimmt ein Administrator in den Profilwechsel auf.</string>
+  <string name="common_close">Schließen</string>
+  <string name="err_bad_pin">Falsche PIN.</string>
+  <string name="err_pin_locked">Zu viele falsche PINs. Verwende das Passwort.</string>
+  <string name="err_profile_unavailable">Dieses Profil ist nicht verfügbar.</string>
+  <string name="err_bad_credentials">Falscher Benutzername oder Passwort.</string>
+  <string name="err_too_many_attempts">Zu viele gescheiterte Versuche. Versuchen Sie es in %1$s Sekunden erneut.</string>
 </resources>

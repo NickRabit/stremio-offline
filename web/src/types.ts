@@ -625,11 +625,22 @@ export interface UserPermissions {
 export interface UserAccount {
   id: string; username: string; role: UserRole; disabled: boolean; mustChangePassword: boolean;
   createdAt: string; lastSeenAt?: string; permissions: UserPermissions;
+  switcher: boolean; unlock: "none" | "pin" | "password"; hasPin: boolean;
   libraries: number; addons: number; remoteLibraries?: number;
 }
 /** `mustChangePassword` is set when an administrator chose the password this session signed
  *  in with. The server refuses everything but the change itself while it stands. */
-export interface Session { username: string; role: UserRole; language?: Locale; mustChangePassword?: boolean }
+export interface Session {
+  username: string; role: UserRole; language?: Locale; mustChangePassword?: boolean;
+  canSwitch?: boolean; hasPin?: boolean;
+}
+export interface ProfileEntry {
+  id: string;
+  username: string;
+  unlock: "none" | "pin" | "password";
+  current: boolean;
+  pinLocked?: boolean;
+}
 export interface PairingStart {
   code: string;
   pollToken: string;

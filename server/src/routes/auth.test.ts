@@ -8,6 +8,7 @@ import { test } from "node:test";
 import express from "express";
 import { createSession, hashPassword, parseCookies, readSession, SESSION_COOKIE, sessionCookie, sessionUserId, verifyPassword, type SessionInfo } from "../auth.js";
 import { messageKeyOf } from "../errors.js";
+import { profileAttempts } from "../profile-attempts.js";
 import { Store, type UserPrefs } from "../store.js";
 import { findUserById, type UserRecord } from "../users.js";
 import { registerAuthRoutes } from "./auth.js";
@@ -336,7 +337,9 @@ test("signing in as the migrated user works and the cookie names the user id", a
   assert.equal(readSession(owner?.secret ?? "", cookie)?.userId, owner?.id);
   // The language and the personal data came across with the account.
   const me = await api(harness.base, "/api/auth/me", { cookie: `${SESSION_COOKIE}=${cookie}` });
-  assert.deepEqual(await me.json(), { username: "Ondra", role: "admin", language: "cs", mustChangePassword: false });
+  assert.deepEqual(await me.json(), {
+    username: "Ondra", role: "admin", language: "cs", mustChangePassword: false, canSwitch: false, hasPin: false,
+  });
   assert.deepEqual(harness.store.userData(owner?.id ?? "").progress, { "movie:tt1": { position: 12, duration: 100, title: "Neco", updatedAt: "2026-01-01T00:00:00.000Z" } });
 });
 
@@ -352,6 +355,119 @@ test("the username signs in whatever its case, the way it was matched when the a
   const wrong = await api(harness.base, "/api/auth/login", { method: "POST", body: { username: "ONdra", password: "not-it" }, ip: "10.1.0.4" });
   assert.equal(wrong.status, 401);
   assert.equal(await keyOf(wrong), "err.badCredentials");
+});
+
+test("GET /api/auth/me reports whether the switcher is useful and whether this account has a PIN", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const owner = await seedUser(harness.store, { password: "current-secret", secret: "owner-secret" });
+  const other = await seedUser(harness.store, { id: "usr_00000002", username: "other", password: "other-secret", secret: "other-secret" });
+  const pinHash = await hashPassword("2468");
+  await harness.store.update((state) => {
+    state.users = (state.users ?? []).map((user) => user.id === owner.id
+      ? { ...user, switcher: true, pinHash }
+      : user.id === other.id ? { ...user, switcher: true } : user);
+  });
+  const cookie = `${SESSION_COOKIE}=${createSession(owner.secret, owner.id, Date.now() + 60_000, "sid-me")}`;
+
+  const response = await api(harness.base, "/api/auth/me", { cookie });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    username: "owner",
+    role: "admin",
+    language: "en",
+    mustChangePassword: false,
+    canSwitch: true,
+    hasPin: true,
+  });
+
+  await harness.store.update((state) => {
+    state.users = (state.users ?? []).map((user) => user.id === other.id ? { ...user, switcher: false } : user);
+  });
+  assert.equal((await (await api(harness.base, "/api/auth/me", { cookie })).json() as { canSwitch: boolean }).canSwitch, false);
+
+  await harness.store.update((state) => {
+    state.users = (state.users ?? []).map((user) => user.id === owner.id ? { ...user, switcher: false } : user);
+  });
+  assert.equal((await (await api(harness.base, "/api/auth/me", { cookie })).json() as { canSwitch: boolean }).canSwitch, false,
+    "a caller outside the group cannot switch");
+});
+
+test("PATCH /api/auth/pin sets and removes the caller's PIN without exposing its hash or length", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const owner = await seedUser(harness.store, { password: "current-secret", secret: "owner-secret" });
+  const cookie = `${SESSION_COOKIE}=${createSession(owner.secret, owner.id, Date.now() + 60_000, "sid-pin")}`;
+
+  const set = await api(harness.base, "/api/auth/pin", {
+    method: "PATCH", cookie, body: { currentPassword: "current-secret", pin: "1234" },
+  });
+  assert.equal(set.status, 200);
+  assert.deepEqual(await set.json(), { hasPin: true });
+  const stored = findUserById(harness.store.users(), owner.id)!;
+  assert.ok(stored.pinHash?.startsWith("scrypt$"));
+  assert.equal(await verifyPassword("1234", stored.pinHash!), true);
+
+  const removed = await api(harness.base, "/api/auth/pin", {
+    method: "PATCH", cookie, body: { currentPassword: "current-secret", pin: null },
+  });
+  assert.equal(removed.status, 200);
+  assert.deepEqual(await removed.json(), { hasPin: false });
+  assert.equal(findUserById(harness.store.users(), owner.id)?.pinHash, undefined);
+});
+
+test("PATCH /api/auth/pin refuses a wrong password and a malformed PIN", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const owner = await seedUser(harness.store, { password: "current-secret", secret: "owner-secret" });
+  const cookie = `${SESSION_COOKIE}=${createSession(owner.secret, owner.id, Date.now() + 60_000, "sid-pin-errors")}`;
+
+  const wrong = await api(harness.base, "/api/auth/pin", {
+    method: "PATCH", cookie, body: { currentPassword: "wrong", pin: "1234" },
+  });
+  assert.equal(await keyOf(wrong), "err.wrongCurrentPassword");
+  for (const pin of ["123", "123456789", "12a4", 1234, undefined]) {
+    const bad = await api(harness.base, "/api/auth/pin", {
+      method: "PATCH", cookie, body: { currentPassword: "current-secret", pin },
+    });
+    assert.equal(bad.status, 400, String(pin));
+    assert.equal(await keyOf(bad), "err.pinFormat");
+  }
+  assert.equal(findUserById(harness.store.users(), owner.id)?.pinHash, undefined);
+});
+
+test("removing a PIN that is the unlock method falls back to password", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const owner = await seedUser(harness.store, { password: "current-secret", secret: "owner-secret" });
+  const pinHash = await hashPassword("1234");
+  await harness.store.update((state) => {
+    state.users = (state.users ?? []).map((user) => user.id === owner.id ? { ...user, pinHash, unlock: "pin" } : user);
+  });
+  const cookie = `${SESSION_COOKIE}=${createSession(owner.secret, owner.id, Date.now() + 60_000, "sid-pin-remove")}`;
+
+  const removed = await api(harness.base, "/api/auth/pin", {
+    method: "PATCH", cookie, body: { currentPassword: "current-secret", pin: null },
+  });
+  assert.equal(removed.status, 200);
+  const updated = findUserById(harness.store.users(), owner.id)!;
+  assert.equal(updated.unlock, "password");
+  assert.equal(updated.pinHash, undefined);
+});
+
+test("a successful password sign-in clears a locked profile PIN", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const owner = await seedUser(harness.store, { password: "current-secret" });
+  for (let count = 0; count < 10; count += 1) profileAttempts.fail(owner.id);
+  assert.equal(profileAttempts.pinLocked(owner.id), true);
+
+  const response = await api(harness.base, "/api/auth/login", {
+    method: "POST", body: { username: "owner", password: "current-secret" }, ip: "10.3.0.1",
+  });
+  assert.equal(response.status, 200);
+  assert.equal(profileAttempts.pinLocked(owner.id), false);
+  assert.equal(profileAttempts.retryAfterMs(owner.id), 0);
 });
 
 test("a sign-in records when the account was last seen, and a sign-out leaves it there", async (t) => {

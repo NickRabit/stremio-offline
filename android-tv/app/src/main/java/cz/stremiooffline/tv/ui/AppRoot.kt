@@ -20,6 +20,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -58,6 +59,7 @@ import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.CookieStore
 import cz.stremiooffline.tv.data.MeResult
+import cz.stremiooffline.tv.data.ProfileApi
 import cz.stremiooffline.tv.data.ServerAddress
 import cz.stremiooffline.tv.data.SessionStore
 import cz.stremiooffline.tv.data.TvApi
@@ -86,11 +88,15 @@ sealed interface SessionState {
     val language: String?,
     val start: Section,
     val api: ApiClient,
+    val canSwitch: Boolean = false,
   ) : SessionState
   data class Offline(val server: String) : SessionState
 }
 
-class SessionViewModel(private val store: SessionStore) : ViewModel() {
+class SessionViewModel(
+  private val store: SessionStore,
+  private val appContext: Context? = null,
+) : ViewModel() {
 
   var state by mutableStateOf<SessionState>(SessionState.Loading)
     private set
@@ -116,7 +122,7 @@ class SessionViewModel(private val store: SessionStore) : ViewModel() {
       val api = ApiClient(address, CookieStore(address.origin, store))
       try {
         state = when (val me = api.me()) {
-          is MeResult.SignedIn -> SessionState.SignedIn(me.username, me.language, startSection(settingsOf(api)), api)
+          is MeResult.SignedIn -> SessionState.SignedIn(me.username, me.language, startSection(settingsOf(api)), api, me.canSwitch)
           MeResult.Setup -> {
             store.clearSession()
             SessionState.SignedOut(address.display, ApiFailure.NeedsSetup)
@@ -134,7 +140,51 @@ class SessionViewModel(private val store: SessionStore) : ViewModel() {
   }
 
   fun signedIn(username: String, language: String?, start: Section, api: ApiClient) {
-    state = SessionState.SignedIn(username, language, start, api)
+    state = SessionState.SignedIn(username, language, start, api, canSwitch = false)
+    refreshCanSwitch()
+  }
+
+  /** Whether this account may switch is the administrator's choice and can change while the
+   *  session lives; the entries in Settings and on the rail follow what the server says now. */
+  fun refreshCanSwitch() {
+    val api = (state as? SessionState.SignedIn)?.api ?: return
+    viewModelScope.launch {
+      val canSwitch = try {
+        (api.me() as? MeResult.SignedIn)?.canSwitch ?: false
+      } catch (_: Exception) {
+        false
+      }
+      val current = state as? SessionState.SignedIn ?: return@launch
+      if (current.api !== api) return@launch
+      state = current.copy(canSwitch = canSwitch)
+    }
+  }
+
+  fun switchedProfile() {
+    val address = store.serverUrl?.let(ServerAddress::parse) ?: return
+    viewModelScope.launch {
+      val api = ApiClient(address, CookieStore(address.origin, store))
+      try {
+        when (val me = api.me()) {
+          is MeResult.SignedIn -> {
+            val start = startSection(settingsOf(api))
+            appContext?.let { WatchNextPublisher.clear(it) }
+            state = SessionState.SignedIn(me.username, me.language, start, api, me.canSwitch)
+          }
+          MeResult.Setup -> {
+            store.clearSession()
+            state = SessionState.SignedOut(address.display, ApiFailure.NeedsSetup)
+          }
+        }
+      } catch (error: ApiError) {
+        if (error.failure == ApiFailure.Unreachable) {
+          state = SessionState.Offline(address.display)
+        } else {
+          store.clearSession()
+          state = SessionState.SignedOut(address.display, error.failure)
+        }
+      }
+    }
   }
 
   fun changeServer() {
@@ -169,7 +219,8 @@ class SessionViewModel(private val store: SessionStore) : ViewModel() {
   companion object {
     const val DEFAULT_ADDRESS = "http://"
 
-    fun factory(store: SessionStore) = viewModelFactory { initializer { SessionViewModel(store) } }
+    fun factory(store: SessionStore, appContext: Context? = null) =
+      viewModelFactory { initializer { SessionViewModel(store, appContext) } }
   }
 }
 
@@ -191,7 +242,7 @@ private fun AppContent() {
     onDispose { watchNextClearScope.cancel() }
   }
   val store = remember { SessionStore(context.applicationContext) }
-  val session = viewModel<SessionViewModel>(factory = SessionViewModel.factory(store))
+  val session = viewModel<SessionViewModel>(factory = SessionViewModel.factory(store, context.applicationContext))
   when (val state = session.state) {
     SessionState.Loading -> Box(Modifier.fillMaxSize().appBackground())
 
@@ -230,6 +281,10 @@ private fun AppContent() {
           start = state.start,
           username = state.username,
           address = state.api.serverAddress,
+          canSwitch = state.canSwitch,
+          profileApi = state.api,
+          onSwitched = session::switchedProfile,
+          onProfilesGone = session::refreshCanSwitch,
           onSignOut = {
             watchNextClearScope.launch {
               WatchNextPublisher.clear(context.applicationContext)
@@ -273,9 +328,25 @@ fun SessionShell(
   onExitApp: () -> Unit = {},
   address: String = "http://",
   onLocale: (String) -> Unit = {},
+  canSwitch: Boolean = false,
+  profileApi: ProfileApi? = null,
+  onSwitched: () -> Unit = {},
+  onProfilesGone: () -> Unit = {},
 ) {
   SessionContent(api) {
-    Shell(start = start, api = api, username = username, onSignOut = onSignOut, onExitApp = onExitApp, address = address, onLocale = onLocale)
+    Shell(
+      start = start,
+      api = api,
+      username = username,
+      onSignOut = onSignOut,
+      onExitApp = onExitApp,
+      address = address,
+      onLocale = onLocale,
+      canSwitch = canSwitch,
+      profileApi = profileApi,
+      onSwitched = onSwitched,
+      onProfilesGone = onProfilesGone,
+    )
   }
 }
 
@@ -291,7 +362,9 @@ private tailrec fun Context.hostActivity(): Activity? = when (this) {
 fun SessionContent(api: TvApi, content: @Composable () -> Unit) {
   val owner = remember(api) { SessionViewModelStoreOwner() }
   DisposableEffect(api) { onDispose { owner.viewModelStore.clear() } }
-  CompositionLocalProvider(LocalViewModelStoreOwner provides owner) { content() }
+  // Keyed too, not only the store: a profile switch keeps this call site, and every
+  // remember and LaunchedEffect(Unit) below would otherwise carry over to the new account.
+  key(api) { CompositionLocalProvider(LocalViewModelStoreOwner provides owner) { content() } }
 }
 
 /** The view-model store of one signed-in session; a new sign-in gets a fresh instance. */

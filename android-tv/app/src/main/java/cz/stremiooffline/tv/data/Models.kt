@@ -22,6 +22,7 @@ data class MeResponse(
   val role: String? = null,
   val language: String? = null,
   val mustChangePassword: Boolean = false,
+  val canSwitch: Boolean = false,
 )
 
 @Serializable

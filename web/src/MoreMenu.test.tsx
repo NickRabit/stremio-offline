@@ -22,16 +22,18 @@ afterEach(() => {
 
 const item = (over: Partial<MoreItem> & Pick<MoreItem, "key">): MoreItem => ({ icon: null, label: over.key, active: false, onSelect: vi.fn(), ...over });
 
-const render = async (items: MoreItem[], onSignOut = vi.fn()) => {
+const render = async (items: MoreItem[], onSignOut = vi.fn(), onSwitchProfile?: () => void) => {
   await act(async () => {
-    root.render(<MoreMenu items={items} badge={3} active={items.some((entry) => entry.active)} onSignOut={onSignOut}/>);
+    root.render(<MoreMenu items={items} badge={3} active={items.some((entry) => entry.active)} onSwitchProfile={onSwitchProfile} onSignOut={onSignOut}/>);
   });
-  return { onSignOut };
+  return { onSignOut, onSwitchProfile };
 };
 
 const trigger = () => host.querySelector<HTMLButtonElement>(".nav-more")!;
 const menu = () => document.querySelector<HTMLDivElement>(".more-menu");
 const open = async () => { await act(async () => { trigger().click(); }); };
+const button = (label: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>(".more-menu button")].find((entry) => entry.textContent?.trim() === label);
 
 describe("MoreMenu", () => {
   it("opens the menu from a trigger that says whether it is open", async () => {
@@ -75,5 +77,24 @@ describe("MoreMenu", () => {
     await act(async () => { [...menu()!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Sign out")!.click(); });
     expect(onSignOut).toHaveBeenCalledTimes(1);
     expect(menu()).toBeNull();
+  });
+
+  it("offers profile switching directly above sign out when enabled", async () => {
+    const onSwitchProfile = vi.fn();
+    await render([item({ key: "following" })], vi.fn(), onSwitchProfile);
+    await open();
+    const labels = [...menu()!.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')]
+      .map((entry) => entry.textContent?.trim());
+    expect(labels.slice(-2)).toEqual(["Switch profile", "Sign out"]);
+
+    await act(async () => { button("Switch profile")!.click(); });
+    expect(onSwitchProfile).toHaveBeenCalledTimes(1);
+    expect(menu()).toBeNull();
+  });
+
+  it("does not offer profile switching when no handler is given", async () => {
+    await render([item({ key: "following" })]);
+    await open();
+    expect(button("Switch profile")).toBeUndefined();
   });
 });

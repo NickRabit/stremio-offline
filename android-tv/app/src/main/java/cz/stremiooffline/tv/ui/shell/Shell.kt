@@ -42,6 +42,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -52,12 +55,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ProfileApi
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.DownloadTargetDto
@@ -96,6 +101,8 @@ import cz.stremiooffline.tv.ui.search.GlobalSearchScreen
 import cz.stremiooffline.tv.ui.search.SearchPreset
 import cz.stremiooffline.tv.ui.search.SourceClass
 import cz.stremiooffline.tv.ui.search.toPreset
+import cz.stremiooffline.tv.ui.profiles.ProfileSwitcherScreen
+import cz.stremiooffline.tv.ui.profiles.ProfileSwitcherViewModel
 import cz.stremiooffline.tv.ui.settings.SettingsRoute
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
@@ -190,6 +197,11 @@ fun Shell(
   onExitApp: () -> Unit = {},
   address: String = "http://",
   onLocale: (String) -> Unit = {},
+  canSwitch: Boolean = false,
+  profileApi: ProfileApi? = null,
+  onSwitched: () -> Unit = {},
+  /** The switcher found nobody to switch to; the session re-reads whether it may still switch. */
+  onProfilesGone: () -> Unit = {},
 ) {
   val shellState = rememberSaveable(start, saver = ShellStateSaver) { ShellState(start) }
   val current = shellState.selected
@@ -238,6 +250,13 @@ fun Shell(
   // A folder a Home card asked for; the library opens it once and clears it.
   var libraryPush by remember { mutableStateOf<String?>(null) }
   var hint by remember { mutableStateOf<String?>(null) }
+  var switcherOpen by remember { mutableStateOf(false) }
+  var switcherGeneration by remember { mutableIntStateOf(0) }
+  fun openSwitcher() {
+    if (!canSwitch || profileApi == null) return
+    switcherGeneration++
+    switcherOpen = true
+  }
   val hintScope = rememberCoroutineScope()
   // A short notice over the content: Home's own messages and Settings' confirmed actions.
   fun showHint(text: String) {
@@ -468,7 +487,9 @@ fun Shell(
       true
     },
     onBackToExit = onExitApp,
-    railHidden = catalogDetail != null,
+    railHidden = catalogDetail != null || switcherOpen,
+    canSwitch = canSwitch,
+    onAccountLongPress = ::openSwitcher,
   ) { focusRequester ->
     val section = current
     val accountFocus = remember { FocusRequester() }
@@ -600,6 +621,8 @@ fun Shell(
           onSignOut = onSignOut,
           onLocale = onLocale,
           onHint = ::showHint,
+          canSwitch = canSwitch,
+          onSwitchProfile = ::openSwitcher,
         )
       }
     }
@@ -691,6 +714,17 @@ fun Shell(
       },
     )
   }
+
+  if (switcherOpen && profileApi != null) OverlayFocusTrap(fenced = true) {
+    val switcher = viewModel<ProfileSwitcherViewModel>(
+      key = "profile-switcher-$switcherGeneration",
+      factory = ProfileSwitcherViewModel.factory(profileApi, onNobody = onProfilesGone) {
+        switcherOpen = false
+        onSwitched()
+      },
+    )
+    ProfileSwitcherScreen(viewModel = switcher, onClose = { switcherOpen = false })
+  }
 }
 
 /** A detail covers the section it was opened from, which stays composed underneath. Without this
@@ -739,6 +773,8 @@ fun ShellScaffold(
   railHidden: Boolean = false,
   /** A transient notice over the content; the shell's own exit warning shows when it is null. */
   hint: String? = null,
+  canSwitch: Boolean = false,
+  onAccountLongPress: () -> Unit = {},
   content: @Composable (FocusRequester) -> Unit,
 ) {
   val railFocusRequesters = remember { Section.entries.associateWith { FocusRequester() } }
@@ -795,6 +831,8 @@ fun ShellScaffold(
         onSelect = { section ->
           if (section != current && !onSection(section)) runCatching { contentFocusRequester.requestFocus() }
         },
+        canSwitch = canSwitch,
+        onAccountLongPress = onAccountLongPress,
       )
     }
 
@@ -814,6 +852,8 @@ private fun Rail(
   contentRequester: () -> FocusRequester,
   onFocusChanged: (Section, Boolean) -> Unit,
   onSelect: (Section) -> Unit,
+  canSwitch: Boolean = false,
+  onAccountLongPress: () -> Unit = {},
 ) {
   val sections = remember {
     listOf(
@@ -888,6 +928,7 @@ private fun Rail(
       leading = { Avatar(username) },
       onFocusChanged = { onFocusChanged(Section.Account, it) },
       onClick = { onSelect(Section.Account) },
+      onLongPress = if (canSwitch) onAccountLongPress else null,
     )
   }
 }
@@ -907,8 +948,10 @@ private fun RailItem(
   onFocusChanged: (Boolean) -> Unit,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  onLongPress: (() -> Unit)? = null,
 ) {
   val shape = RoundedCornerShape(8.dp)
+  var consumeUp by remember { mutableStateOf(false) }
   Surface(
     onClick = onClick,
     modifier = modifier
@@ -916,7 +959,38 @@ private fun RailItem(
       .clip(shape)
       // Icons only: the label lives on as the item's spoken name.
       .semantics { contentDescription = label }
-      .onFocusChanged { onFocusChanged(it.isFocused) },
+      .onFocusChanged { onFocusChanged(it.isFocused) }
+      .then(
+        if (onLongPress == null) Modifier
+        else Modifier.onPreviewKeyEvent { event ->
+          val native = event.nativeKeyEvent
+          val isOk = native.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER
+            || native.keyCode == android.view.KeyEvent.KEYCODE_ENTER
+          if (!isOk) return@onPreviewKeyEvent false
+          when (event.type) {
+            KeyEventType.KeyDown -> {
+              if (native.isLongPress || native.repeatCount > 0) {
+                if (!consumeUp) {
+                  consumeUp = true
+                  onLongPress()
+                }
+                true
+              } else {
+                false
+              }
+            }
+            KeyEventType.KeyUp -> {
+              if (consumeUp) {
+                consumeUp = false
+                true
+              } else {
+                false
+              }
+            }
+            else -> false
+          }
+        },
+      ),
     shape = ClickableSurfaceDefaults.shape(shape = shape),
     colors = ClickableSurfaceDefaults.colors(
       containerColor = Color.Transparent,

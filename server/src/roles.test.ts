@@ -16,6 +16,9 @@ const ALLOWED: Array<[string, string]> = [
   ["POST", "/auth/login"],
   ["POST", "/auth/logout"],
   ["PATCH", "/auth/password"],
+  ["PATCH", "/auth/pin"],
+  ["GET", "/profiles"],
+  ["POST", "/profiles/switch"],
   ["POST", "/auth/pair/start"],
   ["POST", "/auth/pair/poll"],
   ["POST", "/auth/pair/inspect"],
@@ -252,6 +255,10 @@ test("an ordinary user reaches the allowed paths and is refused the rest", () =>
   }
 });
 
+test("an ordinary account cannot set another account's PIN", () => {
+  assert.equal(isUserAllowed("PATCH", "/users/usr_12345678/pin"), false);
+});
+
 /** The property the allow-list exists for: a route nobody has classified yet closes. */
 test("a path nobody has classified is refused for an ordinary user", () => {
   const error = invoke("POST", "/something-new", { role: "user" });
@@ -375,6 +382,7 @@ const ADMIN_ONLY = new Set([
   "GET /admin/source-profiles", "POST /admin/source-profiles", "PATCH /admin/source-profiles/:id",
   "DELETE /admin/source-profiles/:id", "POST /admin/source-profiles/:id/duplicate",
   "GET /users", "POST /users", "PATCH /users/:id", "DELETE /users/:id", "PATCH /users/:id/password",
+  "PATCH /users/:id/pin",
   "GET /logs", "DELETE /logs", "GET /client-logs", "GET /client-logs/:id", "DELETE /client-logs/:id",
   "GET /diagnostics", "GET /stats", "GET /stats/activity", "GET /stats/streams",
   "GET /settings/export", "POST /settings/import",

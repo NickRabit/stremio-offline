@@ -527,4 +527,23 @@
   <string name="genre_war">Guerra</string>
   <string name="genre_war_politics">Guerra e politica</string>
   <string name="genre_western">Western</string>
+  <string name="profiles_switch">Cambia profilo</string>
+  <string name="profiles_current">Attuale</string>
+  <string name="profiles_needs_pin">Si apre con un PIN</string>
+  <string name="profiles_needs_password">Si apre con la password</string>
+  <string name="profiles_pin_for">PIN di %1$s</string>
+  <string name="profiles_password_for">Password di %1$s</string>
+  <string name="profiles_use_password">Usa la password</string>
+  <string name="profiles_pin_locked">Il PIN è bloccato dopo troppi tentativi errati. Inserisci la password.</string>
+  <string name="profiles_submit">Cambia</string>
+  <string name="profiles_back">Torna ai profili</string>
+  <string name="profiles_pin_delete">Cancella</string>
+  <string name="profiles_pin_confirm">Conferma</string>
+  <string name="profiles_empty">Non c’è nessun profilo a cui passare. Un amministratore aggiunge gli account al cambio profilo.</string>
+  <string name="common_close">Chiudi</string>
+  <string name="err_bad_pin">PIN errato.</string>
+  <string name="err_pin_locked">Troppi PIN errati. Usa la password.</string>
+  <string name="err_profile_unavailable">Questo profilo non è disponibile.</string>
+  <string name="err_bad_credentials">Nome utente o password errati.</string>
+  <string name="err_too_many_attempts">Troppi tentativi falliti. Riprova tra %1$s secondi.</string>
 </resources>

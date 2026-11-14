@@ -90,6 +90,7 @@ val UI_LOCALE_NAMES: List<Pair<String, String>> = listOf(
 
 const val TagSettingsRowServer = "settings_row_server"
 const val TagSettingsRowAccount = "settings_row_account"
+const val TagSettingsRowSwitchProfile = "settings_row_switch_profile"
 const val TagSettingsRowUiLanguage = "settings_row_ui_language"
 const val TagSettingsRowAudio = "settings_row_audio"
 const val TagSettingsRowSubtitle = "settings_row_subtitle"
@@ -131,6 +132,8 @@ fun SettingsRoute(
   onLocale: (String) -> Unit,
   /** Reports a finished action to the shell's notice; the cleared history is shown this way. */
   onHint: (String) -> Unit = {},
+  canSwitch: Boolean = false,
+  onSwitchProfile: () -> Unit = {},
 ) {
   val viewModel = viewModel<SettingsViewModel>(factory = SettingsViewModel.factory(api, onLocale))
   val context = LocalContext.current
@@ -190,6 +193,8 @@ fun SettingsRoute(
     cleared = viewModel.historyCleared,
     onClearSearchHistory = viewModel::clearSearchHistory,
     onHint = onHint,
+    canSwitch = canSwitch,
+    onSwitchProfile = onSwitchProfile,
     onSignOut = onSignOut,
     focusRequester = focusRequester,
   )
@@ -233,6 +238,8 @@ fun SettingsScreen(
   cleared: Int = 0,
   onClearSearchHistory: () -> Unit = {},
   onHint: (String) -> Unit = {},
+  canSwitch: Boolean = false,
+  onSwitchProfile: () -> Unit = {},
   onSignOut: () -> Unit,
   focusRequester: FocusRequester,
 ) {
@@ -342,6 +349,14 @@ fun SettingsScreen(
         onClick = { openPanel(SettingsPanel.SignOut, accountFocus) },
         modifier = Modifier.testTag(TagSettingsRowAccount).focusRequester(accountFocus),
       )
+      if (canSwitch) {
+        SettingsRow(
+          label = stringResource(R.string.profiles_switch),
+          value = "",
+          onClick = onSwitchProfile,
+          modifier = Modifier.testTag(TagSettingsRowSwitchProfile),
+        )
+      }
       SettingsRow(
         label = stringResource(R.string.settings_ui_language),
         value = interfaceName,

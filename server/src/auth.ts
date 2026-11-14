@@ -99,9 +99,10 @@ export function envCredentials(): { username: string; password: string } | undef
 export const SESSION_COOKIE = "stremio_offline_session";
 export const REMEMBER_DAYS = 30;
 
-export function sessionCookie(token: string, remember: boolean, secure: boolean): string {
+export function sessionCookie(token: string, remember: boolean, secure: boolean, maxAgeSeconds?: number): string {
   const parts = [`${SESSION_COOKIE}=${token}`, "Path=/", "HttpOnly", "SameSite=Lax"];
-  if (remember) parts.push(`Max-Age=${REMEMBER_DAYS * 24 * 60 * 60}`);
+  if (maxAgeSeconds !== undefined) parts.push(`Max-Age=${maxAgeSeconds}`);
+  else if (remember) parts.push(`Max-Age=${REMEMBER_DAYS * 24 * 60 * 60}`);
   if (secure) parts.push("Secure");
   return parts.join("; ");
 }

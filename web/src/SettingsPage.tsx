@@ -367,7 +367,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
       <SearchSettings state={search} onState={onSearch} onNotify={onNotify} onError={onError}/>
       </>}
       {tab === "account" && <>
-      {admin && <section className="panel settings-section user-manager-section"><SettingsSectionHead icon={<Users/>} title={t("users.title")} text={t("users.hint")}/><UserManager session={session} restricted={restricted} onChanged={onLibrariesChanged} onNotify={onNotify} onError={onError}/></section>}
+      {admin && <section className="panel settings-section user-manager-section"><SettingsSectionHead icon={<Users/>} title={t("users.title")} text={t("users.hint")}/><UserManager session={session} restricted={restricted} onChanged={onLibrariesChanged} onAccountsChanged={() => { void api.me().then((next) => { if (!("setup" in next)) onSession({ ...session, ...next }); }).catch(() => undefined); }} onNotify={onNotify} onError={onError}/></section>}
       {admin && <section className="panel settings-section"><SettingsSectionHead icon={<ShieldCheck/>} title={t("settings.privacyTitle")} text={t("settings.privacyText")}/>
         <SettingControl title={t("settings.secureMode")} text={t("settings.secureModeHint")}>
           <select aria-label={t("settings.secureModeLabel")} disabled={restricted} value={settings.secureMode ? "1" : "0"} onChange={(event) => void onSave({ secureMode: event.target.value === "1" })}>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { LogOut, MoreHorizontal } from "lucide-react";
+import { LogOut, MoreHorizontal, Users } from "lucide-react";
 import { t } from "./i18n";
 
 export interface MoreItem {
@@ -14,7 +14,13 @@ export interface MoreItem {
 
 /** The compact navigation's overflow slot. The trigger sits among the destinations; the menu
  *  is drawn over the page, so it is portalled out of the sidebar's own button styles. */
-export function MoreMenu({ items, badge, active, onSignOut }: { items: MoreItem[]; badge?: number; active: boolean; onSignOut: () => void }) {
+export function MoreMenu({ items, badge, active, onSwitchProfile, onSignOut }: {
+  items: MoreItem[];
+  badge?: number;
+  active: boolean;
+  onSwitchProfile?: () => void;
+  onSignOut: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
@@ -45,6 +51,9 @@ export function MoreMenu({ items, badge, active, onSignOut }: { items: MoreItem[
       <div className="more-menu open" role="menu" ref={menu}>
         {items.map((item) => <button key={item.key} role="menuitem" aria-current={item.active ? "page" : undefined} onClick={() => choose(item)}>{item.icon}<span>{item.label}</span>{item.badge ? <b>{item.badge}</b> : null}</button>)}
         <hr/>
+        {onSwitchProfile && <button role="menuitem" onClick={() => { setOpen(false); trigger.current?.focus(); onSwitchProfile(); }}>
+          <Users/><span>{t("profiles.switch")}</span>
+        </button>}
         <button role="menuitem" onClick={() => { setOpen(false); trigger.current?.focus(); onSignOut(); }}><LogOut/><span>{t("app.signOut")}</span></button>
       </div>, document.body)}
   </>;

@@ -19,7 +19,8 @@ const adminLibrary = (over: Partial<AdminRemoteLibrary> = {}): AdminRemoteLibrar
 });
 const account: UserAccount = {
   id: "user_1", username: "bob", role: "user", disabled: false, mustChangePassword: false,
-  createdAt: "2026-01-01T00:00:00Z", permissions: { downloadToLibrary: false, downloadToDevice: false }, libraries: 0, addons: 0,
+  createdAt: "2026-01-01T00:00:00Z", permissions: { downloadToLibrary: false, downloadToDevice: false },
+  switcher: false, unlock: "password", hasPin: false, libraries: 0, addons: 0,
 };
 
 const localLibrary = (over: Partial<LibraryView> = {}): LibraryView => ({

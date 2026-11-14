@@ -1,7 +1,7 @@
 # Profile switching
 
-Status: proposed design contract, not implemented. Decided with the owner on
-2026-11-14. The execution order is in
+Status: implemented in 0.7.104; the behaviour as shipped is described in
+[users.md](users.md#switching-profiles). Decided with the owner on 2026-11-14. The execution order is in
 [profile-switching-agent-task.md](profile-switching-agent-task.md); the visual
 study is in [profile-switching-prototype](profile-switching-prototype/README.md).
 Where the prototype disagrees with this document, this document wins.
@@ -155,6 +155,9 @@ Body: `{ "id": "usr_…", "pin"?: "1234", "password"?: "…" }`.
    - re-check that the caller is still in the group and that the target is
      still listed, enabled, not owing a password change and that its secret
      is the one the hash was checked against;
+   - refuse with `401 err.notSignedIn` if the caller's session id is already in
+     the ledger: a sign-out or another switch of the same session landed
+     first, and one session must not enter two profiles;
    - add the caller's session id to the caller's `revoked` ledger;
    - set the target's `lastSeenAt`.
 6. Issue a session for the target signed with the target's secret, with the
@@ -222,6 +225,8 @@ accepted: nobody who can restart the server needs to guess a PIN.
 - After 10 failures without a success the **PIN is locked**: the profile takes
   only the password until that account signs in or switches with its password,
   or an administrator sets a new PIN.
+- An attempt is counted before its secret is hashed and cleared again on success;
+  counting it afterwards would let guesses sent together all read the old count.
 - A success clears the counter.
 - Failures through the sign-in screen keep their own per-address throttle and
   do not feed this one. A successful password sign-in for the account clears

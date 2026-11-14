@@ -101,6 +101,7 @@ import { LibraryOps } from "./library-ops.js";
 import { registerAddonsRoutes } from "./routes/addons.js";
 import { registerAdminSourceProfilesRoutes } from "./routes/admin-source-profiles.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerProfilesRoutes } from "./routes/profiles.js";
 import { registerCatalogRoutes } from "./routes/catalog.js";
 import { registerContentRoutes } from "./routes/content.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./routes/context.js";
@@ -893,7 +894,7 @@ app.use("/api", (req, res, next) => {
 });
 const userForLimit = (req: express.Request) => currentUser(req)?.id;
 const authLimit = authRequestLimiter({ userId: userForLimit });
-app.use(["/api/auth/setup", "/api/auth/login", "/api/auth/password"], authLimit);
+app.use(["/api/auth/setup", "/api/auth/login", "/api/auth/password", "/api/auth/pin", "/api/profiles"], authLimit);
 app.use("/api", apiRequestLimiter({
   userId: userForLimit,
   skip: (req) => internalMediaRequest(req) || Boolean(airplayRequest(req)) || isMediaTransferRequest(req),
@@ -933,6 +934,7 @@ const routeContext: RouteContext = {
   requireAccess, stopContentAccess,
 };
 registerAuthRoutes(app, routeContext);
+registerProfilesRoutes(app, routeContext);
 registerPairingRoutes(app, routeContext);
 registerUsersRoutes(app, { ...routeContext, deleteUserAccess, permissionsChanged });
 registerSourceProfilesRoutes(app, routeContext);

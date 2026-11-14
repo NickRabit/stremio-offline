@@ -55,7 +55,7 @@ data class LoginResult(val username: String, val mustChangePassword: Boolean)
 
 sealed interface MeResult {
   data object Setup : MeResult
-  data class SignedIn(val username: String, val language: String?) : MeResult
+  data class SignedIn(val username: String, val language: String?, val canSwitch: Boolean = false) : MeResult
 }
 
 /** The decoder typed GETs share, including `GET /api/source-profiles`. Unknown keys stay ignored. */
@@ -66,7 +66,7 @@ class ApiClient(
   private val address: ServerAddress,
   cookieStore: CookieStore,
   baseClient: OkHttpClient = OkHttpClient(),
-) : TvApi {
+) : TvApi, ProfileApi {
 
   private val json = ApiJson
   private val catalogSearchJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
@@ -79,6 +79,8 @@ class ApiClient(
   /** A remote-state PATCH carries only the fields the caller set: a `null` field is dropped and
    *  an explicit `false` still travels. */
   private val patchJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
+  /** A switch body drops a null pin or password instead of sending them as `null`. */
+  private val profileJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   private val mediaType = "application/json; charset=utf-8".toMediaType()
 
   private val client = baseClient.newBuilder()
@@ -274,7 +276,55 @@ class ApiClient(
       val body = readBody(response)
       val parsed = body.decodeOrNull<MeResponse>() ?: throw ApiError(ApiFailure.Incompatible)
       if (parsed.setup) return MeResult.Setup
-      return MeResult.SignedIn(parsed.username ?: throw ApiError(ApiFailure.SessionExpired), parsed.language)
+      return MeResult.SignedIn(
+        parsed.username ?: throw ApiError(ApiFailure.SessionExpired),
+        parsed.language,
+        parsed.canSwitch,
+      )
+    }
+  }
+
+  override suspend fun profiles(): List<ProfileDto> {
+    val body = request(Request.Builder().url(address.resolve("/api/profiles")).get().build())
+    return body.decode<ProfilesResponse>()?.profiles ?: emptyList()
+  }
+
+  override suspend fun switchProfile(id: String, pin: String?, password: String?): SwitchOutcome {
+    val started = System.currentTimeMillis()
+    val payload = profileJson.encodeToString(SwitchProfileRequest.serializer(), SwitchProfileRequest(id, pin, password))
+    val request = Request.Builder()
+      .url(address.resolve("/api/profiles/switch"))
+      .post(payload.toRequestBody(mediaType))
+      .build()
+    return try {
+      call(request).closing { response ->
+        val body = readBody(response, log = false)
+        val error = body.decodeOrNull<ErrorBody>()
+        when {
+          response.isSuccessful -> {
+            val parsed = body.decodeOrNull<SwitchProfileResponse>()
+              ?: return@closing SwitchOutcome.Failed(ApiFailure.Generic)
+            SwitchOutcome.Switched(parsed.username, parsed.language)
+          }
+          response.code == 401 && error?.messageKey == "err.badPin" -> SwitchOutcome.WrongPin
+          response.code == 401 && error?.messageKey == "err.badCredentials" -> SwitchOutcome.WrongPassword
+          response.code == 403 && error?.messageKey == "err.pinLocked" -> SwitchOutcome.PinLocked
+          response.code == 404 -> SwitchOutcome.Unavailable
+          response.code == 429 -> SwitchOutcome.Wait(error?.vars?.seconds ?: 0)
+          else -> {
+            AppLog.apiFailure("POST", "/api/profiles/switch", response.code, System.currentTimeMillis() - started)
+            SwitchOutcome.Failed(
+              when (response.code) {
+                401 -> ApiFailure.SessionExpired
+                403 -> ApiFailure.Forbidden
+                else -> ApiFailure.Generic
+              },
+            )
+          }
+        }
+      }
+    } catch (error: ApiError) {
+      SwitchOutcome.Failed(error.failure)
     }
   }
 

@@ -79,6 +79,60 @@ class ApiClientTest {
   }
 
   @Test
+  fun `me carries canSwitch`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"username":"demo","language":"cs","canSwitch":true}"""))
+    val me = client(start()).me() as MeResult.SignedIn
+    assertEquals("demo", me.username)
+    assertEquals(true, me.canSwitch)
+  }
+
+  @Test
+  fun `switchProfile maps 200 401 403 404 and 429`() = runTest {
+    val api = client(start())
+
+    server.enqueue(MockResponse().setBody("""{"username":"jana","language":"cs"}"""))
+    val switched = api.switchProfile("usr_jana")
+    assertEquals(SwitchOutcome.Switched("jana", "cs"), switched)
+    val noneBody = server.takeRequest().body.readUtf8()
+    assertTrue(noneBody, noneBody.contains("\"id\":\"usr_jana\""))
+    assertTrue(noneBody, !noneBody.contains("pin"))
+    assertTrue(noneBody, !noneBody.contains("password"))
+
+    server.enqueue(
+      MockResponse().setResponseCode(401)
+        .setBody("""{"error":"Wrong PIN.","messageKey":"err.badPin"}"""),
+    )
+    assertEquals(SwitchOutcome.WrongPin, api.switchProfile("usr_jana", pin = "0000"))
+    val pinBody = server.takeRequest().body.readUtf8()
+    assertTrue(pinBody, pinBody.contains("\"pin\":\"0000\""))
+    assertTrue(pinBody, !pinBody.contains("password"))
+
+    server.enqueue(
+      MockResponse().setResponseCode(401)
+        .setBody("""{"error":"Wrong username or password.","messageKey":"err.badCredentials"}"""),
+    )
+    assertEquals(SwitchOutcome.WrongPassword, api.switchProfile("usr_jana", password = "secret"))
+
+    server.enqueue(
+      MockResponse().setResponseCode(403)
+        .setBody("""{"error":"Too many wrong PINs.","messageKey":"err.pinLocked"}"""),
+    )
+    assertEquals(SwitchOutcome.PinLocked, api.switchProfile("usr_jana", pin = "1111"))
+
+    server.enqueue(
+      MockResponse().setResponseCode(404)
+        .setBody("""{"error":"That profile is not available.","messageKey":"err.profileUnavailable"}"""),
+    )
+    assertEquals(SwitchOutcome.Unavailable, api.switchProfile("usr_missing"))
+
+    server.enqueue(
+      MockResponse().setResponseCode(429)
+        .setBody("""{"error":"Too many failed attempts.","messageKey":"err.tooManyAttempts","vars":{"seconds":30}}"""),
+    )
+    assertEquals(SwitchOutcome.Wait(30), api.switchProfile("usr_jana", pin = "1234"))
+  }
+
+  @Test
   fun `sign-in asks to be remembered`() = runTest {
     server.enqueue(MockResponse().setBody("""{"username":"demo","role":"admin","mustChangePassword":false}"""))
     client(start()).login("demo", "secret")

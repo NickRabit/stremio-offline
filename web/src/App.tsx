@@ -6,6 +6,7 @@ import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, describeError, saveToDevice } from "./api";
 import { LoginScreen, PasswordChangeRequired } from "./Login";
 import { clearPairLink, PairDeviceDialog, pairLinkCode } from "./PairDeviceDialog";
+import { ProfileSwitcher } from "./ProfileSwitcher";
 import { bytes, Heading, hideBroken } from "./settings-ui";
 import { Player } from "./Player";
 import { TrailerPlayer } from "./TrailerPlayer";
@@ -326,6 +327,7 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
   const restricted = buildInfo?.restricted === true;
   // Home waits for the build's answer: a restricted build must never draw it, not even for the
@@ -1416,6 +1418,7 @@ export function App() {
   });
   /** The top bar and the More menu sign out through the same call. */
   const signOut = async () => { try { clearHomeCache(); await api.logout(); } finally { location.reload(); } };
+  const confirmStop = playerOpen || deviceTransfers.some((transfer) => transfer.state === "running");
 
   const refresh = async (selectFirst = false) => {
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs); setCatalogsKnown(true);
@@ -3810,7 +3813,7 @@ export function App() {
   // Signed in, but on a password an administrator chose: the server allows this form, reading
   // one's own name and signing out, and nothing else. Rendering the application here would
   // render a shell whose every request comes back refused with nothing to explain it.
-  if (session?.mustChangePassword) return <PasswordChangeRequired session={session} onSession={setSession}/>;
+  if (session?.mustChangePassword) return <PasswordChangeRequired session={session} onSession={(next) => setSession({ ...session, ...next })}/>;
   const selectedRating = imdbRating(selected);
   const selectedFactText = [selected?.releaseInfo || selected?.year, ...(selected?.genres || []).slice(0, 3).map(genreLabel), runtimeLabel(selected?.runtime ?? selectedSummary?.runtime, localeTag())].filter(Boolean).join(" · ");
   const panelAge = TitleExtraFacts({ extras: panelExtras.extras, language: settings.uiLanguage, name: selected?.name }).ageBadge;
@@ -3852,10 +3855,16 @@ export function App() {
   return <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
   <div className={`app-shell${tilesKnown ? "" : " tiles-pending"} tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
-      <div className="topbar-user"><span className="topbar-user-name">
-        <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
-        {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
-      </span><button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} aria-label={t("app.signOut")} onClick={signOut}><LogOut/> <span className="signout-label">{t("app.signOut")}</span></button></div></div></header>
+      <div className="topbar-user">{session?.canSwitch
+        ? <button className="profile-trigger" title={t("profiles.switch")} aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
+            <strong>{session.username}</strong>
+            {session.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
+          </button>
+        : <span className="topbar-user-name">
+            <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
+            {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
+          </span>}
+        <button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} aria-label={t("app.signOut")} onClick={signOut}><LogOut/> <span className="signout-label">{t("app.signOut")}</span></button></div></div></header>
     <aside className="sidebar"><nav>
       {/* Restricted accounts have no Home: the view needs the personal data they are not
           given, so the destination is not offered at all. */}
@@ -3871,7 +3880,7 @@ export function App() {
       {/* `/api/stats` is administrator-only, so for anybody else this is a tab that loads an
           error. */}
       {session!.role === "admin" && <Nav secondary icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>}
-      <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSignOut={signOut}/>
+      <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSwitchProfile={session?.canSwitch ? () => setSwitcherOpen(true) : undefined} onSignOut={signOut}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{catalogsKnown ? addons.filter((a) => a.enabled).length : "–"}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}${catalogueDetail ? " view-title-detail" : ""}`}>
       {/* The shared catalogue detail is hosted over the page that opened it, so closing it simply
@@ -4418,6 +4427,7 @@ export function App() {
       </>}
     </main>
     <TrailerPlayer trailer={trailerOpen} onClose={() => setTrailerOpen(null)}/>
+    {switcherOpen && <ProfileSwitcher confirmStop={confirmStop} onClose={() => setSwitcherOpen(false)}/>}
     <Player nextTitle={playerNextTitle} nextBusy={nextBusy} onNext={playerOnNext} autoNext={playerAutoNext} previousTitle={playerPreviousTitle} onPrevious={playerOnPrevious} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} upNextAt={settings.upNextAt} skipSegmentsAuto={settings.skipSegmentsAuto} shuffle={shuffleActive} onPreferences={setPlaybackPreferences}
       catalogueKey={localStream && playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
