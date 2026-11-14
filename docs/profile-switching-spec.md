@@ -222,6 +222,8 @@ accepted: nobody who can restart the server needs to guess a PIN.
 - After 10 failures without a success the **PIN is locked**: the profile takes
   only the password until that account signs in or switches with its password,
   or an administrator sets a new PIN.
+- An attempt is counted before its secret is hashed and cleared again on success;
+  counting it afterwards would let guesses sent together all read the old count.
 - A success clears the counter.
 - Failures through the sign-in screen keep their own per-address throttle and
   do not feed this one. A successful password sign-in for the account clears

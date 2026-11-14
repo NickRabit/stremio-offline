@@ -378,6 +378,23 @@ test("the sixth failure waits, counting is per target across callers and address
   assert.equal(profileAttempts.pinLocked(BOB), false);
 });
 
+test("wrong PINs sent together are counted before their hashes, so the burst still waits", async (t) => {
+  const alice = await account({ id: ALICE, username: "alice" });
+  const bob = await account({ id: BOB, username: "bob", unlock: "pin", pinHash: await hashPassword("1234") });
+  const harness = await mount([alice, bob]);
+  t.after(harness.close);
+  profileAttempts.succeed(BOB);
+  t.after(() => profileAttempts.succeed(BOB));
+
+  const cookie = cookieFor(alice, "sid-alice-burst", Date.now() + 24 * 60 * 60_000);
+  const answers = await Promise.all(Array.from({ length: 40 }, () => api(harness.base, "/api/profiles/switch", {
+    method: "POST", cookie, body: { id: BOB, pin: "9999" },
+  })));
+  const wrong = answers.filter((response) => response.status === 401).length;
+  assert.ok(wrong <= 6, `${wrong} guesses were checked in one burst`);
+  assert.ok(answers.some((response) => response.status === 429));
+});
+
 test("a caller removed from the group between the secret check and the write is refused", async (t) => {
   const alice = await account({ id: ALICE, username: "alice" });
   const bob = await account({ id: BOB, username: "bob", unlock: "none" });

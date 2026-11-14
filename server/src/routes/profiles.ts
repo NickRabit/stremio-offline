@@ -72,13 +72,18 @@ export function registerProfilesRoutes(app: express.Application, ctx: RouteConte
     let checkedPinHash: string | undefined;
     let failure: AppError | undefined;
 
+    if (!usePassword && method === "pin" && profileAttempts.pinLocked(target.id)) {
+      return res.status(403).json({ error: "Too many wrong PINs. Use the password.", messageKey: "err.pinLocked" });
+    }
+    // Counted before the hash and cleared on success: requests sent together would otherwise
+    // all read the count as it stood before any of them failed, and none would ever wait.
+    const wasLocked = profileAttempts.pinLocked(target.id);
+    if (usePassword || method !== "none") profileAttempts.fail(target.id);
+
     if (usePassword) {
       if (await verifyPassword(password, target.passwordHash)) checkedPasswordHash = target.passwordHash;
       else failure = new AppError("Wrong username or password.", "err.badCredentials", 401);
     } else if (method === "pin") {
-      if (profileAttempts.pinLocked(target.id)) {
-        return res.status(403).json({ error: "Too many wrong PINs. Use the password.", messageKey: "err.pinLocked" });
-      }
       if (typeof pin === "string" && target.pinHash && await verifyPassword(pin, target.pinHash)) {
         checkedPinHash = target.pinHash;
       } else {
@@ -90,8 +95,6 @@ export function registerProfilesRoutes(app: express.Application, ctx: RouteConte
 
     if (failure) {
       const logMethod = usePassword ? "password" : method;
-      const wasLocked = profileAttempts.pinLocked(target.id);
-      profileAttempts.fail(target.id);
       log("WARN", "Failed profile switch", {
         from: caller.username,
         fromId: caller.id,
