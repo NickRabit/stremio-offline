@@ -65,6 +65,10 @@ interface CatalogApi : SearchHistoryApi {
   suspend fun meta(type: String, id: String, language: String?): MetaDto
   suspend fun titleExtras(type: String, id: String, language: String?): TitleExtrasDto =
     throw ApiError(ApiFailure.Generic)
+  suspend fun person(tmdbId: Long, language: String?): PersonFilmographyDto =
+    throw ApiError(ApiFailure.Generic)
+  suspend fun personTitle(type: String, tmdbId: Long): PersonTitleResolutionDto =
+    throw ApiError(ApiFailure.Generic)
   suspend fun streamSources(type: String, id: String): List<StreamSourceDto>
   suspend fun streams(type: String, id: String, addon: String? = null): List<StreamDto>
   suspend fun inspect(sourceId: String): InspectionDto = throw ApiError(ApiFailure.Generic)

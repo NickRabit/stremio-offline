@@ -106,6 +106,38 @@ data class TitlePersonDto(
 )
 
 @Serializable
+data class PersonTitleDto(
+  val type: String = "",
+  val tmdbId: Long = 0,
+  val id: String = "",
+  val name: String = "",
+  val year: String? = null,
+  val poster: String? = null,
+  val role: String? = null,
+  val inLibrary: Boolean = false,
+)
+
+@Serializable
+data class PersonSectionDto(
+  val key: String = "",
+  val titles: List<PersonTitleDto> = emptyList(),
+)
+
+@Serializable
+data class PersonFilmographyDto(
+  val id: Long = 0,
+  val name: String = "",
+  val photo: String? = null,
+  val sections: List<PersonSectionDto> = emptyList(),
+)
+
+@Serializable
+data class PersonTitleResolutionDto(
+  val id: String,
+  val imdb: String? = null,
+)
+
+@Serializable
 data class RelatedTitleDto(
   val type: String = "",
   val id: String = "",

@@ -42,6 +42,8 @@ import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.NextFileDto
+import cz.stremiooffline.tv.data.PersonFilmographyDto
+import cz.stremiooffline.tv.data.PersonTitleResolutionDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
@@ -132,6 +134,12 @@ open class FakeTvApi : TvApi {
   var titleExtrasValue: TitleExtrasDto = TitleExtrasDto()
   var titleExtrasFailure: ApiError? = null
   val titleExtrasRequests: MutableList<Triple<String, String, String?>> = mutableListOf()
+  var personValue: PersonFilmographyDto = PersonFilmographyDto()
+  var personFailure: ApiError? = null
+  val personRequests: MutableList<Pair<Long, String?>> = mutableListOf()
+  var personTitleValue: PersonTitleResolutionDto = PersonTitleResolutionDto(id = "")
+  var personTitleFailure: ApiError? = null
+  val personTitleRequests: MutableList<Pair<String, Long>> = mutableListOf()
   var streamsRequests: MutableList<String> = mutableListOf()
   /** Each `streams()` request that has finished answering, in completion order. */
   var streamsCompleted: MutableList<String> = mutableListOf()
@@ -518,6 +526,18 @@ open class FakeTvApi : TvApi {
     titleExtrasRequests += Triple(type, id, language)
     titleExtrasFailure?.let { throw it }
     return titleExtrasValue
+  }
+
+  override suspend fun person(tmdbId: Long, language: String?): PersonFilmographyDto {
+    personRequests += tmdbId to language
+    personFailure?.let { throw it }
+    return personValue
+  }
+
+  override suspend fun personTitle(type: String, tmdbId: Long): PersonTitleResolutionDto {
+    personTitleRequests += type to tmdbId
+    personTitleFailure?.let { throw it }
+    return personTitleValue
   }
 
   override suspend fun streamSources(type: String, id: String): List<StreamSourceDto> {

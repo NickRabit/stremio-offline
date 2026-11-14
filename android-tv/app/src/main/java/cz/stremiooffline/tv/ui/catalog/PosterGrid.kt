@@ -18,6 +18,9 @@ import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.PosterCard
 
+internal fun posterGridColumns(widthDp: Float): Int =
+  (((widthDp + 18f) / 128f).toInt()).coerceAtLeast(1)
+
 /** The poster grid of both the catalogue and search: focus with the D-pad, ask for more when
  *  focus reaches the last row. */
 @Composable
@@ -30,7 +33,7 @@ fun PosterGrid(
   modifier: Modifier = Modifier,
 ) {
   BoxWithConstraints(modifier) {
-    val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
+    val columns = posterGridColumns(maxWidth.value)
     LazyVerticalGrid(
       columns = GridCells.Fixed(columns),
       modifier = Modifier.focusRequester(gridFocus).focusGroup(),

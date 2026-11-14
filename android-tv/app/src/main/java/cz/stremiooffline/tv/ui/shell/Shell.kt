@@ -65,6 +65,7 @@ import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ProfileApi
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.SearchScope
+import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
@@ -101,6 +102,8 @@ import cz.stremiooffline.tv.ui.search.GlobalSearchScreen
 import cz.stremiooffline.tv.ui.search.SearchPreset
 import cz.stremiooffline.tv.ui.search.SourceClass
 import cz.stremiooffline.tv.ui.search.toPreset
+import cz.stremiooffline.tv.ui.person.PersonArgs
+import cz.stremiooffline.tv.ui.person.PersonScreen
 import cz.stremiooffline.tv.ui.profiles.ProfileSwitcherScreen
 import cz.stremiooffline.tv.ui.profiles.ProfileSwitcherViewModel
 import cz.stremiooffline.tv.ui.settings.SettingsRoute
@@ -212,6 +215,8 @@ fun Shell(
   val detailLookup = remember { DetailLookup() }
   var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
   val catalogStack = remember { CatalogDetailStack() }
+  var personScreen by remember { mutableStateOf<PersonArgs?>(null) }
+  var personRestoreToken by remember { mutableIntStateOf(0) }
   var catalogReturnOrigin by remember { mutableStateOf<CatalogReturnOrigin?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
   // The next catalogue episode: the detail offers it, the player asks for it, and the play the
@@ -427,6 +432,17 @@ fun Shell(
     searchPreset = SearchPreset(query = name)
     shellState.pick(Section.Search)
   }
+  fun openPerson(person: TitlePersonDto) {
+    val id = person.id
+    if (id == null) {
+      openPersonSearch(person.name)
+      return
+    }
+    detailLookup.cancel()
+    catalogDetail = null
+    clearCatalogHistory()
+    personScreen = PersonArgs(id, person.name)
+  }
   fun openRelatedFromUnderlying(related: RelatedTitleDto, origin: CatalogReturnOrigin) {
     catalogStack.clear()
     catalogReturnOrigin = origin
@@ -469,14 +485,15 @@ fun Shell(
 
   // A detail or the player covers the section it was opened from; the hidden section's own Back
   // handlers must not consume Back while it is up.
-  val overlayOpen = catalogDetail != null || player != null
+  val overlayOpen = catalogDetail != null || player != null || personScreen != null
+  val noImdbNotice = stringResource(R.string.person_no_imdb)
 
   ShellScaffold(
     username = username,
     start = start,
     current = current,
     downloading = downloading,
-    hint = hint,
+    hint = hint.takeUnless { catalogDetail != null && it == noImdbNotice },
     onSection = { section ->
       // The rail's Search is not the catalogue's or a library's: it starts with no preset.
       if (section == Section.Search) {
@@ -487,7 +504,7 @@ fun Shell(
       true
     },
     onBackToExit = onExitApp,
-    railHidden = catalogDetail != null || switcherOpen,
+    railHidden = catalogDetail != null || personScreen != null || switcherOpen,
     canSwitch = canSwitch,
     onAccountLongPress = ::openSwitcher,
   ) { focusRequester ->
@@ -628,6 +645,31 @@ fun Shell(
     }
   }
 
+  val openPersonScreen = personScreen
+  if (openPersonScreen != null) OverlayFocusTrap(fenced = catalogDetail == null && player == null) {
+    PersonScreen(
+      api = api,
+      args = openPersonScreen,
+      language = null,
+      imageUrl = { path -> path?.let(api::url) },
+      restoreFocusToken = personRestoreToken,
+      onOpenTitle = { related, noImdb ->
+        catalogStack.clear()
+        catalogReturnOrigin = null
+        catalogDetail = catalogStack.detailFor(related)
+        if (noImdb) showHint(noImdbNotice)
+      },
+      onUnavailable = { name ->
+        personScreen = null
+        openPersonSearch(name)
+      },
+      onBack = {
+        personScreen = null
+        returnToken++
+      },
+    )
+  }
+
   val openCatalogDetail = catalogDetail
   if (openCatalogDetail != null) OverlayFocusTrap(fenced = player == null) {
     CatalogDetailScreen(
@@ -656,13 +698,16 @@ fun Shell(
           catalogDetail = null
           catalogStack.clear()
           catalogReturnOrigin = null
+        } else if (personScreen != null) {
+          catalogDetail = null
+          personRestoreToken++
         } else {
           clearCatalogHistory()
           catalogDetail = null
           returnToken++
         }
       },
-      onSearchPerson = ::openPersonSearch,
+      onSearchPerson = ::openPerson,
       onOpenRelated = { related ->
         catalogStack.pushRelated(openCatalogDetail, related)
         catalogDetail = catalogStack.detailFor(related, openCatalogDetail)
@@ -724,6 +769,16 @@ fun Shell(
       },
     )
     ProfileSwitcherScreen(viewModel = switcher, onClose = { switcherOpen = false })
+  }
+
+  // The scaffold's notice sits below an overlay, where a person's no-IMDb detail would cover it.
+  if (catalogDetail != null && hint == noImdbNotice) {
+    Box(
+      Modifier.fillMaxSize().padding(bottom = 40.dp),
+      contentAlignment = Alignment.BottomCenter,
+    ) {
+      Hint(noImdbNotice)
+    }
   }
 }
 

@@ -59,7 +59,7 @@ class TitleExtrasTest {
 
   private fun mount(
     state: TitleExtrasState,
-    onPerson: (String) -> Unit = {},
+    onPerson: (TitlePersonDto) -> Unit = {},
     onRelated: (RelatedTitleDto) -> Unit = {},
     onUpFromRows: () -> Unit = {},
     videoResolver: ((String) -> Boolean)? = null,
@@ -186,22 +186,40 @@ class TitleExtrasTest {
 
   @Test
   fun `OK on a person and a related card carries their identity`() {
-    var person = ""
+    var person: TitlePersonDto? = null
     var related: RelatedTitleDto? = null
-    val state = TitleExtrasState().apply { extras = extras() }
+    val state = TitleExtrasState().apply {
+      extras = extras().copy(
+        people = listOf(TitlePersonDto(id = 31, name = "Tom Hanks", role = "cast", character = "Woody")),
+      )
+    }
     mount(state, onPerson = { person = it }, onRelated = { related = it })
 
     compose.onNodeWithTag(titlePersonTag("Tom Hanks"))
       .performSemanticsAction(SemanticsActions.RequestFocus)
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
-    assertEquals("Tom Hanks", person)
+    assertEquals(31L, person?.id)
+    assertEquals("Tom Hanks", person?.name)
 
     compose.onNodeWithTag(relatedTitleTag("tt2"))
       .performSemanticsAction(SemanticsActions.RequestFocus)
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
     assertEquals("tt2", related?.id)
+  }
+
+  @Test
+  fun `the people hint changes when a person has a TMDB id`() {
+    val state = TitleExtrasState().apply {
+      extras = extras().copy(
+        people = listOf(TitlePersonDto(id = 31, name = "Tom Hanks", role = "cast")),
+      )
+    }
+    mount(state)
+
+    compose.onNodeWithText("OK shows what the person made").assertExists()
+    compose.onNodeWithText("OK searches for the name").assertDoesNotExist()
   }
 
   @Test

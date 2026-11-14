@@ -459,7 +459,7 @@ private fun compactVotes(votes: Long, locale: Locale): String {
 fun TitleExtrasRows(
   state: TitleExtrasState,
   imageUrl: (String?) -> String?,
-  onPerson: (String) -> Unit,
+  onPerson: (TitlePersonDto) -> Unit,
   onRelated: (RelatedTitleDto) -> Unit,
   onUpFromRows: () -> Unit,
   videoResolver: ((String) -> Boolean)? = null,
@@ -531,7 +531,7 @@ fun TitleExtrasRows(
       )
       if (cast.isNotEmpty()) {
         Text(
-          stringResource(R.string.detail_people_hint_tv),
+          stringResource(if (cast.any { it.id != null }) R.string.person_hint_tv else R.string.detail_people_hint_tv),
           color = Tokens.Muted,
           fontSize = 9.5.sp,
         )
@@ -563,7 +563,7 @@ fun TitleExtrasRows(
             PersonCard(
               person = person,
               imageUrl = imageUrl(person.photo),
-              onClick = { onPerson(person.name) },
+              onClick = { onPerson(person) },
               modifier = if (index == 0) Modifier.focusRequester(state.castFocus) else Modifier,
             )
           }
