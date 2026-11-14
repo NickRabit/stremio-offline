@@ -717,6 +717,33 @@ test("one viewer leaving does not cancel the shared build another viewer still w
   assert.equal(detailRequests, 1);
 });
 
+test("a viewer joining right after the only one left gets a fresh build, not its cancellation", async (t) => {
+  fresh(t);
+  let detailRequests = 0;
+  let started!: () => void;
+  const startedSignal = new Promise<void>((resolve) => { started = resolve; });
+  const fetchImpl: FetchLike = async (raw, init) => {
+    if (new URL(raw).pathname === "/3/movie/25") {
+      detailRequests += 1;
+      started();
+      if (detailRequests === 1) {
+        await new Promise<void>((resolve) => init?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+        throw new Error("aborted");
+      }
+      return json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+    }
+    throw new Error(`Unexpected URL ${raw}`);
+  };
+  const leaving = new AbortController();
+  const first = titleExtras("movie", "tmdb:25", "cs", deps(fetchImpl, { signal: leaving.signal }));
+  first.catch(() => undefined);
+  await startedSignal;
+  leaving.abort();
+  assert.equal((await titleExtras("movie", "tmdb:25", "cs", deps(fetchImpl))).source, "tmdb");
+  await assert.rejects(first);
+  assert.equal(detailRequests, 2);
+});
+
 test("a build its only viewer left caches no failure", async (t) => {
   fresh(t);
   let detailRequests = 0;
