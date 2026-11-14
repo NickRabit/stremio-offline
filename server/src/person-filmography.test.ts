@@ -91,11 +91,16 @@ test("normalisation drops adult, untitled, non-title and self-credit rows", () =
     { id: 9004, media_type: "movie", title: "Archive synthetic", character: "Himself (archive footage)", popularity: 100 },
     { id: 9005, media_type: "movie", title: "Uncredited synthetic", character: "Bartender (uncredited)", popularity: 100 },
     { id: 9006, media_type: "movie", title: "Negative synthetic", character: "Actor", popularity: -2 },
+    { id: 9007, media_type: "tv", name: "Host synthetic", character: "Himself - Host", popularity: 100 },
+    { id: 9008, media_type: "movie", title: "Voice synthetic", character: "Herself (voice)", popularity: 100 },
+    { id: 9009, media_type: "tv", name: "Band synthetic", character: "Themselves - Guests", popularity: 100 },
+    { id: 9010, media_type: "movie", title: "Selfish synthetic", character: "Selfridge", popularity: 100 },
   );
   const credits = normalizePerson(raw, 287);
   assert.ok(credits);
   const ids = new Set([...credits.acting, ...credits.crew].map((item) => item.tmdbId));
-  for (const id of [9001, 9002, 9003, 9004, 9005]) assert.equal(ids.has(id), false, String(id));
+  for (const id of [9001, 9002, 9003, 9004, 9005, 9007, 9008, 9009]) assert.equal(ids.has(id), false, String(id));
+  assert.equal(ids.has(9010), true);
   assert.equal(credits.acting.find((item) => item.tmdbId === 9006)?.popularity, -2);
 });
 
@@ -217,6 +222,28 @@ test("concurrent person cache misses share one TMDB request", async (t) => {
   assert.equal(url.pathname, "/3/person/138");
   assert.equal(url.searchParams.get("append_to_response"), "combined_credits");
   assert.equal(calls.some((call) => call.includes("/external_ids")), false);
+});
+
+test("a caller joining just after the last one left gets a fresh lookup, not its cancellation", async (t) => {
+  fresh(t);
+  let requests = 0;
+  const fetchImpl: FetchLike = async (_raw, init) => {
+    requests += 1;
+    if (requests === 1) {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    }
+    return json(fixture("quentin-tarantino-138.json"));
+  };
+  const leaving = new AbortController();
+  const first = personCredits(138, "en-US", { tmdb: config, fetchImpl, signal: leaving.signal });
+  first.catch(() => undefined);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  leaving.abort();
+  const second = await personCredits(138, "en-US", { tmdb: config, fetchImpl });
+  assert.equal(second.status, "found");
+  await assert.rejects(first);
 });
 
 test("failed person lookups are retried after ten minutes and found ones after a day", async (t) => {

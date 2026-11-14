@@ -67,13 +67,12 @@ const text = (value: unknown): string | undefined =>
 const positiveInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value > 0;
 
+/** `Self`, `Himself - Host`, `Herself (voice)`, `Themselves`; not `Selfridge`. */
+const SELF = /^(?:self|himself|herself|themselves)(?:$|[\s(-])/;
+
 const selfAppearance = (character: string): boolean => {
   const lower = character.toLowerCase();
-  return lower === "self"
-    || lower === "himself"
-    || lower === "herself"
-    || lower === "themselves"
-    || lower.startsWith("self ")
+  return SELF.test(lower)
     || lower.includes("archive footage")
     || lower.includes("uncredited");
 };
@@ -349,7 +348,8 @@ export function personCredits(tmdbId: number, language: string, deps: {
   const hit = cached(key, now);
   if (hit) return Promise.resolve(hit.value);
   let entry = inFlight.get(key);
-  if (!entry) {
+  // The last waiter left and aborted it; the entry is only waiting for its own cleanup.
+  if (!entry || entry.controller.signal.aborted) {
     const controller = new AbortController();
     const promise = buildPerson(tmdbId, deps, key, now, controller.signal);
     const started: PersonInFlight = {
