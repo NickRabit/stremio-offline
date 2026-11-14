@@ -2477,7 +2477,7 @@ p.next-episode b{color:var(--accent2)}
 .profile-switcher .profile-row>strong{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px}
 .profile-switcher .profile-row>small{flex:0 0 auto;font-size:11px;font-weight:700;color:var(--green)}
 .profile-switcher .profile-row>svg{flex:0 0 auto;width:16px;height:16px;color:var(--muted)}
-.profile-switcher .profile-row.current{border-style:dashed;background:transparent;opacity:.75;cursor:default}
+.profile-switcher .profile-row.current{border-color:transparent;background:transparent;opacity:.75;cursor:default}
 .profile-switcher .profile-face{display:grid;place-items:center;flex:0 0 auto;width:42px;height:42px;border-radius:50%;background:linear-gradient(145deg,var(--accent),#a83c79);color:#fff;font-size:17px;font-weight:800}
 .profile-switcher .profile-unlock{display:grid;justify-items:center;gap:12px;padding:6px 0 4px}
 .profile-switcher .profile-unlock>.profile-face{width:64px;height:64px;font-size:26px}
