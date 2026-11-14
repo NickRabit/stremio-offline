@@ -50,10 +50,11 @@ const admin = () => dialog("<h2>Upravit účet</h2>", `<section class="user-edit
     <label class="user-edit-field"><span>Role</span><select><option>Uživatel</option></select></label></div>
   <div class="user-edit-password"><label class="user-edit-field"><span>Nastavit heslo</span><input type="password" placeholder="Nové heslo"></label><button>Nastavit</button></div>
   <div class="profile-block proto-new" style="padding:12px"><h3>Přepínání profilů</h3>
-    <label class="user-switch"><span class="switch"><input type="checkbox" checked><span></span></span><span>Zobrazit v přepínání profilů</span></label>
+    <label class="user-switch"><span class="switch"><input type="checkbox" checked><span></span></span><span>Patří do přepínání profilů</span></label>
+    <p class="identify-hint">Účty v přepínání se navzájem vidí a mohou mezi sebou přepínat. Hostovi nechte vypnuté.</p>
     <div class="profile-block-row admin"><label class="user-edit-field"><span>K otevření profilu je potřeba</span><select><option>PIN</option><option>Nic</option><option>Heslo</option></select></label>
       <div class="user-edit-field"><span style="font-size:12px;color:var(--muted)">PIN</span><div class="profile-pin-state"><span>${I.check} PIN je nastaven</span><button>Změnit</button><button>Odebrat</button></div></div></div>
-    <p class="identify-hint">PIN chrání před překliknutím, ne před někým, kdo ho odkoukal. Správcovský účet nejde otevřít bez PINu nebo hesla. Heslo funguje vždy.</p></div>
+    <p class="identify-hint">PIN chrání před překliknutím, ne před někým, kdo ho odkoukal. Správcovský účet nejde otevřít bez PINu nebo hesla.</p></div>
   </section>`, `<button>Zrušit</button><button class="primary">Uložit</button>`, "user-edit-card");
 
 const own = () => `${chrome(false).replace(/<div class="proto-page">[\s\S]*?<\/div>/, `<div class="proto-page"><h2>Nastavení</h2><div class="proto-settings">

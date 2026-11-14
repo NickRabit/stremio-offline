@@ -10,8 +10,9 @@ intended screens.
 
 A signed-in device changes to another household account from a switcher, with
 nothing, a PIN or the password, as the administrator chose for that account.
-The administrator decides per account whether it is in the switcher. Web,
-desktop and Android TV all get it.
+The administrator decides per account whether it is in the switcher, and that
+one mark works both ways: only accounts in it see the profiles and may switch,
+and only among themselves. Web, desktop and Android TV all get it.
 
 ## Do not
 
@@ -24,6 +25,8 @@ desktop and Android TV all get it.
 - Do not persist attempt counters. Do not write the state file on a failed
   attempt.
 - Do not build kids mode, avatars or age filtering here.
+- Do not add the deferred "first entry on a device by password" rule or any
+  per-device record. Do not split the mark into separate rights.
 - Do not log or return a PIN, its hash or its length.
 
 ## Execute in this order
@@ -94,6 +97,10 @@ specification in the same commit.
 
 ## Things that are easy to get wrong
 
+- Check the **caller's** membership as well as the target's. A guest account
+  with a valid session must get an empty list and a 404 from the switch, even
+  for a member whose method is `none`. Checking only the target is the
+  obvious implementation and it is wrong.
 - The attempt guard is keyed by the target account. Keying it by `req.ip`
   makes it useless behind a reverse proxy.
 - The new session takes the **old session's expiry**. Issuing 30 fresh days

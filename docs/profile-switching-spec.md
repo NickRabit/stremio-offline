@@ -19,7 +19,7 @@ one, without weakening what an account protects.
 | Question | Decision |
 | --- | --- |
 | What is a profile? | **An existing account.** No profiles under an account, no second key in personal data. "Profile" is only the word the switcher uses. |
-| Who decides which accounts can be switched to? | The administrator, per account. Off for every existing and new account. |
+| Who can switch, and to whom? | The administrator marks accounts as **in the profile switcher**. That one mark works both ways: the marked accounts see each other and can switch among themselves. An account without it — a friend's, a guest's — sees no profiles and cannot switch at all. Off for every existing and new account. |
 | What does entering a profile take? | Per account: **nothing**, a **PIN**, or the **password**. The default is the password. An administrator account can never be entered with nothing. |
 | What does a device show when it starts? | The account that was last active on it, as today. There is no "Who is watching?" screen and no household-device token. |
 | Kids mode | Out of scope. It comes after this and builds on it. |
@@ -60,14 +60,21 @@ Read [users.md](users.md) first. The parts this design leans on:
 5. **Attempts are counted per target account**, not per address: behind a
    reverse proxy the whole household shares one address, and four digits are
    only 10,000 guesses.
-6. **Who is listed is a disclosure the administrator opts into.** An account
-   not marked for the switcher is answered exactly like one that does not
-   exist.
+6. **The switcher is a closed group the administrator chooses.** Only an
+   account in it may list profiles or switch, and only to another account in
+   it. Having an account on the instance is not enough: somebody given an
+   account as a guest learns no names and enters nothing. To everybody, an
+   account outside the group is answered exactly like one that does not exist.
 
 A PIN is a convenience between people who share a living room. It is not a
 parental boundary on its own: a child who watches a parent type four digits has
 them. That is why the administrator's account defaults to the password and why
 the unlock method is chosen per account.
+
+`unlock: "none"` means what it says: any member of the group, on any device
+they are signed in on, enters that profile. A stricter rule — the first entry
+on each device takes the password, and a PIN or nothing works only after
+that — was considered and deferred; see [Not in this design](#not-in-this-design).
 
 ## Data model
 
@@ -76,7 +83,7 @@ mean today's behaviour, so no migration and no `schemaVersion` bump.
 
 | Field | Meaning |
 | --- | --- |
-| `switcher?: boolean` | The account is offered in the switcher. |
+| `switcher?: boolean` | The account is in the switcher group: it is offered to the other members and may itself switch. |
 | `unlock?: "none" \| "pin" \| "password"` | What entering it from the switcher takes. Absent means `"password"`. |
 | `pinHash?: string` | scrypt hash of the PIN, the same scheme as `passwordHash`. Never leaves the server. |
 
@@ -101,8 +108,8 @@ carries `cache-control: private, no-store`.
 
 ### `GET /profiles`
 
-For any signed-in account. Lists the accounts that can be switched to from this
-session.
+For any signed-in account. Lists the switcher group as this session sees it.
+A caller that is not in the group gets an empty list.
 
 ```json
 { "profiles": [
@@ -111,9 +118,11 @@ session.
 ] }
 ```
 
-- Contains accounts with `switcher: true` that are enabled and do not owe a
-  password change. The caller's own account is included only if it is marked
-  too, with `current: true`.
+- For a caller with `switcher: true`: the accounts with `switcher: true` that
+  are enabled and do not owe a password change, the caller's own among them
+  with `current: true`.
+- For any other caller: `{ "profiles": [] }`, the same answer an instance
+  with no group gives.
 - Order: the order of the account list, which is creation order.
 - `pinLocked` is present for `unlock: "pin"` and true while the PIN is locked
   (see [attempt limits](#attempt-limits)); the client then asks for the
@@ -127,8 +136,10 @@ session.
 Body: `{ "id": "usr_…", "pin"?: "1234", "password"?: "…" }`.
 
 1. The caller needs a valid session that does not owe a password change.
-2. The target must be in the caller's `GET /profiles` list and not be the
-   caller. Otherwise `404 err.profileUnavailable`, whatever the reason.
+2. The caller must be in the group, and the target must be in the caller's
+   `GET /profiles` list and not be the caller. Otherwise
+   `404 err.profileUnavailable`, whatever the reason: a caller outside the
+   group cannot tell a member from an account that does not exist.
 3. If the attempt limit says wait: `429 err.tooManyAttempts` with
    `retry-after`, before any secret is checked.
 4. Check the secret:
@@ -141,8 +152,9 @@ Body: `{ "id": "usr_…", "pin"?: "1234", "password"?: "…" }`.
      thing accepted while the PIN is locked. It is the same credential the
      sign-in screen takes.
 5. On success, inside one `store.update` that re-reads both accounts:
-   - re-check that the target is still listed, enabled, not owing a password
-     change and that its secret is the one the hash was checked against;
+   - re-check that the caller is still in the group and that the target is
+     still listed, enabled, not owing a password change and that its secret
+     is the one the hash was checked against;
    - add the caller's session id to the caller's `revoked` ledger;
    - set the target's `lastSeenAt`.
 6. Issue a session for the target signed with the target's secret, with the
@@ -178,7 +190,7 @@ the fallback rule above. Clears the attempt counter for this account.
 ### `GET /auth/me`
 
 Gains `canSwitch: boolean`: true when `GET /profiles` would return at least one
-entry other than the caller. Clients show the switcher entry only then, without
+entry other than the caller, so always false for an account outside the group. Clients show the switcher entry only then, without
 a second request on every start. Also gains `hasPin: boolean` for the caller's
 own settings.
 
@@ -299,7 +311,9 @@ stops them either way.
 
 - **Settings -> Users -> account dialog**, on the Account tab under the
   password, a **Profile switching** block:
-  - a switch **Show in the profile switcher**;
+  - a switch **In the profile switcher**, with a line under it: *Accounts in
+    the switcher see each other and can switch among themselves. Leave it off
+    for a guest.*;
   - **To open this profile**: a select with *Nothing*, *PIN*, *Password*.
     *Nothing* is absent for an administrator. Disabled while the switch above
     is off;
@@ -310,9 +324,8 @@ stops them either way.
     watched it being typed.
   The user list shows a small marker on accounts that are in the switcher.
 - **Settings -> Account**: **Profile PIN** for the signed-in account: set,
-  change or remove, each asking for the current password. Shown to every
-  account; a line says whether the administrator has put this account in the
-  switcher.
+  change or remove, each asking for the current password. Shown only to an
+  account that is in the switcher; a PIN is of no use to any other.
 
 ![The block in the account dialog](profile-switching-prototype/screens/web-admin.jpg)
 
@@ -353,6 +366,14 @@ All strings go through `web/src/i18n/en.ts` and `cs.ts`.
 
 - A profile chooser at start-up, and remembering a device as belonging to the
   household after sign-out.
+- **First entry on a device by password.** A PIN or nothing would work only on
+  a device where that account has already signed in with its password, proven
+  by a signed record the device keeps until the password changes. It would
+  stop one member entering another's profile on a device that person never
+  used, at the cost of device state and of typing every password once on each
+  television. Deferred by the owner on 2026-11-14 until the closed group
+  proves insufficient.
+- Separate rights to be listed and to switch. One mark covers both.
 - Kids mode: a child policy, a simplified Home, age ratings.
 - Profiles under one account, avatars or colours chosen by the user.
 - Biometric unlock, PIN on the sign-in screen, PIN for single actions
@@ -364,6 +385,10 @@ All strings go through `web/src/i18n/en.ts` and `cs.ts`.
 Server, as route tests against a real `Store`:
 
 - an unlisted, disabled, must-change or unknown target answers the same 404;
+- a caller outside the group gets an empty list, `canSwitch: false` and the
+  same 404 for a member, a non-member and an unknown id, even for a member
+  whose method is `none`; taking a caller out of the group between the check
+  and the write refuses the switch;
 - none / PIN / password each switch and each refuse the wrong secret;
 - a password works for a PIN profile and for a locked PIN;
 - the old session is revoked and stopped, the new one verifies with the
