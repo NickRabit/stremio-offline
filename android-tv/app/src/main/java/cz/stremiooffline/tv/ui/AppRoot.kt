@@ -141,6 +141,13 @@ class SessionViewModel(
 
   fun signedIn(username: String, language: String?, start: Section, api: ApiClient) {
     state = SessionState.SignedIn(username, language, start, api, canSwitch = false)
+    refreshCanSwitch()
+  }
+
+  /** Whether this account may switch is the administrator's choice and can change while the
+   *  session lives; the entries in Settings and on the rail follow what the server says now. */
+  fun refreshCanSwitch() {
+    val api = (state as? SessionState.SignedIn)?.api ?: return
     viewModelScope.launch {
       val canSwitch = try {
         (api.me() as? MeResult.SignedIn)?.canSwitch ?: false
@@ -277,6 +284,7 @@ private fun AppContent() {
           canSwitch = state.canSwitch,
           profileApi = state.api,
           onSwitched = session::switchedProfile,
+          onProfilesGone = session::refreshCanSwitch,
           onSignOut = {
             watchNextClearScope.launch {
               WatchNextPublisher.clear(context.applicationContext)
@@ -323,6 +331,7 @@ fun SessionShell(
   canSwitch: Boolean = false,
   profileApi: ProfileApi? = null,
   onSwitched: () -> Unit = {},
+  onProfilesGone: () -> Unit = {},
 ) {
   SessionContent(api) {
     Shell(
@@ -336,6 +345,7 @@ fun SessionShell(
       canSwitch = canSwitch,
       profileApi = profileApi,
       onSwitched = onSwitched,
+      onProfilesGone = onProfilesGone,
     )
   }
 }

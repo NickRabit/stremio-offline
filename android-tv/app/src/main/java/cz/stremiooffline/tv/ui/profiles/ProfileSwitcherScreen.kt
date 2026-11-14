@@ -52,6 +52,8 @@ const val TagProfilePassword = "profile_password"
 const val TagProfileSubmit = "profile_submit"
 const val TagProfileError = "profile_error"
 const val TagProfilesRetry = "profiles_retry"
+const val TagProfilesEmpty = "profiles_empty"
+const val TagProfilesClose = "profiles_close"
 
 fun profileTag(id: String): String = "profile_$id"
 
@@ -79,8 +81,10 @@ fun ProfileSwitcherScreen(
       SwitcherStep.Choose -> ChooseStep(
         profiles = viewModel.profiles,
         failure = viewModel.loadFailure,
+        nobody = viewModel.nobody,
         onChoose = viewModel::choose,
         onRetry = viewModel::load,
+        onClose = onClose,
       )
       is SwitcherStep.Pin -> PinPad(
         profile = step.profile,
@@ -120,11 +124,22 @@ private fun switcherErrorText(error: SwitcherError?, waitSeconds: Int): String? 
 }
 
 @Composable
-private fun ChooseStep(profiles: List<ProfileDto>, failure: ApiFailure?, onChoose: (ProfileDto) -> Unit, onRetry: () -> Unit) {
+private fun ChooseStep(
+  profiles: List<ProfileDto>,
+  failure: ApiFailure?,
+  nobody: Boolean,
+  onChoose: (ProfileDto) -> Unit,
+  onRetry: () -> Unit,
+  onClose: () -> Unit,
+) {
   val firstFocus = remember { FocusRequester() }
   val retryFocus = remember { FocusRequester() }
+  val closeFocus = remember { FocusRequester() }
   LaunchedEffect(failure) {
     if (failure != null) runCatching { retryFocus.requestFocus() }
+  }
+  LaunchedEffect(nobody) {
+    if (nobody) runCatching { closeFocus.requestFocus() }
   }
   val firstSelectable = profiles.indexOfFirst { !it.current }
   LaunchedEffect(firstSelectable) {
@@ -152,6 +167,19 @@ private fun ChooseStep(profiles: List<ProfileDto>, failure: ApiFailure?, onChoos
         text = stringResource(R.string.common_retry),
         onClick = onRetry,
         modifier = Modifier.focusRequester(retryFocus).testTag(TagProfilesRetry),
+      )
+    }
+    if (nobody) {
+      Text(
+        stringResource(R.string.profiles_empty),
+        color = Tokens.Muted,
+        fontSize = 16.sp,
+        modifier = Modifier.padding(horizontal = 48.dp).testTag(TagProfilesEmpty),
+      )
+      FocusButton(
+        text = stringResource(R.string.common_close),
+        onClick = onClose,
+        modifier = Modifier.focusRequester(closeFocus).testTag(TagProfilesClose),
       )
     }
     Row(

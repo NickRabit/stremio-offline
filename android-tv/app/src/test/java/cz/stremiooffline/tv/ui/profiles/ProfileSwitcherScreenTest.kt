@@ -69,8 +69,13 @@ class ProfileSwitcherScreenTest {
     ProfileDto("usr_kids", "Kids", "none"),
   )
 
-  private fun mount(api: FakeProfileApi, onClose: () -> Unit = {}, onSwitched: () -> Unit = {}): ProfileSwitcherViewModel {
-    val viewModel = ProfileSwitcherViewModel(api, onSwitched)
+  private fun mount(
+    api: FakeProfileApi,
+    onClose: () -> Unit = {},
+    onSwitched: () -> Unit = {},
+    onNobody: () -> Unit = {},
+  ): ProfileSwitcherViewModel {
+    val viewModel = ProfileSwitcherViewModel(api, onSwitched, onNobody)
     scenario.onActivity { activity ->
       activity.setContent { ProfileSwitcherScreen(viewModel, onClose = onClose) }
     }
@@ -105,6 +110,26 @@ class ProfileSwitcherScreenTest {
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagProfileError).assertDoesNotExist()
     compose.onNodeWithTag(profileTag("usr_jana")).assertIsFocused()
+  }
+
+  @Test
+  fun `a list with nobody to switch to says so, reports it and OK on Close leaves`() {
+    var gone = 0
+    var closed = 0
+    mount(FakeProfileApi(household.take(1)), onClose = { closed++ }, onNobody = { gone++ })
+    compose.onNodeWithTag(TagProfilesEmpty).assertIsDisplayed()
+    compose.onNodeWithTag(TagProfilesClose).assertIsFocused()
+    assertEquals(1, gone)
+    press(Key.DirectionCenter)
+    assertEquals(1, closed)
+  }
+
+  @Test
+  fun `a list with another profile shows no empty notice`() {
+    var gone = 0
+    mount(FakeProfileApi(household), onNobody = { gone++ })
+    compose.onNodeWithTag(TagProfilesEmpty).assertDoesNotExist()
+    assertEquals(0, gone)
   }
 
   @Test

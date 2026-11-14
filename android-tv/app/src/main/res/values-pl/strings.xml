@@ -563,6 +563,8 @@
   <string name="profiles_back">Wróć do profili</string>
   <string name="profiles_pin_delete">Usuń</string>
   <string name="profiles_pin_confirm">Zatwierdź</string>
+  <string name="profiles_empty">Nie ma profilu, na który można się przełączyć. Konta do przełączania profili dodaje administrator.</string>
+  <string name="common_close">Zamknij</string>
   <string name="err_bad_pin">Nieprawidłowy PIN.</string>
   <string name="err_pin_locked">Zbyt wiele błędnych PIN-ów. Użyj hasła.</string>
   <string name="err_profile_unavailable">Ten profil jest niedostępny.</string>

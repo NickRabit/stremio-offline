@@ -539,6 +539,8 @@
   <string name="profiles_back">Back to profiles</string>
   <string name="profiles_pin_delete">Delete</string>
   <string name="profiles_pin_confirm">Confirm</string>
+  <string name="profiles_empty">There is no profile to switch to. An administrator adds accounts to profile switching.</string>
+  <string name="common_close">Close</string>
   <string name="err_bad_pin">Wrong PIN.</string>
   <string name="err_pin_locked">Too many wrong PINs. Use the password.</string>
   <string name="err_profile_unavailable">That profile is not available.</string>

@@ -563,6 +563,8 @@
   <string name="profiles_back">Назад к профилям</string>
   <string name="profiles_pin_delete">Стереть</string>
   <string name="profiles_pin_confirm">Подтвердить</string>
+  <string name="profiles_empty">Нет профиля, на который можно переключиться. Учётные записи в переключение профилей добавляет администратор.</string>
+  <string name="common_close">Закрыть</string>
   <string name="err_bad_pin">Неверный PIN-код.</string>
   <string name="err_pin_locked">Слишком много неверных PIN-кодов. Используйте пароль.</string>
   <string name="err_profile_unavailable">Этот профиль недоступен.</string>

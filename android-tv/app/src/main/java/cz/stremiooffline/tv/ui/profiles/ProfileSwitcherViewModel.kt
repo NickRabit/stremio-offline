@@ -30,6 +30,8 @@ data class SwitcherError(val messageRes: Int, val arg: String? = null)
 class ProfileSwitcherViewModel(
   private val api: ProfileApi,
   private val onSwitched: () -> Unit = {},
+  /** The list came back with nobody to switch to: the entry that opened this is out of date. */
+  private val onNobody: () -> Unit = {},
 ) : ViewModel() {
 
   var profiles by mutableStateOf<List<ProfileDto>>(emptyList())
@@ -52,6 +54,12 @@ class ProfileSwitcherViewModel(
   var loadFailure by mutableStateOf<ApiFailure?>(null)
     private set
 
+  /** The list was read and holds no profile but this one; an administrator changed the group
+   *  after this session learned it could switch. */
+  var nobody by mutableStateOf(false)
+    private set
+
+  // Below every property it writes: load() can run to its end inside this call.
   init {
     load()
   }
@@ -59,6 +67,7 @@ class ProfileSwitcherViewModel(
   fun load() {
     viewModelScope.launch {
       loadFailure = null
+      nobody = false
       profiles = try {
         api.profiles()
       } catch (error: ApiError) {
@@ -67,6 +76,10 @@ class ProfileSwitcherViewModel(
       } catch (_: Exception) {
         loadFailure = ApiFailure.Generic
         emptyList()
+      }
+      if (loadFailure == null && profiles.none { !it.current }) {
+        nobody = true
+        onNobody()
       }
     }
   }
@@ -208,8 +221,8 @@ class ProfileSwitcherViewModel(
   }
 
   companion object {
-    fun factory(api: ProfileApi, onSwitched: () -> Unit = {}) = viewModelFactory {
-      initializer { ProfileSwitcherViewModel(api, onSwitched) }
+    fun factory(api: ProfileApi, onNobody: () -> Unit = {}, onSwitched: () -> Unit = {}) = viewModelFactory {
+      initializer { ProfileSwitcherViewModel(api, onSwitched, onNobody) }
     }
   }
 }

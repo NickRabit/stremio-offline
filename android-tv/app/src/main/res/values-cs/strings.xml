@@ -563,6 +563,8 @@
   <string name="profiles_back">Zpět na profily</string>
   <string name="profiles_pin_delete">Smazat</string>
   <string name="profiles_pin_confirm">Potvrdit</string>
+  <string name="profiles_empty">Není na který profil přepnout. Účty do přepínání profilů zařazuje správce.</string>
+  <string name="common_close">Zavřít</string>
   <string name="err_bad_pin">Nesprávný PIN.</string>
   <string name="err_pin_locked">Příliš mnoho chybných PINů. Použijte heslo.</string>
   <string name="err_profile_unavailable">Tento profil není k dispozici.</string>

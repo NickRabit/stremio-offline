@@ -510,6 +510,8 @@ profiles.submit
 profiles.back
 profiles.pinDelete
 profiles.pinConfirm
+profiles.empty
+common.close
 err.badPin
 err.pinLocked
 err.profileUnavailable

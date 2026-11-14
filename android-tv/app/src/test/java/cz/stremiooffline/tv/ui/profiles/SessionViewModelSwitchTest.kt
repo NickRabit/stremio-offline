@@ -18,6 +18,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -68,6 +69,25 @@ class SessionViewModelSwitchTest {
     assertEquals(Section.Catalog, signedIn.start)
     assertTrue(signedIn.canSwitch)
     assertEquals("new-token", store.loadSession(address.origin))
+  }
+
+  @Test
+  fun `refreshCanSwitch follows an administrator taking the account out of the group`() {
+    server.start()
+    val address = ServerAddress.parse(server.url("/").toString())!!
+    val store = MemoryStore(context)
+    val session = SessionViewModel(store, context)
+    store.serverUrl = address.display
+    store.saveSession(address.origin, "token")
+    val api = ApiClient(address, CookieStore(address.origin, store))
+    server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs","canSwitch":true}"""))
+    session.signedIn("ondra", "cs", Section.Home, api)
+    awaitSignedIn(session, "ondra", canSwitch = true)
+
+    server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs","canSwitch":false}"""))
+    session.refreshCanSwitch()
+    val signedIn = awaitSignedIn(session, "ondra", canSwitch = false)
+    assertSame(api, signedIn.api)
   }
 
   private fun awaitSignedIn(

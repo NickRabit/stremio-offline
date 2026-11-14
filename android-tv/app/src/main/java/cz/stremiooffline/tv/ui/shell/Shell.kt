@@ -200,6 +200,8 @@ fun Shell(
   canSwitch: Boolean = false,
   profileApi: ProfileApi? = null,
   onSwitched: () -> Unit = {},
+  /** The switcher found nobody to switch to; the session re-reads whether it may still switch. */
+  onProfilesGone: () -> Unit = {},
 ) {
   val shellState = rememberSaveable(start, saver = ShellStateSaver) { ShellState(start) }
   val current = shellState.selected
@@ -716,7 +718,7 @@ fun Shell(
   if (switcherOpen && profileApi != null) OverlayFocusTrap(fenced = true) {
     val switcher = viewModel<ProfileSwitcherViewModel>(
       key = "profile-switcher-$switcherGeneration",
-      factory = ProfileSwitcherViewModel.factory(profileApi) {
+      factory = ProfileSwitcherViewModel.factory(profileApi, onNobody = onProfilesGone) {
         switcherOpen = false
         onSwitched()
       },

@@ -539,6 +539,8 @@
   <string name="profiles_back">Volver a los perfiles</string>
   <string name="profiles_pin_delete">Borrar</string>
   <string name="profiles_pin_confirm">Confirmar</string>
+  <string name="profiles_empty">No hay ningún perfil al que cambiar. Un administrador añade las cuentas al cambio de perfil.</string>
+  <string name="common_close">Cerrar</string>
   <string name="err_bad_pin">PIN incorrecto.</string>
   <string name="err_pin_locked">Demasiados PIN incorrectos. Usa la contraseña.</string>
   <string name="err_profile_unavailable">Ese perfil no está disponible.</string>

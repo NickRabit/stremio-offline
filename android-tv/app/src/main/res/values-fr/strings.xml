@@ -539,6 +539,8 @@
   <string name="profiles_back">Retour aux profils</string>
   <string name="profiles_pin_delete">Effacer</string>
   <string name="profiles_pin_confirm">Valider</string>
+  <string name="profiles_empty">Aucun profil vers lequel basculer. Un administrateur ajoute les comptes au changement de profil.</string>
+  <string name="common_close">Fermer</string>
   <string name="err_bad_pin">Code PIN incorrect.</string>
   <string name="err_pin_locked">Trop de codes PIN erronés. Utilisez le mot de passe.</string>
   <string name="err_profile_unavailable">Ce profil n’est pas disponible.</string>
