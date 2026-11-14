@@ -527,4 +527,21 @@
   <string name="genre_war">War</string>
   <string name="genre_war_politics">War &amp; Politics</string>
   <string name="genre_western">Western</string>
+  <string name="profiles_switch">Switch profile</string>
+  <string name="profiles_current">Current</string>
+  <string name="profiles_needs_pin">Opens with a PIN</string>
+  <string name="profiles_needs_password">Opens with the password</string>
+  <string name="profiles_pin_for">PIN for %1$s</string>
+  <string name="profiles_password_for">Password for %1$s</string>
+  <string name="profiles_use_password">Use password instead</string>
+  <string name="profiles_pin_locked">The PIN is locked after too many wrong attempts. Enter the password.</string>
+  <string name="profiles_submit">Switch</string>
+  <string name="profiles_back">Back to profiles</string>
+  <string name="profiles_pin_delete">Delete</string>
+  <string name="profiles_pin_confirm">Confirm</string>
+  <string name="err_bad_pin">Wrong PIN.</string>
+  <string name="err_pin_locked">Too many wrong PINs. Use the password.</string>
+  <string name="err_profile_unavailable">That profile is not available.</string>
+  <string name="err_bad_credentials">Wrong username or password.</string>
+  <string name="err_too_many_attempts">Too many failed attempts. Try again in %1$s s.</string>
 </resources>

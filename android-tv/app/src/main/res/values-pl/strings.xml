@@ -551,4 +551,21 @@
   <string name="genre_war">Wojenny</string>
   <string name="genre_war_politics">Wojna i polityka</string>
   <string name="genre_western">Western</string>
+  <string name="profiles_switch">Przełącz profil</string>
+  <string name="profiles_current">Bieżący</string>
+  <string name="profiles_needs_pin">Otwierany kodem PIN</string>
+  <string name="profiles_needs_password">Otwierany hasłem</string>
+  <string name="profiles_pin_for">PIN dla %1$s</string>
+  <string name="profiles_password_for">Hasło dla %1$s</string>
+  <string name="profiles_use_password">Użyj hasła</string>
+  <string name="profiles_pin_locked">PIN jest zablokowany po zbyt wielu błędnych próbach. Wpisz hasło.</string>
+  <string name="profiles_submit">Przełącz</string>
+  <string name="profiles_back">Wróć do profili</string>
+  <string name="profiles_pin_delete">Usuń</string>
+  <string name="profiles_pin_confirm">Zatwierdź</string>
+  <string name="err_bad_pin">Nieprawidłowy PIN.</string>
+  <string name="err_pin_locked">Zbyt wiele błędnych PIN-ów. Użyj hasła.</string>
+  <string name="err_profile_unavailable">Ten profil jest niedostępny.</string>
+  <string name="err_bad_credentials">Nieprawidłowa nazwa użytkownika lub hasło.</string>
+  <string name="err_too_many_attempts">Zbyt wiele nieudanych prób. Spróbuj ponownie za %1$s s.</string>
 </resources>

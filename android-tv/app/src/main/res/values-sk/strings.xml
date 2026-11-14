@@ -551,4 +551,21 @@
   <string name="genre_war">Vojnový</string>
   <string name="genre_war_politics">Vojna a politika</string>
   <string name="genre_western">Western</string>
+  <string name="profiles_switch">Prepnúť profil</string>
+  <string name="profiles_current">Aktuálny</string>
+  <string name="profiles_needs_pin">Otvára sa PIN-om</string>
+  <string name="profiles_needs_password">Otvára sa heslom</string>
+  <string name="profiles_pin_for">PIN pre %1$s</string>
+  <string name="profiles_password_for">Heslo pre %1$s</string>
+  <string name="profiles_use_password">Použiť heslo</string>
+  <string name="profiles_pin_locked">PIN je po príliš mnohých chybných pokusoch zamknutý. Zadajte heslo.</string>
+  <string name="profiles_submit">Prepnúť</string>
+  <string name="profiles_back">Späť na profily</string>
+  <string name="profiles_pin_delete">Zmazať</string>
+  <string name="profiles_pin_confirm">Potvrdiť</string>
+  <string name="err_bad_pin">Nesprávny PIN.</string>
+  <string name="err_pin_locked">Príliš veľa chybných PIN-ov. Použite heslo.</string>
+  <string name="err_profile_unavailable">Tento profil nie je k dispozícii.</string>
+  <string name="err_bad_credentials">Nesprávne používateľské meno alebo heslo.</string>
+  <string name="err_too_many_attempts">Príliš veľa neúspešných pokusov. Skúste to znova o %1$s s.</string>
 </resources>

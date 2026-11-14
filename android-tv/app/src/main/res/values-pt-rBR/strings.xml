@@ -527,4 +527,21 @@
   <string name="genre_war">Guerra</string>
   <string name="genre_war_politics">Guerra e política</string>
   <string name="genre_western">Faroeste</string>
+  <string name="profiles_switch">Trocar de perfil</string>
+  <string name="profiles_current">Atual</string>
+  <string name="profiles_needs_pin">Abre com um PIN</string>
+  <string name="profiles_needs_password">Abre com a senha</string>
+  <string name="profiles_pin_for">PIN de %1$s</string>
+  <string name="profiles_password_for">Senha de %1$s</string>
+  <string name="profiles_use_password">Usar a senha</string>
+  <string name="profiles_pin_locked">O PIN foi bloqueado após muitas tentativas erradas. Digite a senha.</string>
+  <string name="profiles_submit">Trocar</string>
+  <string name="profiles_back">Voltar aos perfis</string>
+  <string name="profiles_pin_delete">Apagar</string>
+  <string name="profiles_pin_confirm">Confirmar</string>
+  <string name="err_bad_pin">PIN incorreto.</string>
+  <string name="err_pin_locked">Muitos PINs errados. Use a senha.</string>
+  <string name="err_profile_unavailable">Esse perfil não está disponível.</string>
+  <string name="err_bad_credentials">Nome de usuário ou senha incorretos.</string>
+  <string name="err_too_many_attempts">Muitas tentativas fracassadas. Tente novamente em %1$s segundos.</string>
 </resources>

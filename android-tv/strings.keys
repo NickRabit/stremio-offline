@@ -496,3 +496,22 @@ genre.tvMovie
 genre.war
 genre.warPolitics
 genre.western
+
+# Profile switching
+profiles.switch
+profiles.current
+profiles.needsPin
+profiles.needsPassword
+profiles.pinFor
+profiles.passwordFor
+profiles.usePassword
+profiles.pinLocked
+profiles.submit
+profiles.back
+profiles.pinDelete
+profiles.pinConfirm
+err.badPin
+err.pinLocked
+err.profileUnavailable
+err.badCredentials
+err.tooManyAttempts
