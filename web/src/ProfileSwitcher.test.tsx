@@ -72,6 +72,19 @@ describe("ProfileSwitcher", () => {
     expect(document.body.querySelectorAll("button.profile-row")).toHaveLength(1);
   });
 
+  it("says so when there is nobody to switch to, instead of an empty dialog", async () => {
+    profilesMock.mockResolvedValue({ profiles: [] });
+    await mount();
+    expect(document.body.textContent).toContain("There is no profile to switch to");
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    profilesMock.mockResolvedValue({ profiles: [{ id: "usr_b", username: "Bob", unlock: "password", current: true }] });
+    await mount();
+    expect(document.body.querySelector(".profile-row.current")?.textContent).toContain("Bob");
+    expect(document.body.textContent).toContain("There is no profile to switch to");
+  });
+
   it("switches immediately to a profile that needs nothing", async () => {
     profilesMock.mockResolvedValue({ profiles: profiles({ unlock: "none" }) });
     const { onSwitched } = await mount();

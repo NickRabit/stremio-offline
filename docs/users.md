@@ -147,7 +147,7 @@ the code by hand. There is no server discovery or device inventory yet.
 
 A signed-in device can change to another household account without signing out.
 The administrator decides which accounts take part: **Settings → Users →**
-account → **Profile switching → In the profile switcher**. The mark works both
+account → **Profile switching → Include in profile switching**. The mark works both
 ways. Accounts in the switcher see each other and can switch among themselves;
 an account outside it — a guest's, a friend's — sees no profiles and cannot
 switch, and the server answers it as if no other account existed. Every account

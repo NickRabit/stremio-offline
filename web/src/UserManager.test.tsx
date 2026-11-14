@@ -54,6 +54,7 @@ afterEach(() => {
 /** `onWrite` answers a non-GET call: a Response says what the server said, anything else is
  *  answered as a 200, and `undefined` as an empty object. */
 const flush = async () => { await act(async () => { await new Promise((done) => setTimeout(done, 0)); }); };
+const onAccountsChanged = vi.fn();
 const mount = async ({ session, users, libraries = [], remoteLibraries = [], addons = [], failRemote = false, restricted = false, onWrite, onError = vi.fn() }:
   { session: Session; users: UserAccount[]; libraries?: LibraryView[]; remoteLibraries?: AdminRemoteLibrary[]; addons?: Addon[];
     failRemote?: boolean; restricted?: boolean; onWrite?: (url: string, body: Record<string, unknown>) => unknown; onError?: (error: unknown) => void }) => {
@@ -74,7 +75,7 @@ const mount = async ({ session, users, libraries = [], remoteLibraries = [], add
     }
     return json({});
   });
-  await act(async () => { root.render(<UserManager session={session} restricted={restricted} onError={onError} onNotify={vi.fn()}/>); });
+  await act(async () => { root.render(<UserManager session={session} restricted={restricted} onAccountsChanged={onAccountsChanged} onError={onError} onNotify={vi.fn()}/>); });
   await flush();
 };
 
@@ -286,7 +287,7 @@ it("does not show profile switching while creating an account", async () => {
 it("disables the unlock choice while the account is outside the switcher", async () => {
   await mount({ session: admin, users: [account({ switcher: false })] });
   await clickText("Edit");
-  expect(host.querySelector<HTMLSelectElement>('select[aria-label="To open this profile"]')?.disabled).toBe(true);
+  expect(host.querySelector<HTMLSelectElement>('select[aria-label="Switching to this profile requires"]')?.disabled).toBe(true);
 });
 
 it("writes the switcher mark and unlock choice and marks the account in the list", async () => {
@@ -301,18 +302,19 @@ it("writes the switcher mark and unlock choice and marks the account in the list
     },
   });
   await clickText("Edit");
-  await clickBox("In the profile switcher");
+  await clickBox("Include in profile switching");
   expect(writes).toContainEqual({ switcher: true });
-  expect(host.querySelector(".user-admin-row .profile-marker")?.textContent).toBe("Switcher");
+  expect(onAccountsChanged, "the session has to re-read whether it may still switch").toHaveBeenCalled();
+  expect(host.querySelector(".user-admin-row .profile-marker")?.textContent).toBe("Profile switching");
 
-  await choose("To open this profile", "pin");
+  await choose("Switching to this profile requires", "pin");
   expect(writes).toContainEqual({ unlock: "pin" });
 });
 
 it("does not offer Nothing to an administrator", async () => {
   await mount({ session: admin, users: [account({ switcher: true })] });
   await clickText("Edit");
-  const choices = [...host.querySelectorAll<HTMLOptionElement>('select[aria-label="To open this profile"] option')]
+  const choices = [...host.querySelectorAll<HTMLOptionElement>('select[aria-label="Switching to this profile requires"] option')]
     .map((option) => option.textContent);
   expect(choices).toEqual(["PIN", "Password"]);
 });
@@ -320,7 +322,7 @@ it("does not offer Nothing to an administrator", async () => {
 it("disables PIN until the account has one", async () => {
   await mount({ session: admin, users: [account({ switcher: true, hasPin: false })] });
   await clickText("Edit");
-  const pin = [...host.querySelectorAll<HTMLOptionElement>('select[aria-label="To open this profile"] option')]
+  const pin = [...host.querySelectorAll<HTMLOptionElement>('select[aria-label="Switching to this profile requires"] option')]
     .find((option) => option.textContent === "PIN");
   expect(pin?.disabled).toBe(true);
 });

@@ -2489,7 +2489,6 @@ p.next-episode b{color:var(--accent2)}
 .profile-switcher .profile-link{padding:6px;border:0;background:transparent;color:var(--accent2);font-size:12px}
 .profile-switcher .profile-head-back{display:flex;align-items:center;gap:8px;min-width:0}
 .profile-switcher .profile-head-back h2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.profile-marker{display:inline-flex;align-items:center;padding:2px 7px;border:1px solid #42ce9155;border-radius:99px;color:var(--green);font-size:9px;font-style:normal;font-weight:700}
 .profile-block{display:grid;gap:12px;padding-top:12px;border-top:1px solid var(--line)}
 .profile-block h3{display:flex;align-items:center;gap:7px;margin:0;font-size:13px}
 .profile-block h3 svg{width:15px;height:15px}

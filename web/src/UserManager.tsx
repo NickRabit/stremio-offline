@@ -35,8 +35,10 @@ const remoteGrantLabel = (remote: AdminRemoteLibrary, libraries: AdminRemoteLibr
 
 /** The accounts of this instance. Only an administrator renders it; an ordinary user is
  *  never shown the rows, let alone offered a control the API would refuse. */
-export function UserManager({ session, restricted = false, onChanged, onNotify, onError }: {
+export function UserManager({ session, restricted = false, onChanged, onAccountsChanged, onNotify, onError }: {
   session: Session; restricted?: boolean; onChanged?: () => void;
+  /** An account was edited or removed: who may switch profiles, this session included, may have changed. */
+  onAccountsChanged?: () => void;
   onNotify: (message: string) => void; onError: (error: unknown) => void;
 }) {
   useI18n();
@@ -93,6 +95,7 @@ export function UserManager({ session, restricted = false, onChanged, onNotify, 
       setEditingId(null);
       await load();
       onChanged?.();
+      onAccountsChanged?.();
       onNotify(t("users.deleted"));
     } catch (error) { onError(error); }
     finally { setBusy(false); }
@@ -113,7 +116,7 @@ export function UserManager({ session, restricted = false, onChanged, onNotify, 
           <strong>{account.username}</strong>
           <small className="user-admin-state">
             {roleLabel(account.role)}
-            {account.switcher && <i className="profile-marker" title={t("users.inSwitcherBadge")}>{t("users.inSwitcherBadge")}</i>}
+            {account.switcher && <i className="library-badge profile-marker" title={t("users.inSwitcherHint")}>{t("users.inSwitcherBadge")}</i>}
             {account.disabled && <i className="library-badge off">{t("users.disabled")}</i>}
             {account.mustChangePassword && <i className="library-badge warn">{t("users.mustChangePassword")}</i>}
           </small>
@@ -143,7 +146,7 @@ export function UserManager({ session, restricted = false, onChanged, onNotify, 
         await load().catch(onError);
         onChanged?.();
       }}
-      onUpdated={replace} onLibraryUpdated={(library) => {
+      onUpdated={(next) => { replace(next); onAccountsChanged?.(); }} onLibraryUpdated={(library) => {
         updateGrantCounts("libraries", libraries.find((row) => row.id === library.id)?.visibleTo ?? [], library.visibleTo ?? []);
         setLibraries((rows) => rows.map((row) => row.id === library.id ? library : row));
       }}

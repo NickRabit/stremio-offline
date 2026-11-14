@@ -176,7 +176,7 @@ export function ProfileSwitcher({ onClose, confirmStop, onSwitched = () => {
       </> : step === "choose" ? <>
         <div className="dialog-body">
           {profiles === null && !error && <div className="loading" role="status">{t("common.loading")}</div>}
-          {profiles && <div className="profile-list">
+          {profiles && profiles.length > 0 && <div className="profile-list">
             {profiles.map((profile) => profile.current
               ? <div className="profile-row current" aria-current="true" key={profile.id}>
                   <span className="profile-face">{initial(profile.username)}</span>
@@ -190,6 +190,9 @@ export function ProfileSwitcher({ onClose, confirmStop, onSwitched = () => {
                   {profile.unlock === "password" && <KeyRound aria-label={t("profiles.needsPassword")}/>}
                 </button>)}
           </div>}
+          {/* The entry point is drawn from what the session knew at start; an administrator may
+              have taken this account, or the last other one, out of the group since. */}
+          {profiles && !profiles.some((profile) => !profile.current) && <p className="identify-hint">{t("profiles.empty")}</p>}
         </div>
         <footer className="dialog-foot">
           {error && <p className="login-error" role="alert">{error}</p>}
