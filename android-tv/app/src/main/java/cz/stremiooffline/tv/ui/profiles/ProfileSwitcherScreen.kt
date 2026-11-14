@@ -234,10 +234,10 @@ internal val ProfileLockIcon = outlineIcon("ProfileLock") {
 }
 
 internal val ProfileKeyIcon = outlineIcon("ProfileKey") {
-  moveTo(8f, 15f)
-  arcTo(4f, 4f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 8f, y1 = 15f)
-  close()
-  moveTo(11f, 12f)
+  moveTo(4f, 15f)
+  arcTo(4f, 4f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 12f, y1 = 15f)
+  arcTo(4f, 4f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 4f, y1 = 15f)
+  moveTo(10.8f, 12.2f)
   lineTo(20f, 3f)
   moveTo(16f, 7f)
   lineTo(19f, 10f)

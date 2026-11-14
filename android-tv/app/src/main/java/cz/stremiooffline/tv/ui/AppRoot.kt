@@ -20,6 +20,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -351,7 +352,9 @@ private tailrec fun Context.hostActivity(): Activity? = when (this) {
 fun SessionContent(api: TvApi, content: @Composable () -> Unit) {
   val owner = remember(api) { SessionViewModelStoreOwner() }
   DisposableEffect(api) { onDispose { owner.viewModelStore.clear() } }
-  CompositionLocalProvider(LocalViewModelStoreOwner provides owner) { content() }
+  // Keyed too, not only the store: a profile switch keeps this call site, and every
+  // remember and LaunchedEffect(Unit) below would otherwise carry over to the new account.
+  key(api) { CompositionLocalProvider(LocalViewModelStoreOwner provides owner) { content() } }
 }
 
 /** The view-model store of one signed-in session; a new sign-in gets a fresh instance. */

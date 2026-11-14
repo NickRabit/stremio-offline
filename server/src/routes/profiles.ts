@@ -77,7 +77,7 @@ export function registerProfilesRoutes(app: express.Application, ctx: RouteConte
       else failure = new AppError("Wrong username or password.", "err.badCredentials", 401);
     } else if (method === "pin") {
       if (profileAttempts.pinLocked(target.id)) {
-        throw new AppError("Too many wrong PINs. Use the password.", "err.pinLocked", 403);
+        return res.status(403).json({ error: "Too many wrong PINs. Use the password.", messageKey: "err.pinLocked" });
       }
       if (typeof pin === "string" && target.pinHash && await verifyPassword(pin, target.pinHash)) {
         checkedPinHash = target.pinHash;
@@ -102,7 +102,8 @@ export function registerProfilesRoutes(app: express.Application, ctx: RouteConte
       if (!wasLocked && profileAttempts.pinLocked(target.id)) {
         log("WARN", "PIN locked", { username: target.username, userId: target.id });
       }
-      throw failure;
+      // Answered here like a failed sign-in: a wrong secret is not a server error worth a stack.
+      return res.status(failure.status ?? 401).json({ error: failure.message, messageKey: failure.messageKey });
     }
 
     let tokenSecret = "";

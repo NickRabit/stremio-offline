@@ -1,6 +1,18 @@
 package cz.stremiooffline.tv.ui.profiles
 
 import android.view.KeyEvent
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.tv.material3.Border
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Surface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
@@ -125,14 +137,12 @@ fun PinPad(
               "confirm" -> onConfirm
               else -> ({ onDigit(key[0]) })
             }
-            FocusButton(
-              text = label,
+            PinKey(
+              label = label,
               onClick = onClick,
               enabled = key != "confirm" || confirmEnabled,
-              kind = if (key == "confirm") FocusButtonKind.Primary else FocusButtonKind.Normal,
-              height = 52.dp,
+              primary = key == "confirm",
               modifier = Modifier
-                .width(64.dp)
                 .testTag(pinKeyTag(key))
                 .then(if (key == "5") Modifier.focusRequester(fiveFocus) else Modifier),
             )
@@ -145,8 +155,43 @@ fun PinPad(
         leading = {
           Icon(ProfileKeyIcon, contentDescription = null, modifier = Modifier.size(16.dp))
         },
-        modifier = Modifier.width(210.dp).testTag(TagPinUsePassword),
+        modifier = Modifier.width(294.dp).testTag(TagPinUsePassword),
       )
+    }
+  }
+}
+
+/** A pad key draws its label in the middle; a text button keeps its row at the top-left. */
+@Composable
+private fun PinKey(label: String, onClick: () -> Unit, enabled: Boolean, primary: Boolean, modifier: Modifier = Modifier) {
+  val interaction = remember { MutableInteractionSource() }
+  val focused by interaction.collectIsFocusedAsState()
+  val shape = RoundedCornerShape(8.dp)
+  Surface(
+    onClick = onClick,
+    enabled = enabled,
+    modifier = modifier.size(width = 92.dp, height = 52.dp).alpha(if (enabled) 1f else 0.5f),
+    interactionSource = interaction,
+    shape = ClickableSurfaceDefaults.shape(shape = shape),
+    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f),
+    colors = ClickableSurfaceDefaults.colors(
+      containerColor = if (primary) Tokens.Accent.copy(alpha = 0.15f) else Tokens.Panel2,
+      contentColor = if (primary) Tokens.Accent2 else Tokens.Text,
+      focusedContainerColor = Color.Transparent,
+      focusedContentColor = Color.White,
+      pressedContainerColor = Color.Transparent,
+      pressedContentColor = Color.White,
+    ),
+    border = ClickableSurfaceDefaults.border(
+      border = Border(BorderStroke(1.dp, if (primary) Tokens.Accent.copy(alpha = 0.44f) else Tokens.Line), shape = shape),
+      focusedBorder = Border.None,
+    ),
+  ) {
+    Box(
+      Modifier.fillMaxSize().background(if (focused) Tokens.AccentGradient else SolidColor(Color.Transparent)),
+      contentAlignment = Alignment.Center,
+    ) {
+      Text(label, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
   }
 }
