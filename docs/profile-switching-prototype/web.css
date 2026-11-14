@@ -1,0 +1,65 @@
+/* Prototype layer on top of the real style.css. Everything below is new and is what the
+   specification proposes for web/src/style.css. */
+.proto-switch{position:fixed;z-index:400;left:8px;bottom:8px;display:flex;flex-wrap:wrap;gap:4px;max-width:calc(100vw - 16px);opacity:.55}
+.proto-switch:hover{opacity:1}
+.proto-switch a{font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:3px 8px;background:#0b0e13;text-decoration:none}
+.proto-switch a.on{color:var(--text);border-color:var(--accent)}
+.shot .proto-switch{display:none}
+.proto-page{padding:116px 28px 40px;color:var(--muted);font-size:13px;max-width:900px}
+.proto-page h2{color:var(--text);font-size:26px;margin:0 0 8px}
+@media(max-width:700px){.proto-page{padding:86px 16px 90px}.topbar{height:62px;padding:0 16px}.topbar .online,.topbar .signout-label{display:none}}
+.proto-tabbar{display:none}
+@media(max-width:700px){.proto-tabbar{position:fixed;inset:auto 0 0;z-index:30;height:calc(62px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--line);background:#0f131af2}.proto-tabbar span{display:grid;place-items:center;align-content:center;gap:3px;font-size:10px;color:var(--muted)}.proto-tabbar span.on{color:var(--text)}.proto-tabbar svg{width:20px;height:20px}.proto-desktop-only{display:none!important}}
+.more-menu.proto-open{right:12px;bottom:calc(72px + env(safe-area-inset-bottom,0px));min-width:230px}
+.proto-new{box-shadow:0 0 0 2px #ff5b3855;border-radius:9px}
+
+/* The account name in the top bar becomes the switcher's trigger. */
+.profile-trigger{display:flex;align-items:center;gap:8px;min-width:0;border:1px solid transparent;background:transparent;padding:5px 9px 5px 5px;border-radius:99px;font-size:12px}
+.profile-trigger:hover,.profile-trigger:focus-visible{border-color:var(--line);background:var(--panel2)}
+.profile-trigger svg{width:14px;height:14px;color:var(--muted)}
+.profile-face{flex:0 0 auto;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;color:#fff;background:linear-gradient(145deg,var(--accent),#a83c79)}
+.profile-face.b{background:linear-gradient(145deg,#3a8f7a,#235a8c)}
+.profile-face.c{background:linear-gradient(145deg,#b98a2e,#a84f2c)}
+.profile-face.d{background:linear-gradient(145deg,#6a5acd,#a83c79)}
+
+/* The switcher dialog. */
+.profile-card{width:min(440px,100%)}
+.profile-list{display:grid;gap:8px}
+.profile-row{display:flex;align-items:center;gap:14px;justify-content:flex-start;min-height:60px;width:100%;padding:8px 14px 8px 10px;border-radius:12px;background:var(--panel2);text-align:left}
+.profile-row:hover,.profile-row:focus-visible{border-color:var(--accent)}
+.profile-row .profile-face{width:42px;height:42px;font-size:17px}
+.profile-row strong{flex:1 1 auto;min-width:0;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.profile-row small{display:flex;align-items:center;gap:6px;flex:0 0 auto;font-size:11px;font-weight:600;color:var(--muted)}
+.profile-row small svg{width:15px;height:15px}
+.profile-row.current{background:transparent;border-style:dashed;cursor:default;opacity:.75}
+.profile-row.current small{color:var(--green)}
+.profile-unlock{display:grid;justify-items:center;gap:14px;padding:6px 0 4px}
+.profile-unlock .profile-face{width:64px;height:64px;font-size:26px}
+.profile-unlock p{margin:0;font-size:13px;color:var(--muted);text-align:center}
+.profile-pin{width:min(260px,100%);text-align:center;font-size:28px;font-weight:800;letter-spacing:.5em;padding:12px 8px 12px calc(8px + .5em);font-variant-numeric:tabular-nums}
+.profile-password{width:min(320px,100%)}
+.profile-link{border:0;background:none;padding:6px;font-size:12px;font-weight:600;color:var(--accent2)}
+.profile-head-back{display:flex;align-items:center;gap:8px;min-width:0}
+.profile-head-back h2{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* A phone held sideways with the keyboard up: face and hint go, field and footer stay. */
+@media(max-height:420px){.profile-unlock{grid-template-columns:minmax(0,260px) auto;justify-content:center;align-items:center;gap:8px;padding:0}.profile-unlock .profile-face,.profile-unlock p.hint{display:none}.profile-pin{width:100%;font-size:22px;padding-block:8px}.dialog-foot .login-error{padding:6px 10px}}
+
+/* Illustration only: the system keypad, so the screenshots show what stays visible. */
+.proto-keys{position:fixed;inset:auto 0 0;z-index:300;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:8px 6px calc(8px + env(safe-area-inset-bottom,0px));background:#1c1f26;border-top:1px solid #000}
+.proto-keys span{display:grid;place-items:center;height:46px;border-radius:6px;background:#3a3f4a;font-size:20px;color:#fff}
+.proto-keys span.fn{background:#2a2e37;font-size:13px}
+.proto-keys.wide{grid-template-columns:repeat(6,1fr)}.proto-keys.wide span{height:34px;font-size:16px}
+
+/* Settings: the block in the account dialog and the user's own PIN. */
+.profile-block{display:grid;gap:12px;margin-top:4px;padding-top:12px;border-top:1px solid var(--line)}
+.profile-block h3{margin:0;font-size:13px}
+.profile-block-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:end}
+.profile-block-row.admin{grid-template-columns:minmax(0,200px) minmax(0,1fr);align-items:start}
+.profile-pin-state{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-height:40px}
+.profile-pin-state button{padding:9px 12px}
+.profile-pin-state>span{flex:1 1 auto;font-size:13px;display:flex;align-items:center;gap:7px}
+.profile-pin-state>span svg{width:15px;height:15px;color:var(--green)}
+@media(max-width:700px){.profile-block-row,.profile-block-row.admin{grid-template-columns:minmax(0,1fr)}}
+.proto-settings{display:grid;gap:14px;max-width:560px}
+.proto-settings .panel{padding:18px;display:grid;gap:12px}
+.proto-settings h3{margin:0;font-size:15px;color:var(--text)}
