@@ -26,12 +26,15 @@ export interface UserRecord {
   /** Set when an administrator chose the password. Until the user replaces it,
    *  the server allows only the account endpoints. */
   mustChangePassword?: boolean;
+  child?: boolean;
+  /** Meaningful only for a child account. */
+  catalogue?: boolean;
   createdAt: string;
   lastSeenAt?: string;
   /** Revoked sessions by identifier; the value is when they would have expired. */
   revoked?: Record<string, number>;
   permissions: UserPermissions;
-  /** Bumped by every change to role, permissions, disabled, or to any
+  /** Bumped by every change to role, permissions, child flags, disabled, or to any
    *  visibleTo / allowedUsers list this user enters or leaves. A request
    *  captures it and re-checks it before it issues a resource. */
   permissionsVersion: number;
@@ -96,6 +99,8 @@ export interface PublicUser {
   id: string;
   username: string;
   role: Role;
+  child: boolean;
+  catalogue: boolean;
   disabled: boolean;
   mustChangePassword: boolean;
   createdAt: string;
@@ -121,11 +126,24 @@ export function switcherGroup(users: UserRecord[], callerId: string): UserRecord
   return users.filter((user) => user.switcher === true && !user.disabled && !user.mustChangePassword);
 }
 
+/** The profiles this caller may enter. A child never sees a profile opened
+ *  without a secret, nor another child. */
+export function switchTargets(users: UserRecord[], callerId: string): UserRecord[] {
+  const group = switcherGroup(users, callerId);
+  const caller = group.find((user) => user.id === callerId);
+  if (!caller?.child) return group;
+  return group.filter((user) =>
+    user.id === caller.id
+    || (!user.child && (effectiveUnlock(user) === "pin" || effectiveUnlock(user) === "password")));
+}
+
 export function publicUser(record: UserRecord): PublicUser {
   return {
     id: record.id,
     username: record.username,
     role: record.role,
+    child: Boolean(record.child),
+    catalogue: Boolean(record.child && record.catalogue),
     disabled: Boolean(record.disabled),
     mustChangePassword: Boolean(record.mustChangePassword),
     createdAt: record.createdAt,

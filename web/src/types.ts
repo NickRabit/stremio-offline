@@ -642,6 +642,7 @@ export interface UserPermissions {
 /** One account as `GET /api/users` sends it: the public fields and the grant counts. */
 export interface UserAccount {
   id: string; username: string; role: UserRole; disabled: boolean; mustChangePassword: boolean;
+  child?: boolean; catalogue?: boolean;
   createdAt: string; lastSeenAt?: string; permissions: UserPermissions;
   switcher: boolean; unlock: "none" | "pin" | "password"; hasPin: boolean;
   libraries: number; addons: number; remoteLibraries?: number;
@@ -650,6 +651,7 @@ export interface UserAccount {
  *  in with. The server refuses everything but the change itself while it stands. */
 export interface Session {
   username: string; role: UserRole; language?: Locale; mustChangePassword?: boolean;
+  child?: boolean; catalogue?: boolean;
   canSwitch?: boolean; hasPin?: boolean;
 }
 export interface ProfileEntry {

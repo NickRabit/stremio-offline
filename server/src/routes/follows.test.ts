@@ -144,7 +144,7 @@ const mount = async (options: {
     now: () => Date.now(),
     owner: (userId) => {
       const user = Object.values(users).find((entry) => entry.id === userId);
-      return user ? { id: user.id, role: user.role, disabled: user.disabled } : undefined;
+      return user ? { id: user.id, role: user.role, disabled: user.disabled, child: user.child } : undefined;
     },
     meta: async (_owner, type, metaId) => ({
       id: metaId, type, name: "Show",
@@ -1096,7 +1096,7 @@ test("the public feed is served without a session and heads the right account", 
   } finally { await h.close(); }
 });
 
-test("an unknown, revoked or disabled token answers the same bare 404", async () => {
+test("an unknown, revoked, disabled or child token answers the same bare 404", async () => {
   const h = await mount();
   try {
     assert.equal((await fetch(`${h.base}/calendar/nobody.ics`)).status, 404);
@@ -1107,6 +1107,8 @@ test("an unknown, revoked or disabled token answers the same bare 404", async ()
     assert.equal((await fetch(`${h.base}/calendar/${token}.ics`)).status, 404, "a revoked token names nobody");
 
     const { token: bobTokens } = await (await api(h.base, "/api/follows/calendar-feed", { method: "POST", as: "B" })).json() as { token: string };
+    h.users.B!.child = true;
+    assert.equal((await fetch(`${h.base}/calendar/${bobTokens}.ics`)).status, 404, "a child's feed cannot be used as an export");
     h.users.B!.disabled = true;
     assert.equal((await fetch(`${h.base}/calendar/${bobTokens}.ics`)).status, 404, "a disabled account's feed is closed");
   } finally { await h.close(); }
@@ -1170,4 +1172,46 @@ test("a plain account cannot turn retention on, and a film has nothing to delete
     assert.equal(rejected.status, 400);
     assert.equal(await keyOf(rejected), "err.followInvalid");
   } finally { await h.close(); }
+});
+
+test("a child cannot create or enable automatic downloads or retention", async (t) => {
+  const h = await mount();
+  t.after(h.close);
+  h.users.B!.child = true;
+
+  const automatic = await api(h.base, "/api/follows", {
+    method: "POST",
+    as: "B",
+    body: {
+      type: "series", id: "tt1", name: "Show",
+      autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } },
+    },
+  });
+  assert.equal(automatic.status, 403);
+  assert.equal(await keyOf(automatic), "err.notAllowed");
+
+  const notify = await api(h.base, "/api/follows", {
+    method: "POST",
+    as: "B",
+    body: { type: "series", id: "tt1", name: "Show" },
+  });
+  assert.equal(notify.status, 201);
+  const follow = await notify.json() as { id: string };
+
+  const autoPatch = await api(h.base, `/api/follows/${follow.id}`, {
+    method: "PATCH",
+    as: "B",
+    body: { autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
+  });
+  assert.equal(autoPatch.status, 403);
+  assert.equal(await keyOf(autoPatch), "err.notAllowed");
+
+  const retention = await api(h.base, `/api/follows/${follow.id}`, {
+    method: "PATCH",
+    as: "B",
+    body: { retention: { afterWatchedDays: 7 } },
+  });
+  assert.equal(retention.status, 403);
+  assert.equal(await keyOf(retention), "err.notAllowed");
+  assert.equal(h.store.get(follow.id)?.autoDownload, undefined);
 });

@@ -4,7 +4,7 @@ import { hashPassword } from "./auth.js";
 import {
   assertAdminRemains, bumpPermissions, dormantGrants, emptyUserData, enabledAdmins, envResetApplied, envResetPending, findUser, findUserById, forEachUserData,
   effectiveUnlock, migrateUsers, newUserPermissions, newUserId, normalizeUsername, PASSWORD_MIN, PERSONAL_SETTINGS, PIN_PATTERN,
-  publicUser, switcherGroup, USER_ID,
+  publicUser, switchTargets, switcherGroup, USER_ID,
   USERNAME_MIN, usersToBump, type MigratableState, type UserData, type UserRecord,
 } from "./users.js";
 
@@ -54,7 +54,7 @@ test("a name finds its record whichever spelling was typed", () => {
 
 test("the public shape of an account carries neither the hash, the secret nor the ledger", () => {
   const view = publicUser(user({ revoked: { "sid-1": 4102444800000 }, disabled: true, mustChangePassword: true, lastSeenAt: "2026-02-01T00:00:00.000Z" }));
-  assert.deepEqual(Object.keys(view).sort(), ["createdAt", "disabled", "hasPin", "id", "lastSeenAt", "mustChangePassword", "permissions", "role", "switcher", "unlock", "username"]);
+  assert.deepEqual(Object.keys(view).sort(), ["catalogue", "child", "createdAt", "disabled", "hasPin", "id", "lastSeenAt", "mustChangePassword", "permissions", "role", "switcher", "unlock", "username"]);
   assert.equal("passwordHash" in view, false);
   assert.equal("secret" in view, false);
   assert.equal("revoked" in view, false);
@@ -68,6 +68,8 @@ test("the public shape of an account carries neither the hash, the secret nor th
     createdAt: "2026-01-01T00:00:00.000Z",
     lastSeenAt: "2026-02-01T00:00:00.000Z",
     permissions: { downloadToLibrary: false, downloadToDevice: true },
+    child: false,
+    catalogue: false,
     switcher: false,
     unlock: "password",
     hasPin: false,
@@ -79,10 +81,12 @@ test("the public shape states the flags a fresh account does not carry", () => {
   assert.equal(view.disabled, false);
   assert.equal(view.mustChangePassword, false);
   assert.equal(view.switcher, false);
+  assert.equal(view.child, false);
+  assert.equal(view.catalogue, false);
   assert.equal(view.unlock, "password");
   assert.equal(view.hasPin, false);
   assert.equal("lastSeenAt" in view, false, "an account that was never seen has no such row");
-  assert.deepEqual(Object.keys(view).sort(), ["createdAt", "disabled", "hasPin", "id", "mustChangePassword", "permissions", "role", "switcher", "unlock", "username"]);
+  assert.deepEqual(Object.keys(view).sort(), ["catalogue", "child", "createdAt", "disabled", "hasPin", "id", "mustChangePassword", "permissions", "role", "switcher", "unlock", "username"]);
   assert.notEqual(view.permissions, admin().permissions, "the rights are copied, not handed out live");
 });
 
@@ -112,6 +116,24 @@ test("the switcher group is closed, ordered and excludes accounts that cannot be
   assert.deepEqual(switcherGroup([{ ...caller, switcher: false }, other], caller.id), []);
   assert.deepEqual(switcherGroup([{ ...caller, disabled: true }, other], caller.id), []);
   assert.deepEqual(switcherGroup([{ ...caller, mustChangePassword: true }, other], caller.id), []);
+});
+
+test("a child's switch targets keep the child itself and only adults behind a secret", () => {
+  const child = user({ switcher: true, child: true });
+  const sibling = user({ id: "usr_00000002", username: "sibling", switcher: true, child: true, unlock: "password" });
+  const openAdult = user({ id: "usr_00000003", username: "open", switcher: true, unlock: "none" });
+  const pinAdult = user({ id: "usr_00000004", username: "pin", switcher: true, unlock: "pin", pinHash: "scrypt$aa$bb" });
+  const passwordAdult = user({ id: "usr_00000005", username: "password", switcher: true });
+
+  assert.deepEqual(
+    switchTargets([child, sibling, openAdult, pinAdult, passwordAdult], child.id).map((entry) => entry.id),
+    [child.id, pinAdult.id, passwordAdult.id],
+  );
+  assert.deepEqual(
+    switchTargets([child, sibling, openAdult, pinAdult, passwordAdult], passwordAdult.id).map((entry) => entry.id),
+    [child.id, sibling.id, openAdult.id, pinAdult.id, passwordAdult.id],
+    "an ordinary caller keeps the group it had",
+  );
 });
 
 test("the last enabled administrator cannot be demoted, disabled or deleted", () => {

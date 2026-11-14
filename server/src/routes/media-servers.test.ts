@@ -211,7 +211,15 @@ const mount = async (options: { remoteMatchTimeoutMs?: number } = {}): Promise<H
     return express.json({ limit: "9mb" })(req, res, next);
   });
   app.use(express.json({ limit: "256kb" }));
-  app.use("/api", roleMiddleware({ isOpen: () => false, isInternal: () => false, roleOf: (req) => currentUser(req)?.role }));
+  app.use("/api", roleMiddleware({
+    isOpen: () => false,
+    isInternal: () => false,
+    roleOf: (req) => currentUser(req)?.role,
+    childOf: (req) => {
+      const user = currentUser(req);
+      return user ? { child: Boolean(user.child), catalogue: Boolean(user.catalogue) } : undefined;
+    },
+  }));
   app.use("/api", restrictedMiddleware({ isOpen: () => false, isInternal: () => false }));
   const resources = new MediaResources();
   const mediaSources = new MediaServerSources(store, manager, resources);

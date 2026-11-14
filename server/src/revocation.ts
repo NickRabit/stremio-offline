@@ -61,6 +61,7 @@ export function accessLost(source: AccessSource, claim: AccessClaim | undefined,
   // password change mid-request.
   const session = readSession(user.secret, claim.token);
   if (!session || session.userId !== claim.userId || session.sid !== claim.sid) return true;
+  if (user.child && !user.catalogue && need.addonKey !== undefined) return true;
   const viewer: Viewer = { id: user.id, role: user.role };
   if (need.libraryId !== undefined) {
     if (REMOTE_LIBRARY_ID.test(need.libraryId)) {

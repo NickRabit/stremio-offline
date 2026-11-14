@@ -906,6 +906,10 @@ app.use("/api", roleMiddleware({
   isOpen: (req) => OPEN_PATHS.has(req.path),
   isInternal: (req) => internalMediaRequest(req) || Boolean(airplayRequest(req)),
   roleOf: (req) => currentUser(req)?.role,
+  childOf: (req) => {
+    const user = currentUser(req);
+    return user ? { child: Boolean(user.child), catalogue: Boolean(user.child && user.catalogue) } : undefined;
+  },
 }));
 // Beside the role gate, because it is the same kind of decision: an account that still owes
 // a password change reaches the account endpoints and nothing else, whatever its role is.
@@ -2333,7 +2337,7 @@ const followService = new FollowService({
   now: () => Date.now(),
   owner: (userId) => {
     const user = findUserById(store.users(), userId);
-    return user ? { id: user.id, role: user.role, disabled: user.disabled } : undefined;
+    return user ? { id: user.id, role: user.role, disabled: user.disabled, child: user.child } : undefined;
   },
   meta: (owner, type, metaId) => cachedMeta(type, metaId, store.prefs(owner.id).uiLanguage, owner, { fresh: true, interactive: false }),
   // TMDB keeps per-episode air dates, so a check trusts them over a catalogue that stamps the

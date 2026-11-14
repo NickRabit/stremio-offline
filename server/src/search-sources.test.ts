@@ -325,6 +325,25 @@ test("globalSearch false, disabled and ungranted addons are never catalog target
   assert.deepEqual(sources.map((source) => source.label), ["NORMAL · movies catalog"]);
 });
 
+test("Search everywhere skips addon catalogues for a child without catalogue browsing", async () => {
+  const child = { ...user, child: true } as UserRecord;
+  const withoutCatalogue = await discoverSources(
+    deps({ user: () => child, addons: () => [addon("alpha")] }),
+    authority(),
+    request(),
+    "ss_test",
+  );
+  assert.deepEqual(withoutCatalogue, []);
+
+  const withCatalogue = await discoverSources(
+    deps({ user: () => ({ ...child, catalogue: true }), addons: () => [addon("alpha")] }),
+    authority(),
+    request(),
+    "ss_test",
+  );
+  assert.deepEqual(withCatalogue.map((source) => source.label), ["ALPHA · movies catalog"]);
+});
+
 test("an explicit catalog scope includes an addon kept out of global search", async () => {
   const hidden = addon("no-global", [catalog("movies")], { globalSearch: false });
   const sources = await discoverSources(

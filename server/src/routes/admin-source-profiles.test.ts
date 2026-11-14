@@ -154,6 +154,10 @@ const mount = async (options: {
       isOpen: () => false,
       isInternal: () => false,
       roleOf: (req) => currentUser(req)?.role,
+      childOf: (req) => {
+        const user = currentUser(req);
+        return user ? { child: Boolean(user.child), catalogue: Boolean(user.catalogue) } : undefined;
+      },
     }));
     app.use("/api", restrictedMiddleware({
       isOpen: () => false,

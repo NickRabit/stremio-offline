@@ -168,7 +168,131 @@ export const USER_ALLOWED: Rule[] = [
   { method: "PATCH", pattern: /^\/settings$/ },
 ];
 
+const rulesFor = (entries: Array<[string, string]>): Rule[] =>
+  entries.map(([method, path]) => {
+    const rule = USER_ALLOWED.find((candidate) => candidate.method === method && candidate.pattern.test(path));
+    if (!rule) throw new Error(`No user rule for ${method} ${path}`);
+    return rule;
+  });
+
+export const CHILD_ALLOWED: Rule[] = rulesFor([
+  ["GET", "/auth/me"],
+  ["POST", "/auth/login"],
+  ["POST", "/auth/logout"],
+  ["GET", "/profiles"],
+  ["POST", "/profiles/switch"],
+  ["GET", "/progress"],
+  ["GET", "/progress/movie:tt1254207"],
+  ["POST", "/progress"],
+  ["POST", "/progress/forget"],
+  ["DELETE", "/progress"],
+  ["DELETE", "/progress/movie:tt1254207"],
+  ["GET", "/library/favorites"],
+  ["GET", "/favorites"],
+  ["GET", "/resume"],
+  ["GET", "/library/resume"],
+  ["POST", "/library/favorite"],
+  ["GET", "/views"],
+  ["PATCH", "/views"],
+  ["GET", "/search/state"],
+  ["GET", "/search/preferences"],
+  ["POST", "/search/history"],
+  ["POST", "/search/history/forget"],
+  ["DELETE", "/search/history"],
+  ["POST", "/search/everywhere"],
+  ["POST", "/search/everywhere/ss_abc/poll"],
+  ["POST", "/search/everywhere/ss_abc/page"],
+  ["POST", "/search/everywhere/ss_abc/sources/s0/retry"],
+  ["GET", "/search/everywhere/ss_abc/members/member_1"],
+  ["DELETE", "/search/everywhere/ss_abc"],
+  ["GET", "/follows"],
+  ["POST", "/follows"],
+  ["GET", "/follows/defaults"],
+  ["GET", "/follows/calendar"],
+  ["DELETE", "/follows/calendar-feed"],
+  ["GET", "/follows/activity"],
+  ["GET", "/follows/new-episodes"],
+  ["GET", "/follows/by-meta/series/tt1254207"],
+  ["PATCH", "/follows/f-1"],
+  ["DELETE", "/follows/f-1"],
+  ["POST", "/follows/f-1/check"],
+  ["GET", "/follows/f-1/episodes"],
+  ["GET", "/follows/f-1/preview"],
+  ["GET", "/library"],
+  ["GET", "/library/browse"],
+  ["GET", "/library/mosaic"],
+  ["GET", "/library/gallery"],
+  ["GET", "/library/identity"],
+  ["GET", "/library/thumb"],
+  ["GET", "/library/next/movie:tt1254207"],
+  ["GET", "/library/previous/movie:tt1254207"],
+  ["POST", "/library/source"],
+  ["GET", "/libraries"],
+  ["GET", "/library/title"],
+  ["GET", "/remote-libraries"],
+  ["GET", "/remote-libraries/personal"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/browse"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/preview"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/mosaic"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/episodes"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/sources"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Primary"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Backdrop"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Thumb"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/streams/movie/tt1254207"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/state"],
+  ["PATCH", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/state"],
+  ["POST", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/playing"],
+  ["GET", "/home"],
+  ["GET", "/home/layout"],
+  ["POST", "/inspect"],
+  ["POST", "/playback"],
+  ["GET", "/playback/abc/status"],
+  ["POST", "/playback/abc/ping"],
+  ["GET", "/playback/abc/preview"],
+  ["GET", "/playback/abc/sidecar.vtt"],
+  ["GET", "/playback/abc/1/master.m3u8"],
+  ["DELETE", "/playback/abc"],
+  ["POST", "/shuffle"],
+  ["POST", "/shuffle/abc/next"],
+  ["DELETE", "/shuffle/abc"],
+  ["GET", "/media/abc"],
+  ["GET", "/media/abc/u/signature"],
+  ["GET", "/intro-segments"],
+  ["GET", "/image/poster"],
+  ["GET", "/local-streams/movie/tt1254207"],
+  ["GET", "/local-streams/series/tt1254207%3A1%3A1"],
+  ["GET", "/subtitle/sub-1"],
+  ["POST", "/client-log"],
+  ["POST", "/client-log/bundle"],
+  ["DELETE", "/device-transfers"],
+  ["DELETE", "/device-transfers/abc"],
+]);
+
+export const CHILD_CATALOGUE_ALLOWED: Rule[] = [
+  ...CHILD_ALLOWED,
+  ...rulesFor([
+    ["GET", "/catalogs"],
+    ["GET", "/catalog"],
+    ["GET", "/search"],
+    ["GET", "/searchable"],
+    ["POST", "/search/catalog"],
+    ["POST", "/search/catalog/cs_abc/poll"],
+    ["POST", "/search/catalog/cs_abc/page"],
+    ["DELETE", "/search/catalog/cs_abc"],
+    ["GET", "/meta/movie/tt1254207"],
+    ["GET", "/stream-sources/movie/tt1254207"],
+    ["GET", "/streams/movie/tt1254207"],
+    ["GET", "/subtitles/movie/tt1254207"],
+    ["GET", "/addons"],
+  ]),
+];
+
 export const isUserAllowed = (method: string, path: string) => match(USER_ALLOWED, method, path);
+export const isChildAllowed = (method: string, path: string, catalogue: boolean) =>
+  match(catalogue ? CHILD_CATALOGUE_ALLOWED : CHILD_ALLOWED, method, path);
 
 /** What an account whose password an administrator chose may still reach: the three calls
  *  that let it read its own name, replace that password and sign out. Everything else is
@@ -220,11 +344,13 @@ export const roleMiddleware = (opts: {
   isOpen: (req: Request) => boolean;
   isInternal: (req: Request) => boolean;
   roleOf: (req: Request) => Role | undefined;
+  childOf: (req: Request) => { child: boolean; catalogue: boolean } | undefined;
 }): RequestHandler =>
   (req, _res, next) => {
     if (opts.isOpen(req) || opts.isInternal(req)) return next();
     if (opts.roleOf(req) !== "user") return next();
-    if (isUserAllowed(req.method, req.path)) return next();
+    const child = opts.childOf(req);
+    if (child?.child ? isChildAllowed(req.method, req.path, child.catalogue) : isUserAllowed(req.method, req.path)) return next();
     next(new ForbiddenError());
   };
 
