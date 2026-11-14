@@ -483,6 +483,8 @@ async function buildTmdbPart(
     ...(data.originalLanguage ? { originalLanguage: data.originalLanguage } : {}),
     ...(data.overview ? { overview: data.overview } : {}),
   };
+  // A newer build may own this key by now; an abandoned one writes nothing.
+  throwIfCancelled(deps.signal);
   rememberMemory(key, { at: now, ttl: related.partial ? PARTIAL_TTL_MS : SUCCESS_TTL_MS, value });
   if (!related.partial) writeDisk(key, now, value);
   return value;
