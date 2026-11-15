@@ -71,8 +71,11 @@ const journey = async (page: Page) => {
   await scroller.evaluate((el) => {
     el.scrollTop = Math.min(80, Math.max(0, el.scrollHeight - el.clientHeight));
   });
+  const card = main.locator(".title-extras .person", { hasText: "Brad Pitt" });
+  // A phone scrolls the card into view before the click; the position to get back is the one it clicked at.
+  await card.scrollIntoViewIfNeeded();
   const before = await scroller.evaluate((el) => el.scrollTop);
-  await main.locator(".title-extras .person", { hasText: "Brad Pitt" }).click();
+  await card.click();
   const person = page.locator(".person-view");
   await expect(person).toBeVisible();
   await expect(person.getByRole("heading", { name: "Herectví" })).toBeVisible();

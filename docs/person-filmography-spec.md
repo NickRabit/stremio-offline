@@ -15,8 +15,8 @@ the filmography, and a film the household already has is missing because the
 libraries are searched by title.
 
 This is the **first, smaller version**. It gives the complete, ordered
-filmography with the household's own copies first. It does not add a way back
-to the person the viewer came from; see [Not in this version](#not-in-this-version).
+filmography with the household's own copies first. Since 0.7.106 Back from the
+person returns to the title it was opened from, on the web and the television.
 
 ## Decisions
 
@@ -27,7 +27,7 @@ to the person the viewer came from; see [Not in this version](#not-in-this-versi
 | How the filmography is divided | Two sections: acting, and directing or writing. Films and series together, each tile labelled with its type. |
 | IMDb ids | Not resolved for the whole filmography. One title is resolved when it is opened. |
 | Titles already owned | Marked and listed first, for **local libraries only**. |
-| Leaving the title detail | Stays as today: selecting a person closes the detail. Back from the person view does not return to it. |
+| Leaving the title detail | The person opens over the detail, which stays as it was. Back from the person returns to that title (0.7.106; the first version left the detail). |
 
 ## What already exists
 
@@ -206,12 +206,15 @@ an id, or when the route answers `err.personUnavailable`, it does what it does
 today, and the results carry one line above them: *Searched by name. This may
 not be everything the person made.*
 
-**The person view** is a new `View` value, drawn in the main area like the
-other views, so the title detail opens over it and closing the detail returns
-to it with its scroll position. It shows:
+**The person view** is a layer over whatever is on screen: a catalogue
+detail, a local library detail or a Jellyfin or Emby detail. Nothing under it
+is closed or unmounted; it is hidden while the person is shown and gets its
+scroll position back afterwards. A title opened from the person goes onto the
+same stack as related titles, so closing it returns to the person. Any
+navigation entry drops the layer. It shows:
 
-- a header with the portrait, the name, and a Back control that returns to the
-  view the person was opened from;
+- a header with the portrait, the name, and a Back control (or Escape) that
+  returns to the title the person was opened from;
 - one grid per section, under the headings *Acting* and *Directing and
   writing*, with the tile the catalogue grid already uses: poster, name, year,
   a *Film* or *Series* label, the role as the second line, and the existing
@@ -253,8 +256,10 @@ held by the shell, like the catalogue detail:
 - OK on a tile resolves it if needed and opens the catalogue detail over the
   person screen. Back from the detail returns to the person screen with focus
   on the tile that was opened;
-- Back from the person screen closes it and returns to the section that was
-  under the detail.
+- Back from the person screen returns to the title detail with focus on the
+  cast card that was selected. The detail and the person screen share one
+  stack (`CatalogDetailStack`), so any chain of titles, people and related
+  titles unwinds in order.
 
 Loading, failure with *Try again*, and the no-IMDb notice as on the web.
 
@@ -263,12 +268,6 @@ edit the generated resources.
 
 ## Not in this version
 
-- **Returning to the person in the cast row.** Both clients keep a stack of
-  title details only (`detailStack` on the web, `CatalogDetailStack` on the
-  television), and the television gives only the first cast card a focus
-  requester. Keeping the detail under the person view needs a general screen
-  stack on both clients. Deferred; this version leaves the detail as selecting
-  a person does today.
 - **Owned marks for Jellyfin and Emby.** Their items carry TMDB ids, but no
   inventory of them is kept, so marking would cost one provider request per
   title and library. Deferred until an index of provider ids exists.
