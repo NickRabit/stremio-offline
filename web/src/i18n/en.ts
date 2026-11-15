@@ -2276,6 +2276,7 @@ export const en = {
   "searchAll.openTitlePage": "Open title page",
   "searchAll.conflict": "Conflicting ids",
   "searchAll.backToSearch": "Back to search",
+  "searchAll.people": "People",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Search all libraries",
   "searchAll.homeAction": "Open search",

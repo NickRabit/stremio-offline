@@ -2191,6 +2191,7 @@ export const ptBR: Catalog = {
   "searchAll.openTitlePage": "Abrir página do título",
   "searchAll.conflict": "IDs conflitantes",
   "searchAll.backToSearch": "Voltar à pesquisa",
+  "searchAll.people": "Pessoas",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Pesquisar em todas as bibliotecas",
   "searchAll.homeAction": "Abrir pesquisa",

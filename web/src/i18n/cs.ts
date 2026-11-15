@@ -2284,6 +2284,7 @@ export const cs: Catalog = {
   "searchAll.openTitlePage": "Otevřít stránku titulu",
   "searchAll.conflict": "Rozporuplná ID",
   "searchAll.backToSearch": "Zpět na hledání",
+  "searchAll.people": "Osoby",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Hledat ve všech knihovnách",
   "searchAll.homeAction": "Otevřít hledání",

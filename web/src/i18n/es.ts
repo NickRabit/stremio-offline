@@ -2191,6 +2191,7 @@ export const es: Catalog = {
   "searchAll.openTitlePage": "Abrir página del título",
   "searchAll.conflict": "ID en conflicto",
   "searchAll.backToSearch": "Volver a la búsqueda",
+  "searchAll.people": "Personas",
   "searchAll.libraryChip": "{title}  ✕",
   "searchAll.libraryClear": "Buscar en todas las bibliotecas",
   "searchAll.homeAction": "Abrir búsqueda",
