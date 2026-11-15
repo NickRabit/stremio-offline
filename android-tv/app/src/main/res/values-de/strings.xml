@@ -566,4 +566,5 @@
   <string name="person_search_as_text">„%1$s“ als Text suchen</string>
   <string name="err_person_unavailable">Über diese Person ist nichts bekannt.</string>
   <string name="err_person_lookup_failed">Die Filmografie konnte nicht geladen werden. Versuche es später erneut.</string>
+  <string name="search_all_people">Personen</string>
 </resources>

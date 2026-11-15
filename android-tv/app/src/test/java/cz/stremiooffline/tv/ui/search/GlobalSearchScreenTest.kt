@@ -37,9 +37,12 @@ import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
 import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.RemoteItemDetailDto
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.PersonHitDto
+import cz.stremiooffline.tv.data.PersonSearchDto
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchableCatalogDto
+import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagSearchRecentList
 import cz.stremiooffline.tv.ui.catalog.TagSearchScopeAll
@@ -68,6 +71,7 @@ class GlobalSearchScreenTest {
   private var catalogOpened: cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs? = null
   private var remoteOpened: RemoteDetailData? = null
   private var libraryOpened: String? = null
+  private var personOpened: TitlePersonDto? = null
 
   private class Voice {
     val calls = mutableListOf<(String) -> Unit>()
@@ -126,6 +130,7 @@ class GlobalSearchScreenTest {
         onOpenCatalog = { catalogOpened = it },
         onOpenRemote = { remoteOpened = it },
         onOpenLibrary = { libraryOpened = it },
+        onOpenPerson = { personOpened = it },
         imageUrl = { null },
         overlayOpen = false,
         preset = preset,
@@ -150,6 +155,10 @@ class GlobalSearchScreenTest {
     api.globalStartHandler = {
       GlobalSearchStartResultDto(id = "gs", snapshot = snapshot(1, cards, state))
     }
+  }
+
+  private fun people(api: FakeTvApi, vararg people: PersonHitDto) {
+    api.peopleSearchHandler = { _, _ -> PersonSearchDto(people.toList()) }
   }
 
   private fun press(key: Key) {
@@ -220,6 +229,45 @@ class GlobalSearchScreenTest {
     compose.onNodeWithTag(TagGlobalSearchInput).performImeAction()
     compose.waitForIdle()
     assertEquals("matrix", api.globalStartCalls.single().query)
+  }
+
+  @Test
+  fun `People sits above results and the D-pad moves through people to the first result`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("matrix", "m1", title = "The Matrix")))
+    people(api, PersonHitDto(id = 138, name = "Quentin Tarantino", knownTitles = listOf("Pulp Fiction")))
+    mount(api)
+
+    search()
+    compose.waitUntil(5_000) { api.peopleSearchCalls.isNotEmpty() }
+
+    val peopleBounds = compose.onNodeWithTag(TagGlobalSearchPeople).fetchSemanticsNode().boundsInRoot
+    val resultBounds = compose.onNodeWithTag(globalSearchCardTag("m1")).fetchSemanticsNode().boundsInRoot
+    assertTrue("People is above results", peopleBounds.top < resultBounds.top)
+
+    focus(TagGlobalSearchField)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchPersonTag(138)).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchCardTag("m1")).assertIsFocused()
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(globalSearchPersonTag(138)).assertIsFocused()
+  }
+
+  @Test
+  fun `OK on a person opens that person`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("matrix", "m1")))
+    people(api, PersonHitDto(id = 138, name = "Quentin Tarantino"))
+    mount(api)
+
+    search()
+    compose.waitUntil(5_000) { api.peopleSearchCalls.isNotEmpty() }
+    focus(globalSearchPersonTag(138))
+    press(Key.DirectionCenter)
+
+    assertEquals(138L, personOpened?.id)
+    assertEquals("Quentin Tarantino", personOpened?.name)
   }
 
   @Test
@@ -1219,6 +1267,7 @@ class GlobalSearchScreenTest {
         onOpenCatalog = { catalogOpened = it },
         onOpenRemote = { remoteOpened = it },
         onOpenLibrary = { libraryOpened = it },
+        onOpenPerson = {},
         imageUrl = { null },
         overlayOpen = overlay,
         voiceAvailable = false,

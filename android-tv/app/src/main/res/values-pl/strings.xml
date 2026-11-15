@@ -592,4 +592,5 @@
   <string name="person_search_as_text">Szukaj „%1$s” jako tekstu</string>
   <string name="err_person_unavailable">Nic nie wiadomo o tej osobie.</string>
   <string name="err_person_lookup_failed">Nie udało się wczytać filmografii. Spróbuj później.</string>
+  <string name="search_all_people">Osoby</string>
 </resources>

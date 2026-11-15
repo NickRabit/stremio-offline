@@ -607,6 +607,7 @@ fun Shell(
                 libraryPush = path
                 shellState.pick(Section.Library)
               },
+              onOpenPerson = ::openPerson,
               imageUrl = { path -> path?.let(api::url) },
               overlayOpen = overlayOpen,
               preset = searchPreset,

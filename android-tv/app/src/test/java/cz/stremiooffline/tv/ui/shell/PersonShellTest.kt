@@ -13,8 +13,10 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -23,6 +25,8 @@ import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.PersonFilmographyDto
+import cz.stremiooffline.tv.data.PersonHitDto
+import cz.stremiooffline.tv.data.PersonSearchDto
 import cz.stremiooffline.tv.data.PersonSectionDto
 import cz.stremiooffline.tv.data.PersonTitleDto
 import cz.stremiooffline.tv.data.RelatedTitleDto
@@ -35,7 +39,9 @@ import cz.stremiooffline.tv.ui.detail.titlePersonTag
 import cz.stremiooffline.tv.ui.person.TagPersonScreen
 import cz.stremiooffline.tv.ui.person.TagPersonSearchAsText
 import cz.stremiooffline.tv.ui.person.personTileTag
+import cz.stremiooffline.tv.ui.search.TagGlobalSearchField
 import cz.stremiooffline.tv.ui.search.TagGlobalSearchInput
+import cz.stremiooffline.tv.ui.search.globalSearchPersonTag
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -80,13 +86,13 @@ class PersonShellTest {
     }
   }
 
-  private fun launch(api: FakeTvApi) {
+  private fun launch(api: FakeTvApi, start: Section = Section.Library) {
     scenario = ActivityScenario.launch(
       Intent(ApplicationProvider.getApplicationContext(), ComponentActivity::class.java)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
     )
     scenario.onActivity { activity ->
-      activity.setContent { Shell(start = Section.Library, api = api, username = "demo", onSignOut = {}) }
+      activity.setContent { Shell(start = start, api = api, username = "demo", onSignOut = {}) }
     }
     compose.waitForIdle()
   }
@@ -148,6 +154,41 @@ class PersonShellTest {
 
     compose.onNodeWithTag(TagCatalogPrimary).assertExists()
     waitFocused(titlePersonTag("Quentin Tarantino"))
+  }
+
+  @Test
+  fun `Back from a person opened in search restores its card`() {
+    val hit = PersonHitDto(id = 138, name = "Quentin Tarantino", knownTitles = listOf("Pulp Fiction"))
+    val api = api().apply {
+      globalSearchEnabled = true
+      peopleSearchHandler = { _, _ -> PersonSearchDto(listOf(hit)) }
+      personValue = PersonFilmographyDto(
+        id = 138,
+        name = "Quentin Tarantino",
+        sections = listOf(PersonSectionDto("acting", listOf(personTile("tt2", 680, "Pulp Fiction")))),
+      )
+    }
+    launch(api, Section.Search)
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagGlobalSearchInput).assertExists() }.isSuccess
+    }
+
+    compose.onNodeWithTag(TagGlobalSearchField).performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagGlobalSearchInput).performTextInput("Quentin")
+    compose.onNodeWithTag(TagGlobalSearchInput).performImeAction()
+    compose.waitUntil(5_000) { api.peopleSearchCalls.isNotEmpty() }
+
+    compose.onNodeWithTag(globalSearchPersonTag(138))
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.personRequests.isNotEmpty() }
+    compose.onNodeWithTag(TagPersonScreen).assertExists()
+
+    back()
+
+    compose.onNodeWithTag(TagPersonScreen).assertDoesNotExist()
+    waitFocused(globalSearchPersonTag(138))
   }
 
   @Test

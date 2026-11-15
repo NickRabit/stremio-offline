@@ -592,4 +592,5 @@
   <string name="person_search_as_text">Искать «%1$s» как текст</string>
   <string name="err_person_unavailable">Об этом человеке ничего не известно.</string>
   <string name="err_person_lookup_failed">Не удалось загрузить фильмографию. Попробуйте позже.</string>
+  <string name="search_all_people">Люди</string>
 </resources>

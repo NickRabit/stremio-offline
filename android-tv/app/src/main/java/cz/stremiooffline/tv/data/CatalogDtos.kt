@@ -106,6 +106,20 @@ data class TitlePersonDto(
 )
 
 @Serializable
+data class PersonHitDto(
+  val id: Long = 0,
+  val name: String = "",
+  val photo: String? = null,
+  val knownFor: String = "acting",
+  val knownTitles: List<String> = emptyList(),
+)
+
+@Serializable
+data class PersonSearchDto(
+  val people: List<PersonHitDto> = emptyList(),
+)
+
+@Serializable
 data class PersonTitleDto(
   val type: String = "",
   val tmdbId: Long = 0,
