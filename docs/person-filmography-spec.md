@@ -15,7 +15,7 @@ the filmography, and a film the household already has is missing because the
 libraries are searched by title.
 
 This is the **first, smaller version**. It gives the complete, ordered
-filmography with the household's own copies first. Since 0.7.106 Back from the
+filmography with the household's own copies first. Since 0.7.107 Back from the
 person returns to the title it was opened from, on the web and the television.
 
 ## Decisions
@@ -27,7 +27,7 @@ person returns to the title it was opened from, on the web and the television.
 | How the filmography is divided | Two sections: acting, and directing or writing. Films and series together, each tile labelled with its type. |
 | IMDb ids | Not resolved for the whole filmography. One title is resolved when it is opened. |
 | Titles already owned | Marked and listed first, for **local libraries only**. |
-| Leaving the title detail | The person opens over the detail, which stays as it was. Back from the person returns to that title (0.7.106; the first version left the detail). |
+| Leaving the title detail | The person opens over the detail, which stays as it was. Back from the person returns to that title (0.7.107; the first version left the detail). |
 
 ## What already exists
 
@@ -147,6 +147,21 @@ field is always present could not be checked without a key. See
 id: the same `404`. TMDB failed or timed out: `502 err.personLookupFailed`.
 A client treats the first as "use the name search" and the second as a retry.
 
+### `GET /person/search`
+
+`?query=<name>` (at least two characters) answers
+`{ people: [{ id, name, photo?, knownFor, knownTitles }] }` from TMDB's
+`/search/person` (0.7.107): at most eight actors, directors and writers TMDB
+names a title for, in TMDB's order, without namesakes a tenth as popular as the
+best match, so *Tarantino* is Quentin Tarantino alone. Cached in memory per
+query, language and key for an hour; a failure is remembered for a minute and
+answers `502 err.personLookupFailed`. Without a TMDB key the list is empty.
+
+The Search page on the web and the global search on Android TV show these
+people as a **People** row above the results for every submitted query, unless
+only libraries are searched. Selecting one opens the person over the search,
+and Back returns to the results.
+
 ### `GET /person/title/:type/:tmdbId`
 
 Resolves one title when its tile is opened. `:type` is `movie` or `series`.
@@ -209,7 +224,7 @@ an id, or when the route answers `err.personUnavailable`, it does what it does
 today, and the results carry one line above them: *Searched by name. This may
 not be everything the person made.*
 
-**The person is shown as the Search page** (0.7.106), not as a page of its
+**The person is shown as the Search page** (0.7.107), not as a page of its
 own. It is a layer over whatever is on screen: a catalogue detail, a local
 library detail or a Jellyfin or Emby detail. Nothing under it is closed or
 unmounted; it is hidden while the person is shown and gets its scroll position
@@ -254,7 +269,7 @@ view, as an open detail does.
 **Selecting a person** with an id opens the person screen; without one, or on
 `err.personUnavailable`, the search with the name, as today.
 
-**The person screen** looks like the global search (0.7.106): the search
+**The person screen** looks like the global search (0.7.107): the search
 field with the person's name (a query confirmed there opens Search), a small
 person card with the section, the number of titles and *Search as text*, and
 the sections in the global search cards (`GlobalSearchCard`), with the year,
@@ -282,8 +297,7 @@ edit the generated resources.
 - **Owned marks for Jellyfin and Emby.** Their items carry TMDB ids, but no
   inventory of them is kept, so marking would cost one provider request per
   title and library. Deferred until an index of provider ids exists.
-- A biography, a "People" group in Search everywhere, typing a name into the
-  search box to get a filmography.
+- A biography.
 - A filter for guest appearances.
 - Any persisted cache of people.
 
