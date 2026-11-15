@@ -26,6 +26,8 @@ export interface MenuInput {
   actions: MenuActions;
   /** The operating system the menu is built for; macOS keeps the app menu. */
   platform?: NodeJS.Platform;
+  /** A child account is on screen: the servers and the settings are shown switched off. */
+  locked?: boolean;
 }
 
 const isLocal = (target: Target | null): boolean => target?.kind === "local";
@@ -39,6 +41,9 @@ const localLabel = (strings: MenuStrings, platform: NodeJS.Platform): string =>
 /** Pure: the shell tests the template without Electron's `Menu`, which needs a ready app. */
 export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[] {
   const { strings, profiles, current, connected, isPackaged, actions, platform = process.platform } = input;
+  // Another server keeps its own signed-in session, and the settings add and pick servers: both
+  // are ways out of a child's profile, so they stay visible and cannot be chosen.
+  const open = !input.locked;
 
   const view: MenuItemConstructorOptions[] = [
     // An explicit click, not `role: "reload"`, which acts on the focused contents.
@@ -54,17 +59,19 @@ export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[
       label: localLabel(strings, platform),
       type: "checkbox",
       checked: isLocal(current) && connected,
+      enabled: open,
       click: () => actions.connect({ kind: "local" }),
     },
     ...profiles.map((profile): MenuItemConstructorOptions => ({
       label: profile.name,
       type: "checkbox",
       checked: isProfile(current, profile.id),
+      enabled: open,
       click: () => actions.connect({ kind: "profile", id: profile.id }),
     })),
     { type: "separator" },
     { label: strings["menu.reconnect"], accelerator: "CmdOrCtrl+Shift+R", click: () => actions.reconnect() },
-    { label: strings["menu.serverSettings"], click: () => actions.openSettings() },
+    { label: strings["menu.serverSettings"], enabled: open, click: () => actions.openSettings() },
   ];
 
   const help: MenuItemConstructorOptions = { role: "help", submenu: [{ label: strings["menu.project"], click: () => actions.openProject() }] };
@@ -75,7 +82,7 @@ export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[
       {
         label: strings["menu.file"],
         submenu: [
-          { label: strings["menu.settings"], accelerator: "CmdOrCtrl+,", click: () => actions.openSettings() },
+          { label: strings["menu.settings"], accelerator: "CmdOrCtrl+,", enabled: open, click: () => actions.openSettings() },
           { type: "separator" },
           { label: strings["menu.exit"], role: "quit" },
         ],
@@ -93,7 +100,7 @@ export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[
       submenu: [
         { role: "about" },
         { type: "separator" },
-        { label: strings["menu.settings"], accelerator: "CmdOrCtrl+,", click: () => actions.openSettings() },
+        { label: strings["menu.settings"], accelerator: "CmdOrCtrl+,", enabled: open, click: () => actions.openSettings() },
         { type: "separator" },
         { role: "services" },
         { type: "separator" },

@@ -1,14 +1,9 @@
 # Kids mode
 
-Status: design contract. **The owner confirmed every decision below on
-2026-11-15.** The server slice, the administrator switch and the child interfaces on
-the web and Android TV are implemented on the feature branch. Still open: the
-desktop shell's server menu, the television check on the API 28 and API 31
-images, the *Child accounts* section in [users.md](users.md) and the version
-bump. Nothing is
-released until the last slice lands. Written against `main` at `b4c4d591`
-(0.7.105). The execution order is in
-[kids-mode-agent-task.md](kids-mode-agent-task.md).
+Status: **implemented in 0.7.108** on the server, the web, the desktop shell
+and Android TV; described for administrators in
+[Child accounts](users.md#child-accounts). The owner confirmed every decision
+below on 2026-11-15. This document stays as the design contract.
 
 ## Goal
 
@@ -180,11 +175,13 @@ draw from it; it is not enforcement.
   switch sits inside it, and a sheet with one entry is a detour. The switcher
   and its PIN pad fit a phone held sideways without scrolling.
 - **Desktop apps.** The shell can switch between saved servers from its menu
-  and tray, each with its own stored session, without any secret. For a child
-  session those entries are disabled, and the tray menu is reduced to showing
-  and quitting the app. Until that is built the desktop app is not a place to
-  leave a child alone, and [users.md](users.md) has to say so.
-- A play pressed twice while it starts starts once.
+  and tray, each with its own stored session, without any secret. While a
+  child account is on the connected server's page the main process holds
+  those entries and the shell's settings closed: it asks the server itself
+  (`GET /api/auth/me` through the page's session) after every page load,
+  sign-in, sign-out and profile switch, never the page. An answer it cannot
+  read changes nothing, and the hold applies only while the server's page is
+  on screen, so an unreachable server can still be left.
 
 ### Android TV
 
