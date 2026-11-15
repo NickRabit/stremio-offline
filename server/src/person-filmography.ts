@@ -4,7 +4,9 @@ import { keyFingerprint } from "./title-extras.js";
 import {
   tmdbImage,
   tmdbPerson,
+  tmdbSearchPeople,
   type TmdbConfig,
+  type TmdbPersonHit,
   type TmdbPersonCredit,
   type TmdbPersonResponse,
 } from "./tmdb.js";
@@ -289,6 +291,7 @@ const inFlight = new Map<string, PersonInFlight>();
 
 export function clearPersonCache(): void {
   cache.clear();
+  peopleCache.clear();
   for (const entry of inFlight.values()) entry.controller.abort();
   inFlight.clear();
 }
@@ -394,4 +397,91 @@ export function personCredits(tmdbId: number, language: string, deps: {
     entry = started;
   }
   return joinInFlight(entry, deps.signal);
+}
+
+export interface PersonHit {
+  id: number;
+  name: string;
+  photo?: string;
+  knownFor: PersonSectionKey;
+  /** Up to three titles TMDB names the person for. */
+  knownTitles: string[];
+}
+
+const PEOPLE_LIMIT = 8;
+const PEOPLE_TTL_MS = 60 * 60_000;
+const PEOPLE_FAILURE_TTL_MS = 60_000;
+const QUERY_MAX = 100;
+const peopleCache = new Map<string, { at: number; ttl: number; value: PersonHit[] | null }>();
+const peopleInFlight = new Map<string, Promise<PersonHit[] | null>>();
+
+const PEOPLE_DEPARTMENTS = new Set(["Acting", "Directing", "Writing", "Creator"]);
+const PEOPLE_RELATIVE_POPULARITY = 0.1;
+
+/** The people a filmography can be shown for: an actor, a director or a writer TMDB names a
+ *  title for, and not drowned out by a far better known namesake (`Tarantino` alone matches 89
+ *  people, of whom one is meant). */
+export function normalizePeople(results: TmdbPersonHit[]): PersonHit[] {
+  const hits: PersonHit[] = [];
+  const seen = new Set<number>();
+  const popularity = (row: TmdbPersonHit) => typeof row.popularity === "number" && Number.isFinite(row.popularity) ? row.popularity : 0;
+  const top = Math.max(0, ...results.map(popularity));
+  for (const row of results) {
+    if (!PEOPLE_DEPARTMENTS.has(row.known_for_department ?? "")) continue;
+    if (popularity(row) < top * PEOPLE_RELATIVE_POPULARITY) continue;
+    if (hits.length >= PEOPLE_LIMIT) break;
+    const name = text(row.name);
+    if (!name || !positiveInteger(row.id) || row.adult === true || seen.has(row.id)) continue;
+    const knownTitles = (Array.isArray(row.known_for) ? row.known_for : [])
+      .flatMap((title) => text(title.title) ?? text(title.name) ?? [])
+      .slice(0, 3);
+    if (!knownTitles.length) continue;
+    seen.add(row.id);
+    const photo = tmdbImage(text(row.profile_path), "w185");
+    hits.push({
+      id: row.id,
+      name,
+      ...(photo ? { photo } : {}),
+      knownFor: row.known_for_department === "Acting" ? "acting" : "crew",
+      knownTitles,
+    });
+  }
+  return hits;
+}
+
+export const normalizePeopleQuery = (query: string): string => query.trim().replace(/\s+/g, " ").slice(0, QUERY_MAX);
+
+/** People matching a name, cached in memory per query, language and key. `null` is a failed
+ *  lookup, remembered for a minute so a burst of typing does not repeat it. */
+export async function searchPeople(query: string, language: string, deps: {
+  tmdb: TmdbConfig;
+  fetchImpl?: FetchLike;
+  now?: () => number;
+}): Promise<PersonHit[] | null> {
+  const normalized = normalizePeopleQuery(query);
+  if (normalized.length < 2) return [];
+  const now = deps.now?.() ?? Date.now();
+  const key = `people:v1:${normalized.toLocaleLowerCase()}:${language}:${keyFingerprint(deps.tmdb.apiKey)}`;
+  const hit = peopleCache.get(key);
+  if (hit && now - hit.at < hit.ttl) {
+    peopleCache.delete(key);
+    peopleCache.set(key, hit);
+    return hit.value;
+  }
+  let pending = peopleInFlight.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const result = await tmdbSearchPeople(normalized, deps.tmdb, deps.fetchImpl);
+      const value = result.status === "found" ? normalizePeople(result.results) : null;
+      peopleCache.delete(key);
+      peopleCache.set(key, { at: now, ttl: value ? PEOPLE_TTL_MS : PEOPLE_FAILURE_TTL_MS, value });
+      if (peopleCache.size > CACHE_LIMIT) {
+        const oldest = peopleCache.keys().next().value;
+        if (oldest !== undefined) peopleCache.delete(oldest);
+      }
+      return value;
+    })().finally(() => peopleInFlight.delete(key));
+    peopleInFlight.set(key, pending);
+  }
+  return pending;
 }

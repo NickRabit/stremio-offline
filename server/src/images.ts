@@ -546,6 +546,17 @@ export class ImageProxy {
     };
   }
 
+  rewritePeople<T extends { people: Array<{ photo?: string }> }>(answer: T): T {
+    if (!secureMode()) return answer;
+    return {
+      ...answer,
+      people: answer.people.map((person) => ({
+        ...person,
+        ...(typeof person.photo === "string" ? { photo: this.proxied(person.photo) } : {}),
+      })),
+    };
+  }
+
   rewritePerson<T extends {
     photo?: string;
     sections: Array<{ titles: Array<{ poster?: string; background?: string }> }>;

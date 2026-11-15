@@ -13,7 +13,7 @@ import { localCopySummary } from "../library-file-facts.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
 import { readMediaBytes } from "../media-playlist.js";
-import { composePerson, personCredits } from "../person-filmography.js";
+import { composePerson, personCredits, searchPeople } from "../person-filmography.js";
 import type { MediaInfo } from "../probe.js";
 import { isRemoteMediaStream } from "../media-server-reference.js";
 import type { MediaServerSources } from "../media-server-sources.js";
@@ -209,6 +209,15 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     } finally {
       disconnect.dispose();
     }
+  }));
+  app.get("/api/person/search", asyncRoute(async (req, res) => {
+    const query = String(req.query.query ?? "");
+    const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
+    const apiKey = store.settings().tmdbApiKey;
+    if (!apiKey) { res.json({ people: [] }); return; }
+    const people = await searchPeople(query, language, { tmdb: { apiKey, language } });
+    if (!people) throw new AppError("The people could not be looked up.", "err.personLookupFailed", 502);
+    res.json(imageProxy.rewritePeople({ people }));
   }));
   app.get("/api/person/:tmdbId", asyncRoute(async (req, res) => {
     const rawId = String(req.params.tmdbId);

@@ -7,13 +7,15 @@ import type { FetchLike } from "./debrid.js";
 import {
   clearPersonCache,
   composePerson,
+  normalizePeople,
   normalizePerson,
   ownedTitleKeys,
   personCredits,
+  searchPeople,
   type PersonCreditTitle,
   type PersonCredits,
 } from "./person-filmography.js";
-import type { TmdbConfig, TmdbPersonResponse } from "./tmdb.js";
+import type { TmdbConfig, TmdbPersonHit, TmdbPersonResponse } from "./tmdb.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string): TmdbPersonResponse =>
@@ -314,4 +316,67 @@ test("the person cache evicts the least recently used of 201 people", async (t) 
   assert.equal(requests, 201);
   await personCredits(1, "en-US", { tmdb: config, fetchImpl, now: () => 1_000 });
   assert.equal(requests, 202, "the oldest person was evicted");
+});
+
+const hits = (name: string): TmdbPersonHit[] =>
+  (JSON.parse(readFileSync(path.join(here, "..", "test-fixtures", "tmdb-person", name), "utf8")) as { results: TmdbPersonHit[] }).results;
+
+test("a people search keeps those TMDB knows a title for, at most eight, in TMDB's order", () => {
+  const brad = normalizePeople(hits("search-brad-pitt.json"));
+  assert.equal(brad[0]?.name, "Brad Pitt");
+  assert.equal(brad[0]?.id, 287);
+  assert.equal(brad[0]?.knownFor, "acting");
+  assert.ok(brad[0]!.knownTitles.length > 0 && brad[0]!.knownTitles.length <= 3);
+  assert.match(brad[0]?.photo ?? "", /^https:\/\/image\.tmdb\.org\/t\/p\/w185\//);
+
+  const raw = hits("search-tarantino.json");
+  const tarantino = normalizePeople(raw);
+  assert.ok(raw.length > 10, "the fixture is full of namesakes");
+  assert.deepEqual(tarantino.map((person) => person.name), ["Quentin Tarantino"], "namesakes a tenth as known are dropped");
+  assert.equal(tarantino[0]?.knownFor, "crew");
+
+  const row = (over: Partial<TmdbPersonHit>): TmdbPersonHit => ({ name: "Someone", known_for_department: "Acting", popularity: 1, known_for: [{ title: "X" }], ...over });
+  assert.deepEqual(normalizePeople([
+    row({ id: 1, adult: true }),
+    row({ id: 2, name: "" }),
+    row({ id: 3 }),
+    row({ id: 3 }),
+    row({ id: 4, known_for_department: "Camera" }),
+    row({ id: 5, known_for: [] }),
+    row({ id: 6, known_for_department: "Writing", popularity: 0.2 }),
+    row({ id: 7, popularity: 0.05 }),
+  ]).map((person) => person.id), [3, 6], "adult, nameless, repeated, camera, title-less and obscure rows are dropped");
+  assert.equal(normalizePeople(Array.from({ length: 12 }, (_, index) => row({ id: index + 1 }))).length, 8);
+});
+
+test("a people search is asked once per query and remembers a failure briefly", async (t) => {
+  fresh(t);
+  const calls: string[] = [];
+  let fail = false;
+  const fetchImpl: FetchLike = async (raw) => {
+    calls.push(raw);
+    return fail ? json({}, 500) : json({ results: hits("search-brad-pitt.json") });
+  };
+  let now = 1_000;
+  const deps = { tmdb: config, fetchImpl, now: () => now };
+  const [first, second] = await Promise.all([searchPeople("Brad  Pitt", "en-US", deps), searchPeople("brad pitt", "en-US", deps)]);
+  assert.equal(first?.[0]?.name, "Brad Pitt");
+  assert.deepEqual(second, first);
+  assert.equal(calls.length, 1);
+  const url = new URL(calls[0]!);
+  assert.equal(url.pathname, "/3/search/person");
+  assert.equal(url.searchParams.get("query"), "Brad Pitt");
+  assert.equal(url.searchParams.get("include_adult"), "false");
+
+  assert.deepEqual(await searchPeople("b", "en-US", deps), []);
+  assert.equal(calls.length, 1, "a one-letter query asks nobody");
+
+  fail = true;
+  assert.equal(await searchPeople("nobody known", "en-US", deps), null);
+  assert.equal(await searchPeople("nobody known", "en-US", deps), null);
+  assert.equal(calls.length, 2);
+  now += 61_000;
+  fail = false;
+  assert.ok((await searchPeople("nobody known", "en-US", deps))?.length);
+  assert.equal(calls.length, 3);
 });
