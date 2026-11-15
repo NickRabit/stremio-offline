@@ -1682,6 +1682,7 @@ export const ru: Catalog = {
   "err.downloadNeedsHttp": "Можно загрузить только прямой HTTP-поток.",
   "err.downloadLibraryNotAllowed": "Эта учетная запись не может загружать файлы в библиотеку.",
   "err.revokedDownloadCleanupFailed": "Не удалось удалить загрузку из библиотеки после отзыва разрешения.",
+  "err.downloadCleanupFailed": "Не удалось удалить временные файлы предыдущей загрузки. Проверьте доступ к хранилищу и повторите попытку.",
   "err.clientLogTooLarge": "Пакет журналов слишком большой.",
   "err.clientLogTooMany": "Слишком много пакетов журналов. Повторите попытку позже.",
   "err.downloadDeviceNotAllowed": "Эта учетная запись может не сохраниться на устройстве.",

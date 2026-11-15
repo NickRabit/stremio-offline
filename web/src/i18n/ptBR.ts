@@ -1680,6 +1680,7 @@ export const ptBR: Catalog = {
   "err.downloadNeedsHttp": "Somente um fluxo HTTP direto pode ser baixado.",
   "err.downloadLibraryNotAllowed": "Esta conta não pode ser baixada para a biblioteca.",
   "err.revokedDownloadCleanupFailed": "Não foi possível remover o download da biblioteca após a revogação da permissão.",
+  "err.downloadCleanupFailed": "Não foi possível remover os arquivos temporários do download anterior. Verifique o acesso ao armazenamento e tente novamente.",
   "err.clientLogTooLarge": "O pacote de logs é grande demais.",
   "err.clientLogTooMany": "Pacotes de logs demais. Tente novamente mais tarde.",
   "err.downloadDeviceNotAllowed": "Esta conta pode não ser salva no dispositivo.",

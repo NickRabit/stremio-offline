@@ -1682,6 +1682,7 @@ export const sk: Catalog = {
   "err.downloadNeedsHttp": "Dá sa stiahnuť iba priamy HTTP stream.",
   "err.downloadLibraryNotAllowed": "Tento účet sa nemusí stiahnuť do knižnice.",
   "err.revokedDownloadCleanupFailed": "Po odobratí oprávnenia sa stiahnutý súbor nepodarilo odstrániť z knižnice.",
+  "err.downloadCleanupFailed": "Nepodarilo sa odstrániť dočasné súbory predchádzajúceho sťahovania. Skontrolujte prístup k úložisku a skúste to znova.",
   "err.clientLogTooLarge": "Logový balík je príliš veľký.",
   "err.clientLogTooMany": "Príliš mnoho logových balíkov. Skúste to neskôr.",
   "err.downloadDeviceNotAllowed": "Tento účet sa nemusí uložiť do zariadenia.",

@@ -1761,6 +1761,7 @@ export const cs: Catalog = {
   "err.downloadNeedsHttp": "Stáhnout lze jen přímý HTTP stream.",
   "err.downloadLibraryNotAllowed": "Tento účet nesmí stahovat do knihovny.",
   "err.revokedDownloadCleanupFailed": "Stažený soubor se po odebrání oprávnění nepodařilo odstranit z knihovny.",
+  "err.downloadCleanupFailed": "Nepodařilo se odstranit dočasné soubory předchozího stahování. Zkontrolujte přístup k úložišti a zkuste to znovu.",
   "err.clientLogTooLarge": "Logový balík je příliš velký.",
   "err.clientLogTooMany": "Příliš mnoho logových balíků. Zkuste to později.",
   "err.downloadDeviceNotAllowed": "Tento účet nesmí ukládat do zařízení.",
