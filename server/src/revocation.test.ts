@@ -150,6 +150,24 @@ test("marking an account as a child pauses its queue and drops its device ticket
   assert.deepEqual(h.stopped, [], "a library film keeps playing");
 });
 
+test("an account that becomes a child without catalogue browsing loses the addon film it was playing", async () => {
+  const h = harness();
+  const who = owner("usr_a");
+  const addon = { key: "cine", enabled: true, allowedUsers: ["usr_a"] };
+  h.deps.source = { ...h.deps.source, addons: () => [addon] as never };
+  const fromAddon = h.resources.add({ url: "https://media.example/film.mp4", addonKey: "cine" }, who, "media");
+  const plain = h.resources.add({ url: "https://media.example/other.mp4" }, who, "media");
+  h.playbackOwners.set("play-addon", { owner: who, resourceId: fromAddon });
+  h.playbackOwners.set("play-plain", { owner: who, resourceId: plain });
+  const before = { id: "usr_a", role: "user", permissions: { downloadToLibrary: false, downloadToDevice: false } };
+
+  await h.revocations.permissionsChanged(before as never, { ...before, child: true, catalogue: true } as never);
+  assert.deepEqual(h.stopped, [], "with catalogue browsing the granted addon still plays");
+
+  await h.revocations.permissionsChanged({ ...before, child: true, catalogue: true } as never, { ...before, child: true, catalogue: false } as never);
+  assert.deepEqual(h.stopped, ["play-addon"], "clearing the tick stops the addon film and nothing else");
+});
+
 test("losing the device permission drops tickets and leaves the queue and playback alone", async () => {
   const jobs = [job("one", "usr_a")];
   const h = harness(jobs);

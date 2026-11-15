@@ -881,6 +881,20 @@ test("switching an account off sweeps what it holds and keeps its history", asyn
   assert.equal((await back.json() as { disabled: boolean }).disabled, false, "nothing was lost and it is reversible");
 });
 
+test("a password an administrator sets for a child is final, and marking a child clears the owed change", async (t) => {
+  const harness = await mount({ users: [admin, { ...bob, child: true }, account({ id: "usr_00000009", username: "cid", mustChangePassword: true })] });
+  t.after(harness.close);
+
+  const reset = await api(harness.base, `/api/users/${BOB}/password`, { method: "PATCH", body: { password: "brand-new" } });
+  assert.equal(reset.status, 200);
+  assert.equal((await reset.json() as { mustChangePassword: boolean }).mustChangePassword, false, "a child cannot change it, so it owes nothing");
+  assert.equal(await verifyPassword("brand-new", findUserById(harness.store.users(), BOB)!.passwordHash), true);
+
+  const marked = await api(harness.base, "/api/users/usr_00000009", { method: "PATCH", body: { child: true } });
+  assert.equal(marked.status, 200);
+  assert.equal((await marked.json() as { mustChangePassword: boolean }).mustChangePassword, false);
+});
+
 test("an administrator setting a password sweeps that account and leaves their own session alone", async (t) => {
   const harness = await mount({ users: [admin, bob] });
   t.after(harness.close);

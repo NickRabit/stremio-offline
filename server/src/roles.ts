@@ -281,6 +281,9 @@ export const CHILD_CATALOGUE_ALLOWED: Rule[] = [
     // The star on a catalogue title: the account's own rows, and nothing without the catalogue.
     ["GET", "/watchlist"],
     ["POST", "/watchlist"],
+    // Read only and already projected to the account's own addons: the player orders addon
+    // sources by it.
+    ["GET", "/source-profiles"],
     // Following a series reads its episodes from the addons, so it goes with the catalogue.
     ["GET", "/follows"],
     ["POST", "/follows"],

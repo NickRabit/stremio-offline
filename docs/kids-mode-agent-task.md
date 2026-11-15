@@ -56,5 +56,14 @@ released until the last one lands.
   `USER_ALLOWED`; pin that with a test so a rule cannot be child-only.
 - **Reads that write.** Browsing can schedule artwork beside the media; a
   child's request must not.
+- **Hiding instead of not calling.** A child client that still asks for
+  addons, catalogues, the watchlist or the download queue gets a 403 and shows
+  an error or retries for ever. Remove the call, then the control.
+- **The shared television detail.** A library title opens the catalogue
+  detail; with `/meta` refused it must still list the episodes from the files.
+- **A child that owes a password change** can never pay it. The server clears
+  the debt; do not reintroduce it in a client flow.
+- **The desktop shell.** Its server menu and tray switch saved sessions
+  without a secret.
 - **The administrator dialog's dormant ticks.** Promoting a child clears the
   flag; demoting back does not bring it back silently.

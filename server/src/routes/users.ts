@@ -216,6 +216,8 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
           ...(switcher === undefined ? {} : { switcher }),
           child: nextChild,
           catalogue: nextCatalogue,
+          // The same reason as in the password route below: a child cannot pay that debt.
+          ...(nextChild && user.mustChangePassword ? { mustChangePassword: false } : {}),
           ...(nextUnlock === undefined ? {} : { unlock: nextUnlock }),
           ...(cutOff ? { secret: randomBytes(32).toString("hex"), revoked: {} } : {}),
           permissions,
@@ -265,7 +267,9 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     const secret = randomBytes(32).toString("hex");
     await store.update((state) => {
       assertStillAdmin(state.users ?? [], actor);
-      withUser(state, id, (user) => ({ ...user, passwordHash, secret, mustChangePassword: true, revoked: {} }));
+      // A child may not change its own password, so the one an administrator chose is final:
+      // owing a change would lock the account out of everything, the switcher included.
+      withUser(state, id, (user) => ({ ...user, passwordHash, secret, mustChangePassword: !user.child, revoked: {} }));
     });
     // The new secret stops the next request; the sweep reaches the film, the device ticket
     // and the AirPlay grant already in flight on that account's devices. The administrator's

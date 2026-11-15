@@ -321,6 +321,7 @@ const CHILD_CATALOGUE_EXTRA: Array<[string, string]> = [
   ["GET", "/addons"],
   ["GET", "/watchlist"],
   ["POST", "/watchlist"],
+  ["GET", "/source-profiles"],
   ["GET", "/follows"],
   ["POST", "/follows"],
   ["GET", "/follows/defaults"],
@@ -341,7 +342,6 @@ const CHILD_REFUSED: Array<[string, string]> = [
   // simply not on the child list.
   ["POST", "/auth/pair/start"],
   ["POST", "/auth/pair/poll"],
-  ["GET", "/source-profiles"],
   ["GET", "/downloads"],
   ["POST", "/downloads"],
   ["POST", "/downloads/bulk"],
