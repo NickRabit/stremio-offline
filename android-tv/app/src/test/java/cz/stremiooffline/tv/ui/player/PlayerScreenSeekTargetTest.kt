@@ -26,9 +26,12 @@ import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.playback.PlaybackController
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import java.io.IOException
 import java.time.Duration
+import java.util.concurrent.CountDownLatch
 import kotlinx.coroutines.CompletableDeferred
 import okhttp3.OkHttpClient
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -55,6 +58,19 @@ class PlayerScreenSeekTargetTest {
 
   private class SeekApi : FakeTvApi() {
     val answer = CompletableDeferred<Unit>()
+    val released = CountDownLatch(1)
+
+    // A playlist session hands the player an HLS source of its own, so the fake media factory is
+    // bypassed and the player would fetch the playlist over the real network. When that lookup
+    // failed was up to the runner's DNS, and a failure before the presses put the error over the
+    // player, which swallows the D-pad. The request is parked instead, so nothing but the test
+    // moves the screen.
+    override val http: OkHttpClient = OkHttpClient.Builder()
+      .addInterceptor {
+        released.await()
+        throw IOException("test finished")
+      }
+      .build()
 
     override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto {
       val descriptor = super.seekPlayback(id, time)
@@ -63,15 +79,18 @@ class PlayerScreenSeekTargetTest {
     }
   }
 
+  @After
+  fun releaseParkedRequests() {
+    api.released.countDown()
+  }
+
+  /** Every step moves both fake clocks, so the bound is fake time, not the runner's speed. */
   private fun advanceUntil(condition: () -> Boolean) {
-    val deadline = System.currentTimeMillis() + 5_000
-    while (!condition()) {
-      check(System.currentTimeMillis() < deadline) { "Condition still not satisfied after 5000 ms" }
-      shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
-      compose.mainClock.advanceTimeBy(100)
-      compose.waitForIdle()
-      Thread.sleep(10)
+    repeat(MAX_STEPS) {
+      if (condition()) return
+      advance(STEP_MS)
     }
+    check(condition()) { "Condition still not satisfied after ${MAX_STEPS * STEP_MS} ms of fake time" }
   }
 
   private fun advance(milliseconds: Long) {
@@ -84,9 +103,10 @@ class PlayerScreenSeekTargetTest {
     compose.onNodeWithTag(TAG_SEEK_STRIP_POSITION, useUnmergedTree = true).assertTextEquals(text)
   }
 
+  private val api = SeekApi()
+
   @Test
   fun `dpad bursts keep the unanswered target on the timeline and accumulate from it`() {
-    val api = SeekApi()
     api.startAnswer = PlaybackDescriptorDto(
       id = "p1",
       mode = "remux",
@@ -131,5 +151,10 @@ class PlayerScreenSeekTargetTest {
     compose.onNode(isFocused()).performKeyInput { pressKey(Key.DirectionRight) }
     advanceUntil { api.seekTimes.size == 2 }
     assertEquals(120.0, api.seekTimes.last(), 0.001)
+  }
+
+  private companion object {
+    const val STEP_MS = 100L
+    const val MAX_STEPS = 50
   }
 }
