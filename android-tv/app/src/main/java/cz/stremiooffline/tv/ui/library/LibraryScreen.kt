@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.library
 
+import cz.stremiooffline.tv.ui.LocalChildAccount
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -498,7 +499,13 @@ fun LibraryRoute(
             state.error -> ErrorPanel { viewModel.retry() }
             items.isEmpty() -> Text(
               // A level that was narrowed and matched nothing says so rather than reading as empty.
-              stringResource(if (committed.isNotEmpty()) R.string.media_server_no_matches else R.string.tv_library_empty),
+              stringResource(
+                when {
+                  committed.isNotEmpty() -> R.string.media_server_no_matches
+                  LocalChildAccount.current -> R.string.library_child_empty_text
+                  else -> R.string.tv_library_empty
+                },
+              ),
               color = Tokens.Muted,
               fontSize = 12.sp,
             )

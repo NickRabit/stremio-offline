@@ -593,4 +593,6 @@
   <string name="err_person_unavailable">O této osobě nejsou žádné údaje.</string>
   <string name="err_person_lookup_failed">Filmografii se nepodařilo načíst. Zkuste to později.</string>
   <string name="search_all_people">Osoby</string>
+  <string name="home_child_empty_text">Co si pustíš, najdeš potom tady.</string>
+  <string name="library_child_empty_text">Co bude v knihovně, vybírá rodič.</string>
 </resources>

@@ -1,5 +1,7 @@
 package cz.stremiooffline.tv.ui.profiles
 
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.FocusDirection
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -126,6 +128,7 @@ private fun switcherErrorText(error: SwitcherError?, waitSeconds: Int): String? 
   return error.arg?.let { stringResource(error.messageRes, it) } ?: stringResource(error.messageRes)
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun ChooseStep(
   profiles: List<ProfileDto>,
@@ -187,7 +190,18 @@ private fun ChooseStep(
       )
     }
     Row(
-      modifier = Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 24.dp).focusGroup(),
+      // LEFT and RIGHT stay among the profiles: past the last one the focus search would land on
+      // Sign out below, one accidental OK away from the sign-in screen.
+      modifier = Modifier
+        .horizontalScroll(rememberScrollState())
+        .padding(horizontal = 24.dp)
+        .focusProperties {
+          exit = { direction ->
+            if (direction == FocusDirection.Left || direction == FocusDirection.Right) FocusRequester.Cancel
+            else FocusRequester.Default
+          }
+        }
+        .focusGroup(),
       horizontalArrangement = Arrangement.spacedBy(28.dp),
       verticalAlignment = Alignment.Top,
     ) {

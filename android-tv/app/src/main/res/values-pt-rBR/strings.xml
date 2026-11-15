@@ -567,4 +567,6 @@
   <string name="err_person_unavailable">Nada se sabe sobre esta pessoa.</string>
   <string name="err_person_lookup_failed">Não foi possível carregar a filmografia. Tente mais tarde.</string>
   <string name="search_all_people">Pessoas</string>
+  <string name="home_child_empty_text">O que você assistir aparece aqui.</string>
+  <string name="library_child_empty_text">Um adulto escolhe o que fica na sua biblioteca.</string>
 </resources>

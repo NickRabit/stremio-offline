@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.home
 
+import cz.stremiooffline.tv.ui.LocalChildAccount
 import cz.stremiooffline.tv.ui.genreLabeler
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.animation.Crossfade
@@ -199,7 +200,8 @@ private fun HomeEmptyPanel() {
   Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
     Column(verticalArrangement = Arrangement.spacedBy(7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
       Text(stringResource(R.string.home_empty_title), color = Tokens.Text, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
-      Text(stringResource(R.string.home_empty_text), color = Tokens.Muted, fontSize = 12.sp)
+      val text = if (LocalChildAccount.current) R.string.home_child_empty_text else R.string.home_empty_text
+      Text(stringResource(text), color = Tokens.Muted, fontSize = 12.sp)
     }
   }
 }

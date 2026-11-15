@@ -127,6 +127,18 @@ class ProfileSwitcherScreenTest {
   }
 
   @Test
+  fun `LEFT and RIGHT never leave the profiles for sign out`() {
+    var signedOut = 0
+    mount(FakeProfileApi(household), onSignOut = { signedOut += 1 })
+    repeat(household.size + 2) { press(Key.DirectionRight) }
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsNotFocused()
+    repeat(household.size + 2) { press(Key.DirectionLeft) }
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsNotFocused()
+    press(Key.DirectionCenter)
+    assertEquals(0, signedOut)
+  }
+
+  @Test
   fun `sign out is last and reachable by DOWN without taking initial focus`() {
     var signedOut = 0
     mount(FakeProfileApi(household), onSignOut = { signedOut += 1 })

@@ -537,3 +537,5 @@ person.searchAsText
 err.personUnavailable
 err.personLookupFailed
 searchAll.people
+home.childEmptyText
+library.childEmptyText

@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.shell
 
+import cz.stremiooffline.tv.ui.LocalChildAccount
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -944,7 +945,10 @@ fun ShellScaffold(
         .focusRequester(contentFocusRequester)
         .focusGroup(),
     ) {
-      CompositionLocalProvider(LocalRailFocus provides railFocusRequesters.getValue(current)) {
+      CompositionLocalProvider(
+        LocalRailFocus provides railFocusRequesters.getValue(current),
+        LocalChildAccount provides child,
+      ) {
         content(contentFocusRequester)
       }
     }
