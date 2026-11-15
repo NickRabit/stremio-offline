@@ -136,6 +136,9 @@ export interface FavoritesOptions {
   /** Whether this page reads the media server itself. Home's shelf mixes the local page with
    *  the remote cards on its own, so it asks for the local half alone. */
   remote?: boolean;
+  /** Collects the watchlist keys the local half draws, the only stars a media-server card of
+   *  the same title may be left out for. */
+  drawnStars?: Set<string>;
 }
 export interface FavoritesPage {
   items: FavoriteItem[];
@@ -167,7 +170,8 @@ export interface PersonalApi {
   pathVisible(key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean;
   /** The catalogue keys the account starred: a media-server record of one of them is that title,
    *  so a caller that draws the title itself leaves the record out. */
-  watchlistKeys(req: express.Request): string[];
+  /** The watchlist keys Home's local favourites draw; the media-server cards leave only these out. */
+  drawnStarKeys(req: express.Request): Promise<string[]>;
 }
 
 const LOOKUP_TIMEOUT = Symbol("home-lookup-timeout");
@@ -541,6 +545,11 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     return Boolean(account?.child && !account.catalogue);
   };
 
+  /** Whether a stored row still plays its own file. A later play from another source keeps the
+   *  path but names that source, and the row is then answered as a catalogue row. */
+  const playsOwnFile = (value: { path?: string; stableKey?: string }): boolean =>
+    Boolean(value.path) && !(value.stableKey && value.stableKey !== stableKeyOfFile(value.path!));
+
   const progressRows = async (req: express.Request, options: ProgressRowOptions = {}): Promise<ProgressPage> => {
     const data = dataOf(req);
     const all = progressOf(data);
@@ -560,7 +569,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // the same show stays suppressed, so a dropped row does not reappear as its next episode.
     const closed = addonsClosed(req);
     const rows = (options.addonFilter ? grouped.filter((row) => !row.addonKey || allowed.has(row.addonKey)) : grouped)
-      .filter((row) => !closed || Boolean(row.path));
+      .filter((row) => !closed || playsOwnFile(row));
     const over: string[] = [];
     const language = prefsOf(req).uiLanguage;
     // A marker remembers which addon the show came from. One the caller may no longer use
@@ -612,7 +621,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         const poster = images.proxied(value.poster) ?? (remote ? remoteArtworkPath(remote.libraryId, remote.itemId, "Primary") : undefined);
         // A row stored before every write named its source can claim a file it was not last
         // played from: the source key wins, and the stale file is not offered as the way back.
-        const path = value.path && !(value.stableKey && value.stableKey !== stableKeyOfFile(value.path)) ? wirePath(value.path) : undefined;
+        const path = playsOwnFile(value) ? wirePath(value.path!) : undefined;
         return { ...value, key: wireProgressKey(value.key), path, poster, remote };
       });
     return { items, partial };
@@ -913,7 +922,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       const identity = `${entry.type}:${entry.id}`;
       // Starred in the library too: the library card becomes this catalogue star too.
       const starredCopy = owner.get(identity);
-      if (starredCopy) { starredCopy.catalogId = entry.id; continue; }
+      if (starredCopy) { starredCopy.catalogId = entry.id; options.drawnStars?.add(entry.key); continue; }
       // Home leaves out a title starred from an add-on switched off there; an entry that never
       // recorded its add-on stays.
       if (options.onHome && entry.addonKey && addons.find((addon) => addon.key === entry.addonKey)?.showOnHome === false) continue;
@@ -926,9 +935,11 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         drawn.set(bound, card);
         owner.set(identity, card);
         library.push(card);
+        options.drawnStars?.add(entry.key);
         continue;
       }
       if (addonsClosed(req)) continue;
+      options.drawnStars?.add(entry.key);
       catalog.push({
         kind: "catalog", type: entry.type, id: entry.id, name: entry.name,
         ...(entry.poster ? { poster: entry.poster } : {}),
@@ -1067,9 +1078,11 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const filter = options.filter ?? "all";
     const skip = Math.max(0, options.skip ?? 0);
     const limit = Math.max(1, Math.min(120, options.limit ?? 60));
-    // The titles the account starred: the local half draws them, so a media-server record of one
-    // of them is not drawn a second time.
-    const starredTitles = new Set(Object.keys(watchlistOf(dataOf(req))));
+    // The titles the local half draws, so a media-server record of one of them is not drawn a
+    // second time. Only those: a star the local half leaves out, such as a catalogue star a
+    // child without catalogue browsing cannot open, must not hide the media server's own.
+    const starredTitles = new Set<string>();
+    const entries = await favoritesEntries(req, { ...options, drawnStars: starredTitles });
     if (filter === "remote") {
       const remote = await remoteFavorites(req, skip, limit, options.onHome === true, starredTitles);
       if (!remote) return { items: [], total: 0, pending: false, partial: true };
@@ -1086,7 +1099,6 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // by the kind of item, and merged with the local half the way `all` merges them.
     if (filter === "movies" || filter === "series") {
       const wanted = filter === "movies" ? "movie" : "series";
-      const entries = await favoritesEntries(req, options);
       const local = await Promise.all(entries.map((entry) => describeFavorite(req, entry)));
       const described = local.filter((item): item is FavoriteItem => item !== undefined);
       const remote = await remoteFavorites(req, 0, REMOTE_FAVORITE_LIMIT, options.onHome === true, starredTitles);
@@ -1105,7 +1117,6 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         ...(remote === undefined || !current ? { partial: true } : {}),
       };
     }
-    const entries = await favoritesEntries(req, options);
     // Every entry is described before the slice, so `total` counts only what can be returned:
     // a key the disk no longer answers cannot make a page repeat or stall the "load more".
     const local = (await Promise.all(entries.map((entry) => describeFavorite(req, entry))))
@@ -1251,5 +1262,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
   }));
 
-  return { progressRows, libraryResumeItems, titleArtwork, favoritesPage, pathVisible, watchlistKeys: (req) => Object.keys(watchlistOf(dataOf(req))) };
+  return { progressRows, libraryResumeItems, titleArtwork, favoritesPage, pathVisible, drawnStarKeys: async (req) => {
+    const drawn = new Set<string>();
+    await favoritesEntries(req, { onHome: true, drawnStars: drawn });
+    return [...drawn];
+  } };
 }

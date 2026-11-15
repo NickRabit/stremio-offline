@@ -436,7 +436,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const authority = authorityOf(req);
     // The local half draws a starred title once; a media-server record of the same title is left
     // out, so the shelf never shows it twice.
-    const starredTitles = personal.watchlistKeys(req);
+    const starredTitles = await personal.drawnStarKeys(req);
     const remote = await remotePersonal.cards(authority, {
       filter: "favorites", onHome: true, limit: HOME_ROW_LIMIT,
       ...(starredTitles.length ? { excludeTitles: new Set(starredTitles) } : {}),
