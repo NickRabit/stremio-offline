@@ -1,8 +1,11 @@
 # Kids mode
 
 Status: design contract. **The owner confirmed every decision below on
-2026-11-15.** The server slice and the administrator switch are implemented on
-the feature branch; the web and Android TV interfaces are not. Nothing is
+2026-11-15.** The server slice, the administrator switch and the child interfaces on
+the web and Android TV are implemented on the feature branch. Still open: the
+desktop shell's server menu, the television check on the API 28 and API 31
+images, the *Child accounts* section in [users.md](users.md) and the version
+bump. Nothing is
 released until the last slice lands. Written against `main` at `b4c4d591`
 (0.7.105). The execution order is in
 [kids-mode-agent-task.md](kids-mode-agent-task.md).
