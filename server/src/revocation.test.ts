@@ -135,6 +135,21 @@ test("losing the library permission pauses downloads and leaves playback running
   assert.equal((watching as unknown as { destroyed: boolean }).destroyed, false);
 });
 
+test("marking an account as a child pauses its queue and drops its device tickets", async () => {
+  const jobs = [job("one", "usr_a"), job("two", "usr_b")];
+  const h = harness(jobs);
+  h.deviceTickets.set("ticket-a", { owner: owner("usr_a") } as DeviceDownloadTicket);
+  h.playbackOwners.set("play-a", { owner: owner("usr_a"), resourceId: "res-a" });
+
+  const before = { id: "usr_a", role: "user", permissions: { downloadToLibrary: true, downloadToDevice: true } };
+  const after = { ...before, child: true };
+  await h.revocations.permissionsChanged(before as never, after as never);
+
+  assert.deepEqual(h.paused, ["one"], "only the child's own queued download pauses");
+  assert.equal(h.deviceTickets.size, 0, "the ticket is gone");
+  assert.deepEqual(h.stopped, [], "a library film keeps playing");
+});
+
 test("losing the device permission drops tickets and leaves the queue and playback alone", async () => {
   const jobs = [job("one", "usr_a")];
   const h = harness(jobs);

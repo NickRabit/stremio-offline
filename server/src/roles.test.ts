@@ -250,19 +250,6 @@ const CHILD_ALLOWED_PATHS: Array<[string, string]> = [
   ["POST", "/search/everywhere/ss_abc/sources/s0/retry"],
   ["GET", "/search/everywhere/ss_abc/members/member_1"],
   ["DELETE", "/search/everywhere/ss_abc"],
-  ["GET", "/follows"],
-  ["POST", "/follows"],
-  ["GET", "/follows/defaults"],
-  ["GET", "/follows/calendar"],
-  ["DELETE", "/follows/calendar-feed"],
-  ["GET", "/follows/activity"],
-  ["GET", "/follows/new-episodes"],
-  ["GET", "/follows/by-meta/series/tt1254207"],
-  ["PATCH", "/follows/f-1"],
-  ["DELETE", "/follows/f-1"],
-  ["POST", "/follows/f-1/check"],
-  ["GET", "/follows/f-1/episodes"],
-  ["GET", "/follows/f-1/preview"],
   ["GET", "/library"],
   ["GET", "/library/browse"],
   ["GET", "/library/gallery"],
@@ -314,6 +301,8 @@ const CHILD_ALLOWED_PATHS: Array<[string, string]> = [
   ["POST", "/client-log/bundle"],
   ["DELETE", "/device-transfers"],
   ["DELETE", "/device-transfers/abc"],
+  ["GET", "/settings"],
+  ["GET", "/languages"],
 ];
 
 const CHILD_CATALOGUE_EXTRA: Array<[string, string]> = [
@@ -330,9 +319,29 @@ const CHILD_CATALOGUE_EXTRA: Array<[string, string]> = [
   ["GET", "/streams/movie/tt1254207"],
   ["GET", "/subtitles/movie/tt1254207"],
   ["GET", "/addons"],
+  ["GET", "/watchlist"],
+  ["POST", "/watchlist"],
+  ["GET", "/follows"],
+  ["POST", "/follows"],
+  ["GET", "/follows/defaults"],
+  ["GET", "/follows/calendar"],
+  ["DELETE", "/follows/calendar-feed"],
+  ["GET", "/follows/activity"],
+  ["GET", "/follows/new-episodes"],
+  ["GET", "/follows/by-meta/series/tt1254207"],
+  ["PATCH", "/follows/f-1"],
+  ["DELETE", "/follows/f-1"],
+  ["POST", "/follows/f-1/check"],
+  ["GET", "/follows/f-1/episodes"],
+  ["GET", "/follows/f-1/preview"],
 ];
 
 const CHILD_REFUSED: Array<[string, string]> = [
+  // Open paths in the running server, so a television can still sign a child in; they are
+  // simply not on the child list.
+  ["POST", "/auth/pair/start"],
+  ["POST", "/auth/pair/poll"],
+  ["GET", "/source-profiles"],
   ["GET", "/downloads"],
   ["POST", "/downloads"],
   ["POST", "/downloads/bulk"],
@@ -431,6 +440,14 @@ test("every child rule is an ordinary-user rule", () => {
   }
   assert.equal(CHILD_ALLOWED.length, CHILD_ALLOWED_PATHS.length);
   assert.equal(CHILD_CATALOGUE_ALLOWED.length, CHILD_ALLOWED.length + CHILD_CATALOGUE_EXTRA.length);
+});
+
+test("every ordinary-user rule is either open to a child or named in the refused table", () => {
+  const named = [...CHILD_ALLOWED_PATHS, ...CHILD_CATALOGUE_EXTRA, ...CHILD_REFUSED];
+  const unclassified = USER_ALLOWED
+    .filter((rule) => !named.some(([method, path]) => rule.method === method && rule.pattern.test(path)))
+    .map((rule) => `${rule.method} ${rule.pattern}`);
+  assert.deepEqual(unclassified, []);
 });
 
 test("a child is refused every route in the policy's refused table while an ordinary account passes", () => {

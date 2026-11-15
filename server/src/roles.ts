@@ -205,19 +205,6 @@ export const CHILD_ALLOWED: Rule[] = rulesFor([
   ["POST", "/search/everywhere/ss_abc/sources/s0/retry"],
   ["GET", "/search/everywhere/ss_abc/members/member_1"],
   ["DELETE", "/search/everywhere/ss_abc"],
-  ["GET", "/follows"],
-  ["POST", "/follows"],
-  ["GET", "/follows/defaults"],
-  ["GET", "/follows/calendar"],
-  ["DELETE", "/follows/calendar-feed"],
-  ["GET", "/follows/activity"],
-  ["GET", "/follows/new-episodes"],
-  ["GET", "/follows/by-meta/series/tt1254207"],
-  ["PATCH", "/follows/f-1"],
-  ["DELETE", "/follows/f-1"],
-  ["POST", "/follows/f-1/check"],
-  ["GET", "/follows/f-1/episodes"],
-  ["GET", "/follows/f-1/preview"],
   ["GET", "/library"],
   ["GET", "/library/browse"],
   ["GET", "/library/mosaic"],
@@ -269,6 +256,10 @@ export const CHILD_ALLOWED: Rule[] = rulesFor([
   ["POST", "/client-log/bundle"],
   ["DELETE", "/device-transfers"],
   ["DELETE", "/device-transfers/abc"],
+  // Read only: both clients read these on the way in, and the player takes its languages
+  // from them. Changing either stays refused.
+  ["GET", "/settings"],
+  ["GET", "/languages"],
 ]);
 
 export const CHILD_CATALOGUE_ALLOWED: Rule[] = [
@@ -287,6 +278,23 @@ export const CHILD_CATALOGUE_ALLOWED: Rule[] = [
     ["GET", "/streams/movie/tt1254207"],
     ["GET", "/subtitles/movie/tt1254207"],
     ["GET", "/addons"],
+    // The star on a catalogue title: the account's own rows, and nothing without the catalogue.
+    ["GET", "/watchlist"],
+    ["POST", "/watchlist"],
+    // Following a series reads its episodes from the addons, so it goes with the catalogue.
+    ["GET", "/follows"],
+    ["POST", "/follows"],
+    ["GET", "/follows/defaults"],
+    ["GET", "/follows/calendar"],
+    ["DELETE", "/follows/calendar-feed"],
+    ["GET", "/follows/activity"],
+    ["GET", "/follows/new-episodes"],
+    ["GET", "/follows/by-meta/series/tt1254207"],
+    ["PATCH", "/follows/f-1"],
+    ["DELETE", "/follows/f-1"],
+    ["POST", "/follows/f-1/check"],
+    ["GET", "/follows/f-1/episodes"],
+    ["GET", "/follows/f-1/preview"],
   ]),
 ];
 

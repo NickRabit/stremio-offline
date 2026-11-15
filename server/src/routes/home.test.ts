@@ -50,6 +50,8 @@ const instancePrefs: UserPrefs = {
 
 interface Harness {
   base: string;
+  /** The accounts the harness answers as child accounts. */
+  children: Set<string>;
   /** The addons the two accounts are pitched against. */
   addons: AddonRecord[];
   /** The library bindings a resume row resolves its show id from. */
@@ -162,6 +164,7 @@ const mount = async (options: {
     metaDelayMs: 0, metaAnswer: null, metaThrows: false, metaCalls: [], metaSignals: [], lookups: [], catalogCalls: [], catalogDelayMs: 0,
     artworkKeyCalls: [],
     remoteCards: [], remoteCalls: [], remoteAssertions: 0, remoteInvalid: false, events: [], remoteThrows: false, remotePartial: false,
+    children: new Set(),
     data: () => { throw new Error("not mounted"); }, close: async () => undefined,
   };
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()], [ADMIN, emptyUserData()]]);
@@ -176,7 +179,7 @@ const mount = async (options: {
     currentSession: () => undefined,
     currentUser: (req) => {
       const id = userOf(req);
-      return id ? { id, username: id, role: roleOf(id) } as unknown as UserRecord : undefined;
+      return id ? { id, username: id, role: roleOf(id), child: state.children.has(id) } as unknown as UserRecord : undefined;
     },
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
@@ -2510,4 +2513,29 @@ test("a title row written from a library file follows that library's two switche
   assert.deepEqual((await resumePageOf(harness)).items.map((item) => item.key), ["movie:tt9"], "the section reads only `showInContinueWatching`");
   const rows = await allRows(harness, ALICE);
   assert.deepEqual(rows.resume!.items, [], "Home drops the row with the library");
+});
+
+test("a child's Home is its own three rows, whatever addons and layout the account has", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.addons.push(cinemeta());
+  harness.children.add(ALICE);
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  harness.data(ALICE).prefs.homeLayout = { order: ["episodes", "tonight"], hidden: ["resume"], feeds: [homeFeedSelectionKey("cinemeta", "movie", "top")] };
+
+  const body = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }>; rows: Record<string, unknown> };
+  assert.deepEqual(body.order.map((entry) => entry.id), ["resume", "favorites", "recent"]);
+  assert.deepEqual(Object.keys(body.rows).sort(), ["favorites", "recent", "resume"]);
+  assert.equal(movie in body.rows, false);
+  assert.equal(harness.catalogCalls.length, 0, "no addon is asked for a child's Home");
+
+  const named = await (await api(harness.base, `/api/home?rows=${encodeURIComponent(movie)}`, ALICE)).json() as { rows: Record<string, unknown> };
+  assert.deepEqual(named.rows, {}, "a feed row named directly is not built either");
+
+  const layout = await (await api(harness.base, "/api/home/layout", ALICE)).json() as { rows: Array<{ id: string; added: boolean }> };
+  assert.deepEqual(layout.rows.map((row) => row.id), ["resume", "favorites", "recent"], "nothing is offered to add");
+
+  harness.children.delete(ALICE);
+  const grown = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }> };
+  assert.equal(grown.order.some((entry) => entry.id === movie), true, "the same account gets its feeds back once it is no child");
 });
