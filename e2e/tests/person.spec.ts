@@ -41,13 +41,20 @@ const stubPerson = async (page: Page) => {
   });
 };
 
-const openPerson = async (page: Page) => {
+const openCatalogueTitle = async (page: Page) => {
   await stubPerson(page);
   await openCatalogue(page);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await page.locator(".detail-panel .detail-info:visible").click();
   const main = page.locator("main.view-title-detail");
   await expect(main.locator(".title-extras .person", { hasText: "Brad Pitt" })).toBeVisible();
+  return main;
+};
+
+const detailScroll = (page: Page) => page.locator("main.view-title-detail .browse-scroll");
+
+const openPerson = async (page: Page) => {
+  const main = await openCatalogueTitle(page);
   await main.locator(".title-extras .person", { hasText: "Brad Pitt" }).click();
   const person = page.locator(".person-view");
   await expect(person).toBeVisible();
@@ -55,16 +62,37 @@ const openPerson = async (page: Page) => {
   await expect(person.getByRole("heading", { name: "Režie a scénář" })).toBeVisible();
   await expect(person.locator(".browse-item", { hasText: "Pulp Fiction" })).toBeVisible();
   await expect(person.locator(".browse-item", { hasText: "Kill Bill" })).toBeVisible();
+  return person;
 };
 
 const journey = async (page: Page) => {
-  await openPerson(page);
+  const main = await openCatalogueTitle(page);
+  const scroller = detailScroll(page);
+  await scroller.evaluate((el) => {
+    el.scrollTop = Math.min(80, Math.max(0, el.scrollHeight - el.clientHeight));
+  });
+  const before = await scroller.evaluate((el) => el.scrollTop);
+  await main.locator(".title-extras .person", { hasText: "Brad Pitt" }).click();
+  const person = page.locator(".person-view");
+  await expect(person).toBeVisible();
+  await expect(person.getByRole("heading", { name: "Herectví" })).toBeVisible();
+  await expect(person.getByRole("heading", { name: "Režie a scénář" })).toBeVisible();
+  await expect(person.locator(".browse-item", { hasText: "Pulp Fiction" })).toBeVisible();
+  await expect(person.locator(".browse-item", { hasText: "Kill Bill" })).toBeVisible();
+
+  await person.locator(".person-back").click();
+  await expect(page.locator(".person-view")).toHaveCount(0);
+  await expect(page.locator("main.view-title-detail .library-title-detail h2")).toBeVisible();
+  const restored = await scroller.evaluate((el) => el.scrollTop);
+  expect(Math.abs(restored - before)).toBeLessThan(8);
+
+  await page.locator("main.view-title-detail .title-extras .person", { hasText: "Brad Pitt" }).click();
+  await expect(page.locator(".person-view")).toBeVisible();
   await page.locator(".person-view .browse-item", { hasText: "Pulp Fiction" }).click();
   const detail = page.locator("main.view-title-detail");
   await expect(detail).toBeVisible();
   await expect(detail.locator(".library-title-detail h2")).toBeVisible();
   await detail.locator(".library-back").click();
-  await expect(page.locator("main.view-title-detail")).toHaveCount(0);
   await expect(page.locator(".person-view")).toBeVisible();
   await expect(page.locator(".person-view").getByRole("heading", { name: "Herectví" })).toBeVisible();
 };

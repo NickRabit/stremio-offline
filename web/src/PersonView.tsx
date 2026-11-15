@@ -16,11 +16,11 @@ export type PersonOpenTitle = {
   poster?: string;
 };
 
-export function PersonView({ person, language, shape, hidden, onBack, onUnavailable, onOpenTitle, onNotify }: {
+export function PersonView({ person, language, shape, initialScroll, onBack, onUnavailable, onOpenTitle, onNotify }: {
   person: { id: number; name: string };
   language: string;
   shape: TileShape;
-  hidden?: boolean;
+  initialScroll?: number;
   onBack: () => void;
   onUnavailable: (name: string) => void;
   onOpenTitle: (title: PersonOpenTitle, notice?: "noImdb") => void;
@@ -30,6 +30,9 @@ export function PersonView({ person, language, shape, hidden, onBack, onUnavaila
   const pageRef = useRef<HTMLElement>(null);
   const onUnavailableRef = useRef(onUnavailable);
   onUnavailableRef.current = onUnavailable;
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
+  const appliedScroll = useRef(false);
   const [filmography, setFilmography] = useState<PersonFilmography | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,6 +62,36 @@ export function PersonView({ person, language, shape, hidden, onBack, onUnavaila
   }, [person.id, person.name, language, retry]);
 
   useEffect(() => () => { openingAbort.current?.abort(); }, []);
+
+  useEffect(() => {
+    appliedScroll.current = false;
+  }, [person.id, initialScroll]);
+
+  useEffect(() => {
+    if (appliedScroll.current || initialScroll == null || loading || error || !filmography) return;
+    appliedScroll.current = true;
+    const apply = () => {
+      const node = pageRef.current;
+      if (node) node.scrollTop = initialScroll;
+      window.scrollTo(0, initialScroll);
+    };
+    apply();
+    const handle = requestAnimationFrame(apply);
+    return () => cancelAnimationFrame(handle);
+  }, [filmography, loading, error, initialScroll]);
+
+  useEffect(() => {
+    const node = pageRef.current;
+    if (!node) return;
+    node.focus({ preventScroll: true });
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onBackRef.current();
+    };
+    node.addEventListener("keydown", onKey);
+    return () => node.removeEventListener("keydown", onKey);
+  }, [person.id]);
 
   const displayName = filmography?.name ?? person.name;
   const photo = filmography?.photo;
@@ -93,7 +126,7 @@ export function PersonView({ person, language, shape, hidden, onBack, onUnavaila
     });
   };
 
-  return <section ref={pageRef} className="person-view" hidden={hidden ? true : undefined}
+  return <section ref={pageRef} className="person-view" tabIndex={-1}
     aria-label={t("person.label", { name: displayName })}>
     <ArtworkProximity scroller={pageRef}>
       <header className="person-head">
