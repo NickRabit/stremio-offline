@@ -5,6 +5,7 @@ import { OMIT_IDLE_MS, SCROLLING_MS } from "./home-omit";
 import { Home } from "./Home";
 import { EAGER_CARDS } from "./HomeShelf";
 import { setLocale } from "./i18n";
+import { ChildModeProvider } from "./child-mode";
 import type { HomeRowState, HomeRows } from "./home-state";
 import type { HomeCard, HomeOrderEntry } from "../../server/src/home";
 import { homeCatalogRowId } from "../../server/src/home";
@@ -70,7 +71,7 @@ afterEach(() => {
 
 type Overrides = Partial<Parameters<typeof Home>[0]>;
 
-const render = async (over: Overrides = {}) => {
+const render = async (over: Overrides = {}, child = false) => {
   const props: Parameters<typeof Home>[0] = {
     jobs: [], libraries: [], addons: [], admin: false, rows: allEmpty(), shape: "wide" as TileShape,
     onShowDownloads: vi.fn(), onAction: vi.fn(async () => undefined),
@@ -78,7 +79,7 @@ const render = async (over: Overrides = {}) => {
     onPlay: vi.fn(), onOpenCatalogue: vi.fn(), onReveal: vi.fn(), onForgotten: vi.fn(), onError: vi.fn(),
     ...over,
   };
-  await act(async () => { root.render(<Home {...props}/>); });
+  await act(async () => { root.render(<ChildModeProvider child={child} catalogue><Home {...props}/></ChildModeProvider>); });
   return props;
 };
 
@@ -91,6 +92,16 @@ const click = async (element: HTMLElement) => { await act(async () => { element.
 const openMenu = async (id: string) => { await act(async () => { menuButton(id).click(); }); };
 
 describe("Home", () => {
+  it("draws no queue or customisation for a child", async () => {
+    await render({
+      jobs: [job({ id: "failed", status: "failed" })],
+      rows: allEmpty({ resume: rowState({ items: [resumeFile()], hasMore: true }), favorites: rowState({ items: [favoriteCard("file")] }) }),
+    }, true);
+    expect(host.querySelector(".hq-card")).toBeNull();
+    expect(host.querySelector(".shape-toggle")).toBeNull();
+    expect(host.querySelector(".resume-show-all")).toBeNull();
+  });
+
   it("draws no row and shows the empty state when the queue is empty and every server row answered empty", async () => {
     await render({
       jobs: [job({ id: "done", status: "completed" }), job({ id: "theirs", mine: false })],

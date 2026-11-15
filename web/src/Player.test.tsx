@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Player } from "./Player";
 import type { PlayerSources } from "./Player";
+import { ChildModeProvider } from "./child-mode";
 import { setLocale } from "./i18n";
 import type { LibrarySourceGroup } from "./library-sources";
 import type { RemoteCapabilities, Stream } from "./types";
@@ -235,20 +236,27 @@ const props = (over: Partial<Parameters<typeof Player>[0]> = {}) => ({
   onDownload: vi.fn(async () => true), onDeviceDownload: vi.fn(async () => true), onClose: vi.fn(), ...over,
 });
 
-const render = async (over: Partial<Parameters<typeof Player>[0]> = {}) => {
+const render = async (over: Partial<Parameters<typeof Player>[0]> = {}, child = false) => {
   const value = props(over);
-  await act(async () => { root.render(<Player {...value}/>); });
+  await act(async () => { root.render(<ChildModeProvider child={child} catalogue><Player {...value}/></ChildModeProvider>); });
   await flush();
   return value;
 };
 const rerender = async (over: Partial<Parameters<typeof Player>[0]>) => {
   const value = props(over);
-  await act(async () => { root.render(<Player {...value}/>); });
+  await act(async () => { root.render(<ChildModeProvider child={false} catalogue><Player {...value}/></ChildModeProvider>); });
   await flush();
   return value;
 };
 
 describe("Player save actions", () => {
+  it("draws neither save action for a child", async () => {
+    await render({ stream: addonRow() }, true);
+    await openSettings();
+    expect(action("To library")).toBeNull();
+    expect(action("To device")).toBeNull();
+  });
+
   it("offers the library save for a media server's version only where the server proved the right", async () => {
     const proved = await render({ stream: remoteVersion({ capabilities: rights({ downloadToLibrary: true }) }) });
     await openSettings();

@@ -9,6 +9,7 @@ import { homeAllRowsEmpty, homeCatalogShelves, homeFeedTitle, homeRowsFor, isHom
 import { HomeShelf } from "./HomeShelf";
 import type { HomeCardActions } from "./HomeCard";
 import { t } from "./i18n";
+import { useChildMode } from "./child-mode";
 import type { Download, LibraryView, TileShape } from "./types";
 import type { HomeCard, HomeOrderEntry, HomeRowId } from "../../server/src/home";
 
@@ -62,6 +63,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
   onError: (error: unknown) => void;
   onOpenSearch?: () => void;
 }) {
+  const { child } = useChildMode();
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const shuffleCount = useRef<Record<string, number>>({});
   const latest = useRef({
@@ -110,7 +112,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
   const catalogTitles = new Map(homeCatalogShelves(addons).map((shelf) => [shelf.id, homeFeedTitle(shelf.id, shelf.title)]));
   for (const entry of order ?? []) if (entry.title) catalogTitles.set(entry.id, homeFeedTitle(entry.id, entry.title));
   const askedRows = order?.length ? order.map((entry) => entry.id) : homeRowsFor(admin);
-  const items = homeQueue(jobs);
+  const items = child ? [] : homeQueue(jobs);
   const attention = attentionCount(jobs);
   const cards = items.filter((job) => queueGroup(job) === "attention");
   // A personal layout can hide `confirm`; the server then builds no row for it, so the chip
@@ -122,7 +124,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
     <div className="home-heading-actions">
       {confirm?.status === "ok" && (confirm.total ?? 0) > 0 && <button className="home-confirm-chip" onClick={() => onShowAll("confirm")}>{t("home.confirmChip", { count: confirm.total ?? 0 })}</button>}
       {onOpenSearch && <button type="button" className="home-search-action" onClick={onOpenSearch}><Search/> {t("searchAll.homeAction")}</button>}
-      <button className="shape-toggle" title={t(shape === "wide" ? "home.shapePoster" : "home.shapeWide")} aria-pressed={shape === "wide"} onClick={onToggleShape}>{shape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
+      {!child && <button className="shape-toggle" title={t(shape === "wide" ? "home.shapePoster" : "home.shapeWide")} aria-pressed={shape === "wide"} onClick={onToggleShape}>{shape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
     </div>
   </div>;
 

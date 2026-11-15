@@ -36,11 +36,11 @@ afterEach(() => {
 const flush = async () => {
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 };
-const mount = async (confirmStop = false) => {
+const mount = async (confirmStop = false, onSignOut?: () => void) => {
   const onClose = vi.fn();
   const onSwitched = vi.fn();
   await act(async () => {
-    root.render(<ProfileSwitcher onClose={onClose} confirmStop={confirmStop} onSwitched={onSwitched}/>);
+    root.render(<ProfileSwitcher onClose={onClose} confirmStop={confirmStop} onSignOut={onSignOut} onSwitched={onSwitched}/>);
   });
   await flush();
   return { onClose, onSwitched };
@@ -83,6 +83,33 @@ describe("ProfileSwitcher", () => {
     await mount();
     expect(document.body.querySelector(".profile-row.current")?.textContent).toContain("Bob");
     expect(document.body.textContent).toContain("There is no profile to switch to");
+  });
+
+  it("puts Sign out after the profile list and calls it", async () => {
+    const onSignOut = vi.fn();
+    await mount(false, onSignOut);
+    const actions = [...document.body.querySelectorAll<HTMLButtonElement>(".dialog-body button")];
+    const action = actions.at(-1)!;
+    expect(action.textContent).toBe("Sign out");
+    expect(action.classList.contains("profile-signout")).toBe(true);
+    await act(async () => { action.click(); });
+    expect(onSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no new action without onSignOut", async () => {
+    await mount();
+    expect(document.body.querySelector(".profile-signout")).toBeNull();
+  });
+
+  it("uses Sign out as the main action when there is no switch target", async () => {
+    profilesMock.mockResolvedValue({ profiles: [] });
+    const onSignOut = vi.fn();
+    await mount(false, onSignOut);
+    const action = document.body.querySelector<HTMLButtonElement>(".profile-signout-main")!;
+    expect(action.textContent).toBe("Sign out");
+    expect(document.body.textContent).toContain("There is no profile to switch to");
+    await act(async () => { action.click(); });
+    expect(onSignOut).toHaveBeenCalledTimes(1);
   });
 
   it("switches immediately to a profile that needs nothing", async () => {

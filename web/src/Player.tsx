@@ -2,7 +2,8 @@ import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, suppor
 import type Hls from "hls.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
-import { ApiError, api, describeError, subtitleUrl } from "./api";
+import { ApiError, api, describeError, guardChildRequest, subtitleUrl } from "./api";
+import { useChildMode } from "./child-mode";
 import { hlsIfLoaded, loadHls } from "./hls-loader";
 import { watchSidecar } from "./player-sidecar";
 import { label, pickAddonSubtitle } from "./languages";
@@ -76,6 +77,7 @@ function PreviewFrame({ sessionId, time }: { sessionId: string; time: number }) 
   const bucket = useRef(0);
   bucket.current = Math.floor(time / 5) * 5;
   useEffect(() => {
+    guardChildRequest("GET", `/api/playback/${encodeURIComponent(sessionId)}/preview`);
     const controller = new AbortController();
     let objectUrl: string | undefined;
     let previous: number | undefined;
@@ -274,6 +276,7 @@ const SKIP_KEY: Record<SegmentKind, Key> = {
 };
 
 export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, shuffle = false, catalogueKey }: Props) {
+  const { child } = useChildMode();
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -507,10 +510,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // A copy of another media server is queued only where the server proved the right for this
   // exact source; everything else keeps its own policy, where only an explicit refusal hides it.
   const libraryRight = stream?.capabilities?.downloadToLibrary;
-  const canSaveToLibrary = remoteSource ? libraryRight === true : libraryRight !== false;
+  const canSaveToLibrary = !child && (remoteSource ? libraryRight === true : libraryRight !== false);
   // The device is the same kind of copy: a media server's own original is offered it wherever the
   // projection says the account's right is there, and only an explicit refusal hides it.
-  const canSaveToDevice = remoteSource ? stream?.capabilities?.downloadToDevice === true : stream?.capabilities?.downloadToDevice !== false;
+  const canSaveToDevice = !child && (remoteSource ? stream?.capabilities?.downloadToDevice === true : stream?.capabilities?.downloadToDevice !== false);
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
   // Some browsers paint native WebVTT below the visible video box. Active cues

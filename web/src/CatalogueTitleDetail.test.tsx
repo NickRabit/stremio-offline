@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget, type CatalogueTitleDetailProps } from "./CatalogueTitleDetail";
+import { ChildModeProvider } from "./child-mode";
 import { setLocale } from "./i18n";
 import { clearTitleExtras } from "./title-extras";
 import { clearTitleEnrichment } from "./title-enrichment";
@@ -124,7 +125,7 @@ const pickerRows = () => [...document.querySelectorAll<HTMLButtonElement>(".libr
 const chosenRow = () => pickerRows().find((row) => row.getAttribute("aria-pressed") === "true");
 const pickerArrow = () => host.querySelector<HTMLButtonElement>(".split-button-toggle");
 
-const render = async (over: Partial<CatalogueTitleDetailProps> = {}) => {
+const render = async (over: Partial<CatalogueTitleDetailProps> = {}, child = false) => {
   const onPlay = vi.fn();
   const onSaveToLibrary = vi.fn();
   const onSaveElsewhere = vi.fn();
@@ -134,16 +135,16 @@ const render = async (over: Partial<CatalogueTitleDetailProps> = {}) => {
     onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported: () => true, onDownloadToDevice,
     ...over,
   };
-  await act(async () => { root.render(<CatalogueTitleDetail {...props}/>); });
+  await act(async () => { root.render(<ChildModeProvider child={child} catalogue={child}><CatalogueTitleDetail {...props}/></ChildModeProvider>); });
   await flush();
   return { props, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice };
 };
 
 const rerender = async (over: Partial<CatalogueTitleDetailProps>) => {
-  await act(async () => { root.render(<CatalogueTitleDetail
+  await act(async () => { root.render(<ChildModeProvider child={false} catalogue={false}><CatalogueTitleDetail
     target={{ type: "movie", id: "tt-film", name: "A film" }}
     onPlay={vi.fn()} onSaveToLibrary={vi.fn()} onSaveElsewhere={vi.fn()} saveSupported={() => true} onDownloadToDevice={vi.fn()}
-    {...over}/>); });
+    {...over}/></ChildModeProvider>); });
   await flush();
 };
 
@@ -156,6 +157,17 @@ describe("catalogueStreamId", () => {
 });
 
 describe("CatalogueTitleDetail metadata", () => {
+  it("keeps play and the catalogue rows for a child, without extras, downloads or bulk copy", async () => {
+    await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() }, onGallery: vi.fn() }, true);
+    expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("A film");
+    expect(host.querySelector(".title-extras")).toBeNull();
+    expect(host.querySelector(".trailer-action")).toBeNull();
+    expect(host.querySelector(".library-detail-save")).toBeNull();
+    expect(host.querySelector('button[aria-label="Download to device"]')).toBeNull();
+    expect(calls.extras).toEqual([]);
+    expect(calls.gallery).toEqual([]);
+  });
+
   it("takes the catalogue's own snapshot and never reads metadata again", async () => {
     await render({ target: { type: "movie", id: "tt-film", name: "The catalogue's title", initialMeta: film({ name: "The catalogue's title" }) }, onGallery: vi.fn() });
     expect(calls.meta).toHaveLength(0);

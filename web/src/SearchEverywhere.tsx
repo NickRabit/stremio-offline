@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { createPortal } from "react-dom";
 import { ChevronLeft, Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
 import { describeError } from "./api";
+import { useChildMode } from "./child-mode";
 import { ShapeToggle } from "./app-chrome";
 import { TileArt } from "./TileArt";
 import { useDialogFocus } from "./dialog-focus";
@@ -378,6 +379,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   nameSearchNotice?: boolean;
   /** Returns to the Library place Search was opened from. */
 }) {
+  const { child } = useChildMode();
   const root = useRef<HTMLElement>(null);
   const composing = useRef(false);
   const waiting = search.committed
@@ -509,7 +511,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
         ] as const).map(([value, key]) => <button key={value} type="button" className={search.kind === value ? "active" : ""} aria-pressed={search.kind === value}
           onClick={() => search.setKind(value)}>{t(key)}</button>)}
       </div>
-      <ShapeToggle shape={shape} onToggle={onToggleShape}/>
+      {!child && <ShapeToggle shape={shape} onToggle={onToggleShape}/>}
     </div>
     {stripShown && <div className="search-source-strip">
       <div className="search-source-summary" aria-live="polite" role="status">

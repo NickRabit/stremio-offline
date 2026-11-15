@@ -1,9 +1,11 @@
-import { FormEvent, ReactNode, Suspense, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, Suspense, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { genreLabel } from "./genres";
 import { useCrumbsAtEnd } from "./crumbs";
-import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Users, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
-import { api, ApiError, describeError, saveToDevice } from "./api";
+import { api, ApiError, ChildRefusedError, describeError, saveToDevice } from "./api";
+import { childViewAllowed, setChildSession } from "./child-policy";
+import { ChildModeProvider } from "./child-mode";
 import { LoginScreen, PasswordChangeRequired } from "./Login";
 import { clearPairLink, PairDeviceDialog, pairLinkCode } from "./PairDeviceDialog";
 import { ProfileSwitcher } from "./ProfileSwitcher";
@@ -130,7 +132,7 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 };
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
-type View = "home" | "catalog" | "library" | "search" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings" | "person";
+export type View = "home" | "catalog" | "library" | "search" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings" | "person";
 /** One accessible remote library and the sources it reported for the title on screen. */
 type RemoteGroup = { libraryId: string; name: string; provider: MediaServerProvider; order: number; streams: Stream[]; error: string };
 type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
@@ -177,6 +179,7 @@ export function App() {
   const { t } = useI18n();
   const [view, setViewState] = useState<View>(() => rememberedStartView()); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
   const firstView = useRef<View>(view);
+  const initialViewResolved = useRef(false);
   // The Library is this visit's first page: start its chunk during this render, alongside
   // the requests the effects below fire, rather than with the idle prefetch.
   const preloadStartLibrary = useRef(firstView.current === "library");
@@ -331,6 +334,17 @@ export function App() {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
   const restricted = buildInfo?.restricted === true;
+  const child = session?.child === true;
+  const childCatalogue = child && session?.catalogue === true;
+  useLayoutEffect(() => {
+    setChildSession(session ? { child: session.child === true, catalogue: session.catalogue === true } : null);
+    // A child always starts on Home, whatever this browser remembered for somebody else. Only
+    // a child's session is touched here: everybody else keeps the view the first render chose.
+    if (!session?.child || initialViewResolved.current) return;
+    initialViewResolved.current = true;
+    firstView.current = "home";
+    setViewState("home");
+  }, [session]);
   // Home waits for the build's answer: a restricted build must never draw it, not even for the
   // first few frames. A failed answer reads as unrestricted, as it always has.
   const [buildKnown, setBuildKnown] = useState(false);
@@ -489,7 +503,8 @@ export function App() {
       const target = job.op === "move" && job.total === 1 && job.failed === 0 ? job.results[0]?.to : undefined;
       if (target) revealInLibrary(target);
       else await loadBrowse(browsePath);
-      await Promise.all([api.progressList().then(setResume), api.watchlist().then(setWatchlist)]);
+      await api.progressList().then(setResume);
+      if (!child || childCatalogue) await api.watchlist().then(setWatchlist);
       // A job the user stopped did not finish the item, so it keeps the plain wording even
       // when it was the only one.
       const single = job.status === "completed" && job.total === 1
@@ -550,7 +565,7 @@ export function App() {
       if (localSeries?.path === itemPath) setLocalSeries({ ...localSeries, favorite });
       // One star per title: starring a bound copy stars its title too, so the catalogue's own
       // list has to be read again for the star to read filled everywhere.
-      setWatchlist(await api.watchlist());
+      if (!child || childCatalogue) setWatchlist(await api.watchlist());
       await loadBrowse(browsePath);
     } catch (error) { fail(error); }
   };
@@ -558,6 +573,7 @@ export function App() {
   /** `addonKey` is the add-on the title came from, picked as its playback position picks it, so
    *  that add-on's Home switch can hide the star. */
   const toggleWatchlist = async (item: Meta, addonKey?: string) => {
+    if (child && !childCatalogue) return;
     const favorite = !inWatchlist(item.type, item.id);
     try {
       await api.setWatchlist({ type: item.type || "movie", id: item.id, name: item.name, poster: item.poster, ...(favorite && addonKey ? { addonKey } : {}), favorite });
@@ -577,7 +593,7 @@ export function App() {
       const wanted = !starred;
       try {
         await api.setFavorite(path, wanted);
-        setWatchlist(await api.watchlist());
+        if (!child || childCatalogue) setWatchlist(await api.watchlist());
         setLibraryFavorites((current) => wanted ? [...current, path] : current.filter((item) => item !== path));
         notify(t(wanted ? "favorite.added" : "favorite.removed"));
       } catch (error) { fail(error); }
@@ -806,6 +822,7 @@ export function App() {
   };
   /** A menu is asked about once per path per session; the answer is chrome either way. */
   const loadLibraryLinks = (item: TreeItem) => {
+    if (child) return;
     if (item.match !== "matched" || askedLibraryLinks.current.has(item.path)) return;
     askedLibraryLinks.current.add(item.path);
     void api.libraryLinks(item.path, settings.uiLanguage)
@@ -813,6 +830,7 @@ export function App() {
       .catch(() => { /* a failure only leaves the menu without the row */ });
   };
   const loadLibraryTrailer = (item: TreeItem) => {
+    if (child) return;
     if (item.match !== "matched" || askedLibraryTrailers.current.has(item.path)) return;
     askedLibraryTrailers.current.add(item.path);
     void api.libraryTrailer(item.path, settings.uiLanguage)
@@ -998,7 +1016,7 @@ export function App() {
     setStoredGallery(images);
     setGalleryIndex(0);
     const saved = path ? api.libraryGallery(path).then((answer) => answer.images.map(localGalleryImage)).catch(() => []) : Promise.resolve([]);
-    const extra = ref ? loadTitleGallery(ref, settings.uiLanguage) : Promise.resolve([]);
+    const extra = ref && !child ? loadTitleGallery(ref, settings.uiLanguage) : Promise.resolve([]);
     void Promise.all([saved, extra]).then(([local, catalogue]) => {
       if (request === galleryRequest.current) setStoredGallery(mergeGallery(images, local, catalogue));
     });
@@ -1018,6 +1036,7 @@ export function App() {
   const [pairLink, setPairLink] = useState(() => pairLinkCode());
   useEffect(() => { if (pairLink) clearPairLink(); }, []);
   const fail = (value: unknown) => {
+    if (value instanceof ChildRefusedError) return;
     if (value instanceof ApiError && value.status === 401) { setSession(null); return; }
     // A failure with a reference stays long enough to copy the reference down.
     setError(describeError(value)); setTimeout(() => setError(""), value instanceof ApiError && value.reference ? 15000 : 6000);
@@ -1366,6 +1385,7 @@ export function App() {
   /** Clicking the section we are already in resets it; otherwise the last filters
    * and the page position are restored. */
   const openViewNow = (target: View) => {
+    if (child && !childViewAllowed(target, childCatalogue)) target = "home";
     navigated.current = true;
     setSearchReturn(false);
     // A shared detail is drawn over the section that opened it, and the menu is a way out of it:
@@ -1402,6 +1422,7 @@ export function App() {
     window.scrollTo(0, 0);
   };
   const openView = (target: View) => {
+    if (child && !childViewAllowed(target, childCatalogue)) target = "home";
     const ticket = ++openViewTicket.current;
     const lazyTarget = target === "settings" ? SettingsPage : target === "stats" ? StatsPanel : target === "library" ? RemoteLibraryBrowser : null;
     if (lazyTarget && !lazyTarget.ready()) {
@@ -1425,6 +1446,12 @@ export function App() {
   const confirmStop = playerOpen || deviceTransfers.some((transfer) => transfer.state === "running");
 
   const refresh = async (selectFirst = false) => {
+    if (child && !childCatalogue) {
+      setAddons([]);
+      setCatalogs([]);
+      setCatalogsKnown(true);
+      return [] as Catalog[];
+    }
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs); setCatalogsKnown(true);
     if ((selectFirst || !selectedCatalog) && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
     return nextCatalogs;
@@ -1461,14 +1488,14 @@ export function App() {
     setSpeedLimitMbps(Array.isArray(snapshot) ? null : snapshot.speedLimitMbps ?? null);
     setDeviceTransfers(Array.isArray(snapshot) ? [] : snapshot.deviceTransfers ?? []);
   };
-  const loadDownloads = () => api.downloads().then(applyDownloads).catch(fail);
+  const loadDownloads = () => child ? Promise.resolve() : api.downloads().then(applyDownloads).catch(fail);
   /** Home's queue card action: the mutation, then the poll that carries its result, with the
    *  failure handed to the toast the rest of the app uses. */
   const homeAction = async (job: DownloadJob, action: "pause" | "resume" | "retry") => {
     try { await api.downloadAction(job.id, action); await loadDownloads(); } catch (error) { fail(error); }
   };
   /** The followed series and the episodes they announced: the Library row needs both. */
-  const loadFollows = () => Promise.all([api.follows(), api.newEpisodes()])
+  const loadFollows = () => child && !childCatalogue ? Promise.resolve() : Promise.all([api.follows(), api.newEpisodes()])
     .then(([list, items]) => { setFollows(list); setNewEpisodes(items); })
     .catch(() => undefined);
   const applyFollowChange = (id: string, follow: FollowView | null) => {
@@ -1533,8 +1560,9 @@ export function App() {
   };
   /** The logo leads to the account's own start page: Home or the Library when chosen (a restricted
    *  build has no Home), otherwise a clean catalogue as it always has. */
-  const startHome = settings.startView !== "catalog" && !(restricted && settings.startView === "home");
+  const startHome = child || (settings.startView !== "catalog" && !(restricted && settings.startView === "home"));
   const goToStart = () => {
+    if (child) { openView("home"); return; }
     if (!startHome) { resetCatalog(); return; }
     openView(settings.startView === "library" ? "library" : "home");
   };
@@ -1596,7 +1624,9 @@ export function App() {
     // A fresh sign-in re-arms the start page: signing out again must not remember the last
     // switch as if the person had navigated.
     if (!ready) { navigated.current = false; return; }
-    const loaded = refresh().catch((error: unknown) => { fail(error); return null; });
+    const loaded = child && !childCatalogue
+      ? Promise.resolve(null)
+      : refresh().catch((error: unknown) => { fail(error); return null; });
     api.settings().then(async (next) => {
       settingsArrived.current = true;
       // Remembered here as well as in the effect: an answer equal to the defaults changes
@@ -1611,32 +1641,37 @@ export function App() {
       const resolvedBuild = await loadBuildInfo();
       // The chosen page is opened once, and only while nobody has gone anywhere yet.
       if (!navigated.current && !selected && !playerOpen) {
-        const target = resolveStartView(next.startView, { restricted: resolvedBuild?.restricted === true, navigated: navigated.current, hasCatalogs }) ?? "catalog";
-        rememberStartView(target);
-        if (target !== firstView.current) {
-          startupViewTransition.current = true;
-          startupPersonalRefresh.current = true;
-          // `refresh()` above has already picked the first catalogue; resetCatalog would read the
-          // first render's empty list and clear that pick.
-          if (target === "catalog") setView("catalog");
-          else openView(target);
+        if (child) {
+          if (viewRef.current !== "home") setView("home");
+        } else {
+          const target = resolveStartView(next.startView, { restricted: resolvedBuild?.restricted === true, navigated: navigated.current, hasCatalogs }) ?? "catalog";
+          rememberStartView(target);
+          if (target !== firstView.current) {
+            startupViewTransition.current = true;
+            startupPersonalRefresh.current = true;
+            // `refresh()` above has already picked the first catalogue; resetCatalog would read the
+            // first render's empty list and clear that pick.
+            if (target === "catalog") setView("catalog");
+            else openView(target);
+          }
         }
         navigated.current = true;
       }
     }).catch((error: unknown) => { setTilesKnown(true); fail(error); });
     api.languages().then(setLanguages).catch(() => undefined);
-    api.sourceProfiles().then(setSourceProfiles).catch(() => setSourceProfiles([]));
+    if (!child || childCatalogue) api.sourceProfiles().then(setSourceProfiles).catch(() => setSourceProfiles([]));
+    else setSourceProfiles([]);
     void loadViews();
   }, [ready]);
   /** After an admin changed the rules: the sort options list them, and a deleted default came
    *  back as Balanced in the settings. */
   const reloadSourceRules = () => {
-    api.sourceProfiles().then(setSourceProfiles).catch(() => undefined);
+    if (!child || childCatalogue) api.sourceProfiles().then(setSourceProfiles).catch(() => undefined);
     api.settings().then((next) => setSettings((current: AppSettings) => ({ ...current, ...next }))).catch(() => undefined);
   };
   // Which addons are worth searching changes as they are switched on and off.
   useEffect(() => {
-    if (!catalogsKnown) return;
+    if (!catalogsKnown || (child && !childCatalogue)) return;
     api.searchable().then(setSearchable).catch(() => undefined);
   }, [addons, catalogsKnown]);
   // Only a file probe knows the exact languages, so we run one for the chosen stream.
@@ -1721,8 +1756,10 @@ export function App() {
       startupPersonalRefresh.current = false;
       return;
     }
-    api.watchlist().then(setWatchlist).catch(() => undefined);
-    void loadFollows();
+    if (!child || childCatalogue) {
+      api.watchlist().then(setWatchlist).catch(() => undefined);
+      void loadFollows();
+    }
   }, [ready, view]);
   useEffect(() => {
     if (!ready || view !== "favorites") return;
@@ -1756,6 +1793,7 @@ export function App() {
   useEffect(() => {
     const item = selected;
     if (!item || !(item.type === "series" || item.type === "movie" || item.videos?.length)) { setDetailFollow(null); followLoadedFor.current = null; return; }
+    if (child && !childCatalogue) { setDetailFollow(null); followLoadedFor.current = null; return; }
     const wanted = item.id;
     // Metadata that arrives later only adds `videos` to the same title, which must not drop
     // the follow the chip already shows: only a different title resets it.
@@ -2191,6 +2229,7 @@ export function App() {
   useEffect(() => {
     setFileSubtitles([]);
     if (!localStream || !playingCatalogue) return;
+    if (child && !childCatalogue) return;
     const controller = new AbortController();
     void api.subtitles(playingCatalogue.type, playingCatalogue.id, controller.signal)
       .then((found) => { if (!controller.signal.aborted) setFileSubtitles(found); })
@@ -2285,7 +2324,7 @@ export function App() {
   // does nothing, and a failing server is asked ever less often. A toast on every tick
   // would only cover the screen while the server restarts.
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || child) return;
     const base = view === "downloads" ? 1200 : 5000;
     let delay = base;
     let timer: number | undefined;
@@ -2796,12 +2835,14 @@ export function App() {
       setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]);
     }
     // The links never hold up the description, and only the title on screen keeps them.
-    void api.links(type, item.id, settings.uiLanguage)
-      .then((answer) => { if (linksRequest === linksRequestRef.current) setTitleLinks(answer.links); })
-      .catch(() => { if (linksRequest === linksRequestRef.current) setTitleLinks([]); });
-    void api.trailer(type, item.id, settings.uiLanguage)
-      .then((answer) => { if (trailerRequest === trailerRequestRef.current) setTitleTrailer(answer.trailer); })
-      .catch(() => { if (trailerRequest === trailerRequestRef.current) setTitleTrailer(null); });
+    if (!child) {
+      void api.links(type, item.id, settings.uiLanguage)
+        .then((answer) => { if (linksRequest === linksRequestRef.current) setTitleLinks(answer.links); })
+        .catch(() => { if (linksRequest === linksRequestRef.current) setTitleLinks([]); });
+      void api.trailer(type, item.id, settings.uiLanguage)
+        .then((answer) => { if (trailerRequest === trailerRequestRef.current) setTitleTrailer(answer.trailer); })
+        .catch(() => { if (trailerRequest === trailerRequestRef.current) setTitleTrailer(null); });
+    }
     const remembered = resumeVideo(detail.videos, resume);
     if (remembered) {
       setSeason(remembered.season ?? null); setEpisodesOpen(false);
@@ -3128,6 +3169,7 @@ export function App() {
   /** Bulk download: the queue gets lazy jobs and each picks its own source (the largest in the
    *  preferred language) when its turn comes. That way addons never get an avalanche of requests. */
   const enqueueEpisodes = async (scope: "series" | "season") => {
+    if (child) return;
     if (!selected?.videos?.length || remoteFilterId(streamAddon) || (selectedStream && isRemoteStream(selectedStream))) return;
     const now = Date.now();
     const episodes = selected.videos.filter((video) => {
@@ -3292,6 +3334,7 @@ export function App() {
   const detailId = catalogueDetail?.id;
   useEffect(() => {
     if (!detailType || !detailId) { setDetailLinks([]); setDetailTrailer(null); return; }
+    if (child) { setDetailLinks([]); setDetailTrailer(null); return; }
     let live = true;
     void api.links(detailType, detailId, settings.uiLanguage)
       .then((answer) => { if (live) setDetailLinks(answer.links); })
@@ -3306,6 +3349,7 @@ export function App() {
   // here would run after the detail's first report and throw that report away.
   useEffect(() => {
     if (!catalogueDetail) return;
+    if (child && !childCatalogue) { setCatalogueFollow(null); return; }
     const { type, id } = catalogueDetail;
     let live = true;
     api.followByMeta(type, id).then((follow) => { if (live) setCatalogueFollow(follow); }).catch(() => undefined);
@@ -3337,6 +3381,7 @@ export function App() {
     options?: { libraryFirst?: boolean; remoteFirst?: boolean; keepStack?: boolean },
   ) => {
     if (target.type !== "movie" && target.type !== "series") return;
+    if (child && !childCatalogue) return;
     navigated.current = true;
     if (!catalogueDetail) {
       detailReturn.current = { view, windowY: window.scrollY, pane: view === "catalog" ? "catalog" : null, paneY: gridRef.current?.scrollTop ?? 0 };
@@ -3682,8 +3727,8 @@ export function App() {
    *  the moment the panel opens, and only for the title the player is identified by. */
   const playingSources = useLibrarySources({
     scope: `player:${playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : "-"}`,
-    open: playerOpen && playerSourcesOpen,
-    catalogue: playingCatalogue,
+    open: !child && playerOpen && playerSourcesOpen,
+    catalogue: child ? null : playingCatalogue,
     libraries: null,
     localCopies: true,
   });
@@ -3692,8 +3737,8 @@ export function App() {
   const [alternativeSourcesOpen, setAlternativeSourcesOpen] = useState(false);
   const alternativeSources = useLibrarySources({
     scope: `alternative:${alternative?.catalogue ? `${alternative.catalogue.type}:${alternative.catalogue.id}` : "-"}`,
-    open: alternativeSourcesOpen,
-    catalogue: alternative?.catalogue ?? null,
+    open: !child && alternativeSourcesOpen,
+    catalogue: child ? null : alternative?.catalogue ?? null,
     libraries: null,
     localCopies: true,
   });
@@ -3791,7 +3836,7 @@ export function App() {
     leading={(catalogueDetail.type === "series" || (detailRead !== null && !detailRead.pending && !detailRead.playable)) && (catalogueFollow
       ? <button className="follow-chip on" aria-label={t("follow.following")} title={t("follow.following")} onClick={() => setDetailFollowOpen(true)}><BellRing/><span className="follow-chip-label">{t("follow.following")}</span>{catalogueFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button>
       : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}), ...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })} aria-label={t("follow.follow")} title={t("follow.follow")}><Bell/><span className="follow-chip-label">{t("follow.follow")}</span></button>)}/> : undefined;
-  const panelExtras = useTitleExtras(selected?.type, selected?.id);
+  const panelExtras = useTitleExtras(child ? undefined : selected?.type, child ? undefined : selected?.id);
 
   const localLibraryDetailProps = (
     item: TreeItem,
@@ -3877,7 +3922,8 @@ export function App() {
     ? (shuffleState?.hasPrevious ? previousRandom : undefined)
     : previousFile ? () => playAdjacent(previousFile) : undefined;
 
-  return <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
+  return <ChildModeProvider child={child} catalogue={childCatalogue}>
+  <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
   <div className={`app-shell${tilesKnown ? "" : " tiles-pending"} tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user">{session?.canSwitch
@@ -3889,8 +3935,16 @@ export function App() {
             <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
             {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
           </span>}
-        <button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} aria-label={t("app.signOut")} onClick={signOut}><LogOut/> <span className="signout-label">{t("app.signOut")}</span></button></div></div></header>
-    <aside className="sidebar"><nav>
+        {!(child && session?.canSwitch) && <button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} aria-label={t("app.signOut")} onClick={signOut}><LogOut/> <span className="signout-label">{t("app.signOut")}</span></button>}</div></div></header>
+    <aside className={`sidebar${child ? " sidebar-child" : ""}`}><nav>
+      {child ? <>
+        <Nav icon={<HomeIcon/>} label={t("nav.home")} active={view === "home"} onClick={() => openView("home")}/>
+        {childCatalogue && <Nav icon={<Library/>} label={t("nav.catalog")} active={view === "catalog"} onClick={() => openView("catalog")}/>}
+        <Nav icon={<HardDrive/>} label={t("nav.library")} active={view === "library"} onClick={() => openView("library")}/>
+        {session?.canSwitch
+          ? <Nav icon={<Users/>} label={t("profiles.switch")} active={false} onClick={() => setSwitcherOpen(true)}/>
+          : <Nav icon={<LogOut/>} label={t("app.signOut")} active={false} onClick={() => void signOut()}/>}
+      </> : <>
       {/* Restricted accounts have no Home: the view needs the personal data they are not
           given, so the destination is not offered at all. */}
       {!restricted && <Nav icon={<HomeIcon/>} label={t("nav.home")} active={view === "home"} onClick={() => openView("home")}/>}
@@ -3906,7 +3960,8 @@ export function App() {
           error. */}
       {session!.role === "admin" && <Nav secondary icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>}
       <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSwitchProfile={session?.canSwitch ? () => setSwitcherOpen(true) : undefined} onSignOut={signOut}/>
-    </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{catalogsKnown ? addons.filter((a) => a.enabled).length : "–"}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
+      </>}
+    </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button>{!child && <div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{catalogsKnown ? addons.filter((a) => a.enabled).length : "–"}</strong><span>{t("app.catalogsAndSources")}</span></div>}</div></aside>
     <main className={`view-${view}${catalogueDetail ? " view-title-detail" : ""}`}>
       {/* The shared catalogue detail is hosted over the page that opened it, so closing it simply
           puts that page back: Home is never turned into an unfiltered catalogue on the way. Its
@@ -4032,7 +4087,7 @@ export function App() {
                 </>}
             <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={activeSort} onChange={(e) => (submittedQuery ? setSearchSort(e.target.value) : setSort(e.target.value))}><option value="default">{t("catalog.sortAddon")}</option>{submittedQuery && <option value="titleMatch">{t("catalog.sortTitleMatch")}</option>}<option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
             {activeSort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}
-            <button className="shape-toggle" title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
+            {!child && <button className="shape-toggle" title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
             {/* The one control the collapsed header keeps: it unfolds the search block and hands over the caret. */}
             <button className="header-expand" title={t("catalog.showTools")} aria-label={t("catalog.showTools")} aria-expanded={!catalogCompact} onClick={(event) => {
               holdHeaderOpen();
@@ -4103,7 +4158,7 @@ export function App() {
               copy={<><h2>{selected.name}</h2><p className="meta-line">{selectedRating && <ImdbRating rating={selectedRating}/>}{selectedRating && selectedFactText ? " · " : ""}{selectedFactText}{panelAge && (selectedRating || selectedFactText) ? " " : ""}{panelAge}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/></>}/></div>
 
             <div className="detail-workflow">
-            {selected.videos?.length ? !(chosenEpisode && sourcesLoaded) && <div className={`episodes ${chosenEpisode ? "collapsed" : ""}`}>{chosenEpisode ?? <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && !remoteFilterId(streamAddon) && !(selectedStream && isRemoteStream(selectedStream)) && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}{!remoteFilterId(streamAddon) && !(selectedStream && isRemoteStream(selectedStream)) && <button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>}{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
+            {selected.videos?.length ? !(chosenEpisode && sourcesLoaded) && <div className={`episodes ${chosenEpisode ? "collapsed" : ""}`}>{chosenEpisode ?? <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{!child && activeSeason != null && !remoteFilterId(streamAddon) && !(selectedStream && isRemoteStream(selectedStream)) && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}{!child && !remoteFilterId(streamAddon) && !(selectedStream && isRemoteStream(selectedStream)) && <button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>}{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
             {sourcesLoaded && (!selected.videos?.length || !episodesOpen) && <div className="sources"><div className={`subhead ${chosenEpisode ? "sources-episode" : ""}`}>{chosenEpisode ?? <h3>{t("sources.heading")}</h3>}<span>{sourceRows.length === sourceTotal ? sourceTotal : t("sources.ofTotal", { shown: sourceRows.length, total: sourceTotal })}{pendingSources > 0 ? ` · ${t("sources.loadingFrom", { count: pendingSources })}` : ""}</span></div>
               <SourceFilters visible={offered.length > 1 || localStreams.length > 0 || remoteGroups.length > 0} addon={{
                 value: streamAddon, onChange: setStreamAddon,
@@ -4128,7 +4183,7 @@ export function App() {
                   ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : []}/>
               {!sourceRows.length && sourcesPending && <div className="no-sources">{t("sources.asking")}</div>}
               {!sourceRows.length && !sourcesPending && (!offered.length || localSelected || remoteSelected !== undefined) && <div className="no-sources">{t("sources.none")}</div>}
-              {Boolean(offered.length) && !sourceRows.length && !sourcesPending && !localSelected && hiddenTorrents && !addonFilter && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
+              {!child && Boolean(offered.length) && !sourceRows.length && !sourcesPending && !localSelected && hiddenTorrents && !addonFilter && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
               {Boolean(offered.length) && !sourceRows.length && !sourcesPending && !localSelected && !(hiddenTorrents && !addonFilter && !streamLanguage) && <div className="no-sources">{t("sources.noneMatchFilter", { count: offered.length })} <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>{t("sources.clearFilters")}</button></div>}
               {notices.map((notice) => <p className="notice" key={notice.sourceId}><b>{notice.addonName}</b> {noticeText(notice)}</p>)}
               {remoteDiscoveryError && <p className="notice" role="alert"><b>{t("mediaServer.remoteTitle")}</b> {remoteDiscoveryError} <button className="link-button" onClick={() => retryRemoteGroups()}>{t("home.retry")}</button></p>}
@@ -4137,7 +4192,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealLibraryCopy(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => openSingleDownload()}><ChevronDown/></button></div>}<button disabled={!canSaveToDevice || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealLibraryCopy(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : !child && <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => openSingleDownload()}><ChevronDown/></button></div>}{!child && <button disabled={!canSaveToDevice || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button>}</div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
@@ -4229,8 +4284,8 @@ export function App() {
               setBrowsePath(localSeries.path);
               setLocalSeriesRefresh((value) => value + 1);
             }}><Info/><span>{t("library.titleDetail")}</span></button>}
-            {!libraryList && !localDetail && !openLocalSeries && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
-            <div className="library-maintenance" onKeyDown={(event) => {
+            {!child && !libraryList && !localDetail && !openLocalSeries && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
+            {!child && <div className="library-maintenance" onKeyDown={(event) => {
               if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
             }}>
               <button className="library-maintenance-toggle" aria-label={t("library.tools")} title={t("library.tools")} aria-expanded={menuFor === ":library-tools"} aria-controls="library-maintenance-actions" onClick={(event) => {
@@ -4257,7 +4312,7 @@ export function App() {
                   <Library/> {t("library.libraries")}
                 </button>}
               </div>
-            </div>
+            </div>}
             <button className="header-expand" title={t("library.showTools")} aria-label={t("library.showTools")} aria-expanded={!libraryCompact} onClick={() => { holdHeaderOpen(); setLibraryCompact(false); }}><SlidersHorizontal/></button>
             </div>
           </div>
@@ -4401,7 +4456,7 @@ export function App() {
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       {item.progress && <button onClick={() => revealInLibrary(item.path)}><HardDrive/> {t("library.showInLibrary")}</button>}
                       {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> {t("library.markUnwatched")}</button>}
-                      <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> {t("library.downloadToDevice")}</button>
+                      {!child && <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> {t("library.downloadToDevice")}</button>}
                       {admin && <>
                         <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> {t("library.rename")}</button>
                         <button onClick={() => openMove(item.path, item.label, item.titleType)}><FolderInput/> {t("library.move")}</button>
@@ -4472,7 +4527,7 @@ export function App() {
       </>}
     </main>
     <TrailerPlayer trailer={trailerOpen} onClose={() => setTrailerOpen(null)}/>
-    {switcherOpen && <ProfileSwitcher confirmStop={confirmStop} onClose={() => setSwitcherOpen(false)}/>}
+    {switcherOpen && <ProfileSwitcher confirmStop={confirmStop} onClose={() => setSwitcherOpen(false)} {...(child ? { onSignOut: () => void signOut() } : {})}/>}
     <Player nextTitle={playerNextTitle} nextBusy={nextBusy} onNext={playerOnNext} autoNext={playerAutoNext} previousTitle={playerPreviousTitle} onPrevious={playerOnPrevious} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} upNextAt={settings.upNextAt} skipSegmentsAuto={settings.skipSegmentsAuto} shuffle={shuffleActive} onPreferences={setPlaybackPreferences}
       catalogueKey={localStream && playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
@@ -4488,8 +4543,8 @@ export function App() {
       sources={{
         lead: playingStream ? [playingStream] : [],
         leadLabel: playingStream ? streamGroupLabel(playingStream) : t("sources.heading"),
-        groups: playingSources.groups,
-        panel: { groups: playingSources.groups, retry: playingSources.retry, renew: playingSources.renew, refind: playingSources.refind },
+        groups: child ? [] : playingSources.groups,
+        ...(!child ? { panel: { groups: playingSources.groups, retry: playingSources.retry, renew: playingSources.renew, refind: playingSources.refind } } : {}),
         onOpen: () => setPlayerSourcesOpen(true),
         onSwitch: switchPlaybackSource,
       }}
@@ -4507,8 +4562,8 @@ export function App() {
       sources={{
         lead: [alternative.stream],
         leadLabel: streamGroupLabel(alternative.stream),
-        groups: alternativeSources.groups,
-        panel: { groups: alternativeSources.groups, retry: alternativeSources.retry, renew: alternativeSources.renew, refind: alternativeSources.refind },
+        groups: child ? [] : alternativeSources.groups,
+        ...(!child ? { panel: { groups: alternativeSources.groups, retry: alternativeSources.retry, renew: alternativeSources.renew, refind: alternativeSources.refind } } : {}),
         onOpen: () => setAlternativeSourcesOpen(true),
         onSwitch: switchAlternativeSource,
       }}
@@ -4598,5 +4653,6 @@ export function App() {
     {pairLink && !restricted && <PairDeviceDialog session={session!} initialCode={pairLink} onClose={() => setPairLink(null)} onNotify={notify}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button aria-label={t("common.close")} title={t("common.close")} onClick={() => {setError("");setMessage("");}}><X aria-hidden="true"/></button></div>}
   </div>
-  </TitleExtrasActions.Provider>;
+  </TitleExtrasActions.Provider>
+  </ChildModeProvider>;
 }

@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
+import { ChildModeProvider } from "./child-mode";
 import { setLocale } from "./i18n";
 import type { FollowAutoDownload, LibraryView, SourceProfile, Stream } from "./types";
 
@@ -73,10 +74,10 @@ const setupFetch = (profiles: SourceProfile[] | Error) => {
     return json({});
   });
 };
-const renderDialog = async (props: Partial<ComponentProps<typeof SeriesDownloadDialog>> = {}) => {
+const renderDialog = async (props: Partial<ComponentProps<typeof SeriesDownloadDialog>> = {}, child = false) => {
   await act(async () => {
-    root.render(<SeriesDownloadDialog type="series" label="Season 1" title="Show" episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]}
-      libraries={[]} onClose={() => undefined} onSubmit={vi.fn().mockResolvedValue(undefined)} {...props}/>);
+    root.render(<ChildModeProvider child={child} catalogue={child}><SeriesDownloadDialog type="series" label="Season 1" title="Show" episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]}
+      libraries={[]} onClose={() => undefined} onSubmit={vi.fn().mockResolvedValue(undefined)} {...props}/></ChildModeProvider>);
   });
   await flush();
 };
@@ -84,6 +85,15 @@ const selectedProfile = () => host.querySelector<HTMLInputElement>('input[name="
 const primary = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.classList.contains("primary"))!;
 
 describe("SeriesDownloadDialog", () => {
+  it("offers a child only notification following, with no download or retention setup", async () => {
+    setupFetch([balanced]);
+    await renderDialog({ follow: { create: { metaId: "tt1", name: "Show" } } }, true);
+    expect(host.querySelectorAll('input[name="follow-mode"]')).toHaveLength(1);
+    expect((host.querySelector('input[name="follow-mode"]') as HTMLInputElement).value).toBe("notify");
+    expect(host.textContent).not.toContain("Download rules");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("renders only download-rule cards and no legacy source, audio or subtitle controls", async () => {
     setupFetch([balanced, myLanguage]);
     await renderDialog();
