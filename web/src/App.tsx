@@ -132,7 +132,7 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
 type View = "home" | "catalog" | "library" | "search" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings";
-type PersonLayer = { id: number; name: string; fromTitle?: string };
+type PersonLayer = { id: number; name: string; fromTitle?: string; backLabel?: string };
 type CatalogueDetailState = CatalogueDetailTarget & {
   initialSources?: Stream[];
   libraryFirst?: boolean;
@@ -3499,13 +3499,16 @@ export function App() {
     }
     openSearch(name);
   };
+  const openPersonLayer = (person: { id: number; name: string }, extra?: { fromTitle?: string; backLabel?: string }) => {
+    setPersonNameSearch(null);
+    personPageSnapshot.current = captureScroll();
+    personRestoreScroll.current = undefined;
+    pendingPersonPageRestore.current = false;
+    setPersonLayer({ id: person.id, name: person.name, ...extra });
+  };
   const searchPerson = (person: { name: string; id?: number }, fromTitle?: string) => {
     if (person.id) {
-      setPersonNameSearch(null);
-      personPageSnapshot.current = captureScroll();
-      personRestoreScroll.current = undefined;
-      pendingPersonPageRestore.current = false;
-      setPersonLayer({ id: person.id, name: person.name, ...(fromTitle ? { fromTitle } : {}) });
+      openPersonLayer({ id: person.id, name: person.name }, fromTitle ? { fromTitle } : undefined);
       return;
     }
     searchPersonByName(person.name);
@@ -3981,6 +3984,7 @@ export function App() {
       {personLayer && <PersonView key={personLayer.id} person={personLayer} language={settings.uiLanguage} shape={settings.searchTileShape}
         onToggleShape={() => void toggleShape("searchTileShape")} onSearchText={searchTypedText}
         {...(personLayer.fromTitle ? { fromTitle: personLayer.fromTitle } : {})}
+        {...(personLayer.backLabel ? { backLabel: personLayer.backLabel } : {})}
         {...(personRestoreScroll.current != null ? { initialScroll: personRestoreScroll.current } : {})}
         onBack={() => {
           pendingPersonPageRestore.current = true;
@@ -4247,6 +4251,7 @@ export function App() {
       {view === "search" && buildInfo?.searchEverywhere && <SearchEverywhere search={searchEverywhere} shape={settings.searchTileShape} onToggleShape={() => void toggleShape("searchTileShape")}
         searchable={searchable} recent={searchState?.saveHistory ? searchState.recent.map((entry) => entry.query) : []}
         onRecord={recordSearch} onForget={forgetSearch} onRefreshRecent={() => void loadSearchState()} onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}
+        onOpenPerson={(person) => openPersonLayer(person, { backLabel: t("searchAll.backToSearch") })}
         nameSearchNotice={Boolean(personNameSearch)}/>}
       {view === "library" && <section ref={libraryPageRef} hidden={catalogueDetail ? true : undefined} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}

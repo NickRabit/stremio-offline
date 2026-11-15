@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { api } from "./api";
 import { SearchEverywhere } from "./SearchEverywhere";
 import { setLocale } from "./i18n";
 import type { SearchClusterView, SearchMember, SearchMemberPage, SearchSnapshot, SearchableCatalog } from "./types";
@@ -87,6 +88,7 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
+  vi.spyOn(api, "searchPeople").mockResolvedValue({ people: [] });
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -112,7 +114,8 @@ const render = async (search: SearchEverywhereController, handlers: {
     root.render(<SearchEverywhere search={search} shape="poster" onToggleShape={vi.fn()}
       searchable={handlers.searchable ?? []} recent={handlers.recent ?? []}
       onRecord={handlers.onRecord ?? vi.fn()} onForget={handlers.onForget ?? vi.fn()} onRefreshRecent={handlers.onRefreshRecent ?? vi.fn()}
-      onOpenMember={handlers.onOpenMember ?? vi.fn()} onOpenCanonical={handlers.onOpenCanonical ?? vi.fn()}/>);
+      onOpenMember={handlers.onOpenMember ?? vi.fn()} onOpenCanonical={handlers.onOpenCanonical ?? vi.fn()}
+      onOpenPerson={vi.fn()}/>);
   });
 };
 

@@ -283,6 +283,15 @@ describe("PersonView", () => {
     expect(onBack).toHaveBeenCalled();
   });
 
+  it("shows backLabel on the back link when given", async () => {
+    const { onBack } = await mount({ backLabel: "Back to search" });
+    const back = host.querySelector<HTMLButtonElement>(".search-return")!;
+    expect(back.textContent).toContain("Back to search");
+    expect(back.textContent).not.toContain("Back to Heat");
+    await act(async () => { back.click(); });
+    expect(onBack).toHaveBeenCalled();
+  });
+
   it("renders 40 tiles of a long section until the sentinel intersects", async () => {
     vi.stubGlobal("IntersectionObserver", RecordingIntersectionObserver);
     const titles = Array.from({ length: 120 }, (_, index) => title({

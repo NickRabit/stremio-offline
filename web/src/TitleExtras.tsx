@@ -41,7 +41,7 @@ const initials = (name: string) => {
   return letters.join("").toLocaleUpperCase();
 };
 
-function PersonFace({ name, photo }: { name: string; photo?: string }) {
+export function PersonFace({ name, photo }: { name: string; photo?: string }) {
   const [broken, setBroken] = useState(false);
   const source = photo?.trim();
   if (!source || broken) return <span className="person-face">{initials(name)}</span>;

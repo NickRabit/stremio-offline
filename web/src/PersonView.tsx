@@ -25,12 +25,13 @@ const KINDS = [
   ["series", "searchAll.kindSeries"],
 ] as const;
 
-export function PersonView({ person, language, shape, initialScroll, fromTitle, onBack, onUnavailable, onOpenTitle, onNotify, onSearchText, onToggleShape }: {
+export function PersonView({ person, language, shape, initialScroll, fromTitle, backLabel, onBack, onUnavailable, onOpenTitle, onNotify, onSearchText, onToggleShape }: {
   person: { id: number; name: string };
   language: string;
   shape: TileShape;
   initialScroll?: number;
   fromTitle?: string;
+  backLabel?: string;
   onBack: () => void;
   onUnavailable: (name: string) => void;
   onOpenTitle: (title: PersonOpenTitle, notice?: "noImdb") => void;
@@ -153,7 +154,7 @@ export function PersonView({ person, language, shape, initialScroll, fromTitle, 
   return <section ref={pageRef} className="person-view" tabIndex={-1}
     aria-label={t("person.label", { name: displayName })}>
       <button type="button" className="search-return" onClick={onBack}>
-        <ChevronLeft/> {fromTitle ? t("person.backTo", { title: fromTitle }) : t("person.back")}
+        <ChevronLeft/> {backLabel ?? (fromTitle ? t("person.backTo", { title: fromTitle }) : t("person.back"))}
       </button>
       <Heading eyebrow={t("searchAll.eyebrow")} title={t("searchAll.title")}/>
       <form className="search-everywhere-form" role="search" onSubmit={submitSearch}>

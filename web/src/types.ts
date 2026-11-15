@@ -67,6 +67,13 @@ export interface PersonFilmography {
   total: number;
   sections: Array<{ key: PersonSectionKey; titles: PersonTitle[] }>;
 }
+export interface PersonHit {
+  id: number;
+  name: string;
+  photo?: string;
+  knownFor: "acting" | "crew";
+  knownTitles: string[];
+}
 export interface RelatedTitle {
   type: "movie" | "series";
   id: string;

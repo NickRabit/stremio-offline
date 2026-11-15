@@ -124,6 +124,7 @@ let catalogItems: Meta[];
 let libraryItems: Array<typeof heatFile>;
 let remoteLibraries: Array<typeof jellyLibrary>;
 let downloadMode: "idle" | "downloading" | "completed" | "unauthorized";
+let personHits: Array<{ id: number; name: string; photo?: string; knownFor: "acting" | "crew"; knownTitles: string[] }>;
 let extrasCalls: string[];
 let remoteStreamCalls: string[];
 let watchlistItems: Array<Record<string, unknown>>;
@@ -160,6 +161,7 @@ beforeEach(() => {
   libraryItems = [];
   remoteLibraries = [];
   downloadMode = "idle";
+  personHits = [];
   extrasCalls = [];
   remoteStreamCalls = [];
   watchlistItems = [];
@@ -301,6 +303,7 @@ beforeEach(() => {
     if (path === "/api/library/trailer") return json({ trailer: null });
     if (path === "/api/library/gallery") return json({ images: [] });
     if (path === "/api/library/scan") return json({ status: "idle", total: 0, done: 0, matched: 0, skipped: 0, failed: 0 });
+    if (path === "/api/person/search") return json({ people: personHits });
     if (path.startsWith("/api/person/title/")) return json({ id: "tt2" });
     if (/^\/api\/person\/\d+$/.test(path)) {
       return json({
@@ -1150,6 +1153,30 @@ describe("person layer navigation", () => {
     await until(() => host.querySelector(".person-view section[data-section]") !== null);
     expect(host.querySelector(".person-card h2")!.textContent).toBe("Brad Pitt");
     expect(host.querySelector(".person-view .search-return")!.textContent).toContain("Back to Heat");
+  });
+
+  it("opens a person from Search with Back to search and returns to the results", async () => {
+    personHits = [{
+      id: 287, name: "Brad Pitt", photo: "/brad.jpg", knownFor: "acting",
+      knownTitles: ["Fight Club", "Ocean's Eleven"],
+    }];
+    await openCatalog();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".topbar-search")!.click(); });
+    await until(() => host.querySelector("[data-search-input]") !== null);
+    const input = host.querySelector<HTMLInputElement>("[data-search-input]")!;
+    await typeInto(input, "Brad");
+    await act(async () => { input.form!.requestSubmit(); });
+    await until(() => host.querySelector("button.search-person") !== null);
+    expect(host.querySelector(".search-people h3")!.textContent).toBe("People");
+    expect(host.querySelector("button.search-person")!.textContent).toContain("Brad Pitt");
+    await act(async () => { host.querySelector<HTMLButtonElement>("button.search-person")!.click(); });
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(host.querySelector(".person-view .search-return")!.textContent).toContain("Back to search");
+    expect(host.querySelector("main.view-search")).not.toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".person-view .search-return")!.click(); });
+    await until(() => host.querySelector(".person-view") === null);
+    expect(host.querySelector("main.view-search")).not.toBeNull();
+    expect(host.querySelector("button.search-person")).not.toBeNull();
   });
 
   it("treats Escape on the person view as Back", async () => {
