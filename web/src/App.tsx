@@ -1871,7 +1871,9 @@ export function App() {
   // Polling only means something while a scan is on; otherwise one look on entry is enough.
   const scanning = libraryScan?.status === "running" || libraryScan?.status === "paused";
   useEffect(() => {
-    if (!ready || view !== "library") return;
+    // The scan state is administrator-only, like the operations queue below: asking for it as
+    // anybody else is a refusal on every visit to the Library.
+    if (!ready || view !== "library" || session?.role !== "admin") return;
     let cancelled = false;
     // A repeat in a hidden tab is skipped, like the downloads poll; the first read never is.
     const tick = async (repeat = false) => {
@@ -1889,7 +1891,7 @@ export function App() {
     if (!scanning) return () => { cancelled = true; };
     const timer = window.setInterval(() => void tick(true), 2000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [ready, view, scanning]);
+  }, [ready, view, scanning, session?.role]);
   const operationsActive = libraryOps.some((job) => job.status === "running" || job.status === "paused");
   useEffect(() => {
     // The library operations queue is administrator-only, reading included: polling it as an
@@ -4394,7 +4396,7 @@ export function App() {
         </div>}
         {!browse || !browse.items.length
           ? (browseBusy ? <div className="loading">{t("common.loading")}</div>
-            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : onlyUnconfirmed ? "library.emptyUnconfirmedTitle" : browsePath === ":favorites" ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : onlyUnconfirmed ? "library.emptyUnconfirmedText" : browsePath === ":favorites" ? "library.emptyFavoritesText" : "library.emptyText")}/>)
+            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : onlyUnconfirmed ? "library.emptyUnconfirmedTitle" : browsePath === ":favorites" ? "library.emptyFavoritesTitle" : child ? "library.childEmptyTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : onlyUnconfirmed ? "library.emptyUnconfirmedText" : browsePath === ":favorites" ? "library.emptyFavoritesText" : child ? "library.childEmptyText" : "library.emptyText")}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "library"

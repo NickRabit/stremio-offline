@@ -132,7 +132,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
     ? <div className="home-note bad"><span>{t("home.rowFailed")}</span><button className="home-retry" onClick={() => onRetry("confirm")}>{t("home.retry")}</button></div>
     : null;
 
-  if (!items.length && homeAllRowsEmpty(rows, askedRows)) return <>{heading}{confirmError}<Empty icon={<DownloadIcon/>} title={t("home.emptyTitle")} text={t("home.emptyText")}/></>;
+  if (!items.length && homeAllRowsEmpty(rows, askedRows)) return <>{heading}{confirmError}<Empty icon={child ? <Play/> : <DownloadIcon/>} title={t("home.emptyTitle")} text={t(child ? "home.childEmptyText" : "home.emptyText")}/></>;
 
   const run = (job: Download, action: ReturnType<typeof queueAction>) => {
     if (action === "open") { latest.current.onShowDownloads(); return; }
