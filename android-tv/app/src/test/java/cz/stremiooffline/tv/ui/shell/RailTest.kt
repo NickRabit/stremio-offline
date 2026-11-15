@@ -40,13 +40,15 @@ class RailTest {
 
   private val context: Context get() = ApplicationProvider.getApplicationContext()
 
-  private fun mount() {
+  private fun mount(child: Boolean = false, childCatalogue: Boolean = false) {
     compose.setContent {
       ShellScaffold(
         username = "demo",
         start = Section.Home,
         current = Section.Home,
         onBackToExit = {},
+        child = child,
+        childCatalogue = childCatalogue,
       ) { requester ->
         Box(
           Modifier
@@ -101,5 +103,38 @@ class RailTest {
     assertEquals(before.left, after.left)
     assertEquals(before.right - before.left, after.right - after.left)
     compose.onNodeWithText(context.getString(R.string.nav_home)).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a child rail has Search Home Library and the account item only`() {
+    mount(child = true)
+
+    compose.onNodeWithTag(railTag(Section.Search)).assertExists()
+    compose.onNodeWithTag(railTag(Section.Home)).assertExists()
+    compose.onNodeWithTag(railTag(Section.Library)).assertExists()
+    compose.onNodeWithTag(railTag(Section.Account)).assertExists()
+    compose.onNodeWithTag(railTag(Section.Catalog)).assertDoesNotExist()
+    compose.onNodeWithTag(railTag(Section.Resume)).assertDoesNotExist()
+    compose.onNodeWithTag(railTag(Section.Favorites)).assertDoesNotExist()
+    compose.onNodeWithTag(railTag(Section.Downloads)).assertDoesNotExist()
+  }
+
+  @Test
+  fun `catalogue browsing adds Catalogue for a child`() {
+    mount(child = true, childCatalogue = true)
+
+    compose.onNodeWithTag(railTag(Section.Catalog)).assertExists()
+    compose.onNodeWithTag(railTag(Section.Resume)).assertDoesNotExist()
+    compose.onNodeWithTag(railTag(Section.Favorites)).assertDoesNotExist()
+    compose.onNodeWithTag(railTag(Section.Downloads)).assertDoesNotExist()
+  }
+
+  @Test
+  fun `an ordinary account keeps every rail item`() {
+    mount()
+
+    Section.entries.forEach { section ->
+      compose.onNodeWithTag(railTag(section)).assertExists()
+    }
   }
 }

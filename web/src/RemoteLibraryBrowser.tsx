@@ -3,6 +3,7 @@ import { genreLabel } from "./genres";
 import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, Shuffle, SlidersHorizontal, Star } from "lucide-react";
 import { ApiError, api, describeError, saveToDevice, type ShuffleItem } from "./api";
+import { useChildMode } from "./child-mode";
 import { relativeAge } from "./home-cards";
 import { formatRuntime } from "./runtime-format";
 import { localeTag, t, useI18n } from "./i18n";
@@ -252,6 +253,7 @@ const episodeOrder = (left: RemoteItem, right: RemoteItem) =>
 
 export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onSeriesBulk, onNotify, accountScope = "", addons = [], realDebridConfigured = false, sourceProfiles = null, defaultSort }: Props) {
   useI18n();
+  const { child } = useChildMode();
   // The listing effect must not restart when the shape changes. It still warms only the
   // picture that shape draws, so the other role is fetched when a tile actually asks for it.
   const tileShape = useRef(libraryTileShape);
@@ -1335,7 +1337,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // library the detail already came from is never asked again. A refused list is the exception:
   // the version the title was last played from cannot be selected until its group has answered.
   const extra = useLibrarySources({
-    scope: titleScope, open: chooserOpen || playerSourcesOpen || (noRow && resumeElsewhere), catalogue: addonIdentity,
+    scope: titleScope, open: !child && (chooserOpen || playerSourcesOpen || (noRow && resumeElsewhere)), catalogue: child ? null : addonIdentity,
     ...(series?.name ? { nameHint: series.name } : {}),
     libraries, localCopies: true, ...(selected ? { originLibraryId: selected.id } : {}),
   });
@@ -1450,7 +1452,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       season={episodeSeason}
       onSeason={setEpisodeSeason}
       {...(detail.type === "series" ? { headClassName: "remote-episodes-head" } : {})}
-      {...(onSeriesBulk ? {
+      {...(!child && onSeriesBulk ? {
         bulk: {
           onSeason: (season: number) => { const request = seriesBulkRequest("season", season); if (request) onSeriesBulk(request); },
           onSeries: () => { const request = seriesBulkRequest("series"); if (request) onSeriesBulk(request); },
@@ -1904,7 +1906,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         </button>}
         {/* Only a playable original can be copied; a folder, a series or a season never is. The
             versions are read once when this is pressed, never while the tile merely draws. */}
-        {playable && <button onClick={() => { closeMenu(); if (selectedRef.current) setSaveRequest({ library: saveLibrary(selectedRef.current), item, knownSources: null }); }}><HardDrive/> {t("save.toLibrary")}</button>}
+        {!child && playable && <button onClick={() => { closeMenu(); if (selectedRef.current) setSaveRequest({ library: saveLibrary(selectedRef.current), item, knownSources: null }); }}><HardDrive/> {t("save.toLibrary")}</button>}
         <button onClick={() => { closeMenu(); onOpen(item); }}>{item.type === "series" ? <><FolderOpen/> {t("library.openFolder")}</> : <><CirclePlay/> {t("mediaServer.versions")}</>}</button>
       </LibraryItemMenu>
     </LibraryItem>;
@@ -1994,7 +1996,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
                 onClick={changeView}>{view === "grid" ? <List/> : <LayoutGrid/>}</button>}
             </div></div>
             <div className="browse-keep">
-              {!detail && view === "grid" && <button className="shape-toggle" title={t(libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={libraryTileShape === "wide"} onClick={onToggleLibraryShape}>{libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
+              {!child && !detail && view === "grid" && <button className="shape-toggle" title={t(libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={libraryTileShape === "wide"} onClick={onToggleLibraryShape}>{libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
               <button className="header-expand" title={t("library.showTools")} aria-label={t("library.showTools")} aria-expanded={!compact} onClick={() => { fold.hold(); onCompactChange(false); }}><SlidersHorizontal/></button>
             </div>
           </div>
@@ -2029,11 +2031,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             originalLine={detailPieces.originalLine}
             ratings={<DetailRatings age={detailPieces.ageBadge} imdb={detailScores.imdb} tmdb={detailScores.tmdb} tmdbVotes={detailScores.tmdbVotes}/>}
             heroExtra={detailPieces.nextLine}
-            people={titleExtras.extras?.people}
-            trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)}
-            onTrailer={onTrailer}
+            {...(!child && titleExtras.extras?.people ? { people: titleExtras.extras.people } : {})}
+            {...(!child ? { trailer: enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage), onTrailer } : {})}
             secureMode={secureMode}
-            extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} remoteFirst {...(heroItem?.name ? { titleName: heroItem.name } : {})}/>}
+            {...(!child ? { extras: <TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} remoteFirst {...(heroItem?.name ? { titleName: heroItem.name } : {})}/> } : {})}
             copyPending={copyPending}
             trailerPending={copyPending}
             {...(detailDescription ? { description: detailDescription } : {})}
@@ -2051,7 +2052,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             placeholder={detail.type === "series" ? <></> : undefined}
             sourceProfiles={sourceProfiles}
             {...(defaultSort ? { defaultSort } : {})}
-            {...(addonIdentity ? {
+            {...(!child && addonIdentity ? {
               sourceGroups: { groups: extra.groups, retry: extra.retry, renew: extra.renew, refind: extra.refind },
               onOpenSources: () => setChooserOpen(true),
               nativeSourceLabel: ownLabel,
@@ -2079,22 +2080,22 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             // Every row is saved as the row it is: the native dialog for this library's own
             // version, the copy's own projected destination for another library's, the addon's
             // rule for an answer, and nothing at all for a file that is already here.
-            onSaveToLibrary={(stream) => saveDetailStream(stream, detail, detailTitle(detail))}
+            {...(!child ? { onSaveToLibrary: (stream: Stream) => saveDetailStream(stream, detail, detailTitle(detail)) } : {})}
             // The arrow opens the shared rules when the item has an exact catalogue identity;
             // otherwise it keeps the destination dialog this row already used.
-            onSaveElsewhere={(stream) => {
+            {...(!child ? { onSaveElsewhere: (stream: Stream) => {
               const target = catalogueDownloadDetail(detail, detailTitle(detail));
               if (target && onCatalogueDownload) onCatalogueDownload(stream, target);
               else saveDetailStream(stream, detail, detailTitle(detail), undefined, true);
-            }}
+            } } : {})}
             // Only a source the server proved may be copied is offered the action, so a click
             // always reaches a real decision instead of a button that does nothing.
             saveSupported={(stream) => canQueue(stream, realDebridConfigured)}
             // The device at the keyboard: the server fetches the row it plays through its own
             // proxy, so a copy of this library reaches the device the way an addon answer does.
-            onDownloadToDevice={(stream) => void (isLocalStream(stream) && stream.localPath
+            {...(!child ? { onDownloadToDevice: (stream: Stream) => void (isLocalStream(stream) && stream.localPath
               ? saveLibraryFileToDevice(stream.localPath)
-              : saveAddonToDevice({ stream, media: addonMediaSubject(detail, series, addonArtwork()), title: detailTitle(detail) }))}
+              : saveAddonToDevice({ stream, media: addonMediaSubject(detail, series, addonArtwork()), title: detailTitle(detail) })) } : {})}
             sourceBadge={() => t(providerKey(selected!.provider))}
           />
           {stateError && <div className="remote-error" role="alert">
@@ -2159,8 +2160,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         // item's own versions lead, and the title's other groups follow once the panel asks for
         // them. Nothing is read before that: the panel is the hook's own `open`.
         sources={{
-          lead: sources ?? [], leadLabel: ownLabel, groups: extra.groups,
-          panel: { groups: extra.groups, retry: extra.retry, renew: extra.renew, refind: extra.refind },
+          lead: sources ?? [], leadLabel: ownLabel, groups: child ? [] : extra.groups,
+          ...(!child ? { panel: { groups: extra.groups, retry: extra.retry, renew: extra.renew, refind: extra.refind } } : {}),
           onOpen: () => setPlayerSourcesOpen(true),
           onSwitch: switchDetailSource,
         }}

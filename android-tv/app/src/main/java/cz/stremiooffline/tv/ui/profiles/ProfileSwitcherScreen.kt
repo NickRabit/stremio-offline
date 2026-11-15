@@ -54,6 +54,7 @@ const val TagProfileError = "profile_error"
 const val TagProfilesRetry = "profiles_retry"
 const val TagProfilesEmpty = "profiles_empty"
 const val TagProfilesClose = "profiles_close"
+const val TagProfilesSignOut = "profiles_sign_out"
 
 fun profileTag(id: String): String = "profile_$id"
 
@@ -63,6 +64,7 @@ fun pinKeyTag(key: String): String = "pin_key_$key"
 fun ProfileSwitcherScreen(
   viewModel: ProfileSwitcherViewModel,
   onClose: () -> Unit,
+  onSignOut: (() -> Unit)? = null,
 ) {
   BackHandler {
     if (viewModel.step is SwitcherStep.Choose || viewModel.step is SwitcherStep.Busy) onClose()
@@ -85,6 +87,7 @@ fun ProfileSwitcherScreen(
         onChoose = viewModel::choose,
         onRetry = viewModel::load,
         onClose = onClose,
+        onSignOut = onSignOut,
       )
       is SwitcherStep.Pin -> PinPad(
         profile = step.profile,
@@ -131,6 +134,7 @@ private fun ChooseStep(
   onChoose: (ProfileDto) -> Unit,
   onRetry: () -> Unit,
   onClose: () -> Unit,
+  onSignOut: (() -> Unit)?,
 ) {
   val firstFocus = remember { FocusRequester() }
   val retryFocus = remember { FocusRequester() }
@@ -194,6 +198,13 @@ private fun ChooseStep(
           modifier = if (index == firstSelectable) Modifier.focusRequester(firstFocus) else Modifier,
         )
       }
+    }
+    if (onSignOut != null) {
+      FocusButton(
+        text = stringResource(R.string.auth_sign_out),
+        onClick = onSignOut,
+        modifier = Modifier.testTag(TagProfilesSignOut),
+      )
     }
   }
 }

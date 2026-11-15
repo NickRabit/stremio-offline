@@ -42,7 +42,7 @@ private const val MAX_GROUP_REQUESTS = 2
  * panel shows the local copy and the first addon while the rest still answer. It is merged only
  * when an answer lands, never on a focus move.
  */
-class LibraryPlaySources(private val api: TvApi) {
+class LibraryPlaySources(private val api: TvApi, private val catalogue: Boolean = true) {
 
   private val addonPermits = Semaphore(MAX_GROUP_REQUESTS)
   private val remotePermits = Semaphore(MAX_GROUP_REQUESTS)
@@ -90,11 +90,19 @@ class LibraryPlaySources(private val api: TvApi) {
     val type = title.type
     // An episode is asked for the id the addon stream endpoint takes, which is the video's own.
     val id = title.videoId?.takeIf { it.isNotBlank() } ?: title.id
-    val settings = deadline(ADDON_GROUP_TIMEOUT_MS) { api.settings() } ?: SettingsResponse()
-    val addons = deadline(ADDON_GROUP_TIMEOUT_MS) { api.addons() }.orEmpty()
-    val profileIds = deadline(ADDON_GROUP_TIMEOUT_MS) { api.sourceProfiles() }.orEmpty()
-      .map { it.id }
-      .filter { it.isNotBlank() }
+    val settings = if (catalogue) {
+      deadline(ADDON_GROUP_TIMEOUT_MS) { api.settings() } ?: SettingsResponse()
+    } else {
+      SettingsResponse()
+    }
+    val addons = if (catalogue) deadline(ADDON_GROUP_TIMEOUT_MS) { api.addons() }.orEmpty() else emptyList()
+    val profileIds = if (catalogue) {
+      deadline(ADDON_GROUP_TIMEOUT_MS) { api.sourceProfiles() }.orEmpty()
+        .map { it.id }
+        .filter { it.isNotBlank() }
+    } else {
+      emptyList()
+    }
     val sort = Streams.resolveRuleSort(Streams.StreamSort.of(settings.streamSort), profileIds)
     val filters = Streams.StreamFilters(sort = sort)
     val noteProfile = Streams.noteProfileId(sort, settings.streamSort, profileIds)
@@ -202,30 +210,37 @@ class LibraryPlaySources(private val api: TvApi) {
           }
         }
       }
-      // A provider that came back without a key names nothing to ask on its own, and an unfiltered
-      // call would fan out into every addon at once: it is left out of the providers.
-      val sources = deadline(ADDON_GROUP_TIMEOUT_MS) { api.streamSources(type, id) }.orEmpty()
-        .filter { it.key.isNotBlank() }
-      var pending = sources.size
-      lock.withLock {
-        if (pending == 0) addonsAsking = false
-        publish()
-      }
-      coroutineScope {
-        sources.forEach { source ->
-          launch {
-            val part = addonPermits.withPermit {
-              deadline(ADDON_GROUP_TIMEOUT_MS) { api.streams(type, id, source.key) }.orEmpty()
-            }
-            // Addon answers can resume on different threads, so their updates take a lock: a lost
-            // decrement would leave the panel asking forever.
-            lock.withLock {
-              if (part.isNotEmpty()) streams += part
-              pending -= 1
-              if (pending == 0) addonsAsking = false
-              publish()
+      if (catalogue) {
+        // A provider that came back without a key names nothing to ask on its own, and an
+        // unfiltered call would fan out into every addon at once: it is left out of the providers.
+        val sources = deadline(ADDON_GROUP_TIMEOUT_MS) { api.streamSources(type, id) }.orEmpty()
+          .filter { it.key.isNotBlank() }
+        var pending = sources.size
+        lock.withLock {
+          if (pending == 0) addonsAsking = false
+          publish()
+        }
+        coroutineScope {
+          sources.forEach { source ->
+            launch {
+              val part = addonPermits.withPermit {
+                deadline(ADDON_GROUP_TIMEOUT_MS) { api.streams(type, id, source.key) }.orEmpty()
+              }
+              // Addon answers can resume on different threads, so their updates take a lock: a lost
+              // decrement would leave the panel asking forever.
+              lock.withLock {
+                if (part.isNotEmpty()) streams += part
+                pending -= 1
+                if (pending == 0) addonsAsking = false
+                publish()
+              }
             }
           }
+        }
+      } else {
+        lock.withLock {
+          addonsAsking = false
+          publish()
         }
       }
     }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { setLocale } from "./i18n";
+import { ChildModeProvider } from "./child-mode";
 import { CrewLine } from "./detail-copy";
 import { isTagLine, synopsisOf, TitleExtraFacts, TitleExtrasActions, TitleExtrasRows, trailerFromExtras, type TitleExtrasActionsValue } from "./TitleExtras";
 import type { TitleExtras } from "./types";
@@ -75,7 +76,16 @@ const mount = (node: ReactNode, actions?: TitleExtrasActionsValue) => {
   return value;
 };
 
+const mountChild = (node: ReactNode) => {
+  act(() => root.render(<ChildModeProvider child catalogue><TitleExtrasActions.Provider value={{ searchPerson: vi.fn(), openTitle: vi.fn() }}>{node}</TitleExtrasActions.Provider></ChildModeProvider>));
+};
+
 describe("TitleExtrasRows", () => {
+  it("draws nothing, loading included, for a child", () => {
+    mountChild(<TitleExtrasRows extras={cast} loading/>);
+    expect(host.querySelector(".title-extras")).toBeNull();
+  });
+
   it("puts the crew in the strip around the cast, with their role in place of a character", () => {
     mount(<TitleExtrasRows extras={cast} loading={false}/>);
     expect(host.querySelector(".extras-crew")).toBeNull();

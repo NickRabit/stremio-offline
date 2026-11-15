@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { childSession } from "./child-policy";
+import { useChildMode } from "./child-mode";
 import { localGalleryImage, type GalleryImage } from "./gallery-images";
 import type { Meta, SiteLink, Trailer } from "./types";
 
@@ -71,7 +73,8 @@ function useSessionValue<T>(cache: Map<string, T>, inflight: Map<string, Promise
  * empty and never blocks the sources the viewer is already waiting for.
  */
 export function useTitleEnrichment(source: TitleSource | null, metaRef: CatalogueRef | null, language: string): TitleEnrichment {
-  const key = source ? `${sourceKey(source)}@${language}` : "";
+  const { child } = useChildMode();
+  const key = !child && source ? `${sourceKey(source)}@${language}` : "";
   const links = useSessionValue(linksCache, linksInflight, key,
     () => (source?.kind === "local" ? api.libraryLinks(source.path, language)
       : source ? api.links(source.ref.type, source.ref.id, language) : Promise.resolve({ links: EMPTY_LINKS }))
@@ -80,13 +83,14 @@ export function useTitleEnrichment(source: TitleSource | null, metaRef: Catalogu
     () => (source?.kind === "local" ? api.libraryTrailer(source.path, language)
       : source ? api.trailer(source.ref.type, source.ref.id, language) : Promise.resolve({ trailer: null }))
       .then((answer) => answer.trailer).catch(() => null), null);
-  const meta = useSessionValue(metaCache, metaInflight, metaRef ? `${metaRef.type}:${metaRef.id}@${language}` : "",
+  const meta = useSessionValue(metaCache, metaInflight, !child && metaRef ? `${metaRef.type}:${metaRef.id}@${language}` : "",
     () => metaRef ? api.meta(metaRef.type, metaRef.id, language) : Promise.resolve(null), null);
   return { meta, links, trailer };
 }
 
 
 export function loadTitleGallery(ref: CatalogueRef, language: string): Promise<GalleryImage[]> {
+  if (childSession()?.child) return Promise.resolve([]);
   const key = `${ref.type}:${ref.id}@${language}`;
   const cached = galleryCache.get(key);
   if (cached && Date.now() - cached.at < 30 * 60_000) return cached.result;
@@ -100,8 +104,9 @@ export function loadTitleGallery(ref: CatalogueRef, language: string): Promise<G
  *  what the gallery will show. The opened overlay asks `loadTitleGallery` again and gets the same
  *  cached answer. Nothing is read while `enabled` is false. */
 export function useCatalogueStills(ref: CatalogueRef | null, language: string, enabled = true): GalleryImage[] {
+  const { child } = useChildMode();
   const [stills, setStills] = useState<{ key: string; images: GalleryImage[] }>({ key: "", images: [] });
-  const key = ref && enabled ? `${ref.type}:${ref.id}@${language}` : "";
+  const key = !child && ref && enabled ? `${ref.type}:${ref.id}@${language}` : "";
   const latest = useRef(ref);
   latest.current = ref;
   useEffect(() => {

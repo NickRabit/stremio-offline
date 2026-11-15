@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Play } from "lucide-react";
 import { ArtworkProximity, NearImage } from "./artwork-proximity";
+import { useChildMode } from "./child-mode";
 import { localeTag, t, useI18n, type Locale } from "./i18n";
 import { hideBroken } from "./settings-ui";
 import { trailerAction } from "./trailers";
@@ -199,6 +200,8 @@ export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer
 }) {
   const { t: translate } = useI18n();
   const actions = useContext(TitleExtrasActions);
+  const { child } = useChildMode();
+  if (child) return null;
   if (loading) return <section className="title-extras" aria-busy="true">
     <div className="extras-row extras-skeleton">
       <h3>{translate("detail.people")} <small>{translate("detail.peopleHint")}</small></h3>

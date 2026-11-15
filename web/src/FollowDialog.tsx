@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDialogFocus } from "./dialog-focus";
 import { BellRing, Download, ListVideo, X } from "lucide-react";
 import { ApiError, api, describeError } from "./api";
+import { useChildMode } from "./child-mode";
 import { languageName, localeTag, serverText, t, useI18n } from "./i18n";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import type { FollowEpisodeRow, FollowView, LibraryView, Video } from "./types";
@@ -51,6 +52,7 @@ export function FollowDialog({ follow, videos, libraries, canRetain = false, dow
   const dialog = useRef<HTMLDivElement>(null);
   useDialogFocus(dialog);
   useI18n();
+  const { child } = useChildMode();
   const [current, setCurrent] = useState(follow);
   const [episodes, setEpisodes] = useState<FollowEpisodeRow[]>([]);
   const [checking, setChecking] = useState(false);
@@ -107,6 +109,7 @@ export function FollowDialog({ follow, videos, libraries, canRetain = false, dow
       .catch(() => undefined);
   };
   const openSetup = async () => {
+    if (child) return;
     if (setupEpisodes.length) { setSetupOpen(true); return; }
     setLoadingMeta(true);
     try {
@@ -170,8 +173,8 @@ export function FollowDialog({ follow, videos, libraries, canRetain = false, dow
                 : movie.state === "waiting" && futureGrace(movie.graceUntil)
                   ? <small>{t("follow.graceWaiting", { language: graceLanguage, date: formatDay(movie.graceUntil) })}</small>
                   : movie.state === "waiting" && movie.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(movie.nextAttemptAt) })}</small> : null}
-              {(movie.state === "reserved" || movie.state === "queued" || movie.state === "waiting") && <button type="button" onClick={() => void runAction(() => api.skipFollowEpisode(current.id, "1:1"))}>{t("follow.skip")}</button>}
-              {(movie.state === "waiting" || movie.state === "attention" || movie.state === "skipped") && <button type="button" onClick={() => void runAction(() => api.retryFollowEpisode(current.id, "1:1"))}>{t("follow.retry")}</button>}
+              {!child && (movie.state === "reserved" || movie.state === "queued" || movie.state === "waiting") && <button type="button" onClick={() => void runAction(() => api.skipFollowEpisode(current.id, "1:1"))}>{t("follow.skip")}</button>}
+              {!child && (movie.state === "waiting" || movie.state === "attention" || movie.state === "skipped") && <button type="button" onClick={() => void runAction(() => api.retryFollowEpisode(current.id, "1:1"))}>{t("follow.retry")}</button>}
             </div>}
             {!isMovie && <p className="identify-hint">{current.nextEpisode ? t("follow.nextEpisode", { code: episodeCode(current.nextEpisode.season, current.nextEpisode.episode), date: formatDay(current.nextEpisode.released) }) : t("follow.noNextEpisode")}</p>}
             <p className="identify-hint">{current.lastCheckedAt ? t("follow.lastChecked", { time: formatWhen(current.lastCheckedAt) }) : t("follow.neverChecked")}</p>
@@ -179,7 +182,7 @@ export function FollowDialog({ follow, videos, libraries, canRetain = false, dow
             <label className="switch follow-pause"><input type="checkbox" checked={!current.enabled} onChange={(event) => void setEnabled(!event.target.checked)}/><span/>{t("follow.paused")}</label>
             <button type="button" disabled={checking} onClick={() => void checkNow()}>{checking ? t("common.loading") : t("follow.checkNow")}</button>
           </section>
-          <section className="bulk-section">
+          {!child && <section className="bulk-section">
             <div className="bulk-section-head"><Download/><div><h3>{t("follow.autoHeading")}</h3><p>{t(isMovie ? "follow.movieDownloadHint" : "follow.autoHint")}</p></div></div>
             {!auto
               ? loadingMeta
@@ -191,7 +194,7 @@ export function FollowDialog({ follow, videos, libraries, canRetain = false, dow
                 <div className="follow-actions"><button type="button" onClick={() => void openSetup()}>{t("follow.autoEdit")}</button><button type="button" onClick={() => void disableAuto()}>{t("follow.autoDisable")}</button></div>
               </>}
             {countParts.length > 0 && <p className="identify-hint">{t("follow.counts", { parts: countParts.join(" · ") })}</p>}
-          </section>
+          </section>}
           {showEpisodes && <section className="bulk-section">
             <div className="bulk-section-head"><ListVideo/><div><h3>{t("follow.episodesHeading")}</h3></div></div>
             {shownEpisodes.map((row) => {
@@ -211,7 +214,7 @@ export function FollowDialog({ follow, videos, libraries, canRetain = false, dow
                       ? <small>{t("follow.graceWaiting", { language: graceLanguage, date: formatDay(grace) })}</small>
                       : state === "waiting" && row.download?.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(row.download.nextAttemptAt) })}</small> : null}
                 </div>
-                {(canSkip || canRetry) && <span className="follow-episode-actions">
+                {!child && (canSkip || canRetry) && <span className="follow-episode-actions">
                   {canSkip && <button type="button" onClick={() => void runAction(() => api.skipFollowEpisode(current.id, row.key))}>{t("follow.skip")}</button>}
                   {canRetry && <button type="button" onClick={() => void runAction(() => api.retryFollowEpisode(current.id, row.key))}>{t("follow.retry")}</button>}
                 </span>}
@@ -222,7 +225,7 @@ export function FollowDialog({ follow, videos, libraries, canRetain = false, dow
         <footer className="dialog-foot"><p className="identify-hint">{t("follow.footerHint")}</p><button type="button" onClick={() => void unfollow()}>{t("follow.unfollow")}</button><button type="button" className="primary" onClick={onClose}>{t("common.close")}</button></footer>
       </div>
     </div>
-    {setupOpen && <SeriesDownloadDialog type={current.type} label={current.name} title={current.name} episodes={setupEpisodes}
+    {!child && setupOpen && <SeriesDownloadDialog type={current.type} label={current.name} title={current.name} episodes={setupEpisodes}
       libraries={libraries}
       canRetain={canRetain}
       downloadSourceProfileId={downloadSourceProfileId}

@@ -363,6 +363,7 @@ const CHILD_REFUSED: Array<[string, string]> = [
   ["GET", "/meta/movie/tt1254207/extras"],
   ["GET", "/meta/series/tt1254207/extras"],
   ["GET", "/person/search"],
+  ["GET", "/person/search"],
   ["GET", "/person/138"],
   ["GET", "/person/title/movie/680"],
   ["GET", "/follows/calendar-feed"],

@@ -3,6 +3,8 @@ import { ChevronRight, Shuffle, TriangleAlert } from "lucide-react";
 import { HomeCard, type HomeCardActions } from "./HomeCard";
 import { showAllTarget, type ShowAllTarget } from "./home-cards";
 import { t, type Key } from "./i18n";
+import { childViewAllowed } from "./child-policy";
+import { useChildMode } from "./child-mode";
 import type { HomeRowState } from "./home-state";
 import type { BuiltinHomeRowId, HomeRowId } from "../../server/src/home";
 import type { TileShape } from "./types";
@@ -41,6 +43,7 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
   /** An addon shelf's heading opens its whole catalogue. */
   onOpenCatalog?: () => void;
 }) {
+  const { child, catalogue } = useChildMode();
   const placeholder = useRef<HTMLElement>(null);
   // The partial mark explains itself on a click: a phone has no hover for the title.
   const [explained, setExplained] = useState(false);
@@ -113,7 +116,7 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
     <div className="subhead">
       <div className="home-head">{heading(title ?? (row in TITLE ? t(TITLE[row as BuiltinHomeRowId]) : row))}{row === "confirm" && state.total != null && <span className="count">{state.total}</span>}{partial && <button type="button" className="home-partial" title={t("home.partial")} aria-label={t("home.partial")} aria-expanded={explained} aria-controls={`home-partial-${row}`} onClick={() => setExplained((open) => !open)}><TriangleAlert aria-hidden="true"/></button>}</div>
       {(row === "tonight" || row.startsWith("catalog:") ) && onShuffle && <button className="home-shuffle" aria-label={t("home.shuffle")} title={t("home.shuffle")} onClick={onShuffle}><Shuffle/></button>}
-      {target && <button className="resume-show-all" onClick={() => onShowAll(target)}>{t(SHOW_ALL[row] ?? "library.showAll")}<ChevronRight/></button>}
+      {target && (!child || childViewAllowed(target, catalogue)) && <button className="resume-show-all" onClick={() => onShowAll(target)}>{t(SHOW_ALL[row] ?? "library.showAll")}<ChevronRight/></button>}
     </div>
     {partial && explained && <div className="home-note" id={`home-partial-${row}`} role="note"><span>{t("home.partialHint")}</span><button className="home-retry" onClick={() => { setExplained(false); onRetry(row); }}>{t("home.retry")}</button></div>}
     {state.status === "error"

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { ChevronLeft, Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
 import { api, describeError } from "./api";
+import { useChildMode } from "./child-mode";
 import { ShapeToggle } from "./app-chrome";
 import { TileArt } from "./TileArt";
 import { useDialogFocus } from "./dialog-focus";
@@ -404,6 +405,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   nameSearchNotice?: boolean;
   /** Returns to the Library place Search was opened from. */
 }) {
+  const { child } = useChildMode();
   const root = useRef<HTMLElement>(null);
   const composing = useRef(false);
   const [people, setPeople] = useState<PersonHit[]>([]);
@@ -429,7 +431,8 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
 
   useEffect(() => {
     const query = search.committed.trim();
-    if (query.length < 2 || librariesOnly) {
+    // People come from TMDB, which a child account never reaches.
+    if (child || query.length < 2 || librariesOnly) {
       setPeople([]);
       return;
     }
@@ -443,7 +446,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
       setPeople([]);
     });
     return () => controller.abort();
-  }, [search.committed, librariesOnly]);
+  }, [search.committed, librariesOnly, child]);
 
   useLayoutEffect(() => {
     const shown = people.length > 0;
@@ -572,7 +575,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
             onClick={() => search.setKind(value)}>{t(key)}</button>)}
         </div>
       </div>
-      <ShapeToggle shape={shape} onToggle={onToggleShape}/>
+      {!child && <ShapeToggle shape={shape} onToggle={onToggleShape}/>}
     </div>
     {stripShown && <div className="search-source-strip">
       <div className="search-source-summary" aria-live="polite" role="status">

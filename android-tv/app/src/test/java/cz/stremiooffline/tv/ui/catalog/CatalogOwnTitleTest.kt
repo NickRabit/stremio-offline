@@ -19,6 +19,8 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.TagTitleExtrasCast
+import cz.stremiooffline.tv.ui.detail.TagTitleExtrasVideos
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -44,11 +46,18 @@ class CatalogOwnTitleTest {
     behaviorHints = BehaviorHintsDto(filename = path.substringAfterLast('/')),
   )
 
-  private fun mount(api: FakeTvApi, args: CatalogDetailArgs) {
+  private fun mount(
+    api: FakeTvApi,
+    args: CatalogDetailArgs,
+    child: Boolean = false,
+    childCatalogue: Boolean = false,
+  ) {
     compose.setContent {
       CatalogDetailScreen(
         api = api,
         args = args,
+        child = child,
+        childCatalogue = childCatalogue,
         imageUrl = { null },
         onPlay = { played += it },
         onBack = {},
@@ -258,6 +267,73 @@ class CatalogOwnTitleTest {
     compose.waitUntil(5_000) { played.isNotEmpty() }
     assertEquals(second, played.single().path)
     assertEquals("file:$second", played.single().key)
+  }
+
+  @Test
+  fun `a child library series uses its files and offers no save or download path`() {
+    val first = "Shows/Show/Show.S01E01.mkv"
+    val second = "Shows/Show/Show.S01E02.mkv"
+    val firstVideo = VideoDto(id = "local:$first", season = 1, episode = 1, title = "Pilot")
+    val secondVideo = VideoDto(id = "local:$second", season = 1, episode = 2, title = "Second")
+    val api = FakeTvApi()
+    val args = CatalogDetailArgs(
+      meta = MetaDto(
+        id = "local:Shows/Show",
+        type = "series",
+        name = "Show",
+        videos = listOf(firstVideo, secondVideo),
+      ),
+      addonName = "",
+      type = "series",
+      episode = ResumeEpisode("series:local:$first", 1, 1),
+      backend = LibraryBackend(
+        rows = mapOf(
+          "local:$first" to listOf(row(first)),
+          "local:$second" to listOf(row(second)),
+        ),
+        favouritePath = "Shows/Show",
+        favourite = false,
+      ),
+    )
+    mount(api, args, child = true)
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess
+    }
+
+    compose.onNodeWithTag(episodeCardTag(secondVideo)).assertExists()
+    compose.onNodeWithTag(TagCatalogFavourite).assertExists()
+    compose.onNodeWithTag(TagCatalogToLibrary).assertDoesNotExist()
+    compose.onNodeWithTag(TagTitleExtrasCast).assertDoesNotExist()
+    compose.onNodeWithTag(TagTitleExtrasVideos).assertDoesNotExist()
+    assertEquals(0, api.downloadCalls)
+    assertEquals(0, api.addonsCalls)
+    assertEquals(0, api.watchlistCalls)
+    assertEquals(0, api.sourceProfilesCalls)
+    assertEquals(0, api.metaRequests.size)
+    assertEquals(0, api.titleExtrasRequests.size)
+    assertEquals(0, api.personRequests.size)
+    assertEquals(0, api.streamSourcesRequests.size)
+  }
+
+  @Test
+  fun `a child without catalogue browsing hides a catalogue-only star`() {
+    val api = FakeTvApi()
+    mount(
+      api,
+      CatalogDetailArgs(
+        meta = MetaDto(id = "tt1", type = "movie", name = "Film"),
+        addonName = "Cinemeta",
+        type = "movie",
+      ),
+      child = true,
+    )
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertExists() }.isSuccess
+    }
+
+    compose.onNodeWithTag(TagCatalogFavourite).assertDoesNotExist()
+    assertEquals(0, api.metaRequests.size)
+    assertEquals(0, api.watchlistCalls)
   }
 
   @Test

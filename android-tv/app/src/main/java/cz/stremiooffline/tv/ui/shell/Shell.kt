@@ -42,6 +42,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -215,13 +216,16 @@ fun Shell(
   address: String = "http://",
   onLocale: (String) -> Unit = {},
   canSwitch: Boolean = false,
+  child: Boolean = false,
+  childCatalogue: Boolean = false,
   profileApi: ProfileApi? = null,
   onSwitched: () -> Unit = {},
   /** The switcher found nobody to switch to; the session re-reads whether it may still switch. */
   onProfilesGone: () -> Unit = {},
 ) {
   val shellState = rememberSaveable(start, saver = ShellStateSaver) { ShellState(start) }
-  val current = shellState.selected
+  val childSections = remember(child, childCatalogue) { sectionsFor(child, childCatalogue).map { it.first }.toSet() }
+  val current = shellState.selected.takeUnless { child && it !in childSections } ?: Section.Home
   val sectionStates = rememberSaveableStateHolder()
 
   // The one binding lookup still out. A newer choice, another detail or another section replaces
@@ -249,12 +253,13 @@ fun Shell(
   // The native copy action's two catalogue collaborators: the destinations this account may write
   // to, read once when the action is used, and the queue call itself. A failed read is thrown so
   // the screen can say so; both stay off the remote screens' own RemoteLibraryApi.
-  val nativeDestinations: suspend () -> List<LibraryDto> = { api.libraries() }
+  val nativeDestinations: (suspend () -> List<LibraryDto>)? = if (child) null else ({ api.libraries() })
   // The caller resolves the target DTO: a library equal to the version's projected destination
   // travels as no target, so the server resolves its own configured subfolder and layout.
-  val nativeQueue: suspend (String, String, MediaDto, DownloadTargetDto?) -> Unit = { title, sourceId, media, target ->
-    api.download(title, sourceId, media, target)
-  }
+  val nativeQueue: (suspend (String, String, MediaDto, DownloadTargetDto?) -> Unit)? =
+    if (child) null else ({ title, sourceId, media, target ->
+      api.download(title, sourceId, media, target)
+    })
   /** The source the player ended on, so the title underneath keeps naming what was watched. */
   var playedSourceId by remember { mutableStateOf<String?>(null) }
   // A section takes the remote back when a detail or a player over it closes; a detail takes it
@@ -271,7 +276,7 @@ fun Shell(
   var switcherOpen by remember { mutableStateOf(false) }
   var switcherGeneration by remember { mutableIntStateOf(0) }
   fun openSwitcher() {
-    if (!canSwitch || profileApi == null) return
+    if ((!canSwitch && !child) || profileApi == null) return
     switcherGeneration++
     switcherOpen = true
   }
@@ -332,6 +337,10 @@ fun Shell(
       openLibraryFolder(data.gridPath)
       return
     }
+    if (child && !childCatalogue) {
+      openCatalog(ownCatalogueArgs(data))
+      return
+    }
     val own = ownCatalogueArgs(data)
     // One file stands for itself; a folder of several only for a title bound to the folder as a
     // whole -- a folder of different films never opens as the first one's title.
@@ -382,6 +391,16 @@ fun Shell(
               initialRemoteMetadata(data.copy(item = resolvedItem))
             } else {
               resolveRemoteMetadata(api, data.copy(item = resolvedItem))
+            }
+            if (child && !childCatalogue) {
+              val own = try {
+                remoteOwnCatalogueArgs(api, data, metadata)
+              } catch (cancelled: CancellationException) {
+                throw cancelled
+              } catch (_: Exception) {
+                null
+              }
+              return@withTimeoutOrNull own ?: remoteFallbackCatalogueArgs(data)
             }
             val identity = remoteExtrasIdentity(metadata)
             if (identity == null) {
@@ -439,6 +458,7 @@ fun Shell(
     onMissing = { shellState.pick(Section.Home) },
   )
   fun openPersonSearch(name: String) {
+    if (child) return
     catalogDetail = null
     clearCatalogHistory()
     searchScope = SearchScope()
@@ -447,6 +467,7 @@ fun Shell(
     shellState.pick(Section.Search)
   }
   fun openPerson(person: TitlePersonDto) {
+    if (child) return
     val id = person.id
     if (id == null) {
       openPersonSearch(person.name)
@@ -472,7 +493,7 @@ fun Shell(
     searchEverywhereEnabled = runCatching { api.searchEverywhereEnabled() }.getOrDefault(false)
   }
   LaunchedEffect(player == null) {
-    if (player != null) return@LaunchedEffect
+    if (player != null || child) return@LaunchedEffect
     while (true) {
       try {
         downloading = activeJobs(api.downloads().jobs).isNotEmpty()
@@ -482,6 +503,9 @@ fun Shell(
       }
       delay(15_000L)
     }
+  }
+  LaunchedEffect(child, current) {
+    if (child && shellState.selected != current) shellState.pick(current)
   }
   LaunchedEffect(current) {
     detailLookup.cancel()
@@ -515,6 +539,10 @@ fun Shell(
     downloading = downloading,
     hint = hint.takeUnless { catalogDetail != null && it == noImdbNotice },
     onSection = { section ->
+      if (child && section == Section.Account) {
+        openSwitcher()
+        return@ShellScaffold true
+      }
       // The rail's Search is not the catalogue's or a library's: it starts with no preset.
       if (section == Section.Search) {
         searchOrigin = SearchOrigin.Rail
@@ -526,6 +554,8 @@ fun Shell(
     onBackToExit = onExitApp,
     railHidden = catalogDetail != null || personScreen != null || switcherOpen,
     canSwitch = canSwitch,
+    child = child,
+    childCatalogue = childCatalogue,
     onAccountLongPress = ::openSwitcher,
   ) { focusRequester ->
     val section = current
@@ -598,7 +628,7 @@ fun Shell(
           restoreToken = returnToken,
         )
         Section.Search -> {
-          if (searchOrigin == SearchOrigin.Library || searchEverywhereEnabled) {
+          if (child || searchOrigin == SearchOrigin.Library || searchEverywhereEnabled) {
             GlobalSearchScreen(
               api = api,
               onOpenCatalog = ::openCatalog,
@@ -611,6 +641,8 @@ fun Shell(
               imageUrl = { path -> path?.let(api::url) },
               overlayOpen = overlayOpen,
               preset = searchPreset,
+              catalogueAvailable = !child || childCatalogue,
+              peopleAvailable = !child,
               onBack = when (searchOrigin) {
                 SearchOrigin.Library -> {
                   {
@@ -651,6 +683,7 @@ fun Shell(
           refreshToken = homeRefreshToken + returnToken,
           onHint = ::showHint,
           onAction = ::onHomeAction,
+          catalogue = !child || childCatalogue,
         )
         Section.Account -> SettingsRoute(
           api = api,
@@ -708,6 +741,8 @@ fun Shell(
     CatalogDetailScreen(
       api = api,
       args = openCatalogDetail,
+      child = child,
+      childCatalogue = childCatalogue,
       imageUrl = { path -> path?.let(api::url) },
       onPlay = {
         if (player != null && nextBridge.take()) {
@@ -741,11 +776,11 @@ fun Shell(
           }
         }
       },
-      onSearchPerson = ::openPerson,
-      onOpenRelated = { related ->
+      onSearchPerson = if (child) ({}) else ::openPerson,
+      onOpenRelated = if (child) ({}) else ({ related ->
         catalogStack.pushRelated(openCatalogDetail, related)
         catalogDetail = catalogStack.detailFor(related, openCatalogDetail)
-      },
+      }),
       restoreToken = detailReturnToken,
       retryToken = catalogueSourcesRetry,
     )
@@ -758,7 +793,7 @@ fun Shell(
     // it. Leaving the player takes the effect out of the composition and cancels the loading.
     LaunchedEffect(openPlayer, librarySourcesRetry) {
       librarySources = OfferedSources()
-      LibraryPlaySources(api).load(openPlayer) { librarySources = it }
+      LibraryPlaySources(api, catalogue = !child || childCatalogue).load(openPlayer) { librarySources = it }
     }
     val sourcesNow = playerSourcesFor(openPlayer, playerSources, librarySources)
     // The next episode had nothing playable: the player closes on its detail, which shows why.
@@ -773,6 +808,7 @@ fun Shell(
     PlayerScreen(
       api = api,
       target = openPlayer,
+      catalogue = !child || childCatalogue,
       sources = sourcesNow.streams,
       sourcesLoading = sourcesNow.loading,
       sourcesRemoteFailure = sourcesNow.remoteFailure,
@@ -802,7 +838,11 @@ fun Shell(
         onSwitched()
       },
     )
-    ProfileSwitcherScreen(viewModel = switcher, onClose = { switcherOpen = false })
+    ProfileSwitcherScreen(
+      viewModel = switcher,
+      onClose = { switcherOpen = false },
+      onSignOut = if (child) ({ switcherOpen = false; onSignOut() }) else null,
+    )
   }
 
   // The scaffold's notice sits below an overlay, where a person's no-IMDb detail would cover it.
@@ -863,6 +903,8 @@ fun ShellScaffold(
   /** A transient notice over the content; the shell's own exit warning shows when it is null. */
   hint: String? = null,
   canSwitch: Boolean = false,
+  child: Boolean = false,
+  childCatalogue: Boolean = false,
   onAccountLongPress: () -> Unit = {},
   content: @Composable (FocusRequester) -> Unit,
 ) {
@@ -921,6 +963,8 @@ fun ShellScaffold(
           if (section != current && !onSection(section)) runCatching { contentFocusRequester.requestFocus() }
         },
         canSwitch = canSwitch,
+        child = child,
+        childCatalogue = childCatalogue,
         onAccountLongPress = onAccountLongPress,
       )
     }
@@ -942,19 +986,11 @@ private fun Rail(
   onFocusChanged: (Section, Boolean) -> Unit,
   onSelect: (Section) -> Unit,
   canSwitch: Boolean = false,
+  child: Boolean = false,
+  childCatalogue: Boolean = false,
   onAccountLongPress: () -> Unit = {},
 ) {
-  val sections = remember {
-    listOf(
-      Section.Search to SearchIcon,
-      Section.Home to HomeIcon,
-      Section.Catalog to CatalogIcon,
-      Section.Library to LibraryIcon,
-      Section.Resume to HistoryIcon,
-      Section.Favorites to StarIcon,
-      Section.Downloads to DownloadIcon,
-    )
-  }
+  val sections = remember(child, childCatalogue) { sectionsFor(child, childCatalogue) }
 
   Column(
     modifier = Modifier
@@ -1017,10 +1053,30 @@ private fun Rail(
       leading = { Avatar(username) },
       onFocusChanged = { onFocusChanged(Section.Account, it) },
       onClick = { onSelect(Section.Account) },
-      onLongPress = if (canSwitch) onAccountLongPress else null,
+      onLongPress = if (canSwitch || child) onAccountLongPress else null,
     )
   }
 }
+
+private fun sectionsFor(child: Boolean, childCatalogue: Boolean): List<Pair<Section, ImageVector>> =
+  if (child) {
+    buildList {
+      add(Section.Search to SearchIcon)
+      add(Section.Home to HomeIcon)
+      if (childCatalogue) add(Section.Catalog to CatalogIcon)
+      add(Section.Library to LibraryIcon)
+    }
+  } else {
+    listOf(
+      Section.Search to SearchIcon,
+      Section.Home to HomeIcon,
+      Section.Catalog to CatalogIcon,
+      Section.Library to LibraryIcon,
+      Section.Resume to HistoryIcon,
+      Section.Favorites to StarIcon,
+      Section.Downloads to DownloadIcon,
+    )
+  }
 
 fun railTag(section: Section): String = TAG_RAIL_PREFIX + section.route
 

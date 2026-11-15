@@ -19,12 +19,13 @@ const mappedError = (error: ApiError) => {
     : null;
 };
 
-export function ProfileSwitcher({ onClose, confirmStop, onSwitched = () => {
+export function ProfileSwitcher({ onClose, confirmStop, onSignOut, onSwitched = () => {
   clearHomeCache();
   location.reload();
 } }: {
   onClose: () => void;
   confirmStop: boolean;
+  onSignOut?: () => void;
   onSwitched?: () => void;
 }) {
   useI18n();
@@ -192,7 +193,13 @@ export function ProfileSwitcher({ onClose, confirmStop, onSwitched = () => {
           </div>}
           {/* The entry point is drawn from what the session knew at start; an administrator may
               have taken this account, or the last other one, out of the group since. */}
-          {profiles && !profiles.some((profile) => !profile.current) && <p className="identify-hint">{t("profiles.empty")}</p>}
+          {profiles && profiles.some((profile) => !profile.current) && onSignOut && <button type="button" className="profile-link profile-signout" disabled={busy} onClick={onSignOut}>
+            {t("app.signOut")}
+          </button>}
+          {profiles && !profiles.some((profile) => !profile.current) && <div className="profile-empty">
+            <p className="identify-hint">{t("profiles.empty")}</p>
+            {onSignOut && <button type="button" className="primary profile-signout-main" disabled={busy} onClick={onSignOut}>{t("app.signOut")}</button>}
+          </div>}
         </div>
         <footer className="dialog-foot">
           {error && <p className="login-error" role="alert">{error}</p>}

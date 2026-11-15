@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeError, ApiError, api , logDownloadUrl, subtitleUrl } from "./api";
+import { describeError, ApiError, api, ChildRefusedError, logDownloadUrl, subtitleUrl } from "./api";
+import { setChildSession } from "./child-policy";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -7,11 +8,15 @@ const json = (body: unknown, status = 200) =>
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  setChildSession(null);
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  setChildSession(null);
+  vi.unstubAllGlobals();
+});
 
 const optionsOf = (call = 0) => fetchMock.mock.calls[call][1] as RequestInit;
 
@@ -208,6 +213,40 @@ describe("request", () => {
   });
 });
 
+describe("child request policy", () => {
+  it("rejects a refused request before fetch", async () => {
+    setChildSession({ child: true, catalogue: false });
+    await expect(api.downloads()).rejects.toBeInstanceOf(ChildRefusedError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("lets an allowed request go out", async () => {
+    setChildSession({ child: true, catalogue: false });
+    fetchMock.mockResolvedValue(json({ uiLanguage: "en" }));
+    await expect(api.settings()).resolves.toMatchObject({ uiLanguage: "en" });
+    expect(fetchMock).toHaveBeenCalledWith("/api/settings", expect.any(Object));
+  });
+
+  it("turns a server not-allowed answer into a child refusal for a child", async () => {
+    setChildSession({ child: true, catalogue: true });
+    fetchMock.mockResolvedValue(json({ error: "This account may not do that.", messageKey: "err.notAllowed" }, 403));
+    await expect(api.exportSettings()).rejects.toBeInstanceOf(ChildRefusedError);
+  });
+
+  it("keeps an ordinary not-allowed answer as an ApiError outside a child session", async () => {
+    fetchMock.mockResolvedValue(json({ error: "This account may not do that.", messageKey: "err.notAllowed" }, 403));
+    const error = await api.exportSettings().catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(ChildRefusedError);
+  });
+
+  it("does not apply the child guard when no child session is set", async () => {
+    fetchMock.mockResolvedValue(json({ jobs: [], deviceTransfers: [] }));
+    await expect(api.downloads()).resolves.toMatchObject({ jobs: [] });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("early startup GETs", () => {
   const isolatedApi = async () => {
     vi.resetModules();
@@ -396,6 +435,10 @@ describe("views", () => {
 });
 
 describe("describeError", () => {
+  it("never turns a child refusal into visible text", () => {
+    expect(describeError(new ChildRefusedError())).toBe("");
+  });
+
   it("translates a failure the server tagged with a key", async () => {
     fetchMock.mockResolvedValue(json({ error: "The addon was not found.", messageKey: "err.addonNotFound" }, 400));
     const error = await api.addons().catch((value) => value);

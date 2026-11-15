@@ -1,4 +1,5 @@
 import { serverText, t } from "./i18n";
+import { childRefuses, childSession } from "./child-policy";
 import type { SaveTarget } from "./save-target";
 import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, BulkDownloadOrigin, BulkPrepareResponse, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, CatalogSearchPollResult, CatalogSearchRequest, CatalogSearchSnapshot, Download, DownloadRules, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, IntroSegments, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, PairingApproved, PairingInspection, PairingStart, PersonFilmography, PersonHit, ProfileEntry, ProfileSelection, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, PlaybackStatus, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, SourceProfile, AdminSourceProfile, Stream, Subtitle, TitleExtras, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
@@ -14,10 +15,17 @@ export class ApiError extends Error {
     readonly reference?: string) { super(message); }
 }
 
+export class ChildRefusedError extends ApiError {
+  constructor() {
+    super(t("err.notAllowed"), 403, "CHILD_REFUSED", "err.notAllowed");
+  }
+}
+
 /** Every failure the interface shows goes through here: a known key wins, the
  *  server's English text is the fallback. A failure the server could not explain carries the
  *  reference that finds it in the log. */
 export const describeError = (error: unknown): string => {
+  if (error instanceof ChildRefusedError) return "";
   if (!(error instanceof ApiError)) return error instanceof Error ? error.message : String(error);
   const text = serverText(error.messageKey, error.message, error.vars);
   return error.reference ? `${text} ${t("error.reference", { reference: error.reference })}` : text;
@@ -52,6 +60,18 @@ const EARLY_GET_MS = 10_000;
 
 export const STARTUP_GETS = ["/api/auth/me", "/api/status", "/api/settings"] as const;
 
+const requestPath = (url: string) => url.split(/[?#]/, 1)[0] ?? url;
+
+/** Whether the signed-in child must not send this request at all. */
+export function childBlocks(method: string, url: string): boolean {
+  const current = childSession();
+  return Boolean(current?.child && childRefuses(method, requestPath(url), current.catalogue));
+}
+
+export function guardChildRequest(method: string, url: string): void {
+  if (childBlocks(method, url)) throw new ChildRefusedError();
+}
+
 /** The start-up reads. Settings needs a session, so it waits for /api/auth/me to name an account:
  *  a signed-out start must not cost a refused request and a server log line. */
 export function startStartupGets(): void {
@@ -82,6 +102,7 @@ export function startEarlyGets(urls: readonly string[]): void {
 async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const timeoutMs = options?.timeoutMs ?? 30_000;
   const method = options?.method;
+  guardChildRequest(method ?? "GET", url);
   const read = method === undefined || method === "GET";
   // A write -- sign-in and sign-out included -- may change what any read returns: a read asked
   // after it must not join one that left before it, and never another account's.
@@ -113,6 +134,7 @@ async function request<T>(url: string, options?: RequestInit & { timeoutMs?: num
 
 async function performRequest<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const { timeoutMs = 30_000, signal: callerSignal, ...init } = options ?? {};
+  guardChildRequest(init.method ?? "GET", url);
   // `AbortSignal.any` is not in Safari < 17.4, so the deadline and the caller's own signal are
   // wired into one controller by hand. The timeout aborts with a TimeoutError reason, which the
   // catch below turns into a 408; a caller abort keeps its own reason and passes through.
@@ -139,6 +161,7 @@ async function performRequest<T>(url: string, options?: RequestInit & { timeoutM
     }
     if (!response.ok) {
       const body = await response.json().catch(() => ({} as { error?: string; code?: string; messageKey?: string; vars?: Record<string, string | number>; category?: string; retry?: string; reference?: string }));
+      if (response.status === 403 && body.messageKey === "err.notAllowed" && childSession()?.child) throw new ChildRefusedError();
       const retryAfter = Number(response.headers.get("retry-after"));
       const vars = response.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0 && body.vars?.seconds === undefined
         ? { ...body.vars, seconds: retryAfter }
@@ -221,7 +244,9 @@ export const api = {
   searchEverywhereMembers: (id: string, memberKey: string, from = 0) =>
     request<SearchMemberPage>(`/api/search/everywhere/${encodeURIComponent(id)}/members/${encodeURIComponent(memberKey)}?from=${from}`),
   searchEverywhereDelete: (id: string) => {
-    void fetch(`/api/search/everywhere/${encodeURIComponent(id)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
+    const url = `/api/search/everywhere/${encodeURIComponent(id)}`;
+    if (childBlocks("DELETE", url)) return;
+    void fetch(url, { method: "DELETE", keepalive: true }).catch(() => undefined);
   },
   startCatalogSearch: (body: CatalogSearchRequest, signal?: AbortSignal) =>
     request<{ id: string; snapshot: CatalogSearchSnapshot }>("/api/search/catalog", { method: "POST", body: JSON.stringify(body), signal }),
@@ -230,7 +255,9 @@ export const api = {
   pageCatalogSearch: (id: string) =>
     request<{ revision: number }>(`/api/search/catalog/${encodeURIComponent(id)}/page`, { method: "POST" }),
   deleteCatalogSearch: (id: string) => {
-    void fetch(`/api/search/catalog/${encodeURIComponent(id)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
+    const url = `/api/search/catalog/${encodeURIComponent(id)}`;
+    if (childBlocks("DELETE", url)) return;
+    void fetch(url, { method: "DELETE", keepalive: true }).catch(() => undefined);
   },
   updateSearchPreferences: (patch: Partial<SearchPreferences>) => request<SearchState>("/api/search/preferences", { method: "PATCH", body: JSON.stringify(patch) }),
   recordSearch: (query: string) => request<void>("/api/search/history", { method: "POST", body: JSON.stringify({ query }) }),
@@ -310,9 +337,12 @@ export const api = {
     body: JSON.stringify({ sourceId: stream.sourceId }),
     signal,
   }),
-  logs: (options: { tail?: number; level?: string; hours?: number; search?: string; inline?: boolean } = {}) =>
-    fetch(`/api/logs?${q({ tail: options.tail, level: options.level || undefined, hours: options.hours || undefined, q: options.search || undefined, inline: options.inline ? 1 : undefined })}`)
-      .then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),
+  logs: (options: { tail?: number; level?: string; hours?: number; search?: string; inline?: boolean } = {}) => {
+    const url = `/api/logs?${q({ tail: options.tail, level: options.level || undefined, hours: options.hours || undefined, q: options.search || undefined, inline: options.inline ? 1 : undefined })}`;
+    if (childBlocks("GET", url)) return Promise.reject(new ChildRefusedError());
+    return fetch(url)
+      .then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); });
+  },
   clearLogs: () => request<void>("/api/logs", { method: "DELETE" }),
   diagnostics: () => request<Diagnostics>("/api/diagnostics"),
   clientLogs: () => request<ClientLogSummary[]>("/api/client-logs"),
@@ -411,10 +441,17 @@ export const api = {
   /** The page itself is going away -- a closed tab, a reload, the browser being quit. A
    *  keepalive request outlives the page that sent it, so the server hears that the film is
    *  over instead of converting and reading the source until it works out nobody is there. */
-  stopPlaybackOnUnload: (id: string) => void fetch(`/api/playback/${id}`, { method: "DELETE", keepalive: true }).catch(() => undefined),
-  saveProgressOnUnload: (payload: ProgressPayload) => void fetch("/api/progress", {
-    method: "POST", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-  }).catch(() => undefined),
+  stopPlaybackOnUnload: (id: string) => {
+    const url = `/api/playback/${id}`;
+    if (childBlocks("DELETE", url)) return;
+    void fetch(url, { method: "DELETE", keepalive: true }).catch(() => undefined);
+  },
+  saveProgressOnUnload: (payload: ProgressPayload) => {
+    if (childBlocks("POST", "/api/progress")) return;
+    void fetch("/api/progress", {
+      method: "POST", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+    }).catch(() => undefined);
+  },
   progressOf: (key: string, signal?: AbortSignal) => request<ProgressEntry | null>(`/api/progress/${encodeURIComponent(key)}`, { signal }),
   saveProgress: (payload: ProgressPayload) =>
     request<void>("/api/progress", { method: "POST", body: JSON.stringify(payload) }),
@@ -552,16 +589,18 @@ export const api = {
   saveRemoteState: (libraryId: string, itemId: string, body: { position?: number; duration?: number; favorite?: boolean; watched?: boolean; mediaSourceId?: string; final?: true }) =>
     request<RemoteItemState>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/state`, { method: "PATCH", body: JSON.stringify(body) }),
   /** The page is going away: a keepalive PATCH outlives it, so the last position still lands. */
-  saveRemoteStateOnUnload: (libraryId: string, itemId: string, body: { position?: number; duration?: number; mediaSourceId?: string; final?: true }) => void fetch(
-    `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/state`,
-    { method: "PATCH", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
-  ).catch(() => undefined),
+  saveRemoteStateOnUnload: (libraryId: string, itemId: string, body: { position?: number; duration?: number; mediaSourceId?: string; final?: true }) => {
+    const url = `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/state`;
+    if (childBlocks("PATCH", url)) return;
+    void fetch(url, { method: "PATCH", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => undefined);
+  },
   reportRemotePlayback: (libraryId: string, itemId: string, body: { mediaSourceId: string; position: number; paused: boolean; event: "start" | "progress" | "stop"; playId?: string }) =>
     request<void>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/playing`, { method: "POST", body: JSON.stringify(body) }),
-  reportRemotePlaybackOnUnload: (libraryId: string, itemId: string, body: { mediaSourceId: string; position: number; paused: boolean; event: "start" | "progress" | "stop"; playId?: string }) => void fetch(
-    `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/playing`,
-    { method: "POST", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
-  ).catch(() => undefined),
+  reportRemotePlaybackOnUnload: (libraryId: string, itemId: string, body: { mediaSourceId: string; position: number; paused: boolean; event: "start" | "progress" | "stop"; playId?: string }) => {
+    const url = `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/playing`;
+    if (childBlocks("POST", url)) return;
+    void fetch(url, { method: "POST", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => undefined);
+  },
 };
 
 /** Hand the same-origin ticket to the browser so large files never pass through JavaScript memory. */

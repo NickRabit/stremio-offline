@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { ChildModeProvider } from "./child-mode";
 import { TitleChips, type TitleChipsProps } from "./TitleChips";
 import { setLocale } from "./i18n";
 import type { SiteLink, Trailer } from "./types";
@@ -22,9 +23,9 @@ afterEach(() => {
 });
 
 const trailer: Trailer = { youtubeId: "abcdefghijk", provider: "tmdb" };
-const render = (over: Partial<TitleChipsProps> = {}) => {
+const render = (over: Partial<TitleChipsProps> = {}, child = false) => {
   const onTrailer = vi.fn();
-  act(() => root.render(<TitleChips onTrailer={onTrailer} secureMode={false} {...over}/>));
+  act(() => root.render(<ChildModeProvider child={child} catalogue><TitleChips onTrailer={onTrailer} secureMode={false} {...over}/></ChildModeProvider>));
   return onTrailer;
 };
 const chips = () => [...host.querySelectorAll<HTMLElement>(".title-chips > *")];
@@ -69,5 +70,12 @@ describe("TitleChips", () => {
     expect(anchor.textContent).toBe("ČSFD");
     expect(anchor.getAttribute("title")).toBe("Open on ČSFD");
     expect(anchor.getAttribute("href")).toBe("/csfd");
+  });
+
+  it("keeps only the safe title identity for a child", () => {
+    render({ kind: "Movie", trailer, links: [{ site: "imdb", url: "/imdb" }] }, true);
+    expect(host.querySelector(".title-chips")!.textContent).toBe("Movie");
+    expect(host.querySelector(".trailer-action")).toBeNull();
+    expect(host.querySelector(".title-links")).toBeNull();
   });
 });

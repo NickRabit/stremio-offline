@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { genreLabel } from "./genres";
 import { api, describeError } from "./api";
+import { useChildMode } from "./child-mode";
 import { catalogueGalleryImages, galleryLabel, mergeGallery, type GalleryImage } from "./gallery-images";
 import { DetailRatings, ratingsFrom, useCopyPending } from "./detail-copy";
 import { EpisodePicker } from "./EpisodePicker";
@@ -118,6 +119,7 @@ const dedupe = (streams: Stream[]): Stream[] => {
 export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const { target, initialSources, libraryFirst = false, remoteFirst = false, onGallery, chips, trailer, onTrailer, secureMode, favorite, onToggleFavorite, favoriteDisabled, favoriteAriaLabel, favoriteTitle, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, onBulkDownload, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended", playingEpisode } = props;
   const { locale } = useI18n();
+  const { child } = useChildMode();
   const { type, id, name } = target;
   const titleExtras = useTitleExtras(type, id);
   const incomingId = catalogueStreamId(target);
@@ -423,7 +425,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     loading={snapshot === null && !metaError}
     season={pickerSeason}
     onSeason={setPickerSeason}
-    {...(snapshot !== null && videos.length > 0 && onBulkDownload ? {
+    {...(!child && snapshot !== null && videos.length > 0 && onBulkDownload ? {
       bulk: {
         onSeason: (season: number) => onBulkDownload(bulkRequest("season", season)),
         onSeries: () => onBulkDownload(bulkRequest("series")),
@@ -483,10 +485,12 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       {...(sourceError ? { sourceError } : {})}
       onRetry={() => setNonce((value) => value + 1)}
       onPlay={(stream, fromBeginning) => onPlay(stream, effective, fromBeginning ?? false)}
-      onSaveToLibrary={(stream) => onSaveToLibrary(stream, effective)}
-      onSaveElsewhere={(stream) => onSaveElsewhere(stream, effective)}
+      {...(!child ? {
+        onSaveToLibrary: (stream: Stream) => onSaveToLibrary(stream, effective),
+        onSaveElsewhere: (stream: Stream) => onSaveElsewhere(stream, effective),
+      } : {})}
       saveSupported={saveSupported}
-      onDownloadToDevice={(stream) => onDownloadToDevice(stream, effective)}
+      {...(!child ? { onDownloadToDevice: (stream: Stream) => onDownloadToDevice(stream, effective) } : {})}
     />
   </div>;
 }
