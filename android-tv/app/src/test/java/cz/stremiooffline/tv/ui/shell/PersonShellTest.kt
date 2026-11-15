@@ -25,10 +25,12 @@ import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.PersonFilmographyDto
 import cz.stremiooffline.tv.data.PersonSectionDto
 import cz.stremiooffline.tv.data.PersonTitleDto
+import cz.stremiooffline.tv.data.RelatedTitleDto
 import cz.stremiooffline.tv.data.TitleExtrasDto
 import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
+import cz.stremiooffline.tv.ui.detail.relatedTitleTag
 import cz.stremiooffline.tv.ui.detail.titlePersonTag
 import cz.stremiooffline.tv.ui.person.TagPersonScreen
 import cz.stremiooffline.tv.ui.person.personTileTag
@@ -54,7 +56,7 @@ class PersonShellTest {
     scenario.close()
   }
 
-  private fun api(person: TitlePersonDto): FakeTvApi {
+  private fun api(vararg people: TitlePersonDto): FakeTvApi {
     val path = "It/It.mkv"
     return FakeTvApi().apply {
       pages[null] = BrowseResult(
@@ -70,9 +72,10 @@ class PersonShellTest {
         pending = false,
       )
       libraryTitleValues[path] = LibraryTitleDto(type = "movie", id = "tt1", name = "It, the film")
-      titleExtrasValue = TitleExtrasDto(people = listOf(person))
+      titleExtrasValue = TitleExtrasDto(people = people.toList())
       metaValues["movie:tt1"] = MetaDto(id = "tt1", type = "movie", name = "It, the film")
       metaValues["movie:tt2"] = MetaDto(id = "tt2", type = "movie", name = "Pulp Fiction")
+      metaValues["movie:tt3"] = MetaDto(id = "tt3", type = "movie", name = "Reservoir Dogs")
     }
   }
 
@@ -97,16 +100,101 @@ class PersonShellTest {
     compose.waitForIdle()
   }
 
+  private fun press(key: Key) {
+    compose.onRoot().performKeyInput { pressKey(key) }
+    compose.waitForIdle()
+  }
+
+  private fun back() {
+    scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    compose.waitForIdle()
+  }
+
+  private fun waitFocused(tag: String) {
+    compose.waitUntil(5_000) {
+      runCatching { compose.onNodeWithTag(tag).assertIsFocused() }.isSuccess
+    }
+  }
+
+  private fun personTile(id: String, tmdbId: Long, name: String) = PersonTitleDto(
+    type = "movie",
+    tmdbId = tmdbId,
+    id = id,
+    name = name,
+  )
+
   @Test
-  fun `a person opens over the detail and Back returns from their title to the tile`() {
-    val tile = PersonTitleDto(
-      type = "movie",
-      tmdbId = 680,
-      id = "tt2",
-      name = "Pulp Fiction",
-      year = "1994",
-    )
-    val api = api(TitlePersonDto(id = 138, name = "Quentin Tarantino", role = "cast")).apply {
+  fun `Back from a person restores the title and the cast card`() {
+    val firstCast = TitlePersonDto(id = 1, name = "First Actor", role = "cast")
+    val secondCast = TitlePersonDto(id = 138, name = "Quentin Tarantino", role = "cast")
+    val api = api(firstCast, secondCast).apply {
+      personValue = PersonFilmographyDto(
+        id = 138,
+        name = "Quentin Tarantino",
+        sections = listOf(PersonSectionDto("acting", listOf(personTile("tt2", 680, "Pulp Fiction")))),
+      )
+    }
+    launch(api)
+    openCatalogueDetail(api)
+
+    compose.onNodeWithTag(titlePersonTag("Quentin Tarantino"))
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.personRequests.isNotEmpty() }
+
+    compose.onNodeWithTag(TagPersonScreen).assertExists()
+    back()
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertExists()
+    waitFocused(titlePersonTag("Quentin Tarantino"))
+  }
+
+  @Test
+  fun `Back from a title returns to its person tile and then to the original cast card`() {
+    val cast = TitlePersonDto(id = 138, name = "Quentin Tarantino", role = "cast")
+    val tile = personTile("tt2", 680, "Pulp Fiction")
+    val api = api(cast).apply {
+      personValue = PersonFilmographyDto(
+        id = 138,
+        name = "Quentin Tarantino",
+        sections = listOf(
+          PersonSectionDto("acting", listOf(personTile("tt4", 4, "Acting credit"))),
+          PersonSectionDto("crew", listOf(tile)),
+        ),
+      )
+    }
+    launch(api)
+    openCatalogueDetail(api)
+
+    compose.onNodeWithTag(titlePersonTag("Quentin Tarantino"))
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.personRequests.isNotEmpty() }
+    waitFocused(personTileTag(personTile("tt4", 4, "Acting credit")))
+
+    press(Key.DirectionDown)
+    waitFocused(personTileTag(tile))
+    api.titleExtrasValue = TitleExtrasDto()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.titleExtrasRequests.any { it.first == "movie" && it.second == "tt2" } }
+    compose.onNodeWithTag(TagCatalogPrimary).assertExists()
+
+    back()
+    compose.onNodeWithTag(TagPersonScreen).assertExists()
+    waitFocused(personTileTag(tile))
+
+    api.titleExtrasValue = TitleExtrasDto(people = listOf(cast))
+    back()
+    compose.onNodeWithTag(TagCatalogPrimary).assertExists()
+    waitFocused(titlePersonTag("Quentin Tarantino"))
+  }
+
+  @Test
+  fun `two Backs from a related title return to the person tile`() {
+    val cast = TitlePersonDto(id = 138, name = "Quentin Tarantino", role = "cast")
+    val tile = personTile("tt2", 680, "Pulp Fiction")
+    val related = RelatedTitleDto(type = "movie", id = "tt3", name = "Reservoir Dogs")
+    val api = api(cast).apply {
       personValue = PersonFilmographyDto(
         id = 138,
         name = "Quentin Tarantino",
@@ -118,28 +206,52 @@ class PersonShellTest {
 
     compose.onNodeWithTag(titlePersonTag("Quentin Tarantino"))
       .performSemanticsAction(SemanticsActions.RequestFocus)
-    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.personRequests.isNotEmpty() }
-    compose.waitForIdle()
+    waitFocused(personTileTag(tile))
 
-    compose.onNodeWithTag(TagPersonScreen).assertExists()
-    compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
-    compose.onNodeWithTag(personTileTag(tile)).assertIsFocused()
-    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
-    compose.waitForIdle()
-
+    api.titleExtrasValue = TitleExtrasDto(related = listOf(related))
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.titleExtrasRequests.any { it.first == "movie" && it.second == "tt2" } }
+    compose.onNodeWithTag(relatedTitleTag("tt3"))
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.titleExtrasRequests.any { it.first == "movie" && it.second == "tt3" } }
     compose.onNodeWithTag(TagCatalogPrimary).assertExists()
-    assertEquals("movie:tt2", api.titleExtrasRequests.last().let { "${it.first}:${it.second}" })
-    scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
-    compose.waitForIdle()
+
+    back()
+    compose.onNodeWithTag(TagCatalogPrimary).assertExists()
+    back()
 
     compose.onNodeWithTag(TagPersonScreen).assertExists()
-    compose.onNodeWithTag(personTileTag(tile)).assertIsFocused()
-    scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
-    compose.waitForIdle()
+    waitFocused(personTileTag(tile))
+  }
 
-    compose.onNodeWithTag(TagPersonScreen).assertDoesNotExist()
+  @Test
+  fun `Back from a person and then its title returns to the library origin`() {
+    val cast = TitlePersonDto(id = 138, name = "Quentin Tarantino", role = "cast")
+    val api = api(cast).apply {
+      personValue = PersonFilmographyDto(
+        id = 138,
+        name = "Quentin Tarantino",
+        sections = listOf(PersonSectionDto("acting", listOf(personTile("tt2", 680, "Pulp Fiction")))),
+      )
+    }
+    launch(api)
+    openCatalogueDetail(api)
+
+    compose.onNodeWithTag(titlePersonTag("Quentin Tarantino"))
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.personRequests.isNotEmpty() }
+
+    back()
+    compose.onNodeWithTag(TagCatalogPrimary).assertExists()
+    waitFocused(titlePersonTag("Quentin Tarantino"))
+    back()
+
     compose.onNodeWithTag(TagCatalogPrimary).assertDoesNotExist()
+    waitFocused("It")
   }
 
   @Test
@@ -153,7 +265,7 @@ class PersonShellTest {
 
     compose.onNodeWithTag(titlePersonTag("Quentin Tarantino"))
       .performSemanticsAction(SemanticsActions.RequestFocus)
-    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }
     compose.waitForIdle()
 

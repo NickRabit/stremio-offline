@@ -62,17 +62,16 @@ class PersonScreenTest {
 
   private fun mount(
     api: FakeTvApi,
-    restoreFocusToken: Int = 0,
-    onOpenTitle: (RelatedTitleDto, Boolean) -> Unit = { _, _ -> },
+    focusKey: String? = null,
+    onOpenTitle: (RelatedTitleDto, String, Boolean) -> Unit = { _, _, _ -> },
     onUnavailable: (String) -> Unit = {},
   ) {
     compose.setContent {
       PersonScreen(
         api = api,
-        args = PersonArgs(138, "Quentin Tarantino"),
+        args = PersonArgs(138, "Quentin Tarantino", focusKey = focusKey),
         language = "en",
         imageUrl = { null },
-        restoreFocusToken = restoreFocusToken,
         onOpenTitle = onOpenTitle,
         onUnavailable = onUnavailable,
         onBack = {},
@@ -99,6 +98,14 @@ class PersonScreenTest {
   }
 
   @Test
+  fun `focus starts on the requested tile`() {
+    val api = FakeTvApi().apply { personValue = person() }
+    mount(api, focusKey = "series:500")
+
+    compose.onNodeWithTag(personTileTag(actingTitle)).assertIsFocused()
+  }
+
+  @Test
   fun `DOWN from the last row of a section focuses the next section`() {
     val api = FakeTvApi().apply {
       personValue = person(
@@ -120,15 +127,16 @@ class PersonScreenTest {
     val api = FakeTvApi().apply {
       personValue = person(first = PersonSectionDto("crew", listOf(crewTitle)), second = PersonSectionDto("acting"))
     }
-    var opened: Pair<RelatedTitleDto, Boolean>? = null
-    mount(api, onOpenTitle = { title, noImdb -> opened = title to noImdb })
+    var opened: Triple<RelatedTitleDto, String, Boolean>? = null
+    mount(api, onOpenTitle = { title, focusKey, noImdb -> opened = Triple(title, focusKey, noImdb) })
 
     compose.onNodeWithTag(personTileTag(crewTitle)).assertIsFocused()
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
 
     assertEquals("tt0110912", opened?.first?.id)
-    assertEquals(false, opened?.second)
+    assertEquals("movie:680", opened?.second)
+    assertEquals(false, opened?.third)
   }
 
   @Test
@@ -137,8 +145,8 @@ class PersonScreenTest {
       personValue = person(first = PersonSectionDto("acting", listOf(actingTitle)), second = PersonSectionDto("crew"))
       personTitleValue = PersonTitleResolutionDto(id = "tt0105236")
     }
-    var opened: Pair<RelatedTitleDto, Boolean>? = null
-    mount(api, onOpenTitle = { title, noImdb -> opened = title to noImdb })
+    var opened: Triple<RelatedTitleDto, String, Boolean>? = null
+    mount(api, onOpenTitle = { title, focusKey, noImdb -> opened = Triple(title, focusKey, noImdb) })
 
     compose.onNodeWithTag(personTileTag(actingTitle)).assertIsFocused()
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
@@ -146,7 +154,8 @@ class PersonScreenTest {
 
     assertEquals(listOf("series" to 500L), api.personTitleRequests)
     assertEquals("tt0105236", opened?.first?.id)
-    assertEquals(false, opened?.second)
+    assertEquals("series:500", opened?.second)
+    assertEquals(false, opened?.third)
   }
 
   @Test
@@ -155,15 +164,16 @@ class PersonScreenTest {
       personValue = person(first = PersonSectionDto("acting", listOf(actingTitle)), second = PersonSectionDto("crew"))
       personTitleValue = PersonTitleResolutionDto(id = "tmdb:500", imdb = "none")
     }
-    var opened: Pair<RelatedTitleDto, Boolean>? = null
-    mount(api, onOpenTitle = { title, noImdb -> opened = title to noImdb })
+    var opened: Triple<RelatedTitleDto, String, Boolean>? = null
+    mount(api, onOpenTitle = { title, focusKey, noImdb -> opened = Triple(title, focusKey, noImdb) })
 
     compose.onNodeWithTag(personTileTag(actingTitle)).assertIsFocused()
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitUntil(5_000) { opened != null }
 
     assertEquals("tmdb:500", opened?.first?.id)
-    assertEquals(true, opened?.second)
+    assertEquals("series:500", opened?.second)
+    assertEquals(true, opened?.third)
   }
 
   @Test
@@ -173,7 +183,7 @@ class PersonScreenTest {
       personTitleFailure = ApiError(ApiFailure.Generic, messageKey = "err.personLookupFailed")
     }
     var opened: RelatedTitleDto? = null
-    mount(api, onOpenTitle = { title, _ -> opened = title })
+    mount(api, onOpenTitle = { title, _, _ -> opened = title })
 
     compose.onNodeWithTag(personTileTag(actingTitle)).assertIsFocused()
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
@@ -196,8 +206,7 @@ class PersonScreenTest {
         args = PersonArgs(138, "Quentin Tarantino"),
         language = null,
         imageUrl = { null },
-        restoreFocusToken = 0,
-        onOpenTitle = { _, _ -> },
+        onOpenTitle = { _, _, _ -> },
         onUnavailable = { unavailable = it },
         onBack = {},
       )

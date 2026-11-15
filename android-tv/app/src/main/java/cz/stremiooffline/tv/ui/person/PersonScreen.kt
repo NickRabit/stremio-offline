@@ -66,7 +66,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
 
-data class PersonArgs(val id: Long, val name: String)
+data class PersonArgs(val id: Long, val name: String, val focusKey: String? = null)
 
 const val TagPersonScreen = "person_screen"
 const val TagPersonRetry = "person_retry"
@@ -82,8 +82,7 @@ fun PersonScreen(
   args: PersonArgs,
   language: String?,
   imageUrl: (String?) -> String?,
-  restoreFocusToken: Int,
-  onOpenTitle: (RelatedTitleDto, noImdb: Boolean) -> Unit,
+  onOpenTitle: (related: RelatedTitleDto, focusKey: String, noImdb: Boolean) -> Unit,
   onUnavailable: (String) -> Unit,
   onBack: () -> Unit,
 ) {
@@ -92,7 +91,6 @@ fun PersonScreen(
   var failure by remember(args) { mutableStateOf<ApiError?>(null) }
   var notice by remember(args) { mutableStateOf<ApiError?>(null) }
   var openingKey by remember(args) { mutableStateOf<String?>(null) }
-  var lastOpenedKey by remember(args) { mutableStateOf<String?>(null) }
   val requesters = remember(args) { mutableMapOf<String, FocusRequester>() }
   val retryFocus = remember(args) { FocusRequester() }
   val scope = rememberCoroutineScope()
@@ -120,36 +118,24 @@ fun PersonScreen(
     }
   }
 
-  val firstTitle = person?.sections?.firstNotNullOfOrNull { it.titles.firstOrNull() }
-  LaunchedEffect(person) {
-    if (firstTitle == null) return@LaunchedEffect
-    awaitFrame()
-    runCatching { requester(firstTitle.focusKey()).requestFocus() }
-  }
   LaunchedEffect(failure) {
     if (failure == null) return@LaunchedEffect
     awaitFrame()
     runCatching { retryFocus.requestFocus() }
   }
-  LaunchedEffect(restoreFocusToken) {
-    val key = lastOpenedKey ?: return@LaunchedEffect
-    awaitFrame()
-    runCatching { requester(key).requestFocus() }
-  }
 
   fun open(title: PersonTitleDto) {
     if (openingKey != null) return
     val key = title.focusKey()
-    lastOpenedKey = key
     notice = null
     when {
-      title.id.startsWith("tt") -> onOpenTitle(title.related(title.id), false)
+      title.id.startsWith("tt") -> onOpenTitle(title.related(title.id), key, false)
       title.id.startsWith("tmdb:") -> {
         openingKey = key
         scope.launch {
           try {
             val resolved = api.personTitle(title.type, title.tmdbId)
-            onOpenTitle(title.related(resolved.id), resolved.imdb == "none")
+            onOpenTitle(title.related(resolved.id), key, resolved.imdb == "none")
           } catch (cancelled: CancellationException) {
             throw cancelled
           } catch (error: ApiError) {
@@ -211,6 +197,7 @@ fun PersonScreen(
         } else {
           PersonGrid(
             sections = sections,
+            focusKey = args.focusKey,
             imageUrl = imageUrl,
             openingKey = openingKey,
             requester = ::requester,
@@ -261,6 +248,7 @@ private fun PersonHeader(name: String, photo: String?, imageUrl: (String?) -> St
 @Composable
 private fun PersonGrid(
   sections: List<PersonSectionDto>,
+  focusKey: String?,
   imageUrl: (String?) -> String?,
   openingKey: String?,
   requester: (String) -> FocusRequester,
@@ -269,6 +257,13 @@ private fun PersonGrid(
   BoxWithConstraints(Modifier.fillMaxSize()) {
     val columns = posterGridColumns(maxWidth.value)
     val state = rememberLazyGridState()
+    val focusTarget = focusTarget(sections, focusKey)
+    LaunchedEffect(sections, focusKey) {
+      val target = focusTarget ?: return@LaunchedEffect
+      state.scrollToItem(target.second)
+      awaitFrame()
+      runCatching { requester(target.first.focusKey()).requestFocus() }
+    }
     LazyVerticalGrid(
       columns = GridCells.Fixed(columns),
       state = state,
@@ -329,6 +324,21 @@ private fun PersonGrid(
       }
     }
   }
+}
+
+private fun focusTarget(sections: List<PersonSectionDto>, focusKey: String?): Pair<PersonTitleDto, Int>? {
+  var first: Pair<PersonTitleDto, Int>? = null
+  var itemIndex = 0
+  for (section in sections) {
+    itemIndex++
+    section.titles.forEachIndexed { index, title ->
+      val target = title to itemIndex + index
+      if (first == null) first = target
+      if (title.focusKey() == focusKey) return target
+    }
+    itemIndex += section.titles.size
+  }
+  return first
 }
 
 @Composable

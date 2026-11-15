@@ -84,6 +84,7 @@ import cz.stremiooffline.tv.ui.catalog.remoteResumeCards
 import cz.stremiooffline.tv.ui.catalog.SearchScreen
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.initialRemoteMetadata
+import cz.stremiooffline.tv.ui.detail.personKey
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.remoteExtrasIdentity
@@ -158,8 +159,13 @@ val LocalRailFocus = compositionLocalOf<FocusRequester?> { null }
 /** The rail is always icons only: it never widens on focus. */
 private val CollapsedRail = 60.dp
 
+internal sealed interface CatalogStackEntry {
+  data class Detail(val args: CatalogDetailArgs) : CatalogStackEntry
+  data class Person(val args: PersonArgs) : CatalogStackEntry
+}
+
 internal class CatalogDetailStack {
-  var entries by mutableStateOf<List<CatalogDetailArgs>>(emptyList())
+  var entries by mutableStateOf<List<CatalogStackEntry>>(emptyList())
     private set
 
   fun clear() {
@@ -167,10 +173,18 @@ internal class CatalogDetailStack {
   }
 
   fun pushRelated(current: CatalogDetailArgs, related: RelatedTitleDto) {
-    entries = (entries + current.copy(focusRelatedId = related.id)).takeLast(10)
+    entries = (entries + CatalogStackEntry.Detail(current.copy(focusRelatedId = related.id))).takeLast(10)
   }
 
-  fun pop(): CatalogDetailArgs? {
+  fun pushPerson(current: CatalogDetailArgs, person: TitlePersonDto) {
+    entries = (entries + CatalogStackEntry.Detail(current.copy(focusPersonKey = personKey(person)))).takeLast(10)
+  }
+
+  fun pushPersonScreen(args: PersonArgs) {
+    entries = (entries + CatalogStackEntry.Person(args)).takeLast(10)
+  }
+
+  fun pop(): CatalogStackEntry? {
     val previous = entries.lastOrNull() ?: return null
     entries = entries.dropLast(1)
     return previous
@@ -216,7 +230,6 @@ fun Shell(
   var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
   val catalogStack = remember { CatalogDetailStack() }
   var personScreen by remember { mutableStateOf<PersonArgs?>(null) }
-  var personRestoreToken by remember { mutableIntStateOf(0) }
   var catalogReturnOrigin by remember { mutableStateOf<CatalogReturnOrigin?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
   // The next catalogue episode: the detail offers it, the player asks for it, and the play the
@@ -299,6 +312,7 @@ fun Shell(
   fun clearCatalogHistory() {
     catalogStack.clear()
     catalogReturnOrigin = null
+    personScreen = null
   }
   fun openCatalog(args: CatalogDetailArgs) {
     detailLookup.cancel()
@@ -439,12 +453,18 @@ fun Shell(
       return
     }
     detailLookup.cancel()
-    catalogDetail = null
-    clearCatalogHistory()
+    val current = catalogDetail
+    if (current == null) {
+      catalogDetail = null
+      clearCatalogHistory()
+    } else {
+      catalogStack.pushPerson(current, person)
+      catalogDetail = null
+    }
     personScreen = PersonArgs(id, person.name)
   }
   fun openRelatedFromUnderlying(related: RelatedTitleDto, origin: CatalogReturnOrigin) {
-    catalogStack.clear()
+    clearCatalogHistory()
     catalogReturnOrigin = origin
     catalogDetail = catalogStack.detailFor(related).copy(preferRemote = origin == CatalogReturnOrigin.Remote)
   }
@@ -652,10 +672,9 @@ fun Shell(
       args = openPersonScreen,
       language = null,
       imageUrl = { path -> path?.let(api::url) },
-      restoreFocusToken = personRestoreToken,
-      onOpenTitle = { related, noImdb ->
-        catalogStack.clear()
-        catalogReturnOrigin = null
+      onOpenTitle = { related, focusKey, noImdb ->
+        catalogStack.pushPersonScreen(openPersonScreen.copy(focusKey = focusKey))
+        personScreen = null
         catalogDetail = catalogStack.detailFor(related)
         if (noImdb) showHint(noImdbNotice)
       },
@@ -664,8 +683,17 @@ fun Shell(
         openPersonSearch(name)
       },
       onBack = {
-        personScreen = null
-        returnToken++
+        when (val previous = catalogStack.pop()) {
+          is CatalogStackEntry.Detail -> {
+            catalogDetail = previous.args
+            personScreen = null
+          }
+          is CatalogStackEntry.Person -> personScreen = previous.args
+          null -> {
+            personScreen = null
+            returnToken++
+          }
+        }
       },
     )
   }
@@ -691,20 +719,21 @@ fun Shell(
         openLibraryFolder(folder)
       },
       onBack = {
-        val previous = catalogStack.pop()
-        if (previous != null) {
-          catalogDetail = previous
-        } else if (catalogReturnOrigin != null) {
-          catalogDetail = null
-          catalogStack.clear()
-          catalogReturnOrigin = null
-        } else if (personScreen != null) {
-          catalogDetail = null
-          personRestoreToken++
-        } else {
-          clearCatalogHistory()
-          catalogDetail = null
-          returnToken++
+        when (val previous = catalogStack.pop()) {
+          is CatalogStackEntry.Detail -> catalogDetail = previous.args
+          is CatalogStackEntry.Person -> {
+            catalogDetail = null
+            personScreen = previous.args
+          }
+          null -> {
+            catalogDetail = null
+            if (catalogReturnOrigin != null) {
+              clearCatalogHistory()
+            } else {
+              clearCatalogHistory()
+              returnToken++
+            }
+          }
         }
       },
       onSearchPerson = ::openPerson,
