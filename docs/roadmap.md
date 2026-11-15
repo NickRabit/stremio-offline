@@ -37,6 +37,7 @@ metadata store, or scheduler for each platform.
 | Proposed | Trakt and Simkl | Send what was watched, read the watchlist and history, so people coming from Stremio or Nuvio bring theirs along. See [Trakt and Simkl](#trakt-and-simkl). |
 | Proposed | Notifications | A new episode, a finished or failed download and a full disk reach the household through ntfy, Telegram or browser push. Extends the queue's completion notice. See [Notifications](#notifications). |
 | Proposed | Player extras on the web | Picture in picture, playback speed, dialogue boost and loudness levelling, and a bitrate cap for viewers outside the home network. See [Player extras](#player-extras). |
+| Proposed | Player and interface polish | Progressive seeking on Android TV, an estimated finish time, spoiler-safe next-episode previews, and adjustable web/desktop interface scale. See [Player and interface polish](#player-and-interface-polish). |
 | Proposed | Collections and shared lists | Film series from TMDB and hand-made lists an account can share with others in the household. See [Collections and lists](#collections-and-lists). |
 | Proposed | Library metadata in NFO files | Read and write `.nfo` files beside the media, so a library survives a reinstall and agrees with Jellyfin or Emby on the same NAS. See [NFO files](#nfo-files). |
 | Proposed | More ratings | Rotten Tomatoes, Metacritic and Letterboxd beside IMDb and TMDB, through MDBList with a key in Settings → Services. |
@@ -524,6 +525,25 @@ the account may not see.
   does not come from the LAN. It depends on telling LAN from remote reliably,
   which is also the configurable LAN address under
   [Access and multi-instance](#access-and-multi-instance).
+
+### Player and interface polish
+
+Ideas from Stremio's [Android TV update](https://blog.stremio.com/stremio-tech-update-79-stremio-android-tv-android-mobile-updated/)
+and [web/desktop update](https://blog.stremio.com/stremio-tech-update-85-stremio-desktop-and-stremio-web-update/).
+These are independent usability improvements, not a new delivery stage:
+
+- **Progressive seeking on Android TV:** increase the seek step while a remote
+  direction is held, so a long jump takes fewer presses without making a short
+  correction imprecise. Keep the existing seek recovery behavior.
+- **Estimated finish time:** show when the current film or episode will end,
+  based on its remaining duration; update it after seeks and pauses, and account
+  for playback speed if that control is added.
+- **Spoiler-safe Up next:** hide or blur the next episode's thumbnail until that
+  episode is watched. Use the current account's watched state, including when
+  the next episode comes from a different source.
+- **Adjustable interface scale on web and desktop:** let an account enlarge the
+  interface for viewing from a distance. First verify the need on the target
+  screens, then check dialogs, navigation and player controls at each scale.
 
 ### Collections and lists
 
