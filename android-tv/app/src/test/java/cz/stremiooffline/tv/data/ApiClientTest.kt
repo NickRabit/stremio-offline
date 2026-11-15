@@ -87,6 +87,19 @@ class ApiClientTest {
   }
 
   @Test
+  fun `me carries the child policy and catalogue only with the child flag`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"username":"kid","child":true,"catalogue":true}"""))
+    val me = client(start()).me() as MeResult.SignedIn
+    assertEquals(true, me.child)
+    assertEquals(true, me.catalogue)
+
+    server.enqueue(MockResponse().setBody("""{"username":"adult","catalogue":true}"""))
+    val adult = client(start()).me() as MeResult.SignedIn
+    assertEquals(false, adult.child)
+    assertEquals(false, adult.catalogue)
+  }
+
+  @Test
   fun `switchProfile maps 200 401 403 404 and 429`() = runTest {
     val api = client(start())
 

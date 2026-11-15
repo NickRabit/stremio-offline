@@ -101,12 +101,15 @@ fun GlobalSearchScreen(
   imageUrl: (String?) -> String?,
   overlayOpen: Boolean,
   preset: SearchPreset? = null,
+  catalogueAvailable: Boolean = true,
   onBack: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
   voiceAvailable: Boolean = voiceSearchAvailable(),
   voiceLauncher: VoiceLauncher? = null,
 ) {
-  val viewModel = viewModel<GlobalSearchViewModel>(factory = GlobalSearchViewModel.factory(api))
+  val viewModel = viewModel<GlobalSearchViewModel>(
+    factory = GlobalSearchViewModel.factory(api, catalogueAvailable),
+  )
   val state = viewModel.state
   val fieldFocus = remember { FocusRequester() }
   val gridFocus = remember { FocusRequester() }
@@ -148,8 +151,12 @@ fun GlobalSearchScreen(
   }
 
   val showRecent = !state.submitted && draft.isBlank() && state.recent.isNotEmpty()
-  val sourceSet = if (state.sources.isEmpty()) SourceClass.entries.toSet() else state.sources
-  val scopeShown = state.library == null && SourceClass.Catalog in sourceSet
+  val sourceSet = if (state.sources.isEmpty()) {
+    if (catalogueAvailable) SourceClass.entries.toSet() else LibrarySources
+  } else {
+    state.sources
+  }
+  val scopeShown = catalogueAvailable && state.library == null && SourceClass.Catalog in sourceSet
   val libraryShown = state.library != null
   val toolbarSize = if (scopeShown || libraryShown) 5 else 4
   val activeToolbarIndex = toolbarFocusIndex.coerceIn(0, toolbarSize - 1)
@@ -158,6 +165,7 @@ fun GlobalSearchScreen(
     3 -> kindFocus
     else -> if (libraryShown) libraryFocus else scopeFocus
   }
+  val firstSourceFocus = if (catalogueAvailable) sourceFocuses.first() else sourceFocuses[2]
   val snapshot = state.snapshot
   val stripShown = state.submitted && sourceStripShown(snapshot?.state, snapshot?.sources.orEmpty())
   val hasCards = snapshot?.clusters?.isNotEmpty() == true || snapshot?.unidentified?.isNotEmpty() == true
@@ -207,7 +215,7 @@ fun GlobalSearchScreen(
     viewModel.refreshRecent()
   }
   LaunchedEffect(viewModel, state.sources) {
-    if (SourceClass.Catalog in sourceSet) viewModel.loadSearchable()
+    if (catalogueAvailable && SourceClass.Catalog in sourceSet) viewModel.loadSearchable()
   }
   if (onBack != null) BackHandler { onBack() }
   BackHandler(enabled = stripExpanded) { stripExpanded = false }
@@ -257,7 +265,7 @@ fun GlobalSearchScreen(
         onSubmit = ::submit,
         modifier = Modifier
           .weight(1f)
-          .focusDirections(down = sourceFocuses.first())
+          .focusDirections(down = firstSourceFocus)
           .onFocusChanged { if (it.isFocused) clearCardFocus() },
       )
       if (voice.available) {
@@ -270,7 +278,7 @@ fun GlobalSearchScreen(
           modifier = Modifier
             .size(38.dp)
             .testTag(TagGlobalSearchVoice)
-            .focusDirections(down = sourceFocuses.first())
+            .focusDirections(down = firstSourceFocus)
             .onFocusChanged { if (it.isFocused) clearCardFocus() },
         )
       }
@@ -290,7 +298,7 @@ fun GlobalSearchScreen(
         modifier = Modifier
           .size(38.dp)
           .testTag(TagGlobalSearchReset)
-          .focusDirections(down = sourceFocuses.first())
+          .focusDirections(down = firstSourceFocus)
           .onFocusChanged { if (it.isFocused) clearCardFocus() },
       )
     }
@@ -308,6 +316,7 @@ fun GlobalSearchScreen(
       scope = state.scope,
       library = state.library,
       searchable = state.searchable,
+      catalogueAvailable = catalogueAvailable,
       fieldFocus = fieldFocus,
       sourceFocuses = sourceFocuses,
       kindFocus = kindFocus,
@@ -317,7 +326,7 @@ fun GlobalSearchScreen(
       onFocusChanged = { toolbarFocusIndex = it },
       onSources = {
         viewModel.setSources(it)
-        if (SourceClass.Catalog in it || it.isEmpty()) {
+        if (catalogueAvailable && (SourceClass.Catalog in it || it.isEmpty())) {
           viewModel.loadSearchable()
         } else {
           scopePanel = false
@@ -427,6 +436,7 @@ private fun GlobalSearchFilters(
   scope: SearchScope,
   library: LibraryFilter?,
   searchable: List<SearchableCatalogDto>,
+  catalogueAvailable: Boolean,
   fieldFocus: FocusRequester,
   sourceFocuses: List<FocusRequester>,
   kindFocus: FocusRequester,
@@ -440,7 +450,7 @@ private fun GlobalSearchFilters(
   onClearLibrary: () -> Unit,
   onFocused: () -> Unit,
 ) {
-  val catalog = sources.isEmpty() || SourceClass.Catalog in sources
+  val catalog = catalogueAvailable && (sources.isEmpty() || SourceClass.Catalog in sources)
   val catalogOnly = sources == setOf(SourceClass.Catalog)
   val trailingFocus = if (library != null) libraryFocus else if (catalog) scopeFocus else null
   Row(
@@ -448,12 +458,23 @@ private fun GlobalSearchFilters(
     horizontalArrangement = Arrangement.spacedBy(6.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    val values = listOf(
-      Triple(stringResource(R.string.tv_global_search_source_all), sources.isEmpty(), "source_all"),
-      Triple(stringResource(R.string.tv_global_search_source_catalog), catalogOnly, "source_catalog"),
-      Triple(stringResource(R.string.tv_global_search_source_libraries), sources == LibrarySources, "source_libraries"),
-    )
-    values.forEachIndexed { index, (text, selected, tag) ->
+    val values = if (catalogueAvailable) {
+      listOf(
+        0 to Triple(stringResource(R.string.tv_global_search_source_all), sources.isEmpty(), "source_all"),
+        1 to Triple(stringResource(R.string.tv_global_search_source_catalog), catalogOnly, "source_catalog"),
+        2 to Triple(stringResource(R.string.tv_global_search_source_libraries), sources == LibrarySources, "source_libraries"),
+      )
+    } else {
+      listOf(
+        2 to Triple(
+          stringResource(R.string.tv_global_search_source_libraries),
+          sources == LibrarySources,
+          "source_libraries",
+        ),
+      )
+    }
+    values.forEach { (index, value) ->
+      val (text, selected, tag) = value
       GlobalSearchFilter(
         text = text,
         selected = selected,

@@ -128,8 +128,9 @@ fun HomeScreen(
   onHint: (String) -> Unit,
   modifier: Modifier = Modifier,
   refreshToken: Int = 0,
+  catalogue: Boolean = true,
 ) {
-  val viewModel = viewModel<HomeViewModel>(factory = HomeViewModel.factory(api))
+  val viewModel = viewModel<HomeViewModel>(factory = HomeViewModel.factory(api, catalogue))
   LaunchedEffect(Unit) { viewModel.start() }
   LaunchedEffect(refreshToken) { if (refreshToken > 0) viewModel.refresh() }
   val state = viewModel.state

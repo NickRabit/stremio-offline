@@ -71,6 +71,23 @@ class LibraryPlaySourcesTest {
   }
 
   @Test
+  fun `without catalogue browsing a library play reads no addons or source profiles`() = runTest {
+    val api = FakeTvApi()
+    api.libraryTitleValues["Filmy/Heat/Heat.mkv"] = LibraryTitleDto("movie", "tt1", name = "Heat")
+    api.localStreamsValues["movie:tt1"] = listOf(library("Filmy/Heat/Heat.mkv"))
+    api.remoteLibrariesValue = emptyList()
+    val reports = mutableListOf<OfferedSources>()
+
+    LibraryPlaySources(api, catalogue = false).load(target("Filmy/Heat/Heat.mkv")) { reports += it }
+
+    assertEquals(listOf("Filmy/Heat/Heat.mkv"), reports.last().streams.map { it.localPath })
+    assertEquals(0, api.addonsCalls)
+    assertEquals(0, api.sourceProfilesCalls)
+    assertEquals(0, api.streamSourcesRequests.size)
+    assertEquals(0, api.streamsRequests.size)
+  }
+
+  @Test
   fun `at most two providers and two libraries are asked at a time`() = runTest {
     val api = FakeTvApi()
     api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en")

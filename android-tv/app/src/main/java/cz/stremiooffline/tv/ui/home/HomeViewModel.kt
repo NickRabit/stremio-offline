@@ -80,7 +80,10 @@ fun drawnRowIds(rows: List<HomeRowSlot>): List<String> = rows.filter { drawnCont
  * The Home rows: the `order` probe, the built-in request and the lazy catalogue carousels. Rows
  * are keyed by id, so a retry touches only the row it names.
  */
-class HomeViewModel(private val api: TvApi) : ViewModel() {
+class HomeViewModel(
+  private val api: TvApi,
+  private val catalogue: Boolean = true,
+) : ViewModel() {
 
   var state by mutableStateOf(HomeState())
     private set
@@ -117,6 +120,7 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
    * focused card is ever asked.
    */
   fun heroMeta(type: String, id: String) {
+    if (!catalogue) return
     val key = "$type:$id"
     val cached = heroCache[key]
     if (cached != null) {
@@ -311,6 +315,7 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
     /** How many catalogue rows are asked before focus ever reaches them. */
     private const val CATALOG_PREFETCH = 2
     private const val HERO_CACHE_SIZE = 60
-    fun factory(api: TvApi) = viewModelFactory { initializer { HomeViewModel(api) } }
+    fun factory(api: TvApi, catalogue: Boolean = true) =
+      viewModelFactory { initializer { HomeViewModel(api, catalogue) } }
   }
 }

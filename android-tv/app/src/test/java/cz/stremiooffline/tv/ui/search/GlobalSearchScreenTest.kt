@@ -119,6 +119,7 @@ class GlobalSearchScreenTest {
     voiceLauncher: VoiceLauncher? = null,
     preset: SearchPreset? = null,
     onBack: (() -> Unit)? = null,
+    catalogueAvailable: Boolean = true,
   ) {
     compose.setContent {
       GlobalSearchScreen(
@@ -129,6 +130,7 @@ class GlobalSearchScreenTest {
         imageUrl = { null },
         overlayOpen = false,
         preset = preset,
+        catalogueAvailable = catalogueAvailable,
         onBack = onBack,
         voiceAvailable = voiceAvailable,
         voiceLauncher = voiceLauncher,
@@ -155,6 +157,17 @@ class GlobalSearchScreenTest {
   private fun press(key: Key) {
     compose.onRoot().performKeyInput { pressKey(key) }
     compose.waitForIdle()
+  }
+
+  @Test
+  fun `a child without catalogue browsing searches libraries without reading searchable catalogues`() {
+    val api = FakeTvApi()
+    mount(api, catalogueAvailable = false)
+
+    assertEquals(0, api.searchableCalls)
+    compose.onNodeWithTag(globalSearchFilterTag("source_catalog")).assertDoesNotExist()
+    compose.onNodeWithTag(globalSearchFilterTag("source_libraries")).assertExists()
+    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertDoesNotExist()
   }
 
   private fun focused(tag: String): Boolean =

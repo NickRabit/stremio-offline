@@ -26,6 +26,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -90,6 +91,76 @@ class SessionViewModelSwitchTest {
     assertSame(api, signedIn.api)
   }
 
+  @Test
+  fun `a child starts on Home instead of the stored start view`() {
+    server.start()
+    val address = ServerAddress.parse(server.url("/").toString())!!
+    val store = MemoryStore(context)
+    store.serverUrl = address.display
+    store.saveSession(address.origin, "token")
+    server.enqueue(MockResponse().setBody("""{"username":"kid","language":"en","child":true}"""))
+
+    val session = SessionViewModel(store, context)
+
+    val signedIn = awaitSignedIn(session, "kid")
+    assertEquals(Section.Home, signedIn.start)
+    assertTrue(signedIn.child)
+    assertEquals(1, server.requestCount)
+  }
+
+  @Test
+  fun `a foreground policy change rebuilds the session and an unchanged read does not`() {
+    server.start()
+    val address = ServerAddress.parse(server.url("/").toString())!!
+    val store = MemoryStore(context)
+    store.serverUrl = address.display
+    store.saveSession(address.origin, "token")
+    server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs"}"""))
+    server.enqueue(MockResponse().setBody("""{"startView":"library"}"""))
+
+    val session = SessionViewModel(store, context)
+    val initial = awaitSignedIn(session, "ondra")
+    server.takeRequest(5, TimeUnit.SECONDS)
+    server.takeRequest(5, TimeUnit.SECONDS)
+
+    server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs","child":true,"catalogue":true}"""))
+    session.refreshPolicy()
+    server.takeRequest(5, TimeUnit.SECONDS)
+    val child = awaitPolicy(session, child = true, catalogue = true)
+    assertTrue(child.child)
+    assertTrue(child.catalogue)
+    assertEquals(Section.Home, child.start)
+    assertNotSame(initial.api, child.api)
+
+    server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs","child":true,"catalogue":true}"""))
+    session.refreshPolicy()
+    server.takeRequest(5, TimeUnit.SECONDS)
+    Thread.sleep(100)
+    assertSame(child.api, (session.state as SessionState.SignedIn).api)
+  }
+
+  @Test
+  fun `a failed foreground policy read changes nothing`() {
+    server.start()
+    val address = ServerAddress.parse(server.url("/").toString())!!
+    val store = MemoryStore(context)
+    store.serverUrl = address.display
+    store.saveSession(address.origin, "token")
+    server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs"}"""))
+    server.enqueue(MockResponse().setBody("""{"startView":"home"}"""))
+
+    val session = SessionViewModel(store, context)
+    val initial = awaitSignedIn(session, "ondra")
+    server.takeRequest(5, TimeUnit.SECONDS)
+    server.takeRequest(5, TimeUnit.SECONDS)
+
+    server.enqueue(MockResponse().setResponseCode(500))
+    session.refreshPolicy()
+    server.takeRequest(5, TimeUnit.SECONDS)
+    Thread.sleep(100)
+    assertSame(initial.api, (session.state as SessionState.SignedIn).api)
+  }
+
   private fun awaitSignedIn(
     session: SessionViewModel,
     username: String,
@@ -102,6 +173,21 @@ class SessionViewModelSwitchTest {
       Thread.sleep(25)
     }
     fail("expected signed in as $username, was ${session.state}")
+    error("unreachable")
+  }
+
+  private fun awaitPolicy(
+    session: SessionViewModel,
+    child: Boolean,
+    catalogue: Boolean,
+  ): SessionState.SignedIn {
+    val deadline = System.currentTimeMillis() + 5_000
+    while (System.currentTimeMillis() < deadline) {
+      val state = session.state as? SessionState.SignedIn
+      if (state?.child == child && state.catalogue == catalogue) return state
+      Thread.sleep(25)
+    }
+    fail("expected child=$child catalogue=$catalogue, was ${session.state}")
     error("unreachable")
   }
 

@@ -42,6 +42,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
@@ -89,6 +92,8 @@ sealed interface SessionState {
     val start: Section,
     val api: ApiClient,
     val canSwitch: Boolean = false,
+    val child: Boolean = false,
+    val catalogue: Boolean = false,
   ) : SessionState
   data class Offline(val server: String) : SessionState
 }
@@ -122,7 +127,7 @@ class SessionViewModel(
       val api = ApiClient(address, CookieStore(address.origin, store))
       try {
         state = when (val me = api.me()) {
-          is MeResult.SignedIn -> SessionState.SignedIn(me.username, me.language, startSection(settingsOf(api)), api, me.canSwitch)
+          is MeResult.SignedIn -> signedInState(me, api)
           MeResult.Setup -> {
             store.clearSession()
             SessionState.SignedOut(address.display, ApiFailure.NeedsSetup)
@@ -139,8 +144,22 @@ class SessionViewModel(
     }
   }
 
-  fun signedIn(username: String, language: String?, start: Section, api: ApiClient) {
-    state = SessionState.SignedIn(username, language, start, api, canSwitch = false)
+  fun signedIn(
+    username: String,
+    language: String?,
+    start: Section,
+    api: ApiClient,
+    child: Boolean = false,
+    catalogue: Boolean = false,
+  ) {
+    state = SessionState.SignedIn(
+      username = username,
+      language = language,
+      start = if (child) Section.Home else start,
+      api = api,
+      child = child,
+      catalogue = child && catalogue,
+    )
     refreshCanSwitch()
   }
 
@@ -149,14 +168,49 @@ class SessionViewModel(
   fun refreshCanSwitch() {
     val api = (state as? SessionState.SignedIn)?.api ?: return
     viewModelScope.launch {
-      val canSwitch = try {
-        (api.me() as? MeResult.SignedIn)?.canSwitch ?: false
+      val me = try {
+        api.me() as? MeResult.SignedIn ?: return@launch
       } catch (_: Exception) {
-        false
+        return@launch
       }
       val current = state as? SessionState.SignedIn ?: return@launch
       if (current.api !== api) return@launch
-      state = current.copy(canSwitch = canSwitch)
+      state = current.copy(
+        canSwitch = me.canSwitch,
+        child = me.child,
+        catalogue = me.child && me.catalogue,
+        start = if (me.child) Section.Home else current.start,
+      )
+    }
+  }
+
+  /** Re-reads the live account policy when the app returns to the foreground. A failed read leaves
+   *  the current session untouched; a changed policy gets a fresh session and clears Watch Next. */
+  fun refreshPolicy() {
+    val current = state as? SessionState.SignedIn ?: return
+    val address = store.serverUrl?.let(ServerAddress::parse) ?: return
+    viewModelScope.launch {
+      val me = try {
+        current.api.me() as? MeResult.SignedIn ?: return@launch
+      } catch (_: Exception) {
+        return@launch
+      }
+      val latest = state as? SessionState.SignedIn ?: return@launch
+      if (latest.api !== current.api) return@launch
+      val catalogue = me.child && me.catalogue
+      if (latest.child == me.child && latest.catalogue == catalogue) return@launch
+      val api = ApiClient(address, CookieStore(address.origin, store))
+      val start = if (me.child) Section.Home else startSection(settingsOf(api))
+      appContext?.let { WatchNextPublisher.clear(it) }
+      state = SessionState.SignedIn(
+        username = me.username,
+        language = me.language,
+        start = start,
+        api = api,
+        canSwitch = me.canSwitch,
+        child = me.child,
+        catalogue = catalogue,
+      )
     }
   }
 
@@ -167,9 +221,8 @@ class SessionViewModel(
       try {
         when (val me = api.me()) {
           is MeResult.SignedIn -> {
-            val start = startSection(settingsOf(api))
             appContext?.let { WatchNextPublisher.clear(it) }
-            state = SessionState.SignedIn(me.username, me.language, start, api, me.canSwitch)
+            state = signedInState(me, api)
           }
           MeResult.Setup -> {
             store.clearSession()
@@ -216,6 +269,19 @@ class SessionViewModel(
       null
     }
 
+  private suspend fun signedInState(me: MeResult.SignedIn, api: ApiClient): SessionState.SignedIn {
+    val start = if (me.child) Section.Home else startSection(settingsOf(api))
+    return SessionState.SignedIn(
+      username = me.username,
+      language = me.language,
+      start = start,
+      api = api,
+      canSwitch = me.canSwitch,
+      child = me.child,
+      catalogue = me.child && me.catalogue,
+    )
+  }
+
   companion object {
     const val DEFAULT_ADDRESS = "http://"
 
@@ -253,6 +319,14 @@ private fun AppContent() {
     }
 
     is SessionState.SignedIn -> {
+      val lifecycleOwner = LocalLifecycleOwner.current
+      DisposableEffect(lifecycleOwner, state.api) {
+        val observer = LifecycleEventObserver { _, event ->
+          if (event == Lifecycle.Event.ON_RESUME) session.refreshPolicy()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+      }
       // The account's interface language from /api/auth/me is the app's locale from the first
       // frame, and every later pick goes through the session too.
       SessionLocale(session)
@@ -282,6 +356,8 @@ private fun AppContent() {
           username = state.username,
           address = state.api.serverAddress,
           canSwitch = state.canSwitch,
+          child = state.child,
+          childCatalogue = state.catalogue,
           profileApi = state.api,
           onSwitched = session::switchedProfile,
           onProfilesGone = session::refreshCanSwitch,
@@ -329,6 +405,8 @@ fun SessionShell(
   address: String = "http://",
   onLocale: (String) -> Unit = {},
   canSwitch: Boolean = false,
+  child: Boolean = false,
+  childCatalogue: Boolean = false,
   profileApi: ProfileApi? = null,
   onSwitched: () -> Unit = {},
   onProfilesGone: () -> Unit = {},
@@ -343,6 +421,8 @@ fun SessionShell(
       address = address,
       onLocale = onLocale,
       canSwitch = canSwitch,
+      child = child,
+      childCatalogue = childCatalogue,
       profileApi = profileApi,
       onSwitched = onSwitched,
       onProfilesGone = onProfilesGone,

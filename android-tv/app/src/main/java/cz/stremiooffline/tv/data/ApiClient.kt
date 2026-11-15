@@ -55,7 +55,13 @@ data class LoginResult(val username: String, val mustChangePassword: Boolean)
 
 sealed interface MeResult {
   data object Setup : MeResult
-  data class SignedIn(val username: String, val language: String?, val canSwitch: Boolean = false) : MeResult
+  data class SignedIn(
+    val username: String,
+    val language: String?,
+    val canSwitch: Boolean = false,
+    val child: Boolean = false,
+    val catalogue: Boolean = false,
+  ) : MeResult
 }
 
 /** The decoder typed GETs share, including `GET /api/source-profiles`. Unknown keys stay ignored. */
@@ -276,10 +282,13 @@ class ApiClient(
       val body = readBody(response)
       val parsed = body.decodeOrNull<MeResponse>() ?: throw ApiError(ApiFailure.Incompatible)
       if (parsed.setup) return MeResult.Setup
+      val child = parsed.child
       return MeResult.SignedIn(
         parsed.username ?: throw ApiError(ApiFailure.SessionExpired),
         parsed.language,
         parsed.canSwitch,
+        child,
+        child && parsed.catalogue,
       )
     }
   }

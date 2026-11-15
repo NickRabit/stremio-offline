@@ -131,9 +131,10 @@ internal fun retainedFocusAnchor(
 class GlobalSearchViewModel(
   private val api: GlobalSearchApi,
   private val slotId: String = UUID.randomUUID().toString().replace("-", ""),
+  private val catalogue: Boolean = true,
 ) : ViewModel() {
 
-  var state by mutableStateOf(GlobalSearchState())
+  var state by mutableStateOf(GlobalSearchState(sources = if (catalogue) emptySet() else LibrarySources))
     private set
 
   private var generation = 0
@@ -155,12 +156,13 @@ class GlobalSearchViewModel(
   }
 
   fun applyPreset(preset: SearchPreset) {
+    val sources = if (catalogue) preset.sources else preset.sources - SourceClass.Catalog
     state = state.copy(
-      sources = preset.sources,
-      scope = preset.scope,
+      sources = sources.ifEmpty { if (catalogue) sources else LibrarySources },
+      scope = preset.scope.takeIf { catalogue } ?: SearchScope(),
       library = preset.library,
     )
-    if (!preset.scope.addonKey.isNullOrEmpty()) loadSearchable()
+    if (catalogue && !preset.scope.addonKey.isNullOrEmpty()) loadSearchable()
   }
 
   fun refreshRecent() {
@@ -185,19 +187,20 @@ class GlobalSearchViewModel(
   }
 
   fun setSources(sources: Set<SourceClass>) {
-    if (sources == state.sources) return
-    val includesCatalog = sources.isEmpty() || SourceClass.Catalog in sources
+    val nextSources = if (catalogue) sources else (sources - SourceClass.Catalog).ifEmpty { LibrarySources }
+    if (nextSources == state.sources) return
+    val includesCatalog = catalogue && (nextSources.isEmpty() || SourceClass.Catalog in nextSources)
     state = state.copy(
-      sources = sources,
+      sources = nextSources,
       scope = state.scope.takeIf { includesCatalog } ?: SearchScope(),
-      library = state.library?.takeIf { sources == LibrarySources },
+      library = state.library?.takeIf { nextSources == LibrarySources },
     )
     if (includesCatalog) loadSearchable()
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
   }
 
   fun loadSearchable() {
-    if (searchableLoaded) return
+    if (!catalogue || searchableLoaded) return
     searchableLoaded = true
     viewModelScope.launch {
       val list = try {
@@ -212,6 +215,7 @@ class GlobalSearchViewModel(
   }
 
   fun setScope(scope: SearchScope) {
+    if (!catalogue) return
     if (state.sources.isNotEmpty() && SourceClass.Catalog !in state.sources) return
     if (state.scope == scope && state.library == null) return
     state = state.copy(scope = scope, library = null)
@@ -307,7 +311,12 @@ class GlobalSearchViewModel(
     val kept = state
     val wasActive = active
     leave()
-    state = GlobalSearchState(recent = kept.recent, saveHistory = kept.saveHistory, searchable = kept.searchable)
+    state = GlobalSearchState(
+      sources = if (catalogue) emptySet() else LibrarySources,
+      recent = kept.recent,
+      saveHistory = kept.saveHistory,
+      searchable = kept.searchable,
+    )
     searchableLoaded = kept.searchable.isNotEmpty()
     active = wasActive
   }
@@ -331,7 +340,8 @@ class GlobalSearchViewModel(
     startJob?.cancel()
     pollJob?.cancel()
     actionJob?.cancel()
-    val requestSources = state.library?.let { setOf(it.source) } ?: state.sources.ifEmpty { SourceClass.entries.toSet() }
+    val requestSources = state.library?.let { setOf(it.source) }
+      ?: state.sources.ifEmpty { if (catalogue) SourceClass.entries.toSet() else LibrarySources }
     val requestLibrary = state.library?.library
     state = state.copy(
       committed = query,
@@ -349,6 +359,7 @@ class GlobalSearchViewModel(
             slotId = slotId,
             generation = currentGeneration,
             scope = state.scope.takeIf {
+              catalogue &&
               (requestSources.isEmpty() || SourceClass.Catalog in requestSources) && !it.addonKey.isNullOrEmpty()
             },
             library = requestLibrary,
@@ -470,8 +481,8 @@ class GlobalSearchViewModel(
   }
 
   companion object {
-    fun factory(api: GlobalSearchApi) = viewModelFactory {
-      initializer { GlobalSearchViewModel(api) }
+    fun factory(api: GlobalSearchApi, catalogue: Boolean = true) = viewModelFactory {
+      initializer { GlobalSearchViewModel(api, catalogue = catalogue) }
     }
   }
 }

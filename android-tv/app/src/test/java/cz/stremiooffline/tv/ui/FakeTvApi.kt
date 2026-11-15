@@ -113,6 +113,7 @@ open class FakeTvApi : TvApi {
   var favoriteAnswer: ((Boolean) -> Boolean)? = null
 
   var catalogsValue: List<CatalogDto> = emptyList()
+  var catalogsCalls = 0
   var librariesValue: List<LibraryDto> = emptyList()
   var librariesFailure: ApiFailure? = null
   /** Held open until the test releases it, so a destination read can land after a move. */
@@ -399,6 +400,7 @@ open class FakeTvApi : TvApi {
   }
 
   override suspend fun catalogs(): List<CatalogDto> {
+    catalogsCalls += 1
     if (failCatalogs) throw ApiError(ApiFailure.Generic)
     return catalogsValue
   }
