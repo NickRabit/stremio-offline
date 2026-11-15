@@ -62,6 +62,8 @@ data class CatalogDetailArgs(
   val autoPlay: Boolean = false,
   /** A related card to restore after returning to this detail. */
   val focusRelatedId: String? = null,
+  /** A cast card to restore after returning to this detail. */
+  val focusPersonKey: String? = null,
   /** Opened from a Jellyfin/Emby title: that server's copy leads Play. */
   val preferRemote: Boolean = false,
   /** The exact media-server version this catalogue detail was opened from. */

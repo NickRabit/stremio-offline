@@ -1,6 +1,9 @@
 package cz.stremiooffline.tv.ui.search
 
 import android.widget.Toast
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -9,16 +12,22 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,22 +42,34 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.tv.material3.Border
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Glow
+import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import coil3.compose.AsyncImage
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.GlobalSearchCanonicalDto
 import cz.stremiooffline.tv.data.GlobalSearchClusterDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.PersonHitDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
+import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.SidePanel
 import cz.stremiooffline.tv.ui.components.CardRowInset
@@ -56,6 +77,7 @@ import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
+import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
@@ -73,9 +95,11 @@ internal fun GlobalSearchResults(
   onOpenCatalog: (CatalogDetailArgs) -> Unit,
   onOpenRemote: (RemoteDetailData) -> Unit,
   onOpenLibrary: (String) -> Unit,
+  onOpenPerson: (TitlePersonDto) -> Unit,
   imageUrl: (String?) -> String?,
   modifier: Modifier = Modifier,
   gridFocus: FocusRequester = remember { FocusRequester() },
+  peopleFocus: FocusRequester = remember { FocusRequester() },
   restoreToken: Int = 0,
   clearFocusSignal: Int = 0,
   canonicalTitles: Boolean = true,
@@ -86,6 +110,8 @@ internal fun GlobalSearchResults(
   val scope = rememberCoroutineScope()
   val gridState = rememberLazyGridState()
   val cardFocus = remember { mutableMapOf<String, FocusRequester>() }
+  val peopleFocuses = remember { mutableMapOf<Long, FocusRequester>() }
+  val firstResultFocus = remember { FocusRequester() }
   var unidentifiedExpanded by remember { mutableStateOf(false) }
   var focusedAnchor by remember { mutableStateOf<String?>(null) }
   var focusedIndex by remember { mutableIntStateOf(-1) }
@@ -106,7 +132,10 @@ internal fun GlobalSearchResults(
     if (anchor == null) return
     scope.launch {
       awaitFrame()
-      runCatching { cardFocus[anchor]?.requestFocus() }
+      val requester = anchor.removePrefix("person:").takeIf { it != anchor }?.toLongOrNull()?.let(peopleFocuses::get)
+        ?: cardFocus[anchor]
+        ?: return@launch
+      runCatching { requester.requestFocus() }
     }
   }
 
@@ -245,6 +274,7 @@ internal fun GlobalSearchResults(
   val cards = state.order.mapNotNull(clustersByKey::get)
   val unidentifiedByKey = snapshot?.unidentified.orEmpty().associateBy { it.key }
   val unidentifiedCards = state.unidentifiedOrder.mapNotNull(unidentifiedByKey::get)
+  val people = state.people
 
   Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     if (state.previousQuery) {
@@ -252,14 +282,14 @@ internal fun GlobalSearchResults(
     }
     Box(Modifier.weight(1f).fillMaxWidth()) {
       when {
-        state.error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        state.error != null && people.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
           Text(stringResource(state.error), color = Tokens.Muted, fontSize = 13.sp)
         }
         !state.submitted -> Unit
-        snapshot == null && state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        snapshot == null && state.loading && people.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
           Text(stringResource(R.string.tv_global_search_state_loading), color = Tokens.Muted, fontSize = 13.sp)
         }
-        snapshot != null && cards.isEmpty() && unidentifiedCards.isEmpty() && snapshot.state != "partial" ->
+        snapshot != null && cards.isEmpty() && unidentifiedCards.isEmpty() && people.isEmpty() && snapshot.state != "partial" ->
           Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
               stringResource(
@@ -269,12 +299,13 @@ internal fun GlobalSearchResults(
               fontSize = 13.sp,
             )
           }
-        snapshot != null -> GlobalResultGrid(
+        snapshot != null || people.isNotEmpty() -> GlobalResultGrid(
+          people = people,
           cards = cards,
           unidentified = unidentifiedCards,
           focusAnchor = state.focusAnchor,
-          snapshotRevision = snapshot.revision,
-          limitReached = snapshot.limitReached,
+          snapshotRevision = snapshot?.revision ?: 0,
+          limitReached = snapshot?.limitReached == true,
           hasMore = state.hasMore,
           unidentifiedExpanded = unidentifiedExpanded,
           onUnidentified = { unidentifiedExpanded = !unidentifiedExpanded },
@@ -286,9 +317,14 @@ internal fun GlobalSearchResults(
           },
           onClearFocus = ::clearCardFocus,
           onOpen = ::openCluster,
+          onOpenPerson = onOpenPerson,
+          onFocusPerson = search::setFocusAnchor,
           imageUrl = imageUrl,
           firstRowUp = firstRowUp,
           gridFocus = gridFocus,
+          peopleFocus = peopleFocus,
+          peopleFocuses = peopleFocuses,
+          firstResultFocus = firstResultFocus,
           gridState = gridState,
           cardFocus = cardFocus,
           focusedIndex = focusedIndex,
@@ -331,6 +367,7 @@ internal fun GlobalSearchResults(
 
 @Composable
 private fun GlobalResultGrid(
+  people: List<PersonHitDto>,
   cards: List<GlobalSearchClusterDto>,
   unidentified: List<GlobalSearchClusterDto>,
   focusAnchor: String?,
@@ -343,9 +380,14 @@ private fun GlobalResultGrid(
   onFocusCard: (String, Int) -> Unit,
   onClearFocus: () -> Unit,
   onOpen: (GlobalSearchClusterDto, String) -> Unit,
+  onOpenPerson: (TitlePersonDto) -> Unit,
+  onFocusPerson: (String) -> Unit,
   imageUrl: (String?) -> String?,
   firstRowUp: FocusRequester?,
   gridFocus: FocusRequester,
+  peopleFocus: FocusRequester,
+  peopleFocuses: MutableMap<Long, FocusRequester>,
+  firstResultFocus: FocusRequester,
   gridState: LazyGridState,
   cardFocus: MutableMap<String, FocusRequester>,
   focusedIndex: Int,
@@ -362,6 +404,22 @@ private fun GlobalResultGrid(
       horizontalArrangement = Arrangement.spacedBy(18.dp),
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+      if (people.isNotEmpty()) {
+        item(key = "people", span = { GridItemSpan(maxLineSpan) }) {
+          GlobalSearchPeopleRow(
+            people = people,
+            imageUrl = imageUrl,
+            focus = peopleFocus,
+            requesters = peopleFocuses,
+            firstResultFocus = firstResultFocus,
+            onFocus = onFocusPerson,
+            onOpen = { person ->
+              onFocusPerson(globalSearchPersonAnchor(person.id))
+              onOpenPerson(TitlePersonDto(id = person.id, name = person.name, role = "cast"))
+            },
+          )
+        }
+      }
       if (limitReached) {
         item(key = "limit-reached", span = { GridItemSpan(maxLineSpan) }) {
           Text(stringResource(R.string.tv_global_search_limit_reached), color = Tokens.Muted, fontSize = 12.sp)
@@ -386,6 +444,7 @@ private fun GlobalResultGrid(
           onOpen = onOpen,
           cardFocus = cardFocus,
           firstRowUp = firstRowUp.takeIf { index == 0 },
+          firstResultFocus = firstResultFocus.takeIf { index == 0 },
         )
       }
       if (unidentified.isNotEmpty()) {
@@ -422,6 +481,7 @@ private fun GlobalResultGrid(
             onOpen = onOpen,
             cardFocus = cardFocus,
             firstRowUp = null,
+            firstResultFocus = null,
           )
         }
       }
@@ -446,14 +506,24 @@ private fun GlobalSearchResultCard(
   onOpen: (GlobalSearchClusterDto, String) -> Unit,
   cardFocus: MutableMap<String, FocusRequester>,
   firstRowUp: FocusRequester?,
+  firstResultFocus: FocusRequester?,
 ) {
   val anchor = globalSearchAnchor(cluster, focusAnchor)
-  val requester = remember(anchor) { FocusRequester() }
+  val requester = firstResultFocus ?: remember(anchor) { FocusRequester() }
   cardFocus[anchor] = requester
   GlobalSearchCard(
-    cluster = cluster,
-    anchor = anchor,
-    imageUrl = imageUrl,
+    title = cluster.title,
+    imageUrl = imageUrl(cluster.poster ?: cluster.background),
+    captionLines = listOfNotNull(
+      cluster.year?.toString(),
+      cluster.episodeCount?.takeIf { it > 0 }?.let {
+        pluralStringResource(R.plurals.tv_global_search_episodes, it, it)
+      },
+      cluster.itemCount?.takeIf { it > 0 }?.let {
+        pluralStringResource(R.plurals.tv_global_search_folder_items, it, it)
+      },
+    ),
+    tag = globalSearchCardTag(anchor),
     onFocus = {
       onFocus(anchor)
       if (hasMore && index >= cardCount - columns && lastLoadRevision != snapshotRevision) {
@@ -469,10 +539,143 @@ private fun GlobalSearchResultCard(
 }
 
 @Composable
-private fun GlobalSearchCard(
-  cluster: GlobalSearchClusterDto,
-  anchor: String,
+private fun GlobalSearchPeopleRow(
+  people: List<PersonHitDto>,
   imageUrl: (String?) -> String?,
+  focus: FocusRequester,
+  requesters: MutableMap<Long, FocusRequester>,
+  firstResultFocus: FocusRequester,
+  onFocus: (String) -> Unit,
+  onOpen: (PersonHitDto) -> Unit,
+) {
+  Column(
+    modifier = Modifier.fillMaxWidth().testTag(TagGlobalSearchPeople),
+    verticalArrangement = Arrangement.spacedBy(5.dp),
+  ) {
+    Text(
+      stringResource(R.string.search_all_people),
+      color = Tokens.Text,
+      fontSize = 14.sp,
+      fontWeight = FontWeight.Bold,
+    )
+    LazyRow(
+      modifier = Modifier.fillMaxWidth().focusGroup(),
+      contentPadding = PaddingValues(horizontal = CardRowInset),
+      horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+      items(people, key = { it.id }) { person ->
+        val anchor = globalSearchPersonAnchor(person.id)
+        val first = person.id == people.first().id
+        val requester = remember(person.id, first) {
+          if (first) focus else FocusRequester()
+        }
+        requesters[person.id] = requester
+        GlobalSearchPersonCard(
+          person = person,
+          imageUrl = imageUrl(person.photo),
+          onClick = { onOpen(person) },
+          modifier = Modifier
+            .focusRequester(requester)
+            .focusProperties { down = firstResultFocus }
+            .onFocusChanged { if (it.isFocused) onFocus(anchor) },
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun GlobalSearchPersonCard(
+  person: PersonHitDto,
+  imageUrl: String?,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  var focused by remember { mutableStateOf(false) }
+  var failed by remember(imageUrl) { mutableStateOf(false) }
+  val scale by animateFloatAsState(if (focused) 1.08f else 1f, label = "search-person-scale")
+  Column(
+    modifier = Modifier.width(82.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+  ) {
+    Surface(
+      onClick = onClick,
+      modifier = modifier
+        .size(58.dp)
+        .graphicsLayer {
+          scaleX = scale
+          scaleY = scale
+          transformOrigin = TransformOrigin(0.5f, 0f)
+        }
+        .testTag(globalSearchPersonTag(person.id))
+        .onFocusChanged { focused = it.isFocused },
+      shape = ClickableSurfaceDefaults.shape(CircleShape),
+      scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
+      glow = ClickableSurfaceDefaults.glow(focusedGlow = Glow(Tokens.Accent2.copy(alpha = 0.35f), 18.dp)),
+      border = ClickableSurfaceDefaults.border(
+        border = Border.None,
+        focusedBorder = Border(BorderStroke(2.dp, Tokens.Accent2), shape = CircleShape),
+      ),
+      colors = ClickableSurfaceDefaults.colors(
+        containerColor = Tokens.Panel2,
+        focusedContainerColor = Tokens.Panel2,
+      ),
+    ) {
+      Box(Modifier.fillMaxSize().background(Tokens.Panel2), contentAlignment = Alignment.Center) {
+        if (imageUrl != null && !failed) {
+          AsyncImage(
+            model = imageUrl,
+            contentDescription = null,
+            imageLoader = sessionImageLoader(),
+            contentScale = ContentScale.Crop,
+            onError = { failed = true },
+            modifier = Modifier.fillMaxSize(),
+          )
+        } else {
+          Text(
+            person.name.split(Regex("\\s+")).filter { it.isNotEmpty() }.take(2)
+              .joinToString("") { it.take(1).uppercase() },
+            color = Tokens.Text,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.ExtraBold,
+          )
+        }
+      }
+    }
+    Spacer(Modifier.height(6.dp))
+    Text(
+      person.name,
+      color = if (focused) Tokens.Text else Tokens.Text.copy(alpha = 0.82f),
+      fontSize = 10.5.sp,
+      lineHeight = 13.sp,
+      fontWeight = FontWeight.SemiBold,
+      textAlign = TextAlign.Center,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.fillMaxWidth(),
+    )
+    val role = stringResource(
+      if (person.knownFor == "acting") R.string.person_acting else R.string.person_crew,
+    )
+    Text(
+      listOfNotNull(role, person.knownTitles.firstOrNull { it.isNotBlank() }).joinToString(" · "),
+      color = Tokens.Muted,
+      fontSize = 9.5.sp,
+      textAlign = TextAlign.Center,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.fillMaxWidth(),
+    )
+  }
+}
+
+@Composable
+internal fun GlobalSearchCard(
+  title: String,
+  imageUrl: String?,
+  captionLines: List<String>,
+  tag: String,
+  localMark: String? = null,
   onFocus: () -> Unit,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
@@ -482,30 +685,23 @@ private fun GlobalSearchCard(
     verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     PosterCard(
-      name = cluster.title,
-      imageUrl = imageUrl(cluster.poster ?: cluster.background),
+      name = title,
+      imageUrl = imageUrl,
       progress = null,
       onClick = onClick,
-      cardTag = globalSearchCardTag(anchor),
+      cardTag = tag,
       modifier = modifier.onFocusChanged { if (it.isFocused) onFocus() },
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-      cluster.year?.let { Text(it.toString(), color = Tokens.Muted, fontSize = 10.sp) }
+    localMark?.let {
+      Text(it, color = Tokens.Accent2, fontSize = 9.sp, maxLines = 1)
     }
-    cluster.episodeCount?.takeIf { it > 0 }?.let {
+    captionLines.forEachIndexed { index, line ->
       Text(
-        pluralStringResource(R.plurals.tv_global_search_episodes, it, it),
+        line,
         color = Tokens.Muted,
-        fontSize = 9.sp,
+        fontSize = if (index == 0) 10.sp else 9.sp,
         maxLines = 1,
-      )
-    }
-    cluster.itemCount?.takeIf { it > 0 }?.let {
-      Text(
-        pluralStringResource(R.plurals.tv_global_search_folder_items, it, it),
-        color = Tokens.Muted,
-        fontSize = 9.sp,
-        maxLines = 1,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
       )
     }
   }

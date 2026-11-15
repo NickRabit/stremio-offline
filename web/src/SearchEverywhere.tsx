@@ -1,18 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
-import { describeError } from "./api";
+import { api, describeError } from "./api";
 import { useChildMode } from "./child-mode";
 import { ShapeToggle } from "./app-chrome";
 import { TileArt } from "./TileArt";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
-import { t, type Key } from "./i18n";
+import { locale, t, type Key } from "./i18n";
 import { parseSearchScope } from "./search-scope";
 import { suggest, type Suggestion } from "./search-suggestions";
 import { SearchScopeOptions } from "./SearchScopeOptions";
 import { Heading } from "./settings-ui";
+import { PersonFace } from "./TitleExtras";
 import type {
+  PersonHit,
   SearchClusterView,
   SearchMember,
   SearchMemberPage,
@@ -40,6 +42,7 @@ const SOURCE_OPTIONS: Array<{ id: "all" | "catalog" | "libraries"; sources: Sear
   { id: "catalog", sources: ["catalog"], label: "searchAll.sourceCatalog" },
   { id: "libraries", sources: ["local", "remote"], label: "searchAll.sourceLibraries" },
 ];
+const LIBRARIES_SOURCES = SOURCE_OPTIONS.find((option) => option.id === "libraries")!.sources;
 
 const sameSources = (current: readonly SearchSourceClass[], option: readonly SearchSourceClass[]): boolean =>
   option.length === 0
@@ -66,6 +69,31 @@ const episodeText = (member: SearchMember): string | null => {
 /** One title, the way every other grid draws one: its picture, its name and a caption. A list is
  *  about titles, not about sources, so no card names the addon or library it came from; a copy
  *  that is already in a library only earns a small mark. */
+export function SearchTile({ title, poster, background, caption, shape, local = false, folder = false, busy = false, dataAttributes, onFocus, onClick }: {
+  title: string;
+  poster?: string;
+  background?: string;
+  caption: string;
+  shape: TileShape;
+  local?: boolean;
+  folder?: boolean;
+  busy?: boolean;
+  dataAttributes?: Record<string, string>;
+  onFocus?: () => void;
+  onClick: (button: HTMLButtonElement) => void;
+}) {
+  return <button type="button" className="browse-item" title={title} {...dataAttributes}
+    {...(busy ? { disabled: true, "aria-busy": true } : {})} onFocus={onFocus}
+    onClick={(event) => onClick(event.currentTarget)}>
+    <span className="browse-art">
+      <TileArt shape={shape} poster={poster} wide={background} fallback={folder ? <FolderOpen/> : <Film/>}/>
+      {local && <i className="fav-mark" title={t("searchAll.badgeLocal")} aria-label={t("searchAll.badgeLocal")}><HardDrive/></i>}
+    </span>
+    <strong>{title}</strong>
+    <small>{caption}</small>
+  </button>;
+}
+
 function SearchCard({ cluster, shape, onInteract, onOpen }: {
   cluster: SearchClusterView;
   shape: TileShape;
@@ -78,17 +106,14 @@ function SearchCard({ cluster, shape, onInteract, onOpen }: {
     cluster.episodeCount ? t("searchAll.episodes", { count: cluster.episodeCount }) : undefined,
     cluster.kind === "folder" && cluster.itemCount ? t("searchAll.folderItems", { count: cluster.itemCount }) : undefined,
   ].filter(Boolean).join(" · ");
-  const folder = cluster.kind === "folder";
-  return <button type="button" className="browse-item" title={cluster.title} data-search-card data-primary-member={cluster.primaryMemberKey}
-    data-member-keys={cluster.memberKeys.join(" ")} onFocus={onInteract}
-    onClick={(event) => { onInteract(); onOpen(event.currentTarget); }}>
-    <span className="browse-art">
-      <TileArt shape={shape} poster={cluster.poster} wide={cluster.background} fallback={folder ? <FolderOpen/> : <Film/>}/>
-      {cluster.hasLocal && <i className="fav-mark" title={t("searchAll.badgeLocal")} aria-label={t("searchAll.badgeLocal")}><HardDrive/></i>}
-    </span>
-    <strong>{cluster.title}</strong>
-    <small>{caption}</small>
-  </button>;
+  return <SearchTile title={cluster.title} poster={cluster.poster} background={cluster.background} caption={caption} shape={shape}
+    local={cluster.hasLocal} folder={cluster.kind === "folder"}
+    dataAttributes={{
+      "data-search-card": "true",
+      "data-primary-member": cluster.primaryMemberKey,
+      "data-member-keys": cluster.memberKeys.join(" "),
+    }}
+    onFocus={onInteract} onClick={(button) => { onInteract(); onOpen(button); }}/>;
 }
 
 /** One addon answers the same title from several of its catalogues; the chooser lists it once. */
@@ -362,7 +387,7 @@ export function SearchResults({ search, shape, onOpenMember, onOpenCanonical, on
   </div>;
 }
 
-export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical, nameSearchNotice = false }: {
+export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical, onOpenPerson, nameSearchNotice = false }: {
   search: SearchEverywhereController;
   shape: TileShape;
   onToggleShape: () => void;
@@ -375,6 +400,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   onRefreshRecent: () => void;
   onOpenMember: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
   onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
+  onOpenPerson: (person: { id: number; name: string }) => void;
   /** A person without a TMDB id was searched by name. */
   nameSearchNotice?: boolean;
   /** Returns to the Library place Search was opened from. */
@@ -382,6 +408,10 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   const { child } = useChildMode();
   const root = useRef<HTMLElement>(null);
   const composing = useRef(false);
+  const [people, setPeople] = useState<PersonHit[]>([]);
+  const peopleSection = useRef<HTMLElement>(null);
+  const hadPeople = useRef(false);
+  const librariesOnly = sameSources(search.sources, LIBRARIES_SOURCES);
   const waiting = search.committed
     ? search.snapshot?.sources.filter((source) => source.state === "queued" || source.state === "loading" || source.state === "indexing").length
       ?? (search.sources.length || 3)
@@ -398,6 +428,34 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, [search.setScrollTop]);
+
+  useEffect(() => {
+    const query = search.committed.trim();
+    // People come from TMDB, which a child account never reaches.
+    if (child || query.length < 2 || librariesOnly) {
+      setPeople([]);
+      return;
+    }
+    const controller = new AbortController();
+    setPeople([]);
+    void api.searchPeople(query, locale(), controller.signal).then((answer) => {
+      if (controller.signal.aborted) return;
+      setPeople(Array.isArray(answer.people) ? answer.people : []);
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setPeople([]);
+    });
+    return () => controller.abort();
+  }, [search.committed, librariesOnly, child]);
+
+  useLayoutEffect(() => {
+    const shown = people.length > 0;
+    if (shown && !hadPeople.current && window.scrollY > 0) {
+      const node = peopleSection.current;
+      if (node) window.scrollBy(0, node.getBoundingClientRect().height);
+    }
+    hadPeople.current = shown;
+  }, [people]);
 
   /** A phone's keyboard would cover the results, and a field that keeps the focus is scrolled back
    *  into view as the page re-renders under the reader's finger. */
@@ -490,12 +548,15 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
             onClick={(event) => { event.stopPropagation(); onForget(suggestion.text); }}><X/></button></li>)}</ul>}
     </form>
     <div className="filterbar section-filter search-filters">
-      <div className="library-shelf-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
-        {SOURCE_OPTIONS.map((option) => {
-          const active = sameSources(search.sources, option.sources);
-          return <button key={option.id} type="button" className={active ? "active" : ""} aria-pressed={active}
-            onClick={() => search.setSources(option.sources)}>{t(option.label)}</button>;
-        })}
+      <div className="search-filter-group">
+        <span aria-hidden="true">{t("searchAll.sourcesToggle")}</span>
+        <div className="library-shelf-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
+          {SOURCE_OPTIONS.map((option) => {
+            const active = sameSources(search.sources, option.sources);
+            return <button key={option.id} type="button" className={active ? "active" : ""} aria-pressed={active}
+              onClick={() => search.setSources(option.sources)}>{t(option.label)}</button>;
+          })}
+        </div>
       </div>
       {search.library && <button type="button" className="search-library-chip" aria-label={t("searchAll.libraryClear")} onClick={() => search.clearLibrary()}>{t("searchAll.libraryChip", { title: search.library.title })}</button>}
       {catalogOnly && <label><span>{t("catalog.searchScope")}</span>
@@ -503,13 +564,16 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
           <SearchScopeOptions searchable={searchable}/>
         </select>
       </label>}
-      <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
-        {([
-          ["all", "searchAll.kindAll"],
-          ["movie", "searchAll.kindMovies"],
-          ["series", "searchAll.kindSeries"],
-        ] as const).map(([value, key]) => <button key={value} type="button" className={search.kind === value ? "active" : ""} aria-pressed={search.kind === value}
-          onClick={() => search.setKind(value)}>{t(key)}</button>)}
+      <div className="search-filter-group">
+        <span aria-hidden="true">{t("catalog.type")}</span>
+        <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
+          {([
+            ["all", "searchAll.kindAll"],
+            ["movie", "searchAll.kindMovies"],
+            ["series", "searchAll.kindSeries"],
+          ] as const).map(([value, key]) => <button key={value} type="button" className={search.kind === value ? "active" : ""} aria-pressed={search.kind === value}
+            onClick={() => search.setKind(value)}>{t(key)}</button>)}
+        </div>
       </div>
       {!child && <ShapeToggle shape={shape} onToggle={onToggleShape}/>}
     </div>
@@ -531,6 +595,17 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
       </details>
     </div>}
     {nameSearchNotice && <p className="person-name-search" role="note">{t("person.nameSearch")}</p>}
+    {people.length > 0 && <section ref={peopleSection} className="search-people">
+      <h3>{t("searchAll.people")}</h3>
+      <div className="search-people-strip">
+        {people.map((person) => <button type="button" className="search-person" key={person.id}
+          onClick={() => onOpenPerson({ id: person.id, name: person.name })}>
+          <PersonFace name={person.name} photo={person.photo}/>
+          <strong>{person.name}</strong>
+          <small>{t(person.knownFor === "acting" ? "person.acting" : "person.crew")} · {person.knownTitles.slice(0, 2).join(", ")}</small>
+        </button>)}
+      </div>
+    </section>}
     <SearchResults search={search} shape={shape} onOpenMember={onOpenMember} onOpenCanonical={onOpenCanonical} onRecord={onRecord}/>
   </section>;
 }

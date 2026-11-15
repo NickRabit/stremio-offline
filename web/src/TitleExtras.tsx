@@ -15,7 +15,7 @@ export interface TitleExtrasTarget {
 }
 
 export interface TitleExtrasActionsValue {
-  searchPerson: (person: { name: string; id?: number }) => void;
+  searchPerson: (person: { name: string; id?: number }, fromTitle?: string) => void;
   /** `remoteFirst`: opened from a Jellyfin/Emby title, so that server's copy leads Play. */
   openTitle: (title: TitleExtrasTarget, options?: { remoteFirst?: boolean }) => void;
 }
@@ -42,7 +42,7 @@ const initials = (name: string) => {
   return letters.join("").toLocaleUpperCase();
 };
 
-function PersonFace({ name, photo }: { name: string; photo?: string }) {
+export function PersonFace({ name, photo }: { name: string; photo?: string }) {
   const [broken, setBroken] = useState(false);
   const source = photo?.trim();
   if (!source || broken) return <span className="person-face">{initials(name)}</span>;
@@ -188,13 +188,15 @@ export function peopleInStripOrder(people: TitlePerson[]): TitlePerson[] {
 
 /** Cast, crew and similar titles under the actions. Nothing while there is nothing to show,
  *  and never an error: a failed read looks the same as an empty one. */
-export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer, remoteFirst = false }: {
+export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer, remoteFirst = false, titleName }: {
   extras: TitleExtras | null;
   loading: boolean;
   secureMode?: boolean;
   onTrailer?: (trailer: Trailer) => void;
   /** A similar title opens with the media server's own copy leading Play. */
   remoteFirst?: boolean;
+  /** The title this person was opened from, named on the way back. */
+  titleName?: string;
 }) {
   const { t: translate } = useI18n();
   const actions = useContext(TitleExtrasActions);
@@ -230,7 +232,11 @@ export function TitleExtrasRows({ extras, loading, secureMode = false, onTrailer
     {people.length > 0 && <div className="extras-row">
       <h3>{translate("detail.people")} <small>{translate(strip.some((person) => person.id != null) ? "person.hint" : "detail.peopleHint")}</small></h3>
       <ExtrasStrip>{strip.map((person, index) => <button type="button" className="person" key={`${person.name}:${person.role}:${index}`}
-        title={translate(person.id != null ? "person.label" : "detail.searchPerson", { name: person.name })} onClick={() => actions.searchPerson({ name: person.name, ...(person.id != null ? { id: person.id } : {}) })}>
+        title={translate(person.id != null ? "person.label" : "detail.searchPerson", { name: person.name })} onClick={() => {
+          const target = { name: person.name, ...(person.id != null ? { id: person.id } : {}) };
+          if (titleName) actions.searchPerson(target, titleName);
+          else actions.searchPerson(target);
+        }}>
         <PersonFace name={person.name} photo={person.photo}/>
         <strong>{person.name}</strong>
         {person.role === "cast"

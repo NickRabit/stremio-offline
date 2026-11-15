@@ -684,6 +684,16 @@ class ApiClient(
     ).decode() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  override suspend fun searchPeople(query: String, language: String?): PersonSearchDto {
+    val suffix = if (!language.isNullOrEmpty()) "&language=" + encode(language) else ""
+    return request(
+      Request.Builder()
+        .url(address.resolve("/api/person/search?query=" + encode(query) + suffix))
+        .get()
+        .build(),
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
   override suspend fun person(tmdbId: Long, language: String?): PersonFilmographyDto {
     val suffix = if (!language.isNullOrEmpty()) "?language=" + encode(language) else ""
     return request(

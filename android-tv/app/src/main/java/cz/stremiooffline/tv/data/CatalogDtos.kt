@@ -106,6 +106,20 @@ data class TitlePersonDto(
 )
 
 @Serializable
+data class PersonHitDto(
+  val id: Long = 0,
+  val name: String = "",
+  val photo: String? = null,
+  val knownFor: String = "acting",
+  val knownTitles: List<String> = emptyList(),
+)
+
+@Serializable
+data class PersonSearchDto(
+  val people: List<PersonHitDto> = emptyList(),
+)
+
+@Serializable
 data class PersonTitleDto(
   val type: String = "",
   val tmdbId: Long = 0,
@@ -113,7 +127,10 @@ data class PersonTitleDto(
   val name: String = "",
   val year: String? = null,
   val poster: String? = null,
-  val role: String? = null,
+  val background: String? = null,
+  /** `director`, `writer`, `creator` or `novel`, as the detail's crew roles name them. */
+  val jobs: List<String> = emptyList(),
+  val character: String? = null,
   val inLibrary: Boolean = false,
 )
 
@@ -128,6 +145,8 @@ data class PersonFilmographyDto(
   val id: Long = 0,
   val name: String = "",
   val photo: String? = null,
+  val knownFor: String = "acting",
+  val total: Int = 0,
   val sections: List<PersonSectionDto> = emptyList(),
 )
 

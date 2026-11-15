@@ -2034,7 +2034,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             {...(!child && titleExtras.extras?.people ? { people: titleExtras.extras.people } : {})}
             {...(!child ? { trailer: enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage), onTrailer } : {})}
             secureMode={secureMode}
-            {...(!child ? { extras: <TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} remoteFirst/> } : {})}
+            {...(!child ? { extras: <TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} remoteFirst {...(heroItem?.name ? { titleName: heroItem.name } : {})}/> } : {})}
             copyPending={copyPending}
             trailerPending={copyPending}
             {...(detailDescription ? { description: detailDescription } : {})}

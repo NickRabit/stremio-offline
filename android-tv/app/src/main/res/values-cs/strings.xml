@@ -582,6 +582,15 @@
   <string name="person_in_library">Ve vaší knihovně</string>
   <string name="person_label">Filmografie: %1$s</string>
   <string name="person_hint_tv">OK ukáže, na čem se osoba podílela</string>
+  <string name="person_back_to">Zpět na %1$s</string>
+  <plurals name="person_title_count">
+    <item quantity="one">%1$s titul</item>
+    <item quantity="few">%1$s tituly</item>
+    <item quantity="many">%1$s titulu</item>
+    <item quantity="other">%1$s titulů</item>
+  </plurals>
+  <string name="person_search_as_text">Hledat „%1$s“ jako text</string>
   <string name="err_person_unavailable">O této osobě nejsou žádné údaje.</string>
   <string name="err_person_lookup_failed">Filmografii se nepodařilo načíst. Zkuste to později.</string>
+  <string name="search_all_people">Osoby</string>
 </resources>

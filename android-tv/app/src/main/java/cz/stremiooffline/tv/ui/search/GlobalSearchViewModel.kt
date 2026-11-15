@@ -17,6 +17,7 @@ import cz.stremiooffline.tv.data.GlobalSearchClusterDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchStartDto
+import cz.stremiooffline.tv.data.PersonHitDto
 import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchStateDto
@@ -56,6 +57,7 @@ data class GlobalSearchState(
   val order: List<String> = emptyList(),
   val unidentifiedOrder: List<String> = emptyList(),
   val previousQuery: Boolean = false,
+  val people: List<PersonHitDto> = emptyList(),
   /** The account's recent searches, newest first; empty while none are kept or the read failed. */
   val recent: List<RecentSearchDto> = emptyList(),
   /** False once the account has switched history saving off: nothing is recorded then. */
@@ -102,6 +104,7 @@ internal fun retainedFocusAnchor(
   aliases: List<GlobalSearchAliasDto> = emptyList(),
 ): String? {
   if (anchor == null) return null
+  if (anchor.startsWith("person:")) return anchor
   if (newClusters.any { anchor in it.memberKeys }) return anchor
   val oldIndex = oldClusters.indexOfFirst { anchor in it.memberKeys }
     .takeIf { it >= 0 }
@@ -132,6 +135,8 @@ class GlobalSearchViewModel(
   private val api: GlobalSearchApi,
   private val slotId: String = UUID.randomUUID().toString().replace("-", ""),
   private val catalogue: Boolean = true,
+  /** People come from TMDB, which a child account never reaches. */
+  private val people: Boolean = true,
 ) : ViewModel() {
 
   var state by mutableStateOf(GlobalSearchState(sources = if (catalogue) emptySet() else LibrarySources))
@@ -147,6 +152,8 @@ class GlobalSearchViewModel(
   private var startJob: Job? = null
   private var pollJob: Job? = null
   private var actionJob: Job? = null
+  private var peopleJob: Job? = null
+  private var peopleRequest: String? = null
 
   fun submit(query: String) {
     val trimmed = query.trim()
@@ -297,6 +304,9 @@ class GlobalSearchViewModel(
     startJob?.cancel()
     pollJob?.cancel()
     actionJob?.cancel()
+    peopleJob?.cancel()
+    peopleJob = null
+    peopleRequest = null
     sessionId = null
     revision = 0
     restartDepth = 0
@@ -327,6 +337,7 @@ class GlobalSearchViewModel(
     startJob?.cancel()
     pollJob?.cancel()
     actionJob?.cancel()
+    peopleJob?.cancel()
     sessionId = null
     if (id != null) {
       CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { api.deleteGlobalSearch(id) }
@@ -336,6 +347,7 @@ class GlobalSearchViewModel(
 
   private fun startSearch(query: String, freshLayout: Boolean, record: Boolean = false) {
     if (freshLayout) interacted = false
+    val queryChanged = state.committed != query
     val currentGeneration = ++generation
     startJob?.cancel()
     pollJob?.cancel()
@@ -346,9 +358,12 @@ class GlobalSearchViewModel(
     state = state.copy(
       committed = query,
       previousQuery = state.snapshot != null,
+      people = state.people.takeUnless { queryChanged }.orEmpty(),
+      focusAnchor = state.focusAnchor.takeUnless { queryChanged },
       error = null,
       loading = true,
     )
+    loadPeople(query)
     startJob = viewModelScope.launch {
       try {
         val answer = api.startGlobalSearch(
@@ -374,6 +389,33 @@ class GlobalSearchViewModel(
         throw cancelled
       } catch (error: ApiError) {
         handleError(error, currentGeneration, query)
+      }
+    }
+  }
+
+  private fun loadPeople(query: String) {
+    val eligible = people && query.length >= 2 && state.sources != LibrarySources
+    if (!eligible) {
+      peopleJob?.cancel()
+      peopleJob = null
+      peopleRequest = null
+      if (state.people.isNotEmpty()) state = state.copy(people = emptyList())
+      return
+    }
+    if (peopleRequest == query) return
+    peopleJob?.cancel()
+    peopleRequest = query
+    if (state.people.isNotEmpty()) state = state.copy(people = emptyList())
+    peopleJob = viewModelScope.launch {
+      val people = try {
+        api.searchPeople(query, null).people
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: Exception) {
+        emptyList()
+      }
+      if (peopleRequest == query && state.committed == query && state.sources != LibrarySources) {
+        state = state.copy(people = people)
       }
     }
   }
@@ -481,8 +523,8 @@ class GlobalSearchViewModel(
   }
 
   companion object {
-    fun factory(api: GlobalSearchApi, catalogue: Boolean = true) = viewModelFactory {
-      initializer { GlobalSearchViewModel(api, catalogue = catalogue) }
+    fun factory(api: GlobalSearchApi, catalogue: Boolean = true, people: Boolean = true) = viewModelFactory {
+      initializer { GlobalSearchViewModel(api, catalogue = catalogue, people = people) }
     }
   }
 }

@@ -306,6 +306,7 @@ export interface TmdbPersonCredit {
   release_date?: string;
   first_air_date?: string;
   poster_path?: string | null;
+  backdrop_path?: string | null;
   popularity?: number;
   genre_ids?: number[];
   character?: string;
@@ -383,6 +384,59 @@ export async function tmdbPerson(
     return { status: "failed" };
   }
   return { status: "found", person: body };
+}
+
+export interface TmdbPersonHit {
+  id?: number;
+  name?: string;
+  adult?: boolean;
+  popularity?: number;
+  profile_path?: string | null;
+  known_for_department?: string;
+  known_for?: Array<{ id?: number; media_type?: string; title?: string; name?: string }>;
+}
+
+export type TmdbPersonSearchResult =
+  | { status: "found"; results: TmdbPersonHit[] }
+  | { status: "failed" };
+
+/** People whose name matches the query, TMDB's own relevance order. */
+export async function tmdbSearchPeople(
+  query: string,
+  config: TmdbConfig,
+  fetchImpl?: FetchLike,
+  signal?: AbortSignal,
+): Promise<TmdbPersonSearchResult> {
+  throwIfCancelled(signal);
+  let reply: TmdbReply<{ results?: TmdbPersonHit[] }>;
+  try {
+    reply = await tmdbReply<{ results?: TmdbPersonHit[] }>(
+      "/search/person",
+      { api_key: config.apiKey, language: config.language, include_adult: "false", query },
+      fetchImpl,
+      signal,
+    );
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    log("WARN", "TMDB person search failed", { operation: "person-search", reason: reasonOf(error, config.apiKey) });
+    return { status: "failed" };
+  }
+  const { response } = reply;
+  throwIfCancelled(signal);
+  if (!response.ok) {
+    log("WARN", "TMDB person search failed", { operation: "person-search", status: response.status, retryAfterMs: tmdbRetryAfterMs(response) });
+    return { status: "failed" };
+  }
+  try {
+    if (reply.parseError) throw reply.parseError;
+    const body = reply.body ?? await readTmdbJson<{ results?: TmdbPersonHit[] }>(response, signal);
+    throwIfCancelled(signal);
+    return { status: "found", results: Array.isArray(body?.results) ? body.results : [] };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    log("WARN", "TMDB answered with malformed JSON", { operation: "person-search", reason: reasonOf(error, config.apiKey) });
+    return { status: "failed" };
+  }
 }
 
 /** Alternate artwork of one chosen title, deduplicated and bounded. Only called once a

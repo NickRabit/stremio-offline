@@ -89,7 +89,7 @@ describe("childRefuses", () => {
 describe("childViewAllowed", () => {
   const allowedViews: View[] = ["home", "library", "search"];
   const catalogueView: View[] = ["catalog"];
-  const refusedViews: View[] = ["resume", "favorites", "following", "downloads", "stats", "addons", "settings", "person"];
+  const refusedViews: View[] = ["resume", "favorites", "following", "downloads", "stats", "addons", "settings"];
 
   it("allows the three always-available views in both catalogue states", () => {
     for (const view of allowedViews) {

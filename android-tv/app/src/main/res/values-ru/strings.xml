@@ -582,6 +582,15 @@
   <string name="person_in_library">В вашей библиотеке</string>
   <string name="person_label">Фильмография: %1$s</string>
   <string name="person_hint_tv">OK покажет, в чём участвовал этот человек</string>
+  <string name="person_back_to">Назад к «%1$s»</string>
+  <plurals name="person_title_count">
+    <item quantity="one">%1$s название</item>
+    <item quantity="few">%1$s названия</item>
+    <item quantity="many">%1$s названий</item>
+    <item quantity="other">%1$s названия</item>
+  </plurals>
+  <string name="person_search_as_text">Искать «%1$s» как текст</string>
   <string name="err_person_unavailable">Об этом человеке ничего не известно.</string>
   <string name="err_person_lookup_failed">Не удалось загрузить фильмографию. Попробуйте позже.</string>
+  <string name="search_all_people">Люди</string>
 </resources>

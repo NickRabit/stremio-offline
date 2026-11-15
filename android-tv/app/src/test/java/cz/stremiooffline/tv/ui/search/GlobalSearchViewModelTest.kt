@@ -9,6 +9,8 @@ import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.data.GlobalSearchPollDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
+import cz.stremiooffline.tv.data.PersonHitDto
+import cz.stremiooffline.tv.data.PersonSearchDto
 import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchScope
@@ -292,6 +294,71 @@ class GlobalSearchViewModelTest {
 
     assertEquals(listOf("matrix"), api.recordedSearches)
     assertEquals(2, api.globalStartCalls.size)
+  }
+
+  @Test
+  fun `people load once for a committed query across filter changes`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    api.peopleSearchHandler = { _, _ ->
+      PersonSearchDto(listOf(PersonHitDto(id = 138, name = "Quentin Tarantino")))
+    }
+    val viewModel = viewModel(api)
+
+    viewModel.submit("Quentin")
+    runCurrent()
+    viewModel.setKind(KindFilter.Movies)
+    runCurrent()
+
+    assertEquals(listOf("Quentin" to null), api.peopleSearchCalls)
+    assertEquals(listOf(138L), viewModel.state.people.map { it.id })
+  }
+
+  @Test
+  fun `people do not load for a one-letter query or a libraries-only search`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+
+    viewModel.submit("Q")
+    runCurrent()
+    viewModel.setSources(LibrarySources)
+    viewModel.submit("Quentin")
+    runCurrent()
+
+    assertTrue(api.peopleSearchCalls.isEmpty())
+    assertTrue(viewModel.state.people.isEmpty())
+  }
+
+  @Test
+  fun `a people failure leaves the group empty`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    api.peopleSearchHandler = { _, _ -> throw ApiError(ApiFailure.Generic) }
+    val viewModel = viewModel(api)
+
+    viewModel.submit("Quentin")
+    runCurrent()
+
+    assertTrue(viewModel.state.people.isEmpty())
+  }
+
+  @Test
+  fun `a new query replaces people and discards the older answer`() = runTest(dispatcher) {
+    val first = CompletableDeferred<Unit>()
+    val api = FakeTvApi()
+    api.peopleSearchHandler = { query, _ ->
+      if (query == "Quen") first.await()
+      PersonSearchDto(listOf(PersonHitDto(id = if (query == "Quen") 1 else 138, name = query)))
+    }
+    val viewModel = viewModel(api)
+
+    viewModel.submit("Quen")
+    runCurrent()
+    viewModel.submit("Quentin")
+    runCurrent()
+    first.complete(Unit)
+    runCurrent()
+
+    assertEquals(listOf("Quen" to null, "Quentin" to null), api.peopleSearchCalls)
+    assertEquals(listOf(138L), viewModel.state.people.map { it.id })
   }
 
   @Test

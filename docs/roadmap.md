@@ -30,13 +30,14 @@ metadata store, or scheduler for each platform.
 | --- | --- | --- |
 | Implemented | Queue controls: download window, speed limit, queue-finished notice | Runs only inside an administrator's window, shares one speed cap and reports one in-memory in-app notice per account when a run finishes. |
 | 7 | Family home and kids mode | Needs a design first: a child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. Quick switching between household accounts with a PIN shipped in 0.7.104 ([users.md](users.md#switching-profiles)); kids mode builds on it. Proposed design: [kids-mode-spec.md](kids-mode-spec.md), waiting for the owner's decisions. |
-| Implemented | Search by cast and crew | A person in the title detail opens what that person made: the TMDB filmography in two sections, local copies first, on the web, desktop and Android TV (0.7.105). Without a TMDB id the name search stays and says so. Still open: the way back to the cast row and owned marks for Jellyfin and Emby. [Specification](person-filmography-spec.md). |
+| Implemented | Search by cast and crew | A person in the title detail opens what that person made: the TMDB filmography in two sections, local copies first, on the web, desktop and Android TV (0.7.105). Without a TMDB id the name search stays and says so. Since 0.7.107 the person is shown as the Search page, Back returns to the title, and a search shows matching people in a People row. Still open: owned marks for Jellyfin and Emby. [Specification](person-filmography-spec.md). |
 | Then | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
 | Implemented | Android TV sign-in by code | The TV shows a short code and a QR link to it; an account already signed in on a phone or computer inspects and confirms it. No password typed with the remote. Server discovery remains deferred. |
 | Proposed | Trakt and Simkl | Send what was watched, read the watchlist and history, so people coming from Stremio or Nuvio bring theirs along. See [Trakt and Simkl](#trakt-and-simkl). |
 | Proposed | Notifications | A new episode, a finished or failed download and a full disk reach the household through ntfy, Telegram or browser push. Extends the queue's completion notice. See [Notifications](#notifications). |
 | Proposed | Player extras on the web | Picture in picture, playback speed, dialogue boost and loudness levelling, and a bitrate cap for viewers outside the home network. See [Player extras](#player-extras). |
+| Proposed | Player and interface polish | Progressive seeking on Android TV, an estimated finish time, spoiler-safe next-episode previews, and adjustable web/desktop interface scale. See [Player and interface polish](#player-and-interface-polish). |
 | Proposed | Collections and shared lists | Film series from TMDB and hand-made lists an account can share with others in the household. See [Collections and lists](#collections-and-lists). |
 | Proposed | Library metadata in NFO files | Read and write `.nfo` files beside the media, so a library survives a reinstall and agrees with Jellyfin or Emby on the same NAS. See [NFO files](#nfo-files). |
 | Proposed | More ratings | Rotten Tomatoes, Metacritic and Letterboxd beside IMDb and TMDB, through MDBList with a key in Settings → Services. |
@@ -525,6 +526,25 @@ the account may not see.
   does not come from the LAN. It depends on telling LAN from remote reliably,
   which is also the configurable LAN address under
   [Access and multi-instance](#access-and-multi-instance).
+
+### Player and interface polish
+
+Ideas from Stremio's [Android TV update](https://blog.stremio.com/stremio-tech-update-79-stremio-android-tv-android-mobile-updated/)
+and [web/desktop update](https://blog.stremio.com/stremio-tech-update-85-stremio-desktop-and-stremio-web-update/).
+These are independent usability improvements, not a new delivery stage:
+
+- **Progressive seeking on Android TV:** increase the seek step while a remote
+  direction is held, so a long jump takes fewer presses without making a short
+  correction imprecise. Keep the existing seek recovery behavior.
+- **Estimated finish time:** show when the current film or episode will end,
+  based on its remaining duration; update it after seeks and pauses, and account
+  for playback speed if that control is added.
+- **Spoiler-safe Up next:** hide or blur the next episode's thumbnail until that
+  episode is watched. Use the current account's watched state, including when
+  the next episode comes from a different source.
+- **Adjustable interface scale on web and desktop:** let an account enlarge the
+  interface for viewing from a distance. First verify the need on the target
+  screens, then check dialogs, navigation and player controls at each scale.
 
 ### Collections and lists
 

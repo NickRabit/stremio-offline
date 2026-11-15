@@ -78,6 +78,14 @@ describe("request", () => {
     await expect(api.deleteAddon("alpha")).resolves.toBeUndefined();
   });
 
+  it("asks the person search with query, language and abort signal", async () => {
+    fetchMock.mockResolvedValue(json({ people: [] }));
+    const controller = new AbortController();
+    await api.searchPeople("Brad Pitt", "cs", controller.signal);
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/person/search?query=Brad+Pitt&language=cs");
+    expect(optionsOf().signal).toBeInstanceOf(AbortSignal);
+  });
+
   it("cancels a local source read when the caller aborts", async () => {
     const controller = new AbortController();
     fetchMock.mockImplementation((_url: unknown, init?: RequestInit) => new Promise((_resolve, reject) => {

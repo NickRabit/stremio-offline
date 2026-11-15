@@ -65,6 +65,7 @@ import { Home } from "./Home";
 import { clearHomeCache } from "./home-cache";
 import { SearchEverywhere } from "./SearchEverywhere";
 import { PersonView } from "./PersonView";
+import { captureScroll, restoreScroll, snapshotScrollTop, type ScrollSnapshot } from "./scroll-snapshot";
 import { useSearchEverywhere } from "./useSearchEverywhere";
 import { CatalogSearchStartNotFound, catalogSearchHasMore, catalogSearchSession, newCatalogSearchSlot, runCatalogSearch, type CatalogSearchCursor } from "./catalog-search-session";
 import type { HomeCardActions } from "./HomeCard";
@@ -132,7 +133,16 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 };
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
-export type View = "home" | "catalog" | "library" | "search" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings" | "person";
+export type View = "home" | "catalog" | "library" | "search" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings";
+type PersonLayer = { id: number; name: string; fromTitle?: string; backLabel?: string };
+type CatalogueDetailState = CatalogueDetailTarget & {
+  initialSources?: Stream[];
+  libraryFirst?: boolean;
+  remoteFirst?: boolean;
+};
+type DetailStackEntry =
+  | { kind: "title"; target: CatalogueDetailState; scrollTop: number }
+  | { kind: "person"; person: PersonLayer; scroll: ScrollSnapshot };
 /** One accessible remote library and the sources it reported for the title on screen. */
 type RemoteGroup = { libraryId: string; name: string; provider: MediaServerProvider; order: number; streams: Stream[]; error: string };
 type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
@@ -387,13 +397,9 @@ export function App() {
   const [saveTargetOpen, setSaveTargetOpen] = useState(false);
   /** The shared title detail, hosted over whichever page opened it, with the rows the catalogue
    *  panel already read for the selection it was opened on. */
-  const [catalogueDetail, setCatalogueDetail] = useState<(CatalogueDetailTarget & {
-    initialSources?: Stream[];
-    libraryFirst?: boolean;
-    remoteFirst?: boolean;
-  }) | null>(null);
+  const [catalogueDetail, setCatalogueDetail] = useState<CatalogueDetailState | null>(null);
   const catalogueDetailScroll = useRef<HTMLDivElement | null>(null);
-  const detailStack = useRef<Array<{ target: NonNullable<typeof catalogueDetail>; scrollTop: number }>>([]);
+  const detailStack = useRef<DetailStackEntry[]>([]);
   const pendingCatalogueScroll = useRef<number | null>(null);
   const [searchReturn, setSearchReturn] = useState(false);
   /** The destination dialog the shared detail's save arrow opens, with the row it was clicked for. */
@@ -900,9 +906,17 @@ export function App() {
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamOrder>("recommended");
   useEffect(() => { setStreamSort(defaultStreamSort); }, [defaultStreamSort]);
   const [submittedQuery, setSubmittedQuery] = useState(""); const [searchScopeValue, setSearchScopeValue] = useState(""); const [searchable, setSearchable] = useState<SearchableCatalog[]>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default"); const [searchSort, setSearchSort] = useState("default");
-  const [personTarget, setPersonTarget] = useState<{ id: number; name: string } | null>(null);
-  const personReturn = useRef<View | null>(null);
+  const [personLayer, setPersonLayer] = useState<PersonLayer | null>(null);
+  const personPageSnapshot = useRef<ScrollSnapshot | null>(null);
+  const pendingPersonPageRestore = useRef(false);
+  const personRestoreScroll = useRef<number | undefined>(undefined);
   const [personNameSearch, setPersonNameSearch] = useState<string | null>(null);
+  const dropPersonLayer = () => {
+    pendingPersonPageRestore.current = false;
+    personRestoreScroll.current = undefined;
+    setPersonLayer(null);
+    detailStack.current = detailStack.current.filter((entry) => entry.kind !== "person");
+  };
   const [liveState, setLiveState] = useState<LiveSearchState>("idle");
   // One debounce controller for the searchbox. It commits the draft to `submittedQuery`
   // itself, so nothing else has to watch keystrokes.
@@ -1353,6 +1367,7 @@ export function App() {
   /** The catalogue view from the top, on its first catalogue or on the one named. */
   const resetCatalog = (pick?: { addonKey: string; type: string; id: string }) => {
     navigated.current = true;
+    dropPersonLayer();
     live.cancel();
     cancelRemoteWork();
     setRemoteGroups([]);
@@ -1388,6 +1403,7 @@ export function App() {
     if (child && !childViewAllowed(target, childCatalogue)) target = "home";
     navigated.current = true;
     setSearchReturn(false);
+    dropPersonLayer();
     // A shared detail is drawn over the section that opened it, and the menu is a way out of it:
     // the entry naming that very section only puts the section back, filters and position intact.
     if (catalogueDetail) {
@@ -1543,6 +1559,7 @@ export function App() {
   /** The top bar's Search always lands at the top of Search with the field ready for a new query;
    *  the way back to a position in the results is Back from the title that was opened. */
   const openSearch = (query?: string) => {
+    dropPersonLayer();
     scrollByView.current.search = 0;
     // The top-bar button passes its click through; only a real query string starts a search.
     if (typeof query === "string" && query.trim()) {
@@ -1563,6 +1580,7 @@ export function App() {
   const startHome = child || (settings.startView !== "catalog" && !(restricted && settings.startView === "home"));
   const goToStart = () => {
     if (child) { openView("home"); return; }
+    dropPersonLayer();
     if (!startHome) { resetCatalog(); return; }
     openView(settings.startView === "library" ? "library" : "home");
   };
@@ -3480,18 +3498,33 @@ export function App() {
     const current = detailOnScreen();
     if (current) {
       if (detailStack.current.length >= 10) detailStack.current.shift();
-      detailStack.current.push({ target: current, scrollTop: catalogueDetailScroll.current?.scrollTop ?? 0 });
+      detailStack.current.push({ kind: "title", target: current, scrollTop: catalogueDetailScroll.current?.scrollTop ?? 0 });
     }
     openCatalogueDetail({
       type: title.type, id: title.id, name: title.name, ...(title.poster ? { poster: title.poster } : {}),
     }, undefined, { keepStack: true, ...(options?.remoteFirst ? { remoteFirst: true } : {}) });
   };
+  const showCatalogueFromStack = (entry: { target: CatalogueDetailState; scrollTop: number }) => {
+    pendingCatalogueScroll.current = entry.scrollTop;
+    setDetailRead(null); setDetailSource(null); setDetailSourcePicked(false); setCatalogueFollow(null); setDetailFollowOpen(false);
+    setCatalogueDetail(entry.target);
+  };
   const backFromCatalogueDetail = () => {
     const previous = detailStack.current.pop();
     if (!previous) { closeCatalogueDetail(); return; }
-    pendingCatalogueScroll.current = previous.scrollTop;
-    setDetailRead(null); setDetailSource(null); setDetailSourcePicked(false); setCatalogueFollow(null); setDetailFollowOpen(false);
-    setCatalogueDetail(previous.target);
+    if (previous.kind === "title") {
+      showCatalogueFromStack(previous);
+      return;
+    }
+    const next = detailStack.current[detailStack.current.length - 1];
+    if (next?.kind === "title") {
+      detailStack.current.pop();
+      showCatalogueFromStack(next);
+    } else {
+      closeCatalogueDetail();
+    }
+    personRestoreScroll.current = snapshotScrollTop(previous.scroll);
+    setPersonLayer(previous.person);
   };
   /** A name from the cast row: leave whichever detail is covering the page, then search for it. */
   const searchPersonByName = (name: string) => {
@@ -3513,18 +3546,56 @@ export function App() {
     }
     openSearch(name);
   };
-  const searchPerson = (person: { name: string; id?: number }) => {
+  const openPersonLayer = (person: { id: number; name: string }, extra?: { fromTitle?: string; backLabel?: string }) => {
+    setPersonNameSearch(null);
+    personPageSnapshot.current = captureScroll();
+    personRestoreScroll.current = undefined;
+    pendingPersonPageRestore.current = false;
+    setPersonLayer({ id: person.id, name: person.name, ...extra });
+  };
+  const searchPerson = (person: { name: string; id?: number }, fromTitle?: string) => {
     if (person.id) {
-      closeLocalDetail();
-      if (catalogueDetail) closeCatalogueDetail();
-      if (view !== "person") personReturn.current = view;
-      setPersonNameSearch(null);
-      setPersonTarget({ id: person.id, name: person.name });
-      setView("person");
+      openPersonLayer({ id: person.id, name: person.name }, fromTitle ? { fromTitle } : undefined);
       return;
     }
     searchPersonByName(person.name);
   };
+  /** A query the viewer typed on the person page: the same search as the Search page, and no
+   *  name-search notice, because they wrote the words themselves. */
+  const searchTypedText = (query: string) => {
+    const text = query.trim();
+    if (!text) return;
+    if (buildInfo?.searchEverywhere) {
+      openSearch(text);
+      return;
+    }
+    dropPersonLayer();
+    closeLocalDetail();
+    navigated.current = true;
+    if (catalogueDetail) closeCatalogueDetail();
+    if (view !== "catalog") {
+      setRemoteTarget(null);
+      setSearchReturn(false);
+      setView("catalog");
+    }
+    live.cancel();
+    setSearch(text);
+    actOnSearch(text);
+    setSubmittedQuery(text);
+  };
+  useEffect(() => {
+    dropPersonLayer();
+  }, [view]);
+  useEffect(() => {
+    if (personLayer) return;
+    if (!pendingPersonPageRestore.current) return;
+    pendingPersonPageRestore.current = false;
+    const snapshot = personPageSnapshot.current;
+    if (!snapshot) return;
+    restoreScroll(snapshot);
+    const handle = requestAnimationFrame(() => restoreScroll(snapshot));
+    return () => cancelAnimationFrame(handle);
+  }, [personLayer]);
   // Back on the section the detail covered, its position is given back. The listing is read again
   // as the section mounts, so the offset is chased for as long as it may still be filling.
   useEffect(() => {
@@ -3894,15 +3965,17 @@ export function App() {
   // chrome folds into More, which is what keeps the bar at exactly five slots. `badge` on More
   // is the Following indicator: new episodes plus attention.
   const followingBadge = (newEpisodes.length + follows.reduce((sum, follow) => sum + follow.downloads.attention, 0)) || undefined;
+  // The person layer is drawn like Search: no sidebar or bottom-bar entry stays lit for the page underneath.
+  const personCoversNav = personLayer !== null;
   const moreItems: MoreItem[] = [
-    { key: "favorites", icon: <Star/>, label: t("nav.favorites"), active: view === "favorites", onSelect: () => openView("favorites") },
-    { key: "resume", icon: <History/>, label: t("nav.resume"), active: view === "resume", onSelect: () => openView("resume") },
-    { key: "following", icon: <BellRing/>, label: t("nav.following"), badge: followingBadge, active: view === "following", onSelect: () => openView("following") },
-    { key: "addons", icon: <PackagePlus/>, label: t("nav.addons"), active: view === "addons", onSelect: () => openView("addons") },
-    { key: "settings", icon: <Settings/>, label: t("nav.settings"), active: view === "settings", onSelect: () => openView("settings") },
-    ...(session!.role === "admin" ? [{ key: "stats", icon: <BarChart3/>, label: t("nav.stats"), active: view === "stats", onSelect: () => openView("stats") }] : []),
+    { key: "favorites", icon: <Star/>, label: t("nav.favorites"), active: !personCoversNav && view === "favorites", onSelect: () => openView("favorites") },
+    { key: "resume", icon: <History/>, label: t("nav.resume"), active: !personCoversNav && view === "resume", onSelect: () => openView("resume") },
+    { key: "following", icon: <BellRing/>, label: t("nav.following"), badge: followingBadge, active: !personCoversNav && view === "following", onSelect: () => openView("following") },
+    { key: "addons", icon: <PackagePlus/>, label: t("nav.addons"), active: !personCoversNav && view === "addons", onSelect: () => openView("addons") },
+    { key: "settings", icon: <Settings/>, label: t("nav.settings"), active: !personCoversNav && view === "settings", onSelect: () => openView("settings") },
+    ...(session!.role === "admin" ? [{ key: "stats", icon: <BarChart3/>, label: t("nav.stats"), active: !personCoversNav && view === "stats", onSelect: () => openView("stats") }] : []),
   ];
-  const moreActive = view === "favorites" || view === "resume" || view === "following" || view === "addons" || view === "settings" || view === "stats";
+  const moreActive = !personCoversNav && (view === "favorites" || view === "resume" || view === "following" || view === "addons" || view === "settings" || view === "stats");
 
   // The row the main player is on: the file of the library, the row the shared detail started, or
   // the row a catalogue tile played. It leads the player's chooser under its own class's name.
@@ -3949,22 +4022,54 @@ export function App() {
       </> : <>
       {/* Restricted accounts have no Home: the view needs the personal data they are not
           given, so the destination is not offered at all. */}
-      {!restricted && <Nav icon={<HomeIcon/>} label={t("nav.home")} active={view === "home"} onClick={() => openView("home")}/>}
-      <Nav icon={<Library/>} label={t("nav.catalog")} active={view === "catalog"} onClick={() => openView("catalog")}/>
-      <Nav icon={<HardDrive/>} label={t("nav.library")} active={view === "library"} onClick={() => openView("library")}/>
-      <Nav secondary icon={<Star/>} label={t("nav.favorites")} active={view === "favorites"} onClick={() => openView("favorites")}/>
-      <Nav secondary icon={<History/>} label={t("nav.resume")} active={view === "resume"} onClick={() => openView("resume")}/>
-      <Nav secondary icon={<BellRing/>} label={t("nav.following")} active={view === "following"} badge={followingBadge} onClick={() => openView("following")}/>
-      <Nav icon={<Download/>} label={t("nav.downloads")} active={view === "downloads"} badge={downloads.filter((job) => job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
-      <Nav secondary icon={<PackagePlus/>} label={t("nav.addons")} active={view === "addons"} onClick={() => openView("addons")}/>
-      <Nav secondary icon={<Settings/>} label={t("nav.settings")} active={view === "settings"} onClick={() => openView("settings")}/>
+      {!restricted && <Nav icon={<HomeIcon/>} label={t("nav.home")} active={!personCoversNav && view === "home"} onClick={() => openView("home")}/>}
+      <Nav icon={<Library/>} label={t("nav.catalog")} active={!personCoversNav && view === "catalog"} onClick={() => openView("catalog")}/>
+      <Nav icon={<HardDrive/>} label={t("nav.library")} active={!personCoversNav && view === "library"} onClick={() => openView("library")}/>
+      <Nav secondary icon={<Star/>} label={t("nav.favorites")} active={!personCoversNav && view === "favorites"} onClick={() => openView("favorites")}/>
+      <Nav secondary icon={<History/>} label={t("nav.resume")} active={!personCoversNav && view === "resume"} onClick={() => openView("resume")}/>
+      <Nav secondary icon={<BellRing/>} label={t("nav.following")} active={!personCoversNav && view === "following"} badge={followingBadge} onClick={() => openView("following")}/>
+      <Nav icon={<Download/>} label={t("nav.downloads")} active={!personCoversNav && view === "downloads"} badge={downloads.filter((job) => job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
+      <Nav secondary icon={<PackagePlus/>} label={t("nav.addons")} active={!personCoversNav && view === "addons"} onClick={() => openView("addons")}/>
+      <Nav secondary icon={<Settings/>} label={t("nav.settings")} active={!personCoversNav && view === "settings"} onClick={() => openView("settings")}/>
       {/* `/api/stats` is administrator-only, so for anybody else this is a tab that loads an
           error. */}
-      {session!.role === "admin" && <Nav secondary icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>}
+      {session!.role === "admin" && <Nav secondary icon={<BarChart3/>} label={t("nav.stats")} active={!personCoversNav && view === "stats"} onClick={() => openView("stats")}/>}
       <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSwitchProfile={session?.canSwitch ? () => setSwitcherOpen(true) : undefined} onSignOut={signOut}/>
       </>}
-    </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button>{!child && <div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{catalogsKnown ? addons.filter((a) => a.enabled).length : "–"}</strong><span>{t("app.catalogsAndSources")}</span></div>}</div></aside>
-    <main className={`view-${view}${catalogueDetail ? " view-title-detail" : ""}`}>
+    </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{catalogsKnown ? addons.filter((a) => a.enabled).length : "–"}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
+    <main className={`view-${view}${catalogueDetail ? " view-title-detail" : ""}${personLayer ? " person-open" : ""}`}>
+      {personLayer && <PersonView key={personLayer.id} person={personLayer} language={settings.uiLanguage} shape={settings.searchTileShape}
+        onToggleShape={() => void toggleShape("searchTileShape")} onSearchText={searchTypedText}
+        {...(personLayer.fromTitle ? { fromTitle: personLayer.fromTitle } : {})}
+        {...(personLayer.backLabel ? { backLabel: personLayer.backLabel } : {})}
+        {...(personRestoreScroll.current != null ? { initialScroll: personRestoreScroll.current } : {})}
+        onBack={() => {
+          pendingPersonPageRestore.current = true;
+          setPersonLayer(null);
+        }}
+        onUnavailable={(name) => {
+          dropPersonLayer();
+          searchPersonByName(name);
+        }}
+        onOpenTitle={(title, notice) => {
+          const person = personLayer;
+          if (!person) return;
+          const under = detailOnScreen();
+          const scrollTop = catalogueDetailScroll.current?.scrollTop ?? 0;
+          const personView = document.querySelector<HTMLElement>("main > .person-view");
+          const personScroll = captureScroll(personView ?? document.querySelector("main") ?? document);
+          openCatalogueDetail({ type: title.type, id: title.id, name: title.name, ...(title.poster ? { poster: title.poster } : {}) }, undefined, { keepStack: true });
+          if (under) {
+            if (detailStack.current.length >= 10) detailStack.current.shift();
+            detailStack.current.push({ kind: "title", target: under, scrollTop });
+          }
+          if (detailStack.current.length >= 10) detailStack.current.shift();
+          detailStack.current.push({ kind: "person", person, scroll: personScroll });
+          pendingPersonPageRestore.current = false;
+          setPersonLayer(null);
+          if (notice === "noImdb") notify(t("person.noImdb"));
+        }}
+        onNotify={notify}/>}
       {/* The shared catalogue detail is hosted over the page that opened it, so closing it simply
           puts that page back: Home is never turned into an unfiltered catalogue on the way. Its
           browse bar holds its place while the body inside the panel is the only thing that
@@ -4018,7 +4123,7 @@ export function App() {
       </section>}
       {/* The library stays mounted under a catalogue detail opened from it: a remote title lives
           in the browser, and unmounting it would land Back on the list instead of that title. */}
-      {(!catalogueDetail || view === "library" || view === "person") && <>
+      {(!catalogueDetail || view === "library") && <>
       {view === "home" && buildKnown && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
@@ -4203,6 +4308,7 @@ export function App() {
       {view === "search" && buildInfo?.searchEverywhere && <SearchEverywhere search={searchEverywhere} shape={settings.searchTileShape} onToggleShape={() => void toggleShape("searchTileShape")}
         searchable={searchable} recent={searchState?.saveHistory ? searchState.recent.map((entry) => entry.query) : []}
         onRecord={recordSearch} onForget={forgetSearch} onRefreshRecent={() => void loadSearchState()} onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}
+        onOpenPerson={(person) => openPersonLayer(person, { backLabel: t("searchAll.backToSearch") })}
         nameSearchNotice={Boolean(personNameSearch)}/>}
       {view === "library" && <section ref={libraryPageRef} hidden={catalogueDetail ? true : undefined} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
@@ -4498,24 +4604,6 @@ export function App() {
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} queueWindow={queueWindow} speedLimitMbps={speedLimitMbps} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <LazyScreenBoundary><Suspense fallback={null}><StatsPanel.Screen key={statsReset} onError={fail}/></Suspense></LazyScreenBoundary>}
       {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} libraries={libraries} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
-      {view === "person" && personTarget && <PersonView key={personTarget.id} person={personTarget} language={settings.uiLanguage} shape={settings.catalogTileShape}
-        hidden={catalogueDetail ? true : undefined}
-        onBack={() => {
-          const previous = personReturn.current ?? "catalog";
-          personReturn.current = null;
-          setPersonTarget(null);
-          setView(previous);
-        }}
-        onUnavailable={(name) => {
-          personReturn.current = null;
-          setPersonTarget(null);
-          searchPersonByName(name);
-        }}
-        onOpenTitle={(title, notice) => {
-          if (notice === "noImdb") notify(t("person.noImdb"));
-          openCatalogueDetail({ type: title.type, id: title.id, name: title.name, ...(title.poster ? { poster: title.poster } : {}) });
-        }}
-        onNotify={notify}/>}
       {view === "settings" && <LazyScreenBoundary><Suspense fallback={null}><SettingsPage.Screen build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSourceProfilesChanged={reloadSourceRules} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);

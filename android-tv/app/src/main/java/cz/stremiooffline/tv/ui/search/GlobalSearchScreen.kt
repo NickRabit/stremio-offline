@@ -53,6 +53,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.GlobalSearchSourceDto
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchableCatalogDto
+import cz.stremiooffline.tv.data.TitlePersonDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.MicIcon
@@ -86,11 +87,15 @@ const val TagGlobalSearchSourceRows = "global_search_source_rows"
 const val TagGlobalSearchUnidentified = "global_search_unidentified"
 const val TagGlobalSearchChooser = "global_search_chooser"
 const val TagGlobalSearchPanelEntry = "global_search_panel_entry"
+const val TagGlobalSearchPeople = "global_search_people"
 
 fun globalSearchCardTag(anchor: String): String = "global_search_card_$anchor"
+fun globalSearchPersonTag(id: Long): String = "global_search_person_$id"
 fun globalSearchSourceRetryTag(sourceId: String): String = "global_search_retry_$sourceId"
 fun globalSearchMemberTag(memberKey: String): String = "global_search_member_$memberKey"
 fun globalSearchFilterTag(value: String): String = "global_search_filter_$value"
+
+internal fun globalSearchPersonAnchor(id: Long): String = "person:$id"
 
 @Composable
 fun GlobalSearchScreen(
@@ -98,21 +103,24 @@ fun GlobalSearchScreen(
   onOpenCatalog: (CatalogDetailArgs) -> Unit,
   onOpenRemote: (RemoteDetailData) -> Unit,
   onOpenLibrary: (String) -> Unit,
+  onOpenPerson: (TitlePersonDto) -> Unit,
   imageUrl: (String?) -> String?,
   overlayOpen: Boolean,
   preset: SearchPreset? = null,
   catalogueAvailable: Boolean = true,
+  peopleAvailable: Boolean = true,
   onBack: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
   voiceAvailable: Boolean = voiceSearchAvailable(),
   voiceLauncher: VoiceLauncher? = null,
 ) {
   val viewModel = viewModel<GlobalSearchViewModel>(
-    factory = GlobalSearchViewModel.factory(api, catalogueAvailable),
+    factory = GlobalSearchViewModel.factory(api, catalogueAvailable, peopleAvailable),
   )
   val state = viewModel.state
   val fieldFocus = remember { FocusRequester() }
   val gridFocus = remember { FocusRequester() }
+  val peopleFocus = remember { FocusRequester() }
   val scopeFocus = remember { FocusRequester() }
   val libraryFocus = remember { FocusRequester() }
   val kindFocus = remember { FocusRequester() }
@@ -171,6 +179,7 @@ fun GlobalSearchScreen(
   val hasCards = snapshot?.clusters?.isNotEmpty() == true || snapshot?.unidentified?.isNotEmpty() == true
   val contentFocus = when {
     !state.submitted -> recentEntryFocus
+    state.people.isNotEmpty() -> peopleFocus
     stripShown -> sourceStripFocus
     hasCards -> gridFocus
     else -> null
@@ -265,7 +274,7 @@ fun GlobalSearchScreen(
         onSubmit = ::submit,
         modifier = Modifier
           .weight(1f)
-          .focusDirections(down = firstSourceFocus)
+          .focusDirections(down = if (state.people.isNotEmpty()) peopleFocus else firstSourceFocus)
           .onFocusChanged { if (it.isFocused) clearCardFocus() },
       )
       if (voice.available) {
@@ -278,7 +287,7 @@ fun GlobalSearchScreen(
           modifier = Modifier
             .size(38.dp)
             .testTag(TagGlobalSearchVoice)
-            .focusDirections(down = firstSourceFocus)
+            .focusDirections(down = if (state.people.isNotEmpty()) peopleFocus else firstSourceFocus)
             .onFocusChanged { if (it.isFocused) clearCardFocus() },
         )
       }
@@ -298,7 +307,7 @@ fun GlobalSearchScreen(
         modifier = Modifier
           .size(38.dp)
           .testTag(TagGlobalSearchReset)
-          .focusDirections(down = firstSourceFocus)
+          .focusDirections(down = if (state.people.isNotEmpty()) peopleFocus else firstSourceFocus)
           .onFocusChanged { if (it.isFocused) clearCardFocus() },
       )
     }
@@ -363,7 +372,7 @@ fun GlobalSearchScreen(
         // The strip's own removal reports a loss of focus too; that one must not count.
         onStripFocus = { if (it || stripStillShown) stripFocused = it },
         upFocus = lastToolbarFocus,
-        downFocus = gridFocus,
+        downFocus = if (state.people.isNotEmpty()) peopleFocus else gridFocus,
         focus = sourceStripFocus,
       )
     }
@@ -389,12 +398,15 @@ fun GlobalSearchScreen(
         onOpenCatalog = onOpenCatalog,
         onOpenRemote = onOpenRemote,
         onOpenLibrary = onOpenLibrary,
+        onOpenPerson = onOpenPerson,
         imageUrl = imageUrl,
         modifier = Modifier.weight(1f),
         gridFocus = gridFocus,
+        peopleFocus = peopleFocus,
         restoreToken = resultRestore,
         clearFocusSignal = clearFocusSignal,
         firstRowUp = when {
+          state.people.isNotEmpty() -> peopleFocus
           stripShown -> sourceStripFocus
           state.submitted -> lastToolbarFocus
           else -> null
