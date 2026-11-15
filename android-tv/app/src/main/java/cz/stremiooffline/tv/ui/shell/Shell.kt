@@ -461,7 +461,7 @@ fun Shell(
       catalogStack.pushPerson(current, person)
       catalogDetail = null
     }
-    personScreen = PersonArgs(id, person.name)
+    personScreen = PersonArgs(id = id, name = person.name, fromTitle = current?.meta?.name)
   }
   fun openRelatedFromUnderlying(related: RelatedTitleDto, origin: CatalogReturnOrigin) {
     clearCatalogHistory()
@@ -681,6 +681,10 @@ fun Shell(
       onUnavailable = { name ->
         personScreen = null
         openPersonSearch(name)
+      },
+      onSearchText = { query ->
+        personScreen = null
+        openPersonSearch(query)
       },
       onBack = {
         when (val previous = catalogStack.pop()) {

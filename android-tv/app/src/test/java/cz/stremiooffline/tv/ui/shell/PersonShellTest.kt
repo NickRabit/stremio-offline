@@ -33,6 +33,7 @@ import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
 import cz.stremiooffline.tv.ui.detail.relatedTitleTag
 import cz.stremiooffline.tv.ui.detail.titlePersonTag
 import cz.stremiooffline.tv.ui.person.TagPersonScreen
+import cz.stremiooffline.tv.ui.person.TagPersonSearchAsText
 import cz.stremiooffline.tv.ui.person.personTileTag
 import cz.stremiooffline.tv.ui.search.TagGlobalSearchInput
 import org.junit.After
@@ -264,6 +265,36 @@ class PersonShellTest {
     compose.waitUntil(5_000) { api.globalSearchEnabledCalls > 0 }
 
     compose.onNodeWithTag(titlePersonTag("Quentin Tarantino"))
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagPersonScreen).assertDoesNotExist()
+    compose.onNodeWithTag(TagGlobalSearchInput).assertTextContains("Quentin Tarantino")
+    assertEquals("Quentin Tarantino", api.globalStartCalls.last().query)
+  }
+
+  @Test
+  fun `search as text opens Search with the name and leaves the person`() {
+    val cast = TitlePersonDto(id = 138, name = "Quentin Tarantino", role = "cast")
+    val api = api(cast).apply {
+      globalSearchEnabled = true
+      personValue = PersonFilmographyDto(
+        id = 138,
+        name = "Quentin Tarantino",
+        sections = listOf(PersonSectionDto("acting", listOf(personTile("tt2", 680, "Pulp Fiction")))),
+      )
+    }
+    launch(api)
+    openCatalogueDetail(api)
+    compose.waitUntil(5_000) { api.globalSearchEnabledCalls > 0 }
+
+    compose.onNodeWithTag(titlePersonTag("Quentin Tarantino"))
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.personRequests.isNotEmpty() }
+    compose.onNodeWithTag(TagPersonSearchAsText)
       .performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }

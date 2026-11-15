@@ -462,6 +462,7 @@ export const cs: Catalog = {
   "person.titleCount": {
     one: "{count} titul",
     few: "{count} tituly",
+    many: "{count} titulu",
     other: "{count} titulů",
   },
   "person.searchAsText": "Hledat „{name}“ jako text",

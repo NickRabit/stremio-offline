@@ -113,6 +113,7 @@ data class PersonTitleDto(
   val name: String = "",
   val year: String? = null,
   val poster: String? = null,
+  val background: String? = null,
   val role: String? = null,
   val inLibrary: Boolean = false,
 )
@@ -128,6 +129,8 @@ data class PersonFilmographyDto(
   val id: Long = 0,
   val name: String = "",
   val photo: String? = null,
+  val knownFor: String = "acting",
+  val total: Int = 0,
   val sections: List<PersonSectionDto> = emptyList(),
 )
 

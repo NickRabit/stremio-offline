@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -19,7 +18,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -40,8 +40,10 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,10 +57,10 @@ import cz.stremiooffline.tv.data.PersonFilmographyDto
 import cz.stremiooffline.tv.data.PersonSectionDto
 import cz.stremiooffline.tv.data.PersonTitleDto
 import cz.stremiooffline.tv.data.RelatedTitleDto
-import cz.stremiooffline.tv.ui.catalog.posterGridColumns
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
-import cz.stremiooffline.tv.ui.components.PosterCard
+import cz.stremiooffline.tv.ui.components.TvTextField
+import cz.stremiooffline.tv.ui.search.GlobalSearchCard
 import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.signin.messageRes
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -66,10 +68,18 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
 
-data class PersonArgs(val id: Long, val name: String, val focusKey: String? = null)
+data class PersonArgs(
+  val id: Long,
+  val name: String,
+  val focusKey: String? = null,
+  val fromTitle: String? = null,
+)
 
 const val TagPersonScreen = "person_screen"
 const val TagPersonRetry = "person_retry"
+const val TagPersonSearchField = "person_search_field"
+const val TagPersonSearchInput = "person_search_input"
+const val TagPersonSearchAsText = "person_search_as_text"
 
 fun personTileTag(title: PersonTitleDto): String = "person_tile_${title.type}_${title.tmdbId}"
 fun personSectionTag(section: PersonSectionDto): String = "person_section_${section.key}"
@@ -84,6 +94,7 @@ fun PersonScreen(
   imageUrl: (String?) -> String?,
   onOpenTitle: (related: RelatedTitleDto, focusKey: String, noImdb: Boolean) -> Unit,
   onUnavailable: (String) -> Unit,
+  onSearchText: (String) -> Unit,
   onBack: () -> Unit,
 ) {
   var retry by remember(args) { mutableIntStateOf(0) }
@@ -91,11 +102,21 @@ fun PersonScreen(
   var failure by remember(args) { mutableStateOf<ApiError?>(null) }
   var notice by remember(args) { mutableStateOf<ApiError?>(null) }
   var openingKey by remember(args) { mutableStateOf<String?>(null) }
+  var query by remember(args) { mutableStateOf(args.name) }
   val requesters = remember(args) { mutableMapOf<String, FocusRequester>() }
+  val fieldFocus = remember(args) { FocusRequester() }
   val retryFocus = remember(args) { FocusRequester() }
   val scope = rememberCoroutineScope()
 
   fun requester(key: String): FocusRequester = requesters.getOrPut(key) { FocusRequester() }
+
+  val sections = person?.sections.orEmpty().filter { it.key == "acting" || it.key == "crew" }
+  val firstTileFocus = sections.firstOrNull()?.titles?.firstOrNull()?.let { requester(it.focusKey()) }
+
+  fun submitSearch() {
+    val submitted = query.trim()
+    if (submitted.isNotEmpty()) onSearchText(submitted)
+  }
 
   BackHandler(onBack = onBack)
 
@@ -116,6 +137,11 @@ fun PersonScreen(
     } catch (_: Exception) {
       failure = ApiError(ApiFailure.Generic)
     }
+  }
+
+  LaunchedEffect(person?.name) {
+    val name = person?.name
+    if (!name.isNullOrBlank() && query == args.name) query = name
   }
 
   LaunchedEffect(failure) {
@@ -151,26 +177,45 @@ fun PersonScreen(
   }
 
   Column(
-    Modifier
+    modifier = Modifier
       .fillMaxSize()
       .background(Tokens.Bg)
       .testTag(TagPersonScreen)
       .padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    PersonHeader(
-      name = person?.name ?: args.name,
-      photo = person?.photo,
-      imageUrl = imageUrl,
+    args.fromTitle?.takeIf { it.isNotBlank() }?.let { title ->
+      Text(
+        stringResource(R.string.person_back_to, title),
+        color = Tokens.Muted,
+        fontSize = 11.sp,
+      )
+    }
+    TvTextField(
+      label = stringResource(R.string.tv_global_search_title),
+      value = query,
+      onValueChange = { query = it },
+      imeAction = ImeAction.Done,
+      surfaceRequester = fieldFocus,
+      testTag = TagPersonSearchField,
+      inputTestTag = TagPersonSearchInput,
+      onSubmit = ::submitSearch,
+      modifier = Modifier
+        .fillMaxWidth()
+        .then(if (firstTileFocus != null) Modifier.focusProperties { down = firstTileFocus } else Modifier),
     )
     when {
       person == null && failure == null -> {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
           Text(stringResource(R.string.person_loading), color = Tokens.Muted, fontSize = 13.sp)
         }
       }
       failure != null -> {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-          Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+          Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+          ) {
             Text(apiErrorText(failure!!), color = Tokens.Muted, fontSize = 13.sp)
             FocusButton(
               text = stringResource(R.string.person_retry),
@@ -181,17 +226,22 @@ fun PersonScreen(
         }
       }
       person != null -> {
+        val loaded = person!!
+        PersonCard(
+          person = loaded,
+          imageUrl = imageUrl,
+          onSearchText = onSearchText,
+        )
         notice?.let {
           Text(
             apiErrorText(it),
             color = Tokens.Red,
             fontSize = 12.sp,
-            modifier = Modifier.padding(vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = CardRowInset, vertical = 4.dp),
           )
         }
-        val sections = person!!.sections.filter { it.key == "acting" || it.key == "crew" }
         if (sections.all { it.titles.isEmpty() }) {
-          Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+          Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
             Text(stringResource(R.string.person_empty), color = Tokens.Muted, fontSize = 13.sp)
           }
         } else {
@@ -200,8 +250,10 @@ fun PersonScreen(
             focusKey = args.focusKey,
             imageUrl = imageUrl,
             openingKey = openingKey,
+            firstRowUp = fieldFocus,
             requester = ::requester,
             onOpen = ::open,
+            modifier = Modifier.fillMaxWidth().weight(1f),
           )
         }
       }
@@ -210,37 +262,60 @@ fun PersonScreen(
 }
 
 @Composable
-private fun PersonHeader(name: String, photo: String?, imageUrl: (String?) -> String?) {
+private fun PersonCard(
+  person: PersonFilmographyDto,
+  imageUrl: (String?) -> String?,
+  onSearchText: (String) -> Unit,
+) {
   Row(
-    modifier = Modifier.fillMaxWidth().height(118.dp).padding(vertical = 10.dp),
-    horizontalArrangement = Arrangement.spacedBy(18.dp),
+    modifier = Modifier.fillMaxWidth().padding(horizontal = CardRowInset, vertical = 4.dp),
+    horizontalArrangement = Arrangement.spacedBy(14.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    val shape = RoundedCornerShape(10.dp)
     Box(
-      Modifier
-        .size(width = 68.dp, height = 98.dp)
-        .clip(shape)
+      modifier = Modifier
+        .size(64.dp)
+        .clip(CircleShape)
         .background(Tokens.Panel2),
     ) {
-      val art = imageUrl(photo)
-      if (art != null) {
+      imageUrl(person.photo)?.let { art ->
         AsyncImage(
           model = art,
-          contentDescription = stringResource(R.string.person_label, name),
+          contentDescription = stringResource(R.string.person_label, person.name),
           imageLoader = sessionImageLoader(),
           contentScale = ContentScale.Crop,
           modifier = Modifier.fillMaxSize(),
         )
       }
     }
-    Text(
-      name,
-      color = Tokens.Text,
-      fontSize = 24.sp,
-      fontWeight = FontWeight.Bold,
-      maxLines = 2,
-      overflow = TextOverflow.Ellipsis,
+    Column(
+      modifier = Modifier.weight(1f),
+      verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+      Text(
+        person.name,
+        color = Tokens.Text,
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+      val section = stringResource(
+        if (person.knownFor == "acting") R.string.person_acting else R.string.person_crew,
+      )
+      Text(
+        "$section · ${pluralStringResource(R.plurals.person_title_count, person.total, person.total)}",
+        color = Tokens.Muted,
+        fontSize = 11.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+    FocusButton(
+      text = stringResource(R.string.person_search_as_text, person.name),
+      onClick = { onSearchText(person.name) },
+      labelMaxWidth = 260.dp,
+      modifier = Modifier.testTag(TagPersonSearchAsText),
     )
   }
 }
@@ -251,11 +326,13 @@ private fun PersonGrid(
   focusKey: String?,
   imageUrl: (String?) -> String?,
   openingKey: String?,
+  firstRowUp: FocusRequester,
   requester: (String) -> FocusRequester,
   onOpen: (PersonTitleDto) -> Unit,
+  modifier: Modifier = Modifier,
 ) {
-  BoxWithConstraints(Modifier.fillMaxSize()) {
-    val columns = posterGridColumns(maxWidth.value)
+  BoxWithConstraints(modifier) {
+    val columns = (((maxWidth.value + 18f) / 138f).toInt()).coerceAtLeast(1)
     val state = rememberLazyGridState()
     val focusTarget = focusTarget(sections, focusKey)
     LaunchedEffect(sections, focusKey) {
@@ -268,9 +345,9 @@ private fun PersonGrid(
       columns = GridCells.Fixed(columns),
       state = state,
       modifier = Modifier.fillMaxSize().focusGroup(),
-      contentPadding = PaddingValues(start = CardRowInset, top = 4.dp, end = CardRowInset, bottom = 40.dp),
+      contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
       horizontalArrangement = Arrangement.spacedBy(18.dp),
-      verticalArrangement = Arrangement.spacedBy(18.dp),
+      verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
       sections.forEachIndexed { sectionIndex, section ->
         item(key = "section:${section.key}", span = { GridItemSpan(maxLineSpan) }) {
@@ -289,20 +366,20 @@ private fun PersonGrid(
           val next = sections.getOrNull(sectionIndex + 1)?.titles?.firstOrNull()
           val rowStart = index - index % columns
           val lastRow = index >= (section.titles.size - 1) / columns * columns
-          val caption = if (openingKey == key) {
-            stringResource(R.string.person_opening)
-          } else {
-            titleCaption(title)
-          }
-          PosterCard(
-            name = title.name,
-            imageUrl = imageUrl(title.poster),
-            progress = null,
-            caption = caption,
-            cardTag = personTileTag(title),
+          GlobalSearchCard(
+            title = title.name,
+            imageUrl = imageUrl(title.poster ?: title.background),
+            captionLines = if (openingKey == key) {
+              listOf(stringResource(R.string.person_opening))
+            } else {
+              titleCaptions(title)
+            },
+            tag = personTileTag(title),
+            onFocus = {},
             onClick = { onOpen(title) },
             modifier = Modifier
               .focusRequester(requester(key))
+              .then(if (index < columns) Modifier.focusProperties { up = firstRowUp } else Modifier)
               .onPreviewKeyEvent { event ->
                 if (
                   event.type == KeyEventType.KeyDown &&
@@ -342,14 +419,12 @@ private fun focusTarget(sections: List<PersonSectionDto>, focusKey: String?): Pa
 }
 
 @Composable
-private fun titleCaption(title: PersonTitleDto): String {
-  val kind = stringResource(if (title.type == "series") R.string.person_series else R.string.person_movie)
-  return listOfNotNull(
-    title.year?.takeIf { it.isNotBlank() },
-    kind,
-    stringResource(R.string.person_in_library).takeIf { title.inLibrary },
-  ).joinToString(" · ")
-}
+private fun titleCaptions(title: PersonTitleDto): List<String> = listOfNotNull(
+  title.year?.takeIf { it.isNotBlank() },
+  stringResource(if (title.type == "series") R.string.person_series else R.string.person_movie),
+  title.role?.takeIf { it.isNotBlank() },
+  stringResource(R.string.person_in_library).takeIf { title.inLibrary },
+)
 
 @Composable
 private fun apiErrorText(error: ApiError): String =

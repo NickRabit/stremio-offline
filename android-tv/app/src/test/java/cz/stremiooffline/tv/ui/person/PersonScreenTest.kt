@@ -5,6 +5,7 @@ package cz.stremiooffline.tv.ui.person
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -54,31 +55,97 @@ class PersonScreenTest {
   private fun person(
     first: PersonSectionDto = PersonSectionDto("crew", listOf(crewTitle)),
     second: PersonSectionDto = PersonSectionDto("acting", listOf(actingTitle)),
+    knownFor: String = "acting",
+    total: Int = first.titles.size + second.titles.size,
   ) = PersonFilmographyDto(
     id = 138,
     name = "Quentin Tarantino",
+    knownFor = knownFor,
+    total = total,
     sections = listOf(first, second),
   )
 
   private fun mount(
     api: FakeTvApi,
     focusKey: String? = null,
+    fromTitle: String? = null,
     onOpenTitle: (RelatedTitleDto, String, Boolean) -> Unit = { _, _, _ -> },
     onUnavailable: (String) -> Unit = {},
+    onSearchText: (String) -> Unit = {},
   ) {
     compose.setContent {
       PersonScreen(
         api = api,
-        args = PersonArgs(138, "Quentin Tarantino", focusKey = focusKey),
+        args = PersonArgs(138, "Quentin Tarantino", focusKey = focusKey, fromTitle = fromTitle),
         language = "en",
         imageUrl = { null },
         onOpenTitle = onOpenTitle,
         onUnavailable = onUnavailable,
+        onSearchText = onSearchText,
         onBack = {},
       )
     }
     compose.waitUntil(5_000) { api.personRequests.isNotEmpty() }
     compose.waitForIdle()
+  }
+
+  @Test
+  fun `the field shows the person and UP from the first tile row focuses it`() {
+    val api = FakeTvApi().apply { personValue = person() }
+    mount(api)
+
+    compose.onNodeWithTag(TagPersonSearchField).assertExists()
+    compose.onNodeWithTag(TagPersonSearchInput).assertTextContains("Quentin Tarantino")
+    compose.onNodeWithTag(personTileTag(crewTitle)).assertIsFocused()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionUp) }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagPersonSearchField).assertIsFocused()
+  }
+
+  @Test
+  fun `the person card shows the known section and title count`() {
+    val api = FakeTvApi().apply {
+      personValue = person(knownFor = "crew", total = 2)
+    }
+    mount(api)
+
+    compose.onNodeWithText("Directing and writing · 2 titles").assertExists()
+  }
+
+  @Test
+  fun `OK on search as text calls the text search callback with the name`() {
+    val api = FakeTvApi().apply { personValue = person() }
+    var searched: String? = null
+    mount(api, onSearchText = { searched = it })
+
+    compose.onNodeWithTag(TagPersonSearchAsText)
+      .performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    assertEquals("Quentin Tarantino", searched)
+  }
+
+  @Test
+  fun `tiles show the year and the film or series line`() {
+    val api = FakeTvApi().apply { personValue = person() }
+    mount(api)
+
+    compose.onNodeWithText("1994").assertExists()
+    compose.onNodeWithText("Film").assertExists()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+    compose.waitForIdle()
+    compose.onNodeWithText("1992").assertExists()
+    compose.onNodeWithText("Series").assertExists()
+  }
+
+  @Test
+  fun `the back label names the title the person was opened from`() {
+    val api = FakeTvApi().apply { personValue = person() }
+    mount(api, fromTitle = "Pulp Fiction")
+
+    compose.onNodeWithText("Back to Pulp Fiction").assertExists()
   }
 
   @Test
@@ -208,6 +275,7 @@ class PersonScreenTest {
         imageUrl = { null },
         onOpenTitle = { _, _, _ -> },
         onUnavailable = { unavailable = it },
+        onSearchText = {},
         onBack = {},
       )
     }

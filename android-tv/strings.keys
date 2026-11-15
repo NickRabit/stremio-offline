@@ -531,5 +531,8 @@ person.opening
 person.inLibrary
 person.label
 person.hintTv
+person.backTo
+person.titleCount
+person.searchAsText
 err.personUnavailable
 err.personLookupFailed

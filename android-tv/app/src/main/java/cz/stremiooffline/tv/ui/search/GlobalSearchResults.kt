@@ -451,9 +451,18 @@ private fun GlobalSearchResultCard(
   val requester = remember(anchor) { FocusRequester() }
   cardFocus[anchor] = requester
   GlobalSearchCard(
-    cluster = cluster,
-    anchor = anchor,
-    imageUrl = imageUrl,
+    title = cluster.title,
+    imageUrl = imageUrl(cluster.poster ?: cluster.background),
+    captionLines = listOfNotNull(
+      cluster.year?.toString(),
+      cluster.episodeCount?.takeIf { it > 0 }?.let {
+        pluralStringResource(R.plurals.tv_global_search_episodes, it, it)
+      },
+      cluster.itemCount?.takeIf { it > 0 }?.let {
+        pluralStringResource(R.plurals.tv_global_search_folder_items, it, it)
+      },
+    ),
+    tag = globalSearchCardTag(anchor),
     onFocus = {
       onFocus(anchor)
       if (hasMore && index >= cardCount - columns && lastLoadRevision != snapshotRevision) {
@@ -469,10 +478,12 @@ private fun GlobalSearchResultCard(
 }
 
 @Composable
-private fun GlobalSearchCard(
-  cluster: GlobalSearchClusterDto,
-  anchor: String,
-  imageUrl: (String?) -> String?,
+internal fun GlobalSearchCard(
+  title: String,
+  imageUrl: String?,
+  captionLines: List<String>,
+  tag: String,
+  localMark: String? = null,
   onFocus: () -> Unit,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
@@ -482,30 +493,23 @@ private fun GlobalSearchCard(
     verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     PosterCard(
-      name = cluster.title,
-      imageUrl = imageUrl(cluster.poster ?: cluster.background),
+      name = title,
+      imageUrl = imageUrl,
       progress = null,
       onClick = onClick,
-      cardTag = globalSearchCardTag(anchor),
+      cardTag = tag,
       modifier = modifier.onFocusChanged { if (it.isFocused) onFocus() },
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-      cluster.year?.let { Text(it.toString(), color = Tokens.Muted, fontSize = 10.sp) }
+    localMark?.let {
+      Text(it, color = Tokens.Accent2, fontSize = 9.sp, maxLines = 1)
     }
-    cluster.episodeCount?.takeIf { it > 0 }?.let {
+    captionLines.forEachIndexed { index, line ->
       Text(
-        pluralStringResource(R.plurals.tv_global_search_episodes, it, it),
+        line,
         color = Tokens.Muted,
-        fontSize = 9.sp,
+        fontSize = if (index == 0) 10.sp else 9.sp,
         maxLines = 1,
-      )
-    }
-    cluster.itemCount?.takeIf { it > 0 }?.let {
-      Text(
-        pluralStringResource(R.plurals.tv_global_search_folder_items, it, it),
-        color = Tokens.Muted,
-        fontSize = 9.sp,
-        maxLines = 1,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
       )
     }
   }
