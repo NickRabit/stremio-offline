@@ -320,8 +320,9 @@ fun CatalogDetailScreen(
   // The key the title's own position (and the source it was played from) is stored under.
   val progressKey = ProgressKey.of(streamType, meta.id, pick.selectedVideo?.id)
 
-  LaunchedEffect(args.meta.id, args.focusRelatedId) {
+  LaunchedEffect(args.meta.id, args.focusRelatedId, args.focusPersonKey) {
     ui.extras.restoreRelatedId = args.focusRelatedId
+    ui.extras.restorePersonKey = args.focusPersonKey
   }
 
   // The title's own requests do not depend on each other, so they all leave at once; only the

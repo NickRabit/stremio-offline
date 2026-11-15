@@ -118,10 +118,10 @@ simply absent when the answer is empty or failed — no error message. Without
 a TMDB key the cast row shows the addon's names without photos and the
 similar row is not drawn.
 
-Selecting a person closes the detail. A person TMDB knows (one with an `id`)
-opens the person view with their filmography; see
+A person TMDB knows (one with an `id`) opens the person view with their
+filmography over the detail, and Back returns to this title; see
 [person-filmography-spec.md](person-filmography-spec.md). Any other person
-opens Search with the name as the query, already submitted (Search
+closes the detail and opens Search with the name as the query, already submitted (Search
 everywhere, or the older catalogue search where the instance runs that one),
 under a line saying it was searched by name. Selecting a similar title opens its
 catalogue full detail; Back returns to the title the viewer came from: the
@@ -173,9 +173,9 @@ TMDB again for a title it has seen.
   way and the column scrolls back.
 - The focused portrait or poster gets the white focus ring and the scale the
   other TV cards use.
-- OK on a person closes the detail overlay. A person with a TMDB id opens the
-  person screen; any other opens the global search with the name as the
-  query, started. OK on a similar title opens its catalogue
+- OK on a person with a TMDB id opens the person screen, and Back returns to
+  this title with focus on that cast card. Any other person closes the detail
+  overlay and opens the global search with the name as the query, started. OK on a similar title opens its catalogue
   detail; Back returns to this title (a stack of up to ten) with the focus
   on the card that was opened.
 - The facts line gains the age-rating badge; the original title line and the

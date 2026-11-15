@@ -65,7 +65,7 @@ export function ClampedDescription({ text }: { text: string }) {
 }
 
 /** Director, creator and novel under the synopsis. Empty roles disappear; a role keeps three names. */
-export function CrewLine({ people }: { people?: TitlePerson[] }) {
+export function CrewLine({ people, titleName }: { people?: TitlePerson[]; titleName?: string }) {
   const actions = useContext(TitleExtrasActions);
   const { t: translate } = useI18n();
   const groups = LINE_ROLES.map((role) => {
@@ -88,7 +88,11 @@ export function CrewLine({ people }: { people?: TitlePerson[] }) {
     {translate(`detail.role.${group.role}`)}{" "}
     {group.names.map((entry, nameIndex) => <span key={entry.name}>
       {nameIndex > 0 ? ", " : null}
-      <button type="button" title={translate(entry.id != null ? "person.label" : "detail.searchPerson", { name: entry.name })} onClick={() => actions.searchPerson({ name: entry.name, ...(entry.id != null ? { id: entry.id } : {}) })}><b>{entry.name}</b></button>
+      <button type="button" title={translate(entry.id != null ? "person.label" : "detail.searchPerson", { name: entry.name })} onClick={() => {
+        const target = { name: entry.name, ...(entry.id != null ? { id: entry.id } : {}) };
+        if (titleName) actions.searchPerson(target, titleName);
+        else actions.searchPerson(target);
+      }}><b>{entry.name}</b></button>
     </span>)}
   </span>)}</p>;
 }

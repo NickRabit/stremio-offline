@@ -558,6 +558,13 @@
   <string name="person_in_library">Dans votre bibliothèque</string>
   <string name="person_label">Filmographie de %1$s</string>
   <string name="person_hint_tv">OK affiche ce à quoi la personne a participé</string>
+  <string name="person_back_to">Retour à %1$s</string>
+  <plurals name="person_title_count">
+    <item quantity="one">%1$s titre</item>
+    <item quantity="other">%1$s titres</item>
+  </plurals>
+  <string name="person_search_as_text">Rechercher « %1$s » comme texte</string>
   <string name="err_person_unavailable">Rien n\'est connu sur cette personne.</string>
   <string name="err_person_lookup_failed">Impossible de charger la filmographie. Réessayez plus tard.</string>
+  <string name="search_all_people">Personnes</string>
 </resources>

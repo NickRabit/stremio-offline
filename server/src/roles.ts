@@ -118,6 +118,7 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/searchable$/ },
   { method: "GET", pattern: /^\/meta\/[^/]+\/[^/]+$/ },
   { method: "GET", pattern: /^\/meta\/[^/]+\/[^/]+\/extras$/ },
+  { method: "GET", pattern: /^\/person\/search$/ },
   { method: "GET", pattern: /^\/person\/\d+$/ },
   { method: "GET", pattern: /^\/person\/title\/(?:movie|series)\/\d+$/ },
   { method: "GET", pattern: /^\/links\/[^/]+\/[^/]+$/ },

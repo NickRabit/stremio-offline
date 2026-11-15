@@ -2272,6 +2272,7 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
      screen and cut the detail off. Here the page itself scrolls, and only the way back stays
      pinned under the 54px top bar. */
   main.view-title-detail{height:auto;overflow:visible;display:block;padding-bottom:max(8px, env(safe-area-inset-bottom, 0px))}
+  main.view-title-detail.person-open > .person-view{flex:none;min-height:0;overflow-y:visible}
   main.view-title-detail>.browse-panel{overflow:visible}
   main.view-title-detail .browse-head{position:sticky;top:54px;z-index:6;background:var(--panel)}
   main.view-title-detail .browse-scroll{overflow:visible}
@@ -2284,10 +2285,13 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
    individual sources are doing. */
 .topbar-search{padding:8px 12px;font-size:11px}
 .topbar-search svg{width:16px;height:16px}
-.search-everywhere-form{display:grid;grid-template-columns:minmax(180px,1fr) auto auto;gap:10px;margin-bottom:13px}
+.search-everywhere-form{display:grid;grid-template-columns:minmax(180px,1fr) auto auto;gap:10px;margin-bottom:13px;padding:12px;border:1px solid var(--line);border-radius:13px;background:var(--panel)}
 .search-everywhere-form>.search-input{grid-column:auto}
-.search-filters{flex-wrap:wrap;gap:10px 12px;margin-bottom:13px}
+.search-filters{flex-wrap:wrap;align-items:center;gap:10px 22px;margin:0 0 14px}
+.search-filter-group{display:flex;align-items:center;gap:8px;min-width:0}
+.search-filter-group>span{font-size:10px;color:var(--muted);white-space:nowrap}
 .search-filters .library-shelf-segments{flex:0 1 auto}
+@media(min-width:701px) and (min-height:501px){.search-filters .library-shelf-segments button{min-height:31px;padding:0 12px;font-size:11px}}
 .search-filters .shape-toggle{margin-left:auto}
 .search-source-strip{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px 18px;margin-bottom:14px;padding:10px 13px;border:1px solid var(--line);border-radius:10px;background:#10151dcc}
 .search-source-summary{font-size:11px;color:var(--muted)}
@@ -2321,6 +2325,16 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .search-title-page button{justify-self:start}
 .search-return{display:inline-flex;align-items:center;gap:4px;justify-self:start;align-self:flex-start;width:auto;margin-bottom:10px;padding:6px 12px 6px 8px;border-radius:99px;font-size:12px}
 .search-return svg{width:15px;height:15px}
+.search-everywhere{min-width:0;overflow-x:clip}
+.search-people{min-width:0;max-width:100%;margin:0;padding:0 0 14px}
+.search-people h3{margin:0 0 10px;font-size:14px}
+.search-people-strip{display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;padding:4px 2px 8px;scroll-snap-type:x proximity;overscroll-behavior-x:contain}
+.search-person{flex:0 0 168px;width:168px;min-width:0;display:grid;justify-items:center;align-content:start;gap:6px;padding:8px 6px;border:0;background:none;color:inherit;text-align:center;scroll-snap-align:start;border-radius:10px}
+.search-person:hover .person-face,.search-person:focus-visible .person-face{outline:2px solid var(--accent);outline-offset:2px;border-color:transparent}
+.search-person .person-face{width:72px;height:72px;font-size:20px}
+.search-person strong,.search-person small{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search-person strong{font-size:13px;line-height:1.25}
+.search-person small{color:var(--muted);font-size:12px;font-weight:600}
 .home-search-action{padding:6px 10px;font-size:10px}
 .home-search-action svg{width:15px;height:15px}
 @media(max-width:700px){
@@ -2328,13 +2342,15 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
   .topbar-search{padding:8px}
   .search-everywhere-form{grid-template-columns:1fr 1fr}
   .search-everywhere-form>.search-input,.search-everywhere-form>button:only-of-type{grid-column:1/-1}
-  .search-filters .library-shelf-segments:first-child{flex:1 1 100%}
-  .search-filters .library-shelf-segments+.library-shelf-segments{flex:1 1 0}
+  .search-filters .search-filter-group:first-child{flex:1 1 100%}
+  .search-filters .search-filter-group+.search-filter-group{flex:1 1 0}
+  .search-filter-group .library-shelf-segments{flex:1 1 auto}
   .search-source-strip{display:grid;gap:8px}
   .search-source-strip details{min-width:0;width:100%}
   .search-source-strip summary{text-align:left}
   .search-source-state{grid-template-columns:minmax(100px,1fr) auto auto}
   .search-source-state small{grid-column:1/-1}
+  .search-person{flex-basis:132px;width:132px}
 }
 
 /* iOS zooms the page into any field under 16px when it gets focus. */
@@ -2509,24 +2525,24 @@ p.next-episode b{color:var(--accent2)}
 }
 
 .person-view{min-width:0;overflow-x:clip}
-.person-view[hidden]{display:none!important}
-.person-head{display:flex;align-items:center;gap:16px;margin:0 0 22px;min-width:0}
-.person-portrait{flex:0 0 80px;width:80px;height:80px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:22px;color:#ffffffcc;background:linear-gradient(140deg,#2b3446,#1a2029);border:1px solid var(--line);overflow:hidden}
-.person-portrait img{width:100%;height:100%;object-fit:cover}
-.person-head h2{flex:1 1 auto;min-width:0;margin:0;font-size:28px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.person-back{flex:0 0 auto;display:inline-flex;align-items:center;gap:4px}
-.person-back svg{width:18px;height:18px}
-.person-section{min-width:0;margin:0 0 28px}
-.person-section h3{margin:0 0 12px;font-size:16px}
-.person-section .browse-grid{min-width:0}
-.person-section .in-library{color:var(--green)}
-.person-status{color:var(--muted);line-height:1.5}
-.person-status[role="alert"]{display:grid;gap:10px;justify-items:start;color:var(--text)}
+.person-view:focus{outline:none}
+main.person-open > :not(.person-view){display:none!important}
+main.view-library.person-open > .person-view,
+main.view-catalog.person-open > .person-view,
+main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.person-view h3{margin:16px 0 12px;font-size:16px}
+.person-card{display:grid;grid-template-columns:64px minmax(0,1fr) auto;align-items:center;gap:8px 14px;margin:0 0 18px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);min-width:0}
+.person-card>img,.person-card>span{width:64px;height:64px;border-radius:50%;object-fit:cover;background:var(--line)}
+.person-card>span,.person-placeholder{animation:skeleton-pulse 1.4s infinite}
+.person-card div{min-width:0}
+.person-card h2{margin:0;font-size:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.person-card p{margin:2px 0 0;color:var(--muted);font-size:12px}
+.person-card .person-text-search{justify-self:end;max-width:100%;padding:6px 12px 6px 10px;border-radius:99px;font-size:12px;font-weight:600;color:var(--muted);white-space:normal;text-align:left}.person-card .person-text-search:hover{color:var(--text)}.person-card .person-text-search svg{width:14px;height:14px;flex:0 0 auto}.person-view h3 span{margin-left:6px;color:var(--muted);font-size:13px;font-weight:600}.person-view .browse-item small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .person-name-search{margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#2a2113;color:#e7b867;font-size:12px;line-height:1.45}
 .person-sentinel{height:1px}
-@media(max-width:700px),(max-width:980px) and (max-height:500px) and (orientation:landscape){
-  .person-head{flex-wrap:nowrap;gap:10px;margin-bottom:16px}
-  .person-portrait{flex:0 0 40px;width:40px;height:40px;font-size:12px}
-  .person-head h2{font-size:18px}
-  .person-view,.person-section,.person-section .browse-grid{overflow-x:clip}
+@media(prefers-reduced-motion:reduce){.person-card>span,.person-placeholder{animation:none}}
+@media(max-width:700px){
+  .person-card{grid-template-columns:44px minmax(0,1fr)}
+  .person-card>img,.person-card>span{width:44px;height:44px}
+  .person-card .person-text-search{grid-column:1/-1;justify-self:start}
 }

@@ -2033,7 +2033,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)}
             onTrailer={onTrailer}
             secureMode={secureMode}
-            extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} remoteFirst/>}
+            extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} remoteFirst {...(heroItem?.name ? { titleName: heroItem.name } : {})}/>}
             copyPending={copyPending}
             trailerPending={copyPending}
             {...(detailDescription ? { description: detailDescription } : {})}

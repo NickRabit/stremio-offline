@@ -717,6 +717,76 @@ test("one viewer leaving does not cancel the shared build another viewer still w
   assert.equal(detailRequests, 1);
 });
 
+test("a viewer joining right after the only one left gets a fresh build, not its cancellation", async (t) => {
+  fresh(t);
+  let detailRequests = 0;
+  let started!: () => void;
+  const startedSignal = new Promise<void>((resolve) => { started = resolve; });
+  const fetchImpl: FetchLike = async (raw, init) => {
+    if (new URL(raw).pathname === "/3/movie/25") {
+      detailRequests += 1;
+      started();
+      if (detailRequests === 1) {
+        await new Promise<void>((resolve) => init?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+        throw new Error("aborted");
+      }
+      return json({ credits: { cast: [], crew: [] }, recommendations: { results: [] }, release_dates: { results: [] } });
+    }
+    throw new Error(`Unexpected URL ${raw}`);
+  };
+  const leaving = new AbortController();
+  const first = titleExtras("movie", "tmdb:25", "cs", deps(fetchImpl, { signal: leaving.signal }));
+  first.catch(() => undefined);
+  await startedSignal;
+  leaving.abort();
+  assert.equal((await titleExtras("movie", "tmdb:25", "cs", deps(fetchImpl))).source, "tmdb");
+  await assert.rejects(first);
+  assert.equal(detailRequests, 2);
+});
+
+test("an abandoned build that finishes late does not overwrite the newer answer", async (t) => {
+  fresh(t);
+  let detailRequests = 0;
+  let idRequests = 0;
+  let started!: () => void;
+  const startedSignal = new Promise<void>((resolve) => { started = resolve; });
+  let releaseOld!: () => void;
+  const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+  const fetchImpl: FetchLike = async (raw) => {
+    const url = new URL(raw);
+    if (url.pathname === "/3/movie/26") {
+      detailRequests += 1;
+      return json({
+        overview: detailRequests === 1 ? "old" : "new",
+        credits: { cast: [], crew: [] },
+        recommendations: { results: [{ id: 99, title: "Related", release_date: "2020-01-01" }] },
+        release_dates: { results: [] },
+      });
+    }
+    if (url.pathname === "/3/movie/99/external_ids") {
+      idRequests += 1;
+      if (idRequests === 1) {
+        started();
+        await oldGate;
+        throw new Error("network down");
+      }
+      return json({ imdb_id: "tt0000099" });
+    }
+    throw new Error(`Unexpected URL ${raw}`);
+  };
+  const leaving = new AbortController();
+  const first = titleExtras("movie", "tmdb:26", "cs", deps(fetchImpl, { signal: leaving.signal }));
+  first.catch(() => undefined);
+  await startedSignal;
+  leaving.abort();
+  assert.equal((await titleExtras("movie", "tmdb:26", "cs", deps(fetchImpl))).overview, "new");
+  releaseOld();
+  await assert.rejects(first);
+  for (let turn = 0; turn < 10; turn += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal((await titleExtras("movie", "tmdb:26", "cs", deps(fetchImpl))).overview, "new");
+  assert.equal(detailRequests, 2);
+});
+
 test("a build its only viewer left caches no failure", async (t) => {
   fresh(t);
   let detailRequests = 0;

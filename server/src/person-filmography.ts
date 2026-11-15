@@ -4,12 +4,15 @@ import { keyFingerprint } from "./title-extras.js";
 import {
   tmdbImage,
   tmdbPerson,
+  tmdbSearchPeople,
   type TmdbConfig,
+  type TmdbPersonHit,
   type TmdbPersonCredit,
   type TmdbPersonResponse,
 } from "./tmdb.js";
 
 export type PersonSectionKey = "acting" | "crew";
+export type PersonJob = "director" | "writer" | "creator" | "novel";
 
 export interface PersonCreditTitle {
   type: "movie" | "series";
@@ -18,7 +21,11 @@ export interface PersonCreditTitle {
   year?: string;
   date?: string;
   posterPath?: string;
-  role?: string;
+  backdropPath?: string;
+  /** What the person did, as the detail's crew roles name it; absent for acting only. */
+  jobs?: PersonJob[];
+  /** The characters played, joined. */
+  character?: string;
   popularity: number;
 }
 
@@ -38,7 +45,11 @@ export interface PersonTitle {
   name: string;
   year?: string;
   poster?: string;
-  role?: string;
+  background?: string;
+  /** What the person did, as the detail's crew roles name it; absent for acting only. */
+  jobs?: PersonJob[];
+  /** The characters played, joined. */
+  character?: string;
   inLibrary?: true;
 }
 
@@ -46,6 +57,10 @@ export interface PersonFilmography {
   id: number;
   name: string;
   photo?: string;
+  /** The section the person is known for, which comes first. */
+  knownFor: PersonSectionKey;
+  /** Titles in both sections before the cut. */
+  total: number;
   sections: Array<{ key: PersonSectionKey; titles: PersonTitle[] }>;
 }
 
@@ -54,7 +69,16 @@ export type PersonLookup =
   | { status: "missing" }
   | { status: "failed" };
 
-const KEPT_JOBS = new Set(["Director", "Writer", "Screenplay", "Story", "Teleplay", "Novel", "Creator"]);
+const JOB_OF: Record<string, PersonJob> = {
+  Director: "director",
+  Writer: "writer",
+  Screenplay: "writer",
+  Story: "writer",
+  Teleplay: "writer",
+  Novel: "novel",
+  Creator: "creator",
+};
+const JOB_ORDER: PersonJob[] = ["creator", "director", "writer", "novel"];
 const TALK_OR_NEWS = new Set([10767, 10763]);
 const SUCCESS_TTL_MS = 24 * 60 * 60_000;
 const FAILURE_TTL_MS = 10 * 60_000;
@@ -83,6 +107,7 @@ interface MergedCredit {
   name: string;
   date?: string;
   posterPath?: string;
+  backdropPath?: string;
   popularity?: number;
   jobs: string[];
   characters: string[];
@@ -108,7 +133,7 @@ export function normalizePerson(raw: TmdbPersonResponse, tmdbId: number): Person
     const character = text(row.character);
     if (cast && character && selfAppearance(character)) return;
     const job = text(row.job);
-    if (!cast && (!job || !KEPT_JOBS.has(job))) return;
+    if (!cast && (!job || !JOB_OF[job])) return;
 
     const type = media === "movie" ? "movie" : "series";
     const key = `${type}:${row.id}`;
@@ -126,6 +151,7 @@ export function normalizePerson(raw: TmdbPersonResponse, tmdbId: number): Person
     const date = text(media === "movie" ? row.release_date : row.first_air_date);
     item.date ??= date;
     item.posterPath ??= text(row.poster_path);
+    item.backdropPath ??= text(row.backdrop_path);
     if (typeof row.popularity === "number" && Number.isFinite(row.popularity)) {
       item.popularity = item.popularity == null ? row.popularity : Math.max(item.popularity, row.popularity);
     }
@@ -140,14 +166,16 @@ export function normalizePerson(raw: TmdbPersonResponse, tmdbId: number): Person
   const acting: PersonCreditTitle[] = [];
   const crew: PersonCreditTitle[] = [];
   for (const item of merged.values()) {
-    const roles = item.jobs.length ? [...item.jobs, ...item.characters] : item.characters;
+    const jobs = JOB_ORDER.filter((key) => item.jobs.some((job) => JOB_OF[job] === key));
     const title: PersonCreditTitle = {
       type: item.type,
       tmdbId: item.tmdbId,
       name: item.name,
       ...(item.date ? { date: item.date, year: item.date.slice(0, 4) } : {}),
       ...(item.posterPath ? { posterPath: item.posterPath } : {}),
-      ...(roles.length ? { role: roles.join(", ") } : {}),
+      ...(item.backdropPath ? { backdropPath: item.backdropPath } : {}),
+      ...(jobs.length ? { jobs } : {}),
+      ...(item.characters.length ? { character: item.characters.join(", ") } : {}),
       popularity: item.popularity ?? 0,
     };
     if (item.jobs.length) crew.push(title);
@@ -196,7 +224,9 @@ export function composePerson(credits: PersonCredits, opts: {
         name: item.name,
         ...(item.year ? { year: item.year } : {}),
         ...(tmdbImage(item.posterPath, "w342") ? { poster: tmdbImage(item.posterPath, "w342") } : {}),
-        ...(item.role ? { role: item.role } : {}),
+        ...(tmdbImage(item.backdropPath, "w780") ? { background: tmdbImage(item.backdropPath, "w780") } : {}),
+        ...(item.jobs ? { jobs: item.jobs } : {}),
+        ...(item.character ? { character: item.character } : {}),
         ...(owned ? { inLibrary: true as const } : {}),
         date: item.date,
         popularity: item.popularity,
@@ -217,6 +247,8 @@ export function composePerson(credits: PersonCredits, opts: {
     id: credits.id,
     name: credits.name,
     ...(tmdbImage(credits.profilePath, "w185") ? { photo: tmdbImage(credits.profilePath, "w185") } : {}),
+    knownFor: credits.knownFor,
+    total: credits.acting.length + credits.crew.length,
     sections,
   };
 }
@@ -259,6 +291,7 @@ const inFlight = new Map<string, PersonInFlight>();
 
 export function clearPersonCache(): void {
   cache.clear();
+  peopleCache.clear();
   for (const entry of inFlight.values()) entry.controller.abort();
   inFlight.clear();
 }
@@ -364,4 +397,91 @@ export function personCredits(tmdbId: number, language: string, deps: {
     entry = started;
   }
   return joinInFlight(entry, deps.signal);
+}
+
+export interface PersonHit {
+  id: number;
+  name: string;
+  photo?: string;
+  knownFor: PersonSectionKey;
+  /** Up to three titles TMDB names the person for. */
+  knownTitles: string[];
+}
+
+const PEOPLE_LIMIT = 8;
+const PEOPLE_TTL_MS = 60 * 60_000;
+const PEOPLE_FAILURE_TTL_MS = 60_000;
+const QUERY_MAX = 100;
+const peopleCache = new Map<string, { at: number; ttl: number; value: PersonHit[] | null }>();
+const peopleInFlight = new Map<string, Promise<PersonHit[] | null>>();
+
+const PEOPLE_DEPARTMENTS = new Set(["Acting", "Directing", "Writing", "Creator"]);
+const PEOPLE_RELATIVE_POPULARITY = 0.1;
+
+/** The people a filmography can be shown for: an actor, a director or a writer TMDB names a
+ *  title for, and not drowned out by a far better known namesake (`Tarantino` alone matches 89
+ *  people, of whom one is meant). */
+export function normalizePeople(results: TmdbPersonHit[]): PersonHit[] {
+  const hits: PersonHit[] = [];
+  const seen = new Set<number>();
+  const popularity = (row: TmdbPersonHit) => typeof row.popularity === "number" && Number.isFinite(row.popularity) ? row.popularity : 0;
+  const top = Math.max(0, ...results.map(popularity));
+  for (const row of results) {
+    if (!PEOPLE_DEPARTMENTS.has(row.known_for_department ?? "")) continue;
+    if (popularity(row) < top * PEOPLE_RELATIVE_POPULARITY) continue;
+    if (hits.length >= PEOPLE_LIMIT) break;
+    const name = text(row.name);
+    if (!name || !positiveInteger(row.id) || row.adult === true || seen.has(row.id)) continue;
+    const knownTitles = (Array.isArray(row.known_for) ? row.known_for : [])
+      .flatMap((title) => text(title.title) ?? text(title.name) ?? [])
+      .slice(0, 3);
+    if (!knownTitles.length) continue;
+    seen.add(row.id);
+    const photo = tmdbImage(text(row.profile_path), "w185");
+    hits.push({
+      id: row.id,
+      name,
+      ...(photo ? { photo } : {}),
+      knownFor: row.known_for_department === "Acting" ? "acting" : "crew",
+      knownTitles,
+    });
+  }
+  return hits;
+}
+
+export const normalizePeopleQuery = (query: string): string => query.trim().replace(/\s+/g, " ").slice(0, QUERY_MAX);
+
+/** People matching a name, cached in memory per query, language and key. `null` is a failed
+ *  lookup, remembered for a minute so a burst of typing does not repeat it. */
+export async function searchPeople(query: string, language: string, deps: {
+  tmdb: TmdbConfig;
+  fetchImpl?: FetchLike;
+  now?: () => number;
+}): Promise<PersonHit[] | null> {
+  const normalized = normalizePeopleQuery(query);
+  if (normalized.length < 2) return [];
+  const now = deps.now?.() ?? Date.now();
+  const key = `people:v1:${normalized.toLocaleLowerCase()}:${language}:${keyFingerprint(deps.tmdb.apiKey)}`;
+  const hit = peopleCache.get(key);
+  if (hit && now - hit.at < hit.ttl) {
+    peopleCache.delete(key);
+    peopleCache.set(key, hit);
+    return hit.value;
+  }
+  let pending = peopleInFlight.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const result = await tmdbSearchPeople(normalized, deps.tmdb, deps.fetchImpl);
+      const value = result.status === "found" ? normalizePeople(result.results) : null;
+      peopleCache.delete(key);
+      peopleCache.set(key, { at: now, ttl: value ? PEOPLE_TTL_MS : PEOPLE_FAILURE_TTL_MS, value });
+      if (peopleCache.size > CACHE_LIMIT) {
+        const oldest = peopleCache.keys().next().value;
+        if (oldest !== undefined) peopleCache.delete(oldest);
+      }
+      return value;
+    })().finally(() => peopleInFlight.delete(key));
+    peopleInFlight.set(key, pending);
+  }
+  return pending;
 }

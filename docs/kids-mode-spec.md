@@ -78,7 +78,7 @@ Refused for every child, whatever the ticks:
 | `/library/folders` | a destination picker for downloads and moves |
 | `/links/*`, `/library/links` | external sites |
 | `/trailer/*`, `/library/trailer` | external video |
-| `/meta/:type/:id/extras`, `/person/*` | decision 4 |
+| `/meta/:type/:id/extras`, `/person/*` (the filmography and the People search) | decision 4 |
 | `/follows/calendar-feed` (GET, POST) | an unauthenticated export of the child's rows |
 | `/follows/:id/episodes/:key/(skip\|retry)` | queues or removes downloads |
 | `PATCH /settings`, `PUT /follows/defaults` | decision 6 and 7 |

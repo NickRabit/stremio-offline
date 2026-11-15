@@ -69,12 +69,19 @@ const extrasFor = (id: string) => id === "tt1" ? {
   ageRating: "R",
   originalTitle: "Heat",
   source: "tmdb",
+} : id === "tt2" ? {
+  people: [{ name: "Ben Affleck", role: "cast", id: 880, character: "Doug" }],
+  related: [{ type: "movie", id: "tt4", name: "Plain", year: "2012" }],
+  source: "tmdb",
 } : id === "tt9" ? {
   people: [{ name: "Show Runner", role: "director" }, { name: "Ada Lovelace", role: "cast", character: "Ada" }],
   related: [{ type: "movie", id: "tt4", name: "Plain", year: "2012" }],
   source: "tmdb",
 } : id === "tt5000" ? {
-  people: [{ name: "Director One", role: "director" }],
+  people: [
+    { name: "Director One", role: "director" },
+    { name: "Brad Pitt", role: "cast", id: 287, character: "Tyler" },
+  ],
   related: [{ type: "movie", id: "tt6", name: "Other Film", poster: "/other.jpg" }],
   ageRating: "PG",
   source: "addon",
@@ -117,6 +124,7 @@ let catalogItems: Meta[];
 let libraryItems: Array<typeof heatFile>;
 let remoteLibraries: Array<typeof jellyLibrary>;
 let downloadMode: "idle" | "downloading" | "completed" | "unauthorized";
+let personHits: Array<{ id: number; name: string; photo?: string; knownFor: "acting" | "crew"; knownTitles: string[] }>;
 let extrasCalls: string[];
 let remoteStreamCalls: string[];
 let watchlistItems: Array<Record<string, unknown>>;
@@ -153,6 +161,7 @@ beforeEach(() => {
   libraryItems = [];
   remoteLibraries = [];
   downloadMode = "idle";
+  personHits = [];
   extrasCalls = [];
   remoteStreamCalls = [];
   watchlistItems = [];
@@ -294,12 +303,15 @@ beforeEach(() => {
     if (path === "/api/library/trailer") return json({ trailer: null });
     if (path === "/api/library/gallery") return json({ images: [] });
     if (path === "/api/library/scan") return json({ status: "idle", total: 0, done: 0, matched: 0, skipped: 0, failed: 0 });
+    if (path === "/api/person/search") return json({ people: personHits });
     if (path.startsWith("/api/person/title/")) return json({ id: "tt2" });
     if (/^\/api\/person\/\d+$/.test(path)) {
       return json({
         id: Number(path.split("/")[3]),
         name: "Brad Pitt",
         photo: "/brad.jpg",
+        knownFor: "acting",
+        total: 2,
         sections: [
           { key: "acting", titles: [{ type: "movie", tmdbId: 49047, id: "tt2", name: "The Town", year: "2010", poster: "/town.jpg", role: "Doug" }] },
           { key: "crew", titles: [{ type: "movie", tmdbId: 1, id: "tt4", name: "Plain", year: "2012", role: "Director" }] },
@@ -412,6 +424,20 @@ const typeInto = async (input: HTMLInputElement, value: string) => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 };
+const clickNamed = async (selector: string, name: string, root: ParentNode = host) => {
+  const button = [...root.querySelectorAll<HTMLButtonElement>(selector)].find((node) => node.textContent?.includes(name));
+  expect(button).toBeTruthy();
+  await act(async () => { button!.click(); });
+};
+const openHeatDetail = async () => {
+  await openCatalog();
+  await act(async () => { host.querySelector<HTMLButtonElement>(".poster-card")!.click(); });
+  await until(() => host.querySelector(".detail-panel .age-badge") !== null);
+  await act(async () => { host.querySelector<HTMLButtonElement>(".detail-info")!.click(); });
+  await until(() => host.querySelector(".view-title-detail .person") !== null);
+};
+const personOnScreen = () => host.querySelector(".person-view") !== null
+  && host.querySelector("main")?.classList.contains("person-open") === true;
 
 describe("lazy settings navigation", () => {
   it("keeps the current page on screen until the Settings chunk loads", async () => {
@@ -705,7 +731,6 @@ describe("title detail from the catalogue", () => {
     await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .related")!.click(); });
     await until(() => detailTitle() === "The Town");
     expect(top).toBe(0);
-    expect(catalogueSection()?.querySelector(".title-extras")).toBeNull();
     expect(catalogueSection()?.querySelector("[role='alert']")).toBeNull();
 
     await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .library-back")!.click(); });
@@ -742,29 +767,26 @@ describe("title detail from the catalogue", () => {
   });
 
   it("opens the person view for a person with an id and returns to it after a title", async () => {
-    await openCatalog();
-    await act(async () => { host.querySelector<HTMLButtonElement>(".poster-card")!.click(); });
-    await until(() => host.querySelector(".detail-panel .age-badge") !== null);
-    await act(async () => { host.querySelector<HTMLButtonElement>(".detail-info")!.click(); });
-    await until(() => host.querySelector(".view-title-detail .person") !== null);
-    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>(".view-title-detail .person")].find((button) => button.textContent?.includes("Brad Pitt"))!.click(); });
-    await until(() => host.querySelector(".person-view .person-section") !== null);
-    expect(host.querySelector(".person-view h2")!.textContent).toBe("Brad Pitt");
-    expect(host.querySelector(".view-title-detail")).toBeNull();
-    const sections = [...host.querySelectorAll(".person-section")];
+    await openHeatDetail();
+    await clickNamed(".view-title-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(host.querySelector(".person-card h2")!.textContent).toBe("Brad Pitt");
+    expect(personOnScreen()).toBe(true);
+    expect(detailTitle()).toBe("Heat");
+    const sections = [...host.querySelectorAll(".person-view section[data-section]")];
     expect(sections.map((section) => section.getAttribute("data-section"))).toEqual(["acting", "crew"]);
-    expect(sections[0]!.querySelector("h3")!.textContent).toBe("Acting");
-    expect(sections[1]!.querySelector("h3")!.textContent).toBe("Directing and writing");
+    expect(sections[0]!.querySelector("h3")!.textContent).toBe("Acting 1");
+    expect(sections[1]!.querySelector("h3")!.textContent).toBe("Directing and writing 1");
 
-    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>(".person-view .browse-item")].find((button) => button.textContent?.includes("The Town"))!.click(); });
+    await clickNamed(".person-view .browse-item", "The Town");
     await until(() => detailTitle() === "The Town");
-    expect(host.querySelector(".person-view")!.hasAttribute("hidden")).toBe(true);
+    expect(host.querySelector(".person-view")).toBeNull();
 
     await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .library-back")!.click(); });
-    await until(() => host.querySelector(".view-title-detail") === null);
-    expect(host.querySelector(".person-view")!.hasAttribute("hidden")).toBe(false);
-    expect(host.querySelector(".person-view h2")!.textContent).toBe("Brad Pitt");
-    expect(host.querySelector(".person-section[data-section='acting']")).not.toBeNull();
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(personOnScreen()).toBe(true);
+    expect(host.querySelector(".person-card h2")!.textContent).toBe("Brad Pitt");
+    expect(host.querySelector(".person-view section[data-section='acting']")).not.toBeNull();
   });
 
   it("restores the chosen episode and the scroll of the title a similar title was opened from", async () => {
@@ -881,7 +903,6 @@ describe("title detail from the catalogue", () => {
     await act(async () => { host.querySelector<HTMLButtonElement>(".library-local-detail .related")!.click(); });
     await until(() => detailTitle() === "The Town");
     expect(host.querySelector(".library-page")?.hasAttribute("hidden")).toBe(true);
-    expect(catalogueSection()?.querySelector(".title-extras")).toBeNull();
     expect(catalogueSection()?.querySelector("[role='alert']")).toBeNull();
     await act(async () => { catalogueSection()!.querySelector<HTMLButtonElement>(".library-back")!.click(); });
     await until(() => host.querySelector(".library-local-detail h2")?.textContent === "Heat");
@@ -980,3 +1001,194 @@ describe("title detail from the catalogue", () => {
     expect(extrasCalls.filter((path) => path.includes("/tt1/")).length).toBe(before + 1);
   });
 });
+
+describe("person layer navigation", () => {
+  it("returns to the same catalogue detail after Back from a person", async () => {
+    await openHeatDetail();
+    const scroller = host.querySelector(".view-title-detail .browse-scroll")!;
+    let top = 0;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => { top = Number(value); },
+    });
+    top = 240;
+    await clickNamed(".view-title-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(personOnScreen()).toBe(true);
+    expect(detailTitle()).toBe("Heat");
+    await act(async () => { host.querySelector<HTMLButtonElement>(".person-view .search-return")!.click(); });
+    await until(() => host.querySelector(".person-view") === null);
+    expect(detailTitle()).toBe("Heat");
+    expect(host.querySelector("main")!.classList.contains("person-open")).toBe(false);
+    expect(top).toBe(240);
+  });
+
+  it("returns to the same local library detail after Back from a person", async () => {
+    libraryItems = [heatFile];
+    await openCatalog();
+    await clickNav("Library");
+    await until(() => host.querySelector("[data-path='Films/Heat.mkv'] .library-open") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>("[data-path='Films/Heat.mkv'] .library-open")!.click(); });
+    await until(() => host.querySelector(".library-local-detail .person") !== null);
+    expect(host.querySelector(".library-local-detail h2")?.textContent).toBe("Heat");
+    await clickNamed(".library-local-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(personOnScreen()).toBe(true);
+    expect(host.querySelector(".library-local-detail h2")?.textContent).toBe("Heat");
+    await act(async () => { host.querySelector<HTMLButtonElement>(".person-view .search-return")!.click(); });
+    await until(() => host.querySelector(".person-view") === null);
+    expect(host.querySelector(".library-local-detail h2")?.textContent).toBe("Heat");
+    expect(host.querySelector("main")!.classList.contains("view-library")).toBe(true);
+  });
+
+  it("returns to the same remote library detail after Back from a person", async () => {
+    remoteLibraries = [jellyLibrary];
+    await openCatalog();
+    await clickNav("Library");
+    await until(() => host.querySelector(".remote-libraries .library-open") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>(".remote-libraries .library-open")!.click(); });
+    await until(() => host.querySelector("[data-remote-id='mov1'] .library-open") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>("[data-remote-id='mov1'] .library-open")!.click(); });
+    await until(() => host.querySelector(".remote-detail .person") !== null);
+    expect(host.querySelector(".remote-detail h2")?.textContent).toBe("Jelly Movie");
+    await clickNamed(".remote-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(personOnScreen()).toBe(true);
+    expect(host.querySelector(".remote-detail h2")?.textContent).toBe("Jelly Movie");
+    await act(async () => { host.querySelector<HTMLButtonElement>(".person-view .search-return")!.click(); });
+    await until(() => host.querySelector(".person-view") === null);
+    expect(host.querySelector(".remote-detail h2")?.textContent).toBe("Jelly Movie");
+    expect(host.querySelector("main")!.classList.contains("view-library")).toBe(true);
+  });
+
+  it("walks A → person → tile B → Back → person → Back → A", async () => {
+    await openHeatDetail();
+    await clickNamed(".view-title-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(detailTitle()).toBe("Heat");
+    await clickNamed(".person-view .browse-item", "The Town");
+    await until(() => detailTitle() === "The Town");
+    expect(host.querySelector(".person-view")).toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .library-back")!.click(); });
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(host.querySelector(".person-card h2")!.textContent).toBe("Brad Pitt");
+    await act(async () => { host.querySelector<HTMLButtonElement>(".person-view .search-return")!.click(); });
+    await until(() => host.querySelector(".person-view") === null);
+    expect(detailTitle()).toBe("Heat");
+  });
+
+  it("walks A → person → tile B → related C → Back → B → Back → person", async () => {
+    await openHeatDetail();
+    await clickNamed(".view-title-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    await clickNamed(".person-view .browse-item", "The Town");
+    await until(() => detailTitle() === "The Town");
+    await until(() => host.querySelector(".view-title-detail .related") !== null);
+    await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .related")!.click(); });
+    await until(() => detailTitle() === "Plain");
+    await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .library-back")!.click(); });
+    await until(() => detailTitle() === "The Town");
+    expect(host.querySelector(".person-view")).toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .library-back")!.click(); });
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(host.querySelector(".person-card h2")!.textContent).toBe("Brad Pitt");
+  });
+
+  it("drops the person layer when a sidebar entry is chosen", async () => {
+    await openHeatDetail();
+    await clickNamed(".view-title-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    await clickNav("Library");
+    await until(() => host.querySelector("main.view-library") !== null);
+    expect(host.querySelector(".person-view")).toBeNull();
+    expect(host.querySelector("main")!.classList.contains("person-open")).toBe(false);
+  });
+
+  it("searches the text typed on the person layer and drops the layer", async () => {
+    await openHeatDetail();
+    await clickNamed(".view-title-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    const input = host.querySelector<HTMLInputElement>(".person-view .search-everywhere-form input")!;
+    await typeInto(input, "Inception");
+    await act(async () => { input.form!.requestSubmit(); });
+    await until(() => host.querySelector(".person-view") === null);
+    expect(host.querySelector("main.view-search")).not.toBeNull();
+    expect(host.querySelector<HTMLInputElement>("[data-search-input]")!.value).toBe("Inception");
+    expect(startBodies.map((body) => body.query)).toEqual(["Inception"]);
+    expect(host.querySelector(".person-name-search")).toBeNull();
+  });
+
+  it("runs a typed person query as a catalogue search without the name notice", async () => {
+    searchEverywhere = false;
+    await openHeatDetail();
+    await clickNamed(".view-title-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    const input = host.querySelector<HTMLInputElement>(".person-view .search-everywhere-form input")!;
+    await typeInto(input, "Inception");
+    await act(async () => { input.form!.requestSubmit(); });
+    await until(() => host.querySelector(".panel-head h3")?.textContent === "Search: Inception");
+    expect(host.querySelector(".person-view")).toBeNull();
+    expect(searchQueries).toContain("Inception");
+    expect(host.querySelector(".person-name-search")).toBeNull();
+  });
+
+  it("marks no navigation entry active while the person layer is open", async () => {
+    await openHeatDetail();
+    expect(host.querySelector("nav button.active")).not.toBeNull();
+    await clickNamed(".view-title-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(host.querySelector("nav button.active")).toBeNull();
+    expect(host.querySelector(".topbar-search")!.classList.contains("active")).toBe(false);
+  });
+
+  it("names the catalogue title on the back link, including after a title opened from the person", async () => {
+    await openHeatDetail();
+    await clickNamed(".view-title-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(host.querySelector(".person-view .search-return")!.textContent).toContain("Back to Heat");
+    await clickNamed(".person-view .browse-item", "The Town");
+    await until(() => detailTitle() === "The Town");
+    await act(async () => { host.querySelector<HTMLButtonElement>(".view-title-detail .library-back")!.click(); });
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(host.querySelector(".person-card h2")!.textContent).toBe("Brad Pitt");
+    expect(host.querySelector(".person-view .search-return")!.textContent).toContain("Back to Heat");
+  });
+
+  it("opens a person from Search with Back to search and returns to the results", async () => {
+    personHits = [{
+      id: 287, name: "Brad Pitt", photo: "/brad.jpg", knownFor: "acting",
+      knownTitles: ["Fight Club", "Ocean's Eleven"],
+    }];
+    await openCatalog();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".topbar-search")!.click(); });
+    await until(() => host.querySelector("[data-search-input]") !== null);
+    const input = host.querySelector<HTMLInputElement>("[data-search-input]")!;
+    await typeInto(input, "Brad");
+    await act(async () => { input.form!.requestSubmit(); });
+    await until(() => host.querySelector("button.search-person") !== null);
+    expect(host.querySelector(".search-people h3")!.textContent).toBe("People");
+    expect(host.querySelector("button.search-person")!.textContent).toContain("Brad Pitt");
+    await act(async () => { host.querySelector<HTMLButtonElement>("button.search-person")!.click(); });
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    expect(host.querySelector(".person-view .search-return")!.textContent).toContain("Back to search");
+    expect(host.querySelector("main.view-search")).not.toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".person-view .search-return")!.click(); });
+    await until(() => host.querySelector(".person-view") === null);
+    expect(host.querySelector("main.view-search")).not.toBeNull();
+    expect(host.querySelector("button.search-person")).not.toBeNull();
+  });
+
+  it("treats Escape on the person view as Back", async () => {
+    await openHeatDetail();
+    await clickNamed(".view-title-detail .person", "Brad Pitt");
+    await until(() => host.querySelector(".person-view section[data-section]") !== null);
+    await act(async () => {
+      host.querySelector(".person-view")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await until(() => host.querySelector(".person-view") === null);
+    expect(detailTitle()).toBe("Heat");
+    expect(host.querySelector("main")!.classList.contains("person-open")).toBe(false);
+  });
+});
+

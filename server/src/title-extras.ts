@@ -483,6 +483,8 @@ async function buildTmdbPart(
     ...(data.originalLanguage ? { originalLanguage: data.originalLanguage } : {}),
     ...(data.overview ? { overview: data.overview } : {}),
   };
+  // A newer build may own this key by now; an abandoned one writes nothing.
+  throwIfCancelled(deps.signal);
   rememberMemory(key, { at: now, ttl: related.partial ? PARTIAL_TTL_MS : SUCCESS_TTL_MS, value });
   if (!related.partial) writeDisk(key, now, value);
   return value;
@@ -499,7 +501,8 @@ async function cachedTmdbPart(
   const cached = cachedMemory(key, now);
   if (cached) return cached.value;
   let entry = extrasInFlight.get(key);
-  if (!entry) {
+  // The last waiter left and aborted it; the entry is only waiting for its own cleanup.
+  if (!entry || entry.controller.signal.aborted) {
     const controller = new AbortController();
     const promise = (async () => {
       const disk = await readDisk(key, now);
