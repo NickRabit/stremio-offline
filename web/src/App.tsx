@@ -132,7 +132,7 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
 type View = "home" | "catalog" | "library" | "search" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings";
-type PersonLayer = { id: number; name: string };
+type PersonLayer = { id: number; name: string; fromTitle?: string };
 type CatalogueDetailState = CatalogueDetailTarget & {
   initialSources?: Stream[];
   libraryFirst?: boolean;
@@ -3499,16 +3499,39 @@ export function App() {
     }
     openSearch(name);
   };
-  const searchPerson = (person: { name: string; id?: number }) => {
+  const searchPerson = (person: { name: string; id?: number }, fromTitle?: string) => {
     if (person.id) {
       setPersonNameSearch(null);
       personPageSnapshot.current = captureScroll();
       personRestoreScroll.current = undefined;
       pendingPersonPageRestore.current = false;
-      setPersonLayer({ id: person.id, name: person.name });
+      setPersonLayer({ id: person.id, name: person.name, ...(fromTitle ? { fromTitle } : {}) });
       return;
     }
     searchPersonByName(person.name);
+  };
+  /** A query the viewer typed on the person page: the same search as the Search page, and no
+   *  name-search notice, because they wrote the words themselves. */
+  const searchTypedText = (query: string) => {
+    const text = query.trim();
+    if (!text) return;
+    if (buildInfo?.searchEverywhere) {
+      openSearch(text);
+      return;
+    }
+    dropPersonLayer();
+    closeLocalDetail();
+    navigated.current = true;
+    if (catalogueDetail) closeCatalogueDetail();
+    if (view !== "catalog") {
+      setRemoteTarget(null);
+      setSearchReturn(false);
+      setView("catalog");
+    }
+    live.cancel();
+    setSearch(text);
+    actOnSearch(text);
+    setSubmittedQuery(text);
   };
   useEffect(() => {
     dropPersonLayer();
@@ -3892,15 +3915,17 @@ export function App() {
   // chrome folds into More, which is what keeps the bar at exactly five slots. `badge` on More
   // is the Following indicator: new episodes plus attention.
   const followingBadge = (newEpisodes.length + follows.reduce((sum, follow) => sum + follow.downloads.attention, 0)) || undefined;
+  // The person layer is drawn like Search: no sidebar or bottom-bar entry stays lit for the page underneath.
+  const personCoversNav = personLayer !== null;
   const moreItems: MoreItem[] = [
-    { key: "favorites", icon: <Star/>, label: t("nav.favorites"), active: view === "favorites", onSelect: () => openView("favorites") },
-    { key: "resume", icon: <History/>, label: t("nav.resume"), active: view === "resume", onSelect: () => openView("resume") },
-    { key: "following", icon: <BellRing/>, label: t("nav.following"), badge: followingBadge, active: view === "following", onSelect: () => openView("following") },
-    { key: "addons", icon: <PackagePlus/>, label: t("nav.addons"), active: view === "addons", onSelect: () => openView("addons") },
-    { key: "settings", icon: <Settings/>, label: t("nav.settings"), active: view === "settings", onSelect: () => openView("settings") },
-    ...(session!.role === "admin" ? [{ key: "stats", icon: <BarChart3/>, label: t("nav.stats"), active: view === "stats", onSelect: () => openView("stats") }] : []),
+    { key: "favorites", icon: <Star/>, label: t("nav.favorites"), active: !personCoversNav && view === "favorites", onSelect: () => openView("favorites") },
+    { key: "resume", icon: <History/>, label: t("nav.resume"), active: !personCoversNav && view === "resume", onSelect: () => openView("resume") },
+    { key: "following", icon: <BellRing/>, label: t("nav.following"), badge: followingBadge, active: !personCoversNav && view === "following", onSelect: () => openView("following") },
+    { key: "addons", icon: <PackagePlus/>, label: t("nav.addons"), active: !personCoversNav && view === "addons", onSelect: () => openView("addons") },
+    { key: "settings", icon: <Settings/>, label: t("nav.settings"), active: !personCoversNav && view === "settings", onSelect: () => openView("settings") },
+    ...(session!.role === "admin" ? [{ key: "stats", icon: <BarChart3/>, label: t("nav.stats"), active: !personCoversNav && view === "stats", onSelect: () => openView("stats") }] : []),
   ];
-  const moreActive = view === "favorites" || view === "resume" || view === "following" || view === "addons" || view === "settings" || view === "stats";
+  const moreActive = !personCoversNav && (view === "favorites" || view === "resume" || view === "following" || view === "addons" || view === "settings" || view === "stats");
 
   // The row the main player is on: the file of the library, the row the shared detail started, or
   // the row a catalogue tile played. It leads the player's chooser under its own class's name.
@@ -3938,22 +3963,24 @@ export function App() {
     <aside className="sidebar"><nav>
       {/* Restricted accounts have no Home: the view needs the personal data they are not
           given, so the destination is not offered at all. */}
-      {!restricted && <Nav icon={<HomeIcon/>} label={t("nav.home")} active={view === "home"} onClick={() => openView("home")}/>}
-      <Nav icon={<Library/>} label={t("nav.catalog")} active={view === "catalog"} onClick={() => openView("catalog")}/>
-      <Nav icon={<HardDrive/>} label={t("nav.library")} active={view === "library"} onClick={() => openView("library")}/>
-      <Nav secondary icon={<Star/>} label={t("nav.favorites")} active={view === "favorites"} onClick={() => openView("favorites")}/>
-      <Nav secondary icon={<History/>} label={t("nav.resume")} active={view === "resume"} onClick={() => openView("resume")}/>
-      <Nav secondary icon={<BellRing/>} label={t("nav.following")} active={view === "following"} badge={followingBadge} onClick={() => openView("following")}/>
-      <Nav icon={<Download/>} label={t("nav.downloads")} active={view === "downloads"} badge={downloads.filter((job) => job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
-      <Nav secondary icon={<PackagePlus/>} label={t("nav.addons")} active={view === "addons"} onClick={() => openView("addons")}/>
-      <Nav secondary icon={<Settings/>} label={t("nav.settings")} active={view === "settings"} onClick={() => openView("settings")}/>
+      {!restricted && <Nav icon={<HomeIcon/>} label={t("nav.home")} active={!personCoversNav && view === "home"} onClick={() => openView("home")}/>}
+      <Nav icon={<Library/>} label={t("nav.catalog")} active={!personCoversNav && view === "catalog"} onClick={() => openView("catalog")}/>
+      <Nav icon={<HardDrive/>} label={t("nav.library")} active={!personCoversNav && view === "library"} onClick={() => openView("library")}/>
+      <Nav secondary icon={<Star/>} label={t("nav.favorites")} active={!personCoversNav && view === "favorites"} onClick={() => openView("favorites")}/>
+      <Nav secondary icon={<History/>} label={t("nav.resume")} active={!personCoversNav && view === "resume"} onClick={() => openView("resume")}/>
+      <Nav secondary icon={<BellRing/>} label={t("nav.following")} active={!personCoversNav && view === "following"} badge={followingBadge} onClick={() => openView("following")}/>
+      <Nav icon={<Download/>} label={t("nav.downloads")} active={!personCoversNav && view === "downloads"} badge={downloads.filter((job) => job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
+      <Nav secondary icon={<PackagePlus/>} label={t("nav.addons")} active={!personCoversNav && view === "addons"} onClick={() => openView("addons")}/>
+      <Nav secondary icon={<Settings/>} label={t("nav.settings")} active={!personCoversNav && view === "settings"} onClick={() => openView("settings")}/>
       {/* `/api/stats` is administrator-only, so for anybody else this is a tab that loads an
           error. */}
-      {session!.role === "admin" && <Nav secondary icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>}
+      {session!.role === "admin" && <Nav secondary icon={<BarChart3/>} label={t("nav.stats")} active={!personCoversNav && view === "stats"} onClick={() => openView("stats")}/>}
       <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSwitchProfile={session?.canSwitch ? () => setSwitcherOpen(true) : undefined} onSignOut={signOut}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{catalogsKnown ? addons.filter((a) => a.enabled).length : "–"}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}${catalogueDetail ? " view-title-detail" : ""}${personLayer ? " person-open" : ""}`}>
-      {personLayer && <PersonView key={personLayer.id} person={personLayer} language={settings.uiLanguage} shape={settings.catalogTileShape}
+      {personLayer && <PersonView key={personLayer.id} person={personLayer} language={settings.uiLanguage} shape={settings.searchTileShape}
+        onToggleShape={() => void toggleShape("searchTileShape")} onSearchText={searchTypedText}
+        {...(personLayer.fromTitle ? { fromTitle: personLayer.fromTitle } : {})}
         {...(personRestoreScroll.current != null ? { initialScroll: personRestoreScroll.current } : {})}
         onBack={() => {
           pendingPersonPageRestore.current = true;

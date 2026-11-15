@@ -129,6 +129,18 @@ const clickCard = async () => {
 };
 
 describe("SearchEverywhere", () => {
+  it("pins one search card's markup", async () => {
+    await render(controller({
+      order: ["one"],
+      snapshot: snapshot({ clusters: [cluster("one", {
+        title: "Pulp Fiction", year: 1994, poster: "/pulp.jpg", background: "/wide.jpg", hasLocal: true,
+      })] }),
+    }));
+    expect(host.querySelector("[data-search-card]")!.outerHTML).toBe(
+      `<button type="button" class="browse-item" title="Pulp Fiction" data-search-card="true" data-primary-member="member-one" data-member-keys="member-one"><span class="browse-art"><img alt="" loading="lazy" decoding="async" src="/pulp.jpg"><i class="fav-mark" title="Local" aria-label="Local"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-hard-drive" aria-hidden="true"><path d="M10 16h.01"></path><path d="M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path><path d="M21.946 12.013H2.054"></path><path d="M6 16h.01"></path></svg></i></span><strong>Pulp Fiction</strong><small>1994 · Movie</small></button>`,
+    );
+  });
+
   it("draws the library chip after the sources and the library return only when given", async () => {
     const clearLibrary = vi.fn();
     const search = controller({

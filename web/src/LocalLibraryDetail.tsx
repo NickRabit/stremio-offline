@@ -351,7 +351,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)}
     onTrailer={onTrailer}
     secureMode={secureMode}
-    extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
+    extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} {...(title ? { titleName: title } : {})}/>}
     copyPending={copyPending}
     progressPending={Boolean(progress && progress.position > 0) && saved === null}
     trailerPending={trailerPending}

@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Film } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ChevronLeft, Search } from "lucide-react";
 import { api, ApiError, describeError } from "./api";
-import { ArtworkProximity } from "./artwork-proximity";
-import { hideBroken } from "./settings-ui";
+import { ShapeToggle } from "./app-chrome";
 import { t, useI18n } from "./i18n";
-import { TileArt } from "./TileArt";
+import { SearchTile } from "./SearchEverywhere";
+import { Heading, hideBroken } from "./settings-ui";
 import type { PersonFilmography, PersonTitle, TileShape } from "./types";
 
 const PAGE = 40;
+const PLACEHOLDERS = 12;
 
 export type PersonOpenTitle = {
   type: "movie" | "series";
@@ -16,15 +17,26 @@ export type PersonOpenTitle = {
   poster?: string;
 };
 
-export function PersonView({ person, language, shape, initialScroll, onBack, onUnavailable, onOpenTitle, onNotify }: {
+type KindFilter = "all" | "movie" | "series";
+
+const KINDS = [
+  ["all", "searchAll.kindAll"],
+  ["movie", "searchAll.kindMovies"],
+  ["series", "searchAll.kindSeries"],
+] as const;
+
+export function PersonView({ person, language, shape, initialScroll, fromTitle, onBack, onUnavailable, onOpenTitle, onNotify, onSearchText, onToggleShape }: {
   person: { id: number; name: string };
   language: string;
   shape: TileShape;
   initialScroll?: number;
+  fromTitle?: string;
   onBack: () => void;
   onUnavailable: (name: string) => void;
   onOpenTitle: (title: PersonOpenTitle, notice?: "noImdb") => void;
   onNotify: (text: string) => void;
+  onSearchText: (query: string) => void;
+  onToggleShape: () => void;
 }) {
   useI18n();
   const pageRef = useRef<HTMLElement>(null);
@@ -38,6 +50,8 @@ export function PersonView({ person, language, shape, initialScroll, onBack, onU
   const [loading, setLoading] = useState(true);
   const [retry, setRetry] = useState(0);
   const [openingId, setOpeningId] = useState<string | null>(null);
+  const [query, setQuery] = useState(person.name);
+  const [kind, setKind] = useState<KindFilter>("all");
   const openingAbort = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -95,6 +109,16 @@ export function PersonView({ person, language, shape, initialScroll, onBack, onU
 
   const displayName = filmography?.name ?? person.name;
   const photo = filmography?.photo;
+  const sections = (filmography?.sections ?? [])
+    .map((section) => ({ ...section, titles: section.titles.filter((title) => kind === "all" || title.type === kind) }))
+    .filter((section) => section.titles.length > 0);
+  const answerEmpty = filmography != null && filmography.sections.every((section) => section.titles.length === 0);
+
+  const submitSearch = (event: FormEvent) => {
+    event.preventDefault();
+    const text = query.trim();
+    if (text) onSearchText(text);
+  };
 
   const openTitle = (title: PersonTitle) => {
     if (openingId) return;
@@ -128,23 +152,46 @@ export function PersonView({ person, language, shape, initialScroll, onBack, onU
 
   return <section ref={pageRef} className="person-view" tabIndex={-1}
     aria-label={t("person.label", { name: displayName })}>
-    <ArtworkProximity scroller={pageRef}>
-      <header className="person-head">
-        <span className="person-portrait">{photo
+      <button type="button" className="search-return" onClick={onBack}>
+        <ChevronLeft/> {fromTitle ? t("person.backTo", { title: fromTitle }) : t("person.back")}
+      </button>
+      <Heading eyebrow={t("searchAll.eyebrow")} title={t("searchAll.title")}/>
+      <form className="search-everywhere-form" role="search" onSubmit={submitSearch}>
+        <div className="search-input">
+          <Search/>
+          <input aria-label={t("searchAll.placeholder")} autoComplete="off" placeholder={t("searchAll.placeholder")}
+            value={query} onChange={(event) => setQuery(event.target.value)}/>
+        </div>
+        <button className="primary" type="submit"><Search/> {t("searchAll.submit")}</button>
+      </form>
+      <div className="filterbar section-filter search-filters">
+        <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
+          {KINDS.map(([value, key]) => <button key={value} type="button" className={kind === value ? "active" : ""} aria-pressed={kind === value}
+            onClick={() => setKind(value)}>{t(key)}</button>)}
+        </div>
+        <ShapeToggle shape={shape} onToggle={onToggleShape}/>
+      </div>
+      <div className="person-card">
+        {photo
           ? <img src={photo} alt="" onError={hideBroken}/>
-          : displayName.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word.charAt(0)).join("").toLocaleUpperCase()}</span>
-        <h2>{displayName}</h2>
-        <button type="button" className="person-back" onClick={onBack}><ChevronLeft/> {t("person.back")}</button>
-      </header>
-      {loading && <p className="person-status" role="status">{t("person.loading")}</p>}
-      {error && <div className="person-status" role="alert">
-        <p>{error}</p>
-        <button type="button" onClick={() => setRetry((value) => value + 1)}>{t("person.retry")}</button>
+          : <span aria-hidden="true"/>}
+        <div>
+          <h2>{displayName}</h2>
+          {filmography && <p>{t(filmography.knownFor === "acting" ? "person.acting" : "person.crew")} · {t("person.titleCount", { count: filmography.total })}</p>}
+        </div>
+        {filmography && <button type="button" className="link-button" onClick={() => onSearchText(filmography.name)}>{t("person.searchAsText", { name: filmography.name })}</button>}
+      </div>
+      {loading && <div className={`browse-grid section-grid search-results tile-shape-${shape}`} aria-hidden="true">
+        {Array.from({ length: PLACEHOLDERS }, (_, index) => <div className="browse-item" key={index}>
+          <span className="browse-art person-placeholder"/>
+        </div>)}
       </div>}
-      {!loading && !error && filmography && filmography.sections.length === 0 && <p className="person-status">{t("person.empty")}</p>}
-      {!loading && !error && filmography?.sections.map((section) =>
+      {error && <p className="search-error" role="alert">
+        {error} <button type="button" onClick={() => setRetry((value) => value + 1)}>{t("person.retry")}</button>
+      </p>}
+      {answerEmpty && <p className="search-empty">{t("person.empty")}</p>}
+      {!loading && !error && sections.map((section) =>
         <PersonSection key={section.key} section={section} shape={shape} openingId={openingId} onOpen={openTitle}/>)}
-    </ArtworkProximity>
   </section>;
 }
 
@@ -178,22 +225,17 @@ function PersonSection({ section, shape, openingId, onOpen }: {
   }, [section.titles, shown]);
 
   const visible = section.titles.slice(0, shown);
-  return <section className="person-section" data-section={section.key}>
-    <h3>{t(section.key === "acting" ? "person.acting" : "person.crew")}</h3>
-    <div className={`browse-grid following-grid tile-shape-${shape}`}>
+  const label = t(section.key === "acting" ? "person.acting" : "person.crew");
+  return <section data-section={section.key}>
+    <h3>{label} <span>{section.titles.length}</span></h3>
+    <div className={`browse-grid section-grid search-results tile-shape-${shape}`}>
       {visible.map((title) => {
-        const key = `${title.type}:${title.id}:${title.tmdbId}`;
         const opening = openingId === `${title.type}:${title.id}`;
-        const line = [title.year, t(title.type === "movie" ? "person.movie" : "person.series"), title.role]
-          .filter((part) => Boolean(part && String(part).trim()))
-          .join(" · ");
-        return <button type="button" className="browse-item" key={key} disabled={opening} aria-busy={opening || undefined}
-          onClick={() => onOpen(title)}>
-          <span className="browse-art"><TileArt shape={shape} poster={title.poster} fallback={<Film/>}/></span>
-          <strong>{title.name}</strong>
-          {opening ? <small>{t("person.opening")}</small> : line ? <small>{line}</small> : null}
-          {title.inLibrary ? <small className="in-library">{t("person.inLibrary")}</small> : null}
-        </button>;
+        const caption = opening
+          ? t("person.opening")
+          : [title.year, t(title.type === "movie" ? "person.movie" : "person.series"), title.role].filter(Boolean).join(" · ");
+        return <SearchTile key={`${title.type}:${title.id}:${title.tmdbId}`} title={title.name} poster={title.poster} background={title.background}
+          caption={caption} shape={shape} local={title.inLibrary === true} busy={opening} onClick={() => onOpen(title)}/>;
       })}
     </div>
     {shown < section.titles.length ? <div className="person-sentinel" ref={sentinel} data-section={section.key}/> : null}

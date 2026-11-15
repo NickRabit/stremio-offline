@@ -54,6 +54,7 @@ export interface PersonTitle {
   name: string;
   year?: string;
   poster?: string;
+  background?: string;
   role?: string;
   inLibrary?: true;
 }
@@ -61,6 +62,8 @@ export interface PersonFilmography {
   id: number;
   name: string;
   photo?: string;
+  knownFor: "acting" | "crew";
+  total: number;
   sections: Array<{ key: PersonSectionKey; titles: PersonTitle[] }>;
 }
 export interface RelatedTitle {

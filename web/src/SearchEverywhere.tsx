@@ -65,6 +65,31 @@ const episodeText = (member: SearchMember): string | null => {
 /** One title, the way every other grid draws one: its picture, its name and a caption. A list is
  *  about titles, not about sources, so no card names the addon or library it came from; a copy
  *  that is already in a library only earns a small mark. */
+export function SearchTile({ title, poster, background, caption, shape, local = false, folder = false, busy = false, dataAttributes, onFocus, onClick }: {
+  title: string;
+  poster?: string;
+  background?: string;
+  caption: string;
+  shape: TileShape;
+  local?: boolean;
+  folder?: boolean;
+  busy?: boolean;
+  dataAttributes?: Record<string, string>;
+  onFocus?: () => void;
+  onClick: (button: HTMLButtonElement) => void;
+}) {
+  return <button type="button" className="browse-item" title={title} {...dataAttributes}
+    {...(busy ? { disabled: true, "aria-busy": true } : {})} onFocus={onFocus}
+    onClick={(event) => onClick(event.currentTarget)}>
+    <span className="browse-art">
+      <TileArt shape={shape} poster={poster} wide={background} fallback={folder ? <FolderOpen/> : <Film/>}/>
+      {local && <i className="fav-mark" title={t("searchAll.badgeLocal")} aria-label={t("searchAll.badgeLocal")}><HardDrive/></i>}
+    </span>
+    <strong>{title}</strong>
+    <small>{caption}</small>
+  </button>;
+}
+
 function SearchCard({ cluster, shape, onInteract, onOpen }: {
   cluster: SearchClusterView;
   shape: TileShape;
@@ -77,17 +102,14 @@ function SearchCard({ cluster, shape, onInteract, onOpen }: {
     cluster.episodeCount ? t("searchAll.episodes", { count: cluster.episodeCount }) : undefined,
     cluster.kind === "folder" && cluster.itemCount ? t("searchAll.folderItems", { count: cluster.itemCount }) : undefined,
   ].filter(Boolean).join(" · ");
-  const folder = cluster.kind === "folder";
-  return <button type="button" className="browse-item" title={cluster.title} data-search-card data-primary-member={cluster.primaryMemberKey}
-    data-member-keys={cluster.memberKeys.join(" ")} onFocus={onInteract}
-    onClick={(event) => { onInteract(); onOpen(event.currentTarget); }}>
-    <span className="browse-art">
-      <TileArt shape={shape} poster={cluster.poster} wide={cluster.background} fallback={folder ? <FolderOpen/> : <Film/>}/>
-      {cluster.hasLocal && <i className="fav-mark" title={t("searchAll.badgeLocal")} aria-label={t("searchAll.badgeLocal")}><HardDrive/></i>}
-    </span>
-    <strong>{cluster.title}</strong>
-    <small>{caption}</small>
-  </button>;
+  return <SearchTile title={cluster.title} poster={cluster.poster} background={cluster.background} caption={caption} shape={shape}
+    local={cluster.hasLocal} folder={cluster.kind === "folder"}
+    dataAttributes={{
+      "data-search-card": "true",
+      "data-primary-member": cluster.primaryMemberKey,
+      "data-member-keys": cluster.memberKeys.join(" "),
+    }}
+    onFocus={onInteract} onClick={(button) => { onInteract(); onOpen(button); }}/>;
 }
 
 /** One addon answers the same title from several of its catalogues; the chooser lists it once. */

@@ -454,7 +454,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       trailer={trailer ?? trailerFromExtras(titleExtras.extras, locale)}
       onTrailer={onTrailer}
       secureMode={secureMode}
-      extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer}/>}
+      extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} {...(name ? { titleName: name } : {})}/>}
       {...(synopsisOf(snapshot?.description, titleExtras.extras) ? { description: synopsisOf(snapshot?.description, titleExtras.extras) } : {})}
       descriptionLoading={snapshot === null && !metaError}
       copyPending={copyPending}
