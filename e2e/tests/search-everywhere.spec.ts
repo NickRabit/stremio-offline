@@ -163,6 +163,65 @@ test("Search keeps the query out of the URL and browser storage", async ({ page 
   expect(stored).not.toContain("Zkušební");
 });
 
+const stubSearchPeople = async (page: Page) => {
+  await page.route("**/e2e-person.svg", async (route) => {
+    await route.fulfill({ contentType: "image/svg+xml", body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"/>` });
+  });
+  await page.route("**/api/person/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("/title/")) {
+      await route.fulfill({ json: { id: "tt-e2e-movie" } });
+      return;
+    }
+    await route.fulfill({ json: {
+      id: 287,
+      name: "Brad Pitt",
+      photo: "/e2e-person.svg",
+      knownFor: "acting",
+      total: 1,
+      sections: [
+        { key: "acting", titles: [
+          { type: "movie", tmdbId: 1, id: "tt-e2e-movie", name: "Pulp Fiction", year: "1994" },
+        ] },
+      ],
+    } });
+  });
+  await page.route("**/api/person/search*", async (route) => {
+    await route.fulfill({ json: {
+      people: [
+        { id: 287, name: "Brad Pitt", photo: "/e2e-person.svg", knownFor: "acting", knownTitles: ["Fight Club", "Ocean's Eleven"] },
+        { id: 138, name: "Quentin Tarantino", knownFor: "crew", knownTitles: ["Pulp Fiction", "Kill Bill"] },
+        { id: 3, name: "Person Three", knownFor: "acting", knownTitles: ["One", "Two"] },
+        { id: 4, name: "Person Four", knownFor: "acting", knownTitles: ["One", "Two"] },
+        { id: 5, name: "Person Five", knownFor: "acting", knownTitles: ["One", "Two"] },
+        { id: 6, name: "Person Six", knownFor: "acting", knownTitles: ["One", "Two"] },
+        { id: 7, name: "Person Seven", knownFor: "acting", knownTitles: ["One", "Two"] },
+        { id: 8, name: "Person Eight", knownFor: "acting", knownTitles: ["One", "Two"] },
+      ],
+    } });
+  });
+};
+
+test("a People row opens a person and Back returns to the results", async ({ page }) => {
+  await stubSearchPeople(page);
+  await page.goto("/");
+  await search(page);
+  const row = page.locator("section.search-people");
+  await expect(row.getByRole("heading", { name: "Osoby" })).toBeVisible();
+  await expect(row.locator("button.search-person", { hasText: "Brad Pitt" })).toBeVisible();
+  await expect(page.locator("[data-search-card][title=\"Zkušební film\"]")).toBeVisible();
+  await row.locator("button.search-person", { hasText: "Brad Pitt" }).click();
+  const person = page.locator(".person-view");
+  await expect(person).toBeVisible();
+  await expect(person.locator(".search-return")).toHaveText(/Zpět na hledání/);
+  await expect(person.getByRole("heading", { name: "Herectví" })).toBeVisible();
+  await person.locator(".search-return").click();
+  await expect(page.locator(".person-view")).toHaveCount(0);
+  await expect(page.locator("main.view-search")).toBeVisible();
+  await expect(page.locator("section.search-people button.search-person", { hasText: "Brad Pitt" })).toBeVisible();
+  await expect(page.locator("[data-search-card][title=\"Zkušební film\"]")).toBeVisible();
+});
+
 test.describe("compact navigation", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
@@ -172,5 +231,14 @@ test.describe("compact navigation", () => {
     await expect(page.getByRole("combobox", { name: "Procházet katalog" })).toBeVisible();
     await expect(page.getByPlaceholder("Hledat ve všech doplňcích naráz…")).toBeVisible();
     await expect(page.locator("aside.sidebar nav button:visible")).toHaveCount(5);
+  });
+
+  test("the People row does not scroll the page sideways", async ({ page }) => {
+    await stubSearchPeople(page);
+    await page.goto("/");
+    await search(page);
+    await expect(page.locator("section.search-people button.search-person", { hasText: "Brad Pitt" })).toBeVisible();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+    expect(overflow).toBe(true);
   });
 });

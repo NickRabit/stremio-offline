@@ -558,6 +558,13 @@
   <string name="person_in_library">In your library</string>
   <string name="person_label">Filmography of %1$s</string>
   <string name="person_hint_tv">OK shows what the person made</string>
+  <string name="person_back_to">Back to %1$s</string>
+  <plurals name="person_title_count">
+    <item quantity="one">%1$s title</item>
+    <item quantity="other">%1$s titles</item>
+  </plurals>
+  <string name="person_search_as_text">Search for “%1$s” as text</string>
   <string name="err_person_unavailable">Nothing is known about this person.</string>
   <string name="err_person_lookup_failed">The filmography could not be loaded. Try again later.</string>
+  <string name="search_all_people">People</string>
 </resources>

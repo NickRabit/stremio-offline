@@ -114,6 +114,7 @@ const val TagTitleTech = "title_tech"
 fun titlePersonTag(name: String): String = "title_person_$name"
 fun relatedTitleTag(id: String): String = "related_title_$id"
 fun videoCardTag(key: String): String = "title_video_$key"
+fun personKey(person: TitlePersonDto): String = "${person.id ?: ""}:${person.name}:${person.role}"
 
 /** Who made it first, then the cast, then the writers: one strip for everybody. */
 private val StripOrder = listOf("creator", "director", "cast", "writer", "novel")
@@ -124,9 +125,11 @@ class TitleExtrasState {
   var actionsFocused by mutableStateOf(false)
   val scroll = ScrollState(0)
   val castFocus = FocusRequester()
+  val personFocus = FocusRequester()
   val videoFocus = FocusRequester()
   val relatedFocus = FocusRequester()
   var restoreRelatedId: String? = null
+  var restorePersonKey: String? = null
   private var videosResolved by mutableStateOf<Boolean?>(null)
 
   private var key: String? = null
@@ -488,6 +491,7 @@ fun TitleExtrasRows(
     crewLabels[person.role.lowercase()]?.let { person.copy(character = it) } ?: person
   }
   val relatedState = rememberLazyListState()
+  val castState = rememberLazyListState()
 
   LaunchedEffect(extras.related, state.restoreRelatedId) {
     val wanted = state.restoreRelatedId ?: return@LaunchedEffect
@@ -498,6 +502,16 @@ fun TitleExtrasRows(
       runCatching { state.relatedFocus.requestFocus() }
     }
     state.restoreRelatedId = null
+  }
+  LaunchedEffect(cast, state.restorePersonKey) {
+    val wanted = state.restorePersonKey ?: return@LaunchedEffect
+    val index = cast.indexOfFirst { personKey(it) == wanted }
+    if (index >= 0) {
+      castState.scrollToItem(index)
+      awaitFrame()
+      runCatching { state.personFocus.requestFocus() }
+    }
+    state.restorePersonKey = null
   }
 
   // The rows sit on a dark band that fades in above them and runs past the safe margins, so names
@@ -538,6 +552,7 @@ fun TitleExtrasRows(
       }
       if (cast.isNotEmpty()) {
         LazyRow(
+          state = castState,
           contentPadding = PaddingValues(horizontal = CardRowInset, vertical = 8.dp),
           horizontalArrangement = Arrangement.spacedBy(16.dp),
           modifier = Modifier
@@ -564,7 +579,13 @@ fun TitleExtrasRows(
               person = person,
               imageUrl = imageUrl(person.photo),
               onClick = { onPerson(person) },
-              modifier = if (index == 0) Modifier.focusRequester(state.castFocus) else Modifier,
+              modifier = when {
+                state.restorePersonKey != null && personKey(person) == state.restorePersonKey ->
+                  Modifier.focusRequester(state.personFocus)
+                state.restorePersonKey == null && index == 0 ->
+                  Modifier.focusRequester(state.castFocus)
+                else -> Modifier
+              },
             )
           }
         }

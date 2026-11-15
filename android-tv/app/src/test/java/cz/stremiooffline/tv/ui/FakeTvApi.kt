@@ -43,6 +43,7 @@ import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.NextFileDto
 import cz.stremiooffline.tv.data.PersonFilmographyDto
+import cz.stremiooffline.tv.data.PersonSearchDto
 import cz.stremiooffline.tv.data.PersonTitleResolutionDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.ProgressDto
@@ -240,6 +241,7 @@ open class FakeTvApi : TvApi {
 
   var globalSearchEnabled = false
   var globalSearchEnabledCalls = 0
+  var peopleSearchHandler: suspend (String, String?) -> PersonSearchDto = { _, _ -> PersonSearchDto() }
   var globalStartHandler: suspend (GlobalSearchStartDto) -> GlobalSearchStartResultDto = { request ->
     GlobalSearchStartResultDto(
       id = "gs_${request.generation}",
@@ -255,6 +257,7 @@ open class FakeTvApi : TvApi {
     GlobalSearchMemberPageDto()
   }
   var globalDeleteHandler: suspend (String) -> Unit = {}
+  val peopleSearchCalls: MutableList<Pair<String, String?>> = mutableListOf()
   val globalStartCalls: MutableList<GlobalSearchStartDto> = mutableListOf()
   val globalPollCalls: MutableList<Pair<String, Int>> = mutableListOf()
   val globalPageCalls: MutableList<String> = mutableListOf()
@@ -431,6 +434,11 @@ open class FakeTvApi : TvApi {
   override suspend fun searchEverywhereEnabled(): Boolean {
     globalSearchEnabledCalls += 1
     return globalSearchEnabled
+  }
+
+  override suspend fun searchPeople(query: String, language: String?): PersonSearchDto {
+    peopleSearchCalls += query to language
+    return peopleSearchHandler(query, language)
   }
 
   override suspend fun startGlobalSearch(body: GlobalSearchStartDto): GlobalSearchStartResultDto {

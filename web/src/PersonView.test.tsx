@@ -27,7 +27,6 @@ const title = (over: Partial<PersonTitle> & Pick<PersonTitle, "id" | "name">): P
   type: "movie",
   tmdbId: 1,
   year: "1994",
-  role: "Director",
   ...over,
 });
 
@@ -35,17 +34,19 @@ const filmography = (over: Partial<PersonFilmography> = {}): PersonFilmography =
   id: 138,
   name: "Quentin Tarantino",
   photo: "/quentin.jpg",
+  knownFor: "crew",
+  total: 2,
   sections: [
     {
       key: "crew",
       titles: [
-        title({ id: "tt0110912", name: "Pulp Fiction", year: "1994", role: "Director, Writer", inLibrary: true, poster: "/pulp.jpg", tmdbId: 680 }),
+        title({ id: "tt0110912", name: "Pulp Fiction", year: "1994", jobs: ["director", "writer"], character: "Jimmie", inLibrary: true, poster: "/pulp.jpg", tmdbId: 680 }),
       ],
     },
     {
       key: "acting",
       titles: [
-        title({ type: "series", id: "tmdb:1396", name: "Breaking Bad", year: "2008", role: "Mr. Brown", tmdbId: 1396 }),
+        title({ type: "series", id: "tmdb:1396", name: "Breaking Bad", year: "2008", character: "Mr. Brown", tmdbId: 1396 }),
       ],
     },
   ],
@@ -79,40 +80,106 @@ const flush = async () => {
   });
 };
 
+const setInput = (input: HTMLInputElement, value: string) => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+};
+
 const mount = async (over: Partial<Parameters<typeof PersonView>[0]> = {}, answer: PersonFilmography | Promise<PersonFilmography> = filmography()) => {
   const person = vi.spyOn(api, "person").mockImplementation(() => Promise.resolve(answer) as Promise<PersonFilmography>);
   const onBack = vi.fn();
   const onUnavailable = vi.fn();
   const onOpenTitle = vi.fn();
   const onNotify = vi.fn();
+  const onSearchText = vi.fn();
+  const onToggleShape = vi.fn();
   await act(async () => {
     root.render(<PersonView person={{ id: 138, name: "Card Name" }} language="en" shape="poster"
-      onBack={onBack} onUnavailable={onUnavailable} onOpenTitle={onOpenTitle} onNotify={onNotify} {...over}/>);
+      onBack={onBack} onUnavailable={onUnavailable} onOpenTitle={onOpenTitle} onNotify={onNotify}
+      onSearchText={onSearchText} onToggleShape={onToggleShape} {...over}/>);
   });
   await flush();
-  return { person, onBack, onUnavailable, onOpenTitle, onNotify };
+  return { person, onBack, onUnavailable, onOpenTitle, onNotify, onSearchText, onToggleShape };
 };
 
+const section = (key: string) => host.querySelector(`section[data-section='${key}']`);
+const tile = (name: string) => [...host.querySelectorAll<HTMLButtonElement>(".browse-item")].find((button) => button.textContent?.includes(name));
+
 describe("PersonView", () => {
-  it("renders both sections in the server's order with headings, tiles, labels and the library marker from the answer", async () => {
+  it("renders the search heading, the person's name in the form, and the card line with the plural count", async () => {
     await mount();
     const region = host.querySelector(".person-view")!;
     expect(region.getAttribute("aria-label")).toBe("Filmography of Quentin Tarantino");
-    expect(region.querySelector("h2")!.textContent).toBe("Quentin Tarantino");
-    expect(region.querySelector(".person-portrait img")!.getAttribute("src")).toBe("/quentin.jpg");
-    expect(region.textContent).not.toContain("Card Name");
-    const sections = [...host.querySelectorAll(".person-section")];
-    expect(sections.map((section) => section.getAttribute("data-section"))).toEqual(["crew", "acting"]);
-    expect(sections[0]!.querySelector("h3")!.textContent).toBe("Directing and writing");
-    expect(sections[1]!.querySelector("h3")!.textContent).toBe("Acting");
-    const crewTile = sections[0]!.querySelector(".browse-item")!;
+    expect(region.querySelector(".heading small")!.textContent).toBe("Search");
+    expect(region.querySelector(".heading h2")!.textContent).toBe("Search everywhere");
+    const form = region.querySelector("form.search-everywhere-form")!;
+    expect(form.getAttribute("role")).toBe("search");
+    expect(form.querySelector("input")!.value).toBe("Card Name");
+    expect(form.querySelector("button.primary")!.textContent).toContain("Search");
+    const card = region.querySelector(".person-card")!;
+    expect(card.querySelector("h2")!.textContent).toBe("Quentin Tarantino");
+    expect(card.querySelector("img")!.getAttribute("src")).toBe("/quentin.jpg");
+    expect(card.querySelector("p")!.textContent).toBe("Directing and writing · 2 titles");
+    expect(card.querySelector(".person-text-search")!.textContent?.trim()).toBe("Search for “Quentin Tarantino” as text");
+  });
+
+  it("shows the clicked name and a skeleton portrait with placeholder tiles while loading", async () => {
+    await mount({}, new Promise(() => undefined) as Promise<PersonFilmography>);
+    const card = host.querySelector(".person-card")!;
+    expect(card.querySelector("h2")!.textContent).toBe("Card Name");
+    expect(card.querySelector("img")).toBeNull();
+    expect(card.querySelector("span")).not.toBeNull();
+    expect(card.querySelector("p")).toBeNull();
+    expect(host.querySelectorAll(".search-results .browse-art")).toHaveLength(12);
+    expect(host.querySelector("section[data-section]")).toBeNull();
+  });
+
+  it("renders both sections in the server's order with counts, captions and the library mark", async () => {
+    await mount();
+    const sections = [...host.querySelectorAll("section[data-section]")];
+    expect(sections.map((item) => item.getAttribute("data-section"))).toEqual(["crew", "acting"]);
+    expect(sections[0]!.querySelector("h3")!.textContent).toBe("Directing and writing 1");
+    expect(sections[1]!.querySelector("h3")!.textContent).toBe("Acting 1");
+    const crewTile = tile("Pulp Fiction")!;
     expect(crewTile.querySelector("strong")!.textContent).toBe("Pulp Fiction");
-    expect(crewTile.querySelector("small")!.textContent).toBe("1994 · Film · Director, Writer");
-    expect(crewTile.querySelector(".in-library")!.textContent).toBe("In your library");
-    const actingTile = sections[1]!.querySelector(".browse-item")!;
-    expect(actingTile.querySelector("strong")!.textContent).toBe("Breaking Bad");
+    expect(crewTile.querySelector("small")!.textContent).toBe("1994 · Film · Director · Writer · Jimmie");
+    expect(crewTile.querySelector(".fav-mark")!.getAttribute("aria-label")).toBe("Local");
+    expect(crewTile.querySelector(".fav-mark svg")).not.toBeNull();
+    const actingTile = tile("Breaking Bad")!;
     expect(actingTile.querySelector("small")!.textContent).toBe("2008 · Series · Mr. Brown");
-    expect(actingTile.querySelector(".in-library")).toBeNull();
+    expect(actingTile.querySelector(".fav-mark")).toBeNull();
+  });
+
+  it("hides series when the movies filter is chosen", async () => {
+    await mount();
+    const movies = [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")].find((button) => button.textContent === "Movies")!;
+    await act(async () => { movies.click(); });
+    expect(tile("Pulp Fiction")).toBeTruthy();
+    expect(tile("Breaking Bad")).toBeUndefined();
+    expect(section("acting")).toBeNull();
+    expect(section("crew")!.querySelector("h3")!.textContent).toBe("Directing and writing 1");
+  });
+
+  it("draws the wide picture in the wide shape and falls back when a title has none", async () => {
+    await mount({ shape: "wide" }, filmography({
+      sections: [{
+        key: "acting",
+        titles: [
+          title({ id: "tt1", name: "Wide One", background: "/wide.jpg", poster: "/poster.jpg", character: "Actor" }),
+          title({ id: "tt2", name: "Poster Only", poster: "/only-poster.jpg", character: "Actor" }),
+          title({ id: "tt3", name: "Bare", year: undefined, character: undefined }),
+        ],
+      }],
+    }));
+    const grid = host.querySelector(".tile-shape-wide")!;
+    expect(grid.className).toContain("search-results");
+    const wide = tile("Wide One")!;
+    expect(wide.querySelector("img")!.getAttribute("src")).toBe("/wide.jpg");
+    const posterOnly = tile("Poster Only")!;
+    expect([...posterOnly.querySelectorAll("img")].map((image) => image.getAttribute("src"))).toEqual(["/only-poster.jpg", "/only-poster.jpg"]);
+    const bare = tile("Bare")!;
+    expect(bare.querySelector("img")).toBeNull();
+    expect(bare.querySelector("svg")).not.toBeNull();
   });
 
   it("opens a tt tile immediately and resolves a tmdb tile before opening", async () => {
@@ -121,18 +188,17 @@ describe("PersonView", () => {
     let resolveTitle!: (value: { id: string; imdb?: "none" }) => void;
     personTitle.mockReturnValue(new Promise((resolve) => { resolveTitle = resolve; }));
 
-    const pulp = [...host.querySelectorAll<HTMLButtonElement>(".browse-item")].find((button) => button.textContent?.includes("Pulp Fiction"))!;
-    await act(async () => { pulp.click(); });
+    await act(async () => { tile("Pulp Fiction")!.click(); });
     expect(onOpenTitle).toHaveBeenCalledWith({ type: "movie", id: "tt0110912", name: "Pulp Fiction", poster: "/pulp.jpg" });
     expect(personTitle).not.toHaveBeenCalled();
     onOpenTitle.mockClear();
 
-    const bad = [...host.querySelectorAll<HTMLButtonElement>(".browse-item")].find((button) => button.textContent?.includes("Breaking Bad"))!;
+    const bad = tile("Breaking Bad")!;
     await act(async () => { bad.click(); });
     expect(personTitle).toHaveBeenCalledWith("series", 1396, expect.any(AbortSignal));
     expect(bad.disabled).toBe(true);
     expect(bad.getAttribute("aria-busy")).toBe("true");
-    expect(bad.textContent).toContain("Opening…");
+    expect(bad.querySelector("small")!.textContent).toBe("Opening…");
     expect(onOpenTitle).not.toHaveBeenCalled();
 
     await act(async () => { resolveTitle({ id: "tt0903747" }); await flush(); });
@@ -142,8 +208,7 @@ describe("PersonView", () => {
   it("opens a tmdb title with no IMDb id using the tmdb id and the noImdb notice", async () => {
     const { onOpenTitle } = await mount();
     vi.spyOn(api, "personTitle").mockResolvedValue({ id: "tmdb:1396", imdb: "none" });
-    const bad = [...host.querySelectorAll<HTMLButtonElement>(".browse-item")].find((button) => button.textContent?.includes("Breaking Bad"))!;
-    await act(async () => { bad.click(); });
+    await act(async () => { tile("Breaking Bad")!.click(); });
     await flush();
     expect(onOpenTitle).toHaveBeenCalledWith({ type: "series", id: "tmdb:1396", name: "Breaking Bad" }, "noImdb");
   });
@@ -151,7 +216,7 @@ describe("PersonView", () => {
   it("leaves a tmdb tile enabled and does not open it when the lookup fails", async () => {
     const { onOpenTitle, onNotify } = await mount();
     vi.spyOn(api, "personTitle").mockRejectedValue(new ApiError("The filmography could not be loaded.", 502, undefined, "err.personLookupFailed"));
-    const bad = [...host.querySelectorAll<HTMLButtonElement>(".browse-item")].find((button) => button.textContent?.includes("Breaking Bad"))!;
+    const bad = tile("Breaking Bad")!;
     await act(async () => { bad.click(); });
     await flush();
     expect(onOpenTitle).not.toHaveBeenCalled();
@@ -165,7 +230,8 @@ describe("PersonView", () => {
     const onUnavailable = vi.fn();
     await act(async () => {
       root.render(<PersonView person={{ id: 1, name: "Unknown" }} language="en" shape="poster"
-        onBack={vi.fn()} onUnavailable={onUnavailable} onOpenTitle={vi.fn()} onNotify={vi.fn()}/>);
+        onBack={vi.fn()} onUnavailable={onUnavailable} onOpenTitle={vi.fn()} onNotify={vi.fn()}
+        onSearchText={vi.fn()} onToggleShape={vi.fn()}/>);
     });
     await flush();
     expect(onUnavailable).toHaveBeenCalledWith("Unknown");
@@ -178,36 +244,67 @@ describe("PersonView", () => {
       .mockResolvedValueOnce(filmography());
     await act(async () => {
       root.render(<PersonView person={{ id: 138, name: "Card Name" }} language="en" shape="poster"
-        onBack={vi.fn()} onUnavailable={vi.fn()} onOpenTitle={vi.fn()} onNotify={vi.fn()}/>);
+        onBack={vi.fn()} onUnavailable={vi.fn()} onOpenTitle={vi.fn()} onNotify={vi.fn()}
+        onSearchText={vi.fn()} onToggleShape={vi.fn()}/>);
     });
     await flush();
-    expect(host.querySelector("[role='alert']")!.textContent).toContain("The filmography could not be loaded. Try again later.");
+    const alert = host.querySelector("p.search-error")!;
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(alert.textContent).toContain("The filmography could not be loaded. Try again later.");
     const retry = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Try again")!;
     await act(async () => { retry.click(); });
     await flush();
     expect(person).toHaveBeenCalledTimes(2);
-    expect(host.querySelector("h2")!.textContent).toBe("Quentin Tarantino");
+    expect(host.querySelector(".person-card h2")!.textContent).toBe("Quentin Tarantino");
   });
 
   it("shows the empty copy when the answer has no sections", async () => {
     await mount({}, filmography({ sections: [] }));
-    expect(host.textContent).toContain("TMDB lists no films or series for this person.");
-    expect(host.querySelector(".person-section")).toBeNull();
+    expect(host.querySelector("p.search-empty")!.textContent).toBe("TMDB lists no films or series for this person.");
+    expect(host.querySelector("section[data-section]")).toBeNull();
+  });
+
+  it("searches the card name and a submitted query", async () => {
+    const { onSearchText } = await mount();
+    await act(async () => { host.querySelector<HTMLButtonElement>(".person-card .person-text-search")!.click(); });
+    expect(onSearchText).toHaveBeenCalledWith("Quentin Tarantino");
+    const input = host.querySelector<HTMLInputElement>(".search-everywhere-form input")!;
+    await act(async () => { setInput(input, "   "); input.form!.requestSubmit(); });
+    expect(onSearchText).toHaveBeenCalledTimes(1);
+    await act(async () => { setInput(input, "  Heat  "); input.form!.requestSubmit(); });
+    expect(onSearchText).toHaveBeenCalledWith("Heat");
+  });
+
+  it("names the title the person was opened from on the back link", async () => {
+    const { onBack } = await mount({ fromTitle: "Heat" });
+    const back = host.querySelector<HTMLButtonElement>(".search-return")!;
+    expect(back.textContent).toContain("Back to Heat");
+    await act(async () => { back.click(); });
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  it("shows backLabel on the back link when given", async () => {
+    const { onBack } = await mount({ backLabel: "Back to search" });
+    const back = host.querySelector<HTMLButtonElement>(".search-return")!;
+    expect(back.textContent).toContain("Back to search");
+    expect(back.textContent).not.toContain("Back to Heat");
+    await act(async () => { back.click(); });
+    expect(onBack).toHaveBeenCalled();
   });
 
   it("renders 40 tiles of a long section until the sentinel intersects", async () => {
     vi.stubGlobal("IntersectionObserver", RecordingIntersectionObserver);
     const titles = Array.from({ length: 120 }, (_, index) => title({
-      id: `tt${index}`, name: `Film ${index}`, tmdbId: index + 1, year: "2000", role: "Actor",
+      id: `tt${index}`, name: `Film ${index}`, tmdbId: index + 1, year: "2000", character: "Actor",
     }));
     await mount({}, filmography({ sections: [{ key: "acting", titles }] }));
-    expect(host.querySelectorAll(".person-section[data-section='acting'] .browse-item")).toHaveLength(40);
+    expect(host.querySelectorAll("section[data-section='acting'] .browse-item")).toHaveLength(40);
     const sentinel = host.querySelector(".person-sentinel")!;
     const observer = RecordingIntersectionObserver.instances.find((instance) => instance.elements.has(sentinel));
     expect(observer).toBeTruthy();
     await act(async () => {
       observer!.callback([{ isIntersecting: true, target: sentinel } as IntersectionObserverEntry], observer as unknown as IntersectionObserver);
     });
-    expect(host.querySelectorAll(".person-section[data-section='acting'] .browse-item")).toHaveLength(120);
+    expect(host.querySelectorAll("section[data-section='acting'] .browse-item")).toHaveLength(120);
   });
 });

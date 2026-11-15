@@ -582,6 +582,15 @@
   <string name="person_in_library">W Twojej bibliotece</string>
   <string name="person_label">Filmografia: %1$s</string>
   <string name="person_hint_tv">OK pokazuje, przy czym ta osoba pracowała</string>
+  <string name="person_back_to">Wróć do %1$s</string>
+  <plurals name="person_title_count">
+    <item quantity="one">%1$s tytuł</item>
+    <item quantity="few">%1$s tytuły</item>
+    <item quantity="many">%1$s tytułów</item>
+    <item quantity="other">%1$s tytułu</item>
+  </plurals>
+  <string name="person_search_as_text">Szukaj „%1$s” jako tekstu</string>
   <string name="err_person_unavailable">Nic nie wiadomo o tej osobie.</string>
   <string name="err_person_lookup_failed">Nie udało się wczytać filmografii. Spróbuj później.</string>
+  <string name="search_all_people">Osoby</string>
 </resources>

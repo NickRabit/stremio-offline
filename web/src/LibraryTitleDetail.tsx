@@ -395,7 +395,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     {(descriptionLoading || copyPending) && (copyPending || !description)
       ? <div className="library-detail-synopsis detail-skeleton" role="status" aria-label={t("common.loading")}><i/><i/><i/></div>
       : <ClampedDescription text={description || t("catalog.noDescription")}/>}
-    {copyPending ? <div className="detail-crew-skeleton detail-skeleton" aria-hidden="true"><i/></div> : <CrewLine people={people}/>}
+    {copyPending ? <div className="detail-crew-skeleton detail-skeleton" aria-hidden="true"><i/></div> : <CrewLine people={people} {...(title ? { titleName: title } : {})}/>}
   </>;
 
   // The gallery is the same overlay the catalogue and a library row open; the corner only says how

@@ -103,6 +103,7 @@ class GlobalSearchCancellationTest {
           onOpenCatalog = {},
           onOpenRemote = {},
           onOpenLibrary = {},
+          onOpenPerson = {},
           imageUrl = { null },
           overlayOpen = false,
           voiceAvailable = false,

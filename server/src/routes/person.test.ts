@@ -142,7 +142,7 @@ test("GET /api/person/:tmdbId returns the contract shape from one TMDB request",
       id: number;
       name: string;
       photo?: string;
-      sections: Array<{ key: string; titles: Array<{ type: string; tmdbId: number; id: string; name: string; year?: string; poster?: string; role?: string; inLibrary?: boolean }> }>;
+      sections: Array<{ key: string; titles: Array<{ type: string; tmdbId: number; id: string; name: string; year?: string; poster?: string; jobs?: string[]; character?: string; inLibrary?: boolean }> }>;
     };
     assert.equal(body.id, 138);
     assert.equal(body.name, "Quentin Tarantino");
@@ -265,12 +265,15 @@ test("secure mode proxies the portrait and every title poster", async (t) => {
     assert.equal(response.status, 200);
     const body = await response.json() as {
       photo?: string;
-      sections: Array<{ titles: Array<{ poster?: string }> }>;
+      sections: Array<{ titles: Array<{ poster?: string; background?: string }> }>;
     };
     assert.match(body.photo ?? "", /^\/api\/image\//);
     const posters = body.sections.flatMap((section) => section.titles).flatMap((title) => title.poster ? [title.poster] : []);
     assert.ok(posters.length > 0);
     assert.equal(posters.every((poster) => poster.startsWith("/api/image/")), true);
+    const backgrounds = body.sections.flatMap((section) => section.titles).flatMap((title) => title.background ? [title.background] : []);
+    assert.ok(backgrounds.length > 0);
+    assert.equal(backgrounds.every((background) => background.startsWith("/api/image/")), true);
   });
 });
 
@@ -286,4 +289,35 @@ test("person requests leave the data directory untouched", async (t) => {
   });
 
   assert.deepEqual(await readdir(harness.dataDir), before);
+});
+
+test("GET /api/person/search answers people, nothing without a key, and 502 on a failure", async (t) => {
+  fresh();
+  t.after(fresh);
+  configureSecureMode(() => false);
+  t.after(() => configureSecureMode(() => true));
+  const withKey = await mount({ apiKey: "route-key" });
+  t.after(withKey.close);
+  const calls: string[] = [];
+  const brad = JSON.parse(readFileSync(path.join(here, "..", "..", "test-fixtures", "tmdb-person", "search-brad-pitt.json"), "utf8"));
+  await withStubbedTmdb((url) => {
+    calls.push(url.href);
+    return url.searchParams.get("query") === "fails" ? json({}, 500) : json(brad);
+  }, async () => {
+    const found = await personRequest(withKey, "/api/person/search?query=Brad%20Pitt");
+    assert.equal(found.status, 200);
+    const body = await found.json() as { people: Array<{ id: number; name: string; knownFor: string; knownTitles: string[] }> };
+    assert.equal(body.people[0]?.id, 287);
+    assert.equal(body.people[0]?.knownFor, "acting");
+    const failed = await personRequest(withKey, "/api/person/search?query=fails");
+    assert.equal(failed.status, 502);
+    assert.equal((await failed.json() as { messageKey?: string }).messageKey, "err.personLookupFailed");
+  });
+  assert.equal(calls.length, 2);
+
+  const without = await mount({});
+  t.after(without.close);
+  const none = await personRequest(without, "/api/person/search?query=Brad%20Pitt");
+  assert.equal(none.status, 200);
+  assert.deepEqual(await none.json(), { people: [] });
 });

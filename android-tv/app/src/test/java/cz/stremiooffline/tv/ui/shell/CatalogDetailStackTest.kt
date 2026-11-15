@@ -27,12 +27,12 @@ class CatalogDetailStackTest {
     val third = stack.detailFor(related("tt3"), second)
 
     assertEquals("tt3", third.meta.id)
-    val previous = stack.pop()
-    assertEquals("tt2", previous?.meta?.id)
-    assertEquals("tt3", previous?.focusRelatedId)
-    val firstAgain = stack.pop()
-    assertEquals("tt1", firstAgain?.meta?.id)
-    assertEquals("tt2", firstAgain?.focusRelatedId)
+    val previous = stack.pop() as CatalogStackEntry.Detail
+    assertEquals("tt2", previous.args.meta.id)
+    assertEquals("tt3", previous.args.focusRelatedId)
+    val firstAgain = stack.pop() as CatalogStackEntry.Detail
+    assertEquals("tt1", firstAgain.args.meta.id)
+    assertEquals("tt2", firstAgain.args.focusRelatedId)
     assertNull(stack.pop())
   }
 
@@ -56,6 +56,6 @@ class CatalogDetailStackTest {
     }
 
     assertEquals(10, stack.entries.size)
-    assertEquals("tt2", stack.entries.first().meta.id)
+    assertEquals("tt2", (stack.entries.first() as CatalogStackEntry.Detail).args.meta.id)
   }
 }
