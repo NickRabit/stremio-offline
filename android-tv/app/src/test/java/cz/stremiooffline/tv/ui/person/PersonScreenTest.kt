@@ -42,6 +42,8 @@ class PersonScreenTest {
     id = "tt0110912",
     name = "Pulp Fiction",
     year = "1994",
+    jobs = listOf("director", "writer"),
+    character = "Jimmie",
     inLibrary = true,
   )
   private val actingTitle = PersonTitleDto(
@@ -134,6 +136,8 @@ class PersonScreenTest {
 
     compose.onNodeWithText("1994").assertExists()
     compose.onNodeWithText("Film").assertExists()
+    compose.onNodeWithText("Director · Writer").assertExists()
+    compose.onNodeWithText("Jimmie").assertExists()
     compose.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
     compose.waitForIdle()
     compose.onNodeWithText("1992").assertExists()

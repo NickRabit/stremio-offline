@@ -90,11 +90,12 @@ account's interface language, as the extras route does.
   "sections": [
     { "key": "crew", "titles": [
       { "type": "movie", "tmdbId": 680, "id": "tt0110912", "name": "Pulp Fiction",
-        "year": "1994", "poster": "…", "role": "Director, Writer", "inLibrary": true }
+        "year": "1994", "poster": "…", "background": "…", "jobs": ["director", "writer"],
+        "character": "Jimmie Dimmick", "inLibrary": true }
     ] },
     { "key": "acting", "titles": [
       { "type": "movie", "tmdbId": 500, "id": "tmdb:500", "name": "Reservoir Dogs",
-        "year": "1992", "poster": "…", "role": "Mr. Brown" }
+        "year": "1992", "poster": "…", "character": "Mr. Brown" }
     ] }
   ]
 }
@@ -117,12 +118,14 @@ account's interface language, as the extras route does.
 
 **What is kept from `combined_credits`:**
 
-- Cast rows as `acting`. `role` is the character.
+- Cast rows as `acting`. `character` joins the characters played.
 - Crew rows whose job is one of `Director`, `Writer`, `Screenplay`, `Story`,
-  `Teleplay`, `Novel`, `Creator`, as `crew`. `role` lists the jobs, without
+  `Teleplay`, `Novel`, `Creator`, as `crew`. `jobs` names them as the detail's
+  crew roles do (`director`, `writer` for Writer, Screenplay, Story and
+  Teleplay, `novel`, `creator`), without
   repeats.
 - A title the person both acted in and has a kept crew job on appears once, in
-  `crew`, with the character appended to `role`.
+  `crew`, with its `character` kept.
 - Rows are merged by `media_type` and `id`. `media_type` `movie` is a film and
   `tv` a series; any other value is dropped.
 
@@ -206,19 +209,27 @@ an id, or when the route answers `err.personUnavailable`, it does what it does
 today, and the results carry one line above them: *Searched by name. This may
 not be everything the person made.*
 
-**The person view** is a layer over whatever is on screen: a catalogue
-detail, a local library detail or a Jellyfin or Emby detail. Nothing under it
-is closed or unmounted; it is hidden while the person is shown and gets its
-scroll position back afterwards. A title opened from the person goes onto the
-same stack as related titles, so closing it returns to the person. Any
-navigation entry drops the layer. It shows:
+**The person is shown as the Search page** (0.7.106), not as a page of its
+own. It is a layer over whatever is on screen: a catalogue detail, a local
+library detail or a Jellyfin or Emby detail. Nothing under it is closed or
+unmounted; it is hidden while the person is shown and gets its scroll position
+back afterwards. A title opened from the person goes onto the same stack as
+related titles, so closing it returns to the person. Any navigation entry drops
+the layer, and no navigation entry is active while it is open, as on Search.
+From the top:
 
-- a header with the portrait, the name, and a Back control (or Escape) that
-  returns to the title the person was opened from;
-- one grid per section, under the headings *Acting* and *Directing and
-  writing*, with the tile the catalogue grid already uses: poster, name, year,
-  a *Film* or *Series* label, the role as the second line, and the existing
-  in-library marker;
+- *Back to <title>* (or Escape), returning to the title the person was opened
+  from;
+- the Search heading and form with the person's name; a query submitted there
+  runs the normal search;
+- the kind filter (all, films, series) and the Search page's shape toggle, so
+  poster and wide tiles switch on both pages together;
+- a small person card: portrait, name, the section the person is known for
+  and the number of titles, and *Search "<name>" as text*;
+- one grid per section with its count, in the same tiles as search results
+  (`SearchTile`): poster or wide picture, name, and one line of year, *Film*
+  or *Series*, the jobs as the detail names its crew roles, and the
+  characters; the local-copy mark for a title in the viewer's libraries;
 - a loading state, an error state with *Try again*, and an empty state.
 
 **Opening a tile.**
@@ -243,14 +254,14 @@ view, as an open detail does.
 **Selecting a person** with an id opens the person screen; without one, or on
 `err.personUnavailable`, the search with the name, as today.
 
-**The person screen** is its own composable in its own file. The catalogue
-detail composable has already hit the bytecode verifier's limit on a device
-once; nothing is added to it beyond passing the person through. The screen is
-held by the shell, like the catalogue detail:
-
-- portrait and name at the top; the two sections below, each a poster grid
-  with a heading. Reuse `PosterGrid` and `PosterCard`; add what the sections
-  need without changing existing callers.
+**The person screen** looks like the global search (0.7.106): the search
+field with the person's name (a query confirmed there opens Search), a small
+person card with the section, the number of titles and *Search as text*, and
+the sections in the global search cards (`GlobalSearchCard`), with the year,
+*Film* or *Series*, the jobs and the characters under each. It lives in its own
+file; the catalogue detail composable has already hit the bytecode verifier's
+limit on a device once, so nothing is added to it beyond the person's focus
+key. The screen is held by the shell:
 - focus starts on the first tile; the D-pad moves through a section and from
   one section to the next;
 - OK on a tile resolves it if needed and opens the catalogue detail over the

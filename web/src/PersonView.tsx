@@ -179,7 +179,7 @@ export function PersonView({ person, language, shape, initialScroll, fromTitle, 
           <h2>{displayName}</h2>
           {filmography && <p>{t(filmography.knownFor === "acting" ? "person.acting" : "person.crew")} · {t("person.titleCount", { count: filmography.total })}</p>}
         </div>
-        {filmography && <button type="button" className="link-button" onClick={() => onSearchText(filmography.name)}>{t("person.searchAsText", { name: filmography.name })}</button>}
+        {filmography && <button type="button" className="person-text-search" onClick={() => onSearchText(filmography.name)}><Search/> {t("person.searchAsText", { name: filmography.name })}</button>}
       </div>
       {loading && <div className={`browse-grid section-grid search-results tile-shape-${shape}`} aria-hidden="true">
         {Array.from({ length: PLACEHOLDERS }, (_, index) => <div className="browse-item" key={index}>
@@ -233,7 +233,8 @@ function PersonSection({ section, shape, openingId, onOpen }: {
         const opening = openingId === `${title.type}:${title.id}`;
         const caption = opening
           ? t("person.opening")
-          : [title.year, t(title.type === "movie" ? "person.movie" : "person.series"), title.role].filter(Boolean).join(" · ");
+          : [title.year, t(title.type === "movie" ? "person.movie" : "person.series"), ...(title.jobs ?? []).map((job) => t(`detail.role.${job}`)), title.character]
+            .filter(Boolean).join(" · ");
         return <SearchTile key={`${title.type}:${title.id}:${title.tmdbId}`} title={title.name} poster={title.poster} background={title.background}
           caption={caption} shape={shape} local={title.inLibrary === true} busy={opening} onClick={() => onOpen(title)}/>;
       })}

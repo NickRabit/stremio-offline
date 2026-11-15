@@ -27,7 +27,6 @@ const title = (over: Partial<PersonTitle> & Pick<PersonTitle, "id" | "name">): P
   type: "movie",
   tmdbId: 1,
   year: "1994",
-  role: "Director",
   ...over,
 });
 
@@ -41,13 +40,13 @@ const filmography = (over: Partial<PersonFilmography> = {}): PersonFilmography =
     {
       key: "crew",
       titles: [
-        title({ id: "tt0110912", name: "Pulp Fiction", year: "1994", role: "Director, Writer", inLibrary: true, poster: "/pulp.jpg", tmdbId: 680 }),
+        title({ id: "tt0110912", name: "Pulp Fiction", year: "1994", jobs: ["director", "writer"], character: "Jimmie", inLibrary: true, poster: "/pulp.jpg", tmdbId: 680 }),
       ],
     },
     {
       key: "acting",
       titles: [
-        title({ type: "series", id: "tmdb:1396", name: "Breaking Bad", year: "2008", role: "Mr. Brown", tmdbId: 1396 }),
+        title({ type: "series", id: "tmdb:1396", name: "Breaking Bad", year: "2008", character: "Mr. Brown", tmdbId: 1396 }),
       ],
     },
   ],
@@ -121,7 +120,7 @@ describe("PersonView", () => {
     expect(card.querySelector("h2")!.textContent).toBe("Quentin Tarantino");
     expect(card.querySelector("img")!.getAttribute("src")).toBe("/quentin.jpg");
     expect(card.querySelector("p")!.textContent).toBe("Directing and writing · 2 titles");
-    expect(card.querySelector(".link-button")!.textContent).toBe("Search for “Quentin Tarantino” as text");
+    expect(card.querySelector(".person-text-search")!.textContent?.trim()).toBe("Search for “Quentin Tarantino” as text");
   });
 
   it("shows the clicked name and a skeleton portrait with placeholder tiles while loading", async () => {
@@ -143,7 +142,7 @@ describe("PersonView", () => {
     expect(sections[1]!.querySelector("h3")!.textContent).toBe("Acting 1");
     const crewTile = tile("Pulp Fiction")!;
     expect(crewTile.querySelector("strong")!.textContent).toBe("Pulp Fiction");
-    expect(crewTile.querySelector("small")!.textContent).toBe("1994 · Film · Director, Writer");
+    expect(crewTile.querySelector("small")!.textContent).toBe("1994 · Film · Director · Writer · Jimmie");
     expect(crewTile.querySelector(".fav-mark")!.getAttribute("aria-label")).toBe("Local");
     expect(crewTile.querySelector(".fav-mark svg")).not.toBeNull();
     const actingTile = tile("Breaking Bad")!;
@@ -166,9 +165,9 @@ describe("PersonView", () => {
       sections: [{
         key: "acting",
         titles: [
-          title({ id: "tt1", name: "Wide One", background: "/wide.jpg", poster: "/poster.jpg", role: "Actor" }),
-          title({ id: "tt2", name: "Poster Only", poster: "/only-poster.jpg", role: "Actor" }),
-          title({ id: "tt3", name: "Bare", year: undefined, role: undefined }),
+          title({ id: "tt1", name: "Wide One", background: "/wide.jpg", poster: "/poster.jpg", character: "Actor" }),
+          title({ id: "tt2", name: "Poster Only", poster: "/only-poster.jpg", character: "Actor" }),
+          title({ id: "tt3", name: "Bare", year: undefined, character: undefined }),
         ],
       }],
     }));
@@ -267,7 +266,7 @@ describe("PersonView", () => {
 
   it("searches the card name and a submitted query", async () => {
     const { onSearchText } = await mount();
-    await act(async () => { host.querySelector<HTMLButtonElement>(".person-card .link-button")!.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>(".person-card .person-text-search")!.click(); });
     expect(onSearchText).toHaveBeenCalledWith("Quentin Tarantino");
     const input = host.querySelector<HTMLInputElement>(".search-everywhere-form input")!;
     await act(async () => { setInput(input, "   "); input.form!.requestSubmit(); });
@@ -287,7 +286,7 @@ describe("PersonView", () => {
   it("renders 40 tiles of a long section until the sentinel intersects", async () => {
     vi.stubGlobal("IntersectionObserver", RecordingIntersectionObserver);
     const titles = Array.from({ length: 120 }, (_, index) => title({
-      id: `tt${index}`, name: `Film ${index}`, tmdbId: index + 1, year: "2000", role: "Actor",
+      id: `tt${index}`, name: `Film ${index}`, tmdbId: index + 1, year: "2000", character: "Actor",
     }));
     await mount({}, filmography({ sections: [{ key: "acting", titles }] }));
     expect(host.querySelectorAll("section[data-section='acting'] .browse-item")).toHaveLength(40);

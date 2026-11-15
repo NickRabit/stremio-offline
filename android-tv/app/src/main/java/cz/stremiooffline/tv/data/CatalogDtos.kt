@@ -114,7 +114,9 @@ data class PersonTitleDto(
   val year: String? = null,
   val poster: String? = null,
   val background: String? = null,
-  val role: String? = null,
+  /** `director`, `writer`, `creator` or `novel`, as the detail's crew roles name them. */
+  val jobs: List<String> = emptyList(),
+  val character: String? = null,
   val inLibrary: Boolean = false,
 )
 

@@ -10,6 +10,7 @@ import {
 } from "./tmdb.js";
 
 export type PersonSectionKey = "acting" | "crew";
+export type PersonJob = "director" | "writer" | "creator" | "novel";
 
 export interface PersonCreditTitle {
   type: "movie" | "series";
@@ -19,7 +20,10 @@ export interface PersonCreditTitle {
   date?: string;
   posterPath?: string;
   backdropPath?: string;
-  role?: string;
+  /** What the person did, as the detail's crew roles name it; absent for acting only. */
+  jobs?: PersonJob[];
+  /** The characters played, joined. */
+  character?: string;
   popularity: number;
 }
 
@@ -40,7 +44,10 @@ export interface PersonTitle {
   year?: string;
   poster?: string;
   background?: string;
-  role?: string;
+  /** What the person did, as the detail's crew roles name it; absent for acting only. */
+  jobs?: PersonJob[];
+  /** The characters played, joined. */
+  character?: string;
   inLibrary?: true;
 }
 
@@ -60,7 +67,16 @@ export type PersonLookup =
   | { status: "missing" }
   | { status: "failed" };
 
-const KEPT_JOBS = new Set(["Director", "Writer", "Screenplay", "Story", "Teleplay", "Novel", "Creator"]);
+const JOB_OF: Record<string, PersonJob> = {
+  Director: "director",
+  Writer: "writer",
+  Screenplay: "writer",
+  Story: "writer",
+  Teleplay: "writer",
+  Novel: "novel",
+  Creator: "creator",
+};
+const JOB_ORDER: PersonJob[] = ["creator", "director", "writer", "novel"];
 const TALK_OR_NEWS = new Set([10767, 10763]);
 const SUCCESS_TTL_MS = 24 * 60 * 60_000;
 const FAILURE_TTL_MS = 10 * 60_000;
@@ -115,7 +131,7 @@ export function normalizePerson(raw: TmdbPersonResponse, tmdbId: number): Person
     const character = text(row.character);
     if (cast && character && selfAppearance(character)) return;
     const job = text(row.job);
-    if (!cast && (!job || !KEPT_JOBS.has(job))) return;
+    if (!cast && (!job || !JOB_OF[job])) return;
 
     const type = media === "movie" ? "movie" : "series";
     const key = `${type}:${row.id}`;
@@ -148,7 +164,7 @@ export function normalizePerson(raw: TmdbPersonResponse, tmdbId: number): Person
   const acting: PersonCreditTitle[] = [];
   const crew: PersonCreditTitle[] = [];
   for (const item of merged.values()) {
-    const roles = item.jobs.length ? [...item.jobs, ...item.characters] : item.characters;
+    const jobs = JOB_ORDER.filter((key) => item.jobs.some((job) => JOB_OF[job] === key));
     const title: PersonCreditTitle = {
       type: item.type,
       tmdbId: item.tmdbId,
@@ -156,7 +172,8 @@ export function normalizePerson(raw: TmdbPersonResponse, tmdbId: number): Person
       ...(item.date ? { date: item.date, year: item.date.slice(0, 4) } : {}),
       ...(item.posterPath ? { posterPath: item.posterPath } : {}),
       ...(item.backdropPath ? { backdropPath: item.backdropPath } : {}),
-      ...(roles.length ? { role: roles.join(", ") } : {}),
+      ...(jobs.length ? { jobs } : {}),
+      ...(item.characters.length ? { character: item.characters.join(", ") } : {}),
       popularity: item.popularity ?? 0,
     };
     if (item.jobs.length) crew.push(title);
@@ -206,7 +223,8 @@ export function composePerson(credits: PersonCredits, opts: {
         ...(item.year ? { year: item.year } : {}),
         ...(tmdbImage(item.posterPath, "w342") ? { poster: tmdbImage(item.posterPath, "w342") } : {}),
         ...(tmdbImage(item.backdropPath, "w780") ? { background: tmdbImage(item.backdropPath, "w780") } : {}),
-        ...(item.role ? { role: item.role } : {}),
+        ...(item.jobs ? { jobs: item.jobs } : {}),
+        ...(item.character ? { character: item.character } : {}),
         ...(owned ? { inLibrary: true as const } : {}),
         date: item.date,
         popularity: item.popularity,

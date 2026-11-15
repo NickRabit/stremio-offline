@@ -422,9 +422,19 @@ private fun focusTarget(sections: List<PersonSectionDto>, focusKey: String?): Pa
 private fun titleCaptions(title: PersonTitleDto): List<String> = listOfNotNull(
   title.year?.takeIf { it.isNotBlank() },
   stringResource(if (title.type == "series") R.string.person_series else R.string.person_movie),
-  title.role?.takeIf { it.isNotBlank() },
+  title.jobs.mapNotNull { jobLabel(it) }.takeIf { it.isNotEmpty() }?.joinToString(" · "),
+  title.character?.takeIf { it.isNotBlank() },
   stringResource(R.string.person_in_library).takeIf { title.inLibrary },
 )
+
+@Composable
+private fun jobLabel(job: String): String? = when (job) {
+  "director" -> stringResource(R.string.detail_role_director)
+  "writer" -> stringResource(R.string.detail_role_writer)
+  "creator" -> stringResource(R.string.detail_role_creator)
+  "novel" -> stringResource(R.string.detail_role_novel)
+  else -> null
+}
 
 @Composable
 private fun apiErrorText(error: ApiError): String =

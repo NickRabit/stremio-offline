@@ -55,7 +55,8 @@ export interface PersonTitle {
   year?: string;
   poster?: string;
   background?: string;
-  role?: string;
+  jobs?: Array<"director" | "writer" | "creator" | "novel">;
+  character?: string;
   inLibrary?: true;
 }
 export interface PersonFilmography {

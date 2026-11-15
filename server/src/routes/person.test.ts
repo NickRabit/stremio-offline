@@ -142,7 +142,7 @@ test("GET /api/person/:tmdbId returns the contract shape from one TMDB request",
       id: number;
       name: string;
       photo?: string;
-      sections: Array<{ key: string; titles: Array<{ type: string; tmdbId: number; id: string; name: string; year?: string; poster?: string; role?: string; inLibrary?: boolean }> }>;
+      sections: Array<{ key: string; titles: Array<{ type: string; tmdbId: number; id: string; name: string; year?: string; poster?: string; jobs?: string[]; character?: string; inLibrary?: boolean }> }>;
     };
     assert.equal(body.id, 138);
     assert.equal(body.name, "Quentin Tarantino");

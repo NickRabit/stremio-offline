@@ -2522,12 +2522,12 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .person-card div{min-width:0}
 .person-card h2{margin:0;font-size:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .person-card p{margin:2px 0 0;color:var(--muted);font-size:12px}
-.person-card .link-button{justify-self:end;max-width:100%;text-align:right;white-space:normal}
+.person-card .person-text-search{justify-self:end;max-width:100%;padding:6px 12px 6px 10px;border-radius:99px;font-size:12px;font-weight:600;color:var(--muted);white-space:normal;text-align:left}.person-card .person-text-search:hover{color:var(--text)}.person-card .person-text-search svg{width:14px;height:14px;flex:0 0 auto}.person-view h3 span{margin-left:6px;color:var(--muted);font-size:13px;font-weight:600}.person-view .browse-item small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .person-name-search{margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#2a2113;color:#e7b867;font-size:12px;line-height:1.45}
 .person-sentinel{height:1px}
 @media(prefers-reduced-motion:reduce){.person-card>span,.person-placeholder{animation:none}}
 @media(max-width:700px){
   .person-card{grid-template-columns:44px minmax(0,1fr)}
   .person-card>img,.person-card>span{width:44px;height:44px}
-  .person-card .link-button{grid-column:1/-1;justify-self:start;text-align:left}
+  .person-card .person-text-search{grid-column:1/-1;justify-self:start}
 }

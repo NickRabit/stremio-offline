@@ -44,9 +44,8 @@ test("Tarantino keeps his Pulp Fiction jobs and character in the crew section", 
   assert.ok(credits);
   const pulp = credits.crew.find((item) => item.tmdbId === 680);
   assert.ok(pulp);
-  assert.match(pulp.role ?? "", /Director/);
-  assert.match(pulp.role ?? "", /Writer/);
-  assert.match(pulp.role ?? "", /Jimmie Dimmick/);
+  assert.deepEqual(pulp.jobs, ["director", "writer"]);
+  assert.match(pulp.character ?? "", /Jimmie Dimmick/);
   assert.equal(credits.acting.some((item) => item.tmdbId === 680), false);
   assert.equal(credits.crew.some((item) => item.tmdbId === 507), false, "Producer-only Killing Zoe is absent");
   assert.equal(credits.crew.some((item) => item.tmdbId === 339403), false, "Thanks-only Baby Driver is absent");
@@ -66,7 +65,7 @@ test("Gilligan's creator credit for Breaking Bad is a series in crew", () => {
   const breakingBad = credits.crew.find((item) => item.tmdbId === 1396);
   assert.ok(breakingBad);
   assert.equal(breakingBad.type, "series");
-  assert.match(breakingBad.role ?? "", /Creator/);
+  assert.ok(breakingBad.jobs?.includes("creator"));
 });
 
 test("Cranston merges characters and drops talk shows and self appearances", () => {
@@ -78,12 +77,12 @@ test("Cranston merges characters and drops talk shows and self appearances", () 
   }
   const familyGuy = credits.acting.filter((item) => item.tmdbId === 1434);
   assert.equal(familyGuy.length, 1);
-  assert.match(familyGuy[0]!.role ?? "", /Dr\. Jewish/);
-  assert.match(familyGuy[0]!.role ?? "", /Bert \/ Judge/);
+  assert.match(familyGuy[0]!.character ?? "", /Dr\. Jewish/);
+  assert.match(familyGuy[0]!.character ?? "", /Bert \/ Judge/);
   const breakingBad = credits.crew.find((item) => item.tmdbId === 1396);
   assert.ok(breakingBad);
-  assert.match(breakingBad.role ?? "", /Director/);
-  assert.match(breakingBad.role ?? "", /Walter White/);
+  assert.ok(breakingBad.jobs?.includes("director"));
+  assert.match(breakingBad.character ?? "", /Walter White/);
 });
 
 test("normalisation drops adult, untitled, non-title and self-credit rows", () => {
@@ -162,7 +161,7 @@ test("composition uses a known IMDb id and marks ownership without changing the 
     profilePath: "/quentin.jpg",
     knownFor: "crew",
     acting: [],
-    crew: [credit({ tmdbId: 680, name: "Pulp Fiction", posterPath: "/pulp.jpg", role: "Director" })],
+    crew: [credit({ tmdbId: 680, name: "Pulp Fiction", posterPath: "/pulp.jpg", jobs: ["director"] })],
   };
   const known = composePerson(credits, {
     owned: new Set(["movie:680"]),
