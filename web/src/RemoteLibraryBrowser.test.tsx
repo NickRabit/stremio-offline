@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
+import { ChildModeProvider } from "./child-mode";
 import { clearRemoteMosaicCache } from "./remote-mosaic";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
@@ -253,7 +254,7 @@ const click = async (element: Element) => { await act(async () => { (element as 
 const byText = (selector: string, text: string) =>
   [...host.querySelectorAll<HTMLElement>(selector)].find((node) => node.textContent?.includes(text));
 
-const render = async (over: Partial<Parameters<typeof RemoteLibraryBrowser>[0]> = {}) => {
+const render = async (over: Partial<Parameters<typeof RemoteLibraryBrowser>[0]> = {}, child = false) => {
   const onPersistPrefs = vi.fn();
   const onOpenChange = vi.fn();
   const props: Parameters<typeof RemoteLibraryBrowser>[0] = {
@@ -265,7 +266,7 @@ const render = async (over: Partial<Parameters<typeof RemoteLibraryBrowser>[0]> 
     downloadLibraries: [],
     ...over,
   };
-  await act(async () => { root.render(<RemoteLibraryBrowser {...props}/>); });
+  await act(async () => { root.render(<ChildModeProvider child={child} catalogue={child}><RemoteLibraryBrowser {...props}/></ChildModeProvider>); });
   await flush();
   return { props, onPersistPrefs, onOpenChange };
 };
@@ -278,6 +279,12 @@ const openRootLibrary = async (which = 0) => {
 };
 
 describe("RemoteLibraryBrowser listing", () => {
+  it("does not offer a child the library shape preference", async () => {
+    await render({}, true);
+    await click(host.querySelectorAll<HTMLButtonElement>(".remote-libraries button.library-open")[0]!);
+    expect(host.querySelector(".shape-toggle")).toBeNull();
+  });
+
   it("shuffles the current remote folder and hands the next random title to the player", async () => {
     const remoteStream = (itemId: string, sourceId: string): Stream => ({
       sourceId, kind: "remote", playable: true, provider: "jellyfin",

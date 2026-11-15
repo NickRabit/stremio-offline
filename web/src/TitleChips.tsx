@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Play } from "lucide-react";
+import { useChildMode } from "./child-mode";
 import { t, useI18n } from "./i18n";
 import { trailerAction } from "./trailers";
 import type { SiteLink, Trailer } from "./types";
@@ -32,8 +33,9 @@ export interface TitleChipsProps {
  *  and a library detail draw the same row, so the three cannot drift apart. */
 export function TitleChips({ kind, trailer, links = [], leading, trailing, onTrailer, secureMode }: TitleChipsProps) {
   useI18n();
-  const action = trailerAction(trailer, secureMode);
-  const sorted = [...links].sort((left, right) => SITE_ORDER.indexOf(left.site) - SITE_ORDER.indexOf(right.site));
+  const { child } = useChildMode();
+  const action = child ? null : trailerAction(trailer, secureMode);
+  const sorted = child ? [] : [...links].sort((left, right) => SITE_ORDER.indexOf(left.site) - SITE_ORDER.indexOf(right.site));
   if (!leading && !kind && !action && !sorted.length && !trailing) return null;
   return <div className="title-chips">
     {leading}

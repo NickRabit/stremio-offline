@@ -1225,7 +1225,7 @@ export interface FollowDeps {
   store: FollowStore;
   now: () => number;
   /** The owner as they are now; undefined when deleted. */
-  owner: (userId: string) => { id: string; role: "admin" | "user"; disabled?: boolean } | undefined;
+  owner: (userId: string) => { id: string; role: "admin" | "user"; disabled?: boolean; child?: boolean } | undefined;
   /** Metadata as the owner may see it, in the owner's language, bypassing the cache. */
   meta: (owner: Viewer, type: string, metaId: string) => Promise<MetaItem | null>;
   /** Per-episode TMDB air dates for the seasons worth checking, keyed `${season}:${episode}`.
@@ -1426,7 +1426,7 @@ export class FollowService {
 
   private mayQueue(follow: Follow): boolean {
     const owner = this.deps.owner(follow.ownerUserId);
-    if (!owner || owner.disabled || !follow.autoDownload) return false;
+    if (!owner || owner.disabled || owner.child || !follow.autoDownload) return false;
     return this.deps.mayDownload(follow.ownerUserId, follow.autoDownload.selection);
   }
 

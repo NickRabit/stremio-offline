@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bell, CalendarClock, FolderOpen, ListFilter, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
+import { useChildMode } from "./child-mode";
 import { useDialogFocus } from "./dialog-focus";
 import { inlineLanguageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
@@ -67,11 +68,12 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
   const dialog = useRef<HTMLDivElement>(null);
   useDialogFocus(dialog);
   useI18n();
+  const { child } = useChildMode();
   const initial = follow?.initial;
   const creating = Boolean(follow?.create);
   const isMovie = type === "movie";
   const [followMode, setFollowMode] = useState<"notify" | "download">("notify");
-  const downloading = !creating || followMode === "download";
+  const downloading = !child && (!creating || followMode === "download");
   const [profiles, setProfiles] = useState<SourceProfile[]>([]);
   const [profilesState, setProfilesState] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [profileId, setProfileId] = useState("");
@@ -221,7 +223,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
       <div className="identify-head bulk-head"><div><span className="bulk-eyebrow">{label}</span><h2 id="bulk-dialog-title">{dialogTitle}</h2></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
       <div className="dialog-body bulk-body">
         {creating && <section className="bulk-section"><div className="bulk-section-head"><Bell/><div><h3>{t("follow.howHeading")}</h3></div></div>
-          <div className="bulk-strategy" role="radiogroup" aria-label={t("follow.howHeading")}>{(["notify", "download"] as const).map((mode) => <label key={mode} className={followMode === mode ? "selected" : ""}><input type="radio" name="follow-mode" value={mode} checked={followMode === mode} onChange={() => setFollowMode(mode)}/><span><strong>{t(mode === "notify" ? (isMovie ? "follow.movieNotify" : "follow.modeNotify") : (isMovie ? "follow.movieDownload" : "follow.modeDownload"))}</strong><small>{t(mode === "notify" ? (isMovie ? "follow.movieNotifyHint" : "follow.modeNotifyHint") : (isMovie ? "follow.movieDownloadHint" : "follow.modeDownloadHint"))}</small></span></label>)}</div>
+          <div className="bulk-strategy" role="radiogroup" aria-label={t("follow.howHeading")}>{(child ? ["notify"] as const : ["notify", "download"] as const).map((mode) => <label key={mode} className={followMode === mode ? "selected" : ""}><input type="radio" name="follow-mode" value={mode} checked={followMode === mode} onChange={() => setFollowMode(mode)}/><span><strong>{t(mode === "notify" ? (isMovie ? "follow.movieNotify" : "follow.modeNotify") : (isMovie ? "follow.movieDownload" : "follow.modeDownload"))}</strong><small>{t(mode === "notify" ? (isMovie ? "follow.movieNotifyHint" : "follow.modeNotifyHint") : (isMovie ? "follow.movieDownloadHint" : "follow.modeDownloadHint"))}</small></span></label>)}</div>
         </section>}
         {follow && downloading && !isMovie && <section className="bulk-section"><div className="bulk-section-head"><CalendarClock/><div><h3>{t("follow.startHeading")}</h3></div></div>
           <div className="bulk-strategy" role="radiogroup" aria-label={t("follow.startHeading")}>

@@ -17,6 +17,8 @@ export interface TrayInput {
   current: Target | null;
   connected: boolean;
   platform?: NodeJS.Platform;
+  /** A child account is on screen: the menu shows and quits the app and nothing else. */
+  locked?: boolean;
   actions: TrayActions;
 }
 
@@ -31,6 +33,14 @@ const localLabel = (strings: MenuStrings, platform: NodeJS.Platform): string =>
 /** Pure: the tray's menu, tested without Electron's `Tray`, which needs a ready app. */
 export function buildTrayTemplate(input: TrayInput): MenuItemConstructorOptions[] {
   const { strings, profiles, current, connected, platform = process.platform, actions } = input;
+  // Another server keeps its own signed-in session, so reaching one is a way out of the profile.
+  if (input.locked) {
+    return [
+      { label: strings["tray.open"], click: () => actions.open() },
+      { type: "separator" },
+      { label: strings["tray.quit"], click: () => actions.quit() },
+    ];
+  }
   return [
     { label: strings["tray.open"], click: () => actions.open() },
     { type: "separator" },

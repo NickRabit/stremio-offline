@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 import type { Request, Response } from "express";
 import { RestrictedError, restrictedMiddleware } from "./restricted.js";
 import { AppError } from "./errors.js";
-import { assertStillAdmin, ForbiddenError, MUST_CHANGE_ALLOWED, USER_ALLOWED, isMustChangePathAllowed, isUserAllowed, passwordChangeMiddleware, roleMiddleware } from "./roles.js";
+import {
+  assertStillAdmin, CHILD_ALLOWED, CHILD_CATALOGUE_ALLOWED, ForbiddenError, MUST_CHANGE_ALLOWED, USER_ALLOWED,
+  isChildAllowed, isMustChangePathAllowed, isUserAllowed, passwordChangeMiddleware, roleMiddleware,
+} from "./roles.js";
 import type { Role } from "./users.js";
 
 /** One concrete path per rule of USER_ALLOWED. The table is pinned in both directions, so
@@ -218,12 +221,179 @@ const REFUSED: Array<[string, string]> = [
   ["DELETE", "/downloads"],
 ];
 
-const invoke = (method: string, path: string, opts?: { role?: Role; isOpen?: boolean; isInternal?: boolean }) => {
+/** One concrete path per child rule, in the same order as the allow-list. */
+const CHILD_ALLOWED_PATHS: Array<[string, string]> = [
+  ["GET", "/auth/me"],
+  ["POST", "/auth/login"],
+  ["POST", "/auth/logout"],
+  ["GET", "/profiles"],
+  ["POST", "/profiles/switch"],
+  ["GET", "/progress"],
+  ["GET", "/progress/movie:tt1254207"],
+  ["POST", "/progress"],
+  ["POST", "/progress/forget"],
+  ["DELETE", "/progress"],
+  ["DELETE", "/progress/movie:tt1254207"],
+  ["GET", "/library/favorites"],
+  ["GET", "/favorites"],
+  ["GET", "/resume"],
+  ["GET", "/library/resume"],
+  ["POST", "/library/favorite"],
+  ["GET", "/views"],
+  ["PATCH", "/views"],
+  ["GET", "/search/state"],
+  ["GET", "/search/preferences"],
+  ["POST", "/search/history"],
+  ["POST", "/search/history/forget"],
+  ["DELETE", "/search/history"],
+  ["POST", "/search/everywhere"],
+  ["POST", "/search/everywhere/ss_abc/poll"],
+  ["POST", "/search/everywhere/ss_abc/page"],
+  ["POST", "/search/everywhere/ss_abc/sources/s0/retry"],
+  ["GET", "/search/everywhere/ss_abc/members/member_1"],
+  ["DELETE", "/search/everywhere/ss_abc"],
+  ["GET", "/library"],
+  ["GET", "/library/browse"],
+  ["GET", "/library/gallery"],
+  ["GET", "/library/identity"],
+  ["GET", "/library/mosaic"],
+  ["GET", "/library/thumb"],
+  ["GET", "/library/next/movie:tt1254207"],
+  ["GET", "/library/previous/movie:tt1254207"],
+  ["POST", "/library/source"],
+  ["GET", "/libraries"],
+  ["GET", "/library/title"],
+  ["GET", "/remote-libraries"],
+  ["GET", "/remote-libraries/personal"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/browse"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/preview"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/mosaic"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/episodes"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/sources"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Primary"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Backdrop"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/artwork/Thumb"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/streams/movie/tt1254207"],
+  ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/state"],
+  ["PATCH", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/state"],
+  ["POST", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/playing"],
+  ["GET", "/home"],
+  ["GET", "/home/layout"],
+  ["POST", "/inspect"],
+  ["POST", "/playback"],
+  ["GET", "/playback/abc/status"],
+  ["POST", "/playback/abc/ping"],
+  ["GET", "/playback/abc/preview"],
+  ["GET", "/playback/abc/sidecar.vtt"],
+  ["GET", "/playback/abc/1/master.m3u8"],
+  ["DELETE", "/playback/abc"],
+  ["POST", "/shuffle"],
+  ["POST", "/shuffle/abc/next"],
+  ["DELETE", "/shuffle/abc"],
+  ["GET", "/media/abc"],
+  ["GET", "/media/abc/u/signature"],
+  ["GET", "/intro-segments"],
+  ["GET", "/image/poster"],
+  ["GET", "/local-streams/movie/tt1254207"],
+  ["GET", "/local-streams/series/tt1254207%3A1%3A1"],
+  ["GET", "/subtitle/sub-1"],
+  ["POST", "/client-log"],
+  ["POST", "/client-log/bundle"],
+  ["DELETE", "/device-transfers"],
+  ["DELETE", "/device-transfers/abc"],
+  ["GET", "/settings"],
+  ["GET", "/languages"],
+];
+
+const CHILD_CATALOGUE_EXTRA: Array<[string, string]> = [
+  ["GET", "/catalogs"],
+  ["GET", "/catalog"],
+  ["GET", "/search"],
+  ["GET", "/searchable"],
+  ["POST", "/search/catalog"],
+  ["POST", "/search/catalog/cs_abc/poll"],
+  ["POST", "/search/catalog/cs_abc/page"],
+  ["DELETE", "/search/catalog/cs_abc"],
+  ["GET", "/meta/movie/tt1254207"],
+  ["GET", "/stream-sources/movie/tt1254207"],
+  ["GET", "/streams/movie/tt1254207"],
+  ["GET", "/subtitles/movie/tt1254207"],
+  ["GET", "/addons"],
+  ["GET", "/watchlist"],
+  ["POST", "/watchlist"],
+  ["GET", "/source-profiles"],
+  ["GET", "/follows"],
+  ["POST", "/follows"],
+  ["GET", "/follows/defaults"],
+  ["GET", "/follows/calendar"],
+  ["DELETE", "/follows/calendar-feed"],
+  ["GET", "/follows/activity"],
+  ["GET", "/follows/new-episodes"],
+  ["GET", "/follows/by-meta/series/tt1254207"],
+  ["PATCH", "/follows/f-1"],
+  ["DELETE", "/follows/f-1"],
+  ["POST", "/follows/f-1/check"],
+  ["GET", "/follows/f-1/episodes"],
+  ["GET", "/follows/f-1/preview"],
+];
+
+const CHILD_REFUSED: Array<[string, string]> = [
+  // Open paths in the running server, so a television can still sign a child in; they are
+  // simply not on the child list.
+  ["POST", "/auth/pair/start"],
+  ["POST", "/auth/pair/poll"],
+  ["GET", "/downloads"],
+  ["POST", "/downloads"],
+  ["POST", "/downloads/bulk"],
+  ["POST", "/downloads/bulk/prepare"],
+  ["POST", "/downloads/job-1/pause"],
+  ["POST", "/downloads/job-1/resume"],
+  ["POST", "/downloads/job-1/retry"],
+  ["POST", "/downloads/job-1/now"],
+  ["DELETE", "/downloads/job-1"],
+  ["POST", "/device-download"],
+  ["GET", "/device-download/abc"],
+  ["GET", "/library/folders"],
+  ["GET", "/links/movie/tt1254207"],
+  ["GET", "/library/links"],
+  ["GET", "/trailer/movie/tt1254207"],
+  ["GET", "/library/trailer"],
+  ["GET", "/meta/movie/tt1254207/extras"],
+  ["GET", "/meta/series/tt1254207/extras"],
+  ["GET", "/person/search"],
+  ["GET", "/person/search"],
+  ["GET", "/person/138"],
+  ["GET", "/person/title/movie/680"],
+  ["GET", "/follows/calendar-feed"],
+  ["POST", "/follows/calendar-feed"],
+  ["POST", "/follows/f-1/episodes/1:2/skip"],
+  ["POST", "/follows/f-1/episodes/1:2/retry"],
+  ["PATCH", "/settings"],
+  ["PATCH", "/search/preferences"],
+  ["PUT", "/follows/defaults"],
+  ["PATCH", "/auth/password"],
+  ["PATCH", "/auth/pin"],
+  ["PUT", "/addons/order"],
+  ["POST", "/auth/pair/inspect"],
+  ["POST", "/auth/pair/approve"],
+  ["POST", "/auth/pair/deny"],
+];
+
+const invoke = (method: string, path: string, opts?: {
+  role?: Role;
+  child?: boolean;
+  catalogue?: boolean;
+  isOpen?: boolean;
+  isInternal?: boolean;
+}) => {
   let passed: unknown = "not-called";
   roleMiddleware({
     isOpen: () => Boolean(opts?.isOpen),
     isInternal: () => Boolean(opts?.isInternal),
     roleOf: () => opts?.role,
+    childOf: () => opts?.child ? { child: true, catalogue: Boolean(opts.catalogue) } : undefined,
   })({ method, path } as Request, {} as Response, ((error?: unknown) => { passed = error; }) as () => void);
   return passed;
 };
@@ -249,6 +419,53 @@ test("an administrator passes every allowed path and the ones outside the table"
   for (const [method, path] of [...ALLOWED, ...REFUSED, ["POST", "/something-new"] as [string, string]]) {
     assert.equal(invoke(method, path, { role: "admin" }), undefined, `${method} ${path}`);
   }
+});
+
+test("CHILD_ALLOWED and CHILD_CATALOGUE_ALLOWED are pinned rule by rule", () => {
+  for (const [method, path] of CHILD_ALLOWED_PATHS) {
+    assert.equal(isChildAllowed(method, path, false), true, `${method} ${path}`);
+  }
+  for (const [method, path] of CHILD_CATALOGUE_EXTRA) {
+    assert.equal(isChildAllowed(method, path, false), false, `${method} ${path} without catalogue`);
+    assert.equal(isChildAllowed(method, path, true), true, `${method} ${path} with catalogue`);
+  }
+  const represented = [...CHILD_ALLOWED_PATHS, ...CHILD_CATALOGUE_EXTRA];
+  for (const rule of CHILD_CATALOGUE_ALLOWED) {
+    assert.ok(
+      represented.some(([method, path]) => rule.method === method && rule.pattern.test(path)),
+      `orphan child rule ${rule.method} ${rule.pattern}`,
+    );
+  }
+});
+
+test("every child rule is an ordinary-user rule", () => {
+  for (const rule of CHILD_CATALOGUE_ALLOWED) {
+    assert.ok(USER_ALLOWED.includes(rule), `${rule.method} ${rule.pattern} is not in USER_ALLOWED`);
+  }
+  assert.equal(CHILD_ALLOWED.length, CHILD_ALLOWED_PATHS.length);
+  assert.equal(CHILD_CATALOGUE_ALLOWED.length, CHILD_ALLOWED.length + CHILD_CATALOGUE_EXTRA.length);
+});
+
+test("every ordinary-user rule is either open to a child or named in the refused table", () => {
+  const named = [...CHILD_ALLOWED_PATHS, ...CHILD_CATALOGUE_EXTRA, ...CHILD_REFUSED];
+  const unclassified = USER_ALLOWED
+    .filter((rule) => !named.some(([method, path]) => rule.method === method && rule.pattern.test(path)))
+    .map((rule) => `${rule.method} ${rule.pattern}`);
+  assert.deepEqual(unclassified, []);
+});
+
+test("a child is refused every route in the policy's refused table while an ordinary account passes", () => {
+  for (const [method, path] of CHILD_REFUSED) {
+    const refused = invoke(method, path, { role: "user", child: true, catalogue: true });
+    assert.ok(refused instanceof ForbiddenError, `${method} ${path}`);
+    assert.equal(refused.status, 403, `${method} ${path}`);
+    assert.equal(refused.messageKey, "err.notAllowed", `${method} ${path}`);
+    assert.equal(invoke(method, path, { role: "user" }), undefined, `${method} ${path}`);
+  }
+});
+
+test("an administrator is never checked against the child list", () => {
+  assert.equal(invoke("GET", "/downloads", { role: "admin", child: true }), undefined);
 });
 
 test("an ordinary user reaches the allowed paths and is refused the rest", () => {
@@ -342,7 +559,9 @@ test("the role gate and the restricted gate are independent", (t) => {
   const run = (role: Role | undefined) => {
     let result: unknown = "not-called";
     const request = { method: "POST", path: "/addons" } as Request;
-    roleMiddleware({ isOpen: () => false, isInternal: () => false, roleOf: () => role })(request, {} as Response, (error?: unknown) => {
+    roleMiddleware({
+      isOpen: () => false, isInternal: () => false, roleOf: () => role, childOf: () => undefined,
+    })(request, {} as Response, (error?: unknown) => {
       if (error !== undefined) { result = error; return; }
       restrictedMiddleware({ isOpen: () => false, isInternal: () => false })(request, {} as Response, (denied?: unknown) => { result = denied; });
     });

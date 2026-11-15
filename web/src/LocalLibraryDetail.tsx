@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, describeError } from "./api";
+import { useChildMode } from "./child-mode";
 import { DetailRatings, ratingsFrom, useCopyPending } from "./detail-copy";
 import { bytes } from "./settings-ui";
 import { localeTag, t, useI18n } from "./i18n";
@@ -87,6 +88,7 @@ interface Props {
  *  library uses. */
 export function LocalLibraryDetail({ item, favorite, progress, progressRevision = 0, onToggleFavorite, onResetProgress, onToggleWatched, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery, accountScope = "", onPlayAlternative, onSaveAlternative, onDownloadToDevice: downloadToDevice, preferredLanguage, realDebridConfigured = false, sourceProfiles = null, defaultSort, episodes }: Props) {
   useI18n();
+  const { child } = useChildMode();
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [error, setError] = useState("");
   const [nonce, setNonce] = useState(0);
@@ -142,8 +144,8 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   const resumeElsewhere = Boolean(resumeStableKey && sources !== null && !sources.some((stream) => stream.stableKey === resumeStableKey));
   const extra = useLibrarySources({
     scope: `${accountScope}\u0000${item.path}`,
-    open: chooserOpen || resumeElsewhere,
-    catalogue,
+    open: !child && (chooserOpen || resumeElsewhere),
+    catalogue: child ? null : catalogue,
     ...(identity?.bound?.type === "series" ? { nameHint: identity.bound.name } : {}),
     libraries: null,
     localCopies: false,
@@ -347,11 +349,10 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     originalLine={pieces.originalLine}
     ratings={<DetailRatings age={pieces.ageBadge} imdb={scores.imdb} tmdb={scores.tmdb} tmdbVotes={scores.tmdbVotes}/>}
     heroExtra={pieces.nextLine}
-    people={titleExtras.extras?.people}
-    trailer={enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage)}
-    onTrailer={onTrailer}
+    {...(!child && titleExtras.extras?.people ? { people: titleExtras.extras.people } : {})}
+    {...(!child ? { trailer: enrichment.trailer ?? trailerFromExtras(titleExtras.extras, uiLanguage), onTrailer } : {})}
     secureMode={secureMode}
-    extras={<TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} {...(title ? { titleName: title } : {})}/>}
+    {...(!child ? { extras: <TitleExtrasRows extras={titleExtras.extras} loading={titleExtras.loading} secureMode={secureMode} onTrailer={onTrailer} {...(title ? { titleName: title } : {})}/> } : {})}
     copyPending={copyPending}
     progressPending={Boolean(progress && progress.position > 0) && saved === null}
     trailerPending={trailerPending}
@@ -375,8 +376,8 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     {...(defaultSort ? { defaultSort } : {})}
     {...(saved && saved.sourceKey === selectedKey ? { progress: saved } : {})}
     onClearProgress={clearSelectedProgress}
-    {...(catalogue ? { sourceGroups: { groups: extra.groups, retry: extra.retry, renew: extra.renew, refind: extra.refind }, onOpenSources: () => setChooserOpen(true) } : {})}
-    {...(catalogue && onSaveAlternative ? {
+    {...(!child && catalogue ? { sourceGroups: { groups: extra.groups, retry: extra.retry, renew: extra.renew, refind: extra.refind }, onOpenSources: () => setChooserOpen(true) } : {})}
+    {...(!child && catalogue && onSaveAlternative ? {
       onSaveToLibrary: (stream: Stream) => onSaveAlternative({
         stream, title, ...(item.poster ? { poster: item.poster } : {}), catalogue, media: alternativeMedia(),
         kind: identity?.bound?.type === "series" ? "series" : "movie",
@@ -406,13 +407,13 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     // row to the server, which downloads it on the viewer's behalf. It is the row on screen that
     // decides, so a detail standing for a title offers it for the copy the viewer has chosen exactly
     // as a detail standing for one file does.
-    {...(downloadToDevice ? { onDownloadToDevice: (stream: Stream) => downloadToDevice(stream) } : {})}
+    {...(!child && downloadToDevice ? { onDownloadToDevice: (stream: Stream) => downloadToDevice(stream) } : {})}
     {...(preferredLanguage ? { preferredLanguage } : {})}
     onPlay={(stream, fromBeginning) => {
       // The library's own file plays through the library player; a row that belongs to an addon or
       // to another media server is handed on as the source it really is, with its own identity.
       if (isLocalStream(stream) || stream.localPath) { onPlay(stream, fromBeginning, catalogue); return; }
-      onPlayAlternative?.({
+      if (!child) onPlayAlternative?.({
         stream, title, ...(item.poster ? { poster: item.poster } : {}), catalogue, media: alternativeMedia(),
         kind: identity?.bound?.type === "series" ? "series" : "movie", ...(fromBeginning ? { fromBeginning: true } : {}),
       });

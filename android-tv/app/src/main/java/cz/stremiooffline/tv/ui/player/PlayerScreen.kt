@@ -129,6 +129,7 @@ const val TagRemoteSourcesRetry = "player_remote_sources_retry"
 fun PlayerScreen(
   api: TvApi,
   target: PlayTarget,
+  catalogue: Boolean = true,
   /** Leaving reports the source the session ended on, so the caller can keep naming it. */
   onExit: (String?) -> Unit,
   /** The other sources the caller offers for this title; a library file has none. */
@@ -254,9 +255,9 @@ fun PlayerScreen(
   var delaySeconds by remember(target.key) { mutableDoubleStateOf(0.0) }
   var cues by remember { mutableStateOf<List<VttCue>>(emptyList()) }
   val sourceFilters = remember(target.key) { SourceFilterState() }
-  BindSourceProfiles(api, sourceFilters)
+  BindSourceProfiles(api.takeIf { catalogue }, sourceFilters)
   LaunchedEffect(api, target.key) {
-    sourceAddons = runCatching { api.addons() }.getOrDefault(emptyList())
+    sourceAddons = if (catalogue) runCatching { api.addons() }.getOrDefault(emptyList()) else emptyList()
   }
 
   val currentState by rememberUpdatedState(state)
@@ -278,7 +279,7 @@ fun PlayerScreen(
     replacementSources = OfferedSources(Streams.deduped(target.initialSources ?: target.remoteSources))
     replacementSourcesLoading = true
     scope.launch {
-      LibraryPlaySources(api).load(target) {
+      LibraryPlaySources(api, catalogue).load(target) {
         if (epoch != replacementSourcesEpoch) return@load
         replacementSources = it
         replacementSourcesLoading = it.loading
@@ -529,11 +530,19 @@ fun PlayerScreen(
     rawSegments = runCatching { api.introSegments(query.imdb, query.season, query.episode) }.getOrNull()
   }
   suspend fun askSubtitles(identity: Pair<String, String>): List<AddonSubtitleDto> =
-    runCatching { api.subtitles(identity.first, identity.second) }.getOrDefault(emptyList())
+    if (!catalogue) {
+      emptyList()
+    } else {
+      runCatching { api.subtitles(identity.first, identity.second) }.getOrDefault(emptyList())
+    }
 
   /** Asks the subtitle addons about [from] beside its session and hands their answer to it. */
   fun offerLater(from: PlayTarget, own: List<AddonSubtitleDto>, identity: suspend () -> Pair<String, String>?) {
     scope.launch {
+      if (!catalogue) {
+        if (currentTarget.key == from.key) addonSubtitles = own
+        return@launch
+      }
       val found = identity()?.let { askSubtitles(it) }.orEmpty()
       if (found.isEmpty() || currentTarget.key != from.key) return@launch
       addonSubtitles = own + found
@@ -597,7 +606,7 @@ fun PlayerScreen(
     val startedAt = clock()
     renewedAt = startedAt
     return scope.launch {
-      LibraryPlaySources(api).load(from, renew = true) { found ->
+      LibraryPlaySources(api, catalogue).load(from, renew = true) { found ->
         if (epoch != renewalEpoch) return@load
         found.streams.forEach { if (it.sourceId.isNotBlank()) listedAt[it.sourceId] = startedAt }
         renewedSources = found

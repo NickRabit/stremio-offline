@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { api } from "./api";
 import { SearchEverywhere } from "./SearchEverywhere";
+import { ChildModeProvider } from "./child-mode";
 import { setLocale } from "./i18n";
 import type { SearchClusterView, SearchMember, SearchMemberPage, SearchSnapshot, SearchableCatalog } from "./types";
 import type { SearchEverywhereController } from "./useSearchEverywhere";
@@ -109,13 +110,13 @@ const render = async (search: SearchEverywhereController, handlers: {
   onRecord?: (query: string) => void;
   onForget?: (query: string) => void;
   onRefreshRecent?: () => void;
-} = {}) => {
+} = {}, child = false) => {
   await act(async () => {
-    root.render(<SearchEverywhere search={search} shape="poster" onToggleShape={vi.fn()}
+    root.render(<ChildModeProvider child={child} catalogue={child}><SearchEverywhere search={search} shape="poster" onToggleShape={vi.fn()}
       searchable={handlers.searchable ?? []} recent={handlers.recent ?? []}
       onRecord={handlers.onRecord ?? vi.fn()} onForget={handlers.onForget ?? vi.fn()} onRefreshRecent={handlers.onRefreshRecent ?? vi.fn()}
       onOpenMember={handlers.onOpenMember ?? vi.fn()} onOpenCanonical={handlers.onOpenCanonical ?? vi.fn()}
-      onOpenPerson={vi.fn()}/>);
+      onOpenPerson={vi.fn()}/></ChildModeProvider>);
   });
 };
 
@@ -132,6 +133,11 @@ const clickCard = async () => {
 };
 
 describe("SearchEverywhere", () => {
+  it("does not offer a child the shape preference that writes settings", async () => {
+    await render(controller(), {}, true);
+    expect(host.querySelector(".shape-toggle")).toBeNull();
+  });
+
   it("pins one search card's markup", async () => {
     await render(controller({
       order: ["one"],

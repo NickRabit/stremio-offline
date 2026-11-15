@@ -110,12 +110,20 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     if (username.length < USERNAME_MIN) throw new AppError(`The username needs at least ${USERNAME_MIN} characters.`, "auth.usernameTooShort");
     const password = String(req.body?.password ?? "");
     if (password.length < PASSWORD_MIN) throw new AppError(`The password needs at least ${PASSWORD_MIN} characters.`, "auth.passwordTooShort");
+    const role = req.body?.role === undefined ? "user" : roleOf(req.body.role);
+    const child = req.body?.child === undefined ? false : flagOf(req.body.child, "child");
+    const catalogue = req.body?.catalogue === undefined ? false : flagOf(req.body.catalogue, "catalogue");
+    if (role === "admin" && child) {
+      throw new AppError("An administrator cannot be a child account.", "err.invalidRequest", 400);
+    }
     const record: UserRecord = {
       id: newUserId(store.users().map((user) => user.id)),
       username,
       passwordHash: await hashPassword(password),
       secret: randomBytes(32).toString("hex"),
-      role: req.body?.role === undefined ? "user" : roleOf(req.body.role),
+      role,
+      child,
+      catalogue: child && catalogue,
       createdAt: new Date().toISOString(),
       permissions: permissionsOf(req.body?.permissions, newUserPermissions()),
       permissionsVersion: 0,
@@ -150,6 +158,8 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     const role = req.body?.role === undefined ? undefined : roleOf(req.body.role);
     const disabled = req.body?.disabled === undefined ? undefined : flagOf(req.body.disabled, "disabled");
     const switcher = req.body?.switcher === undefined ? undefined : flagOf(req.body.switcher, "switcher");
+    const child = req.body?.child === undefined ? undefined : flagOf(req.body.child, "child");
+    const catalogue = req.body?.catalogue === undefined ? undefined : flagOf(req.body.catalogue, "catalogue");
     const unlockValue = req.body?.unlock;
     if (unlockValue !== undefined && unlockValue !== "none" && unlockValue !== "pin" && unlockValue !== "password") {
       throw new AppError("The unlock method is none, pin or password.", "err.invalidRequest", 400);
@@ -175,6 +185,13 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
       if (disabled ?? Boolean(current.disabled)) assertAdminRemains(state.users ?? [], { kind: "disable", id });
       withUser(state, id, (user) => {
         const nextRole = role ?? user.role;
+        const requestedChild = child === undefined ? user.role === "user" && Boolean(user.child) : child;
+        const nextChild = nextRole === "admin" ? false : requestedChild;
+        if (nextRole === "admin" && child === true) {
+          throw new AppError("An administrator cannot be a child account.", "err.invalidRequest", 400);
+        }
+        const requestedCatalogue = catalogue === undefined ? user.role === "user" && Boolean(user.catalogue) : catalogue;
+        const nextCatalogue = nextChild && requestedCatalogue;
         const requestedUnlock = unlock ?? user.unlock;
         let nextUnlock = requestedUnlock;
         if (nextRole === "admin" && requestedUnlock === "none") {
@@ -197,6 +214,10 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
           ...(role ? { role } : {}),
           ...(disabled === undefined ? {} : { disabled }),
           ...(switcher === undefined ? {} : { switcher }),
+          child: nextChild,
+          catalogue: nextCatalogue,
+          // The same reason as in the password route below: a child cannot pay that debt.
+          ...(nextChild && user.mustChangePassword ? { mustChangePassword: false } : {}),
           ...(nextUnlock === undefined ? {} : { unlock: nextUnlock }),
           ...(cutOff ? { secret: randomBytes(32).toString("hex"), revoked: {} } : {}),
           permissions,
@@ -205,6 +226,8 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
           || (next.unlock ?? "password") !== (user.unlock ?? "password");
         changed = next.role !== user.role
           || Boolean(next.disabled) !== Boolean(user.disabled)
+          || next.child !== Boolean(user.child)
+          || next.catalogue !== Boolean(user.catalogue)
           || next.permissions.downloadToLibrary !== user.permissions.downloadToLibrary
           || next.permissions.downloadToDevice !== user.permissions.downloadToDevice;
         return changed ? { ...next, permissionsVersion: user.permissionsVersion + 1 } : next;
@@ -214,6 +237,12 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     if (changed) await permissionsChanged(before, after);
     if (role && role !== before.role) audit("Account role changed", actor, after, { from: before.role, to: after.role });
     if (disabled !== undefined && disabled !== Boolean(before.disabled)) audit(disabled ? "Account disabled" : "Account enabled", actor, after);
+    if (Boolean(after.child) !== Boolean(before.child) || Boolean(after.catalogue) !== Boolean(before.catalogue)) {
+      audit("Child account changed", actor, after, {
+        child: Boolean(after.child),
+        catalogue: Boolean(after.catalogue),
+      });
+    }
     if (after.permissions.downloadToLibrary !== before.permissions.downloadToLibrary || after.permissions.downloadToDevice !== before.permissions.downloadToDevice) {
       audit("Account permissions changed", actor, after, { permissions: after.permissions });
     }
@@ -238,7 +267,9 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     const secret = randomBytes(32).toString("hex");
     await store.update((state) => {
       assertStillAdmin(state.users ?? [], actor);
-      withUser(state, id, (user) => ({ ...user, passwordHash, secret, mustChangePassword: true, revoked: {} }));
+      // A child may not change its own password, so the one an administrator chose is final:
+      // owing a change would lock the account out of everything, the switcher included.
+      withUser(state, id, (user) => ({ ...user, passwordHash, secret, mustChangePassword: !user.child, revoked: {} }));
     });
     // The new secret stops the next request; the sweep reaches the film, the device ticket
     // and the AirPlay grant already in flight on that account's devices. The administrator's

@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.home
 
+import cz.stremiooffline.tv.ui.LocalChildAccount
 import cz.stremiooffline.tv.ui.genreLabeler
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.animation.Crossfade
@@ -128,8 +129,9 @@ fun HomeScreen(
   onHint: (String) -> Unit,
   modifier: Modifier = Modifier,
   refreshToken: Int = 0,
+  catalogue: Boolean = true,
 ) {
-  val viewModel = viewModel<HomeViewModel>(factory = HomeViewModel.factory(api))
+  val viewModel = viewModel<HomeViewModel>(factory = HomeViewModel.factory(api, catalogue))
   LaunchedEffect(Unit) { viewModel.start() }
   LaunchedEffect(refreshToken) { if (refreshToken > 0) viewModel.refresh() }
   val state = viewModel.state
@@ -198,7 +200,8 @@ private fun HomeEmptyPanel() {
   Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
     Column(verticalArrangement = Arrangement.spacedBy(7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
       Text(stringResource(R.string.home_empty_title), color = Tokens.Text, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
-      Text(stringResource(R.string.home_empty_text), color = Tokens.Muted, fontSize = 12.sp)
+      val text = if (LocalChildAccount.current) R.string.home_child_empty_text else R.string.home_empty_text
+      Text(stringResource(text), color = Tokens.Muted, fontSize = 12.sp)
     }
   }
 }

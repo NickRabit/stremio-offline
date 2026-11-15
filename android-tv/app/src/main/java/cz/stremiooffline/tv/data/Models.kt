@@ -23,6 +23,8 @@ data class MeResponse(
   val language: String? = null,
   val mustChangePassword: Boolean = false,
   val canSwitch: Boolean = false,
+  val child: Boolean = false,
+  val catalogue: Boolean = false,
 )
 
 @Serializable

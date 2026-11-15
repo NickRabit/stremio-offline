@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LocalLibraryDetail, type LocalDetailItem } from "./LocalLibraryDetail";
+import { ChildModeProvider } from "./child-mode";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
 import { clearTitleExtras } from "./title-extras";
@@ -112,11 +113,11 @@ afterEach(() => {
 });
 
 const flush = () => act(async () => { await new Promise((done) => setTimeout(done, 0)); });
-const render = async (item: LocalDetailItem, over: Partial<Parameters<typeof LocalLibraryDetail>[0]> = {}) => {
+const render = async (item: LocalDetailItem, over: Partial<Parameters<typeof LocalLibraryDetail>[0]> = {}, child = false) => {
   const onPlay = vi.fn();
   const onToggleFavorite = vi.fn();
   const props = { item, favorite: false, onPlay, onToggleFavorite, onResetProgress: vi.fn(), uiLanguage: "en", secureMode: true, onTrailer: vi.fn(), ...over };
-  await act(async () => { root.render(<LocalLibraryDetail {...props}/>); });
+  await act(async () => { root.render(<ChildModeProvider child={child} catalogue={false}><LocalLibraryDetail {...props}/></ChildModeProvider>); });
   await flush();
   return { onPlay, onToggleFavorite, props };
 };
@@ -125,6 +126,25 @@ const rows = () => [...document.querySelectorAll<HTMLButtonElement>(".library-so
 const openPicker = async () => click(host.querySelector(".split-button-toggle"));
 
 describe("LocalLibraryDetail discovery", () => {
+  it("draws a bound library title from its own records for a child", async () => {
+    identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    await render(file(), { onSaveAlternative: vi.fn(), onDownloadToDevice: vi.fn() }, true);
+    expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Heat.mkv");
+    expect(host.querySelector(".detail-copy-skeleton")).toBeNull();
+    expect(host.querySelector(".title-extras")).toBeNull();
+    expect(host.querySelector(".trailer-action")).toBeNull();
+    expect(host.querySelector(".library-detail-save")).toBeNull();
+    expect(host.querySelector('button[aria-label="Download to device"]')).toBeNull();
+    expect(calls.meta).toEqual([]);
+    expect(calls.extras).toEqual([]);
+    expect(calls.links).toEqual([]);
+    expect(calls.trailer).toEqual([]);
+    expect(calls.catalogueGallery).toEqual([]);
+    expect(calls.providers).toEqual([]);
+    expect(calls.addon).toEqual([]);
+    expect(calls.remote).toEqual([]);
+  });
+
   it("plays the clicked file directly when nothing binds it, decorating it with its own path", async () => {
     const { onPlay } = await render(file());
     expect(calls.source).toHaveLength(1);

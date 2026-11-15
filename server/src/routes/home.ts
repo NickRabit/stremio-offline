@@ -436,7 +436,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const authority = authorityOf(req);
     // The local half draws a starred title once; a media-server record of the same title is left
     // out, so the shelf never shows it twice.
-    const starredTitles = personal.watchlistKeys(req);
+    const starredTitles = await personal.drawnStarKeys(req);
     const remote = await remotePersonal.cards(authority, {
       filter: "favorites", onHome: true, limit: HOME_ROW_LIMIT,
       ...(starredTitles.length ? { excludeTitles: new Set(starredTitles) } : {}),
@@ -678,7 +678,12 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     hidden: Set<HomeRowId>;
   }
 
-  const arrangementOf = (viewer: Viewer, layout: HomeLayout | undefined): Arrangement => {
+  /** A child's Home is fixed: its own three rows, no addon feed and no stored layout, whatever
+   *  the account arranged before it became a child. */
+  const CHILD_ROWS: HomeRowId[] = ["resume", "favorites", "recent"];
+
+  const arrangementOf = (viewer: Viewer, layout: HomeLayout | undefined, child = false): Arrangement => {
+    if (child) return { targets: new Map(), offerings: new Map(), feedKeys: [], arranged: [...CHILD_ROWS], hidden: new Set() };
     const usable = allowedAddons(store.addons(), viewer);
     const instance = new Map<HomeRowId, HomeCatalogTarget>();
     for (const target of homeCatalogTargets(usable)) {
@@ -770,9 +775,10 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
   app.get("/api/home", asyncRoute(async (req, res) => {
     // Sign-in first, even when every named row is unknown: the answer is the same 401 the
     // personal routes give, never a filtered envelope for a request that names nobody.
-    const viewer = viewerOf(currentUser(req));
+    const account = currentUser(req);
+    const viewer = viewerOf(account);
     res.set("Cache-Control", "private, no-store");
-    const arrangement = arrangementOf(viewer, parseHomeLayout(dataOf(req).prefs.homeLayout));
+    const arrangement = arrangementOf(viewer, parseHomeLayout(dataOf(req).prefs.homeLayout), Boolean(account?.child));
     const visible = arrangement.arranged.filter((id) => !arrangement.hidden.has(id));
     // A hidden shelf is not built and not warmed: a row the account hid never reaches its addon.
     catalogs.visited(visible.flatMap((id) => { const target = arrangement.targets.get(id); return target ? [target] : []; }));
@@ -832,10 +838,11 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
   }));
 
   app.get("/api/home/layout", asyncRoute(async (req, res) => {
-    const viewer = viewerOf(currentUser(req));
+    const account = currentUser(req);
+    const viewer = viewerOf(account);
     res.set("Cache-Control", "private, no-store");
     const layout = parseHomeLayout(dataOf(req).prefs.homeLayout);
-    const arrangement = arrangementOf(viewer, layout);
+    const arrangement = arrangementOf(viewer, layout, Boolean(account?.child));
     const entry = (id: HomeRowId, position: number, added: boolean): HomeLayoutEntry => {
       const target = arrangement.targets.get(id) ?? arrangement.offerings.get(id);
       return {

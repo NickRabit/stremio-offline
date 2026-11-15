@@ -593,4 +593,6 @@
   <string name="err_person_unavailable">Об этом человеке ничего не известно.</string>
   <string name="err_person_lookup_failed">Не удалось загрузить фильмографию. Попробуйте позже.</string>
   <string name="search_all_people">Люди</string>
+  <string name="home_child_empty_text">То, что ты посмотришь, появится здесь.</string>
+  <string name="library_child_empty_text">Что будет в библиотеке, выбирает взрослый.</string>
 </resources>

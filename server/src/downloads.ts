@@ -198,12 +198,13 @@ export function downloadOrigin(job: Pick<DownloadJob, "stream" | "remoteDownload
 /** Queueing onto the NAS is a right an administrator hands out. The role is what grants an
  *  administrator, never the flags: those are for ordinary users, and a migrated
  *  administrator's may say anything. */
-export const mayDownloadToLibrary = (user: Pick<UserRecord, "role" | "permissions">): boolean =>
-  user.role === "admin" || user.permissions.downloadToLibrary;
+export const mayDownloadToLibrary = (user: Pick<UserRecord, "role" | "permissions" | "child">): boolean =>
+  user.role === "admin" || (!user.child && user.permissions.downloadToLibrary);
 
-/** The same rule for saving to the device at the keyboard, which is on by default. */
-export const mayDownloadToDevice = (user: Pick<UserRecord, "role" | "permissions">): boolean =>
-  user.role === "admin" || user.permissions.downloadToDevice;
+/** The same rule for saving to the device at the keyboard, which is on by default. A child
+ *  account has neither right, whatever its ticks say: they come back when the flag goes. */
+export const mayDownloadToDevice = (user: Pick<UserRecord, "role" | "permissions" | "child">): boolean =>
+  user.role === "admin" || (!user.child && user.permissions.downloadToDevice);
 
 /** Detect native provenance without trusting public capability fields. */
 export const isRemoteDownloadSource = (stream: Pick<StreamItem, "url"> | undefined): boolean =>

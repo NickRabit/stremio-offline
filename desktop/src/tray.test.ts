@@ -64,3 +64,11 @@ test("every entry reaches its own action, and the pickers hand over the target",
     { action: "quit", target: null },
   ]);
 });
+
+test("a child account's tray menu opens and quits the app and nothing else", () => {
+  const strings = catalogue("en", "win32");
+  const { template, calls } = build({ locked: true, current: { kind: "profile", id: "one" }, connected: true });
+  assert.deepEqual(template.map((item) => item.label ?? item.type), [strings["tray.open"], "separator", strings["tray.quit"]]);
+  for (const item of template) (item.click as (() => void) | undefined)?.();
+  assert.deepEqual(calls.map((call) => call.action), ["open", "quit"]);
+});

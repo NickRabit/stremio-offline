@@ -175,3 +175,22 @@ test("every Windows entry reaches its own action", () => {
     `connect:${call.target?.kind === "profile" ? call.target.id : "local"}` : call.action).sort(),
   ["connect:local", "connect:one", "connect:two", "devTools", "openProject", "openSettings", "openSettings", "reconnect", "reload"]);
 });
+
+test("a child account's menu shows the servers and the settings switched off", () => {
+  for (const platform of ["darwin", "win32"] as const) {
+    const { template } = build({ platform, locked: true, current: { kind: "profile", id: "one" }, connected: true });
+    const all = template.flatMap((item) => submenu(item));
+    const off = all.filter((item) => item.enabled === false).map((item) => item.label);
+    assert.deepEqual(off.sort(), [
+      "Living room", "NAS", en["menu.serverSettings"], en["menu.settings"],
+      platform === "darwin" ? en["window.thisMac"] : en["window.thisPC"],
+    ].sort(), platform);
+    assert.equal(all.find((item) => item.label === en["menu.reconnect"])?.enabled, undefined, "reconnecting to the same server stays");
+    assert.equal(all.find((item) => item.label === en["menu.reload"])?.enabled, undefined);
+  }
+});
+
+test("an ordinary account's menu switches nothing off", () => {
+  const { template } = build({ current: { kind: "profile", id: "one" }, connected: true });
+  assert.deepEqual(template.flatMap((item) => submenu(item)).filter((item) => item.enabled === false), []);
+});

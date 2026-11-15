@@ -119,6 +119,10 @@ const mount = async (): Promise<Harness> => {
     isOpen: () => false,
     isInternal: () => false,
     roleOf: (req) => userOf(req)?.role,
+    childOf: (req) => {
+      const user = userOf(req);
+      return user ? { child: Boolean(user.child), catalogue: Boolean(user.catalogue) } : undefined;
+    },
   }));
   registerShuffleRoutes(app, deps);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

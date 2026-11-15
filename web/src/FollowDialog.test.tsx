@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { FollowDialog } from "./FollowDialog";
+import { ChildModeProvider } from "./child-mode";
 import { setLocale } from "./i18n";
 import type { FollowEpisodeRow, FollowView } from "./types";
 
@@ -31,7 +32,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 let root: Root;
 let host: HTMLDivElement;
 
-const render = async (value: FollowView = follow, overrides: Partial<FollowEpisodeRow[]> = episodes) => {
+const render = async (value: FollowView = follow, overrides: Partial<FollowEpisodeRow[]> = episodes, child = false) => {
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
     const target = String(url);
     if (target.includes("/episodes/") && target.endsWith("/skip")) return Promise.resolve(new Response(null, { status: 204 }));
@@ -42,7 +43,7 @@ const render = async (value: FollowView = follow, overrides: Partial<FollowEpiso
     return Promise.resolve(json(value));
   });
   await act(async () => {
-    root.render(<FollowDialog follow={value} libraries={[]} onChanged={() => undefined} onClose={() => undefined} onNotify={() => undefined}/>);
+    root.render(<ChildModeProvider child={child} catalogue><FollowDialog follow={value} libraries={[]} onChanged={() => undefined} onClose={() => undefined} onNotify={() => undefined}/></ChildModeProvider>);
   });
   await act(async () => { await Promise.resolve(); });
 };
@@ -61,6 +62,13 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
 describe("FollowDialog", () => {
+  it("offers a child no automatic download or episode retry controls", async () => {
+    await render(follow, episodes, true);
+    expect([...host.querySelectorAll("h3")].some((heading) => heading.textContent === "Automatic downloads")).toBe(false);
+    expect(button(host, "Skip")).toBeUndefined();
+    expect(button(host, "Retry")).toBeUndefined();
+  });
+
   it("shows a release on the date it names, west and east of UTC", async () => {
     for (const zone of ["America/New_York", "Asia/Tokyo"]) {
       process.env.TZ = zone;

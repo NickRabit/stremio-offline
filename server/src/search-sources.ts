@@ -184,7 +184,7 @@ const catalogSource = (
     },
     stillAllowed(): boolean {
       const user = deps.user(context.userId);
-      if (!user || user.disabled) return false;
+      if (!user || user.disabled || (user.child && !user.catalogue)) return false;
       const live = allowedAddons(deps.addons(), viewerOf(user)).find((candidate) => candidate.key === addon.key);
       if (!live || !live.enabled || (!explicitScope && live.globalSearch === false) || live.manifestUrl !== manifestUrl) return false;
       return searchableCatalogs([live], undefined, {
@@ -505,7 +505,9 @@ export async function discoverSources(
 
   if (request.sources.includes("catalog")) {
     const order = orderFor(user, (id) => deps.addonOrder(id));
-    const allowed = orderedForUser(allowedAddons(deps.addons(), viewer), order);
+    const allowed = user.child && !user.catalogue
+      ? []
+      : orderedForUser(allowedAddons(deps.addons(), viewer), order);
     const scope = request.scope === undefined
       ? { respectGlobalSearch: true }
       : {

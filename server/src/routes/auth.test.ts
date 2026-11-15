@@ -338,7 +338,8 @@ test("signing in as the migrated user works and the cookie names the user id", a
   // The language and the personal data came across with the account.
   const me = await api(harness.base, "/api/auth/me", { cookie: `${SESSION_COOKIE}=${cookie}` });
   assert.deepEqual(await me.json(), {
-    username: "Ondra", role: "admin", language: "cs", mustChangePassword: false, canSwitch: false, hasPin: false,
+    username: "Ondra", role: "admin", language: "cs", mustChangePassword: false,
+    child: false, catalogue: false, canSwitch: false, hasPin: false,
   });
   assert.deepEqual(harness.store.userData(owner?.id ?? "").progress, { "movie:tt1": { position: 12, duration: 100, title: "Neco", updatedAt: "2026-01-01T00:00:00.000Z" } });
 });
@@ -365,7 +366,7 @@ test("GET /api/auth/me reports whether the switcher is useful and whether this a
   const pinHash = await hashPassword("2468");
   await harness.store.update((state) => {
     state.users = (state.users ?? []).map((user) => user.id === owner.id
-      ? { ...user, switcher: true, pinHash }
+      ? { ...user, switcher: true, pinHash, child: true, catalogue: true }
       : user.id === other.id ? { ...user, switcher: true } : user);
   });
   const cookie = `${SESSION_COOKIE}=${createSession(owner.secret, owner.id, Date.now() + 60_000, "sid-me")}`;
@@ -377,6 +378,8 @@ test("GET /api/auth/me reports whether the switcher is useful and whether this a
     role: "admin",
     language: "en",
     mustChangePassword: false,
+    child: true,
+    catalogue: true,
     canSwitch: true,
     hasPin: true,
   });

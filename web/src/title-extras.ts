@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { useChildMode } from "./child-mode";
 import { useI18n } from "./i18n";
 import type { TitleExtras } from "./types";
 
@@ -47,7 +48,8 @@ const catalogueType = (type?: string): type is "movie" | "series" => type === "m
  */
 export function useTitleExtras(type?: string, id?: string): { extras: TitleExtras | null; loading: boolean } {
   const { locale } = useI18n();
-  const key = catalogueType(type) && id ? `${type}:${id}@${locale}` : "";
+  const { child } = useChildMode();
+  const key = !child && catalogueType(type) && id ? `${type}:${id}@${locale}` : "";
   const [state, setState] = useState<{ key: string; extras: TitleExtras | null; loading: boolean }>(() => {
     const cached = key ? readCache(key) : null;
     return { key, extras: cached, loading: Boolean(key) && !cached };
@@ -55,7 +57,7 @@ export function useTitleExtras(type?: string, id?: string): { extras: TitleExtra
   const epoch = useRef(0);
   useEffect(() => {
     const mine = ++epoch.current;
-    if (!key || !catalogueType(type) || !id) {
+    if (!key || !catalogueType(type) || !id || child) {
       setState({ key, extras: null, loading: false });
       return;
     }
@@ -87,7 +89,7 @@ export function useTitleExtras(type?: string, id?: string): { extras: TitleExtra
       if (mine === epoch.current) setState({ key, extras: null, loading: false });
     });
     return () => { if (epoch.current === mine) epoch.current += 1; };
-  }, [key, type, id, locale]);
+  }, [key, type, id, locale, child]);
   if (!key) return { extras: null, loading: false };
   if (state.key !== key) {
     const cached = readCache(key);

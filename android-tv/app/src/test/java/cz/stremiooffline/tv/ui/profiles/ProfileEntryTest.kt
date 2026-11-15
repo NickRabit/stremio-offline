@@ -176,4 +176,30 @@ class ProfileEntryTest {
     compose.onNodeWithTag(TagSettingsRowServer).assertExists()
     compose.onNodeWithTag(TagProfileSwitcher).assertDoesNotExist()
   }
+
+  @Test
+  fun `a child account item opens the switcher without canSwitch`() {
+    val api = fakeApi()
+    val profiles = FakeProfileApi(household)
+    scenario.onActivity { activity ->
+      activity.setContent {
+        Shell(
+          start = Section.Home,
+          api = api,
+          username = "Kid",
+          onSignOut = {},
+          canSwitch = false,
+          child = true,
+          profileApi = profiles,
+        )
+      }
+    }
+    compose.waitForIdle()
+    compose.onNodeWithTag(railTag(Section.Account)).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagProfileSwitcher).assertExists()
+    compose.onNodeWithTag(TagSettingsRowServer).assertDoesNotExist()
+  }
 }

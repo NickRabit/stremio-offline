@@ -13,6 +13,7 @@ import type { DeviceDownloadTicket } from "./media-resources.js";
 import type { AddonRecord } from "./types.js";
 import type { UserRecord } from "./users.js";
 import { SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import type { LibraryRecord } from "./libraries.js";
 
 const owner = (userId: string, sid = `${userId}-phone`): ResourceOwner =>
   ({ userId, sid, expiresAt: Number.MAX_SAFE_INTEGER });
@@ -132,6 +133,39 @@ test("losing the library permission pauses downloads and leaves playback running
   assert.deepEqual(h.paused, ["one"], "the queued download pauses");
   assert.deepEqual(h.stopped, [], "the film keeps playing: watching was never in question");
   assert.equal((watching as unknown as { destroyed: boolean }).destroyed, false);
+});
+
+test("marking an account as a child pauses its queue and drops its device tickets", async () => {
+  const jobs = [job("one", "usr_a"), job("two", "usr_b")];
+  const h = harness(jobs);
+  h.deviceTickets.set("ticket-a", { owner: owner("usr_a") } as DeviceDownloadTicket);
+  h.playbackOwners.set("play-a", { owner: owner("usr_a"), resourceId: "res-a" });
+
+  const before = { id: "usr_a", role: "user", permissions: { downloadToLibrary: true, downloadToDevice: true } };
+  const after = { ...before, child: true };
+  await h.revocations.permissionsChanged(before as never, after as never);
+
+  assert.deepEqual(h.paused, ["one"], "only the child's own queued download pauses");
+  assert.equal(h.deviceTickets.size, 0, "the ticket is gone");
+  assert.deepEqual(h.stopped, [], "a library film keeps playing");
+});
+
+test("an account that becomes a child without catalogue browsing loses the addon film it was playing", async () => {
+  const h = harness();
+  const who = owner("usr_a");
+  const addon = { key: "cine", enabled: true, allowedUsers: ["usr_a"] };
+  h.deps.source = { ...h.deps.source, addons: () => [addon] as never };
+  const fromAddon = h.resources.add({ url: "https://media.example/film.mp4", addonKey: "cine" }, who, "media");
+  const plain = h.resources.add({ url: "https://media.example/other.mp4" }, who, "media");
+  h.playbackOwners.set("play-addon", { owner: who, resourceId: fromAddon });
+  h.playbackOwners.set("play-plain", { owner: who, resourceId: plain });
+  const before = { id: "usr_a", role: "user", permissions: { downloadToLibrary: false, downloadToDevice: false } };
+
+  await h.revocations.permissionsChanged(before as never, { ...before, child: true, catalogue: true } as never);
+  assert.deepEqual(h.stopped, [], "with catalogue browsing the granted addon still plays");
+
+  await h.revocations.permissionsChanged({ ...before, child: true, catalogue: true } as never, { ...before, child: true, catalogue: false } as never);
+  assert.deepEqual(h.stopped, ["play-addon"], "clearing the tick stops the addon film and nothing else");
 });
 
 test("losing the device permission drops tickets and leaves the queue and playback alone", async () => {
@@ -380,6 +414,29 @@ test("accessLost permits saving a remote original to a device and re-checks the 
   assert.equal(accessLost(remoteSource(), claim, { remote: ref, permission: "downloadToDevice" }), false);
   assert.equal(accessLost(remoteSource({ library: remoteLibrary({ enabled: false }) }), claim, { remote: ref, permission: "downloadToDevice" }), true, "a disabled library is caught");
   assert.equal(accessLost(remoteSource(), claim, { remote: { ...ref, owner: { ...ref.owner, sid: "other" } }, permission: "downloadToDevice" }), true, "the claim session must own the reference");
+});
+
+test("a child without catalogue browsing loses addon resources but keeps library resources", () => {
+  const token = createSession(remoteSecret, "usr_a", Date.now() + 3_600_000, remoteSid);
+  const claim = { userId: "usr_a", sid: remoteSid, token, permissionsVersion: 0 };
+  const addon = {
+    key: "source-addon", enabled: true, allowedUsers: ["usr_a"],
+  } as AddonRecord;
+  const library: LibraryRecord = {
+    id: "lib_00000001", name: "Library", type: "mixed", root: "/media", enabled: true,
+    order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false, visibleTo: ["usr_a"],
+  };
+  const source = (user: UserRecord): AccessSource => ({
+    users: () => [user],
+    addons: () => [addon],
+    libraries: () => [library],
+    mediaConnections: () => [],
+    remoteLibraries: () => [],
+  });
+
+  assert.equal(accessLost(source(remoteUser({ child: true })), claim, { addonKey: addon.key }), true);
+  assert.equal(accessLost(source(remoteUser({ child: true, catalogue: true })), claim, { addonKey: addon.key }), false);
+  assert.equal(accessLost(source(remoteUser({ child: true })), claim, { libraryId: library.id }), false);
 });
 
 test("a connection sweep stops remote resources, playback and AirPlay without the records", async () => {

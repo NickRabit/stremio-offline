@@ -157,7 +157,9 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     }
     const resolved = requested ? await resolveLibraryPath(libraries, requested) : undefined;
     if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
-    if (!libraries.length) throw new AppError("Invalid path.", "err.invalidPath");
+    // The root of a setup whose one library this account was not given: an empty library, the
+    // answer a setup with no library at all gives, rather than an error on every visit.
+    if (!libraries.length) { res.json({ path: "", items: [], total: 0, pending: false }); return; }
     const library = resolved?.library ?? libraries[0]!;
     if (!prewarm) markBrowsed(library);
     const inLibrary = (path: string) => libraryPath(library.id, path);

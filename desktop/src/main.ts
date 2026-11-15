@@ -25,6 +25,7 @@ import { autostartExecutable, autostartFile, launchedHidden, launchExecutable, l
 import { bundledMediaTools, DOWNLOADS_DIRECTORY, INSTANCE_DIRECTORY, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, PORT_FILE, type LocalBackendConnection } from "./local-backend.js";
 import { forgetLocalState, removeIfPresent } from "./local-reset.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, SETTINGS_FILE, writeLocalSettings, type LocalSettings } from "./local-settings.js";
+import { ACCOUNT_REQUEST_FILTERS, accountMayHaveChanged, readChildAccount } from "./child-lock.js";
 import { buildMenuTemplate } from "./menu.js";
 import { externalBrowserUrl, httpAllowedHost, isAccessSignInUrl, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
@@ -227,7 +228,14 @@ const refreshAutostartExec = async (): Promise<void> => {
   }
 };
 
+/** Whether the account on the connected server's page is a child account, as the server itself
+ *  last answered. A child leaves its profile only through an adult's PIN or password; the
+ *  servers and the settings would be a way around that, so they close while this holds. */
+let childAccount = false;
+const childLocked = (): boolean => childAccount && shellState.screen.kind === "connected";
+
 const openSettings = (): void => {
+  if (childLocked()) return;
   settingsWindow.open();
   void refreshLoginItem().then(() => pushState());
 };
@@ -247,6 +255,7 @@ const applyMenu = (): void => {
     live ? "connected" : "idle",
     targetKey(shellState.chosen),
     localConnection !== null ? "local-running" : "local-stopped",
+    childLocked() ? "locked" : "open",
   ].join("|");
   if (key === menuKey) return;
   menuKey = key;
@@ -258,6 +267,7 @@ const applyMenu = (): void => {
     connected: live,
     isPackaged: app.isPackaged,
     platform: PLATFORM,
+    locked: childLocked(),
     actions: {
       openSettings,
       reload: () => {
@@ -276,7 +286,7 @@ const applyMenu = (): void => {
         else if (!current.page.webContents.isDestroyed()) current.page.webContents.toggleDevTools();
       },
       // Electron flips a clicked checkbox itself; rebuilding puts the tick back where the state says.
-      connect: (target) => { menuKey = ""; applyMenu(); void connectTarget(target, { launch: false }); },
+      connect: (target) => { menuKey = ""; applyMenu(); if (!childLocked()) void connectTarget(target, { launch: false }); },
       reconnect: () => { void connectTarget(shellState.chosen ?? { kind: "local" }, { launch: false }); },
       openProject: () => { void electronShell.openExternal(PROJECT_URL).catch(() => {}); },
     },
@@ -294,10 +304,11 @@ const applyMenu = (): void => {
     current: target ?? (localConnection !== null ? { kind: "local" } : shellState.chosen),
     connected: live,
     platform: PLATFORM,
+    locked: childLocked(),
     actions: {
       open: () => { void showMainWindow(); },
       openSettings,
-      connect: (target) => { menuKey = ""; applyMenu(); void connectTarget(target, { launch: false }); },
+      connect: (target) => { menuKey = ""; applyMenu(); if (!childLocked()) void connectTarget(target, { launch: false }); },
       quit: () => app.quit(),
     },
   })));
@@ -633,6 +644,11 @@ const preparePartition = (partition: string, serverOrigin: () => string | null) 
   ses.setPermissionRequestHandler((_contents, permission, callback) => {
     callback(ALLOWED_PERMISSIONS.has(permission));
   });
+  // Signing in, signing out and switching profile happen inside the page without a navigation.
+  ses.webRequest.onCompleted({ urls: ACCOUNT_REQUEST_FILTERS }, (details) => {
+    const origin = serverOrigin();
+    if (accountMayHaveChanged(details.url, origin)) void refreshChildLock(partition, origin);
+  });
   ses.webRequest.onBeforeRequest({ urls: ["http://*/*"] }, (details, callback) => {
     const cancel = httpRequestBlocked(details.url);
     callback({ cancel });
@@ -668,6 +684,18 @@ const preparePartition = (partition: string, serverOrigin: () => string | null) 
   });
 };
 
+/** Asks the server who is signed in on the page and holds or releases the shell accordingly.
+ *  An answer that could not be read changes nothing; a page that moved on meanwhile is ignored. */
+const refreshChildLock = async (partition: string, origin: string | null): Promise<void> => {
+  if (!origin || shell?.remotePartition !== partition) return;
+  const answer = await readChildAccount(origin, sessionFetch(session.fromPartition(partition)));
+  if (answer === undefined || shell?.remotePartition !== partition || connected?.origin !== origin) return;
+  if (answer === childAccount) return;
+  childAccount = answer;
+  if (childLocked()) settingsWindow.close();
+  applyMenu();
+};
+
 const wireRemote = (remote: WebContentsView) => {
   const contents = remote.webContents;
   contents.setBackgroundThrottling(false);
@@ -683,6 +711,7 @@ const wireRemote = (remote: WebContentsView) => {
   contents.on("leave-html-full-screen", () => { if (shell?.remote === remote) { remoteFullscreen = false; settleLayout(); } });
   contents.on("did-finish-load", () => {
     if (shell?.remote !== remote || !onConnectedOrigin(contents.getURL())) return;
+    if (shell.remotePartition !== null) void refreshChildLock(shell.remotePartition, connected?.origin ?? null);
     void contents.executeJavaScript(`(${CAPABILITIES})()`).then(
       (value) => console.log("capabilities " + JSON.stringify(value)),
       () => console.log("capabilities unavailable"),
@@ -1454,6 +1483,7 @@ const registerHandlers = () => {
     assertShellSender(event);
     const target = parseTarget(input);
     if (!target) throw new Error("shell: invalid target");
+    if (childLocked()) throw new Error("shell: a child account cannot change the server");
     await connectTarget(target, { launch: false });
   });
 

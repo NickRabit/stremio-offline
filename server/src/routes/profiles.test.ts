@@ -111,7 +111,15 @@ const mount = async (users: UserRecord[]): Promise<Harness> => {
   const app = express();
   app.set("trust proxy", true);
   app.use(express.json());
-  app.use("/api", roleMiddleware({ isOpen: () => false, isInternal: () => false, roleOf: (req) => currentUser(req)?.role }));
+  app.use("/api", roleMiddleware({
+    isOpen: () => false,
+    isInternal: () => false,
+    roleOf: (req) => currentUser(req)?.role,
+    childOf: (req) => {
+      const user = currentUser(req);
+      return user ? { child: Boolean(user.child), catalogue: Boolean(user.catalogue) } : undefined;
+    },
+  }));
   registerAuthRoutes(app, ctx);
   registerProfilesRoutes(app, ctx);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -223,6 +231,47 @@ test("a member gets the same 404 for every target that GET /api/profiles does no
     assert.equal(response.status, 404, id);
     assert.equal(await keyOf(response), "err.profileUnavailable", id);
   }
+});
+
+test("a child sees only itself and adults behind a secret, and hidden targets stay 404", async (t) => {
+  const child = await account({ id: ALICE, username: "child", child: true });
+  const sibling = await account({ id: BOB, username: "sibling", child: true });
+  const open = await account({ id: CAROL, username: "open", unlock: "none" });
+  const pin = await account({ id: DAVE, username: "pin", unlock: "pin", pinHash: await hashPassword("1234") });
+  const password = await account({ id: ERIN, username: "password" });
+  const harness = await mount([child, sibling, open, pin, password]);
+  t.after(harness.close);
+  profileAttempts.succeed(DAVE);
+  t.after(() => profileAttempts.succeed(DAVE));
+  const cookie = cookieFor(child, "sid-child-targets");
+
+  const listed = await api(harness.base, "/api/profiles", { cookie });
+  assert.equal(listed.status, 200);
+  assert.deepEqual(await listed.json(), {
+    profiles: [
+      { id: ALICE, username: "child", unlock: "password", current: true },
+      { id: DAVE, username: "pin", unlock: "pin", current: false, pinLocked: false },
+      { id: ERIN, username: "password", unlock: "password", current: false },
+    ],
+  });
+
+  for (const id of [BOB, CAROL]) {
+    const hidden = await api(harness.base, "/api/profiles/switch", {
+      method: "POST",
+      cookie,
+      body: { id, password: "current-secret" },
+    });
+    assert.equal(hidden.status, 404, id);
+    assert.equal(await keyOf(hidden), "err.profileUnavailable", id);
+  }
+
+  const entered = await api(harness.base, "/api/profiles/switch", {
+    method: "POST",
+    cookie,
+    body: { id: DAVE, pin: "1234" },
+  });
+  assert.equal(entered.status, 200);
+  assert.equal((await entered.json() as { username: string }).username, "pin");
 });
 
 test("a none profile switches in one write, revokes and stops the old session, and keeps its expiry", async (t) => {

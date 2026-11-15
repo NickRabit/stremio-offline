@@ -5,7 +5,7 @@ import { log } from "../logger.js";
 import { profileAttempts } from "../profile-attempts.js";
 import { assertUnrestricted, restrictedMode } from "../restricted.js";
 import type { State } from "../store.js";
-import { effectiveUnlock, findUserById, switcherGroup, type UserRecord } from "../users.js";
+import { effectiveUnlock, findUserById, switchTargets, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
 const profileUnavailable = () =>
@@ -20,7 +20,7 @@ export function registerProfilesRoutes(app: express.Application, ctx: RouteConte
     res.setHeader("cache-control", "private, no-store");
     const caller = ctx.currentUser(req);
     if (!caller) throw new AppError("Not signed in.", "err.notSignedIn", 401);
-    const group = restrictedMode() ? [] : switcherGroup(ctx.store.users(), caller.id);
+    const group = restrictedMode() ? [] : switchTargets(ctx.store.users(), caller.id);
     res.json({
       profiles: group.map((user) => {
         const unlock = effectiveUnlock(user);
@@ -51,7 +51,7 @@ export function registerProfilesRoutes(app: express.Application, ctx: RouteConte
       throw new AppError("The request is not valid.", "err.invalidRequest", 400);
     }
 
-    const target = switcherGroup(ctx.store.users(), caller.id)
+    const target = switchTargets(ctx.store.users(), caller.id)
       .find((user) => user.id === id && user.id !== caller.id);
     if (!target) throw profileUnavailable();
 
@@ -119,7 +119,7 @@ export function registerProfilesRoutes(app: express.Application, ctx: RouteConte
       if (liveCaller?.revoked?.[info.sid]) throw new AppError("Not signed in.", "err.notSignedIn", 401);
       if (!liveCaller || !liveTarget
         || liveCaller.secret !== caller.secret
-        || !switcherGroup(state.users ?? [], liveCaller.id).some((user) => user.id === liveTarget.id)
+        || !switchTargets(state.users ?? [], liveCaller.id).some((user) => user.id === liveTarget.id)
         || (checkedPasswordHash !== undefined && liveTarget.passwordHash !== checkedPasswordHash)
         || (checkedPinHash !== undefined && (liveTarget.pinHash !== checkedPinHash || effectiveUnlock(liveTarget) !== "pin"))
         || (checkedPasswordHash === undefined && checkedPinHash === undefined && effectiveUnlock(liveTarget) !== "none")) {

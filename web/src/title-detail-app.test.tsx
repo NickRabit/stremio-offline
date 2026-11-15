@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { STARTUP_GETS, startStartupGets } from "./api";
 import { App } from "./App";
+import { setChildSession } from "./child-policy";
 
 const settingsChunk = vi.hoisted(() => {
   let resolveHeld: (() => void) | null = null;
@@ -145,6 +146,7 @@ let sourcesGate: Promise<void> | null;
 let subtitleGate: Promise<void> | null;
 let restrictedBuild: boolean;
 let startupCatalogs: Array<{ addonKey: string; addonName: string; type: string; id: string; name: string }>;
+let childAccount: boolean;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -182,6 +184,7 @@ beforeEach(() => {
   subtitleGate = null;
   restrictedBuild = false;
   startupCatalogs = [{ addonKey: "cinemeta", addonName: "Cinemeta", type: "movie", id: "top", name: "Top" }];
+  childAccount = false;
   vi.stubGlobal("matchMedia", () => ({
     matches: false, media: "", onchange: null,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -210,7 +213,9 @@ beforeEach(() => {
       if (statusGate) await statusGate;
       return json({ status: "ok", version: "test", searchEverywhere, restricted: restrictedBuild });
     }
-    if (path === "/api/auth/me") return json({ username: "alice", role: "admin", language: "en" });
+    if (path === "/api/auth/me") return json(childAccount
+      ? { username: "child", role: "user", language: "en", child: true, catalogue: false, canSwitch: false }
+      : { username: "alice", role: "admin", language: "en" });
     if (path === "/api/auth/login" && method === "POST") return json({ username: "bob", role: "admin", language: "en" });
     if (path === "/api/addons") return json(configuredAddons);
     if (path === "/api/searchable" || path === "/api/languages") return json([]);
@@ -382,6 +387,7 @@ let heldReleases: Array<() => void> = [];
 const held = () => new Promise<void>((resolve) => { heldReleases.push(resolve); });
 
 afterEach(async () => {
+  setChildSession(null);
   settingsChunk.release();
   for (const release of heldReleases) release();
   heldReleases = [];
@@ -438,6 +444,25 @@ const openHeatDetail = async () => {
 };
 const personOnScreen = () => host.querySelector(".person-view") !== null
   && host.querySelector("main")?.classList.contains("person-open") === true;
+
+describe("child shell", () => {
+  it("starts on Home with the short navigation and none of the catalogue or download loads", async () => {
+    childAccount = true;
+    localStorage.setItem("start-view", "library");
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector("aside.sidebar.sidebar-child") !== null);
+    await flush();
+
+    expect(host.querySelector("main.view-home")).not.toBeNull();
+    expect([...host.querySelectorAll<HTMLButtonElement>("aside.sidebar nav button")].map((button) => button.getAttribute("aria-label")))
+      .toEqual(["Home", "Library", "Sign out"]);
+    expect(host.querySelector(".nav-more")).toBeNull();
+    expect(localStorage.getItem("start-view")).toBe("library");
+    for (const path of ["/api/addons", "/api/catalogs", "/api/downloads", "/api/watchlist", "/api/follows", "/api/follows/new-episodes", "/api/source-profiles", "/api/searchable", "/api/catalog", "/api/meta/movie/tt1"]) {
+      expect(requestCounts.get(path) ?? 0, path).toBe(0);
+    }
+  });
+});
 
 describe("lazy settings navigation", () => {
   it("keeps the current page on screen until the Settings chunk loads", async () => {

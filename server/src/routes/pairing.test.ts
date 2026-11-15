@@ -109,6 +109,10 @@ const mount = async (options: {
       isOpen: (req) => OPEN.has(req.path),
       isInternal: () => false,
       roleOf: (req) => ctx.currentUser(req)?.role,
+      childOf: (req) => {
+        const user = ctx.currentUser(req);
+        return user ? { child: Boolean(user.child), catalogue: Boolean(user.catalogue) } : undefined;
+      },
     }));
     app.use("/api", passwordChangeMiddleware({
       isOpen: (req) => OPEN.has(req.path),

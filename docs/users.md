@@ -188,6 +188,68 @@ relative's PIN on purpose; the cost is typing that password once.
 
 Restricted mode lists no profiles and refuses the switch.
 
+## Child accounts
+
+A child account is an ordinary account with one more switch: **Settings →
+Users →** account → **Child account**. An administrator can never be one, and
+promoting a child account clears the switch. The switch only takes things
+away, and the server enforces all of it: hiding a button is never the rule.
+
+What a child account gets:
+
+- **A small app.** Home, Library and Search, on the web, the desktop apps and
+  Android TV. No Downloads, Addons, Settings, Statistics, Following,
+  Favourites or Continue watching pages.
+- **Home with three rows:** Continue watching, favourites and recently added.
+  It cannot be rearranged, and no addon row appears on it.
+- **Only the libraries ticked for it**, local, Jellyfin or Emby, exactly as
+  for any other account.
+- **A simpler title page:** play, the episodes and the favourite star. No
+  downloads or copies, no trailer, no links to other sites, no cast and no
+  similar titles.
+
+What it cannot do, whatever else is ticked for the account: download or save
+anything, to the library or to the device; change a setting, its password or
+its PIN; approve the sign-in of another device. The two download permissions
+stay as they were set and count again once the switch is cleared. Marking an
+account pauses the downloads it had queued.
+
+**Catalogue browsing** is a second switch under the first, off by default.
+With it the child account also gets the catalogues, the search, the sources
+and the stars of the addons ticked for it, and may follow a series for
+new-episode notices, without automatic downloads. Addons are not filtered by
+age: ticking this is the parent's decision about those addons. Without it the
+account reaches no addon at all, and catalogue titles it watched or starred
+before stay stored but are not listed.
+
+**Leaving a child account** takes another profile's PIN or password. In the
+profile switcher a child account sees only profiles that need one, never a
+profile set to *Nothing* and never another child account, and the server
+refuses the switch to those. So give the parent's profile a PIN and add both
+to the profile switching. Signing out is offered last in the switcher; it
+leads to the sign-in screen and to nothing else.
+
+A password an administrator sets for a child account is final, because the
+account cannot change it itself. The interface and playback languages are set
+by the administrator.
+
+Limits worth knowing:
+
+- **No age filter.** The parent chooses the libraries; nothing is judged by
+  rating.
+- **The device is not locked into the child profile.** A television or a phone
+  left in an adult's profile is an adult's session: switch to the child's
+  profile before handing it over.
+- **Wrong PINs delay the adult.** Attempts are counted per target profile, so a
+  child guessing a parent's PIN cannot get in and can make the parent wait or
+  type the password instead.
+- **Desktop apps.** While a child account is on screen the server list and the
+  settings in the app's menu and tray are switched off, because another saved
+  server keeps its own signed-in session. They open again after a switch to an
+  adult profile.
+- **Files already saved to a device** before the account became a child
+  account stay on that device.
+
 ## Disabling and deleting
 
 - **Disable** stops the account signing in and keeps everything it has: its

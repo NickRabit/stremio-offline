@@ -10,6 +10,7 @@ import { libraryVisible, type LibraryRecord, type Viewer } from "../libraries.js
 import type { UserPrefs, WatchedMarker } from "../store.js";
 import type { DownloadTargetSettings, MetaItem } from "../types.js";
 import { feedTokenMatches, type FollowDefaults, type UserData, type UserRecord } from "../users.js";
+import { ForbiddenError } from "../roles.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import { createSelectionParser } from "./downloads.js";
 import { admitsRemoteProviders, legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference, sourceProfileSnapshotForAdmission } from "./source-profile-selection.js";
@@ -174,7 +175,7 @@ export function calendarFeedHandler(deps: CalendarFeedDeps): express.RequestHand
         if (!owner && feedTokenMatches(deps.userData(user.id).calendarFeedToken, token)) owner = user;
       }
     }
-    if (!owner || owner.disabled) { res.status(404).end(); return; }
+    if (!owner || owner.disabled || owner.child) { res.status(404).end(); return; }
     const body = calendarFeed(deps.followsOf(owner.id), Date.now(), {
       name: `${owner.username} – Stremio Offline`,
       language: deps.languageOf(owner.id),
@@ -276,7 +277,9 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
   }));
 
   app.post("/api/follows", asyncRoute(async (req, res) => {
-    const owner = viewerOf(currentUser(req));
+    const account = currentUser(req);
+    const owner = viewerOf(account);
+    if (account?.child && (req.body?.autoDownload != null || req.body?.retention != null)) throw new ForbiddenError();
     const type = String(req.body?.type ?? "").trim();
     const metaId = String(req.body?.id ?? "").trim();
     const name = String(req.body?.name ?? "").trim();
@@ -290,9 +293,14 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
   }));
 
   app.patch("/api/follows/:id", asyncRoute(async (req, res) => {
-    const owner = viewerOf(currentUser(req));
+    const account = currentUser(req);
+    const owner = viewerOf(account);
     const follow = owned(req, String(req.params.id));
     const body = (req.body ?? {}) as Record<string, unknown>;
+    if (account?.child && ((body.autoDownload !== undefined && body.autoDownload !== null)
+      || (body.retention !== undefined && body.retention !== null))) {
+      throw new ForbiddenError();
+    }
     if ("autoDownload" in body) {
       const raw = body.autoDownload;
       if (raw === null) {

@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -74,10 +75,11 @@ class ProfileSwitcherScreenTest {
     onClose: () -> Unit = {},
     onSwitched: () -> Unit = {},
     onNobody: () -> Unit = {},
+    onSignOut: (() -> Unit)? = null,
   ): ProfileSwitcherViewModel {
     val viewModel = ProfileSwitcherViewModel(api, onSwitched, onNobody)
     scenario.onActivity { activity ->
-      activity.setContent { ProfileSwitcherScreen(viewModel, onClose = onClose) }
+      activity.setContent { ProfileSwitcherScreen(viewModel, onClose = onClose, onSignOut = onSignOut) }
     }
     compose.waitForIdle()
     return viewModel
@@ -122,6 +124,44 @@ class ProfileSwitcherScreenTest {
     assertEquals(1, gone)
     press(Key.DirectionCenter)
     assertEquals(1, closed)
+  }
+
+  @Test
+  fun `LEFT and RIGHT never leave the profiles for sign out`() {
+    var signedOut = 0
+    mount(FakeProfileApi(household), onSignOut = { signedOut += 1 })
+    repeat(household.size + 2) { press(Key.DirectionRight) }
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsNotFocused()
+    repeat(household.size + 2) { press(Key.DirectionLeft) }
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsNotFocused()
+    press(Key.DirectionCenter)
+    assertEquals(0, signedOut)
+  }
+
+  @Test
+  fun `sign out is last and reachable by DOWN without taking initial focus`() {
+    var signedOut = 0
+    mount(FakeProfileApi(household), onSignOut = { signedOut += 1 })
+    compose.onNodeWithTag(profileTag("usr_jana")).assertIsFocused()
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsNotFocused()
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsFocused()
+    press(Key.DirectionCenter)
+    assertEquals(1, signedOut)
+  }
+
+  @Test
+  fun `the empty state puts sign out below Close`() {
+    var signedOut = 0
+    mount(FakeProfileApi(household.take(1)), onSignOut = { signedOut += 1 })
+    compose.onNodeWithTag(TagProfilesClose).assertIsFocused()
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsNotFocused()
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsFocused()
+    press(Key.DirectionCenter)
+    assertEquals(1, signedOut)
   }
 
   @Test

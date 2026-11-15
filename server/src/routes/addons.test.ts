@@ -112,7 +112,15 @@ const mount = async (records: AddonRecord[] = [addon("alpha")], options: MountOp
   app.use(express.json());
   // The gate index.ts mounts ahead of these routes, so a test of what an ordinary user may
   // reach exercises the same refusal the running server answers with.
-  app.use("/api", roleMiddleware({ isOpen: () => false, isInternal: () => false, roleOf: (req) => userOf(req).role }));
+  app.use("/api", roleMiddleware({
+    isOpen: () => false,
+    isInternal: () => false,
+    roleOf: (req) => userOf(req).role,
+    childOf: (req) => {
+      const user = userOf(req);
+      return { child: Boolean(user.child), catalogue: Boolean(user.catalogue) };
+    },
+  }));
   registerAddonsRoutes(app, deps);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;

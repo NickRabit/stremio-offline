@@ -243,6 +243,8 @@ data class OfferedSources(
 fun CatalogDetailScreen(
   api: TvApi,
   args: CatalogDetailArgs,
+  child: Boolean = false,
+  childCatalogue: Boolean = false,
   imageUrl: (String?) -> String?,
   onPlay: (PlayTarget) -> Unit,
   onBack: () -> Unit,
@@ -279,7 +281,10 @@ fun CatalogDetailScreen(
   // The source filters are not saved: they live while a title or episode is on screen and reset
   // when either changes. A null sort follows the account's `streamSort`.
   val sourceFilters = remember { SourceFilterState() }
-  BindSourceProfiles(api.takeIf { args.backend.catalogue }, sourceFilters)
+  val access = remember(args.backend, child, childCatalogue) {
+    detailAccess(args.backend is LibraryBackend, child, childCatalogue)
+  }
+  BindSourceProfiles(api.takeIf { args.backend.catalogue && access.catalogueCalls }, sourceFilters)
   var favourite by remember { mutableStateOf(false) }
   var favouriteBusy by remember { mutableStateOf(false) }
   var message by remember { mutableStateOf<String?>(null) }
@@ -339,7 +344,7 @@ fun CatalogDetailScreen(
     sourceFilters.reset()
     ui.extras.clear()
     remoteProgress.preferred = null
-    favourite = args.backend.favourite(api) ?: false
+    favourite = if (access.favourite) args.backend.favourite(api) ?: false else false
     ui.episodeProgress = args.backend.initialEpisodeProgress(api)
     if (!args.backend.catalogue) {
       val videos = meta.videos.orEmpty()
@@ -350,6 +355,7 @@ fun CatalogDetailScreen(
       pick.season = wanted?.season ?: defaultSeason(videos)
       return@LaunchedEffect
     }
+    if (!access.catalogueCalls) return@LaunchedEffect
     coroutineScope {
       val settingsJob = async { runCatching { api.settings() }.getOrDefault(SettingsResponse()) }
       val addonsJob = async { runCatching { api.addons() }.getOrDefault(emptyList()) }
@@ -361,7 +367,9 @@ fun CatalogDetailScreen(
       }
       val loadedSettings = settingsJob.await()
       settings = loadedSettings
-      launch { ui.extras.load(api, args.type, args.meta.id, loadedSettings.uiLanguage) }
+      if (access.extras) {
+        launch { ui.extras.load(api, args.type, args.meta.id, loadedSettings.uiLanguage) }
+      }
       val metaJob = async { runCatching { api.meta(args.type, args.meta.id, loadedSettings.uiLanguage) }.getOrNull() }
       val detail = metaJob.await()
       if (detail != null) meta = mergeMeta(args.meta, detail)
@@ -462,6 +470,17 @@ fun CatalogDetailScreen(
     }
     if (ownRows != null) {
       pick.localStreams = ownRows
+      pick.sourcesLoaded = true
+      return@LaunchedEffect
+    }
+    if (!access.catalogueCalls) {
+      pick.localStreams = try {
+        api.localStreams(streamType, id)
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        emptyList()
+      }
       pick.sourcesLoaded = true
       return@LaunchedEffect
     }
@@ -1379,6 +1398,7 @@ fun CatalogDetailScreen(
         },
         // A series opens one panel for this episode's chosen source, a season or the whole show.
         toLibrary = when {
+          !access.toLibrary -> null
           !args.backend.catalogue -> args.backend.toLibrary(activeStream)?.let { copy ->
             catalogAction(
               TagCatalogToLibrary,
@@ -1433,11 +1453,13 @@ fun CatalogDetailScreen(
           }
           else -> null
         },
-        favourite = catalogAction(
-          TagCatalogFavourite,
-          stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
-          glyph = if (favourite) "★" else "☆",
-        ) { toggleFavourite() },
+        favourite = if (access.favourite) {
+          catalogAction(
+            TagCatalogFavourite,
+            stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
+            glyph = if (favourite) "★" else "☆",
+          ) { toggleFavourite() }
+        } else null,
         unwatched = if (forgetKeys.isNotEmpty()) catalogAction(
           TagCatalogForget, stringResource(R.string.media_server_unwatch), EyeOffIcon,
           enabled = !ui.forget.busy,
@@ -1565,15 +1587,17 @@ fun CatalogDetailScreen(
           } else null,
         )
       }
-      TitleExtrasRows(
-        state = ui.extras,
-        imageUrl = imageUrl,
-        onPerson = onSearchPerson,
-        onRelated = onOpenRelated,
-        onUpFromRows = {
-          runCatching { (if (isSeries) focus.row else focus.primary).requestFocus() }
-        },
-      )
+      if (access.extras) {
+        TitleExtrasRows(
+          state = ui.extras,
+          imageUrl = imageUrl,
+          onPerson = onSearchPerson,
+          onRelated = onOpenRelated,
+          onUpFromRows = {
+            runCatching { (if (isSeries) focus.row else focus.primary).requestFocus() }
+          },
+        )
+      }
     }
 
     if (pick.sourcesOpen) {
@@ -1614,7 +1638,7 @@ fun CatalogDetailScreen(
       )
     }
 
-    if (save.libraryPanelOpen) {
+    if (save.libraryPanelOpen && access.toLibrary) {
       // The preselection follows the web's `ruleTarget`: the addon's own rule first, then the
       // library the account flagged as its default for this kind, then the first usable one.
       val addonDefault = addons.firstOrNull { it.key == save.pendingLibraryStream?.addonKey }?.defaultLibraryId(streamType)
@@ -1666,7 +1690,7 @@ fun CatalogDetailScreen(
       }
     }
 
-    ui.copyRequest?.let { request ->
+    ui.copyRequest?.takeIf { access.toLibrary }?.let { request ->
       NativeQueuePanel(
         versions = request.versions,
         libraries = request.destinations.filter {
@@ -1710,7 +1734,7 @@ fun CatalogDetailScreen(
       )
     }
 
-    ui.seriesCopy?.let { copy ->
+    ui.seriesCopy?.takeIf { access.toLibrary }?.let { copy ->
       RemoteSeriesBulkHost(
         api = api,
         origin = copy.origin,
@@ -1746,7 +1770,7 @@ fun CatalogDetailScreen(
       )
     }
 
-    if (ui.series.open) {
+    if (ui.series.open && access.toLibrary) {
       // The batch carries the title and its artwork, and the addon's own destination unless the
       // viewer picks another library inside the panel.
       SeriesDownloadPanel(
@@ -1787,7 +1811,7 @@ fun CatalogDetailScreen(
       )
     }
 
-    if (ui.titleDownload && activeStream != null) {
+    if (ui.titleDownload && activeStream != null && access.toLibrary) {
       TitleDownloadPanel(
         api = api,
         type = streamType,

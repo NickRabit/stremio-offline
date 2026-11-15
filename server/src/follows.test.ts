@@ -889,6 +889,20 @@ test("admission queues in season order and stops at the caps", async (t) => {
   assert.equal(store.get(id)!.episodes["1:1"].download?.state, "queued");
 });
 
+test("an automatic follow stops queueing when its owner becomes a child", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q, {
+    owner: () => ({ id: "u1", role: "user", child: true }),
+  });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+
+  await service.admit(id);
+
+  assert.deepEqual(q.added, []);
+  assert.equal(store.get(id)?.autoDownload?.blockedKey, "err.downloadLibraryNotAllowed");
+});
+
 test("a long season is admitted over several passes, never more than twenty at once", async (t) => {
   const { store } = await withStore(t);
   const q = fakeQueue();

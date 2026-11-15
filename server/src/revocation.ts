@@ -61,6 +61,7 @@ export function accessLost(source: AccessSource, claim: AccessClaim | undefined,
   // password change mid-request.
   const session = readSession(user.secret, claim.token);
   if (!session || session.userId !== claim.userId || session.sid !== claim.sid) return true;
+  if (user.child && !user.catalogue && need.addonKey !== undefined) return true;
   const viewer: Viewer = { id: user.id, role: user.role };
   if (need.libraryId !== undefined) {
     if (REMOTE_LIBRARY_ID.test(need.libraryId)) {
@@ -278,6 +279,7 @@ export class Revocations {
         }
       }
       if (content.addonKey !== undefined) {
+        if (user.child && !user.catalogue) return true;
         const addon = addons.find((item) => item.key === content.addonKey);
         if (!addon || !addon.enabled || !addonAllowed(addon, viewer)) return true;
       }
@@ -325,7 +327,12 @@ export class Revocations {
     // was granting goes at once, and what is left is whatever the resources name explicitly,
     // which is usually nothing. The counter stops the next request; this reaches the film
     // already playing and the transfer already running.
-    if (before.role === "admin" && after.role !== "admin") await this.stopUnreachable(after);
+    // A child without catalogue browsing reaches no addon: marking the account, or clearing
+    // the tick, ends the addon film already playing the same way a withdrawn grant does.
+    const addonsClosed = (user: UserRecord) => Boolean(user.child && !user.catalogue);
+    if ((before.role === "admin" && after.role !== "admin") || (!addonsClosed(before) && addonsClosed(after))) {
+      await this.stopUnreachable(after);
+    }
     if (mayDownloadToLibrary(before) && !mayDownloadToLibrary(after)) {
       await this.pauseJobs((job) => this.deps.queue.ownerOf(job) === after.id, after.id);
     }

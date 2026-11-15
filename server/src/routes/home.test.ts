@@ -50,6 +50,10 @@ const instancePrefs: UserPrefs = {
 
 interface Harness {
   base: string;
+  /** The accounts the harness answers as child accounts. */
+  children: Set<string>;
+  /** The child accounts with catalogue browsing ticked. */
+  catalogueChildren: Set<string>;
   /** The addons the two accounts are pitched against. */
   addons: AddonRecord[];
   /** The library bindings a resume row resolves its show id from. */
@@ -162,6 +166,7 @@ const mount = async (options: {
     metaDelayMs: 0, metaAnswer: null, metaThrows: false, metaCalls: [], metaSignals: [], lookups: [], catalogCalls: [], catalogDelayMs: 0,
     artworkKeyCalls: [],
     remoteCards: [], remoteCalls: [], remoteAssertions: 0, remoteInvalid: false, events: [], remoteThrows: false, remotePartial: false,
+    children: new Set(), catalogueChildren: new Set(),
     data: () => { throw new Error("not mounted"); }, close: async () => undefined,
   };
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()], [ADMIN, emptyUserData()]]);
@@ -176,7 +181,7 @@ const mount = async (options: {
     currentSession: () => undefined,
     currentUser: (req) => {
       const id = userOf(req);
-      return id ? { id, username: id, role: roleOf(id) } as unknown as UserRecord : undefined;
+      return id ? { id, username: id, role: roleOf(id), child: state.children.has(id), catalogue: state.catalogueChildren.has(id) } as unknown as UserRecord : undefined;
     },
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
@@ -260,12 +265,14 @@ const mount = async (options: {
     remotePersonal: {
       clearTitleFavorites: () => undefined,
       forgetTitlePositions: async () => undefined,
-      cards: async (_authority: unknown, options: { filter: string; skip?: number; limit?: number; onHome?: boolean }) => {
+      cards: async (_authority: unknown, options: { filter: string; skip?: number; limit?: number; onHome?: boolean; excludeTitles?: ReadonlySet<string> }) => {
         state.remoteCalls.push({ filter: options.filter, skip: options.skip ?? 0, limit: options.limit ?? 60, onHome: options.onHome === true });
         if (state.remoteThrows) throw new Error("the media server is unavailable");
         const skip = options.skip ?? 0;
         const limit = options.limit ?? 60;
-        return { items: state.remoteCards.slice(skip, skip + limit), total: state.remoteCards.length,
+        // As the media-server read does: a title the local half draws is not drawn again.
+        const cards = state.remoteCards.filter((card) => !card.identity || !options.excludeTitles?.has(`${card.identity.type}:${card.identity.id}`));
+        return { items: cards.slice(skip, skip + limit), total: cards.length,
           ...(state.remotePartial ? { partial: true } : {}) };
       },
       assertCardsCurrent: () => {
@@ -2510,4 +2517,87 @@ test("a title row written from a library file follows that library's two switche
   assert.deepEqual((await resumePageOf(harness)).items.map((item) => item.key), ["movie:tt9"], "the section reads only `showInContinueWatching`");
   const rows = await allRows(harness, ALICE);
   assert.deepEqual(rows.resume!.items, [], "Home drops the row with the library");
+});
+
+test("a child's Home is its own three rows, whatever addons and layout the account has", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.addons.push(cinemeta());
+  harness.children.add(ALICE);
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  harness.data(ALICE).prefs.homeLayout = { order: ["episodes", "tonight"], hidden: ["resume"], feeds: [homeFeedSelectionKey("cinemeta", "movie", "top")] };
+
+  const body = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }>; rows: Record<string, unknown> };
+  assert.deepEqual(body.order.map((entry) => entry.id), ["resume", "favorites", "recent"]);
+  assert.deepEqual(Object.keys(body.rows).sort(), ["favorites", "recent", "resume"]);
+  assert.equal(movie in body.rows, false);
+  assert.equal(harness.catalogCalls.length, 0, "no addon is asked for a child's Home");
+
+  const named = await (await api(harness.base, `/api/home?rows=${encodeURIComponent(movie)}`, ALICE)).json() as { rows: Record<string, unknown> };
+  assert.deepEqual(named.rows, {}, "a feed row named directly is not built either");
+
+  const layout = await (await api(harness.base, "/api/home/layout", ALICE)).json() as { rows: Array<{ id: string; added: boolean }> };
+  assert.deepEqual(layout.rows.map((row) => row.id), ["resume", "favorites", "recent"], "nothing is offered to add");
+
+  harness.children.delete(ALICE);
+  const grown = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }> };
+  assert.equal(grown.order.some((entry) => entry.id === movie), true, "the same account gets its feeds back once it is no child");
+});
+
+test("a child without catalogue browsing does not list the catalogue rows it kept from before", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.data(ALICE).progress = { "movie:tt1": { position: 60, duration: 600, title: "Heat", updatedAt: "2024-01-02T00:00:00.000Z" } };
+  harness.data(ALICE).watchlist = { "movie:tt9": { type: "movie", id: "tt9", name: "Starred", addedAt: "2024-01-01T00:00:00.000Z" } };
+  harness.children.add(ALICE);
+
+  const closed = await allRows(harness, ALICE);
+  assert.deepEqual(closed.resume!.items, [], "the catalogue position is left out");
+  assert.deepEqual(closed.favorites!.items, [], "and so is the catalogue star");
+  const section = await (await api(harness.base, "/api/favorites", ALICE)).json() as { items: unknown[] };
+  assert.deepEqual(section.items, []);
+  const resume = await (await api(harness.base, "/api/resume", ALICE)).json() as { items: unknown[] };
+  assert.deepEqual(resume.items, []);
+
+  harness.catalogueChildren.add(ALICE);
+  const open = await allRows(harness, ALICE);
+  assert.equal(open.resume!.items.length, 1, "with catalogue browsing both come back");
+  assert.equal(open.favorites!.items.length, 1);
+  assert.deepEqual(Object.keys(harness.data(ALICE).watchlist ?? {}), ["movie:tt9"], "nothing was deleted");
+});
+
+test("a child's media-server star is not hidden behind a catalogue star the child cannot see", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.data(ALICE).watchlist = { "movie:tt9": { type: "movie", id: "tt9", name: "Starred", addedAt: "2024-01-01T00:00:00.000Z" } };
+  harness.remoteCards = [remoteCard("m1", { identity: { type: "movie", id: "tt9" } })];
+
+  const adult = await (await api(harness.base, "/api/favorites", ALICE)).json() as { items: Array<{ kind: string }> };
+  assert.deepEqual(adult.items.map((item) => item.kind), ["catalog"], "an adult sees the title once, as its catalogue star");
+
+  harness.children.add(ALICE);
+  const child = await (await api(harness.base, "/api/favorites", ALICE)).json() as { items: Array<{ kind: string }> };
+  assert.deepEqual(child.items.map((item) => item.kind), ["remote"], "the child sees the media server's star of it");
+  const remoteOnly = await (await api(harness.base, "/api/favorites?filter=remote", ALICE)).json() as { items: Array<{ kind: string }> };
+  assert.deepEqual(remoteOnly.items.map((item) => item.kind), ["remote"]);
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.favorites!.items.length, 1, "Home's favourites row shows it too");
+});
+
+test("a catalogue position whose stored path belongs to another source stays hidden from a child", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    "movie:tt1": {
+      position: 60, duration: 600, title: "Heat", path: "lib_00000001/Films/Heat.mkv",
+      // Played from another source after the file: the path no longer names what plays.
+      stableKey: SOURCE_KEY,
+      updatedAt: "2024-01-02T00:00:00.000Z",
+    },
+  };
+  harness.children.add(ALICE);
+  const page = await resumePageOf(harness);
+  assert.deepEqual(page.items, [], "the row is a catalogue row and the child reaches no addon");
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.resume!.items, []);
 });

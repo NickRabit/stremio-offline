@@ -76,6 +76,7 @@ interface Harness {
   activeMedia: Set<ActiveTransfer>;
   deviceTickets: Map<string, DeviceDownloadTicket>;
   stoppedPlayback: string[];
+  permissionChanges: number;
   /** How many writes are waiting for `releaseWrites`, so a test can interleave two of them. */
   pendingWrites(): number;
   holdWrites(): void;
@@ -123,6 +124,7 @@ const mount = async (options: {
   const jobs = options.jobs ?? [];
   const paused: string[] = [];
   const removed: string[] = [];
+  let permissionChanges = 0;
   const fakeQueue: RevocationQueue = {
     ownerOf: (candidate) => candidate.ownerUserId,
     pauseMatching: async (match) => {
@@ -212,14 +214,25 @@ const mount = async (options: {
   const deps: UsersDeps = {
     ...ctx,
     deleteUserAccess: (userId) => revocations.deleteUser(userId),
-    permissionsChanged: (before, after) => revocations.permissionsChanged(before, after),
+    permissionsChanged: async (before, after) => {
+      permissionChanges += 1;
+      await revocations.permissionsChanged(before, after);
+    },
   };
 
   const app = express();
   app.set("trust proxy", true);
   app.use(express.json());
   // The real order: the role gate first, so the accounts API is administrator-only here too.
-  app.use("/api", roleMiddleware({ isOpen: () => false, isInternal: () => false, roleOf: (req) => currentUser(req)?.role }));
+  app.use("/api", roleMiddleware({
+    isOpen: () => false,
+    isInternal: () => false,
+    roleOf: (req) => currentUser(req)?.role,
+    childOf: (req) => {
+      const user = currentUser(req);
+      return user ? { child: Boolean(user.child), catalogue: Boolean(user.catalogue) } : undefined;
+    },
+  }));
   registerUsersRoutes(app, deps);
   registerAuthRoutes(app, ctx);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -236,6 +249,7 @@ const mount = async (options: {
     store,
     jobs: () => (real ? real.list() : jobs),
     paused, removed, resources, activeMedia, deviceTickets, stoppedPlayback,
+    get permissionChanges() { return permissionChanges; },
     pendingWrites: () => held.length,
     holdWrites: () => { holding = true; },
     releaseWrites: () => { const waiting = held; held = []; for (const run of waiting) run(); },
@@ -291,7 +305,7 @@ test("GET /api/users lists every account with its grants and none of its secrets
   assert.deepEqual(body[1], {
     id: BOB, username: "bob", role: "user", disabled: false, mustChangePassword: false,
     createdAt: "2026-01-01T00:00:00.000Z",
-    permissions: newUserPermissions(), switcher: false, unlock: "password", hasPin: false,
+    permissions: newUserPermissions(), child: false, catalogue: false, switcher: false, unlock: "password", hasPin: false,
     libraries: 1, addons: 1, remoteLibraries: 0,
   });
   assert.deepEqual(body[0]!.libraries, 0, "an administrator is granted nothing by a list");
@@ -302,7 +316,7 @@ test("GET /api/users lists every account with its grants and none of its secrets
   // Every response goes through publicUser, not just the list.
   const created = await api(harness.base, "/api/users", { method: "POST", body: { username: "carol", password: "hunter2" } });
   const createdBody = await created.json() as Record<string, unknown>;
-  assert.deepEqual(Object.keys(createdBody).sort(), ["addons", "createdAt", "disabled", "hasPin", "id", "libraries", "mustChangePassword", "permissions", "remoteLibraries", "role", "switcher", "unlock", "username"]);
+  assert.deepEqual(Object.keys(createdBody).sort(), ["addons", "catalogue", "child", "createdAt", "disabled", "hasPin", "id", "libraries", "mustChangePassword", "permissions", "remoteLibraries", "role", "switcher", "unlock", "username"]);
 });
 
 test("POST /api/users creates an account with the defaults of a new user", async (t) => {
@@ -324,6 +338,36 @@ test("POST /api/users creates an account with the defaults of a new user", async
   // nothing has been watched, queued or reordered yet.
   assert.deepEqual({ ...harness.store.userData(record.id), prefs: undefined }, { ...emptyUserData(), prefs: undefined });
   assert.equal(harness.store.users().length, 2);
+});
+
+test("POST /api/users creates a child with catalogue browsing", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/users", {
+    method: "POST",
+    body: { username: "kid", password: "hunter2", role: "user", child: true, catalogue: true },
+  });
+  assert.equal(response.status, 201);
+  const body = await response.json() as { child: boolean; catalogue: boolean };
+  assert.equal(body.child, true);
+  assert.equal(body.catalogue, true);
+  const record = findUser(harness.store.users(), "kid")!;
+  assert.equal(record.child, true);
+  assert.equal(record.catalogue, true);
+});
+
+test("POST /api/users ignores catalogue browsing on a non-child account", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/users", {
+    method: "POST",
+    body: { username: "adult", password: "hunter2", role: "user", catalogue: true },
+  });
+  assert.equal(response.status, 201);
+  const body = await response.json() as { child: boolean; catalogue: boolean };
+  assert.deepEqual([body.child, body.catalogue], [false, false]);
 });
 
 test("POST /api/users ignores profile-switcher fields", async (t) => {
@@ -451,6 +495,75 @@ test("promoting an account leaves its grants where they are", async (t) => {
   assert.deepEqual(harness.store.addons()[0]?.allowedUsers, [BOB, CAROL], "the grant lies dormant on the addon");
   const promoted = await response.json() as { libraries: number; addons: number };
   assert.deepEqual([promoted.libraries, promoted.addons], [0, 0], "a dormant list is not counted as a grant");
+});
+
+test("an administrator cannot be marked as a child", async (t) => {
+  const harness = await mount({ users: [admin, bob] });
+  t.after(harness.close);
+
+  const patched = await api(harness.base, `/api/users/${ADA}`, { method: "PATCH", body: { child: true } });
+  assert.equal(patched.status, 400);
+  assert.equal(await keyOf(patched), "err.invalidRequest");
+  assert.equal(Boolean(findUserById(harness.store.users(), ADA)?.child), false);
+
+  const promotedChild = await api(harness.base, `/api/users/${BOB}`, {
+    method: "PATCH",
+    body: { role: "admin", child: true },
+  });
+  assert.equal(promotedChild.status, 400);
+  assert.equal(await keyOf(promotedChild), "err.invalidRequest");
+  assert.equal(findUserById(harness.store.users(), BOB)?.role, "user");
+
+  const created = await api(harness.base, "/api/users", {
+    method: "POST",
+    body: { username: "kid-admin", password: "hunter2", role: "admin", child: true },
+  });
+  assert.equal(created.status, 400);
+  assert.equal(await keyOf(created), "err.invalidRequest");
+  assert.equal(findUser(harness.store.users(), "kid-admin"), undefined);
+});
+
+test("setting child or catalogue bumps the permission version and runs the change hook", async (t) => {
+  const harness = await mount({ users: [admin, bob] });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/users/${BOB}`, {
+    method: "PATCH",
+    body: { child: true, catalogue: true },
+  });
+  assert.equal(response.status, 200);
+  const updated = findUserById(harness.store.users(), BOB)!;
+  assert.equal(updated.child, true);
+  assert.equal(updated.catalogue, true);
+  assert.equal(updated.permissionsVersion, 1);
+  assert.equal(harness.permissionChanges, 1);
+});
+
+test("clearing child clears catalogue in the same write", async (t) => {
+  const harness = await mount({ users: [admin, { ...bob, child: true, catalogue: true }] });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { child: false } });
+  assert.equal(response.status, 200);
+  const updated = findUserById(harness.store.users(), BOB)!;
+  assert.equal(updated.child, false);
+  assert.equal(updated.catalogue, false);
+  assert.equal(updated.permissionsVersion, 1);
+  assert.equal(harness.permissionChanges, 1);
+});
+
+test("promoting a child clears both child flags", async (t) => {
+  const harness = await mount({ users: [admin, { ...bob, child: true, catalogue: true }] });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { role: "admin" } });
+  assert.equal(response.status, 200);
+  const promoted = findUserById(harness.store.users(), BOB)!;
+  assert.equal(promoted.role, "admin");
+  assert.equal(promoted.child, false);
+  assert.equal(promoted.catalogue, false);
+  assert.equal(promoted.permissionsVersion, 1);
+  assert.equal(harness.permissionChanges, 1);
 });
 
 test("PATCH /api/users/:id refuses unlock none for an administrator", async (t) => {
@@ -766,6 +879,20 @@ test("switching an account off sweeps what it holds and keeps its history", asyn
   const back = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { disabled: false } });
   assert.equal(back.status, 200);
   assert.equal((await back.json() as { disabled: boolean }).disabled, false, "nothing was lost and it is reversible");
+});
+
+test("a password an administrator sets for a child is final, and marking a child clears the owed change", async (t) => {
+  const harness = await mount({ users: [admin, { ...bob, child: true }, account({ id: "usr_00000009", username: "cid", mustChangePassword: true })] });
+  t.after(harness.close);
+
+  const reset = await api(harness.base, `/api/users/${BOB}/password`, { method: "PATCH", body: { password: "brand-new" } });
+  assert.equal(reset.status, 200);
+  assert.equal((await reset.json() as { mustChangePassword: boolean }).mustChangePassword, false, "a child cannot change it, so it owes nothing");
+  assert.equal(await verifyPassword("brand-new", findUserById(harness.store.users(), BOB)!.passwordHash), true);
+
+  const marked = await api(harness.base, "/api/users/usr_00000009", { method: "PATCH", body: { child: true } });
+  assert.equal(marked.status, 200);
+  assert.equal((await marked.json() as { mustChangePassword: boolean }).mustChangePassword, false);
 });
 
 test("an administrator setting a password sweeps that account and leaves their own session alone", async (t) => {

@@ -224,6 +224,17 @@ test("GET /api/library/browse answers the root from libraryRootBrowse", async (t
   assert.deepEqual(harness.calls.browsed, [], "the root row lists libraries, it does not open one");
 });
 
+test("GET /api/library/browse answers an empty root when the one library is not the caller's", async (t) => {
+  const harness = await mount([library("lib_00000001", "/media/films", 0, [])]);
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/library/browse", { user: BOB });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { path: "", items: [], total: 0, pending: false });
+  assert.deepEqual(harness.calls.browsed, []);
+});
+
 test("GET /api/library/browse lists what is inside one library", async (t) => {
   const root = await makeRoot();
   await put(root, "Films/Heat.mkv");
