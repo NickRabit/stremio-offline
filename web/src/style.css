@@ -2285,10 +2285,13 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
    individual sources are doing. */
 .topbar-search{padding:8px 12px;font-size:11px}
 .topbar-search svg{width:16px;height:16px}
-.search-everywhere-form{display:grid;grid-template-columns:minmax(180px,1fr) auto auto;gap:10px;margin-bottom:13px}
+.search-everywhere-form{display:grid;grid-template-columns:minmax(180px,1fr) auto auto;gap:10px;margin-bottom:13px;padding:12px;border:1px solid var(--line);border-radius:13px;background:var(--panel)}
 .search-everywhere-form>.search-input{grid-column:auto}
-.search-filters{flex-wrap:wrap;gap:10px 12px;margin-bottom:13px}
+.search-filters{flex-wrap:wrap;align-items:center;gap:10px 22px;margin:0 0 14px}
+.search-filter-group{display:flex;align-items:center;gap:8px;min-width:0}
+.search-filter-group>span{font-size:10px;color:var(--muted);white-space:nowrap}
 .search-filters .library-shelf-segments{flex:0 1 auto}
+@media(min-width:701px) and (min-height:501px){.search-filters .library-shelf-segments button{min-height:31px;padding:0 12px;font-size:11px}}
 .search-filters .shape-toggle{margin-left:auto}
 .search-source-strip{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px 18px;margin-bottom:14px;padding:10px 13px;border:1px solid var(--line);border-radius:10px;background:#10151dcc}
 .search-source-summary{font-size:11px;color:var(--muted)}
@@ -2329,8 +2332,9 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
   .topbar-search{padding:8px}
   .search-everywhere-form{grid-template-columns:1fr 1fr}
   .search-everywhere-form>.search-input,.search-everywhere-form>button:only-of-type{grid-column:1/-1}
-  .search-filters .library-shelf-segments:first-child{flex:1 1 100%}
-  .search-filters .library-shelf-segments+.library-shelf-segments{flex:1 1 0}
+  .search-filters .search-filter-group:first-child{flex:1 1 100%}
+  .search-filters .search-filter-group+.search-filter-group{flex:1 1 0}
+  .search-filter-group .library-shelf-segments{flex:1 1 auto}
   .search-source-strip{display:grid;gap:8px}
   .search-source-strip details{min-width:0;width:100%}
   .search-source-strip summary{text-align:left}

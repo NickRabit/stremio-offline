@@ -510,12 +510,15 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
             onClick={(event) => { event.stopPropagation(); onForget(suggestion.text); }}><X/></button></li>)}</ul>}
     </form>
     <div className="filterbar section-filter search-filters">
-      <div className="library-shelf-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
-        {SOURCE_OPTIONS.map((option) => {
-          const active = sameSources(search.sources, option.sources);
-          return <button key={option.id} type="button" className={active ? "active" : ""} aria-pressed={active}
-            onClick={() => search.setSources(option.sources)}>{t(option.label)}</button>;
-        })}
+      <div className="search-filter-group">
+        <span aria-hidden="true">{t("searchAll.sourcesToggle")}</span>
+        <div className="library-shelf-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
+          {SOURCE_OPTIONS.map((option) => {
+            const active = sameSources(search.sources, option.sources);
+            return <button key={option.id} type="button" className={active ? "active" : ""} aria-pressed={active}
+              onClick={() => search.setSources(option.sources)}>{t(option.label)}</button>;
+          })}
+        </div>
       </div>
       {search.library && <button type="button" className="search-library-chip" aria-label={t("searchAll.libraryClear")} onClick={() => search.clearLibrary()}>{t("searchAll.libraryChip", { title: search.library.title })}</button>}
       {catalogOnly && <label><span>{t("catalog.searchScope")}</span>
@@ -523,13 +526,16 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
           <SearchScopeOptions searchable={searchable}/>
         </select>
       </label>}
-      <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
-        {([
-          ["all", "searchAll.kindAll"],
-          ["movie", "searchAll.kindMovies"],
-          ["series", "searchAll.kindSeries"],
-        ] as const).map(([value, key]) => <button key={value} type="button" className={search.kind === value ? "active" : ""} aria-pressed={search.kind === value}
-          onClick={() => search.setKind(value)}>{t(key)}</button>)}
+      <div className="search-filter-group">
+        <span aria-hidden="true">{t("catalog.type")}</span>
+        <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
+          {([
+            ["all", "searchAll.kindAll"],
+            ["movie", "searchAll.kindMovies"],
+            ["series", "searchAll.kindSeries"],
+          ] as const).map(([value, key]) => <button key={value} type="button" className={search.kind === value ? "active" : ""} aria-pressed={search.kind === value}
+            onClick={() => search.setKind(value)}>{t(key)}</button>)}
+        </div>
       </div>
       <ShapeToggle shape={shape} onToggle={onToggleShape}/>
     </div>

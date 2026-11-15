@@ -165,9 +165,12 @@ export function PersonView({ person, language, shape, initialScroll, fromTitle, 
         <button className="primary" type="submit"><Search/> {t("searchAll.submit")}</button>
       </form>
       <div className="filterbar section-filter search-filters">
-        <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
-          {KINDS.map(([value, key]) => <button key={value} type="button" className={kind === value ? "active" : ""} aria-pressed={kind === value}
-            onClick={() => setKind(value)}>{t(key)}</button>)}
+        <div className="search-filter-group">
+          <span aria-hidden="true">{t("catalog.type")}</span>
+          <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
+            {KINDS.map(([value, key]) => <button key={value} type="button" className={kind === value ? "active" : ""} aria-pressed={kind === value}
+              onClick={() => setKind(value)}>{t(key)}</button>)}
+          </div>
         </div>
         <ShapeToggle shape={shape} onToggle={onToggleShape}/>
       </div>
