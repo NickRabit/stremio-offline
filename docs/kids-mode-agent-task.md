@@ -2,8 +2,7 @@
 
 Read `AGENTS.md`, [the specification](kids-mode-spec.md), [users.md](users.md)
 and [ui-conventions.md](ui-conventions.md) before editing. The specification is
-the design contract; this file is its execution order. Do not start a slice
-whose decisions in the specification are still marked **decide**.
+the design contract; this file is its execution order.
 
 ## Do not
 
@@ -54,8 +53,6 @@ released until the last one lands.
   account became a child keeps queueing unless `mayQueue` checks the flag.
 - **Two allow-lists drifting.** `CHILD_ALLOWED` must be a subset of
   `USER_ALLOWED`; pin that with a test so a rule cannot be child-only.
-- **Reads that write.** Browsing can schedule artwork beside the media; a
-  child's request must not.
 - **Hiding instead of not calling.** A child client that still asks for
   addons, catalogues, the watchlist or the download queue gets a 403 and shows
   an error or retries for ever. Remove the call, then the control.

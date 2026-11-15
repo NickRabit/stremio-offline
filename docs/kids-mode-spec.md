@@ -1,13 +1,11 @@
 # Kids mode
 
-Status: design contract with the **server slice implemented** on the feature
-branch; the administrator switch exists, the web and Android TV interfaces do
-not. Written on 2026-11-14 against `main` at `b4c4d591` (0.7.105) and revised
-on 2026-11-15 after a review of the server slice and of the design for phones
-and the television. The server slice follows the proposals below; **the rows
-marked *decide* still wait for the owner**, and an answer that differs changes
-the server as well. Nothing is released until the last slice lands. The
-execution order is in [kids-mode-agent-task.md](kids-mode-agent-task.md).
+Status: design contract. **The owner confirmed every decision below on
+2026-11-15.** The server slice and the administrator switch are implemented on
+the feature branch; the web and Android TV interfaces are not. Nothing is
+released until the last slice lands. Written against `main` at `b4c4d591`
+(0.7.105). The execution order is in
+[kids-mode-agent-task.md](kids-mode-agent-task.md).
 
 ## Goal
 
@@ -27,21 +25,21 @@ This builds on what already exists rather than adding a parallel system:
 
 ## Decisions
 
-| # | Question | Proposal | Owner |
-| --- | --- | --- | --- |
-| 1 | How is a child marked | A flag `child: true` on an ordinary account, set in **Settings → Users** → account. Not a third role: everything a role decides today stays as it is, and the flag only takes things away. An administrator can never be a child; promoting a child clears the flag. | confirm |
-| 2 | Where it is enforced | A second allow-list `CHILD_ALLOWED` in `server/src/roles.ts`, a strict subset of `USER_ALLOWED`, chosen in `roleMiddleware` from the freshly read account. Default deny, like the role gate: a route added later is closed to children until somebody opens it. | confirm |
-| 3 | Addon catalogues | **Off by default.** A child sees only granted libraries (local, Jellyfin, Emby). The administrator can tick *Catalogue browsing* for one child account, which opens catalogues, search, streams, the catalogue watchlist and follows of that account's granted addons. An addon is never age-filtered; the tick says so. | **decide** |
-| 4 | TMDB detail extras and person pages | Off for a child. The detail shows the library's own metadata; no cast row, no similar titles, no filmography, no trailers. With catalogue browsing ticked: still off in this version. | **decide** |
-| 5 | Leaving the child account | Only through the profile switcher, into an account that needs **its PIN or password**. A child never sees, and the server never lets it enter, a profile set to *Nothing*, another child, or anything outside the switcher. Sign-out is allowed and grants nothing. | confirm |
-| 6 | Follows | Only with *Catalogue browsing*: a follow reads its episodes from the addons, so without the tick every follow route is refused. With it a child may follow a series for new-episode notices; automatic download, retention and episode retry or skip are refused. | **decide** |
-| 7 | Personal settings | A child may read its settings and the language list (both clients need them to start and the player takes its languages from them) and may not change any. The interface language, audio and subtitle languages are set by the administrator in the account dialog. | **decide** |
-| 8 | Own password and PIN | A child may not change its password or PIN; the administrator does. Otherwise a child could lock the parent out of the child's account. A password an administrator sets for a child is therefore final: it does not owe a change, and marking an account as a child clears a change it owed. | confirm |
-| 9 | Home | Exactly three rows, fixed by the server: Continue watching, favourites, recently added. No addon feed, no customisation, and the layout the account stored before it became a child is ignored, not deleted. | confirm |
-| 10 | Television | Same policy; the rail shows Home, Library, Search and the profile switch. No Settings, no Downloads. | confirm |
-| 11 | Detail of a library title | Drawn from the library's own records only: name, year, description, artwork and the files. `GET /meta` stays closed without *Catalogue browsing*, so a series shows its files by season and episode number, without episode names or stills from an addon. Opening `/meta` for titles bound in a granted library is the alternative, at the price of one more addon read per detail. | **decide** |
-| 12 | Handing the device over | The app does not lock itself into the child profile. A parent switches to the child before handing over the phone or the remote; a television left in an adult profile is an adult session. See *Not in this version*. | confirm |
-| 13 | Artwork written while a child browses | Allowed, as for any other viewer; see *Rules inside handlers*. The alternative is to skip the generation for a child's request and accept blank tiles. | **decide** |
+| # | Question | Decision |
+| --- | --- | --- |
+| 1 | How is a child marked | A flag `child: true` on an ordinary account, set in **Settings → Users** → account. Not a third role: everything a role decides today stays as it is, and the flag only takes things away. An administrator can never be a child; promoting a child clears the flag. |
+| 2 | Where it is enforced | A second allow-list `CHILD_ALLOWED` in `server/src/roles.ts`, a strict subset of `USER_ALLOWED`, chosen in `roleMiddleware` from the freshly read account. Default deny, like the role gate: a route added later is closed to children until somebody opens it. |
+| 3 | Addon catalogues | **Off by default.** A child sees only granted libraries (local, Jellyfin, Emby). The administrator can tick *Catalogue browsing* for one child account, which opens catalogues, search, streams, the catalogue watchlist and follows of that account's granted addons. An addon is never age-filtered; the tick says so. |
+| 4 | TMDB detail extras and person pages | Off for a child. The detail shows the library's own metadata; no cast row, no similar titles, no filmography, no trailers. With catalogue browsing ticked: still off in this version. |
+| 5 | Leaving the child account | Only through the profile switcher, into an account that needs **its PIN or password**. A child never sees, and the server never lets it enter, a profile set to *Nothing*, another child, or anything outside the switcher. Sign-out is allowed and grants nothing. |
+| 6 | Follows | Only with *Catalogue browsing*: a follow reads its episodes from the addons, so without the tick every follow route is refused. With it a child may follow a series for new-episode notices; automatic download, retention and episode retry or skip are refused. |
+| 7 | Personal settings | A child may read its settings and the language list (both clients need them to start and the player takes its languages from them) and may not change any. The interface language, audio and subtitle languages are set by the administrator in the account dialog. |
+| 8 | Own password and PIN | A child may not change its password or PIN; the administrator does. Otherwise a child could lock the parent out of the child's account. A password an administrator sets for a child is therefore final: it does not owe a change, and marking an account as a child clears a change it owed. |
+| 9 | Home | Exactly three rows, fixed by the server: Continue watching, favourites, recently added. No addon feed, no customisation, and the layout the account stored before it became a child is ignored, not deleted. |
+| 10 | Television | Same policy; the rail shows Home, Library, Search and the profile switch. No Settings, no Downloads. |
+| 11 | Detail of a library title | Drawn from the library's own records only: name, year, description, artwork and the files. `GET /meta` stays closed without *Catalogue browsing*, so a series shows its files by season and episode number, without episode names or stills from an addon. Opening `/meta` for titles bound in a granted library was considered and left out of this version. |
+| 12 | Handing the device over | The app does not lock itself into the child profile. A parent switches to the child before handing over the phone or the remote; a television left in an adult profile is an adult session. See *Not in this version*. |
+| 13 | Artwork written while a child browses | Allowed, as for any other viewer; see *Rules inside handlers*. Skipping the generation for a child's request was rejected: it leaves blank tiles. |
 
 ## What a child may reach
 
@@ -117,11 +115,9 @@ The allow-list cannot see a request body. These stay in the handler:
   again when the flag is cleared. Setting the flag therefore pauses the
   account's queued downloads and drops its device tickets and running device
   transfers, through the same path as taking the permission away.
-- **Artwork (decision 13, not implemented).** The first draft said a child's
-  read never schedules artwork beside the media. It is not built, and the
-  proposal is to drop it: the write is the one any other viewer of the same
-  library triggers, it happens once per file, and suppressing it leaves a
-  child looking at blank tiles until an adult browses the same folder.
+- **Artwork (decision 13).** A child's read schedules artwork like anybody
+  else's: the write is the one any other viewer of the same library triggers
+  and happens once per file.
 
 ## Revocation
 
@@ -150,7 +146,7 @@ draw from it; it is not enforcement.
   failed catalogue read. The child start-up is: `auth/me`, settings,
   languages, Home, libraries, and nothing about addons, downloads or follows
   unless *Catalogue browsing* is ticked. A test per client pins the list.
-- **A detail without the catalogue.** With decision 11 as proposed, the detail
+- **A detail without the catalogue.** By decision 11 the detail
   of a library title is drawn from the library alone and must not wait for, or
   show an error from, `/meta`, `/addons`, `/watchlist` or the extras.
 - **The star.** On a library title it is the library favourite
@@ -228,10 +224,11 @@ draw from it; it is not enforcement.
   profile, not per caller: after five the wait grows to fifteen minutes and
   after ten the PIN is locked and the password is needed. A child guessing
   cannot get in, and can make the parent wait or type the password.
-- **Continue watching and favourites keep old catalogue entries.** An account
-  that used the catalogue before it became a child without *Catalogue
-  browsing* still lists those rows; opening one is refused. The rows have to
-  leave such entries out (open in the server slice).
+- **Old catalogue rows are hidden, not deleted.** An account that used the
+  catalogue before it became a child without *Catalogue browsing* keeps its
+  catalogue positions and stars in storage; Continue watching, Favourites and
+  the progress list leave them out, and they return with the tick or when the
+  flag is cleared.
 
 ## Acceptance
 

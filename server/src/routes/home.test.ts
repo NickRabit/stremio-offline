@@ -52,6 +52,8 @@ interface Harness {
   base: string;
   /** The accounts the harness answers as child accounts. */
   children: Set<string>;
+  /** The child accounts with catalogue browsing ticked. */
+  catalogueChildren: Set<string>;
   /** The addons the two accounts are pitched against. */
   addons: AddonRecord[];
   /** The library bindings a resume row resolves its show id from. */
@@ -164,7 +166,7 @@ const mount = async (options: {
     metaDelayMs: 0, metaAnswer: null, metaThrows: false, metaCalls: [], metaSignals: [], lookups: [], catalogCalls: [], catalogDelayMs: 0,
     artworkKeyCalls: [],
     remoteCards: [], remoteCalls: [], remoteAssertions: 0, remoteInvalid: false, events: [], remoteThrows: false, remotePartial: false,
-    children: new Set(),
+    children: new Set(), catalogueChildren: new Set(),
     data: () => { throw new Error("not mounted"); }, close: async () => undefined,
   };
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()], [ADMIN, emptyUserData()]]);
@@ -179,7 +181,7 @@ const mount = async (options: {
     currentSession: () => undefined,
     currentUser: (req) => {
       const id = userOf(req);
-      return id ? { id, username: id, role: roleOf(id), child: state.children.has(id) } as unknown as UserRecord : undefined;
+      return id ? { id, username: id, role: roleOf(id), child: state.children.has(id), catalogue: state.catalogueChildren.has(id) } as unknown as UserRecord : undefined;
     },
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
@@ -2538,4 +2540,26 @@ test("a child's Home is its own three rows, whatever addons and layout the accou
   harness.children.delete(ALICE);
   const grown = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }> };
   assert.equal(grown.order.some((entry) => entry.id === movie), true, "the same account gets its feeds back once it is no child");
+});
+
+test("a child without catalogue browsing does not list the catalogue rows it kept from before", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.data(ALICE).progress = { "movie:tt1": { position: 60, duration: 600, title: "Heat", updatedAt: "2024-01-02T00:00:00.000Z" } };
+  harness.data(ALICE).watchlist = { "movie:tt9": { type: "movie", id: "tt9", name: "Starred", addedAt: "2024-01-01T00:00:00.000Z" } };
+  harness.children.add(ALICE);
+
+  const closed = await allRows(harness, ALICE);
+  assert.deepEqual(closed.resume!.items, [], "the catalogue position is left out");
+  assert.deepEqual(closed.favorites!.items, [], "and so is the catalogue star");
+  const section = await (await api(harness.base, "/api/favorites", ALICE)).json() as { items: unknown[] };
+  assert.deepEqual(section.items, []);
+  const resume = await (await api(harness.base, "/api/resume", ALICE)).json() as { items: unknown[] };
+  assert.deepEqual(resume.items, []);
+
+  harness.catalogueChildren.add(ALICE);
+  const open = await allRows(harness, ALICE);
+  assert.equal(open.resume!.items.length, 1, "with catalogue browsing both come back");
+  assert.equal(open.favorites!.items.length, 1);
+  assert.deepEqual(Object.keys(harness.data(ALICE).watchlist ?? {}), ["movie:tt9"], "nothing was deleted");
 });

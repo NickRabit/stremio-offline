@@ -533,6 +533,14 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   type ProgressRow = StoredProgress & { key: string; pending?: true };
   /** The body of `GET /api/progress`, shared with Home so both read the same markers and
    *  apply the same permission rules. The options are Home's work bounds. */
+  /** A child without catalogue browsing reaches no addon, so the rows an addon would have to
+   *  answer for -- kept from before the account became a child -- are left out of its lists.
+   *  A row a library file wrote carries that file's path and stays. */
+  const addonsClosed = (req: express.Request): boolean => {
+    const account = currentUser(req);
+    return Boolean(account?.child && !account.catalogue);
+  };
+
   const progressRows = async (req: express.Request, options: ProgressRowOptions = {}): Promise<ProgressPage> => {
     const data = dataOf(req);
     const all = progressOf(data);
@@ -550,7 +558,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const shown = grouped.flatMap((row) => (row.series ? [row.series.id] : []));
     // A stored catalogue row from an addon the caller may not use is dropped; the marker of
     // the same show stays suppressed, so a dropped row does not reappear as its next episode.
-    const rows = options.addonFilter ? grouped.filter((row) => !row.addonKey || allowed.has(row.addonKey)) : grouped;
+    const closed = addonsClosed(req);
+    const rows = (options.addonFilter ? grouped.filter((row) => !row.addonKey || allowed.has(row.addonKey)) : grouped)
+      .filter((row) => !closed || Boolean(row.path));
     const over: string[] = [];
     const language = prefsOf(req).uiLanguage;
     // A marker remembers which addon the show came from. One the caller may no longer use
@@ -558,7 +568,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // not allowed to ask, and finding that out by asking is itself the leak.
     const owing = markersOwingRow(markersOf(data), shown)
       .filter(([id]) => !id.startsWith("local:"))
-      .filter(([, marker]) => !marker.addonKey || allowed.has(marker.addonKey));
+      .filter(([, marker]) => !marker.addonKey || allowed.has(marker.addonKey))
+      // The next episode of a show is read from an addon.
+      .filter(() => !closed);
     const owed = options.markerLimit === undefined
       ? owing
       : [...owing].sort((a, b) => b[1].updatedAt.localeCompare(a[1].updatedAt) || a[0].localeCompare(b[0])).slice(0, options.markerLimit);
@@ -916,6 +928,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         library.push(card);
         continue;
       }
+      if (addonsClosed(req)) continue;
       catalog.push({
         kind: "catalog", type: entry.type, id: entry.id, name: entry.name,
         ...(entry.poster ? { poster: entry.poster } : {}),
