@@ -458,6 +458,13 @@ export const cs: Catalog = {
   "person.opening": "Otevírá se…",
   "person.inLibrary": "Ve vaší knihovně",
   "person.label": "Filmografie: {name}",
+  "person.backTo": "Zpět na {title}",
+  "person.titleCount": {
+    one: "{count} titul",
+    few: "{count} tituly",
+    other: "{count} titulů",
+  },
+  "person.searchAsText": "Hledat „{name}“ jako text",
   "person.hint": "Vyberte jméno a uvidíte, na čem se osoba podílela",
   "person.hintTv": "OK ukáže, na čem se osoba podílela",
   "detail.willPlay": "Přehraje se",

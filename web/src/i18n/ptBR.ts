@@ -419,6 +419,12 @@ export const ptBR: Catalog = {
   "person.opening": "Abrindo…",
   "person.inLibrary": "Na sua biblioteca",
   "person.label": "Filmografia de {name}",
+  "person.backTo": "Voltar para {title}",
+  "person.titleCount": {
+    one: "{count} título",
+    other: "{count} títulos",
+  },
+  "person.searchAsText": "Buscar “{name}” como texto",
   "person.hint": "Selecione um nome para ver em que a pessoa trabalhou",
   "person.hintTv": "OK mostra em que a pessoa trabalhou",
   "detail.willPlay": "Vai reproduzir",

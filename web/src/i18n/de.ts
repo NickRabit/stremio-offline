@@ -419,6 +419,12 @@ export const de: Catalog = {
   "person.opening": "Wird geöffnet…",
   "person.inLibrary": "In deiner Bibliothek",
   "person.label": "Filmografie von {name}",
+  "person.backTo": "Zurück zu {title}",
+  "person.titleCount": {
+    one: "{count} Titel",
+    other: "{count} Titel",
+  },
+  "person.searchAsText": "„{name}“ als Text suchen",
   "person.hint": "Wähle einen Namen, um zu sehen, woran die Person mitgewirkt hat",
   "person.hintTv": "OK zeigt, woran die Person mitgewirkt hat",
   "detail.willPlay": "Wird abgespielt",

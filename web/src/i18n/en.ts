@@ -463,6 +463,12 @@ export const en = {
   "person.opening": "Opening…",
   "person.inLibrary": "In your library",
   "person.label": "Filmography of {name}",
+  "person.backTo": "Back to {title}",
+  "person.titleCount": {
+    one: "{count} title",
+    other: "{count} titles",
+  },
+  "person.searchAsText": "Search for “{name}” as text",
   "person.hint": "Select a name to see what the person made",
   "person.hintTv": "OK shows what the person made",
   "detail.willPlay": "Will play",
