@@ -548,7 +548,7 @@ export class ImageProxy {
 
   rewritePerson<T extends {
     photo?: string;
-    sections: Array<{ titles: Array<{ poster?: string }> }>;
+    sections: Array<{ titles: Array<{ poster?: string; background?: string }> }>;
   }>(person: T): T {
     if (!secureMode()) return person;
     return {
@@ -559,6 +559,7 @@ export class ImageProxy {
         titles: section.titles.map((title) => ({
           ...title,
           poster: typeof title.poster === "string" ? this.proxied(title.poster) : title.poster,
+          background: typeof title.background === "string" ? this.proxied(title.background) : title.background,
         })),
       })),
     };

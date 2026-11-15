@@ -18,6 +18,7 @@ export interface PersonCreditTitle {
   year?: string;
   date?: string;
   posterPath?: string;
+  backdropPath?: string;
   role?: string;
   popularity: number;
 }
@@ -38,6 +39,7 @@ export interface PersonTitle {
   name: string;
   year?: string;
   poster?: string;
+  background?: string;
   role?: string;
   inLibrary?: true;
 }
@@ -46,6 +48,10 @@ export interface PersonFilmography {
   id: number;
   name: string;
   photo?: string;
+  /** The section the person is known for, which comes first. */
+  knownFor: PersonSectionKey;
+  /** Titles in both sections before the cut. */
+  total: number;
   sections: Array<{ key: PersonSectionKey; titles: PersonTitle[] }>;
 }
 
@@ -83,6 +89,7 @@ interface MergedCredit {
   name: string;
   date?: string;
   posterPath?: string;
+  backdropPath?: string;
   popularity?: number;
   jobs: string[];
   characters: string[];
@@ -126,6 +133,7 @@ export function normalizePerson(raw: TmdbPersonResponse, tmdbId: number): Person
     const date = text(media === "movie" ? row.release_date : row.first_air_date);
     item.date ??= date;
     item.posterPath ??= text(row.poster_path);
+    item.backdropPath ??= text(row.backdrop_path);
     if (typeof row.popularity === "number" && Number.isFinite(row.popularity)) {
       item.popularity = item.popularity == null ? row.popularity : Math.max(item.popularity, row.popularity);
     }
@@ -147,6 +155,7 @@ export function normalizePerson(raw: TmdbPersonResponse, tmdbId: number): Person
       name: item.name,
       ...(item.date ? { date: item.date, year: item.date.slice(0, 4) } : {}),
       ...(item.posterPath ? { posterPath: item.posterPath } : {}),
+      ...(item.backdropPath ? { backdropPath: item.backdropPath } : {}),
       ...(roles.length ? { role: roles.join(", ") } : {}),
       popularity: item.popularity ?? 0,
     };
@@ -196,6 +205,7 @@ export function composePerson(credits: PersonCredits, opts: {
         name: item.name,
         ...(item.year ? { year: item.year } : {}),
         ...(tmdbImage(item.posterPath, "w342") ? { poster: tmdbImage(item.posterPath, "w342") } : {}),
+        ...(tmdbImage(item.backdropPath, "w780") ? { background: tmdbImage(item.backdropPath, "w780") } : {}),
         ...(item.role ? { role: item.role } : {}),
         ...(owned ? { inLibrary: true as const } : {}),
         date: item.date,
@@ -217,6 +227,8 @@ export function composePerson(credits: PersonCredits, opts: {
     id: credits.id,
     name: credits.name,
     ...(tmdbImage(credits.profilePath, "w185") ? { photo: tmdbImage(credits.profilePath, "w185") } : {}),
+    knownFor: credits.knownFor,
+    total: credits.acting.length + credits.crew.length,
     sections,
   };
 }

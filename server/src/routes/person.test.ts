@@ -265,12 +265,15 @@ test("secure mode proxies the portrait and every title poster", async (t) => {
     assert.equal(response.status, 200);
     const body = await response.json() as {
       photo?: string;
-      sections: Array<{ titles: Array<{ poster?: string }> }>;
+      sections: Array<{ titles: Array<{ poster?: string; background?: string }> }>;
     };
     assert.match(body.photo ?? "", /^\/api\/image\//);
     const posters = body.sections.flatMap((section) => section.titles).flatMap((title) => title.poster ? [title.poster] : []);
     assert.ok(posters.length > 0);
     assert.equal(posters.every((poster) => poster.startsWith("/api/image/")), true);
+    const backgrounds = body.sections.flatMap((section) => section.titles).flatMap((title) => title.background ? [title.background] : []);
+    assert.ok(backgrounds.length > 0);
+    assert.equal(backgrounds.every((background) => background.startsWith("/api/image/")), true);
   });
 });
 

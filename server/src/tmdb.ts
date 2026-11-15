@@ -306,6 +306,7 @@ export interface TmdbPersonCredit {
   release_date?: string;
   first_air_date?: string;
   poster_path?: string | null;
+  backdrop_path?: string | null;
   popularity?: number;
   genre_ids?: number[];
   character?: string;

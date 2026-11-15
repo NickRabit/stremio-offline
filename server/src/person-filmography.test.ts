@@ -53,6 +53,11 @@ test("Tarantino keeps his Pulp Fiction jobs and character in the crew section", 
 
   const filmography = composePerson(credits, { owned: new Set(), imdbOf: () => undefined });
   assert.equal(filmography.sections[0]?.key, "crew");
+  assert.equal(filmography.knownFor, "crew");
+  assert.equal(filmography.total, credits.acting.length + credits.crew.length);
+  const tile = filmography.sections[0]!.titles.find((title) => title.tmdbId === 680);
+  assert.match(tile?.poster ?? "", /^https:\/\/image\.tmdb\.org\/t\/p\/w342\//);
+  assert.match(tile?.background ?? "", /^https:\/\/image\.tmdb\.org\/t\/p\/w780\//, "a wide tile has a backdrop to show");
 });
 
 test("Gilligan's creator credit for Breaking Bad is a series in crew", () => {
