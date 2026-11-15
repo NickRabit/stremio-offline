@@ -103,6 +103,8 @@ import { registerAddonsRoutes } from "./routes/addons.js";
 import { registerAdminSourceProfilesRoutes } from "./routes/admin-source-profiles.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProfilesRoutes } from "./routes/profiles.js";
+import { registerAvatarRoutes } from "./routes/avatars.js";
+import { AvatarStore } from "./avatars.js";
 import { registerCatalogRoutes } from "./routes/catalog.js";
 import { registerContentRoutes } from "./routes/content.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./routes/context.js";
@@ -161,6 +163,7 @@ const externalIds = new ExternalIdStore(DATA_DIR);
 const debridReady = new DebridReadyStore(DATA_DIR);
 /** The series each account follows, kept outside the personal state so it survives it. */
 const followStore = new FollowStore(DATA_DIR);
+const avatarStore = new AvatarStore(DATA_DIR);
 /** When this app first met each library file, so "Recently added" is not the file's own date. */
 const seen = new LibrarySeenStore(DATA_DIR);
 const fingerprints = new LibraryFingerprints();
@@ -750,6 +753,8 @@ const stopUserSessions = (userId: string) => {
 const deleteUserAccess = (userId: string) => {
   searchSessions?.dropUser(userId);
   catalogSearchSessions?.dropUser(userId);
+  // The account's uploaded picture goes with it; a failure here must not keep the account.
+  void avatarStore.remove(userId).catch(() => undefined);
   return revocations.deleteUser(userId);
 };
 /** What an edit took away from one account: switching it off goes entirely, losing the
@@ -940,6 +945,7 @@ const routeContext: RouteContext = {
 };
 registerAuthRoutes(app, routeContext);
 registerProfilesRoutes(app, routeContext);
+registerAvatarRoutes(app, { ...routeContext, avatars: avatarStore });
 registerPairingRoutes(app, routeContext);
 registerUsersRoutes(app, { ...routeContext, deleteUserAccess, permissionsChanged });
 registerSourceProfilesRoutes(app, routeContext);

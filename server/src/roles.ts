@@ -21,6 +21,11 @@ export const USER_ALLOWED: Rule[] = [
   { method: "POST", pattern: /^\/auth\/logout$/ },
   { method: "PATCH", pattern: /^\/auth\/password$/ },
   { method: "PATCH", pattern: /^\/auth\/pin$/ },
+  // Their own picture, and the pictures of the profiles they may switch to (the handler decides).
+  { method: "PATCH", pattern: /^\/auth\/avatar$/ },
+  { method: "PUT", pattern: /^\/auth\/avatar\/image$/ },
+  { method: "GET", pattern: /^\/avatar\/presets$/ },
+  { method: "GET", pattern: /^\/avatar\/usr_[0-9a-f]{8}$/ },
   { method: "GET", pattern: /^\/profiles$/ },
   { method: "POST", pattern: /^\/profiles\/switch$/ },
   { method: "POST", pattern: /^\/auth\/pair\/start$/ },
@@ -182,6 +187,10 @@ export const CHILD_ALLOWED: Rule[] = rulesFor([
   ["POST", "/auth/logout"],
   ["GET", "/profiles"],
   ["POST", "/profiles/switch"],
+  // A child picks a picture from the set; uploading its own stays refused.
+  ["PATCH", "/auth/avatar"],
+  ["GET", "/avatar/presets"],
+  ["GET", "/avatar/usr_0000000a"],
   ["GET", "/progress"],
   ["GET", "/progress/movie:tt1254207"],
   ["POST", "/progress"],
