@@ -265,12 +265,14 @@ const mount = async (options: {
     remotePersonal: {
       clearTitleFavorites: () => undefined,
       forgetTitlePositions: async () => undefined,
-      cards: async (_authority: unknown, options: { filter: string; skip?: number; limit?: number; onHome?: boolean }) => {
+      cards: async (_authority: unknown, options: { filter: string; skip?: number; limit?: number; onHome?: boolean; excludeTitles?: ReadonlySet<string> }) => {
         state.remoteCalls.push({ filter: options.filter, skip: options.skip ?? 0, limit: options.limit ?? 60, onHome: options.onHome === true });
         if (state.remoteThrows) throw new Error("the media server is unavailable");
         const skip = options.skip ?? 0;
         const limit = options.limit ?? 60;
-        return { items: state.remoteCards.slice(skip, skip + limit), total: state.remoteCards.length,
+        // As the media-server read does: a title the local half draws is not drawn again.
+        const cards = state.remoteCards.filter((card) => !card.identity || !options.excludeTitles?.has(`${card.identity.type}:${card.identity.id}`));
+        return { items: cards.slice(skip, skip + limit), total: cards.length,
           ...(state.remotePartial ? { partial: true } : {}) };
       },
       assertCardsCurrent: () => {
@@ -2562,4 +2564,40 @@ test("a child without catalogue browsing does not list the catalogue rows it kep
   assert.equal(open.resume!.items.length, 1, "with catalogue browsing both come back");
   assert.equal(open.favorites!.items.length, 1);
   assert.deepEqual(Object.keys(harness.data(ALICE).watchlist ?? {}), ["movie:tt9"], "nothing was deleted");
+});
+
+test("a child's media-server star is not hidden behind a catalogue star the child cannot see", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.data(ALICE).watchlist = { "movie:tt9": { type: "movie", id: "tt9", name: "Starred", addedAt: "2024-01-01T00:00:00.000Z" } };
+  harness.remoteCards = [remoteCard("m1", { identity: { type: "movie", id: "tt9" } })];
+
+  const adult = await (await api(harness.base, "/api/favorites", ALICE)).json() as { items: Array<{ kind: string }> };
+  assert.deepEqual(adult.items.map((item) => item.kind), ["catalog"], "an adult sees the title once, as its catalogue star");
+
+  harness.children.add(ALICE);
+  const child = await (await api(harness.base, "/api/favorites", ALICE)).json() as { items: Array<{ kind: string }> };
+  assert.deepEqual(child.items.map((item) => item.kind), ["remote"], "the child sees the media server's star of it");
+  const remoteOnly = await (await api(harness.base, "/api/favorites?filter=remote", ALICE)).json() as { items: Array<{ kind: string }> };
+  assert.deepEqual(remoteOnly.items.map((item) => item.kind), ["remote"]);
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.favorites!.items.length, 1, "Home's favourites row shows it too");
+});
+
+test("a catalogue position whose stored path belongs to another source stays hidden from a child", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    "movie:tt1": {
+      position: 60, duration: 600, title: "Heat", path: "lib_00000001/Films/Heat.mkv",
+      // Played from another source after the file: the path no longer names what plays.
+      stableKey: SOURCE_KEY,
+      updatedAt: "2024-01-02T00:00:00.000Z",
+    },
+  };
+  harness.children.add(ALICE);
+  const page = await resumePageOf(harness);
+  assert.deepEqual(page.items, [], "the row is a catalogue row and the child reaches no addon");
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.resume!.items, []);
 });
