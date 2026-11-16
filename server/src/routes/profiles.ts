@@ -5,7 +5,7 @@ import { log } from "../logger.js";
 import { profileAttempts } from "../profile-attempts.js";
 import { assertUnrestricted, restrictedMode } from "../restricted.js";
 import type { State } from "../store.js";
-import { effectiveUnlock, findUserById, switchTargets, type UserRecord } from "../users.js";
+import { avatarField, effectiveUnlock, findUserById, switchTargets, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
 const profileUnavailable = () =>
@@ -29,6 +29,7 @@ export function registerProfilesRoutes(app: express.Application, ctx: RouteConte
           username: user.username,
           unlock,
           current: user.id === caller.id,
+          ...avatarField(user),
           ...(unlock === "pin" ? { pinLocked: profileAttempts.pinLocked(user.id) } : {}),
         };
       }),

@@ -3,12 +3,20 @@ package cz.stremiooffline.tv.data
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class AvatarDto(
+  val kind: String = "",
+  val id: String? = null,
+  val url: String? = null,
+)
+
+@Serializable
 data class ProfileDto(
   val id: String,
   val username: String,
   val unlock: String,
   val current: Boolean = false,
   val pinLocked: Boolean = false,
+  val avatar: AvatarDto? = null,
 )
 
 @Serializable

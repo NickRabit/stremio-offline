@@ -6,7 +6,7 @@ const signIn = async (page: import("@playwright/test").Page) => {
   await form.getByLabel("Username").fill("restricted-admin");
   await form.getByLabel("Password", { exact: true }).fill("restricted-password");
   await form.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "What do you want to watch?" })).toBeVisible();
+  await expect(page.locator(".restricted-chip")).toContainText("Demo mode");
 };
 
 test.describe("restricted mode", () => {
@@ -40,6 +40,7 @@ test.describe("restricted mode", () => {
     await denied("get", `/api/addons/${addon.key}/export`);
     await denied("get", "/api/settings/export");
     await denied("patch", "/api/auth/password", { currentPassword: "restricted-password", newPassword: "other-password" });
+    await denied("patch", "/api/auth/avatar", { preset: "fox" });
     await denied("get", "/api/diagnostics");
     // Both name directories on the host. The library list itself stays readable: a guest
     // sees the names and the counts, never the roots.
@@ -60,7 +61,12 @@ test.describe("restricted mode", () => {
   test("lets a guest browse, play and keeps the admin surface closed", async ({ page }) => {
     await signIn(page);
 
-    await expect(page.locator(".restricted-chip")).toContainText("Demo mode");
+    const account = page.locator(".account-trigger");
+    await account.press("Enter");
+    await expect(page.locator(".account-menu").getByRole("menuitem", { name: "Settings" })).toBeFocused();
+    await expect(page.locator(".account-menu").getByRole("menuitem", { name: "Change picture" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(account).toBeFocused();
     await expect(page.locator(".addon-form")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Catalog", exact: true }).click();
@@ -102,6 +108,7 @@ test.describe("restricted mode", () => {
     await page.getByRole("tab", { name: "Account", exact: true }).click();
     await expect(page.locator("button.diagnostics-toggle")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Change credentials" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Change picture" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Sign out everywhere" })).toHaveCount(0);
   });
 });

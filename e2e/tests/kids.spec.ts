@@ -21,9 +21,9 @@ const createAccount = async (page: Page, account: { username: string; password: 
 };
 
 const openSwitcher = async (page: Page) => {
-  const direct = page.locator("aside.sidebar").getByRole("button", { name: "Přepnout profil", exact: true });
-  if (await direct.isVisible()) await direct.click();
-  else await page.locator(".profile-trigger").click();
+  await page.locator(".account-trigger").click();
+  await expect(page.locator(".account-menu")).toBeVisible();
+  await page.locator(".account-menu").getByRole("menuitem", { name: `Přepnout na ${adult.username}` }).click();
 };
 
 const cleanup = async (page: Page) => {
@@ -59,8 +59,8 @@ const journey = async (page: Page, mobile: boolean) => {
     await page.goto("/");
     await expect(page.locator("aside.sidebar.sidebar-child")).toBeVisible();
     const navigation = page.locator("aside.sidebar nav");
-    await expect(navigation.getByRole("button")).toHaveCount(3);
-    expect(await navigation.getByRole("button").allTextContents()).toEqual(["Domů", "Knihovna", "Přepnout profil"]);
+    await expect(navigation.getByRole("button")).toHaveCount(2);
+    expect(await navigation.getByRole("button").allTextContents()).toEqual(["Domů", "Knihovna"]);
     await expect(page.getByRole("button", { name: "Více", exact: true })).toHaveCount(0);
 
     await navigation.getByRole("button", { name: "Knihovna", exact: true }).click();
@@ -68,12 +68,6 @@ const journey = async (page: Page, mobile: boolean) => {
 
     await openSwitcher(page);
     const switcher = page.getByRole("dialog", { name: "Přepnout profil" });
-    await expect(switcher.locator(".profile-row")).toHaveCount(2);
-    await expect(switcher.locator(".profile-row.current")).toContainText(child.username);
-    await expect(switcher.getByRole("button", { name: new RegExp(adult.username) })).toBeVisible();
-    await expect(switcher.getByRole("button", { name: new RegExp(child.username) })).toHaveCount(0);
-
-    await switcher.getByRole("button", { name: new RegExp(adult.username) }).click();
     await switcher.getByLabel(`PIN pro ${adult.username}`).fill(pin);
     await Promise.all([
       page.waitForNavigation(),
@@ -86,8 +80,8 @@ const journey = async (page: Page, mobile: boolean) => {
       await expect(page.locator(".nav-more")).toBeVisible();
     } else {
       await expect(page.locator("aside.sidebar").getByRole("button", { name: "Nastavení", exact: true })).toBeVisible();
-      await expect(page.locator(".profile-trigger")).toContainText(adult.username);
     }
+    await expect(page.locator(".account-trigger")).toHaveAttribute("title", adult.username);
     expect(refusals, `child session made refused requests:\n${refusals.join("\n")}`).toEqual([]);
   } finally {
     await cleanup(page);

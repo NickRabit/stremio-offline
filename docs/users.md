@@ -168,10 +168,25 @@ being typed.
 
 Where to switch:
 
-- **Web and desktop:** the account name in the top bar, or **More → Switch
-  profile** on a phone.
-- **Android TV:** **Settings → Switch profile**, or hold OK on the account item
-  in the rail.
+- **Web and desktop:** the face in the right corner of the top bar, on a phone
+  too. Its menu lists the other profiles.
+- **Android TV:** OK on the account item at the bottom of the rail. Settings
+  and Sign out are in the same screen.
+
+### Profile pictures
+
+A profile shows its initial on a colour until somebody gives it a picture:
+one of 96 built-in ones, or an uploaded one. An account changes its own from
+the account menu or **Settings → Account**; an administrator changes
+anybody's in **Settings → Users →** account. On Android TV a profile picks
+from the built-in set in **Settings → Profile picture**; uploading is on the
+web. A child account may pick from the set (from the account menu on the web,
+from **Change picture** in the switcher on the television) and cannot upload.
+
+An uploaded picture is cropped to a square and scaled down in the browser,
+stored as one small file per account in the data directory, and shown only to
+the account, to administrators and to the profiles that may switch to it. The
+built-in pictures are Fluent Emoji by Microsoft, under the MIT License.
 
 A switch never extends a sign-in: the new session expires when the previous one
 would have, and the previous one is revoked with its playback and device

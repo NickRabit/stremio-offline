@@ -546,6 +546,10 @@
   <string name="err_profile_unavailable">That profile is not available.</string>
   <string name="err_bad_credentials">Wrong username or password.</string>
   <string name="err_too_many_attempts">Too many failed attempts. Try again in %1$s s.</string>
+  <string name="avatar_title">Profile picture</string>
+  <string name="avatar_change">Change picture</string>
+  <string name="avatar_pick">Pick a picture</string>
+  <string name="avatar_use_initial">Use the initial</string>
   <string name="person_acting">Acting</string>
   <string name="person_crew">Directing and writing</string>
   <string name="person_empty">TMDB lists no films or series for this person.</string>

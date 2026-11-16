@@ -1,7 +1,7 @@
 import { serverText, t } from "./i18n";
 import { childRefuses, childSession } from "./child-policy";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, BulkDownloadOrigin, BulkPrepareResponse, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, CatalogSearchPollResult, CatalogSearchRequest, CatalogSearchSnapshot, Download, DownloadRules, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, IntroSegments, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, PairingApproved, PairingInspection, PairingStart, PersonFilmography, PersonHit, ProfileEntry, ProfileSelection, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, PlaybackStatus, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, SourceProfile, AdminSourceProfile, Stream, Subtitle, TitleExtras, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, BulkDownloadOrigin, BulkPrepareResponse, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, Avatar, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, CatalogSearchPollResult, CatalogSearchRequest, CatalogSearchSnapshot, Download, DownloadRules, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, IntroSegments, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, PairingApproved, PairingInspection, PairingStart, PersonFilmography, PersonHit, ProfileEntry, ProfileSelection, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, PlaybackStatus, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, SourceProfile, AdminSourceProfile, Stream, Subtitle, TitleExtras, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
@@ -507,6 +507,15 @@ export const api = {
   logout: (everywhere = false) => request<void>("/api/auth/logout", { method: "POST", body: JSON.stringify({ everywhere }) }),
   changeCredentials: (payload: { username?: string; currentPassword?: string; newPassword: string }) => request<Session>("/api/auth/password", { method: "PATCH", body: JSON.stringify(payload) }),
   profiles: () => request<{ profiles: ProfileEntry[] }>("/api/profiles"),
+  avatarPresets: () => request<{ presets: string[] }>("/api/avatar/presets"),
+  setAvatar: (preset: string | null) =>
+    request<{ avatar: Avatar | null }>("/api/auth/avatar", { method: "PATCH", body: JSON.stringify({ preset }) }),
+  uploadAvatar: (image: Blob) =>
+    request<{ avatar: Avatar | null }>("/api/auth/avatar/image", {
+      method: "PUT",
+      body: image,
+      headers: { "content-type": image.type },
+    }),
   switchProfile: (body: { id: string; pin?: string; password?: string }) =>
     request<Session>("/api/profiles/switch", { method: "POST", body: JSON.stringify(body) }),
   setOwnPin: (body: { currentPassword: string; pin: string | null }) =>
@@ -523,6 +532,17 @@ export const api = {
     request<UserAccount>(`/api/users/${encodeURIComponent(id)}/password`, { method: "PATCH", body: JSON.stringify({ password }) }),
   setUserPin: (id: string, pin: string | null) =>
     request<UserAccount>(`/api/users/${encodeURIComponent(id)}/pin`, { method: "PATCH", body: JSON.stringify({ pin }) }),
+  setUserAvatar: (id: string, preset: string | null) =>
+    request<{ avatar: Avatar | null }>(`/api/users/${encodeURIComponent(id)}/avatar`, {
+      method: "PATCH",
+      body: JSON.stringify({ preset }),
+    }),
+  uploadUserAvatar: (id: string, image: Blob) =>
+    request<{ avatar: Avatar | null }>(`/api/users/${encodeURIComponent(id)}/avatar/image`, {
+      method: "PUT",
+      body: image,
+      headers: { "content-type": image.type },
+    }),
   deleteUser: (id: string) => request<void>(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   // Media-server administration. Every identifier travels percent-encoded; the remote

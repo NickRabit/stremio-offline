@@ -3,7 +3,6 @@ package cz.stremiooffline.tv.ui.profiles
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.focus.FocusDirection
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +56,8 @@ const val TagProfilesRetry = "profiles_retry"
 const val TagProfilesEmpty = "profiles_empty"
 const val TagProfilesClose = "profiles_close"
 const val TagProfilesSignOut = "profiles_sign_out"
+const val TagProfilesSettings = "profiles_settings"
+const val TagProfilesPicture = "profiles_picture"
 
 fun profileTag(id: String): String = "profile_$id"
 
@@ -67,6 +68,8 @@ fun ProfileSwitcherScreen(
   viewModel: ProfileSwitcherViewModel,
   onClose: () -> Unit,
   onSignOut: (() -> Unit)? = null,
+  onSettings: (() -> Unit)? = null,
+  onChangePicture: (() -> Unit)? = null,
 ) {
   BackHandler {
     if (viewModel.step is SwitcherStep.Choose || viewModel.step is SwitcherStep.Busy) onClose()
@@ -90,6 +93,8 @@ fun ProfileSwitcherScreen(
         onRetry = viewModel::load,
         onClose = onClose,
         onSignOut = onSignOut,
+        onSettings = onSettings,
+        onChangePicture = onChangePicture,
       )
       is SwitcherStep.Pin -> PinPad(
         profile = step.profile,
@@ -138,6 +143,8 @@ private fun ChooseStep(
   onRetry: () -> Unit,
   onClose: () -> Unit,
   onSignOut: (() -> Unit)?,
+  onSettings: (() -> Unit)?,
+  onChangePicture: (() -> Unit)?,
 ) {
   val firstFocus = remember { FocusRequester() }
   val retryFocus = remember { FocusRequester() }
@@ -189,16 +196,22 @@ private fun ChooseStep(
         modifier = Modifier.focusRequester(closeFocus).testTag(TagProfilesClose),
       )
     }
+    val hasActions = onSettings != null || onSignOut != null || onChangePicture != null
+    val firstAction = remember { FocusRequester() }
     Row(
-      // LEFT and RIGHT stay among the profiles: past the last one the focus search would land on
-      // Sign out below, one accidental OK away from the sign-in screen.
+      // LEFT and RIGHT stay among the profiles, and DOWN always lands on the first action: the
+      // focus search would otherwise pick whichever button sits under the profile, and Sign out
+      // must never be one accidental OK away.
       modifier = Modifier
         .horizontalScroll(rememberScrollState())
         .padding(horizontal = 24.dp)
         .focusProperties {
           exit = { direction ->
-            if (direction == FocusDirection.Left || direction == FocusDirection.Right) FocusRequester.Cancel
-            else FocusRequester.Default
+            when {
+              direction == FocusDirection.Left || direction == FocusDirection.Right -> FocusRequester.Cancel
+              direction == FocusDirection.Down && hasActions -> firstAction
+              else -> FocusRequester.Default
+            }
           }
         }
         .focusGroup(),
@@ -213,13 +226,28 @@ private fun ChooseStep(
         )
       }
     }
-    if (onSignOut != null) {
-      FocusButton(
-        text = stringResource(R.string.auth_sign_out),
-        onClick = onSignOut,
-        modifier = Modifier.testTag(TagProfilesSignOut),
-      )
+    if (hasActions) {
+      // Sign out comes last, behind whatever else the account may do here.
+      val first = when {
+        onSettings != null -> TagProfilesSettings
+        onChangePicture != null -> TagProfilesPicture
+        else -> TagProfilesSignOut
+      }
+      fun Modifier.action(tag: String): Modifier =
+        (if (tag == first) focusRequester(firstAction) else this).testTag(tag)
+      Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (onSettings != null) {
+          FocusButton(text = stringResource(R.string.nav_settings), onClick = onSettings, modifier = Modifier.action(TagProfilesSettings))
+        }
+        if (onChangePicture != null) {
+          FocusButton(text = stringResource(R.string.avatar_change), onClick = onChangePicture, modifier = Modifier.action(TagProfilesPicture))
+        }
+        if (onSignOut != null) {
+          FocusButton(text = stringResource(R.string.auth_sign_out), onClick = onSignOut, modifier = Modifier.action(TagProfilesSignOut))
+        }
+      }
     }
+
   }
 }
 
@@ -231,21 +259,18 @@ internal fun ProfileAvatar(
   size: Int = 100,
   interactive: Boolean = true,
 ) {
-  val initial = profile.username.take(1).uppercase()
   Column(
     modifier = Modifier.then(if (profile.current) Modifier.alpha(0.45f) else Modifier),
     horizontalAlignment = Alignment.CenterHorizontally,
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     val face = @Composable {
-      Box(
-        Modifier
-          .size(size.dp)
-          .background(profileAvatarBrush(profile.id), CircleShape),
-        contentAlignment = Alignment.Center,
-      ) {
-        Text(initial, color = Color.White, fontSize = (size / 2.4).sp, fontWeight = FontWeight.ExtraBold)
-      }
+      ProfileFace(
+        name = profile.username,
+        seed = profile.id,
+        avatar = profile.avatar,
+        size = size.dp,
+      )
     }
     if (!interactive || profile.current) {
       Box(Modifier.testTag(profileTag(profile.id)).focusProperties { canFocus = false }) { face() }

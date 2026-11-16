@@ -110,6 +110,7 @@ class ProfileEntryTest {
     press(Key.DirectionDown)
     compose.onNodeWithTag(TagSettingsRowAccount).assertIsFocused()
     press(Key.DirectionDown)
+    press(Key.DirectionDown)
     compose.onNodeWithTag(TagSettingsRowSwitchProfile).assertIsFocused()
     press(Key.DirectionCenter)
     compose.waitForIdle()
@@ -117,7 +118,7 @@ class ProfileEntryTest {
   }
 
   @Test
-  fun `long-press OK on the rail account item opens the switcher and a short press opens Settings`() {
+  fun `long and short OK on the rail account item open the switcher`() {
     val api = fakeApi()
     val profiles = FakeProfileApi(household)
     scenario.onActivity { activity ->
@@ -173,8 +174,8 @@ class ProfileEntryTest {
     compose.onNodeWithTag(railTag(Section.Account)).assertIsFocused()
     press(Key.DirectionCenter)
     compose.waitForIdle()
-    compose.onNodeWithTag(TagSettingsRowServer).assertExists()
-    compose.onNodeWithTag(TagProfileSwitcher).assertDoesNotExist()
+    compose.onNodeWithTag(TagProfileSwitcher).assertExists()
+    compose.onNodeWithTag(TagSettingsRowServer).assertDoesNotExist()
   }
 
   @Test

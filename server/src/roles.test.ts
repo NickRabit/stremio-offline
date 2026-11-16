@@ -20,6 +20,10 @@ const ALLOWED: Array<[string, string]> = [
   ["POST", "/auth/logout"],
   ["PATCH", "/auth/password"],
   ["PATCH", "/auth/pin"],
+  ["PATCH", "/auth/avatar"],
+  ["PUT", "/auth/avatar/image"],
+  ["GET", "/avatar/presets"],
+  ["GET", "/avatar/usr_0000000a"],
   ["GET", "/profiles"],
   ["POST", "/profiles/switch"],
   ["POST", "/auth/pair/start"],
@@ -228,6 +232,9 @@ const CHILD_ALLOWED_PATHS: Array<[string, string]> = [
   ["POST", "/auth/logout"],
   ["GET", "/profiles"],
   ["POST", "/profiles/switch"],
+  ["PATCH", "/auth/avatar"],
+  ["GET", "/avatar/presets"],
+  ["GET", "/avatar/usr_0000000a"],
   ["GET", "/progress"],
   ["GET", "/progress/movie:tt1254207"],
   ["POST", "/progress"],
@@ -375,6 +382,7 @@ const CHILD_REFUSED: Array<[string, string]> = [
   ["PUT", "/follows/defaults"],
   ["PATCH", "/auth/password"],
   ["PATCH", "/auth/pin"],
+  ["PUT", "/auth/avatar/image"],
   ["PUT", "/addons/order"],
   ["POST", "/auth/pair/inspect"],
   ["POST", "/auth/pair/approve"],
@@ -608,6 +616,8 @@ const ADMIN_ONLY = new Set([
   "DELETE /admin/source-profiles/:id", "POST /admin/source-profiles/:id/duplicate",
   "GET /users", "POST /users", "PATCH /users/:id", "DELETE /users/:id", "PATCH /users/:id/password",
   "PATCH /users/:id/pin",
+  "PATCH /users/:id/avatar",
+  "PUT /users/:id/avatar/image",
   "GET /logs", "DELETE /logs", "GET /client-logs", "GET /client-logs/:id", "DELETE /client-logs/:id",
   "GET /diagnostics", "GET /stats", "GET /stats/activity", "GET /stats/streams",
   "GET /settings/export", "POST /settings/import",
@@ -628,7 +638,7 @@ const ADMIN_ONLY = new Set([
 ]);
 
 /** A concrete value for a route parameter whose rule accepts only some values. */
-const SAMPLE_PARAMS: Record<string, string> = { imageType: "Primary", tmdbId: "138", type: "movie" };
+const SAMPLE_PARAMS: Record<string, string> = { imageType: "Primary", tmdbId: "138", type: "movie", userId: "usr_0000000a" };
 
 const registeredRoutes = async (): Promise<string[]> => {
   const root = path.dirname(fileURLToPath(import.meta.url));

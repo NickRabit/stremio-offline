@@ -36,11 +36,11 @@ afterEach(() => {
 const flush = async () => {
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 };
-const mount = async (confirmStop = false, onSignOut?: () => void) => {
+const mount = async (confirmStop = false, onSignOut?: () => void, preselectId?: string) => {
   const onClose = vi.fn();
   const onSwitched = vi.fn();
   await act(async () => {
-    root.render(<ProfileSwitcher onClose={onClose} confirmStop={confirmStop} onSignOut={onSignOut} onSwitched={onSwitched}/>);
+    root.render(<ProfileSwitcher onClose={onClose} confirmStop={confirmStop} onSignOut={onSignOut} preselectId={preselectId} onSwitched={onSwitched}/>);
   });
   await flush();
   return { onClose, onSwitched };
@@ -194,6 +194,19 @@ describe("ProfileSwitcher", () => {
     expect(document.body.querySelector(".profile-pin")).toBeNull();
     expect(document.body.querySelector<HTMLInputElement>(".profile-password")?.autocomplete).toBe("current-password");
     expect(document.body.textContent).toContain("The PIN is locked");
+  });
+
+  it("preselects a named profile straight to its PIN step", async () => {
+    await mount(false, undefined, "usr_a");
+    expect(document.body.querySelector(".profile-pin")).not.toBeNull();
+    expect(document.body.querySelector<HTMLInputElement>(".profile-pin")?.closest("form")?.textContent).toContain("Alice");
+    expect(switchMock).not.toHaveBeenCalled();
+  });
+
+  it("shows the list for an unknown preselected id", async () => {
+    await mount(false, undefined, "usr_missing");
+    expect(document.body.querySelector(".profile-pin")).toBeNull();
+    expect(document.body.querySelectorAll(".profile-row")).toHaveLength(2);
   });
 
   it("switches from the PIN field to password and sends the password", async () => {

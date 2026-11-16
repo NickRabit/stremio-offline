@@ -227,6 +227,13 @@ describe("child request policy", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/settings", expect.any(Object));
   });
 
+  it("refuses an avatar upload before a child sends it", async () => {
+    setChildSession({ child: true, catalogue: true });
+    await expect(api.uploadAvatar(new Blob(["image"], { type: "image/png" })))
+      .rejects.toBeInstanceOf(ChildRefusedError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("turns a server not-allowed answer into a child refusal for a child", async () => {
     setChildSession({ child: true, catalogue: true });
     fetchMock.mockResolvedValue(json({ error: "This account may not do that.", messageKey: "err.notAllowed" }, 403));
@@ -244,6 +251,16 @@ describe("child request policy", () => {
     fetchMock.mockResolvedValue(json({ jobs: [], deviceTransfers: [] }));
     await expect(api.downloads()).resolves.toMatchObject({ jobs: [] });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("avatar requests", () => {
+  it("uploads the blob as the raw body with its own content type", async () => {
+    const image = new Blob(["image bytes"], { type: "image/webp" });
+    fetchMock.mockResolvedValue(json({ avatar: { kind: "custom", url: "/api/avatar/usr_1?v=2" } }));
+    await api.uploadAvatar(image);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/avatar/image");
+    expect(optionsOf()).toMatchObject({ method: "PUT", body: image, headers: { "content-type": "image/webp" } });
   });
 });
 

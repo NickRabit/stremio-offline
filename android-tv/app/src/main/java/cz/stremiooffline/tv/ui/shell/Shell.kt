@@ -64,6 +64,7 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.AvatarDto
 import cz.stremiooffline.tv.data.ProfileApi
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.SearchScope
@@ -109,6 +110,8 @@ import cz.stremiooffline.tv.ui.person.PersonArgs
 import cz.stremiooffline.tv.ui.person.PersonScreen
 import cz.stremiooffline.tv.ui.profiles.ProfileSwitcherScreen
 import cz.stremiooffline.tv.ui.profiles.ProfileSwitcherViewModel
+import cz.stremiooffline.tv.ui.profiles.AvatarPickerScreen
+import cz.stremiooffline.tv.ui.profiles.ProfileFace
 import cz.stremiooffline.tv.ui.settings.SettingsRoute
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
@@ -219,10 +222,12 @@ fun Shell(
   canSwitch: Boolean = false,
   child: Boolean = false,
   childCatalogue: Boolean = false,
+  avatar: AvatarDto? = null,
   profileApi: ProfileApi? = null,
   onSwitched: () -> Unit = {},
   /** The switcher found nobody to switch to; the session re-reads whether it may still switch. */
   onProfilesGone: () -> Unit = {},
+  onAvatarChanged: (AvatarDto?) -> Unit = {},
 ) {
   val shellState = rememberSaveable(start, saver = ShellStateSaver) { ShellState(start) }
   val childSections = remember(child, childCatalogue) { sectionsFor(child, childCatalogue).map { it.first }.toSet() }
@@ -276,6 +281,7 @@ fun Shell(
   var hint by remember { mutableStateOf<String?>(null) }
   var switcherOpen by remember { mutableStateOf(false) }
   var switcherGeneration by remember { mutableIntStateOf(0) }
+  var avatarPickerOpen by remember { mutableStateOf(false) }
   fun openSwitcher() {
     if ((!canSwitch && !child) || profileApi == null) return
     switcherGeneration++
@@ -530,7 +536,7 @@ fun Shell(
 
   // A detail or the player covers the section it was opened from; the hidden section's own Back
   // handlers must not consume Back while it is up.
-  val overlayOpen = catalogDetail != null || player != null || personScreen != null
+  val overlayOpen = catalogDetail != null || player != null || personScreen != null || avatarPickerOpen
   val noImdbNotice = stringResource(R.string.person_no_imdb)
 
   ShellScaffold(
@@ -540,10 +546,6 @@ fun Shell(
     downloading = downloading,
     hint = hint.takeUnless { catalogDetail != null && it == noImdbNotice },
     onSection = { section ->
-      if (child && section == Section.Account) {
-        openSwitcher()
-        return@ShellScaffold true
-      }
       // The rail's Search is not the catalogue's or a library's: it starts with no preset.
       if (section == Section.Search) {
         searchOrigin = SearchOrigin.Rail
@@ -553,10 +555,11 @@ fun Shell(
       true
     },
     onBackToExit = onExitApp,
-    railHidden = catalogDetail != null || personScreen != null || switcherOpen,
+    railHidden = catalogDetail != null || personScreen != null || switcherOpen || avatarPickerOpen,
     canSwitch = canSwitch,
     child = child,
     childCatalogue = childCatalogue,
+    avatar = avatar,
     onAccountLongPress = ::openSwitcher,
   ) { focusRequester ->
     val section = current
@@ -695,6 +698,8 @@ fun Shell(
           onHint = ::showHint,
           canSwitch = canSwitch,
           onSwitchProfile = ::openSwitcher,
+          avatar = avatar,
+          onAvatarChanged = onAvatarChanged,
         )
       }
     }
@@ -842,7 +847,23 @@ fun Shell(
     ProfileSwitcherScreen(
       viewModel = switcher,
       onClose = { switcherOpen = false },
-      onSignOut = if (child) ({ switcherOpen = false; onSignOut() }) else null,
+      onSignOut = { switcherOpen = false; onSignOut() },
+      onSettings = if (child) null else ({
+        switcherOpen = false
+        shellState.pick(Section.Account)
+      }),
+      onChangePicture = if (child) ({ switcherOpen = false; avatarPickerOpen = true }) else null,
+    )
+  }
+
+  if (avatarPickerOpen) OverlayFocusTrap(fenced = true) {
+    AvatarPickerScreen(
+      api = api,
+      name = username,
+      seed = username,
+      avatar = avatar,
+      onChanged = onAvatarChanged,
+      onClose = { avatarPickerOpen = false },
     )
   }
 
@@ -906,6 +927,7 @@ fun ShellScaffold(
   canSwitch: Boolean = false,
   child: Boolean = false,
   childCatalogue: Boolean = false,
+  avatar: AvatarDto? = null,
   onAccountLongPress: () -> Unit = {},
   content: @Composable (FocusRequester) -> Unit,
 ) {
@@ -964,11 +986,16 @@ fun ShellScaffold(
           if (focused) focusedRail = section else if (focusedRail == section) focusedRail = null
         },
         onSelect = { section ->
-          if (section != current && !onSection(section)) runCatching { contentFocusRequester.requestFocus() }
+          if (section == Section.Account && (canSwitch || child)) {
+            onAccountLongPress()
+          } else if (section != current && !onSection(section)) {
+            runCatching { contentFocusRequester.requestFocus() }
+          }
         },
         canSwitch = canSwitch,
         child = child,
         childCatalogue = childCatalogue,
+        avatar = avatar,
         onAccountLongPress = onAccountLongPress,
       )
     }
@@ -992,6 +1019,7 @@ private fun Rail(
   canSwitch: Boolean = false,
   child: Boolean = false,
   childCatalogue: Boolean = false,
+  avatar: AvatarDto? = null,
   onAccountLongPress: () -> Unit = {},
 ) {
   val sections = remember(child, childCatalogue) { sectionsFor(child, childCatalogue) }
@@ -1054,7 +1082,7 @@ private fun Rail(
         .testTag(railTag(Section.Account))
         .focusRequester(requesters.getValue(Section.Account))
         .focusProperties { right = contentRequester() },
-      leading = { Avatar(username) },
+      leading = { ProfileFace(name = username, seed = username, avatar = avatar, size = 22.dp) },
       onFocusChanged = { onFocusChanged(Section.Account, it) },
       onClick = { onSelect(Section.Account) },
       onLongPress = if (canSwitch || child) onAccountLongPress else null,
@@ -1172,21 +1200,6 @@ private fun RailItem(
           .background(Tokens.Accent, RoundedCornerShape(2.dp))
       )
     }
-  }
-}
-
-@Composable
-private fun Avatar(username: String) {
-  Box(
-    modifier = Modifier.size(22.dp).clip(CircleShape).background(Tokens.Panel2).border(1.dp, Tokens.Line, CircleShape),
-    contentAlignment = Alignment.Center,
-  ) {
-    Text(
-      username.take(1).uppercase(),
-      color = Tokens.Accent2,
-      fontSize = 10.sp,
-      fontWeight = FontWeight.ExtraBold,
-    )
   }
 }
 

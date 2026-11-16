@@ -1,7 +1,7 @@
 import { FormEvent, ReactNode, Suspense, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { genreLabel } from "./genres";
 import { useCrumbsAtEnd } from "./crumbs";
-import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Users, X } from "lucide-react";
+import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, ChildRefusedError, describeError, saveToDevice } from "./api";
 import { childViewAllowed, setChildSession } from "./child-policy";
@@ -9,6 +9,8 @@ import { ChildModeProvider } from "./child-mode";
 import { LoginScreen, PasswordChangeRequired } from "./Login";
 import { clearPairLink, PairDeviceDialog, pairLinkCode } from "./PairDeviceDialog";
 import { ProfileSwitcher } from "./ProfileSwitcher";
+import { AccountMenu } from "./AccountMenu";
+import { AvatarPicker } from "./AvatarPicker";
 import { bytes, Heading, hideBroken } from "./settings-ui";
 import { Player } from "./Player";
 import { TrailerPlayer } from "./TrailerPlayer";
@@ -83,7 +85,7 @@ import { layoutKey, rememberedLayout, rememberLayout } from "./layout-memory";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
-import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, Avatar, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 import type { DownloadDrainView, DownloadWindowState } from "../../server/src/api-types";
 
 export const queueDrainNotice = (
@@ -342,6 +344,8 @@ export function App() {
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [switcherTarget, setSwitcherTarget] = useState<string | undefined>();
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
   const restricted = buildInfo?.restricted === true;
   const child = session?.child === true;
@@ -1457,8 +1461,19 @@ export function App() {
     try { localStorage.setItem("sidebar-collapsed", next ? "1" : "0"); } catch { /* private mode may forbid storage */ }
     return next;
   });
-  /** The top bar and the More menu sign out through the same call. */
+  /** The account menu and the child switcher sign out through the same call. */
   const signOut = async () => { try { clearHomeCache(); await api.logout(); } finally { location.reload(); } };
+  const applyOwnAvatar = (answer: { avatar: Avatar | null }) => {
+    const avatar = answer.avatar ?? undefined;
+    setSession((current) => {
+      if (!current) return current;
+      const next = { ...current };
+      if (avatar) next.avatar = avatar;
+      else delete next.avatar;
+      return next;
+    });
+    return avatar;
+  };
   const confirmStop = playerOpen || deviceTransfers.some((transfer) => transfer.state === "running");
 
   const refresh = async (selectFirst = false) => {
@@ -4001,24 +4016,13 @@ export function App() {
   <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
   <div className={`app-shell${tilesKnown ? "" : " tiles-pending"} tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
-      <div className="topbar-user">{session?.canSwitch
-        ? <button className="profile-trigger" title={t("profiles.switch")} aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
-            <strong>{session.username}</strong>
-            {session.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
-          </button>
-        : <span className="topbar-user-name">
-            <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
-            {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
-          </span>}
-        {!(child && session?.canSwitch) && <button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} aria-label={t("app.signOut")} onClick={signOut}><LogOut/> <span className="signout-label">{t("app.signOut")}</span></button>}</div></div></header>
+      <AccountMenu session={session!} onSwitchTo={(id) => { setSwitcherTarget(id); setSwitcherOpen(true); }} {...(!restricted ? { onChangeAvatar: () => setAvatarPickerOpen(true) } : {})} {...(child ? {} : { onSettings: () => openView("settings") })} onSignOut={() => void signOut()}/>
+      </div></header>
     <aside className={`sidebar${child ? " sidebar-child" : ""}`}><nav>
       {child ? <>
         <Nav icon={<HomeIcon/>} label={t("nav.home")} active={view === "home"} onClick={() => openView("home")}/>
         {childCatalogue && <Nav icon={<Library/>} label={t("nav.catalog")} active={view === "catalog"} onClick={() => openView("catalog")}/>}
         <Nav icon={<HardDrive/>} label={t("nav.library")} active={view === "library"} onClick={() => openView("library")}/>
-        {session?.canSwitch
-          ? <Nav icon={<Users/>} label={t("profiles.switch")} active={false} onClick={() => setSwitcherOpen(true)}/>
-          : <Nav icon={<LogOut/>} label={t("app.signOut")} active={false} onClick={() => void signOut()}/>}
       </> : <>
       {/* Restricted accounts have no Home: the view needs the personal data they are not
           given, so the destination is not offered at all. */}
@@ -4034,7 +4038,7 @@ export function App() {
       {/* `/api/stats` is administrator-only, so for anybody else this is a tab that loads an
           error. */}
       {session!.role === "admin" && <Nav secondary icon={<BarChart3/>} label={t("nav.stats")} active={!personCoversNav && view === "stats"} onClick={() => openView("stats")}/>}
-      <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSwitchProfile={session?.canSwitch ? () => setSwitcherOpen(true) : undefined} onSignOut={signOut}/>
+      <MoreMenu items={moreItems} badge={followingBadge} active={moreActive}/>
       </>}
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{catalogsKnown ? addons.filter((a) => a.enabled).length : "–"}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}${catalogueDetail ? " view-title-detail" : ""}${personLayer ? " person-open" : ""}`}>
@@ -4617,7 +4621,15 @@ export function App() {
       </>}
     </main>
     <TrailerPlayer trailer={trailerOpen} onClose={() => setTrailerOpen(null)}/>
-    {switcherOpen && <ProfileSwitcher confirmStop={confirmStop} onClose={() => setSwitcherOpen(false)} {...(child ? { onSignOut: () => void signOut() } : {})}/>}
+    {switcherOpen && <ProfileSwitcher confirmStop={confirmStop} preselectId={switcherTarget} onClose={() => { setSwitcherOpen(false); setSwitcherTarget(undefined); }} {...(child ? { onSignOut: () => void signOut() } : {})}/>}
+    {!restricted && avatarPickerOpen && <AvatarPicker
+      name={session!.username}
+      avatar={session!.avatar}
+      allowUpload={!child}
+      onPreset={async (preset) => applyOwnAvatar(await api.setAvatar(preset))}
+      onUpload={async (image) => applyOwnAvatar(await api.uploadAvatar(image))}
+      onClose={() => setAvatarPickerOpen(false)}
+    />}
     <Player nextTitle={playerNextTitle} nextBusy={nextBusy} onNext={playerOnNext} autoNext={playerAutoNext} previousTitle={playerPreviousTitle} onPrevious={playerOnPrevious} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} upNextAt={settings.upNextAt} skipSegmentsAuto={settings.skipSegmentsAuto} shuffle={shuffleActive} onPreferences={setPlaybackPreferences}
       catalogueKey={localStream && playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
