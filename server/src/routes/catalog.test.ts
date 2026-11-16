@@ -94,6 +94,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   } as unknown as Store;
   const deps: CatalogDeps = {
     store,
+    nestedHidden: () => false,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: () => viewer ?? undefined,

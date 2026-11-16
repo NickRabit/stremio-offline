@@ -62,6 +62,7 @@ async function mount(options: {
   } as unknown as Store;
   const deps: CatalogDeps = {
     store,
+    nestedHidden: () => false,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: () => viewer,

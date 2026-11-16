@@ -207,6 +207,7 @@ const mount = async (options: {
     };
     const downloadDeps: DownloadsDeps = {
       ...deps,
+      nestedHidden: () => false,
       queue: queue as unknown as DownloadsDeps["queue"],
       mediaSources: {} as DownloadsDeps["mediaSources"],
       deviceTransfers: new DeviceTransfers(),

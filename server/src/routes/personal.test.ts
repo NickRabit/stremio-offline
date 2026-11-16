@@ -98,6 +98,7 @@ const mount = async (libraries: LibraryRecord[] = [], backing?: Store): Promise<
       libraries: () => libraries, addons: () => addons, settings: () => ({ ...instancePrefs }),
       mediaConnections: () => mediaConnections, remoteLibraries: () => remoteLibraries,
     } as unknown as Store),
+    nestedHidden: () => false,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: (req) => {

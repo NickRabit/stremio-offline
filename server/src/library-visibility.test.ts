@@ -13,17 +13,21 @@ import { spawnServer, type SpawnedServer } from "./test-server.js";
 
 const ADMIN = "usr_00000001";
 const USER = "usr_00000002";
+const USER_BOTH = "usr_00000004";
 const GRANTED = "lib_00000001";
 const HIDDEN = "lib_00000002";
+const NESTED = "lib_00000003";
 
 let workDir: string;
 let dataDir: string;
 let grantedRoot: string;
 let hiddenRoot: string;
+let nestedRoot: string;
 let server: SpawnedServer;
 let base = "";
 let adminCookie = "";
 let userCookie = "";
+let bothCookie = "";
 
 const api = (pathname: string, init: { method?: string; body?: unknown; cookie?: string } = {}) =>
   fetch(`${base}${pathname}`, {
@@ -41,17 +45,42 @@ const signIn = async (username: string, password: string) => {
   return response.headers.getSetCookie()[0]!.split(";")[0]!;
 };
 
+const sameAnswer = async (actual: Response, missing: Response) => {
+  assert.equal(actual.status, missing.status);
+  const body = async (response: Response) => {
+    const text = await response.text();
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      return text;
+    }
+  };
+  assert.deepEqual(await body(actual), await body(missing));
+};
+
 before(async () => {
   workDir = await mkdtemp(path.join(tmpdir(), "stremio-visibility-"));
   dataDir = path.join(workDir, "data");
   const roots = path.join(workDir, "roots");
   grantedRoot = path.join(roots, "Filmy");
   hiddenRoot = path.join(roots, "Tajne");
+  nestedRoot = path.join(grantedRoot, "Nested");
   await mkdir(dataDir, { recursive: true });
   await mkdir(grantedRoot, { recursive: true });
   await mkdir(hiddenRoot, { recursive: true });
+  await mkdir(path.join(nestedRoot, "Season 1"), { recursive: true });
+  await mkdir(path.join(nestedRoot, "Alpha"), { recursive: true });
+  await mkdir(path.join(nestedRoot, "Beta"), { recursive: true });
+  await mkdir(path.join(grantedRoot, "Open"), { recursive: true });
   await writeFile(path.join(grantedRoot, "Heat.mkv"), "video");
   await writeFile(path.join(hiddenRoot, "Secret.mkv"), "video");
+  await writeFile(path.join(nestedRoot, "Season 1", "secret.mkv"), "video");
+  await writeFile(path.join(nestedRoot, "Season 1", "secret.jpg"), "picture");
+  await writeFile(path.join(nestedRoot, "Alpha", "Alpha.mkv"), "video");
+  await writeFile(path.join(nestedRoot, "Alpha", "poster.jpg"), "picture");
+  await writeFile(path.join(nestedRoot, "Beta", "Beta.mkv"), "video");
+  await writeFile(path.join(nestedRoot, "Beta", "poster.jpg"), "picture");
+  await writeFile(path.join(grantedRoot, "Open", "Visible.mkv"), "video");
 
   const account = async (id: string, username: string, password: string, role: "admin" | "user") => ({
     id, username, passwordHash: await hashPassword(password), secret: id.padEnd(64, "0"), role,
@@ -66,14 +95,16 @@ before(async () => {
     defaultsInstalled: true,
     settings: {},
     libraries: [
-      { id: GRANTED, name: "Filmy", type: "mixed", root: grantedRoot, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false, visibleTo: [USER] },
+      { id: GRANTED, name: "Filmy", type: "mixed", root: grantedRoot, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false, visibleTo: [USER, USER_BOTH] },
       { id: HIDDEN, name: "Tajne", type: "mixed", root: hiddenRoot, enabled: true, order: 1, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false },
+      { id: NESTED, name: "Nested", type: "mixed", root: nestedRoot, enabled: true, order: 2, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false, visibleTo: [USER_BOTH] },
     ],
     users: [
       await account(ADMIN, "ada", "admin-password", "admin"),
       await account(USER, "bob", "user-password", "user"),
+      await account(USER_BOTH, "bea", "both-password", "user"),
     ],
-    userData: { [ADMIN]: personal(), [USER]: personal() },
+    userData: { [ADMIN]: personal(), [USER]: personal(), [USER_BOTH]: personal() },
   }, null, 2));
 
   server = await spawnServer({
@@ -87,6 +118,7 @@ before(async () => {
 
   adminCookie = await signIn("ada", "admin-password");
   userCookie = await signIn("bob", "user-password");
+  bothCookie = await signIn("bea", "both-password");
 });
 
 after(async () => {
@@ -96,7 +128,7 @@ after(async () => {
 
 test("the list and the browse root show a user only what they were granted", async () => {
   const administrator = await (await api("/api/libraries", { cookie: adminCookie })).json() as Array<{ id: string }>;
-  assert.deepEqual(administrator.map((library) => library.id).sort(), [GRANTED, HIDDEN].sort(), "an administrator sees every library");
+  assert.deepEqual(administrator.map((library) => library.id).sort(), [GRANTED, HIDDEN, NESTED].sort(), "an administrator sees every library");
 
   const user = await (await api("/api/libraries", { cookie: userCookie })).json() as Array<{ id: string }>;
   assert.deepEqual(user.map((library) => library.id), [GRANTED]);
@@ -110,6 +142,137 @@ test("browsing into a library the user may not see answers like one that does no
   const missing = await api(`/api/library/browse?path=${encodeURIComponent("lib_00000099")}`, { cookie: userCookie });
   assert.equal(invisible.status, missing.status);
   assert.deepEqual(await invisible.json(), await missing.json());
+});
+
+/** A hidden nested folder reads as a folder that is not there; only the echoed path differs. */
+const sameListing = async (actual: Response, missing: Response) => {
+  assert.equal(actual.status, missing.status);
+  assert.deepEqual({ ...await actual.json() as object, path: "" }, { ...await missing.json() as object, path: "" });
+};
+
+test("browse does not reach a nested library through its parent", async () => {
+  const parentSpellings = ["Nested", "Nested/Season 1"];
+  for (const relative of parentSpellings) {
+    const actual = await api(`/api/library/browse?path=${encodeURIComponent(`${GRANTED}/${relative}`)}`, { cookie: userCookie });
+    const missing = await api(`/api/library/browse?path=${encodeURIComponent(`${GRANTED}/Missing/${relative}`)}`, { cookie: userCookie });
+    await sameListing(actual, missing);
+  }
+
+  const open = await api(`/api/library/browse?path=${encodeURIComponent(`${GRANTED}/Open`)}`, { cookie: userCookie });
+  assert.equal(open.status, 200);
+  assert.deepEqual((await open.json() as { items: Array<{ path: string }> }).items.map((item) => item.path), [`${GRANTED}/Open/Visible.mkv`]);
+});
+
+test("folders do not reach a nested library through its parent", async () => {
+  const folders = await api(`/api/library/folders?path=${encodeURIComponent(`${GRANTED}/Nested`)}`, { cookie: userCookie });
+  const missingFolders = await api(`/api/library/folders?path=${encodeURIComponent(`${GRANTED}/Missing`)}`, { cookie: userCookie });
+  await sameListing(folders, missingFolders);
+
+  const open = await api(`/api/library/folders?path=${encodeURIComponent(`${GRANTED}/Open`)}`, { cookie: userCookie });
+  assert.equal(open.status, 200);
+});
+
+test("source does not mint a nested file through its parent", async () => {
+  const source = await api("/api/library/source", { method: "POST", cookie: userCookie, body: { path: `${GRANTED}/Nested/Season 1/secret.mkv` } });
+  const missingSource = await api("/api/library/source", { method: "POST", cookie: userCookie, body: { path: "lib_00000099/Season 1/secret.mkv" } });
+  await sameAnswer(source, missingSource);
+
+  const open = await api("/api/library/source", { method: "POST", cookie: userCookie, body: { path: `${GRANTED}/Open/Visible.mkv` } });
+  assert.equal(open.status, 200);
+});
+
+test("the same carve-out is refused when its spelling differs on a folding volume", async () => {
+  const browse = await api(`/api/library/browse?path=${encodeURIComponent(`${GRANTED}/NESTED/Season 1`)}`, { cookie: userCookie });
+  const missing = await api(`/api/library/browse?path=${encodeURIComponent(`${GRANTED}/Missing/Season 1`)}`, { cookie: userCookie });
+  await sameListing(browse, missing);
+
+  const folders = await api(`/api/library/folders?path=${encodeURIComponent(`${GRANTED}/NESTED`)}`, { cookie: userCookie });
+  const missingFolders = await api(`/api/library/folders?path=${encodeURIComponent(`${GRANTED}/Missing`)}`, { cookie: userCookie });
+  await sameListing(folders, missingFolders);
+
+  const source = await api("/api/library/source", { method: "POST", cookie: userCookie, body: { path: `${GRANTED}/NESTED/Season 1/secret.mkv` } });
+  const missingSource = await api("/api/library/source", { method: "POST", cookie: userCookie, body: { path: "lib_00000099/Season 1/secret.mkv" } });
+  await sameAnswer(source, missingSource);
+});
+
+test("source, thumb, mosaic, gallery and identity refuse a nested key like a missing one", async () => {
+  const key = `${GRANTED}/Nested/Season 1/secret.mkv`;
+  const missingKey = "lib_00000099/Season 1/secret.mkv";
+  const source = await api("/api/library/source", { method: "POST", cookie: userCookie, body: { path: key } });
+  const missingSource = await api("/api/library/source", { method: "POST", cookie: userCookie, body: { path: missingKey } });
+  await sameAnswer(source, missingSource);
+
+  for (const route of ["thumb", "gallery", "identity"]) {
+    const actual = await api(`/api/library/${route}?path=${encodeURIComponent(key)}`, { cookie: userCookie });
+    const missing = await api(`/api/library/${route}?path=${encodeURIComponent(missingKey)}`, { cookie: userCookie });
+    await sameAnswer(actual, missing);
+  }
+
+  const mosaic = await api(`/api/library/mosaic?key=${encodeURIComponent(`${GRANTED}/Nested`)}`, { cookie: userCookie });
+  const missingMosaic = await api(`/api/library/mosaic?key=${encodeURIComponent("lib_00000099")}`, { cookie: userCookie });
+  await sameAnswer(mosaic, missingMosaic);
+});
+
+test("administrators use either spelling and keep the carve-out mutation guard", async () => {
+  const parentKey = `${GRANTED}/Nested/Season 1/secret.mkv`;
+  const parentSource = await api("/api/library/source", { method: "POST", cookie: adminCookie, body: { path: parentKey } });
+  assert.equal(parentSource.status, 200);
+
+  const nestedSource = await api("/api/library/source", { method: "POST", cookie: adminCookie, body: { path: `${NESTED}/Season 1/secret.mkv` } });
+  assert.equal(nestedSource.status, 200);
+
+  const rename = await api("/api/library/rename", {
+    method: "POST",
+    cookie: adminCookie,
+    body: { path: `${GRANTED}/Nested`, name: "Moved" },
+  });
+  assert.equal(rename.status, 409);
+  assert.equal((await rename.json() as { messageKey?: string }).messageKey, "err.libraryHoldsAnother");
+});
+
+test("a user granted both libraries reads the nested tree through the parent id", async () => {
+  const libraries = await api("/api/libraries", { cookie: bothCookie });
+  assert.deepEqual((await libraries.json() as Array<{ id: string }>).map((library) => library.id).sort(), [GRANTED, NESTED].sort());
+  const browse = await api(`/api/library/browse?path=${encodeURIComponent(`${GRANTED}/Nested/Season 1`)}`, { cookie: bothCookie });
+  assert.equal(browse.status, 200, await browse.clone().text());
+  assert.deepEqual((await browse.json() as { items: Array<{ path: string }> }).items.map((item) => item.path),
+    [`${GRANTED}/Nested/Season 1/secret.mkv`]);
+
+  const source = await api("/api/library/source", {
+    method: "POST",
+    cookie: bothCookie,
+    body: { path: `${GRANTED}/Nested/Season 1/secret.mkv` },
+  });
+  assert.equal(source.status, 200);
+});
+
+test("a library target ticket stops serving when its path becomes a carve-out", async (t) => {
+  const source = await api("/api/library/source", {
+    method: "POST",
+    cookie: userCookie,
+    body: { path: `${GRANTED}/Open/Visible.mkv` },
+  });
+  assert.equal(source.status, 200);
+  const { sourceId } = await source.json() as { sourceId: string };
+  const ticket = await api("/api/device-download", { method: "POST", cookie: userCookie, body: { sourceId } });
+  assert.equal(ticket.status, 201);
+  const { url } = await ticket.json() as { url: string };
+  assert.equal((await api(url, { cookie: userCookie })).status, 200);
+
+  const added = await api("/api/libraries", {
+    method: "POST",
+    cookie: adminCookie,
+    body: { name: "Open", type: "mixed", root: path.join(grantedRoot, "Open") },
+  });
+  assert.equal(added.status, 201);
+  const { id } = await added.json() as { id: string };
+  t.after(async () => {
+    await api(`/api/libraries/${id}?forget=1`, { method: "DELETE", cookie: adminCookie });
+  });
+
+  const refused = await api(url, { cookie: userCookie });
+  assert.equal(refused.status, 404);
+  assert.equal((await refused.json() as { code?: string }).code, "RESOURCE_NOT_FOUND");
 });
 
 test("a favourite on a library the user was not granted answers like one that does not exist", async () => {

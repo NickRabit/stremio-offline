@@ -1590,6 +1590,7 @@ test("the episodes API does not expose a legacy rule", async (t) => {
   registerFollowRoutes(app, {
     store: {},
     currentUser: () => ({ id: "u1", role: "user" }),
+    nestedHidden: () => false,
     follows: {},
     followStore: store,
     dataOf: () => ({}),

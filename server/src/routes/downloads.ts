@@ -37,6 +37,7 @@ export interface DownloadsDeps extends RouteContext {
   titleKey(target: string, media: MediaInfo | undefined, flat: boolean): string;
   saveCatalogPoster(key: string, url?: string, fallback?: string, backdrop?: string): void;
   libraryKey(value: string): string;
+  nestedHidden(library: LibraryRecord, relative: string, viewer: Viewer | undefined): boolean;
   /** Where a download whose rule names no library goes, resolved the way the queue resolves
    *  it, so the guard at the door and the queue's own check agree on the same library. */
   defaultDownloadLibrary(kind: "movie" | "series"): LibraryRecord | undefined;
@@ -54,7 +55,7 @@ const bulkEpisodeNumber = (value: unknown): number | undefined => {
 
 /** The deps the body-validation of a lazy download selection needs, shared by the bulk route
  *  and the follow routes so both parse audio, subtitles and the pinned target the same way. */
-type SelectionDeps = Pick<DownloadsDeps, "store" | "currentUser" | "cachedMeta" | "prefsOf" | "defaultDownloadLibrary">;
+type SelectionDeps = Pick<DownloadsDeps, "store" | "currentUser" | "cachedMeta" | "nestedHidden" | "prefsOf" | "defaultDownloadLibrary">;
 
 /** The owner-bound check where a failure reaches the caller instead of pausing a job. The
  *  rights are asked before the body is read; the source and the library the rule names are
@@ -89,6 +90,9 @@ const explicitTargetFor = (deps: SelectionDeps) => async (req: express.Request, 
   // tidying its name would put the title in a folder next to the one the user chose.
   const subfolder = exactSubfolder(item!.subfolder);
   if (subfolder) {
+    if (deps.nestedHidden(library, subfolder, viewerOf(deps.currentUser(req)))) {
+      throw new AppError("That folder is not in the library.", "err.targetFolderMissing");
+    }
     const resolved = await resolveLibraryPath([library], subfolder);
     const info = resolved ? await stat(resolved.absolute).catch(() => undefined) : undefined;
     if (!info?.isDirectory()) throw new AppError("That folder is not in the library.", "err.targetFolderMissing");
@@ -114,6 +118,9 @@ const automaticRemoteTargetFor = (deps: SelectionDeps) =>
     const library = libraries.find((candidate) => candidate.id === target.libraryId);
     if (!library || !libraryVisible(library, viewerOf(deps.currentUser(req)))) {
       throw new AppError("That library does not exist.", "err.libraryNotFound");
+    }
+    if (deps.nestedHidden(library, target.subfolder, viewerOf(deps.currentUser(req)))) {
+      throw new AppError("That folder is not in the library.", "err.targetFolderMissing");
     }
     if (!takesRemoteTarget(remote, kind, library)) {
       throw new AppError("That library does not take this kind of title.", "err.libraryTypeMismatch");
@@ -166,6 +173,13 @@ export function createSelectionParser(deps: SelectionDeps): (req: express.Reques
     // A source whose addon found no language falls back to the one the title's own metadata
     // names. The viewer is the caller: what they may see decides what that metadata says.
     const metaLanguage = input.parentId ? titleLanguage((await cachedMeta(input.metaType, input.parentId, prefsOf(req).uiLanguage, viewerOf(currentUser(req))))?.language) : undefined;
+    const targetSettings = explicit ?? (firstAddon?.downloadSettings[kind] ?? defaultDownloadSettings()[kind]);
+    const targetLibrary = targetSettings.libraryId
+      ? store.libraries().find((library) => library.id === targetSettings.libraryId)
+      : defaultDownloadLibrary(kind);
+    if (targetLibrary && deps.nestedHidden(targetLibrary, targetSettings.subfolder, viewerOf(currentUser(req)))) {
+      throw new AppError("That folder is not in the library.", "err.targetFolderMissing");
+    }
     const selection: DownloadSelection = {
       addonKeys, sourceStrategy, audioLanguage,
       fallbackAudioLanguage: fallbackAudioLanguage === audioLanguage ? undefined : fallbackAudioLanguage,
@@ -173,7 +187,7 @@ export function createSelectionParser(deps: SelectionDeps): (req: express.Reques
       titleLanguage: metaLanguage,
       subtitleMode, subtitleLanguage,
       fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,
-      targetSettings: explicit ?? (firstAddon?.downloadSettings[kind] ?? defaultDownloadSettings()[kind]),
+      targetSettings,
     };
     // The rule names a library or leaves the choice to the default for the kind. The queue
     // resolves that same default, so the guard has to resolve it here too or an unavailable
@@ -191,7 +205,12 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
   const automaticTarget = automaticRemoteTargetFor(deps);
   const parseSelection = createSelectionParser(deps);
   const now = () => deps.now?.() ?? Date.now();
-
+  const targetNestedHidden = (settings: DownloadTargetSettings, kind: "movie" | "series", viewer: Viewer): boolean => {
+    const library = settings.libraryId
+      ? store.libraries().find((candidate) => candidate.id === settings.libraryId)
+      : defaultDownloadLibrary(kind);
+    return Boolean(library && deps.nestedHidden(library, settings.subfolder, viewer));
+  };
   const remoteAdmission = (
     owner: ReturnType<typeof currentUser>,
     reference: unknown,
@@ -323,6 +342,9 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     // library is refused here rather than redirected to another one.
     const derived = chosen === undefined && native && remote ? automaticTarget(req, remote, kind) : undefined;
     const targetSettings = chosen ?? derived ?? (kind === "series" ? settings.series : settings.movie);
+    if (targetNestedHidden(targetSettings, kind, viewerOf(currentUser(req)))) {
+      throw new AppError("That folder is not in the library.", "err.targetFolderMissing");
+    }
     // The queue turns a rule that names no library into the default for the kind; the guard
     // has to name that same library or the job would be let in and paused at once.
     if (isRemoteDownloadSource(stream) && !(targetSettings.libraryId ?? defaultDownloadLibrary(kind)?.id)) throw new NoLibraryForKindError(kind);

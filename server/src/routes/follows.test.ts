@@ -174,6 +174,7 @@ const mount = async (options: {
       prefs: () => ({ uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en" }) as UserPrefs,
       userData: () => ({} as UserData),
     } as unknown as Store,
+    nestedHidden: () => false,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: (req) => users[String(req.header("x-as") ?? "A")],

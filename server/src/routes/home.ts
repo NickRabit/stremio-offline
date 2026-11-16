@@ -67,6 +67,7 @@ const PROGRESS_DONE = 0.94;
 
 export interface HomeDeps extends RouteContext {
   personal: PersonalApi;
+  nestedHidden(library: LibraryRecord, relative: string, viewer: Viewer | undefined): boolean;
   /** The account's own verified media-server cards, and the proof a projection re-checks. */
   remotePersonal: MediaServerPersonal;
   /** The media-server authority for the request, built the way the media-server routes build it. */
@@ -146,13 +147,18 @@ const shuffleOf = (raw: unknown): number => {
 };
 
 export function registerHomeRoutes(app: express.Application, deps: HomeDeps): void {
-  const { store, currentUser, requireAccess, personal, remotePersonal, authorityOf, completedJobs, newEpisodes, describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS, imdbOfTmdb, learnImdbOfTmdb } = deps;
+  const { store, currentUser, requireAccess, personal, nestedHidden, remotePersonal, authorityOf, completedJobs, newEpisodes, describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS, imdbOfTmdb, learnImdbOfTmdb } = deps;
 
   /** A key the caller may open now: its library is still configured, switched on and granted.
    *  `pathVisible` covers the removed and the lost-grant case; the enabled switch is Home's.
    *  A key with no library id is the single-library pass-through and stays visible. */
-  const pathOpen = (key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean =>
-    libraryPathOpen(key, viewer, libraries);
+  const pathOpen = (key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean => {
+    if (!libraryPathOpen(key, viewer, libraries)) return false;
+    const parsed = parseLibraryPath(key);
+    if (!parsed) return libraries.length !== 1 || !nestedHidden(libraries[0]!, key, viewer);
+    const library = libraryFor(libraries, parsed.libraryId);
+    return Boolean(library && !nestedHidden(library, parsed.relative, viewer));
+  };
 
   /** A key whose owning library can still be shown on Home: switched on and reachable. A key
    *  no library claims -- an unqualified one, or one whose library is gone -- is left to the
@@ -468,6 +474,8 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       .map((library) => library.id);
     const described = (await Promise.all(seen.recent(ids, RECENT_CANDIDATES).map(async (entry) => {
       const key = libraryPath(entry.libraryId, entry.relative);
+      const library = libraryFor(libraries, entry.libraryId);
+      if (!library || nestedHidden(library, entry.relative, viewer)) return undefined;
       const item = await describeLibraryPath(key);
       return item ? { entry, key, item } : undefined;
     }))).filter((row): row is NonNullable<typeof row> => row !== undefined);
@@ -578,6 +586,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       if (!target) return [];
       const library = libraryFor(libraries, target.libraryId);
       if (!library || !library.enabled || library.unreachable || !libraryVisible(library, viewer)) return [];
+      if (nestedHidden(library, target.relative, viewer)) return [];
       if (!showsOnHome(key, libraries)) return [];
       if (started(key, record.id)) return [];
       return [key];

@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, foldersBetween, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, type BrowseResult } from "./library.js";
+import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, foldersBetween, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, withinLibraryRoot, type BrowseResult } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -846,6 +846,24 @@ test("the carve-out guard compares folders, not spellings, where the volume fold
   // No probe reached the volume, and an unknown fold folds: refusing a delete the user has to
   // do another way costs less than a library taken along by one.
   assert.equal(holdsLibraryRoot(carveOuts, "archiv"), true, "a fold nobody answered with is folded");
+});
+
+test("a path at or inside a carve-out is refused, while the root and a shared prefix are not", () => {
+  const carveOuts = new Set(["Archiv/Serialy"]);
+  assert.equal(withinLibraryRoot(carveOuts, ""), false, "the library root itself");
+  assert.equal(withinLibraryRoot(carveOuts, "Archiv/Serialy"), true, "the carve-out root");
+  assert.equal(withinLibraryRoot(carveOuts, "Archiv/Serialy/S01/01.mkv"), true, "inside the carve-out");
+  assert.equal(withinLibraryRoot(carveOuts, "Archiv/Serialy2/01.mkv"), false, "a sibling with a shared prefix");
+  assert.equal(withinLibraryRoot(carveOuts, "Archiv"), false, "a folder that holds the carve-out");
+  assert.equal(withinLibraryRoot(undefined, "Archiv/Serialy"), false);
+  assert.equal(withinLibraryRoot(new Set(), "Archiv/Serialy"), false);
+});
+
+test("the carve-out read guard follows the volume's case folding", () => {
+  const carveOuts = new Set(["Archiv/Serialy"]);
+  assert.equal(withinLibraryRoot(carveOuts, "archiv/serialy/S01/01.mkv", true), true);
+  assert.equal(withinLibraryRoot(carveOuts, "archiv/serialy/S01/01.mkv", false), false);
+  assert.equal(withinLibraryRoot(carveOuts, "archiv/serialy/S01/01.mkv"), true, "an unknown fold folds");
 });
 
 test("a library filter lists a matching folder once without repeating its descendants", async () => {
