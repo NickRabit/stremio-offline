@@ -18,8 +18,8 @@ the primary agent, and shipped in its own pull request.
 - [x] Inspect and run existing follow reconciliation tests.
 - [x] Run selected authorization, network, transfer, journal, shutdown and playback regressions.
 - [ ] Complete the queue fault-injection matrix, including profile cleanup and range fallback.
-- [x] Ship the legacy source-failover cleanup fix: #834 (awaiting merge).
-- [x] Design and ship a separate subtitle-journal fix: #835 (awaiting merge).
+- [x] Ship the legacy source-failover cleanup fix: #834 (merged).
+- [x] Design and ship a separate subtitle-journal fix: #835.
 - [ ] Decide whether the unjournaled rename route needs the same sidecar recovery (SA-3).
 - [ ] Decide whether a manual retry should keep the sources already tried (SA-4).
 - [ ] Complete every-route role/ownership/foreign-ID matrix through real middleware.
