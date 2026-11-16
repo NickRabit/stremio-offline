@@ -1682,6 +1682,7 @@ export const pl: Catalog = {
   "err.downloadNeedsHttp": "Można pobrać tylko bezpośredni strumień HTTP.",
   "err.downloadLibraryNotAllowed": "Z tego konta nie można pobrać plików do biblioteki.",
   "err.revokedDownloadCleanupFailed": "Po cofnięciu uprawnienia nie udało się usunąć pobranego pliku z biblioteki.",
+  "err.downloadCleanupFailed": "Nie udało się usunąć plików tymczasowych poprzedniego pobierania. Sprawdź dostęp do pamięci i spróbuj ponownie.",
   "err.clientLogTooLarge": "Pakiet logów jest za duży.",
   "err.clientLogTooMany": "Zbyt wiele pakietów logów. Spróbuj później.",
   "err.downloadDeviceNotAllowed": "To konto może nie zostać zapisane na urządzeniu.",

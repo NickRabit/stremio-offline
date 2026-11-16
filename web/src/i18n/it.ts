@@ -1680,6 +1680,7 @@ export const it: Catalog = {
   "err.downloadNeedsHttp": "È possibile scaricare solo un flusso HTTP diretto.",
   "err.downloadLibraryNotAllowed": "Questo account potrebbe non essere scaricato nella libreria.",
   "err.revokedDownloadCleanupFailed": "Non è stato possibile rimuovere il download dalla libreria dopo la revoca dell’autorizzazione.",
+  "err.downloadCleanupFailed": "Impossibile rimuovere i file temporanei del download precedente. Controlla l’accesso allo spazio di archiviazione e riprova.",
   "err.clientLogTooLarge": "Il pacchetto di log è troppo grande.",
   "err.clientLogTooMany": "Troppi pacchetti di log. Riprova più tardi.",
   "err.downloadDeviceNotAllowed": "Questo account potrebbe non essere salvato sul dispositivo.",
