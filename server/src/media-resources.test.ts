@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isInternalMediaPath, mediaChildPath, MediaResources, openMediaUrl, ResourceError, sealedMediaUrl, stableSourceKey, streamKind } from "./media-resources.js";
+import { isInternalMediaPath, mediaChildPath, MediaResources, openMediaUrl, ResourceError, safeSourceText, sealedMediaUrl, stableSourceKey, streamKind } from "./media-resources.js";
 import { isRemoteMediaStream, openRemoteContent, sealRemoteContent } from "./media-server-reference.js";
 
 const owner = { userId: "user-a", sid: "owner-a", expiresAt: 10_000_000 };
@@ -49,6 +49,85 @@ test("public sources allowlist fields and never contain provider addresses or en
   assert.equal("url" in publicSource, false);
   assert.equal("unknown" in publicSource, false);
   assert.equal("proxyHeaders" in publicSource.behaviorHints, false);
+});
+
+test("a filename shared with the source path remains readable while the path token and credentials do not", () => {
+  const filenames = ["Movie.2026.1080p.mkv", "Movie.2026.mts", "Movie.2026.html"];
+  const credentialsStream = { url: "https://user-canary:password-canary@provider-canary.test:8443/download/private-canary/film.mkv?token=query-canary" };
+  for (const filename of filenames) {
+    const stream = {
+      url: `https://user-canary:password-canary@provider-canary.test:8443/download/private-canary/${filename}?token=query-canary`,
+      title: filename,
+      behaviorHints: { filename },
+    };
+    assert.equal(safeSourceText(stream.title, stream), filename);
+    assert.equal(safeSourceText(stream.behaviorHints.filename, stream), filename);
+  }
+  assert.equal(safeSourceText("private-canary", credentialsStream), "[redacted]");
+  assert.equal(safeSourceText("provider-canary.test", credentialsStream), "[redacted]");
+  assert.equal(safeSourceText("PROVIDER-CANARY.TEST", credentialsStream), "[redacted]");
+  assert.equal(safeSourceText("CDN.PROVIDER-CANARY.TEST", credentialsStream), "[redacted]");
+  assert.equal(safeSourceText("CDN%2EPROVIDER-CANARY%2ETEST", credentialsStream), "[redacted]");
+  assert.equal(safeSourceText("provider-canary%2Etest:8443", credentialsStream), "[redacted]");
+  assert.equal(safeSourceText("Film.comedy", { url: "https://film.com/movie.mkv" }), "Film.comedy");
+  assert.equal(safeSourceText("film.comedy", { url: "https://film.com/movie.mkv" }), "film.comedy");
+  assert.equal(safeSourceText("provider-canary.test:8443", credentialsStream), "[redacted]");
+  assert.equal(safeSourceText("provider-canary.test.", credentialsStream), "[redacted]");
+  assert.equal(safeSourceText("%70rovider.example", { url: "https://provider.example/film.mkv" }), "[redacted]");
+  assert.equal(safeSourceText("CDN.%70%72%6F%76%69%64%65%72%2E%65%78%61%6D%70%6C%65:8443",
+    { url: "https://provider.example:8443/film.mkv" }), "[redacted]");
+  const seriesFilename = "Zkušební seriál S01E01.mkv";
+  const seriesStream = {
+    url: `file://Zku%C5%A1ebn%C3%AD%20seri%C3%A1l/${encodeURIComponent(seriesFilename)}`,
+    title: seriesFilename,
+    behaviorHints: { filename: seriesFilename },
+  };
+  assert.equal(safeSourceText(seriesFilename, seriesStream), seriesFilename);
+  assert.equal(safeSourceText("user-canary", credentialsStream), "[redacted]");
+  assert.equal(safeSourceText("password-canary", credentialsStream), "[redacted]");
+  assert.equal(safeSourceText("query-canary", credentialsStream), "[redacted]");
+});
+
+test("encoded secrets are redacted in their decoded form too", () => {
+  const stream = { url: "https://user%40canary:password%2Dcanary@provider.test./download/account%252Dtoken/film.mkv" };
+
+  assert.equal(safeSourceText("user@canary", stream), "[redacted]");
+  assert.equal(safeSourceText("password-canary", stream), "[redacted]");
+  assert.equal(safeSourceText("account-token", stream), "[redacted]");
+  assert.equal(safeSourceText("☃", { url: "https://provider.test/%E2%98%83" }), "☃");
+  assert.equal(safeSourceText("MÜNICH.EXAMPLE", { url: "https://münich.example/film.mkv" }), "[redacted]");
+  assert.equal(safeSourceText("M%C3%9CNICH.EXAMPLE", { url: "https://münich.example/film.mkv" }), "[redacted]");
+  assert.equal(safeSourceText("CDN.M%C3%9CNICH%2EEXAMPLE", { url: "https://münich.example/film.mkv" }), "[redacted]");
+  assert.equal(safeSourceText("M%C3%9Cn%C3%AFch.example", { url: "https://münïch.example/film.mkv" }), "[redacted]");
+  assert.equal(safeSourceText("CDN.M%C3%9CN%C3%AFCH%2Eexample", { url: "https://münïch.example/film.mkv" }), "[redacted]");
+  assert.equal(safeSourceText("mu\u0308nïch.example", { url: "https://münïch.example/film.mkv" }), "[redacted]");
+  assert.equal(safeSourceText("CDN.mu%CC%88n%C3%AFch%2Eexample", { url: "https://münïch.example/film.mkv" }), "[redacted]");
+  assert.equal(safeSourceText("CDN。provider。example:8443", { url: "https://provider.example:8443/film.mkv" }), "[redacted]");
+  assert.equal(safeSourceText("CDN%E3%80%82provider%EF%BC%8Eexample:8443", { url: "https://provider.example:8443/film.mkv" }), "[redacted]");
+  assert.equal(safeSourceText("ｐｒｏｖｉｄｅｒ．ｅｘａｍｐｌｅ", { url: "https://provider.example/film.mkv" }), "[redacted]");
+  for (const hostname of ["0x7f.0.0.1", "0177.0.0.1", "2130706433", "127.1"]) {
+    assert.equal(safeSourceText(hostname, { url: "https://127.0.0.1/film.mkv" }), "[redacted]");
+  }
+  for (const hostname of ["[2001:0db8:0:0:0:0:0:1]", "[2001:db8:0:0::1]"]) {
+    assert.equal(safeSourceText(hostname, { url: "https://[2001:db8::1]/film.mkv" }), "[redacted]");
+  }
+  for (const [hostname, source] of [["℡.example", "tel.example"], ["ﬃ.example", "ffi.example"],
+    ["ⅰ.example", "i.example"], ["①.example", "1.example"], ["ⓐ.example", "a.example"]]) {
+    assert.equal(safeSourceText(hostname, { url: `https://${source}/film.mkv` }), "[redacted]");
+  }
+  assert.equal(safeSourceText("%E2%84%A1.example", { url: "https://tel.example/film.mkv" }), "[redacted]");
+});
+
+test("an extension on a path token does not make it a display filename", () => {
+  const filename = "Movie.2026.mkv";
+  const stream = {
+    url: `https://provider.test/download/account-token.mp4/${filename}`,
+    title: "account-token.mp4",
+    behaviorHints: { filename },
+  };
+
+  assert.equal(safeSourceText(stream.title, stream), "[redacted]");
+  assert.equal(safeSourceText(filename, stream), filename);
 });
 
 test("a library source may expose its own local subtitle sidecars", () => {
