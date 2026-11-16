@@ -180,7 +180,8 @@ one of 96 built-in ones, or an uploaded one. An account changes its own from
 the account menu or **Settings → Account**; an administrator changes
 anybody's in **Settings → Users →** account. On Android TV a profile picks
 from the built-in set in **Settings → Profile picture**; uploading is on the
-web. A child account may pick from the set and cannot upload.
+web. A child account may pick from the set (from the account menu on the web,
+from **Change picture** in the switcher on the television) and cannot upload.
 
 An uploaded picture is cropped to a square and scaled down in the browser,
 stored as one small file per account in the data directory, and shown only to

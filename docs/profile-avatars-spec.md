@@ -1,7 +1,8 @@
 # Profile pictures and the account menu
 
-Status: design contract, being implemented on `feat/profile-avatars`. Written
-on 2026-11-16 against `main` at `a0bb6ce7` (0.7.108). It builds on
+Status: **implemented in 0.7.109** on the server, the web and Android TV;
+described for administrators in [Profile pictures](users.md#profile-pictures).
+Written on 2026-11-16 against `main` at `a0bb6ce7` (0.7.108). It builds on
 [Switching profiles](users.md#switching-profiles) and
 [Child accounts](users.md#child-accounts).
 
@@ -18,7 +19,7 @@ letter at the bottom of the television's rail that opened Settings.
 | --- | --- | --- |
 | 1 | Where the account lives on the web | A round face in the right corner of the top bar, on every layout, phone included. Other streaming services put the active profile there, so it is where people look. It opens the account menu. |
 | 2 | What the account menu holds | The other profiles (one click starts the switch, a PIN or password follows when the profile needs one), *Change picture*, *Settings* and *Sign out*. Switching and signing out leave the phone's *More* sheet and the child's navigation. |
-| 3 | Television | The account item at the bottom of the rail shows the face. OK on it opens the profile switcher for every account that may switch; Settings and Sign out are actions inside the switcher. An account that cannot switch keeps going straight to Settings. |
+| 3 | Television | The account item at the bottom of the rail shows the face. OK on it opens the profile switcher for every account that may switch; Settings, Change picture (for a child, which has no Settings) and Sign out are actions under the profiles. DOWN from any profile lands on the first action and Sign out is the last, so it is never one accidental OK away. An account that cannot switch keeps going straight to Settings. |
 | 4 | What a face is | The initial on a colour derived from the name (the default), one of 96 built-in pictures, or an uploaded picture. |
 | 5 | The built-in set | Fluent Emoji, flat style, by Microsoft, under the MIT License: 72 animals and 24 other pictures, as SVG files in `web/public/avatars` with the licence beside them. The list and its order are `server/src/avatar-presets.ts`. |
 | 6 | Uploading | On the web and desktop only. The browser crops to a square and scales to 256 pixels before sending; the server accepts PNG, JPEG or WebP up to 200 kB, reads the type from the bytes and stores one file per account under `DATA_DIR/avatars`. No image library on the server. |
