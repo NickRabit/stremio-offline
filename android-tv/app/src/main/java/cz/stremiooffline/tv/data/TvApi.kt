@@ -227,6 +227,8 @@ interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, C
   /** The server's own version from `/api/status`. */
   suspend fun serverVersion(): String
   suspend fun librarySource(path: String): SourceDto
+  suspend fun avatarPresets(): List<String>
+  suspend fun setAvatar(preset: String?): AvatarDto?
 
   /** The catalogue title the library file at [path] is bound to (`GET /api/library/title`), or
    *  null when it has no binding, the path names nothing this account may see, or the call

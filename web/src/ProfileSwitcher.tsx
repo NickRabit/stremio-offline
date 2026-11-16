@@ -6,12 +6,12 @@ import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { clearHomeCache } from "./home-cache";
 import { t, useI18n, type Key } from "./i18n";
+import { Avatar } from "./Avatar";
 import type { ProfileEntry } from "./types";
 
 type Step = "confirm" | "choose" | "unlock";
 type UnlockMode = "pin" | "password";
 
-const initial = (name: string) => name.trim().slice(0, 1).toLocaleUpperCase();
 const mappedError = (error: ApiError) => {
   const key = error.messageKey;
   return key === "err.badPin" || key === "err.badCredentials" || key === "err.profileUnavailable"
@@ -19,13 +19,14 @@ const mappedError = (error: ApiError) => {
     : null;
 };
 
-export function ProfileSwitcher({ onClose, confirmStop, onSignOut, onSwitched = () => {
+export function ProfileSwitcher({ onClose, confirmStop, onSignOut, preselectId, onSwitched = () => {
   clearHomeCache();
   location.reload();
 } }: {
   onClose: () => void;
   confirmStop: boolean;
   onSignOut?: () => void;
+  preselectId?: string;
   onSwitched?: () => void;
 }) {
   useI18n();
@@ -40,6 +41,7 @@ export function ProfileSwitcher({ onClose, confirmStop, onSignOut, onSwitched = 
   const [error, setError] = useState("");
   const [remaining, setRemaining] = useState(0);
   const [busy, setBusy] = useState(false);
+  const preselected = useRef(false);
   useDialogFocus(overlay);
   useDialogViewport(overlay);
 
@@ -123,6 +125,13 @@ export function ProfileSwitcher({ onClose, confirmStop, onSignOut, onSwitched = 
     setStep("unlock");
   };
 
+  useEffect(() => {
+    if (preselected.current || !preselectId || step !== "choose" || profiles === null) return;
+    preselected.current = true;
+    const profile = profiles.find((entry) => entry.id === preselectId);
+    if (profile && !profile.current) choose(profile);
+  }, [preselectId, profiles, step]);
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!selected || busy || remaining > 0 || !secret) return;
@@ -180,12 +189,12 @@ export function ProfileSwitcher({ onClose, confirmStop, onSignOut, onSwitched = 
           {profiles && profiles.length > 0 && <div className="profile-list">
             {profiles.map((profile) => profile.current
               ? <div className="profile-row current" aria-current="true" key={profile.id}>
-                  <span className="profile-face">{initial(profile.username)}</span>
+                  <Avatar name={profile.username} avatar={profile.avatar} size={42} className="profile-face"/>
                   <strong>{profile.username}</strong>
                   <small>{t("profiles.current")}</small>
                 </div>
               : <button type="button" className="profile-row" key={profile.id} disabled={busy} onClick={() => choose(profile)}>
-                  <span className="profile-face">{initial(profile.username)}</span>
+                  <Avatar name={profile.username} avatar={profile.avatar} size={42} className="profile-face"/>
                   <strong>{profile.username}</strong>
                   {profile.unlock === "pin" && <Lock aria-label={t("profiles.needsPin")}/>}
                   {profile.unlock === "password" && <KeyRound aria-label={t("profiles.needsPassword")}/>}
@@ -208,7 +217,7 @@ export function ProfileSwitcher({ onClose, confirmStop, onSignOut, onSwitched = 
       </> : selected && <>
         <div className="dialog-body">
           <div className="profile-unlock">
-            <span className="profile-face">{initial(selected.username)}</span>
+            <Avatar name={selected.username} avatar={selected.avatar} size={64} className="profile-face"/>
             <p className="profile-hint">{mode === "pin" ? t("profiles.needsPin") : t("profiles.needsPassword")}</p>
             <label className="profile-field">
               <span>{mode === "pin"

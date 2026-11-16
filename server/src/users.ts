@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { publicAvatar, type PublicAvatar, type StoredAvatar } from "./avatars.js";
 import { verifyPassword } from "./auth.js";
 import { AppError } from "./errors.js";
 
@@ -26,6 +27,8 @@ export interface UserRecord {
   /** Set when an administrator chose the password. Until the user replaces it,
    *  the server allows only the account endpoints. */
   mustChangePassword?: boolean;
+  /** The picture shown instead of the initial; see avatars.ts. */
+  avatar?: StoredAvatar;
   child?: boolean;
   /** Meaningful only for a child account. */
   catalogue?: boolean;
@@ -109,6 +112,7 @@ export interface PublicUser {
   switcher: boolean;
   unlock: UnlockMethod;
   hasPin: boolean;
+  avatar?: PublicAvatar;
 }
 
 /** Absent means "password". The stored combinations this repairs are refused by every write,
@@ -152,7 +156,14 @@ export function publicUser(record: UserRecord): PublicUser {
     switcher: Boolean(record.switcher),
     unlock: effectiveUnlock(record),
     hasPin: Boolean(record.pinHash),
+    ...avatarField(record),
   };
+}
+
+/** `avatar` for an answer, left out when the account shows its initial. */
+export function avatarField(record: Pick<UserRecord, "id" | "avatar">): { avatar?: PublicAvatar } {
+  const avatar = publicAvatar(record);
+  return avatar ? { avatar } : {};
 }
 
 export const USER_ID = /^usr_[0-9a-f]{8}$/;

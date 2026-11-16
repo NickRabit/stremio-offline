@@ -9,7 +9,7 @@ import { logoutDenied, RestrictedError, restrictedMode } from "../restricted.js"
 import type { State } from "../store.js";
 import {
   claimLegacyData, emptyUserData, findUser, findUserById, type MigratableState, newUserId, PIN_PATTERN,
-  switchTargets, USERNAME_MIN, type UserRecord,
+  avatarField, switchTargets, USERNAME_MIN, type UserRecord,
 } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
@@ -46,6 +46,7 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
       catalogue: Boolean(user.child && user.catalogue),
       canSwitch: switchTargets(ctx.store.users(), user.id).some((profile) => profile.id !== user.id) && !restrictedMode(),
       hasPin: Boolean(user.pinHash),
+      ...avatarField(user),
     });
   });
 

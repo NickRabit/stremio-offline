@@ -22,11 +22,10 @@ afterEach(() => {
 
 const item = (over: Partial<MoreItem> & Pick<MoreItem, "key">): MoreItem => ({ icon: null, label: over.key, active: false, onSelect: vi.fn(), ...over });
 
-const render = async (items: MoreItem[], onSignOut = vi.fn(), onSwitchProfile?: () => void) => {
+const render = async (items: MoreItem[]) => {
   await act(async () => {
-    root.render(<MoreMenu items={items} badge={3} active={items.some((entry) => entry.active)} onSwitchProfile={onSwitchProfile} onSignOut={onSignOut}/>);
+    root.render(<MoreMenu items={items} badge={3} active={items.some((entry) => entry.active)}/>);
   });
-  return { onSignOut, onSwitchProfile };
 };
 
 const trigger = () => host.querySelector<HTMLButtonElement>(".nav-more")!;
@@ -71,30 +70,10 @@ describe("MoreMenu", () => {
     expect(menu()).toBeNull();
   });
 
-  it("signs out through the top bar's own handler", async () => {
-    const { onSignOut } = await render([item({ key: "following" })]);
-    await open();
-    await act(async () => { [...menu()!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Sign out")!.click(); });
-    expect(onSignOut).toHaveBeenCalledTimes(1);
-    expect(menu()).toBeNull();
-  });
-
-  it("offers profile switching directly above sign out when enabled", async () => {
-    const onSwitchProfile = vi.fn();
-    await render([item({ key: "following" })], vi.fn(), onSwitchProfile);
-    await open();
-    const labels = [...menu()!.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')]
-      .map((entry) => entry.textContent?.trim());
-    expect(labels.slice(-2)).toEqual(["Switch profile", "Sign out"]);
-
-    await act(async () => { button("Switch profile")!.click(); });
-    expect(onSwitchProfile).toHaveBeenCalledTimes(1);
-    expect(menu()).toBeNull();
-  });
-
-  it("does not offer profile switching when no handler is given", async () => {
+  it("contains destinations only, with no switch or sign-out rows", async () => {
     await render([item({ key: "following" })]);
     await open();
     expect(button("Switch profile")).toBeUndefined();
+    expect(button("Sign out")).toBeUndefined();
   });
 });

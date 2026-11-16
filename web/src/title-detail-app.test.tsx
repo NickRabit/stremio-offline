@@ -455,7 +455,7 @@ describe("child shell", () => {
 
     expect(host.querySelector("main.view-home")).not.toBeNull();
     expect([...host.querySelectorAll<HTMLButtonElement>("aside.sidebar nav button")].map((button) => button.getAttribute("aria-label")))
-      .toEqual(["Home", "Library", "Sign out"]);
+      .toEqual(["Home", "Library"]);
     expect(host.querySelector(".nav-more")).toBeNull();
     expect(localStorage.getItem("start-view")).toBe("library");
     for (const path of ["/api/addons", "/api/catalogs", "/api/downloads", "/api/watchlist", "/api/follows", "/api/follows/new-episodes", "/api/source-profiles", "/api/searchable", "/api/catalog", "/api/meta/movie/tt1"]) {
@@ -1018,7 +1018,7 @@ describe("title detail from the catalogue", () => {
     await typeInto(host.querySelector<HTMLInputElement>("input[autocomplete='username']")!, "bob");
     await typeInto(host.querySelector<HTMLInputElement>("input[type='password']")!, "secret");
     await act(async () => { host.querySelector<HTMLFormElement>(".login-card")!.requestSubmit(); });
-    await until(() => host.querySelector("header strong")?.textContent === "bob");
+    await until(() => host.querySelector<HTMLElement>(".account-trigger")?.title === "bob");
     await clickNav("Catalog");
     await until(() => host.querySelector(".detail-info") !== null);
     await act(async () => { host.querySelector<HTMLButtonElement>(".detail-info")!.click(); });
