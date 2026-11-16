@@ -2,6 +2,7 @@ package cz.stremiooffline.tv.ui
 
 import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.AddonSubtitleDto
+import cz.stremiooffline.tv.data.AvatarDto
 import cz.stremiooffline.tv.data.BulkDownloadRequest
 import cz.stremiooffline.tv.data.BulkDownloadResult
 import cz.stremiooffline.tv.data.BulkEpisodeDto
@@ -188,6 +189,14 @@ open class FakeTvApi : TvApi {
     LanguageDto("en", "Angličtina"),
     LanguageDto("de", "Němčina"),
   )
+  var avatarPresetsValue: List<String> = listOf("fox", "cat-face")
+  var avatarPresetsFailure: ApiFailure? = null
+  var avatarPresetCalls = 0
+  var avatarValues: MutableList<String?> = mutableListOf()
+  var avatarFailure: ApiFailure? = null
+  var avatarAnswer: (String?) -> AvatarDto? = { preset ->
+    preset?.let { AvatarDto(kind = "preset", id = it) }
+  }
   var serverVersionValue: String = "0.5.36"
   override var serverAddress: String = "http://server:8090"
   var progressEntries: List<ProgressEntryDto> = emptyList()
@@ -603,6 +612,18 @@ open class FakeTvApi : TvApi {
   }
 
   override suspend fun languages(): List<LanguageDto> = languagesValue
+
+  override suspend fun avatarPresets(): List<String> {
+    avatarPresetCalls += 1
+    avatarPresetsFailure?.let { throw ApiError(it) }
+    return avatarPresetsValue
+  }
+
+  override suspend fun setAvatar(preset: String?): AvatarDto? {
+    avatarValues += preset
+    avatarFailure?.let { throw ApiError(it) }
+    return avatarAnswer(preset)
+  }
 
   override suspend fun sourceProfiles(): List<SourceProfileDto> {
     sourceProfilesCalls += 1

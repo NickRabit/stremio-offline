@@ -56,10 +56,12 @@ import coil3.ImageLoader
 import coil3.annotation.ExperimentalCoilApi
 import coil3.network.cachecontrol.CacheControlCacheStrategy
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.svg.SvgDecoder
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.ApiClient
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.AvatarDto
 import cz.stremiooffline.tv.data.CookieStore
 import cz.stremiooffline.tv.data.MeResult
 import cz.stremiooffline.tv.data.ProfileApi
@@ -68,6 +70,7 @@ import cz.stremiooffline.tv.data.SessionStore
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.profiles.LocalProfileServer
 import cz.stremiooffline.tv.ui.shell.Section
 import cz.stremiooffline.tv.ui.shell.Shell
 import cz.stremiooffline.tv.ui.shell.startSection
@@ -94,6 +97,7 @@ sealed interface SessionState {
     val canSwitch: Boolean = false,
     val child: Boolean = false,
     val catalogue: Boolean = false,
+    val avatar: AvatarDto? = null,
   ) : SessionState
   data class Offline(val server: String) : SessionState
 }
@@ -151,6 +155,7 @@ class SessionViewModel(
     api: ApiClient,
     child: Boolean = false,
     catalogue: Boolean = false,
+    avatar: AvatarDto? = null,
   ) {
     state = SessionState.SignedIn(
       username = username,
@@ -159,6 +164,7 @@ class SessionViewModel(
       api = api,
       child = child,
       catalogue = child && catalogue,
+      avatar = avatar,
     )
     refreshCanSwitch()
   }
@@ -180,6 +186,7 @@ class SessionViewModel(
         child = me.child,
         catalogue = me.child && me.catalogue,
         start = if (me.child) Section.Home else current.start,
+        avatar = me.avatar,
       )
     }
   }
@@ -198,7 +205,7 @@ class SessionViewModel(
       val latest = state as? SessionState.SignedIn ?: return@launch
       if (latest.api !== current.api) return@launch
       val catalogue = me.child && me.catalogue
-      if (latest.child == me.child && latest.catalogue == catalogue) return@launch
+      if (latest.child == me.child && latest.catalogue == catalogue && latest.avatar == me.avatar) return@launch
       val api = ApiClient(address, CookieStore(address.origin, store))
       val start = if (me.child) Section.Home else startSection(settingsOf(api))
       appContext?.let { WatchNextPublisher.clear(it) }
@@ -210,6 +217,7 @@ class SessionViewModel(
         canSwitch = me.canSwitch,
         child = me.child,
         catalogue = catalogue,
+        avatar = me.avatar,
       )
     }
   }
@@ -253,6 +261,11 @@ class SessionViewModel(
     state = signedIn.copy(language = code)
   }
 
+  fun setAvatar(avatar: AvatarDto?) {
+    val signedIn = state as? SessionState.SignedIn ?: return
+    state = signedIn.copy(avatar = avatar)
+  }
+
   fun signOut() {
     val address = store.serverUrl?.let(ServerAddress::parse)
     viewModelScope.launch {
@@ -279,6 +292,7 @@ class SessionViewModel(
       canSwitch = me.canSwitch,
       child = me.child,
       catalogue = me.child && me.catalogue,
+      avatar = me.avatar,
     )
   }
 
@@ -338,6 +352,7 @@ private fun AppContent() {
         ImageLoader.Builder(context.applicationContext)
           .diskCache(imageDiskCache)
           .components {
+            add(SvgDecoder.Factory())
             add(
               OkHttpNetworkFetcherFactory(
                 callFactory = { state.api.http },
@@ -349,7 +364,10 @@ private fun AppContent() {
       }
       DisposableEffect(imageLoader) { onDispose { imageLoader.shutdown() } }
       val hostActivity = context.hostActivity()
-      CompositionLocalProvider(LocalSessionImageLoader provides imageLoader) {
+      CompositionLocalProvider(
+        LocalSessionImageLoader provides imageLoader,
+        LocalProfileServer provides state.api.serverAddress,
+      ) {
         SessionShell(
           api = state.api,
           start = state.start,
@@ -358,6 +376,7 @@ private fun AppContent() {
           canSwitch = state.canSwitch,
           child = state.child,
           childCatalogue = state.catalogue,
+          avatar = state.avatar,
           profileApi = state.api,
           onSwitched = session::switchedProfile,
           onProfilesGone = session::refreshCanSwitch,
@@ -369,6 +388,7 @@ private fun AppContent() {
           },
           onExitApp = { hostActivity?.finish() },
           onLocale = session::setLanguage,
+          onAvatarChanged = session::setAvatar,
         )
       }
     }
@@ -407,9 +427,11 @@ fun SessionShell(
   canSwitch: Boolean = false,
   child: Boolean = false,
   childCatalogue: Boolean = false,
+  avatar: AvatarDto? = null,
   profileApi: ProfileApi? = null,
   onSwitched: () -> Unit = {},
   onProfilesGone: () -> Unit = {},
+  onAvatarChanged: (AvatarDto?) -> Unit = {},
 ) {
   SessionContent(api) {
     Shell(
@@ -423,9 +445,11 @@ fun SessionShell(
       canSwitch = canSwitch,
       child = child,
       childCatalogue = childCatalogue,
+      avatar = avatar,
       profileApi = profileApi,
       onSwitched = onSwitched,
       onProfilesGone = onProfilesGone,
+      onAvatarChanged = onAvatarChanged,
     )
   }
 }

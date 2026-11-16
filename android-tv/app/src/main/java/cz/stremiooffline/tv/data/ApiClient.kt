@@ -61,6 +61,7 @@ sealed interface MeResult {
     val canSwitch: Boolean = false,
     val child: Boolean = false,
     val catalogue: Boolean = false,
+    val avatar: AvatarDto? = null,
   ) : MeResult
 }
 
@@ -289,6 +290,7 @@ class ApiClient(
         parsed.canSwitch,
         child,
         child && parsed.catalogue,
+        parsed.avatar,
       )
     }
   }
@@ -296,6 +298,21 @@ class ApiClient(
   override suspend fun profiles(): List<ProfileDto> {
     val body = request(Request.Builder().url(address.resolve("/api/profiles")).get().build())
     return body.decode<ProfilesResponse>()?.profiles ?: emptyList()
+  }
+
+  override suspend fun avatarPresets(): List<String> =
+    request(Request.Builder().url(address.resolve("/api/avatar/presets")).get().build())
+      .decode<AvatarPresetsResponse>()?.presets ?: emptyList()
+
+  override suspend fun setAvatar(preset: String?): AvatarDto? {
+    val payload = json.encodeToString(AvatarPatchRequest.serializer(), AvatarPatchRequest(preset))
+    val answer = request(
+      Request.Builder()
+        .url(address.resolve("/api/auth/avatar"))
+        .patch(payload.toRequestBody(mediaType))
+        .build(),
+    ).decode<AvatarResponse>() ?: throw ApiError(ApiFailure.Generic)
+    return answer.avatar
   }
 
   override suspend fun switchProfile(id: String, pin: String?, password: String?): SwitchOutcome {
@@ -1129,6 +1146,15 @@ private data class WatchlistRequest(
   val favorite: Boolean,
   val addonKey: String? = null,
 )
+
+@Serializable
+private data class AvatarPresetsResponse(val presets: List<String> = emptyList())
+
+@Serializable
+private data class AvatarPatchRequest(val preset: String?)
+
+@Serializable
+private data class AvatarResponse(val avatar: AvatarDto? = null)
 
 @Serializable
 private data class DownloadRequest(

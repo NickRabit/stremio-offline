@@ -62,7 +62,7 @@ class SignInViewModelTest {
     var now = 1_000L
     val timed = SignInViewModel(
       store,
-      { username, language, section, _, _, _ -> callback = Triple(username, language, section) },
+      { username, language, section, _, _, _, _ -> callback = Triple(username, language, section) },
       PairingTransportFactory { transport },
       now = { now },
       wait = { now += it },
@@ -90,7 +90,7 @@ class SignInViewModelTest {
     var now = 1_000L
     val viewModel = SignInViewModel(
       store,
-      { _, _, _, _, _, _ -> error("signed in after expiry") },
+      { _, _, _, _, _, _, _ -> error("signed in after expiry") },
       PairingTransportFactory { transport },
       now = { now },
       wait = { now += it },
@@ -120,7 +120,7 @@ class SignInViewModelTest {
     var now = 1_000L
     val viewModel = SignInViewModel(
       store,
-      { _, _, _, _, _, _ -> },
+      { _, _, _, _, _, _, _ -> },
       PairingTransportFactory { transport },
       now = { now },
       wait = { waits += it; now += it },
@@ -143,7 +143,7 @@ class SignInViewModelTest {
     var now = 1_000L
     val viewModel = SignInViewModel(
       store,
-      { _, _, _, _, _, _ -> callbacks += 1 },
+      { _, _, _, _, _, _, _ -> callbacks += 1 },
       PairingTransportFactory { transport },
       now = { now },
       wait = { now += it },
@@ -171,7 +171,7 @@ class SignInViewModelTest {
     var now = 1_000L
     val viewModel = SignInViewModel(
       store,
-      { _, _, _, _, _, _ -> callbacks += 1 },
+      { _, _, _, _, _, _, _ -> callbacks += 1 },
       PairingTransportFactory { transport },
       now = { now },
       wait = { now += it },
@@ -195,7 +195,7 @@ class SignInViewModelTest {
     val transport = FakeTransport(
       startOutcome = PairingStartOutcome.Failed(PairingErrorInfo(PairingFailure.Unsupported)),
     )
-    val viewModel = viewModel(store, transport) { _, _, _, _, _, _ -> }
+    val viewModel = viewModel(store, transport) { _, _, _, _, _, _, _ -> }
 
     viewModel.reset(address.display, null)
     viewModel.startPairing()
@@ -214,7 +214,7 @@ class SignInViewModelTest {
     )
     val expected = address
     val factory = PairingTransportFactory { seen -> assertEquals(expected.display, seen.display); transport }
-    val viewModel = SignInViewModel(store, { _, _, _, _, _, _ -> }, factory, deviceLabel = "Test TV")
+    val viewModel = SignInViewModel(store, { _, _, _, _, _, _, _ -> }, factory, deviceLabel = "Test TV")
 
     viewModel.reset(address.display, null)
     viewModel.startPairing()
@@ -233,7 +233,7 @@ class SignInViewModelTest {
   private fun viewModel(
     store: MemoryStore,
     transport: FakeTransport,
-    callback: (String, String?, Section, ApiClient, Boolean, Boolean) -> Unit,
+    callback: (String, String?, Section, ApiClient, Boolean, Boolean, cz.stremiooffline.tv.data.AvatarDto?) -> Unit,
   ) = SignInViewModel(
     store,
     callback,

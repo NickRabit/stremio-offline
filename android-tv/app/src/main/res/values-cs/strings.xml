@@ -570,6 +570,10 @@
   <string name="err_profile_unavailable">Tento profil není k dispozici.</string>
   <string name="err_bad_credentials">Nesprávné jméno nebo heslo.</string>
   <string name="err_too_many_attempts">Příliš mnoho neúspěšných pokusů. Zkuste to za %1$s s.</string>
+  <string name="avatar_title">Profilový obrázek</string>
+  <string name="avatar_change">Změnit obrázek</string>
+  <string name="avatar_pick">Vyberte obrázek</string>
+  <string name="avatar_use_initial">Použít písmeno</string>
   <string name="person_acting">Herectví</string>
   <string name="person_crew">Režie a scénář</string>
   <string name="person_empty">TMDB u této osoby neuvádí žádné filmy ani seriály.</string>

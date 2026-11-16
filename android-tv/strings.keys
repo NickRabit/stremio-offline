@@ -517,6 +517,10 @@ err.pinLocked
 err.profileUnavailable
 err.badCredentials
 err.tooManyAttempts
+avatar.title
+avatar.change
+avatar.pick
+avatar.useInitial
 
 # Person
 person.acting

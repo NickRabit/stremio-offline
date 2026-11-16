@@ -10,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
@@ -21,6 +22,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.R
@@ -102,6 +104,7 @@ class SettingsScreenTest {
     mount(fake())
     focusRow(TagSettingsRowServer)
     press(Key.DirectionDown); focusRow(TagSettingsRowAccount)
+    press(Key.DirectionDown); focusRow(TagSettingsRowAvatar)
     press(Key.DirectionDown); focusRow(TagSettingsRowUiLanguage)
     press(Key.DirectionDown); focusRow(TagSettingsRowAudio)
     press(Key.DirectionDown); focusRow(TagSettingsRowSubtitle)
@@ -119,7 +122,7 @@ class SettingsScreenTest {
     compose.onNodeWithTag(TagSettingsRowDevice).assertExists().assert(notFocusable)
     compose.onNodeWithTag(TagSettingsRowVersion).assertExists().assert(notFocusable)
 
-    repeat(6) { press(Key.DirectionDown) }
+    repeat(7) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
     // The two playback rows, Home, then the switch, then Send diagnostics: the device facts
     // between and under them are not focusable.
@@ -142,7 +145,7 @@ class SettingsScreenTest {
     mount(fake())
     val root = compose.onRoot().fetchSemanticsNode()
     val rows = listOf(
-      TagSettingsRowServer, TagSettingsRowAccount, TagSettingsRowUiLanguage, TagSettingsRowAudio,
+      TagSettingsRowServer, TagSettingsRowAccount, TagSettingsRowAvatar, TagSettingsRowUiLanguage, TagSettingsRowAudio,
       TagSettingsRowSubtitle, TagSettingsRowStreamSort, TagSettingsRowStartView, TagSettingsRowUpNext,
       TagSettingsRowSkipSegments, TagSettingsRowHomeLayout, TagSettingsRowPreferConversion,
       TagSettingsRowDiagnostics,
@@ -168,7 +171,7 @@ class SettingsScreenTest {
   @Test
   fun `the prefer conversion row sits between the start page and the device`() {
     mount(fake())
-    repeat(6) { press(Key.DirectionDown) }
+    repeat(7) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
     press(Key.DirectionDown)
     focusRow(TagSettingsRowUpNext)
@@ -196,7 +199,7 @@ class SettingsScreenTest {
   fun `OK on the prefer conversion row flips it and stores it on the device`() {
     preferences().preferConversion = false
     mount(fake())
-    repeat(10) { press(Key.DirectionDown) }
+    repeat(11) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowPreferConversion)
     compose.onNodeWithTag(TagSettingsRowPreferConversion).assertTextContains("Off", substring = true)
 
@@ -210,7 +213,7 @@ class SettingsScreenTest {
   fun `toggling the prefer conversion row writes nothing to the server`() {
     val api = fake()
     mount(api)
-    repeat(10) { press(Key.DirectionDown) }
+    repeat(11) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowPreferConversion)
 
     press(Key.DirectionCenter)
@@ -222,6 +225,7 @@ class SettingsScreenTest {
   fun `the interface language panel lists ten languages and the pick is patched`() {
     val api = fake()
     mount(api)
+    press(Key.DirectionDown)
     press(Key.DirectionDown)
     press(Key.DirectionDown)
     press(Key.DirectionCenter)
@@ -244,6 +248,7 @@ class SettingsScreenTest {
     mount(api)
     press(Key.DirectionDown)
     press(Key.DirectionDown)
+    press(Key.DirectionDown)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagSettingsPanel).assertExists()
 
@@ -259,6 +264,7 @@ class SettingsScreenTest {
   fun `choosing a preferred audio language writes only that field`() {
     val api = fake()
     mount(api)
+    press(Key.DirectionDown)
     press(Key.DirectionDown)
     press(Key.DirectionDown)
     press(Key.DirectionDown)
@@ -296,11 +302,25 @@ class SettingsScreenTest {
   }
 
   @Test
+  fun `the profile picture row opens the shared picker`() {
+    val api = fake()
+    mount(api)
+    press(Key.DirectionDown)
+    press(Key.DirectionDown)
+    focusRow(TagSettingsRowAvatar)
+
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.avatarPresetCalls == 1 }
+
+    compose.onNodeWithTag(cz.stremiooffline.tv.ui.profiles.TagAvatarPicker).assertExists()
+  }
+
+  @Test
   fun `the clear history row opens the confirm panel and only confirm clears`() {
     val api = fake()
     api.searchStateValue = SearchStateDto(recent = listOf(RecentSearchDto("Heat", "now")))
     mount(api)
-    repeat(10) { press(Key.DirectionDown) }
+    compose.onNodeWithTag(TagSettingsRowClearHistory).performSemanticsAction(SemanticsActions.RequestFocus)
     focusRow(TagSettingsRowClearHistory)
 
     press(Key.DirectionCenter)
@@ -339,7 +359,7 @@ class SettingsScreenTest {
   fun `the start page panel writes the start view`() {
     val api = fake()
     mount(api)
-    repeat(6) { press(Key.DirectionDown) }
+    repeat(7) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
     press(Key.DirectionCenter)
 
@@ -355,7 +375,7 @@ class SettingsScreenTest {
   fun `the start page panel opens on the fallback when the setting is unknown`() {
     val api = FakeTvApi().apply { settingsValue = SettingsResponse(startView = "following") }
     mount(api)
-    repeat(6) { press(Key.DirectionDown) }
+    repeat(7) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
     press(Key.DirectionCenter)
 
@@ -378,7 +398,7 @@ class SettingsScreenTest {
     val api = fake()
     api.settingsFailure = ApiFailure.Forbidden
     mount(api)
-    repeat(3) { press(Key.DirectionDown) }
+    repeat(4) { press(Key.DirectionDown) }
     press(Key.DirectionCenter)
     press(Key.DirectionDown)
     press(Key.DirectionCenter)
@@ -394,7 +414,7 @@ class SettingsScreenTest {
     cz.stremiooffline.tv.diagnostics.AppLog.clear()
     cz.stremiooffline.tv.diagnostics.AppLog.record("WARN", "API GET /api/home", mapOf("status" to "403"))
     mount(api)
-    repeat(11) { press(Key.DirectionDown) }
+    repeat(12) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -413,7 +433,7 @@ class SettingsScreenTest {
     api.bundleFailure = ApiFailure.Forbidden
     api.bundleFailureMessage = "Client logs are turned off on this server."
     mount(api)
-    repeat(11) { press(Key.DirectionDown) }
+    repeat(12) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -428,7 +448,7 @@ class SettingsScreenTest {
     val api = fake()
     api.bundleFailure = ApiFailure.Unreachable
     mount(api)
-    repeat(11) { press(Key.DirectionDown) }
+    repeat(12) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -448,7 +468,7 @@ class SettingsScreenTest {
   private fun openStreamSort(api: FakeTvApi) {
     compose.waitUntil(5_000) { api.sourceProfilesCalls >= 1 }
     compose.waitForIdle()
-    repeat(5) { press(Key.DirectionDown) }
+    repeat(6) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStreamSort)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagSettingsPanel).assertExists()
@@ -553,7 +573,7 @@ class SettingsScreenTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagSettingsRowStreamSort).assertTextContains("Nightly", substring = true)
-    repeat(5) { press(Key.DirectionDown) }
+    repeat(6) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStreamSort)
     press(Key.DirectionCenter)
 

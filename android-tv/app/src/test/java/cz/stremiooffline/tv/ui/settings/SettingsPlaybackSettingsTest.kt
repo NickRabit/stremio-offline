@@ -15,6 +15,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import cz.stremiooffline.tv.data.SettingsResponse
@@ -84,8 +85,10 @@ class SettingsPlaybackSettingsTest {
   @Test
   fun `a switch shows its value in the same column as a choice, beside its label`() {
     mount(FakeTvApi().apply { settingsValue = SettingsResponse(upNextAt = "end") })
+    compose.onNodeWithTag(TagSettingsRowUpNext).performScrollTo()
     val choice = compose.onNode(hasText("When the episode ends") and hasAnyAncestor(hasTestTag(TagSettingsRowUpNext)), useUnmergedTree = true)
       .getBoundsInRoot()
+    compose.onNodeWithTag(TagSettingsRowSkipSegments).performScrollTo()
     val switchValue = compose.onNode(hasText("Off") and hasAnyAncestor(hasTestTag(TagSettingsRowSkipSegments)), useUnmergedTree = true)
       .getBoundsInRoot()
     val switchLabel = compose.onNode(hasText("Skip intro and recap automatically") and hasAnyAncestor(hasTestTag(TagSettingsRowSkipSegments)), useUnmergedTree = true)

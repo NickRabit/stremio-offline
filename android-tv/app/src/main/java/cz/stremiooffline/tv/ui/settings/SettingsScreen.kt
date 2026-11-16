@@ -63,6 +63,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.Versions
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
+import cz.stremiooffline.tv.data.AvatarDto
 import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SourceProfileDto
@@ -76,6 +77,7 @@ import cz.stremiooffline.tv.ui.catalog.SidePanel
 import cz.stremiooffline.tv.ui.catalog.ruleName
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.profiles.AvatarPickerScreen
 import cz.stremiooffline.tv.ui.signin.messageRes
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
@@ -90,6 +92,7 @@ val UI_LOCALE_NAMES: List<Pair<String, String>> = listOf(
 
 const val TagSettingsRowServer = "settings_row_server"
 const val TagSettingsRowAccount = "settings_row_account"
+const val TagSettingsRowAvatar = "settings_row_avatar"
 const val TagSettingsRowSwitchProfile = "settings_row_switch_profile"
 const val TagSettingsRowUiLanguage = "settings_row_ui_language"
 const val TagSettingsRowAudio = "settings_row_audio"
@@ -134,8 +137,22 @@ fun SettingsRoute(
   onHint: (String) -> Unit = {},
   canSwitch: Boolean = false,
   onSwitchProfile: () -> Unit = {},
+  avatar: AvatarDto? = null,
+  onAvatarChanged: (AvatarDto?) -> Unit = {},
 ) {
   val viewModel = viewModel<SettingsViewModel>(factory = SettingsViewModel.factory(api, onLocale))
+  var avatarPickerOpen by remember { mutableStateOf(false) }
+  if (avatarPickerOpen) {
+    AvatarPickerScreen(
+      api = api,
+      name = username,
+      seed = username,
+      avatar = avatar,
+      onChanged = onAvatarChanged,
+      onClose = { avatarPickerOpen = false },
+    )
+    return
+  }
   val context = LocalContext.current
   val capabilities = remember(context) { runCatching { cz.stremiooffline.tv.playback.detectCapabilities(context) }.getOrElse { ClientCapabilitiesDto() } }
   // The conversion preference belongs to this television, so it lives in the device store, not
@@ -195,6 +212,7 @@ fun SettingsRoute(
     onHint = onHint,
     canSwitch = canSwitch,
     onSwitchProfile = onSwitchProfile,
+    onOpenAvatarPicker = { avatarPickerOpen = true },
     onSignOut = onSignOut,
     focusRequester = focusRequester,
   )
@@ -240,6 +258,7 @@ fun SettingsScreen(
   onHint: (String) -> Unit = {},
   canSwitch: Boolean = false,
   onSwitchProfile: () -> Unit = {},
+  onOpenAvatarPicker: () -> Unit = {},
   onSignOut: () -> Unit,
   focusRequester: FocusRequester,
 ) {
@@ -348,6 +367,12 @@ fun SettingsScreen(
         value = stringResource(R.string.auth_signed_in_as, username),
         onClick = { openPanel(SettingsPanel.SignOut, accountFocus) },
         modifier = Modifier.testTag(TagSettingsRowAccount).focusRequester(accountFocus),
+      )
+      SettingsRow(
+        label = stringResource(R.string.avatar_title),
+        value = "",
+        onClick = onOpenAvatarPicker,
+        modifier = Modifier.testTag(TagSettingsRowAvatar),
       )
       if (canSwitch) {
         SettingsRow(
