@@ -60,9 +60,21 @@ const journey = async (page: Page, mobile: boolean) => {
     await page.goto("/");
     await expect(page.locator("aside.sidebar nav")).toBeVisible();
 
-    await openProfiles(page, mobile);
-    await expect(page.locator(".account-menu-head")).toContainText(beta.username);
-    await page.locator(".account-menu").getByRole("menuitem", { name: `Přepnout na ${alpha.username}` }).click();
+    const menu = page.getByRole("menu").filter({ has: page.locator(".account-menu-head") });
+    const alphaItem = menu.getByRole("menuitem", { name: `Přepnout na ${alpha.username}` });
+    if (mobile) {
+      await openProfiles(page, mobile);
+      await expect(page.locator(".account-menu-head")).toContainText(beta.username);
+      await alphaItem.click();
+    } else {
+      await page.locator(".account-trigger").press("Enter");
+      const changePicture = menu.getByRole("menuitem", { name: "Změnit obrázek" });
+      await expect(changePicture).toBeFocused();
+      await expect(alphaItem).toBeVisible();
+      await page.keyboard.press("Home");
+      await expect(alphaItem).toBeFocused();
+      await page.keyboard.press("Enter");
+    }
 
     const dialog = page.getByRole("dialog", { name: "Přepnout profil" });
     await dialog.getByLabel("PIN pro psw-alpha").fill("2468");

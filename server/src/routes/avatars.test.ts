@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -67,7 +67,7 @@ const mount = async () => {
       body: init.json !== undefined ? JSON.stringify(init.json) : init.image ? new Uint8Array(init.image) : undefined,
     });
   return {
-    store, dir, call,
+    store, avatars, dir, call,
     close: async () => { server.close(); await once(server, "close"); await rm(dir, { recursive: true, force: true }); },
   };
 };
@@ -118,13 +118,13 @@ test("an uploaded picture is stored, served to the profiles that may switch to i
   assert.equal(sent.status, 200);
   const { avatar } = await sent.json() as { avatar: { kind: string; url: string } };
   assert.equal(avatar.kind, "custom");
-  assert.match(avatar.url, new RegExp(`^/api/avatar/${BOB}\\?v=\\d+$`));
+  assert.match(avatar.url, new RegExp(`^/api/avatar/${BOB}\\?v=[0-9a-f-]{36}$`));
 
   const own = await h.call(avatar.url, { user: BOB });
   assert.equal(own.status, 200);
   assert.equal(own.headers.get("content-type"), "image/jpeg", "the bytes decide, not the declared type");
   assert.equal(own.headers.get("x-content-type-options"), "nosniff");
-  assert.match(own.headers.get("cache-control") ?? "", /immutable/);
+  assert.equal(own.headers.get("cache-control"), "private, no-store");
   assert.deepEqual(Buffer.from(await own.arrayBuffer()), JPEG);
 
   assert.equal((await h.call(avatar.url, { user: ADA })).status, 200, "an administrator");
@@ -166,9 +166,45 @@ test("only an administrator sets another account's picture, and choosing a prese
   assert.equal(findUserById(h.store.users(), KID)!.avatar, undefined);
 
   assert.equal((await h.call(`/api/users/${KID}/avatar/image`, { method: "PUT", user: ADA, image: WEBP, type: "image/webp" })).status, 200);
-  assert.deepEqual(await readdir(path.join(h.dir, "avatars")), [KID]);
+  assert.match((await readdir(path.join(h.dir, "avatars"))).join(","), new RegExp(`^${KID}\\.[0-9a-f-]{36}$`));
   const preset = await h.call(`/api/users/${KID}/avatar`, { method: "PATCH", user: ADA, json: { preset: "panda" } });
   assert.deepEqual(await preset.json(), { avatar: { kind: "preset", id: "panda" } });
   assert.deepEqual(await readdir(path.join(h.dir, "avatars")), [], "the file is gone with the pointer to it");
   assert.equal((await h.call(`/api/users/usr_ffffffff/avatar`, { method: "PATCH", user: ADA, json: { preset: "panda" } })).status, 404);
+});
+
+test("changing to a preset only removes the upload it replaced", async (t) => {
+  const h = await mount();
+  t.after(h.close);
+  const upload = async (image: Buffer) => {
+    const response = await h.call("/api/auth/avatar/image", { method: "PUT", user: BOB, image });
+    assert.equal(response.status, 200);
+    return (await response.json() as { avatar: { url: string } }).avatar.url;
+  };
+  const oldUrl = await upload(PNG);
+  const remove = h.avatars.remove.bind(h.avatars);
+  const cleanup = new EventEmitter();
+  const started = once(cleanup, "started");
+  const unblock = once(cleanup, "unblock");
+  h.avatars.remove = async (userId, version) => {
+    cleanup.emit("started");
+    await unblock;
+    await remove(userId, version);
+  };
+
+  const preset = h.call("/api/auth/avatar", { method: "PATCH", user: BOB, json: { preset: "fox" } });
+  try {
+    await Promise.race([started, preset.then(() => assert.fail("Preset completed before removing the old upload"))]);
+    const newUrl = await upload(JPEG);
+    cleanup.emit("unblock");
+    assert.equal((await preset).status, 200);
+    const current = await h.call(newUrl, { user: BOB });
+    assert.equal(current.status, 200);
+    assert.deepEqual(Buffer.from(await current.arrayBuffer()), JPEG);
+    assert.equal((await h.call(oldUrl, { user: BOB })).status, 404);
+    assert.equal((await readdir(path.join(h.dir, "avatars"))).length, 1);
+  } finally {
+    cleanup.emit("unblock");
+    await preset;
+  }
 });

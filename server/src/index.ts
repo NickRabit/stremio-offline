@@ -750,11 +750,11 @@ const stopUserSessions = (userId: string) => {
 };
 /** An account that is gone: what it holds open, its unfinished queue work and the partial
  *  files behind it. A finished file is library content and never leaves with the account. */
-const deleteUserAccess = (userId: string) => {
+const deleteUserAccess = (userId: string, avatar?: UserRecord["avatar"]) => {
   searchSessions?.dropUser(userId);
   catalogSearchSessions?.dropUser(userId);
   // The account's uploaded picture goes with it; a failure here must not keep the account.
-  void avatarStore.remove(userId).catch(() => undefined);
+  if (avatar && "custom" in avatar) void avatarStore.remove(userId, avatar.custom).catch(() => undefined);
   return revocations.deleteUser(userId);
 };
 /** What an edit took away from one account: switching it off goes entirely, losing the

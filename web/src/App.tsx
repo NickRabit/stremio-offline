@@ -4016,7 +4016,7 @@ export function App() {
   <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
   <div className={`app-shell${tilesKnown ? "" : " tiles-pending"} tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
-      <AccountMenu session={session!} onSwitchTo={(id) => { setSwitcherTarget(id); setSwitcherOpen(true); }} onChangeAvatar={() => setAvatarPickerOpen(true)} {...(child ? {} : { onSettings: () => openView("settings") })} onSignOut={() => void signOut()}/>
+      <AccountMenu session={session!} onSwitchTo={(id) => { setSwitcherTarget(id); setSwitcherOpen(true); }} {...(!restricted ? { onChangeAvatar: () => setAvatarPickerOpen(true) } : {})} {...(child ? {} : { onSettings: () => openView("settings") })} onSignOut={() => void signOut()}/>
       </div></header>
     <aside className={`sidebar${child ? " sidebar-child" : ""}`}><nav>
       {child ? <>
@@ -4622,7 +4622,7 @@ export function App() {
     </main>
     <TrailerPlayer trailer={trailerOpen} onClose={() => setTrailerOpen(null)}/>
     {switcherOpen && <ProfileSwitcher confirmStop={confirmStop} preselectId={switcherTarget} onClose={() => { setSwitcherOpen(false); setSwitcherTarget(undefined); }} {...(child ? { onSignOut: () => void signOut() } : {})}/>}
-    {avatarPickerOpen && <AvatarPicker
+    {!restricted && avatarPickerOpen && <AvatarPicker
       name={session!.username}
       avatar={session!.avatar}
       allowUpload={!child}

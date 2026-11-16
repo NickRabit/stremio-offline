@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { Camera, KeyRound, Lock, LogOut, Settings as SettingsIcon } from "lucide-react";
 import { api } from "./api";
@@ -9,7 +9,7 @@ import type { ProfileEntry, Session } from "./types";
 export function AccountMenu({ session, onSwitchTo, onChangeAvatar, onSettings, onSignOut }: {
   session: Session;
   onSwitchTo: (id?: string) => void;
-  onChangeAvatar: () => void;
+  onChangeAvatar?: () => void;
   onSettings?: () => void;
   onSignOut: () => void;
 }) {
@@ -67,6 +67,31 @@ export function AccountMenu({ session, onSwitchTo, onChangeAvatar, onSettings, o
     return () => { alive = false; };
   }, [open, session.canSwitch]);
 
+  const items = () => Array.from(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+  useLayoutEffect(() => {
+    if (open) items()[0]?.focus({ preventScroll: true });
+  }, [open]);
+
+  const navigate = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Tab") {
+      setOpen(false);
+      trigger.current?.focus();
+      return;
+    }
+    const buttons = items();
+    const focused = buttons.findIndex((button) => button === document.activeElement);
+    let next: number;
+    switch (event.key) {
+      case "ArrowDown": next = (focused + 1) % buttons.length; break;
+      case "ArrowUp": next = (focused - 1 + buttons.length) % buttons.length; break;
+      case "Home": next = 0; break;
+      case "End": next = buttons.length - 1; break;
+      default: return;
+    }
+    event.preventDefault();
+    buttons[next]?.focus();
+  };
+
   const choose = (action: () => void) => {
     setOpen(false);
     trigger.current?.focus();
@@ -91,20 +116,20 @@ export function AccountMenu({ session, onSwitchTo, onChangeAvatar, onSettings, o
         setOpen((value) => !value);
       }}
     ><Avatar name={session.username} avatar={session.avatar} size={36}/></button>
-    {open && createPortal(<div ref={menu} className="account-menu open" role="menu" style={position}>
+    {open && createPortal(<div ref={menu} className="account-menu open" role="menu" aria-label={t("account.menu")} onKeyDown={navigate} style={position}>
       <div className="account-menu-head">
         <Avatar name={session.username} avatar={session.avatar} size={44}/>
         <div><strong>{session.username}</strong>{session.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}</div>
       </div>
       {session.canSwitch && <>
         {(profileFailure || (!profileFailure && profiles !== null && others.length === 0)) &&
-          <button type="button" role="menuitem" onClick={() => choose(() => onSwitchTo(undefined))}>
+          <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose(() => onSwitchTo(undefined))}>
             <span>{t("profiles.switch")}</span>
           </button>}
         {others.map((profile) => <button
           key={profile.id}
           type="button"
-          role="menuitem"
+          role="menuitem" tabIndex={-1}
           aria-label={t("profiles.switchTo", { name: profile.username })}
           onClick={() => choose(() => onSwitchTo(profile.id))}
         >
@@ -114,9 +139,9 @@ export function AccountMenu({ session, onSwitchTo, onChangeAvatar, onSettings, o
           {profile.unlock === "password" && <KeyRound aria-label={t("profiles.needsPassword")}/>}
         </button>)}
       </>}
-      <button type="button" role="menuitem" onClick={() => choose(onChangeAvatar)}><Camera/><span>{t("avatar.change")}</span></button>
-      {onSettings && <button type="button" role="menuitem" onClick={() => choose(onSettings)}><SettingsIcon/><span>{t("nav.settings")}</span></button>}
-      <button type="button" role="menuitem" onClick={() => choose(onSignOut)}><LogOut/><span>{t("app.signOut")}</span></button>
+      {onChangeAvatar && <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose(onChangeAvatar)}><Camera/><span>{t("avatar.change")}</span></button>}
+      {onSettings && <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose(onSettings)}><SettingsIcon/><span>{t("nav.settings")}</span></button>}
+      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose(onSignOut)}><LogOut/><span>{t("app.signOut")}</span></button>
     </div>, document.body)}
   </>;
 }

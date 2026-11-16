@@ -205,7 +205,10 @@ class SessionViewModel(
       val latest = state as? SessionState.SignedIn ?: return@launch
       if (latest.api !== current.api) return@launch
       val catalogue = me.child && me.catalogue
-      if (latest.child == me.child && latest.catalogue == catalogue && latest.avatar == me.avatar) return@launch
+      if (latest.child == me.child && latest.catalogue == catalogue) {
+        if (latest.avatar == current.avatar && latest.avatar != me.avatar) state = latest.copy(avatar = me.avatar)
+        return@launch
+      }
       val api = ApiClient(address, CookieStore(address.origin, store))
       val start = if (me.child) Section.Home else startSection(settingsOf(api))
       appContext?.let { WatchNextPublisher.clear(it) }

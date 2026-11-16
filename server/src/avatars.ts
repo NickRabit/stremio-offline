@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isAvatarPreset } from "./avatar-presets.js";
 import { USER_ID, type UserRecord } from "./users.js";
@@ -6,9 +7,8 @@ import { USER_ID, type UserRecord } from "./users.js";
 /** What an account shows instead of its initial. Absent means the initial. */
 export type StoredAvatar =
   | { preset: string }
-  /** The picture itself is a file beside the state; `version` changes with every upload so a
-   *  client can cache the address for good. */
-  | { custom: number; type: AvatarImageType };
+  /** Each upload has its own file. Numeric versions point to the original per-account file. */
+  | { custom: string | number; type: AvatarImageType };
 
 export type AvatarImageType = "image/png" | "image/jpeg" | "image/webp";
 
@@ -42,28 +42,30 @@ export class AvatarStore {
   private readonly dir: string;
   constructor(dataDir: string) { this.dir = path.join(dataDir, "avatars"); }
 
-  private file(userId: string): string {
+  private file(userId: string, version: string | number): string {
     if (!USER_ID.test(userId)) throw new Error("Not an account id.");
-    return path.join(this.dir, userId);
+    if (typeof version === "number") return path.join(this.dir, userId);
+    if (!/^[0-9a-f-]{36}$/.test(version)) throw new Error("Not an avatar version.");
+    return path.join(this.dir, `${userId}.${version}`);
   }
 
-  async write(userId: string, bytes: Uint8Array): Promise<void> {
-    const target = this.file(userId);
+  async write(userId: string, bytes: Uint8Array): Promise<string> {
+    const version = randomUUID();
+    const file = this.file(userId, version);
     await mkdir(this.dir, { recursive: true });
-    const temporary = `${target}.${process.pid}.tmp`;
-    await writeFile(temporary, bytes);
-    await rename(temporary, target);
+    await writeFile(file, bytes, { flag: "wx" });
+    return version;
   }
 
-  async read(userId: string): Promise<Buffer | undefined> {
+  async read(userId: string, version: string | number): Promise<Buffer | undefined> {
     try {
-      return await readFile(this.file(userId));
+      return await readFile(this.file(userId, version));
     } catch {
       return undefined;
     }
   }
 
-  async remove(userId: string): Promise<void> {
-    await rm(this.file(userId), { force: true });
+  async remove(userId: string, version: string | number): Promise<void> {
+    await rm(this.file(userId, version), { force: true });
   }
 }

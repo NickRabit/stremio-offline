@@ -30,15 +30,16 @@ const profiles: ProfileEntry[] = [
 const flush = async () => {
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 };
-const mount = async ({ session = { username: "Bob", role: "admin", canSwitch: true }, onSettings }: {
+const mount = async ({ session = { username: "Bob", role: "admin", canSwitch: true }, onSettings, allowAvatar = true }: {
   session?: Session;
   onSettings?: () => void;
+  allowAvatar?: boolean;
 } = {}) => {
   const onSwitchTo = vi.fn();
   const onChangeAvatar = vi.fn();
   const onSignOut = vi.fn();
   await act(async () => {
-    root.render(<AccountMenu session={session} onSwitchTo={onSwitchTo} onChangeAvatar={onChangeAvatar} onSettings={onSettings} onSignOut={onSignOut}/>);
+    root.render(<AccountMenu session={session} onSwitchTo={onSwitchTo} {...(allowAvatar ? { onChangeAvatar } : {})} onSettings={onSettings} onSignOut={onSignOut}/>);
   });
   return { onSwitchTo, onChangeAvatar, onSignOut };
 };
@@ -86,6 +87,33 @@ describe("AccountMenu", () => {
     await mount();
     await open();
     expect([...document.querySelectorAll('.account-menu [role="menuitem"]')].some((entry) => entry.textContent === "Settings")).toBe(false);
+  });
+
+  it("focuses the menu on open and supports arrows, Home, End and Tab", async () => {
+    await mount({ session: { username: "Bob", role: "admin" }, onSettings: vi.fn() });
+    await open();
+    const items = document.querySelectorAll('[role="menuitem"]');
+    const press = (key: string) => act(() => {
+      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    });
+    expect(document.activeElement).toBe(items[0]);
+    press("ArrowUp");
+    expect(document.activeElement).toBe(items[2]);
+    press("ArrowDown");
+    expect(document.activeElement).toBe(items[0]);
+    press("End");
+    expect(document.activeElement).toBe(items[2]);
+    press("Home");
+    expect(document.activeElement).toBe(items[0]);
+    press("Tab");
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it("omits Change picture when the action is unavailable", async () => {
+    await mount({ session: { username: "Bob", role: "admin" }, allowAvatar: false });
+    await open();
+    expect([...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["Sign out"]);
   });
 
   it("closes on Escape and returns focus to the trigger", async () => {

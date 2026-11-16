@@ -211,13 +211,13 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
       </div>
       {!restricted && <small className="setting-note">{t("auth.sessionNote")}</small>}
     </form>
-    <section className="panel settings-section avatar-settings">
+    {!restricted && <section className="panel settings-section avatar-settings">
       <SettingsSectionHead icon={<Avatar name={session.username} avatar={session.avatar} size={28}/>} title={t("avatar.title")}/>
       <div className="avatar-setting-row">
         <Avatar name={session.username} avatar={session.avatar} size={64}/>
         <button type="button" onClick={() => setAvatarPicker(true)}>{t("avatar.change")}</button>
       </div>
-    </section>
+    </section>}
     {!restricted && (session.canSwitch || session.hasPin) && <section className="panel settings-section profile-own-pin">
       <SettingsSectionHead icon={<KeyRound/>} title={t("profiles.ownPin")} text={t("profiles.ownPinHint")}/>
       <SettingControl title={t("auth.currentPassword")} text={t("auth.currentPasswordHint")}>
@@ -235,7 +235,7 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
         </button>}
       </div>
     </section>}
-    {avatarPicker && <AvatarPicker
+    {!restricted && avatarPicker && <AvatarPicker
       name={session.username}
       avatar={session.avatar}
       allowUpload={!session.child}

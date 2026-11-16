@@ -32,7 +32,8 @@ letter at the bottom of the television's rail that opened Settings.
 `avatar` on the account record is `{ preset }` or `{ custom, type }`, absent
 for the initial. `GET /api/auth/me`, `GET /api/profiles` and `GET /api/users`
 carry it as `{ kind: "preset", id }` or `{ kind: "custom", url }`; the address
-carries the upload's version and is cached for good.
+carries the upload's version. Clients must request uploaded images from the server
+so it can check the current account's access.
 
 | Route | Who | What |
 | --- | --- | --- |

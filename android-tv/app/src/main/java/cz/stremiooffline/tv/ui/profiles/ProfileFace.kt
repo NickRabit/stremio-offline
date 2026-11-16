@@ -16,11 +16,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import coil3.request.CachePolicy
+import coil3.request.ImageRequest
 import cz.stremiooffline.tv.data.AvatarDto
 import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -39,6 +42,15 @@ fun ProfileFace(
   var loaded by remember(model) { mutableStateOf(false) }
   var failed by remember(model) { mutableStateOf(false) }
   val preset = avatar?.kind == "preset"
+  val context = LocalContext.current
+  val request = remember(context, model, preset) {
+    if (model == null || preset) model
+    else ImageRequest.Builder(context)
+      .data(model)
+      .memoryCachePolicy(CachePolicy.DISABLED)
+      .diskCachePolicy(CachePolicy.DISABLED)
+      .build()
+  }
   Box(
     modifier
       .size(size)
@@ -57,7 +69,7 @@ fun ProfileFace(
     )
     if (model != null && !failed) {
       AsyncImage(
-        model = model,
+        model = request,
         contentDescription = null,
         imageLoader = sessionImageLoader(),
         contentScale = if (preset) ContentScale.Fit else ContentScale.Crop,

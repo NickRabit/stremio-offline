@@ -52,29 +52,38 @@ export function registerAvatarRoutes(app: express.Application, deps: AvatarDeps)
   };
 
   const setAvatar = async (userId: string, avatar: StoredAvatar | undefined, actor: UserRecord): Promise<UserRecord> => {
+    let previous: StoredAvatar | undefined;
+    let updated: UserRecord | undefined;
     await store.update((state: State) => {
       const live = findUserById(state.users ?? [], actor.id);
       if (!live || live.disabled || live.secret !== actor.secret) throw new AppError("Not signed in.", "err.notSignedIn", 401);
       if (actor.id !== userId && live.role !== "admin") throw new ForbiddenError();
-      let found = false;
+      if (live.child && avatar && "custom" in avatar) throw new ForbiddenError();
       state.users = (state.users ?? []).map((user) => {
         if (user.id !== userId) return user;
-        found = true;
-        const { avatar: _previous, ...rest } = user;
-        return avatar ? { ...rest, avatar } : rest;
+        const { avatar: oldAvatar, ...rest } = user;
+        previous = oldAvatar;
+        updated = avatar ? { ...rest, avatar } : rest;
+        return updated;
       });
-      if (!found) throw new AppError("That account does not exist.", "err.unknownUser", 404);
+      if (!updated) throw new AppError("That account does not exist.", "err.unknownUser", 404);
     });
-    return findUserById(store.users(), userId)!;
+    if (previous && "custom" in previous) await discard(userId, previous.custom);
+    return updated!;
+  };
+
+  const discard = async (userId: string, version: string | number) => {
+    try {
+      await avatars.remove(userId, version);
+    } catch (error) {
+      log("WARN", "Could not remove profile picture", { userId, version, error });
+    }
   };
 
   const choosePreset = async (req: express.Request, userId: string, actor: UserRecord) => {
     const preset: unknown = req.body?.preset;
     if (preset !== null && !isAvatarPreset(preset)) throw new AppError("That picture is not in the set.", "err.invalidRequest", 400);
-    const before = findUserById(store.users(), userId);
     const after = await setAvatar(userId, preset === null ? undefined : { preset }, actor);
-    // The uploaded file is only dropped once the account no longer points at it.
-    if (before?.avatar && "custom" in before.avatar) await avatars.remove(userId);
     return { avatar: publicAvatar(after) ?? null };
   };
 
@@ -82,8 +91,14 @@ export function registerAvatarRoutes(app: express.Application, deps: AvatarDeps)
     const body = await readImage(req);
     const type = sniffImage(body);
     if (!type) throw new AppError("Send a PNG, JPEG or WebP picture.", "err.avatarFormat", 400);
-    await avatars.write(userId, body);
-    const after = await setAvatar(userId, { custom: Date.now(), type }, actor);
+    const version = await avatars.write(userId, body);
+    let after: UserRecord;
+    try {
+      after = await setAvatar(userId, { custom: version, type }, actor);
+    } catch (error) {
+      await discard(userId, version);
+      throw error;
+    }
     log("INFO", "Profile picture uploaded", { actor: actor.username, actorId: actor.id, userId, bytes: body.length });
     return { avatar: publicAvatar(after) ?? null };
   };
@@ -103,14 +118,15 @@ export function registerAvatarRoutes(app: express.Application, deps: AvatarDeps)
     const visible = owner !== undefined && (caller.id === owner.id || caller.role === "admin"
       || switchTargets(users, caller.id).some((profile) => profile.id === owner.id));
     if (!owner || !visible || !owner.avatar || !("custom" in owner.avatar)) throw notFound();
-    const bytes = await avatars.read(owner.id);
+    const version = owner.avatar.custom;
+    if (req.query.v !== undefined && req.query.v !== String(version)) throw notFound();
+    const bytes = await avatars.read(owner.id, version);
     const type = bytes ? sniffImage(bytes) : undefined;
     if (!bytes || !type) throw notFound();
     res.setHeader("content-type", type);
     res.setHeader("x-content-type-options", "nosniff");
     res.setHeader("content-security-policy", "default-src 'none'; sandbox");
-    // The address carries the upload's version, so a new picture has a new address.
-    res.setHeader("cache-control", "private, max-age=31536000, immutable");
+    res.setHeader("cache-control", "private, no-store");
     res.end(bytes);
   }));
 

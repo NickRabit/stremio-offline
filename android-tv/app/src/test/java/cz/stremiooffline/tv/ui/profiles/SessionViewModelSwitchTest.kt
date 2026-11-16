@@ -164,6 +164,28 @@ class SessionViewModelSwitchTest {
   }
 
   @Test
+  fun `a foreground avatar change preserves the session and start section`() {
+    server.start()
+    val address = ServerAddress.parse(server.url("/").toString())!!
+    val store = MemoryStore(context)
+    store.serverUrl = address.display
+    store.saveSession(address.origin, "token")
+    server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs"}"""))
+    server.enqueue(MockResponse().setBody("""{"startView":"library"}"""))
+    val session = SessionViewModel(store, context)
+    val initial = awaitSignedIn(session, "ondra")
+
+    server.enqueue(
+      MockResponse().setBody("""{"username":"ondra","language":"cs","avatar":{"kind":"preset","id":"fox"}}"""),
+    )
+    session.refreshPolicy()
+    val updated = awaitSignedIn(session, "ondra", avatar = AvatarDto(kind = "preset", id = "fox"))
+    assertSame(initial.api, updated.api)
+    assertEquals(Section.Library, updated.start)
+    assertEquals(3, server.requestCount)
+  }
+
+  @Test
   fun `a failed foreground policy read changes nothing`() {
     server.start()
     val address = ServerAddress.parse(server.url("/").toString())!!
@@ -189,11 +211,15 @@ class SessionViewModelSwitchTest {
     session: SessionViewModel,
     username: String,
     canSwitch: Boolean? = null,
+    avatar: AvatarDto? = null,
   ): SessionState.SignedIn {
     val deadline = System.currentTimeMillis() + 5_000
     while (System.currentTimeMillis() < deadline) {
       val state = session.state as? SessionState.SignedIn
-      if (state?.username == username && (canSwitch == null || state.canSwitch == canSwitch)) return state
+      if (state?.username == username &&
+        (canSwitch == null || state.canSwitch == canSwitch) &&
+        (avatar == null || state.avatar == avatar)
+      ) return state
       Thread.sleep(25)
     }
     fail("expected signed in as $username, was ${session.state}")
