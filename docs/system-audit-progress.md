@@ -4,8 +4,9 @@ Baseline: `origin/main` at `a0bb6ce7`, version 0.7.108, checked 2026-11-15.
 This is the first bounded delivery from `system-audit-refactor-agent-task.md`,
 not a completed whole-application audit. The primary agent performed the
 analysis and reproductions. Initial delegated audits were stopped at the
-owner's request; their output is not evidence in this report. DeepSeek is
-implementing the specified cleanup fix; Grok will review that implementation.
+owner's request; their output is not evidence in this report. Each fix is
+implemented by DeepSeek from a written specification, reviewed by Grok and by
+the primary agent, and shipped in its own pull request.
 
 ## Delivery checklist
 
@@ -17,8 +18,10 @@ implementing the specified cleanup fix; Grok will review that implementation.
 - [x] Inspect and run existing follow reconciliation tests.
 - [x] Run selected authorization, network, transfer, journal, shutdown and playback regressions.
 - [ ] Complete the queue fault-injection matrix, including profile cleanup and range fallback.
-- [ ] Ship the legacy source-failover cleanup fix (implementation in progress).
-- [ ] Design and ship a separate subtitle-journal fix.
+- [x] Ship the legacy source-failover cleanup fix: #834 (awaiting merge).
+- [x] Design and ship a separate subtitle-journal fix: #835 (awaiting merge).
+- [ ] Decide whether the unjournaled rename route needs the same sidecar recovery (SA-3).
+- [ ] Decide whether a manual retry should keep the sources already tried (SA-4).
 - [ ] Complete every-route role/ownership/foreign-ID matrix through real middleware.
 - [ ] Complete account/grant/library revocation and final filesystem boundary campaign.
 - [ ] Complete playback interruption/resource measurements on supported hardware.
@@ -29,8 +32,10 @@ implementing the specified cleanup fix; Grok will review that implementation.
 
 | ID / priority | Status | Evidence and outcome |
 | --- | --- | --- |
-| SA-1 / P2 | Confirmed, reproduced | `downloads.ts:download`, legacy lazy source-failover branch. A 404 after a partial was written into a directory changed to mode 0555 causes unlink to fail. The catch discards target/source state anyway. Restoring permission before source B resolves produces `Film (2).mp4` and leaves `Film.mp4.part`. B's bytes are correct; no foreign-file overwrite was demonstrated. |
-| SA-2 / P2 | Confirmed, reproduced | `library-actions.ts:TransferStep`, `transferLibraryItem`, `resumeTransfer`. Seed the exact post-video/pre-subtitle crash state: video at New/movie.mkv, subtitle at Old/movie.en.srt, a moving journal record. Replay returns the destination twice, but the subtitle stays at Old and is absent at New. No subtitle deletion was observed; destination playback loses its sidecar. |
+| SA-1 / P2 | Confirmed, reproduced | `downloads.ts:download`, legacy lazy source-failover branch. A 404 after a partial was written into a directory changed to mode 0555 causes unlink to fail. The catch discards target/source state anyway. Restoring permission before source B resolves produces `Film (2).mp4` and leaves `Film.mp4.part`. B's bytes are correct; no foreign-file overwrite was demonstrated. Fix in #834: strict cleanup before the source is abandoned, otherwise the job fails with its target and source retained. |
+| SA-2 / P2 | Confirmed, reproduced | `library-actions.ts:TransferStep`, `transferLibraryItem`, `resumeTransfer`. Seed the exact post-video/pre-subtitle crash state: video at New/movie.mkv, subtitle at Old/movie.en.srt, a moving journal record. Replay returns the destination twice, but the subtitle stays at Old and is absent at New. No subtitle deletion was observed; destination playback loses its sidecar. Fix in #835: the journal record names the sidecars and a replay carries them. |
+| SA-3 / P3 | Inspected, not reproduced | `routes/content.ts`, the library rename route. The video is renamed, then each subtitle sidecar, with no journal. A stop between the two leaves the subtitles under the old stem, and nothing replays the rename. Same-filesystem renames keep the window short; no crash was injected. `rerootItem` has a similar window for a loose video, because `RerootStep` records only the two ends. |
+| SA-4 / P3 | Inspected, not reproduced | `DownloadQueue.retry` clears `source.tried` before a lazy job resumes. After #834 a job that failed on cleanup keeps its selected stream, but a later failover may pick a source that had already been abandoned. Raised by the review of #834; no data loss is implied. |
 | Historical H1/H2/H3 | Already fixed in source; not all rerun here | Admissions use the admission/persist machinery; `remove` writes before deleting its partial; unreadable queue/journal tests exist. Do not repeat the October JSON-store findings as current defects. Current queues also support SQLite. A new power-loss/fsync claim was not tested. |
 | Follow reserve/enqueue/adopt replay | Existing implementation verified within harness limits | `follows.test.ts`: reserved-before-queue, queued-before-link, adoption, completion, history removal and repeated restart scenarios. 21 selected tests passed. The queue collaborator is fake in several replay cases: this is not a spawned-process, two-real-store crash campaign. |
 | Missing library root | Existing protection inspected, full campaign not verified | `library.test.ts` contains an incomplete-walk test for a missing root; no evidence here establishes behavior for every unmount/scan/artwork interleaving. Never equate missing with empty. |
@@ -107,6 +112,16 @@ Executed against the baseline source, with disposable fixtures:
   source B bytes and orphan remained.
 - Synthetic post-crash sidecar replay probe: passed assertions describing SA-2,
   including a second replay. This is a failure-state probe, not a fixed regression.
+
+Second delivery, 2026-11-16, against `main` at `2d988397` (0.7.109):
+
+- #834 (SA-1): new regressions failed on the baseline and pass with the fix;
+  `downloads.test.ts` 141 passed after merging current `main`.
+- #835 (SA-2): replay regression failed on unmodified `main` and passes with
+  the fix; library actions, move, transfer and content-route suites 102 passed;
+  full unit gates and a side-port Docker health check passed. The independent
+  review found one low-severity recovery hole (a backslash in a file name
+  discarded the whole journal record), fixed in the same pull request.
 
 Audit-only work does not change runtime and has no version bump. Build, complete
 unit/e2e and Docker deployment belong to each implementation PR. No production
