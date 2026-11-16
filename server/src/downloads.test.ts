@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createWriteStream, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -1476,6 +1476,351 @@ test("legacy lazy failover treats missing partials as already cleaned up", async
     ]));
   } finally {
     release404.release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a profile source stays selected when its partial cleanup is denied", { skip: process.platform === "win32" }, async () => {
+  const payload = Buffer.from(Array.from({ length: 8192 }, (_unused, index) => index % 251));
+  const partialSize = 2048;
+  const firstBody = deferred();
+  const nextBody = deferred();
+  let resolverCalls = 0;
+  let nextSourceHits = 0;
+  const { server, port } = await listen(async (req, res) => {
+    if (req.url === "/next.mp4") {
+      nextSourceHits += 1;
+      await nextBody.promise;
+      res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+      res.end(payload);
+      return;
+    }
+    res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+    res.write(payload.subarray(0, partialSize));
+    await firstBody.promise;
+    req.socket.destroy();
+  });
+  const { directory, queue, downloads } = await tempQueue({ retryDelay: () => 30 });
+  const sourceA = `http://127.0.0.1:${port}/source.mp4`;
+  const sourceB = `http://127.0.0.1:${port}/next.mp4`;
+  queue.setProviderPriorityResolver(async () => {
+    resolverCalls += 1;
+    return {
+      status: "selected",
+      stream: { url: resolverCalls === 1 ? sourceA : sourceB, addonKey: "addon:http-only" },
+      resolution: { checkedCandidates: 1, audioLanguage: "en" },
+      settings: defaultDownloadSettings(),
+      streamAddonIdentity: "a".repeat(64),
+      searchStatus: "complete",
+    };
+  });
+  let lockedDirectory: string | undefined;
+  let originalMode = 0o755;
+  try {
+    const selection = {
+      addonKeys: ["addon:http-only"],
+      sourceStrategy: "priority" as const,
+      audioLanguage: "en",
+      audioMode: "preferred" as const,
+      subtitleMode: "off" as const,
+      targetSettings: defaultDownloadSettings().movie,
+    };
+    const queued = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-profile-cleanup", selection },
+      { kind: "movie", title: "Film", id: "tt-profile-cleanup" },
+      "usr_00000001",
+      undefined,
+      queueAdmission(),
+    );
+    assert.ok(queued);
+    const internal = queue as unknown as { jobs: DownloadJob[]; active: Map<string, AbortController> };
+    const job = internal.jobs[0]!;
+    await waitFor(queue, () => {
+      if (!job.target) return false;
+      const partial = queuedFile(downloads, `${job.target}.part`);
+      return existsSync(partial) && statSync(partial).size === partialSize;
+    });
+    const originalTarget = job.target;
+    const originalFile = queuedFile(downloads, originalTarget);
+    const videoPart = `${originalFile}.part`;
+    lockedDirectory = path.dirname(originalFile);
+    originalMode = (await stat(lockedDirectory)).mode & 0o777;
+    await chmod(lockedDirectory, 0o555);
+    firstBody.release();
+
+    await waitFor(queue, () => job.status === "failed" || resolverCalls > 1);
+    await waitFor(queue, () => !internal.active.has(job.id));
+    await queue.flush();
+    assert.equal(job.status, "failed", "the source cannot be abandoned while its partial remains");
+    assert.equal(job.errorKey, "err.downloadCleanupFailed");
+    assert.equal(job.error, "Could not remove the previous download's temporary files. Check storage access and retry.");
+    assert.doesNotMatch(job.error ?? "", /http|\/tmp|\.part|EACCES/);
+    assert.equal(resolverCalls, 1, "no fallback resolver runs after cleanup fails");
+    assert.equal(nextSourceHits, 0);
+    assert.equal(job.target, originalTarget);
+    assert.equal(job.stream?.url, sourceA);
+    assert.deepEqual(job.source?.tried, []);
+    assert.equal(job.sourceFallbackAttempts, undefined);
+    assert.equal(job.received, partialSize);
+    assert.equal(job.total, payload.length);
+    assert.equal(job.retryCount, undefined);
+    assert.equal(existsSync(videoPart), true);
+
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as DownloadJob[];
+    const persisted = stored.find((item) => item.id === job.id)!;
+    assert.equal(persisted.status, "failed");
+    assert.equal(persisted.errorKey, "err.downloadCleanupFailed");
+    assert.equal(persisted.target, originalTarget);
+    assert.equal(persisted.stream?.url, sourceA);
+    assert.deepEqual(persisted.source?.tried, []);
+    assert.equal(persisted.sourceFallbackAttempts, undefined);
+    assert.equal(persisted.received, partialSize);
+    assert.equal(persisted.total, payload.length);
+
+    await assert.rejects(queue.retry(job.id), /temporary files/, "a retry is refused while the partial cannot be removed");
+    assert.equal(job.status, "failed");
+    assert.equal(job.target, originalTarget);
+    assert.equal(job.stream?.url, sourceA);
+    assert.equal(resolverCalls, 1);
+
+    const restarted = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+      libraries: () => [downloadLibrary(downloads)], defaultLibrary: () => downloadLibrary(downloads),
+    });
+    try {
+      await restarted.load();
+      const reloaded = restarted.list().find((item) => item.id === job.id)!;
+      assert.equal(reloaded.status, "failed");
+      assert.equal(reloaded.target, originalTarget, "a restart keeps the name of the partial it could not remove");
+      assert.equal(existsSync(videoPart), true);
+    } finally {
+      await restarted.stop();
+    }
+
+    await chmod(lockedDirectory, originalMode);
+    nextBody.release();
+    await queue.retry(job.id);
+    await waitFor(queue, () => job.status === "completed" || job.status === "failed");
+    assert.equal(job.status, "completed", job.error);
+    assert.equal(job.target, originalTarget);
+    assert.deepEqual(await readFile(originalFile), payload);
+    assert.equal(existsSync(videoPart), false);
+    assert.equal(resolverCalls, 2, "the retry selects the next source");
+    assert.equal(nextSourceHits, 1);
+  } finally {
+    firstBody.release();
+    nextBody.release();
+    if (lockedDirectory) await chmod(lockedDirectory, originalMode).catch(() => undefined);
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("profile failover treats missing partials as already cleaned up", async () => {
+  const release404 = deferred();
+  let resolverCalls = 0;
+  const enoentCalls: string[] = [];
+  const { server, port } = await listen(async (req, res) => {
+    if (req.url === "/subtitle.srt") {
+      res.writeHead(200, { "content-type": "application/x-subrip" });
+      res.end("1\n00:00:01,000 --> 00:00:02,000\nSubtitle\n");
+      return;
+    }
+    if (req.url === "/first.mp4") {
+      await release404.promise;
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { "content-length": "64", "content-type": "video/mp4" });
+    res.end(Buffer.alloc(64, 7));
+  });
+  const { directory, queue, downloads } = await tempQueue({
+    unlinkFile: async (file) => {
+      try {
+        await unlink(file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") enoentCalls.push(file);
+        throw error;
+      }
+    },
+  });
+  queue.setProviderPriorityResolver(async () => {
+    resolverCalls += 1;
+    return {
+      status: "selected",
+      stream: { url: `http://127.0.0.1:${port}/${resolverCalls === 1 ? "first" : "second"}.mp4` },
+      subtitle: { url: `http://127.0.0.1:${port}/subtitle.srt`, lang: "cs" },
+      resolution: {
+        checkedCandidates: 1, audioLanguage: "en", subtitleLanguage: "cs",
+        subtitleSource: "addon", subtitleStatus: "ready",
+      },
+      settings: defaultDownloadSettings(),
+      streamAddonIdentity: "b".repeat(64),
+      subtitleAddonIdentity: "c".repeat(64),
+      searchStatus: "complete",
+    };
+  });
+  try {
+    const selection = {
+      addonKeys: ["addon:http-only"],
+      sourceStrategy: "priority" as const,
+      audioLanguage: "en",
+      audioMode: "preferred" as const,
+      subtitleMode: "off" as const,
+      targetSettings: defaultDownloadSettings().movie,
+    };
+    const queued = await queue.addPending(
+      "Missing",
+      { type: "movie", videoId: "tt-profile-missing", selection },
+      { kind: "movie", title: "Missing", id: "tt-profile-missing" },
+      "usr_00000001",
+      undefined,
+      queueAdmission(),
+    );
+    assert.ok(queued);
+    const job = (queue as unknown as { jobs: DownloadJob[] }).jobs[0]!;
+    let subtitlePart = "";
+    await waitFor(queue, () => {
+      if (!job.target) return false;
+      const target = queuedFile(downloads, job.target);
+      subtitlePart = path.join(
+        path.dirname(target),
+        `${path.basename(target, path.extname(target))}.cs.vtt.part`,
+      );
+      return existsSync(subtitlePart);
+    });
+    await unlink(subtitlePart);
+    release404.release();
+    await waitFor(queue, () => job.status === "completed" || job.status === "failed");
+    assert.equal(job.status, "completed", job.error);
+    assert.equal(resolverCalls, 2, "ENOENT lets profile failover continue");
+    assert.deepEqual(new Set(enoentCalls), new Set([
+      queuedFile(downloads, `${job.target}.part`),
+      subtitlePart,
+    ]));
+  } finally {
+    release404.release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed partial removal does not reject removing a download", async () => {
+  const cleanupAttempts: string[] = [];
+  let cleanupDenied = false;
+  const transfer = deferred();
+  const { server, port } = await listen(async (_req, res) => {
+    await transfer.promise;
+    if (!res.destroyed) res.end();
+  });
+  const { directory, queue, downloads } = await tempQueue({
+    unlinkFile: async (file) => {
+      cleanupAttempts.push(file);
+      if (cleanupDenied) throw Object.assign(new Error("denied"), { code: "EACCES" });
+      await unlink(file);
+    },
+  });
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await waitFor(queue, () => queue.get(job.id)?.status === "downloading");
+    await queue.pause(job.id);
+    const internal = (queue as unknown as { jobs: DownloadJob[] }).jobs[0]!;
+    internal.subtitle = { url: "http://127.0.0.1:1/subtitle.srt", lang: "cs" };
+    internal.resolution = {
+      checkedCandidates: 1, audioLanguage: "en", subtitleLanguage: "cs",
+      subtitleSource: "addon", subtitleStatus: "ready",
+    };
+    const target = queuedFile(downloads, internal.target);
+    const videoPart = `${target}.part`;
+    const subtitlePart = path.join(
+      path.dirname(target),
+      `${path.basename(target, path.extname(target))}.cs.vtt.part`,
+    );
+    await mkdir(path.dirname(videoPart), { recursive: true });
+    await writeFile(videoPart, "video");
+    await writeFile(subtitlePart, "subtitle");
+    cleanupDenied = true;
+
+    await queue.remove(job.id);
+    assert.equal(queue.get(job.id), undefined);
+    assert.deepEqual(cleanupAttempts, [videoPart, subtitlePart]);
+    assert.equal(existsSync(videoPart), true);
+    assert.equal(existsSync(subtitlePart), true);
+  } finally {
+    transfer.release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed partial removal does not throw from a non-failover discard", async () => {
+  const cleanupAttempts: string[] = [];
+  let cleanupDenied = false;
+  const transfer = deferred();
+  const { server, port } = await listen(async (_req, res) => {
+    await transfer.promise;
+    if (!res.destroyed) res.end();
+  });
+  const { directory, queue, downloads } = await tempQueue({
+    unlinkFile: async (file) => {
+      cleanupAttempts.push(file);
+      if (cleanupDenied) throw Object.assign(new Error("denied"), { code: "EACCES" });
+      await unlink(file);
+    },
+  });
+  queue.setProviderPriorityResolver(async () => ({
+    status: "noMatch",
+    checkedCandidates: 0,
+    temporaryFailures: 0,
+    truncated: false,
+  }));
+  try {
+    const job = await queue.add("Discard", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await waitFor(queue, () => queue.get(job.id)?.status === "downloading");
+    await queue.pause(job.id);
+    const frozen = (queue as unknown as { jobs: DownloadJob[] }).jobs[0]!;
+    frozen.sourceAdmission = queueAdmission();
+    frozen.source = { type: "movie", videoId: "tt-discard", tried: [], selection: {
+      addonKeys: ["addon:http-only"],
+      sourceStrategy: "priority",
+      audioLanguage: "en",
+      audioMode: "preferred",
+      subtitleMode: "off",
+      targetSettings: defaultDownloadSettings().movie,
+    } };
+    frozen.subtitle = { url: "http://127.0.0.1:1/subtitle.srt", lang: "cs" };
+    frozen.resolution = {
+      checkedCandidates: 1, audioLanguage: "en", subtitleLanguage: "cs",
+      subtitleSource: "addon", subtitleStatus: "ready",
+    };
+    const target = queuedFile(downloads, frozen.target);
+    const videoPart = `${target}.part`;
+    const subtitlePart = path.join(
+      path.dirname(target),
+      `${path.basename(target, path.extname(target))}.cs.vtt.part`,
+    );
+    await mkdir(path.dirname(videoPart), { recursive: true });
+    await writeFile(videoPart, "video");
+    await writeFile(subtitlePart, "subtitle");
+    cleanupDenied = true;
+
+    await queue.resume(job.id);
+    await waitFor(queue, () => queue.get(job.id)?.status === "failed");
+    assert.ok(queue.get(job.id));
+    assert.equal(frozen.target, "");
+    assert.equal(frozen.stream, undefined);
+    assert.equal(frozen.subtitle, undefined);
+    assert.deepEqual(cleanupAttempts, [videoPart, subtitlePart]);
+    assert.equal(existsSync(videoPart), true);
+    assert.equal(existsSync(subtitlePart), true);
+  } finally {
+    transfer.release();
     await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
