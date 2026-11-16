@@ -76,6 +76,13 @@ test("a filename shared with the source path remains readable while the path tok
   assert.equal(safeSourceText("%70rovider.example", { url: "https://provider.example/film.mkv" }), "[redacted]");
   assert.equal(safeSourceText("CDN.%70%72%6F%76%69%64%65%72%2E%65%78%61%6D%70%6C%65:8443",
     { url: "https://provider.example:8443/film.mkv" }), "[redacted]");
+  const seriesFilename = "Zkušební seriál S01E01.mkv";
+  const seriesStream = {
+    url: `file://Zku%C5%A1ebn%C3%AD%20seri%C3%A1l/${encodeURIComponent(seriesFilename)}`,
+    title: seriesFilename,
+    behaviorHints: { filename: seriesFilename },
+  };
+  assert.equal(safeSourceText(seriesFilename, seriesStream), seriesFilename);
   assert.equal(safeSourceText("user-canary", credentialsStream), "[redacted]");
   assert.equal(safeSourceText("password-canary", credentialsStream), "[redacted]");
   assert.equal(safeSourceText("query-canary", credentialsStream), "[redacted]");

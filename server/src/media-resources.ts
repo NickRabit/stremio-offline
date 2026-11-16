@@ -88,8 +88,7 @@ export function safeSourceText(value: unknown, stream: StreamItem): string | und
     try {
       const url = new URL(raw);
       const pathParts = url.pathname.split("/").filter(Boolean);
-      const last = pathParts.length - 1;
-      const displayNames = new Set(decodedForms(stream.behaviorHints?.filename ?? ""));
+      const displayNames = [...decodedForms(stream.behaviorHints?.filename ?? "")];
       const host = url.hostname.replace(/\.+$/, "");
       const unicodeHost = domainToUnicode(host);
       hosts.add(host);
@@ -102,7 +101,8 @@ export function safeSourceText(value: unknown, stream: StreamItem): string | und
       secrets.push(
         ...(url.username ? [url.username] : []),
         ...(url.password ? [url.password] : []),
-        ...pathParts.filter((part, index) => part.length >= 8 && !(index === last && [...decodedForms(part)].some((form) => displayNames.has(form)))),
+        ...pathParts.filter((part) => part.length >= 8
+          && ![...decodedForms(part)].some((form) => displayNames.some((name) => name.includes(form)))),
         ...url.searchParams.values(),
       );
     } catch { /* Invalid source addresses are never returned. */ }
