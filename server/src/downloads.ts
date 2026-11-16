@@ -1249,6 +1249,9 @@ export class DownloadQueue {
     }
     for (const job of this.jobs) {
       if (job.status === "completed") continue;
+      // A job that stopped because its partial could not be removed keeps the selection that
+      // names it; the retry removes the file first and discards the selection itself.
+      if (job.status === "failed" && job.errorKey === "err.downloadCleanupFailed") continue;
       if (isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream) {
         await this.discardProfileSelection(job, false);
         if (job.status !== "paused" && job.status !== "failed") job.status = "queued";
@@ -1424,6 +1427,44 @@ export class DownloadQueue {
     job.libraryId = undefined;
   }
 
+  /** Removes the job's video and subtitle partials; a missing file is success. Returns the
+   *  first failure instead of throwing. */
+  private async removeAbandonedPartials(job: DownloadJob): Promise<unknown | undefined> {
+    const abandoned = this.jobPath(job);
+    const subtitleFiles = this.subtitleFiles(job);
+    const partials = [
+      ...(job.target && abandoned ? [`${abandoned}.part`] : []),
+      ...(subtitleFiles ? [subtitleFiles.partial] : []),
+    ];
+    let cleanupError: unknown;
+    for (const partial of partials) {
+      try {
+        await this.unlinkIfPresent(partial);
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
+    return cleanupError;
+  }
+
+  /** A person's retry can be refused, so it is: discarding the selection while its partial is
+   *  still on disk would hand the next source a new name and orphan the old file. */
+  private async requirePartialsGone(job: DownloadJob): Promise<void> {
+    if (await this.removeAbandonedPartials(job) === undefined) return;
+    throw new AppError(
+      "Could not remove the previous download's temporary files. Check storage access and retry.",
+      "err.downloadCleanupFailed", 409);
+  }
+
+  /** Best-effort removal for callers that cannot stop: the leftover is logged, never thrown. */
+  private async dropPartial(job: DownloadJob, file: string, message: string): Promise<void> {
+    try {
+      await this.unlinkIfPresent(file);
+    } catch (error) {
+      log("WARN", message, { id: job.id, reason: (error as NodeJS.ErrnoException).code });
+    }
+  }
+
   private async discardProfileSelection(job: DownloadJob, markTried: boolean) {
     const abandoned = job.target ? this.jobPath(job) : undefined;
     const subtitleFiles = this.subtitleFiles(job);
@@ -1450,8 +1491,8 @@ export class DownloadQueue {
     job.notBefore = undefined;
     job.debrid = undefined;
     job.debridStartedAt = undefined;
-    if (abandoned) await unlink(`${abandoned}.part`).catch(() => undefined);
-    if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
+    if (abandoned) await this.dropPartial(job, `${abandoned}.part`, "A discarded download left a temporary file behind");
+    if (subtitleFiles) await this.dropPartial(job, subtitleFiles.partial, "A discarded download left a temporary file behind");
   }
 
   private pauseForPermission(job: DownloadJob) {
@@ -1999,7 +2040,10 @@ export class DownloadQueue {
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
     const pausedLibraryId = job.libraryId;
     const storageRoot = this.locate(job)?.root;
-    if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, job.status === "failed");
+    if (job.sourceAdmission && job.stream) {
+      if (job.status === "failed") await this.requirePartialsGone(job);
+      await this.discardProfileSelection(job, job.status === "failed");
+    }
     // Read again here rather than trusted from when the job was paused: the right may have
     // gone while it waited, and the answer is what decides.
     const refusal = await this.ownerRefusal(job);
@@ -2062,7 +2106,10 @@ export class DownloadQueue {
     }
     const pinned = job.sourceAdmission === undefined ? selection?.targetSettings?.libraryId : undefined;
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
-    if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, true);
+    if (job.sourceAdmission && job.stream) {
+      await this.requirePartialsGone(job);
+      await this.discardProfileSelection(job, true);
+    }
     delete job.travelCursor;
     delete job.sourceFallbackAttempts;
     delete job.travelTemporaryFailures;
@@ -2295,9 +2342,9 @@ export class DownloadQueue {
     this.active.get(id)?.abort();
     if (job.status !== "completed" && job.target) {
       const partial = this.jobPath(job);
-      if (partial) await unlink(`${partial}.part`).catch(() => undefined);
+      if (partial) await this.dropPartial(job, `${partial}.part`, "A removed download left a temporary file behind");
       const subtitleFiles = this.subtitleFiles(job);
-      if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
+      if (subtitleFiles) await this.dropPartial(job, subtitleFiles.partial, "A removed download left a temporary file behind");
     }
     this.pump();
   }
@@ -4222,6 +4269,22 @@ export class DownloadQueue {
         if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, false);
         await this.haltForStorage(storageMessage(error));
       } else if (job.sourceAdmission && job.stream) {
+        const cleanupError = await this.removeAbandonedPartials(job);
+        if (cleanupError !== undefined) {
+          job.status = "failed";
+          job.speed = 0;
+          this.setError(
+            job,
+            "Could not remove the previous download's temporary files. Check storage access and retry.",
+            "err.downloadCleanupFailed",
+          );
+          log("ERROR", "Download failed because its previous temporary files could not be removed", {
+            id: job.id,
+            title: job.title,
+            reason: (cleanupError as NodeJS.ErrnoException).code,
+          });
+          return;
+        }
         job.sourceFallbackAttempts = (job.sourceFallbackAttempts ?? 0) + 1;
         if (job.sourceFallbackAttempts >= SOURCE_FALLBACK_ATTEMPT_LIMIT) {
           await this.failProfileSourceFallback(job, true);
@@ -4273,20 +4336,7 @@ export class DownloadQueue {
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, wait);
       } else if (job.source && job.stream?.url) {
-        const abandoned = this.jobPath(job);
-        const subtitleFiles = this.subtitleFiles(job);
-        const partials = [
-          ...(job.target && abandoned ? [`${abandoned}.part`] : []),
-          ...(subtitleFiles ? [subtitleFiles.partial] : []),
-        ];
-        let cleanupError: unknown;
-        for (const partial of partials) {
-          try {
-            await this.unlinkIfPresent(partial);
-          } catch (error) {
-            cleanupError ??= error;
-          }
-        }
+        const cleanupError = await this.removeAbandonedPartials(job);
         if (cleanupError !== undefined) {
           job.status = "failed";
           job.speed = 0;
