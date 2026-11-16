@@ -546,6 +546,10 @@
   <string name="err_profile_unavailable">Esse perfil não está disponível.</string>
   <string name="err_bad_credentials">Nome de usuário ou senha incorretos.</string>
   <string name="err_too_many_attempts">Muitas tentativas fracassadas. Tente novamente em %1$s segundos.</string>
+  <string name="avatar_title">Imagem do perfil</string>
+  <string name="avatar_change">Alterar imagem</string>
+  <string name="avatar_pick">Escolha uma imagem</string>
+  <string name="avatar_use_initial">Usar a inicial</string>
   <string name="person_acting">Atuação</string>
   <string name="person_crew">Direção e roteiro</string>
   <string name="person_empty">O TMDB não lista filmes nem séries desta pessoa.</string>

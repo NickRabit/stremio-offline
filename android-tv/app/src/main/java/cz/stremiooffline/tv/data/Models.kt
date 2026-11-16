@@ -25,6 +25,7 @@ data class MeResponse(
   val canSwitch: Boolean = false,
   val child: Boolean = false,
   val catalogue: Boolean = false,
+  val avatar: AvatarDto? = null,
 )
 
 @Serializable

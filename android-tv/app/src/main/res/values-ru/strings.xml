@@ -570,6 +570,10 @@
   <string name="err_profile_unavailable">Этот профиль недоступен.</string>
   <string name="err_bad_credentials">Неверное имя пользователя или пароль.</string>
   <string name="err_too_many_attempts">Слишком много неудачных попыток. Повторите попытку через %1$s сек.</string>
+  <string name="avatar_title">Изображение профиля</string>
+  <string name="avatar_change">Сменить изображение</string>
+  <string name="avatar_pick">Выберите изображение</string>
+  <string name="avatar_use_initial">Использовать букву</string>
   <string name="person_acting">Актёрские работы</string>
   <string name="person_crew">Режиссура и сценарии</string>
   <string name="person_empty">TMDB не указывает фильмов или сериалов этого человека.</string>

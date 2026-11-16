@@ -5,7 +5,9 @@ import { useDialogViewport } from "./dialog-viewport";
 import { api } from "./api";
 import { t, localeTag, useI18n } from "./i18n";
 import { libraryTypeLabel } from "./LibraryManager";
-import type { Addon, AdminRemoteLibrary, LibraryView, MediaServerProvider, Session, UserAccount, UserPermissions, UserRole } from "./types";
+import { Avatar } from "./Avatar";
+import { AvatarPicker } from "./AvatarPicker";
+import type { Addon, AdminRemoteLibrary, Avatar as AvatarValue, LibraryView, MediaServerProvider, Session, UserAccount, UserPermissions, UserRole } from "./types";
 
 const PROVIDER_KEY: Record<MediaServerProvider, "mediaServer.provider.jellyfin" | "mediaServer.provider.emby"> = {
   jellyfin: "mediaServer.provider.jellyfin",
@@ -113,7 +115,10 @@ export function UserManager({ session, restricted = false, onChanged, onAccounts
     {accounts.map((account) => <article className="library-admin-row user-admin-row" key={account.id}>
       <div className="library-admin-head user-admin-head">
         <div className="library-admin-title user-admin-title">
-          <strong>{account.username}</strong>
+          <div className="user-admin-name">
+            <Avatar name={account.username} avatar={account.avatar} size={40}/>
+            <strong>{account.username}</strong>
+          </div>
           <small className="user-admin-state">
             {roleLabel(account.role)}
             {account.switcher && <i className="library-badge profile-marker" title={t("users.inSwitcherHint")}>{t("users.inSwitcherBadge")}</i>}
@@ -188,6 +193,7 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
   const [pinEditing, setPinEditing] = useState(false);
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState("");
+  const [avatarPicker, setAvatarPicker] = useState(false);
   /** What a new account will be granted the moment it exists. Everything switched on is
    *  ticked to begin with, because an account that can see nothing is a support call rather
    *  than a safe default -- but the ticks are shown and can be cleared, so the grant is the
@@ -212,10 +218,10 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
   const addonKey = (key: string) => `addon:${key}`;
 
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy && !avatarPicker) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+  }, [avatarPicker, busy, onClose]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -258,6 +264,26 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
       setPinError("");
       onNotify(t("profiles.pinRemoved"));
     });
+  };
+  const updateAvatar = async (preset: string | null): Promise<AvatarValue | undefined> => {
+    if (!account) return undefined;
+    const answer = await api.setUserAvatar(account.id, preset);
+    const avatar = answer.avatar ?? undefined;
+    const next = { ...account };
+    if (avatar) next.avatar = avatar;
+    else delete next.avatar;
+    onUpdated(next);
+    return avatar;
+  };
+  const uploadAvatar = async (image: Blob): Promise<AvatarValue | undefined> => {
+    if (!account) return undefined;
+    const answer = await api.uploadUserAvatar(account.id, image);
+    const avatar = answer.avatar ?? undefined;
+    const next = { ...account };
+    if (avatar) next.avatar = avatar;
+    else delete next.avatar;
+    onUpdated(next);
+    return avatar;
   };
   const canApply = () => password.length >= 6 && (!creating || (grantsReady && name.trim().length >= 3));
   const applyPassword = () => void run(async () => {
@@ -398,6 +424,10 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
               </select>
             </label>
           </div>
+          {account && <div className="avatar-setting-row">
+            <Avatar name={account.username} avatar={account.avatar} size={64}/>
+            <button type="button" disabled={busy} onClick={() => setAvatarPicker(true)}>{t("avatar.change")}</button>
+          </div>}
           {account && switchFor(t("users.enabled"), "", !account.disabled, locked, (value) => void patch({ disabled: !value }))}
           {locked && <p className="identify-hint">{t("users.lastAdminHint")}</p>}
           {account && currentRole === "user" && <>
@@ -505,6 +535,14 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
           </div>
         </section>}
       </div>
+      {avatarPicker && account && <AvatarPicker
+        name={account.username}
+        avatar={account.avatar}
+        allowUpload
+        onPreset={updateAvatar}
+        onUpload={uploadAvatar}
+        onClose={() => setAvatarPicker(false)}
+      />}
     </div>
   </div>;
 }

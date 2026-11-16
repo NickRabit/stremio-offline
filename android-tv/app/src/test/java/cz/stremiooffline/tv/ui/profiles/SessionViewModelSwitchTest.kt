@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.ui.profiles
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.ApiClient
+import cz.stremiooffline.tv.data.AvatarDto
 import cz.stremiooffline.tv.data.CookieStore
 import cz.stremiooffline.tv.data.ServerAddress
 import cz.stremiooffline.tv.data.SessionStore
@@ -61,7 +62,11 @@ class SessionViewModelSwitchTest {
     awaitSignedIn(session, "ondra", canSwitch = true)
 
     store.saveSession(address.origin, "new-token")
-    server.enqueue(MockResponse().setBody("""{"username":"jana","language":"en","canSwitch":true}"""))
+    server.enqueue(
+      MockResponse().setBody(
+        """{"username":"jana","language":"en","canSwitch":true,"avatar":{"kind":"preset","id":"fox"}}""",
+      ),
+    )
     server.enqueue(MockResponse().setBody("""{"startView":"catalog"}"""))
     session.switchedProfile()
     val signedIn = awaitSignedIn(session, "jana")
@@ -69,7 +74,26 @@ class SessionViewModelSwitchTest {
     assertEquals("jana", signedIn.username)
     assertEquals(Section.Catalog, signedIn.start)
     assertTrue(signedIn.canSwitch)
+    assertEquals(AvatarDto(kind = "preset", id = "fox"), signedIn.avatar)
     assertEquals("new-token", store.loadSession(address.origin))
+  }
+
+  @Test
+  fun `setAvatar updates the signed-in session`() {
+    server.start()
+    val address = ServerAddress.parse(server.url("/").toString())!!
+    val store = MemoryStore(context)
+    store.serverUrl = address.display
+    val session = SessionViewModel(store, context)
+    val api = ApiClient(address, CookieStore(address.origin, store))
+    server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs"}"""))
+    session.signedIn("ondra", "cs", Section.Home, api)
+    awaitSignedIn(session, "ondra")
+
+    val avatar = AvatarDto(kind = "custom", url = "/api/avatar/usr_1?v=2")
+    session.setAvatar(avatar)
+
+    assertEquals(avatar, (session.state as SessionState.SignedIn).avatar)
   }
 
   @Test
@@ -140,6 +164,28 @@ class SessionViewModelSwitchTest {
   }
 
   @Test
+  fun `a foreground avatar change preserves the session and start section`() {
+    server.start()
+    val address = ServerAddress.parse(server.url("/").toString())!!
+    val store = MemoryStore(context)
+    store.serverUrl = address.display
+    store.saveSession(address.origin, "token")
+    server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs"}"""))
+    server.enqueue(MockResponse().setBody("""{"startView":"library"}"""))
+    val session = SessionViewModel(store, context)
+    val initial = awaitSignedIn(session, "ondra")
+
+    server.enqueue(
+      MockResponse().setBody("""{"username":"ondra","language":"cs","avatar":{"kind":"preset","id":"fox"}}"""),
+    )
+    session.refreshPolicy()
+    val updated = awaitSignedIn(session, "ondra", avatar = AvatarDto(kind = "preset", id = "fox"))
+    assertSame(initial.api, updated.api)
+    assertEquals(Section.Library, updated.start)
+    assertEquals(3, server.requestCount)
+  }
+
+  @Test
   fun `a failed foreground policy read changes nothing`() {
     server.start()
     val address = ServerAddress.parse(server.url("/").toString())!!
@@ -165,11 +211,15 @@ class SessionViewModelSwitchTest {
     session: SessionViewModel,
     username: String,
     canSwitch: Boolean? = null,
+    avatar: AvatarDto? = null,
   ): SessionState.SignedIn {
     val deadline = System.currentTimeMillis() + 5_000
     while (System.currentTimeMillis() < deadline) {
       val state = session.state as? SessionState.SignedIn
-      if (state?.username == username && (canSwitch == null || state.canSwitch == canSwitch)) return state
+      if (state?.username == username &&
+        (canSwitch == null || state.canSwitch == canSwitch) &&
+        (avatar == null || state.avatar == avatar)
+      ) return state
       Thread.sleep(25)
     }
     fail("expected signed in as $username, was ${session.state}")

@@ -18,7 +18,7 @@ export interface UsersDeps extends RouteContext {
   /** Everything one account holds, and its unfinished queue work with the partial files
    *  behind them. A deleted account has nothing to come back to, so its jobs are cancelled
    *  rather than paused. */
-  deleteUserAccess(userId: string): Promise<void>;
+  deleteUserAccess(userId: string, avatar?: UserRecord["avatar"]): Promise<void>;
   /** What an edit took away: switching the account off goes entirely, losing the right to
    *  queue pauses only the queue behind it. */
   permissionsChanged(before: UserRecord, after: UserRecord): Promise<void>;
@@ -315,16 +315,19 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     const actor = actorOf(req);
     const id = String(req.params.id);
     if (id === actor.id) throw new AppError("You cannot delete the account you are signed in with.", "err.cannotDeleteSelf", 409);
-    const before = requireUser(id);
+    requireUser(id);
+    let removed: UserRecord | undefined;
     await store.update((state) => {
+      removed = findUserById(state.users ?? [], id);
+      if (!removed) throw new AppError("That account does not exist.", "err.unknownUser", 404);
       assertAdminRemains(state.users ?? [], { kind: "delete", id });
       state.users = (state.users ?? []).filter((user) => user.id !== id);
       if (state.userData) delete state.userData[id];
       // A left-behind id is a dangling reference, and ids are never reused.
       sweepGrants(state, id);
     });
-    await deleteUserAccess(id);
-    audit("Account deleted", actor, before);
+    await deleteUserAccess(id, removed!.avatar);
+    audit("Account deleted", actor, removed!);
     res.status(204).end();
   }));
 }

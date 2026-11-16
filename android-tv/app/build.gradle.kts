@@ -111,6 +111,7 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.coil.network.okhttp)
   implementation(libs.coil.network.cache.control)
+  implementation(libs.coil.svg)
   coreLibraryDesugaring(libs.desugar.jdk.libs)
 
   debugImplementation(libs.androidx.compose.ui.test.manifest)

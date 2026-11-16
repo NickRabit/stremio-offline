@@ -644,6 +644,7 @@ export interface PlaybackStatus {
 }
 
 export type UserRole = "admin" | "user";
+export type Avatar = { kind: "preset"; id: string } | { kind: "custom"; url: string };
 export interface UserPermissions {
   /** May queue a download onto the server. */
   downloadToLibrary: boolean;
@@ -654,6 +655,7 @@ export interface UserPermissions {
 export interface UserAccount {
   id: string; username: string; role: UserRole; disabled: boolean; mustChangePassword: boolean;
   child?: boolean; catalogue?: boolean;
+  avatar?: Avatar;
   createdAt: string; lastSeenAt?: string; permissions: UserPermissions;
   switcher: boolean; unlock: "none" | "pin" | "password"; hasPin: boolean;
   libraries: number; addons: number; remoteLibraries?: number;
@@ -663,11 +665,13 @@ export interface UserAccount {
 export interface Session {
   username: string; role: UserRole; language?: Locale; mustChangePassword?: boolean;
   child?: boolean; catalogue?: boolean;
+  avatar?: Avatar;
   canSwitch?: boolean; hasPin?: boolean;
 }
 export interface ProfileEntry {
   id: string;
   username: string;
+  avatar?: Avatar;
   unlock: "none" | "pin" | "password";
   current: boolean;
   pinLocked?: boolean;

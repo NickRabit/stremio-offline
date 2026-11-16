@@ -100,6 +100,44 @@ class ApiClientTest {
   }
 
   @Test
+  fun `me and profiles decode preset and custom avatars`() = runTest {
+    server.enqueue(
+      MockResponse().setBody(
+        """{"username":"demo","avatar":{"kind":"preset","id":"fox"}}""",
+      ),
+    )
+    val me = client(start()).me() as MeResult.SignedIn
+    assertEquals(AvatarDto(kind = "preset", id = "fox"), me.avatar)
+
+    server.enqueue(
+      MockResponse().setBody(
+        """{"profiles":[{"id":"usr_1","username":"Jana","unlock":"none","avatar":{"kind":"custom","url":"/api/avatar/usr_1?v=1"}}]}""",
+      ),
+    )
+    val profile = client(start()).profiles().single()
+    assertEquals(AvatarDto(kind = "custom", url = "/api/avatar/usr_1?v=1"), profile.avatar)
+  }
+
+  @Test
+  fun `avatar presets and writes use the account routes`() = runTest {
+    val api = client(start())
+    server.enqueue(MockResponse().setBody("""{"presets":["cat-face","fox"]}"""))
+    assertEquals(listOf("cat-face", "fox"), api.avatarPresets())
+    assertEquals("/api/avatar/presets", server.takeRequest().path)
+
+    server.enqueue(MockResponse().setBody("""{"avatar":{"kind":"preset","id":"fox"}}"""))
+    assertEquals(AvatarDto(kind = "preset", id = "fox"), api.setAvatar("fox"))
+    val preset = server.takeRequest()
+    assertEquals("PATCH", preset.method)
+    assertEquals("/api/auth/avatar", preset.path)
+    assertEquals("""{"preset":"fox"}""", preset.body.readUtf8())
+
+    server.enqueue(MockResponse().setBody("""{"avatar":null}"""))
+    assertNull(api.setAvatar(null))
+    assertEquals("""{"preset":null}""", server.takeRequest().body.readUtf8())
+  }
+
+  @Test
   fun `switchProfile maps 200 401 403 404 and 429`() = runTest {
     val api = client(start())
 

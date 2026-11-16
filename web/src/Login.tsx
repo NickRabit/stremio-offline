@@ -5,6 +5,8 @@ import type { Session } from "./types";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES, useI18n, type Locale } from "./i18n";
 import { PairDeviceDialog } from "./PairDeviceDialog";
+import { Avatar } from "./Avatar";
+import { AvatarPicker } from "./AvatarPicker";
 
 export function LoginScreen({ setup, onSession }: { setup: boolean; onSession: (session: Session) => void }) {
   const { t, locale, setLocale } = useI18n();
@@ -131,6 +133,7 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
   const [pinPassword, setPinPassword] = useState("");
   const [newPin, setNewPin] = useState("");
   const [pinBusy, setPinBusy] = useState(false);
+  const [avatarPicker, setAvatarPicker] = useState(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -177,6 +180,15 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
     finally { setPinBusy(false); }
   };
 
+  const updateAvatar = (value: Awaited<ReturnType<typeof api.setAvatar>>) => {
+    const next = value.avatar ?? undefined;
+    const updated = { ...session };
+    if (next) updated.avatar = next;
+    else delete updated.avatar;
+    onSession(updated);
+    return next;
+  };
+
   return <>
     <form className="panel settings-section" onSubmit={submit}>
       <SettingsSectionHead icon={<KeyRound/>} title={t("auth.sectionTitle")} text={t("auth.signedInAs", { username: session.username })}/>
@@ -199,6 +211,13 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
       </div>
       {!restricted && <small className="setting-note">{t("auth.sessionNote")}</small>}
     </form>
+    {!restricted && <section className="panel settings-section avatar-settings">
+      <SettingsSectionHead icon={<Avatar name={session.username} avatar={session.avatar} size={28}/>} title={t("avatar.title")}/>
+      <div className="avatar-setting-row">
+        <Avatar name={session.username} avatar={session.avatar} size={64}/>
+        <button type="button" onClick={() => setAvatarPicker(true)}>{t("avatar.change")}</button>
+      </div>
+    </section>}
     {!restricted && (session.canSwitch || session.hasPin) && <section className="panel settings-section profile-own-pin">
       <SettingsSectionHead icon={<KeyRound/>} title={t("profiles.ownPin")} text={t("profiles.ownPinHint")}/>
       <SettingControl title={t("auth.currentPassword")} text={t("auth.currentPasswordHint")}>
@@ -216,6 +235,14 @@ export function AccountSettings({ session, onSession, onNotify, onError, restric
         </button>}
       </div>
     </section>}
+    {!restricted && avatarPicker && <AvatarPicker
+      name={session.username}
+      avatar={session.avatar}
+      allowUpload={!session.child}
+      onPreset={async (preset) => updateAvatar(await api.setAvatar(preset))}
+      onUpload={async (image) => updateAvatar(await api.uploadAvatar(image))}
+      onClose={() => setAvatarPicker(false)}
+    />}
     {!restricted && pairing && <PairDeviceDialog session={session} onClose={() => setPairing(false)} onNotify={onNotify}/>}
   </>;
 }

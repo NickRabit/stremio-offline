@@ -76,10 +76,20 @@ class ProfileSwitcherScreenTest {
     onSwitched: () -> Unit = {},
     onNobody: () -> Unit = {},
     onSignOut: (() -> Unit)? = null,
+    onSettings: (() -> Unit)? = null,
+    onChangePicture: (() -> Unit)? = null,
   ): ProfileSwitcherViewModel {
     val viewModel = ProfileSwitcherViewModel(api, onSwitched, onNobody)
     scenario.onActivity { activity ->
-      activity.setContent { ProfileSwitcherScreen(viewModel, onClose = onClose, onSignOut = onSignOut) }
+      activity.setContent {
+        ProfileSwitcherScreen(
+          viewModel,
+          onClose = onClose,
+          onSignOut = onSignOut,
+          onSettings = onSettings,
+          onChangePicture = onChangePicture,
+        )
+      }
     }
     compose.waitForIdle()
     return viewModel
@@ -139,7 +149,7 @@ class ProfileSwitcherScreenTest {
   }
 
   @Test
-  fun `sign out is last and reachable by DOWN without taking initial focus`() {
+  fun `sign out is reachable by DOWN without taking initial focus`() {
     var signedOut = 0
     mount(FakeProfileApi(household), onSignOut = { signedOut += 1 })
     compose.onNodeWithTag(profileTag("usr_jana")).assertIsFocused()
@@ -149,6 +159,57 @@ class ProfileSwitcherScreenTest {
     compose.onNodeWithTag(TagProfilesSignOut).assertIsFocused()
     press(Key.DirectionCenter)
     assertEquals(1, signedOut)
+  }
+
+  @Test
+  fun `Settings and Sign out share a row reached by DOWN then RIGHT`() {
+    var settings = 0
+    var signedOut = 0
+    mount(
+      FakeProfileApi(household),
+      onSignOut = { signedOut += 1 },
+      onSettings = { settings += 1 },
+    )
+    compose.onNodeWithTag(profileTag("usr_jana")).assertIsFocused()
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(TagProfilesSettings).assertIsFocused()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(0, settings)
+    assertEquals(1, signedOut)
+  }
+
+  @Test
+  fun `Settings is absent without a settings action`() {
+    mount(FakeProfileApi(household), onSignOut = {})
+
+    compose.onNodeWithTag(TagProfilesSettings).assertDoesNotExist()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsFocused()
+  }
+
+  @Test
+  fun `Change picture exists only for a child action`() {
+    mount(FakeProfileApi(household), onSignOut = {})
+    compose.onNodeWithTag(TagProfilesPicture).assertDoesNotExist()
+
+    var changes = 0
+    mount(
+      FakeProfileApi(household),
+      onSignOut = {},
+      onChangePicture = { changes += 1 },
+    )
+    // DOWN lands on the first action whichever profile was focused; Sign out is the last one.
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(TagProfilesPicture).assertIsFocused()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagProfilesSignOut).assertIsFocused()
+    press(Key.DirectionLeft)
+    press(Key.DirectionCenter)
+    assertEquals(1, changes)
   }
 
   @Test

@@ -20,12 +20,8 @@ const createAccount = async (page: Page, account: { username: string; password: 
 };
 
 const openProfiles = async (page: Page, mobile: boolean) => {
-  if (mobile) {
-    await page.locator(".nav-more").click();
-    await page.getByRole("menuitem", { name: "Přepnout profil" }).click();
-  } else {
-    await page.locator(".profile-trigger").click();
-  }
+  await page.locator(".account-trigger").click();
+  await expect(page.locator(".account-menu")).toBeVisible();
 };
 
 const openFavorites = async (page: Page, mobile: boolean) => {
@@ -64,17 +60,23 @@ const journey = async (page: Page, mobile: boolean) => {
     await page.goto("/");
     await expect(page.locator("aside.sidebar nav")).toBeVisible();
 
+    const menu = page.getByRole("menu").filter({ has: page.locator(".account-menu-head") });
+    const alphaItem = menu.getByRole("menuitem", { name: `Přepnout na ${alpha.username}` });
     if (mobile) {
-      await openProfiles(page, true);
-      const profiles = page.getByRole("dialog", { name: "Přepnout profil" });
-      await expect(profiles.locator(".profile-row.current")).toContainText(beta.username);
+      await openProfiles(page, mobile);
+      await expect(page.locator(".account-menu-head")).toContainText(beta.username);
+      await alphaItem.click();
     } else {
-      await expect(page.locator(".profile-trigger")).toContainText(beta.username);
-      await page.locator(".profile-trigger").click();
+      await page.locator(".account-trigger").press("Enter");
+      const changePicture = menu.getByRole("menuitem", { name: "Změnit obrázek" });
+      await expect(changePicture).toBeFocused();
+      await expect(alphaItem).toBeVisible();
+      await page.keyboard.press("Home");
+      await expect(alphaItem).toBeFocused();
+      await page.keyboard.press("Enter");
     }
 
     const dialog = page.getByRole("dialog", { name: "Přepnout profil" });
-    await dialog.getByRole("button", { name: /psw-alpha/ }).click();
     await dialog.getByLabel("PIN pro psw-alpha").fill("2468");
     await Promise.all([
       page.waitForNavigation(),
@@ -82,16 +84,16 @@ const journey = async (page: Page, mobile: boolean) => {
     ]);
     await expect(page.locator("aside.sidebar nav")).toBeVisible();
 
-    if (mobile) {
-      await openProfiles(page, true);
-      const profiles = page.getByRole("dialog", { name: "Přepnout profil" });
-      await expect(profiles.locator(".profile-row.current")).toContainText(alpha.username);
-      await expect(profiles.locator(".profile-row.current")).not.toContainText(beta.username);
-      await profiles.locator(".dialog-foot").getByRole("button", { name: "Zavřít" }).click();
-    } else {
-      await expect(page.locator(".profile-trigger")).toContainText(alpha.username);
-      await expect(page.locator(".profile-trigger")).not.toContainText(beta.username);
-    }
+    await openProfiles(page, mobile);
+    await expect(page.locator(".account-menu-head")).toContainText(alpha.username);
+    await expect(page.locator(".account-menu-head")).not.toContainText(beta.username);
+
+    await page.locator(".account-menu").getByRole("menuitem", { name: "Změnit obrázek" }).click();
+    const picker = page.getByRole("dialog", { name: "Vyberte obrázek" });
+    await picker.getByRole("button", { name: "fox", exact: true }).click();
+    await expect(picker.getByRole("button", { name: "fox", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await picker.getByRole("button", { name: "Zavřít" }).first().click();
+    await expect(page.locator('.account-trigger img[src="/avatars/fox.svg"]')).toBeVisible();
 
     await openFavorites(page, mobile);
     await expect(page.locator(".favorites-view")).toBeVisible();
@@ -111,14 +113,14 @@ const journey = async (page: Page, mobile: boolean) => {
   }
 };
 
-test("a PIN switch reloads into the other account's favourites", async ({ page }) => {
+test("the account menu switches profiles and saves a preset picture", async ({ page }) => {
   await journey(page, false);
 });
 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
-  test("a PIN switch from the More menu reloads into the other account's favourites", async ({ page }) => {
+  test("the phone avatar opens the account menu and switches profiles", async ({ page }) => {
     await journey(page, true);
   });
 });

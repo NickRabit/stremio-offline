@@ -12,6 +12,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.ApiClient
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.AvatarDto
 import cz.stremiooffline.tv.data.CookieStore
 import cz.stremiooffline.tv.data.MeResult
 import cz.stremiooffline.tv.data.MemorySessionPersistence
@@ -130,7 +131,7 @@ interface SignInActions {
 
 class SignInViewModel(
   private val store: SessionStore,
-  private val onSignedIn: (String, String?, Section, ApiClient, Boolean, Boolean) -> Unit,
+  private val onSignedIn: (String, String?, Section, ApiClient, Boolean, Boolean, AvatarDto?) -> Unit,
   private val pairingFactory: PairingTransportFactory = defaultPairingTransport,
   private val now: () -> Long = System::currentTimeMillis,
   private val wait: suspend (Long) -> Unit = { delay(it) },
@@ -211,7 +212,15 @@ class SignInViewModel(
         when (val me = runCatching { api.me() }.getOrNull()) {
           MeResult.Setup -> return@launch fail(ApiFailure.NeedsSetup)
           is MeResult.SignedIn -> {
-            succeed(address, me.username, me.language, api, child = me.child, catalogue = me.catalogue)
+            succeed(
+              address,
+              me.username,
+              me.language,
+              api,
+              child = me.child,
+              catalogue = me.catalogue,
+              avatar = me.avatar,
+            )
             return@launch
           }
           null -> Unit
@@ -224,7 +233,15 @@ class SignInViewModel(
         }
         val me = api.me() as? MeResult.SignedIn
           ?: return@launch fail(ApiFailure.SessionExpired)
-        succeed(address, me.username, me.language, api, child = me.child, catalogue = me.catalogue)
+        succeed(
+          address,
+          me.username,
+          me.language,
+          api,
+          child = me.child,
+          catalogue = me.catalogue,
+          avatar = me.avatar,
+        )
       } catch (error: ApiError) {
         fail(error.failure, error.seconds)
       }
@@ -318,6 +335,7 @@ class SignInViewModel(
             currentGeneration,
             child = me.child,
             catalogue = me.catalogue,
+            avatar = me.avatar,
             loadSettings = { transport.settings() },
           ) {
             val token = transport.stagedSession()
@@ -372,6 +390,7 @@ class SignInViewModel(
     expectedGeneration: Long? = null,
     child: Boolean = false,
     catalogue: Boolean = false,
+    avatar: AvatarDto? = null,
     loadSettings: (suspend () -> SettingsResponse)? = null,
     beforeCommit: () -> Boolean = {
       store.serverUrl = address.display
@@ -390,7 +409,7 @@ class SignInViewModel(
     val start = if (child) Section.Home else startSection(settings?.startView)
     val uiLanguage = language ?: settings?.uiLanguage
     state = state.copy(busy = false, pairing = PairingState.Idle)
-    onSignedIn(username, uiLanguage, start, api, child, child && catalogue)
+    onSignedIn(username, uiLanguage, start, api, child, child && catalogue, avatar)
     return true
   }
 
@@ -419,7 +438,7 @@ class SignInViewModel(
   companion object {
     fun factory(
       store: SessionStore,
-      onSignedIn: (String, String?, Section, ApiClient, Boolean, Boolean) -> Unit,
+      onSignedIn: (String, String?, Section, ApiClient, Boolean, Boolean, AvatarDto?) -> Unit,
     ) =
       viewModelFactory { initializer { SignInViewModel(store, onSignedIn) } }
   }

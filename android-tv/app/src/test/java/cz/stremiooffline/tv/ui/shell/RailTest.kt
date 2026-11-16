@@ -13,6 +13,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -20,6 +21,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.R
@@ -40,15 +42,24 @@ class RailTest {
 
   private val context: Context get() = ApplicationProvider.getApplicationContext()
 
-  private fun mount(child: Boolean = false, childCatalogue: Boolean = false) {
+  private fun mount(
+    child: Boolean = false,
+    childCatalogue: Boolean = false,
+    canSwitch: Boolean = false,
+    onSection: (Section) -> Boolean = { false },
+    onAccount: () -> Unit = {},
+  ) {
     compose.setContent {
       ShellScaffold(
         username = "demo",
         start = Section.Home,
         current = Section.Home,
+        onSection = onSection,
         onBackToExit = {},
+        canSwitch = canSwitch,
         child = child,
         childCatalogue = childCatalogue,
+        onAccountLongPress = onAccount,
       ) { requester ->
         Box(
           Modifier
@@ -136,5 +147,47 @@ class RailTest {
     Section.entries.forEach { section ->
       compose.onNodeWithTag(railTag(section)).assertExists()
     }
+  }
+
+  @Test
+  fun `OK on the account opens the switcher when the account can switch`() {
+    var switchers = 0
+    var sections = 0
+    mount(
+      canSwitch = true,
+      onSection = { sections += 1; true },
+      onAccount = { switchers += 1 },
+    )
+
+    compose.onNodeWithTag(railTag(Section.Account)).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(railTag(Section.Account)).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    assertEquals(1, switchers)
+    assertEquals(0, sections)
+  }
+
+  @Test
+  fun `OK on the account opens Settings when the account cannot switch`() {
+    val selected = mutableListOf<Section>()
+    mount(onSection = { selected += it; true })
+
+    compose.onNodeWithTag(railTag(Section.Account)).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(railTag(Section.Account)).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    assertEquals(listOf(Section.Account), selected)
+  }
+
+  @Test
+  fun `a child account opens the switcher as before`() {
+    var switchers = 0
+    mount(child = true, onAccount = { switchers += 1 })
+
+    compose.onNodeWithTag(railTag(Section.Account)).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(railTag(Section.Account)).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    assertEquals(1, switchers)
   }
 }
