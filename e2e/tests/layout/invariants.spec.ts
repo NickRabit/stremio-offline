@@ -234,9 +234,10 @@ test.describe("layout invariants", () => {
     await expect(page.locator("aside.sidebar nav button:visible")).toHaveCount(COMPACT.length);
     await more.click();
     await expect(more).toHaveAttribute("aria-expanded", "true");
-    for (const name of ["Oblíbené", "Pokračovat ve sledování", "Sledované", "Doplňky", "Nastavení", "Statistiky", "Odhlásit"]) {
+    for (const name of ["Oblíbené", "Pokračovat ve sledování", "Sledované", "Doplňky", "Nastavení", "Statistiky"]) {
       await expect(menuItem(page, name), `${name} is in More`).toBeVisible();
     }
+    await expect(menuItem(page, "Odhlásit")).toHaveCount(0);
     // A badge in More asks for attention; the number of installed add-ons never does.
     await expect(page.getByRole("menuitem", { name: "Doplňky", exact: true })).toBeVisible();
     const menu = (await page.getByRole("menu").boundingBox())!;
@@ -248,6 +249,9 @@ test.describe("layout invariants", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
     await expect(more).toBeFocused();
+
+    await page.locator(".account-trigger").click();
+    await expect(menuItem(page, "Odhlásit")).toBeVisible();
   });
 
   test("touch targets meet the minimum size", async ({ page }, testInfo) => {
