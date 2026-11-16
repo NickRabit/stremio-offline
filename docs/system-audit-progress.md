@@ -17,12 +17,15 @@ the primary agent, and shipped in its own pull request.
 - [x] Reproduce subtitle loss from the destination after move replay, including replay twice.
 - [x] Inspect and run existing follow reconciliation tests.
 - [x] Run selected authorization, network, transfer, journal, shutdown and playback regressions.
-- [ ] Complete the queue fault-injection matrix, including profile cleanup and range fallback.
+- [x] Read every partial-file removal in the queue and classify it (table below); fix the profile failover twin of SA-1: #837.
+- [ ] Inject the remaining queue faults (range fallback, HTTP 416, remote restore) instead of reasoning about them.
 - [x] Ship the legacy source-failover cleanup fix: #834 (merged).
 - [x] Design and ship a separate subtitle-journal fix: #835.
 - [ ] Decide whether the unjournaled rename route needs the same sidecar recovery (SA-3).
 - [ ] Decide whether a manual retry should keep the sources already tried (SA-4).
-- [ ] Complete every-route role/ownership/foreign-ID matrix through real middleware.
+- [x] First independent pass over the routes an ordinary user or a child can reach; fix the nested-library gap it found: #838.
+- [ ] Finish the route matrix: remote-library items and artwork, playback and media ownership past the mint, follows, watchlist, profiles and PIN, avatars, pairing, the image route, device-download tickets.
+- [ ] Owner's decision on SA-7 (a child without catalogue browsing and the IMDb lookup behind local copies).
 - [ ] Complete account/grant/library revocation and final filesystem boundary campaign.
 - [ ] Complete playback interruption/resource measurements on supported hardware.
 - [ ] Characterize catalogue/search orchestration before extraction.
@@ -36,6 +39,9 @@ the primary agent, and shipped in its own pull request.
 | SA-2 / P2 | Confirmed, reproduced | `library-actions.ts:TransferStep`, `transferLibraryItem`, `resumeTransfer`. Seed the exact post-video/pre-subtitle crash state: video at New/movie.mkv, subtitle at Old/movie.en.srt, a moving journal record. Replay returns the destination twice, but the subtitle stays at Old and is absent at New. No subtitle deletion was observed; destination playback loses its sidecar. Fix in #835: the journal record names the sidecars and a replay carries them. |
 | SA-3 / P3 | Inspected, not reproduced | `routes/content.ts`, the library rename route. The video is renamed, then each subtitle sidecar, with no journal. A stop between the two leaves the subtitles under the old stem, and nothing replays the rename. Same-filesystem renames keep the window short; no crash was injected. `rerootItem` has a similar window for a loose video, because `RerootStep` records only the two ends. |
 | SA-4 / P3 | Inspected, not reproduced | `DownloadQueue.retry` clears `source.tried` before a lazy job resumes. After #834 a job that failed on cleanup keeps its selected stream, but a later failover may pick a source that had already been abandoned. Raised by the review of #834; no data loss is implied. |
+| SA-5 / P2 | Confirmed, reproduced | `DownloadQueue.download`, the `sourceAdmission` failover branch, and `discardProfileSelection`. The twin of SA-1 for a download chosen by a source profile: with the folder made unwritable after a partial was written, the selection was discarded, the next source finished as `Film (2).mp4` and `Film.mp4.part` stayed. Fix in #837: strict removal before the source is abandoned; the job fails with its selection kept, a retry is refused until the partial can go, and a restart keeps the name. The other callers stay best-effort and now log the leftover. |
+| SA-6 / P1 | Confirmed, reproduced twice | Authorization. An account granted a parent library but not a library nested inside it could browse the nested folders (`GET /api/library/browse`, `/folders`), mint a playable source (`POST /api/library/source`) and queue a download into it, by naming the parent's id with the nested folder in the path. Reproduced by the independent reviewer through the real role middleware and handlers, and again by running the new regressions against the unmodified route modules. Fix in #838: such a key is refused when the account may not see the nested library; whoever may see it keeps the previous behaviour. Residual: identity and gallery answer a hidden nested key differently from an absent folder, which confirms a guessed name without returning content; a symlink planted inside the parent is not detected. |
+| SA-7 / P3 | Reproduced by the reviewer, not treated as a defect yet | `GET /api/local-streams/:type/:id` for a child account with catalogue browsing off: an id that is not an IMDb id makes the server ask a granted addon's metadata endpoint for the IMDb id (`subtitleTarget`), while `/api/streams` and `/api/meta` answer 403. Nothing about the title is returned. Closing it would also hide the child's own local copies of a title bound under an addon-specific id, so it is left for the owner to decide. |
 | Historical H1/H2/H3 | Already fixed in source; not all rerun here | Admissions use the admission/persist machinery; `remove` writes before deleting its partial; unreadable queue/journal tests exist. Do not repeat the October JSON-store findings as current defects. Current queues also support SQLite. A new power-loss/fsync claim was not tested. |
 | Follow reserve/enqueue/adopt replay | Existing implementation verified within harness limits | `follows.test.ts`: reserved-before-queue, queued-before-link, adoption, completion, history removal and repeated restart scenarios. 21 selected tests passed. The queue collaborator is fake in several replay cases: this is not a spawned-process, two-real-store crash campaign. |
 | Missing library root | Existing protection inspected, full campaign not verified | `library.test.ts` contains an incomplete-walk test for a missing root; no evidence here establishes behavior for every unmount/scan/artwork interleaving. Never equate missing with empty. |
@@ -66,6 +72,23 @@ These are source-derived transitions, not a claim that every edge was fault-inje
 | Remove | any → absent | Follow guard before durable row removal; abort/unlink after write. Not a cancelled status | `remove` |
 | Clear completed history | completed → absent | Follow completion guard precedes durable history removal; media is kept | `clearCompleted` |
 | Restart | checking/downloading → queued | Reset speed and notBefore, reprove remote/profile state, resume waiting pollers and pause watchers | `load` |
+
+## Partial-file removals in the queue
+
+Every place `downloads.ts` removes a `.part`, and what a failed removal leads to.
+Only the first three rows were fault-injected; the rest are read from the code.
+
+| Site | Keeps the target? | A failed removal leads to | Status |
+| --- | --- | --- | --- |
+| Legacy lazy failover | No | Orphan partial and a `(2)` name | Fixed, #834 |
+| Profile failover (`sourceAdmission`) | No | The same | Fixed, #837 |
+| `discardProfileSelection` from pause, resume, load, storage halt; `remove` | No | Orphan partial; a later pick takes a `(2)` name | Best-effort by design, now logged (#837) |
+| Fresh rule pick before the transfer | Yes | Could resume onto stale bytes, but target assignment never hands out a name whose partial exists | Not reachable as read; not injected |
+| Source ignored byte ranges | Yes | Next request asks from the full size; a source that ignores ranges restarts from zero with a truncating write, one that honours them answers 416 | Reads as failing closed; not injected |
+| HTTP 416 | Yes | The same request repeats until the retry budget fails the job | Fails closed; not injected |
+| Segment plan no longer matches the file | Yes | The next write truncates | Safe as read |
+| Remote job restored with a segment plan | Yes | Resume from the full size is refused by the server | Not injected |
+| Playlist assembly | Yes | FFmpeg overwrites | Safe as read |
 
 ## Follow and filesystem replay
 
@@ -122,6 +145,22 @@ Second delivery, 2026-11-16, against `main` at `2d988397` (0.7.109):
   full unit gates and a side-port Docker health check passed. The independent
   review found one low-severity recovery hole (a backslash in a file name
   discarded the whole journal record), fixed in the same pull request.
+
+Third delivery, 2026-11-16, against `main` at `c9cb4a90` (0.7.111):
+
+- #837 (SA-5): the regression with real directory permissions fails on
+  unmodified `main` and passes with the fix; `downloads.test.ts` 145 passed.
+  The independent review found that a retry or a restart still discarded the
+  selection; fixed in the same pull request.
+- #838 (SA-6): three route regressions fail against the unmodified route
+  modules and pass with the fix; the real-server visibility suite and the full
+  unit gates pass. The independent review of the fix found a write through a
+  title's own folder and a refusal that differed from an absent folder; both
+  fixed in the same pull request.
+- The reviewer's inventory found these sound: the role gate for unlisted
+  routes, the library grant on browse, carve-outs in the index and shuffle,
+  search everywhere and Home for a child without catalogue, ownership of
+  download jobs, and the library list hiding filesystem roots.
 
 Audit-only work does not change runtime and has no version bump. Build, complete
 unit/e2e and Docker deployment belong to each implementation PR. No production
