@@ -491,6 +491,8 @@ export interface QueueHooks {
    *  A refusal pauses the job instead of failing it, so its place is kept for when the
    *  permission comes back. Absent in a queue built without accounts: nothing gates it. */
   ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
+  /** Whether a destination path may still be written through the named library for its owner. */
+  targetAllowed?: (library: LibraryRecord, relative: string, ownerUserId: string | undefined) => boolean;
   /** A profile admission may skip a bulk download when an acceptable local copy already exists. */
   existingLocalCopy?: (
     input: ExistingLocalCopyAdmission,
@@ -640,6 +642,13 @@ class ChosenLibraryGoneError extends AppError {
   constructor() {
     super("The library chosen for this download is gone.", "err.chosenLibraryGone");
     this.name = "ChosenLibraryGoneError";
+  }
+}
+
+class HiddenNestedTargetError extends AppError {
+  constructor() {
+    super("That folder is not in the library.", "err.targetFolderMissing");
+    this.name = "HiddenNestedTargetError";
   }
 }
 
@@ -892,6 +901,7 @@ export class DownloadQueue {
   private readonly debridTimeoutMs: number;
   private readonly legacyOwnerId?: () => string | undefined;
   private readonly ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
+  private readonly targetAllowed?: QueueHooks["targetAllowed"];
   private readonly existingLocalCopy?: QueueHooks["existingLocalCopy"];
   private readonly existingLocalCopyForQueue?: QueueHooks["existingLocalCopyForQueue"];
   private readonly ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
@@ -948,6 +958,7 @@ export class DownloadQueue {
     this.debridTimeoutMs = hooks.debridTimeoutMs ?? 72 * 60 * 60_000;
     this.legacyOwnerId = hooks.legacyOwnerId;
     this.ownerAllowed = hooks.ownerAllowed;
+    this.targetAllowed = hooks.targetAllowed;
     this.existingLocalCopy = hooks.existingLocalCopy;
     this.existingLocalCopyForQueue = hooks.existingLocalCopyForQueue;
     this.ownerSeesLibrary = hooks.ownerSeesLibrary;
@@ -1358,9 +1369,17 @@ export class DownloadQueue {
   /** The file name is chosen when the download can actually start, so a name picked while a
    *  disk was away cannot collide with what came back. */
   private async ensureTarget(job: DownloadJob, library: LibraryRecord | undefined) {
+    const parsed = job.target ? parseLibraryPath(job.target) : undefined;
+    const targetLibrary = parsed ? this.libraries().find((candidate) => candidate.id === parsed.libraryId) : library;
+    if (targetLibrary && this.targetAllowed
+      && !this.targetAllowed(targetLibrary, parsed?.relative ?? (job.target || job.targetSettings?.subfolder || ""), this.ownerOf(job))) {
+      throw new HiddenNestedTargetError();
+    }
     if (job.target || !job.stream) return;
     const extension = streamExtension(job.stream);
     const { directory, base } = targetPath(job.media, job.title, extension, job.targetSettings ?? defaultDownloadSettings().movie);
+    // The naming rules add folders of their own, so the folder is asked about, not the subfolder.
+    if (library && this.targetAllowed && !this.targetAllowed(library, directory, this.ownerOf(job))) throw new HiddenNestedTargetError();
     job.target = await this.uniqueTarget(library, directory, base, extension);
     // The job list covers this name once the job is in it; a name chosen for a job that is
     // still being admitted stays reserved until that admission releases it.
@@ -4049,6 +4068,9 @@ export class DownloadQueue {
       // writing the file into the download directory, where nobody asked for it.
       const located = this.locate(job);
       if (!located) throw new LibraryUnavailableError(job.libraryId ?? parseLibraryPath(job.target)!.libraryId, true);
+      // The last moment before the disk is touched, on the path the file really takes.
+      const destination = this.libraries().find((item) => item.id === (job.libraryId ?? parseLibraryPath(job.target)?.libraryId));
+      if (destination && this.targetAllowed && !this.targetAllowed(destination, located.relative, this.ownerOf(job))) throw new HiddenNestedTargetError();
       const target = path.join(located.root, located.relative);
       const partial = `${target}.part`;
       await mkdir(path.dirname(target), { recursive: true });

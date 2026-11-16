@@ -248,6 +248,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
   app.post("/api/inspect", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
     const stream = await httpSourceOf(req);
+    if (stream.url?.startsWith("file://")) await libraryTarget(stream.url.slice(7), currentUser(req));
     const remote = isRemoteMediaStream(stream);
     const controller = new AbortController();
     res.once("close", () => { if (!res.writableEnded) controller.abort(); });
@@ -289,6 +290,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     if (req.body.quality !== undefined) options.quality = req.body.quality === null ? null : Number(req.body.quality);
     const owner = ownerOf(req);
     const stream = await httpSourceOf(req);
+    if (stream.url?.startsWith("file://")) await libraryTarget(stream.url.slice(7), currentUser(req));
     const remote = isRemoteMediaStream(stream);
     const controller = new AbortController();
     res.once("close", () => { if (!res.writableEnded) controller.abort(); });

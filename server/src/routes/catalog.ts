@@ -7,7 +7,7 @@ import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
 import { askedSurface, imageSurface, logPoster, noteImage } from "../image-stats.js";
 import { images, type ImageProxy } from "../images.js";
 import { normalizeLanguage } from "../language.js";
-import { libraryFor, libraryVisible, parseLibraryPath, posixBase, type Viewer } from "../libraries.js";
+import { libraryFor, libraryVisible, parseLibraryPath, posixBase, type LibraryRecord, type Viewer } from "../libraries.js";
 import { episodeNumberOf, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import { localCopySummary } from "../library-file-facts.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
@@ -43,6 +43,7 @@ export interface CatalogDeps extends RouteContext {
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer, opts?: { artwork?: boolean; signal?: AbortSignal }): Promise<MetaItem | null>;
   prefsOf(req?: express.Request): UserPrefs;
   libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
+  nestedHidden(library: LibraryRecord, relative: string, viewer: Viewer | undefined): boolean;
   ownerOf(req: express.Request): ResourceOwner;
   trackMedia(owner: ResourceOwner, res: express.Response, resourceId?: string): void;
   libraryKey(value: string): string;
@@ -74,7 +75,7 @@ const malformedPersonRequest = () =>
   new AppError("The request was not understood.", "err.invalidRequest", 400);
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
-  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, ownedTitles, localCopyFacts, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, nestedHidden, ownerOf, trackMedia, libraryKey, localCopies, ownedTitles, localCopyFacts, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
   const imageProxy = deps.imageProxy ?? images;
 
   /** The addons this caller may use, read once per request. A disabled addon is left out
@@ -97,9 +98,9 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
    *  answer for a path nothing is bound to. */
   const boundKey = (raw: string, viewer: Viewer) => {
     const key = libraryKey(raw);
-    const libraryId = parseLibraryPath(key)?.libraryId;
-    const library = libraryId ? libraryFor(store.libraries(), libraryId) : undefined;
-    return library && libraryVisible(library, viewer) ? key : undefined;
+    const parsed = parseLibraryPath(key);
+    const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : undefined;
+    return parsed && library && libraryVisible(library, viewer) && !nestedHidden(library, parsed.relative, viewer) ? key : undefined;
   };
 
   const titleTrailer = (type: string, id: string, language: string, viewer: Viewer, signal?: AbortSignal) => {

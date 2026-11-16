@@ -8,10 +8,10 @@ import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { starredPath } from "../favorite-identity.js";
-import { libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, visibleLibraries, type LibraryRecord } from "../libraries.js";
+import { libraryPath, libraryVisible, parseLibraryPath, relativeWithin, resolveLibraryPath, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { GalleryEntry, LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
-import { isPathWithin, type LibraryEntry } from "../library.js";
+import { isPathWithin, withinLibraryRoot, type LibraryEntry } from "../library.js";
 import type { Store, StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
 import { emptyUserData, type UserRecord } from "../users.js";
 import { registerContentRoutes, type ContentDeps } from "./content.js";
@@ -68,6 +68,7 @@ interface LibraryState {
   gallery?: GalleryEntry[];
   galleryArtwork?: (key: string, index: number) => string | undefined;
   artStamp?: (file: string) => Promise<string>;
+  caseInsensitive?: boolean;
 }
 
 const library = (id: string, root: string, order = 0, visibleTo?: string[]): LibraryRecord => ({
@@ -94,6 +95,22 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
  *  is real: the resolver, the browse walk and the name checks are module singletons. */
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], activeItems: () => string[] = () => [], state: LibraryState = {}): Promise<Harness> => {
   const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
+  const nestedRelative = (library: LibraryRecord, other: LibraryRecord): string | undefined => {
+    const relative = path.relative(path.resolve(library.root), path.resolve(other.root));
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
+    return relative.split(path.sep).join("/");
+  };
+  const carveOutsOf = (library: LibraryRecord) =>
+    new Set(libraries.flatMap((other) => {
+      const relative = other.id === library.id ? undefined : nestedRelative(library, other);
+      return relative ? [relative] : [];
+    }));
+  const nestedHidden = (library: LibraryRecord, relative: string, viewer: Viewer | undefined) =>
+    Boolean(viewer && libraries.some((other) => {
+      if (other.id === library.id || libraryVisible(other, viewer)) return false;
+      const nested = nestedRelative(library, other);
+      return Boolean(nested && withinLibraryRoot(new Set([nested]), relative, state.caseInsensitive));
+    }));
   /** A wire path qualified against the single library, the way production does it. */
   const qualify = (value: string) => {
     const parsed = parseLibraryPath(value);
@@ -113,13 +130,14 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
     attachBrowseMeta: async (item, _language, options) => { calls.browseMetaPrewarm.push(options?.prewarm === true); return { item, backfill: false }; },
-    carveOutsOf: () => new Set(),
+    carveOutsOf,
+    nestedHidden,
     dataOf: () => ({ ...emptyUserData(), favorites: state.favorites ?? [], watchlist: state.watchlist ?? {} }),
     deleteLibraryItem: async (relative) => { calls.deleted.push(relative); },
     fileExists: async (file) => exists(file),
     galleryOf: () => state.gallery ?? [],
     galleryArtwork: (key, index) => state.galleryArtwork?.(key, index),
-    healthOf: (record) => ({ unreachable: false, readOnly: false, realRoot: record.root, caseInsensitive: false }),
+    healthOf: (record) => ({ unreachable: false, readOnly: false, realRoot: record.root, caseInsensitive: state.caseInsensitive ?? false }),
     invalidateLibrary: () => undefined,
     libraryEntries: async (read?: { stale?: boolean }) => { calls.entriesAsked += 1; calls.entriesStale.push(read?.stale === true); return entries; },
     libraryKey: (value) => qualify(value),
@@ -414,6 +432,70 @@ test("browsing into a library the caller may not see answers like one that does 
 
   assert.equal(invisible.status, missing.status);
   assert.deepEqual(await invisible.json(), await missing.json(), "the two are indistinguishable");
+});
+
+test("browse and folders answer a nested library's parent-spelled key like a missing path", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Nested/Season 1/secret.mkv");
+  await put(root, "Public/Visible.mkv");
+  const libraries = [
+    library("lib_00000001", root, 0, [BOB]),
+    library("lib_00000002", path.join(root, "Nested"), 1),
+  ];
+  const harness = await mount(libraries, [], () => [], {
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const browse = await api(harness.base, `/api/library/browse?path=${encodeURIComponent("lib_00000001/Nested/Season 1")}`, { user: BOB });
+  const missingBrowse = await api(harness.base, `/api/library/browse?path=${encodeURIComponent("lib_00000001/Missing/Season 1")}`, { user: BOB });
+  assert.equal(browse.status, missingBrowse.status);
+  assert.deepEqual({ ...await browse.json() as object, path: "" }, { ...await missingBrowse.json() as object, path: "" });
+
+  const folders = await api(harness.base, `/api/library/folders?path=${encodeURIComponent("lib_00000001/Nested")}`, { user: BOB });
+  const missingFolders = await api(harness.base, `/api/library/folders?path=${encodeURIComponent("lib_00000001/Missing")}`, { user: BOB });
+  assert.equal(folders.status, missingFolders.status);
+  assert.deepEqual({ ...await folders.json() as object, path: "" }, { ...await missingFolders.json() as object, path: "" });
+
+  const ordinary = await api(harness.base, `/api/library/browse?path=${encodeURIComponent("lib_00000001/Public")}`, { user: BOB });
+  assert.equal(ordinary.status, 200);
+  assert.deepEqual((await ordinary.json() as { items: Array<{ path: string }> }).items.map((item) => item.path), ["lib_00000001/Public/Visible.mkv"]);
+});
+
+test("the parent-spelled carved-out key remains refused when the volume folds case", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Nested/Season 1/secret.mkv");
+  const libraries = [
+    library("lib_00000001", root, 0, [BOB]),
+    library("lib_00000002", path.join(root, "Nested"), 1),
+  ];
+  const harness = await mount(libraries, [], () => [], {
+    caseInsensitive: true,
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const browse = await api(harness.base, `/api/library/browse?path=${encodeURIComponent("lib_00000001/NESTED/Season 1")}`, { user: BOB });
+  const missingBrowse = await api(harness.base, `/api/library/browse?path=${encodeURIComponent("lib_00000001/Missing/Season 1")}`, { user: BOB });
+  assert.equal(browse.status, missingBrowse.status);
+  assert.deepEqual({ ...await browse.json() as object, path: "" }, { ...await missingBrowse.json() as object, path: "" });
+});
+
+test("a viewer granted both libraries browses the nested tree through the parent id", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Nested/Season 1/secret.mkv");
+  const libraries = [
+    library("lib_00000001", root, 0, [BOB]),
+    library("lib_00000002", path.join(root, "Nested"), 1, [BOB]),
+  ];
+  const harness = await mount(libraries);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const browse = await api(harness.base, `/api/library/browse?path=${encodeURIComponent("lib_00000001/Nested/Season 1")}`, { user: BOB });
+  assert.equal(browse.status, 200);
+  assert.deepEqual((await browse.json() as { items: Array<{ path: string }> }).items.map((item) => item.path),
+    ["lib_00000001/Nested/Season 1/secret.mkv"]);
+
+  const folders = await api(harness.base, `/api/library/folders?path=${encodeURIComponent("lib_00000001/Nested")}`, { user: BOB });
+  assert.equal(folders.status, 200);
 });
 
 test("GET /api/library/thumb answers 404 for a path in a library the caller may not see", async (t) => {

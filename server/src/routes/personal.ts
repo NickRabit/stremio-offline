@@ -39,6 +39,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 export interface PersonalDeps extends RouteContext {
   attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string): Promise<{ item: T; backfill: boolean }>;
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer, opts?: { artwork?: boolean; signal?: AbortSignal }): Promise<MetaItem | null>;
+  nestedHidden(library: LibraryRecord, relative: string, viewer: Viewer | undefined): boolean;
   dataOf(req: express.Request): UserData;
   describeLibraryPath(key: string, read?: { stale?: boolean }): Promise<BrowseItem | undefined>;
   libraryKey(value: string): string;
@@ -276,7 +277,7 @@ const metadataArtwork = (meta: MetaItem | null): TitleArtwork => {
 };
 
 export function registerPersonalRoutes(app: express.Application, deps: PersonalDeps): PersonalApi {
-  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls, thumbUrl, updateData, updateDataLater, updateDataUnlessUnchanged, watchlistOf, wirePath, remotePersonal, authorityOf } = deps;
+  const { store, currentUser, attachBrowseMeta, cachedMeta, nestedHidden, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls, thumbUrl, updateData, updateDataLater, updateDataUnlessUnchanged, watchlistOf, wirePath, remotePersonal, authorityOf } = deps;
   const titleArtworks = new WeakMap<express.Request, {
     titles: Set<string>;
     metadata: Map<string, Promise<TitleArtwork>>;
@@ -340,8 +341,13 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
    *  visible sends it on to be described, and the describing falls back to whichever library
    *  is left -- so the row comes back showing a file from a library this account may never
    *  have been granted. */
-  const pathVisible = (key: string, viewer: Viewer, libraries: LibraryRecord[]) =>
-    libraryPathVisible(key, viewer, libraries);
+  const pathVisible = (key: string, viewer: Viewer, libraries: LibraryRecord[]) => {
+    if (!libraryPathVisible(key, viewer, libraries)) return false;
+    const parsed = parseLibraryPath(key);
+    if (!parsed) return libraries.length !== 1 || !nestedHidden(libraries[0]!, key, viewer);
+    const library = libraryFor(libraries, parsed.libraryId);
+    return Boolean(library && !nestedHidden(library, parsed.relative, viewer));
+  };
 
   // Starred catalogue titles. The key is type and id, because no file has to exist for them.
   app.get("/api/watchlist", (req, res) => {
@@ -458,9 +464,10 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     title?: ReturnType<typeof titleProgressKey>;
     listed?: { season?: number | null; episode?: number | null };
   };
-  const resolveProgressKey = async (stored: string): Promise<ResolvedProgressKey> => {
+  const resolveProgressKey = async (stored: string, req: express.Request): Promise<ResolvedProgressKey> => {
     if (!stored.startsWith("file:")) return { key: stored };
     const file = stored.slice(5);
+    if (!pathVisible(file, viewerOf(currentUser(req)), store.libraries())) return { key: stored, file };
     // A key naming a library that is gone cannot be described; it stays its own file key, so the
     // row stored under it is still read, and removed, as it was before this change.
     const item = await describeLibraryPath(file, { stale: true }).catch(() => undefined);
@@ -633,7 +640,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const raw = String(req.params.key);
     if (isRemoteProgressKey(raw)) return void res.json(null);
     const all = progressOf(dataOf(req));
-    const resolved = await resolveProgressKey(storedProgressKey(raw));
+    const resolved = await resolveProgressKey(storedProgressKey(raw), req);
     const units = await libraryUnits();
     // Every row that stands for the same title is a candidate: the title's own, the legacy
     // `file:` rows resolving to it, and the file this key names. The newest of them answers.
@@ -678,7 +685,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     if (isRemoteProgressKey(sent)) throw new AppError("The item was not found.", "err.itemNotFound", 404);
     // A bound file is stored as its title, so one title keeps one position. The rows the write
     // replaces are read before the mutator, which stays synchronous.
-    const resolved = await resolveProgressKey(sent);
+    const resolved = await resolveProgressKey(sent, req);
     const key = resolved.key;
     const records = metaStore.qualifiedMeta();
     const units = await libraryUnits();
@@ -778,7 +785,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   }));
   app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
     if (isRemoteProgressKey(String(req.params.key))) return void res.status(404).end();
-    const resolved = await resolveProgressKey(storedProgressKey(String(req.params.key)));
+    const resolved = await resolveProgressKey(storedProgressKey(String(req.params.key)), req);
     const units = await libraryUnits();
     const keys = standingKeys(resolved, progressOf(dataOf(req)), metaStore.qualifiedMeta(), units);
     await updateData(req, (data) => {
@@ -820,7 +827,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const records = metaStore.qualifiedMeta();
     const units = await libraryUnits();
     const all = progressOf(dataOf(req));
-    const resolved = await Promise.all(sent.map((key) => resolveProgressKey(key)));
+    const resolved = await Promise.all(sent.map((key) => resolveProgressKey(key, req)));
     const keys = [...new Set(resolved.flatMap((entry) => standingKeys(entry, all, records, units)))];
     await updateData(req, (data) => {
       const stored = { ...progressOf(data) };
@@ -969,7 +976,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const record = records[key];
     // A starred file draws the position of the title it is bound to, wherever that row sits.
     const all = progressOf(dataOf(req));
-    const resolved = await resolveProgressKey(`file:${key}`);
+    const resolved = await resolveProgressKey(`file:${key}`, req);
     const units = await libraryUnits();
     const rows = standingKeys(resolved, all, records, units)
       .filter((stored) => all[stored] !== undefined)

@@ -30,6 +30,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 export interface ContentDeps extends RouteContext {
   attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string, options?: { prewarm?: boolean }): Promise<{ item: T; backfill: boolean }>;
   carveOutsOf(library: LibraryRecord): Set<string>;
+  nestedHidden(library: LibraryRecord, relative: string, viewer: Viewer | undefined): boolean;
   dataOf(req: express.Request): UserData;
   deleteLibraryItem(relative: string): Promise<void>;
   fileExists(file: string): Promise<boolean>;
@@ -75,7 +76,7 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
   const fileSnaps = deps.fileSnaps ?? new FileSnapCache();
   const mosaics = deps.mosaics ?? new MosaicCache(path.join(os.tmpdir(), `mosaics-${randomBytes(6).toString("hex")}`));
 
@@ -127,9 +128,9 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
   /** Whether a key names a library the viewer may see. A key in an invisible library is
    *  refused wherever a key to a missing one is, so the two cannot be told apart. */
   const keyVisible = (key: string, viewer: Viewer) => {
-    const libraryId = parseLibraryPath(key)?.libraryId;
-    const library = libraryId ? libraryFor(store.libraries(), libraryId) : undefined;
-    return Boolean(library && libraryVisible(library, viewer));
+    const parsed = parseLibraryPath(key);
+    const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : undefined;
+    return Boolean(parsed && library && libraryVisible(library, viewer) && !nestedHidden(library, parsed.relative, viewer));
   };
 
   app.get("/api/library/browse", asyncRoute(async (req, res) => {
@@ -157,6 +158,9 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     }
     const resolved = requested ? await resolveLibraryPath(libraries, requested) : undefined;
     if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
+    // A folder of a nested library this account was not given reads as a folder that is not
+    // there: an error here would tell a guessed name apart from a wrong one.
+    const hidden = Boolean(resolved && nestedHidden(resolved.library, resolved.relative, viewer));
     // The root of a setup whose one library this account was not given: an empty library, the
     // answer a setup with no library at all gives, rather than an error on every visit.
     if (!libraries.length) { res.json({ path: "", items: [], total: 0, pending: false }); return; }
@@ -183,7 +187,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const markers = markersOf(data);
     const relative = resolved?.relative ?? "";
     const looseEpisodes = seriesTyped || unitFor(libraryPath(library.id, relative), units)?.kind === "series";
-    const result = await browseDirectory(library.root, resolved?.relative ?? "", String(req.query.query ?? ""),
+    const result = hidden ? { path: relative, items: [], total: 0 } : await browseDirectory(library.root, relative, String(req.query.query ?? ""),
       Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), onlyPaths,
       carveOutsOf(library), looseEpisodes);
     // Missing thumbnails are produced in the background; the client asks for the page again shortly.
@@ -351,7 +355,9 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const resolved = await resolveLibraryPath(walkable, relative);
     if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
     markBrowsed(resolved.library);
-    const folders = await listFolders(resolved.library.root, resolved.relative, carveOutsOf(resolved.library));
+    const folders = nestedHidden(resolved.library, resolved.relative, viewer)
+      ? []
+      : await listFolders(resolved.library.root, resolved.relative, carveOutsOf(resolved.library));
     // A move destination travels back through resolveLibraryPath, so it is qualified too.
     res.json({ path: relative, folders: folders.map((folder) => ({ ...folder, path: wirePath(libraryPath(resolved.library.id, folder.path)) })) });
   }));
@@ -395,7 +401,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const viewer = viewerOf(currentUser(req));
     const shape = mosaicShape(req.query.shape);
     const resolved = await resolveLibraryPath(store.libraries(), String(req.query.key ?? ""));
-    if (!resolved || !libraryVisible(resolved.library, viewer)) return void res.status(404).end();
+    if (!resolved || !libraryVisible(resolved.library, viewer) || nestedHidden(resolved.library, resolved.relative, viewer)) return void res.status(404).end();
     // The library's own tile draws one picture per film it stands for, whichever kind that film
     // is: a series library shows its series, the way its listing has always chosen them. A folder
     // inside it keeps the folder rule below.
@@ -465,7 +471,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const keyOf = async (value: unknown) => {
       if (!value) return undefined;
       const resolved = await resolveLibraryPath(store.libraries(), String(value));
-      return resolved && libraryVisible(resolved.library, viewer) ? resolved.key : undefined;
+      return resolved && libraryVisible(resolved.library, viewer) && !nestedHidden(resolved.library, resolved.relative, viewer) ? resolved.key : undefined;
     };
     const filePath = await keyOf(req.query.path);
     const dirPath = await keyOf(req.query.dir);

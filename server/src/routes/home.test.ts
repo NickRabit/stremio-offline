@@ -177,6 +177,7 @@ const mount = async (options: {
   };
   const personalDeps: PersonalDeps = {
     store: { libraries: () => libraries, addons: () => addons, settings: () => ({ ...instancePrefs }) } as unknown as Store,
+    nestedHidden: () => false,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: (req) => {

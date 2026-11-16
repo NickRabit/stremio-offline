@@ -9,8 +9,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
-import { relativeWithin, resolveLibraryPath, type LibraryRecord } from "../libraries.js";
-import { isPathWithin } from "../library.js";
+import { libraryVisible, relativeWithin, resolveLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
+import { isPathWithin, withinLibraryRoot } from "../library.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryCandidateSource } from "../library-candidates.js";
 import type { LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
@@ -18,7 +18,7 @@ import type { TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { LibraryScan } from "../library-scan.js";
-import { mediaResources, type ResourceOwner } from "../media-resources.js";
+import { mediaResources, ResourceError, type ResourceOwner } from "../media-resources.js";
 import type { Store, UserPrefs } from "../store.js";
 import type { UserRecord } from "../users.js";
 import { registerCurateRoutes, type CurateDeps } from "./curate.js";
@@ -54,9 +54,9 @@ interface Harness {
   close(): Promise<void>;
 }
 
-const library = (id: string, root: string, order = 0): LibraryRecord => ({
+const library = (id: string, root: string, order = 0, visibleTo?: string[]): LibraryRecord => ({
   id, name: `Library ${id}`, type: "mixed", root, enabled: true, order,
-  addedAt: "2024-01-01T00:00:00.000Z", writeArtwork: false,
+  addedAt: "2024-01-01T00:00:00.000Z", writeArtwork: false, ...(visibleTo ? { visibleTo } : {}),
 });
 
 const put = async (root: string, relative: string) => {
@@ -85,8 +85,20 @@ const mount = async (options: {
   searches?: Array<{ query: string; kind: string; year: number | undefined }>;
   activeItems?: () => string[];
   onMetaUpdate?: (file: { suggestions: Record<string, LibrarySuggestion> }) => void;
+  caseInsensitive?: boolean;
 } = {}): Promise<Harness> => {
   const libraries = options.libraries ?? [library("lib_00000001", "/media/films")];
+  const nestedRelative = (parent: LibraryRecord, other: LibraryRecord): string | undefined => {
+    const relative = path.relative(path.resolve(parent.root), path.resolve(other.root));
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
+    return relative.split(path.sep).join("/");
+  };
+  const nestedHidden = (parent: LibraryRecord, relative: string, viewer: Viewer | undefined) =>
+    Boolean(viewer && libraries.some((other) => {
+      if (other.id === parent.id || libraryVisible(other, viewer)) return false;
+      const nested = nestedRelative(parent, other);
+      return Boolean(nested && withinLibraryRoot(new Set([nested]), relative, options.caseInsensitive));
+    }));
   const activeItems = options.activeItems ?? (() => []);
   const calls: Calls = { cancelled: [], enqueued: [], invalidated: 0, matched: [], remembered: 0, unitWalks: 0 };
   const pendingOps = new Set(["job_1", "job_2"]);
@@ -122,6 +134,7 @@ const mount = async (options: {
   };
   const deps: CurateDeps = {
     candidates,
+    nestedHidden,
     store: { libraries: () => libraries, users: () => users, settings: () => ({ tmdbApiKey: undefined }) } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
@@ -152,7 +165,13 @@ const mount = async (options: {
       return undefined;
     },
     libraryScan: scan,
-    libraryTarget: async (value: string) => (await resolveLibraryPath(libraries, value))?.absolute ?? value,
+    libraryTarget: async (value: string, viewer: Viewer | undefined) => {
+      const resolved = await resolveLibraryPath(libraries, value);
+      if (!resolved || nestedHidden(resolved.library, resolved.relative, viewer)) {
+        throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+      }
+      return resolved.absolute;
+    },
     libraryUnits: async () => options.units ?? [],
     matchLibraryItem: async (body, language) => {
       calls.matched.push({ body: body as Record<string, unknown>, language });
@@ -564,6 +583,66 @@ test("GET /api/library/identity hides a library an ordinary user cannot see", as
 
   assert.equal(response.status, 400);
   assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.invalidPath");
+});
+
+test("identity and source refuse a nested library's parent-spelled key like a missing path", async (t) => {
+  const root = await makeRoot("stremio-curate-nested-");
+  await put(root, "Nested/Season 1/secret.mkv");
+  const parent = library("lib_00000001", root, 0, [BOB]);
+  const nested = library("lib_00000002", path.join(root, "Nested"), 1);
+  const harness = await mount({
+    as: users[1],
+    libraries: [parent, nested],
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const key = `${parent.id}/Nested/Season 1/secret.mkv`;
+  const missingKey = "lib_00000099/Season 1/secret.mkv";
+  const identity = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(key)}`);
+  const missingIdentity = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(missingKey)}`);
+  assert.equal(identity.status, missingIdentity.status);
+  assert.deepEqual(await identity.json(), await missingIdentity.json());
+
+  const source = await api(harness.base, "/api/library/source", { method: "POST", body: { path: key } });
+  const missingSource = await api(harness.base, "/api/library/source", { method: "POST", body: { path: missingKey } });
+  assert.equal(source.status, missingSource.status);
+  assert.deepEqual(await source.json(), await missingSource.json());
+});
+
+test("identity follows the volume's case folding for a carve-out", async (t) => {
+  const root = await makeRoot("stremio-curate-nested-case-");
+  await put(root, "Nested/Season 1/secret.mkv");
+  const parent = library("lib_00000001", root, 0, [BOB]);
+  const nested = library("lib_00000002", path.join(root, "Nested"), 1);
+  const harness = await mount({
+    as: users[1],
+    libraries: [parent, nested],
+    caseInsensitive: true,
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const key = `${parent.id}/NESTED/Season 1/secret.mkv`;
+  const missingKey = "lib_00000099/Season 1/secret.mkv";
+  const identity = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(key)}`);
+  const missingIdentity = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(missingKey)}`);
+  assert.equal(identity.status, missingIdentity.status);
+  assert.deepEqual(await identity.json(), await missingIdentity.json());
+});
+
+test("a viewer granted both libraries reads identity and source through the parent id", async (t) => {
+  const root = await makeRoot("stremio-curate-nested-visible-");
+  await put(root, "Nested/Season 1/secret.mkv");
+  const parent = library("lib_00000001", root, 0, [BOB]);
+  const nested = library("lib_00000002", path.join(root, "Nested"), 1, [BOB]);
+  const harness = await mount({ as: users[1], libraries: [parent, nested] });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const key = `${parent.id}/Nested/Season 1/secret.mkv`;
+  const identity = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(key)}`);
+  assert.equal(identity.status, 200);
+
+  const source = await api(harness.base, "/api/library/source", { method: "POST", body: { path: key } });
+  assert.equal(source.status, 200);
 });
 
 test("GET /api/library/identity does not expose a suggestion to an ordinary user", async (t) => {

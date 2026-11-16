@@ -4,7 +4,7 @@ import { readdir, stat } from "node:fs/promises";
 import { AppError } from "../errors.js";
 import { assertStillAdmin } from "../roles.js";
 import { normalizeLanguage } from "../language.js";
-import { libraryFor, libraryVisible, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
+import { libraryFor, libraryVisible, parseLibraryPath, posixBase, resolveLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryCandidateSource } from "../library-candidates.js";
 import { episodeNumberOf, knownEntryForUnit, knownTitleOf, lookupSkipped, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, suggestionForUnit, unitFor, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
@@ -37,6 +37,7 @@ export interface CurateSuggestionRow {
 export interface CurateDeps extends RouteContext {
   /** The trusted metadata providers behind the manual search and the identity it binds. */
   candidates: LibraryCandidateSource;
+  nestedHidden(library: LibraryRecord, relative: string, viewer: Viewer | undefined): boolean;
   invalidateLibrary(): void;
   libraryAutoScan: LibraryAutoScan;
   libraryOps: LibraryOps;
@@ -57,7 +58,7 @@ export interface CurateDeps extends RouteContext {
 }
 
 export function registerCurateRoutes(app: express.Application, deps: CurateDeps): { suggestionRows(libraryId?: string): Promise<CurateSuggestionRow[]> } {
-  const { candidates, store, currentUser, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage, refreshLibraryHealth, requireAccess, scheduleMetaBackfill, wirePath } = deps;
+  const { candidates, store, currentUser, nestedHidden, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage, refreshLibraryHealth, requireAccess, scheduleMetaBackfill, wirePath } = deps;
   const suggestionView = (suggestion: NonNullable<ReturnType<typeof suggestionFor>>) => ({
     ...suggestion,
     ...(suggestion.poster ? { poster: proxyImage(suggestion.poster) } : {}),
@@ -67,7 +68,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const viewer = viewerOf(currentUser(req));
     const relative = String(req.query.path ?? "").trim();
     const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
-    if (!resolved || !libraryVisible(resolved.library, viewer)) throw new AppError("Invalid path.", "err.invalidPath");
+    if (!resolved || !libraryVisible(resolved.library, viewer) || nestedHidden(resolved.library, resolved.relative, viewer)) throw new AppError("Invalid path.", "err.invalidPath");
     // The unit the clicked row belongs to, and the title that unit is read as: a folder named
     // for a film keeps the folder title, a loose film in a collection keeps its own name.
     const unit = unitFor(resolved.key, await libraryUnits());
@@ -140,6 +141,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const requested = String(req.query.path ?? "").trim();
     const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
     if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
+    if (resolved && nestedHidden(resolved.library, resolved.relative, viewerOf(currentUser(req)))) throw new AppError("Invalid path.", "err.invalidPath");
     if (resolved) requireAccess(req, { libraryId: resolved.library.id });
     const query = String(req.query.query ?? "").trim();
     const kind = String(req.query.type ?? "") === "series" ? "series" : "movie";

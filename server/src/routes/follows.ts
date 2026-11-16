@@ -19,6 +19,7 @@ export interface FollowDeps extends RouteContext {
   follows: FollowService;
   followStore: FollowStore;
   prefsOf(req?: express.Request): UserPrefs;
+  nestedHidden(library: LibraryRecord, relative: string, viewer: Viewer | undefined): boolean;
   markersOf(data: UserData): Record<string, WatchedMarker>;
   dataOf(req: express.Request): UserData;
   updateData(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
@@ -187,8 +188,8 @@ export function calendarFeedHandler(deps: CalendarFeedDeps): express.RequestHand
 }
 
 export function registerFollowRoutes(app: express.Application, deps: FollowDeps): void {
-  const { store, followStore, follows, currentUser, dataOf, updateData, markersOf, posterOf, cachedMeta, prefsOf, defaultDownloadLibrary } = deps;
-  const parseSelection = createSelectionParser({ store, currentUser, cachedMeta, prefsOf, defaultDownloadLibrary });
+  const { store, followStore, follows, currentUser, dataOf, updateData, nestedHidden, markersOf, posterOf, cachedMeta, prefsOf, defaultDownloadLibrary } = deps;
+  const parseSelection = createSelectionParser({ store, currentUser, cachedMeta, nestedHidden, prefsOf, defaultDownloadLibrary });
 
   /** The follow the caller owns, or nothing. A follow owned by somebody else answers
    *  exactly like one that does not exist, so the route never confirms it is there. */
@@ -215,7 +216,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
     const allowed = new Set(allowedAddons(store.addons(), viewer).filter((addon) => addon.enabled && addon.role !== "catalog").map((addon) => addon.key));
     const libraries = store.libraries();
     const { selection, target, ...rest } = stored;
-    const targetVisible = target && libraries.some((library) => library.id === target.libraryId && libraryVisible(library, viewer));
+    const targetVisible = target && libraries.some((library) =>
+      library.id === target.libraryId && libraryVisible(library, viewer) && !nestedHidden(library, target.subfolder ?? "", viewer));
     return {
       ...rest,
       ...(selection ? { selection: { ...selection, addonKeys: selection.addonKeys.filter((key) => allowed.has(key)) } } : {}),

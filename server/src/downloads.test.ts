@@ -243,6 +243,51 @@ test("flushing persists queue state without stopping an active transfer", async 
   }
 });
 
+test("the queue refuses a destination that became another library's carve-out", async () => {
+  const { directory, queue } = await tempQueue({
+    ownerAllowed: () => false,
+    targetAllowed: (library, relative, ownerUserId) =>
+      library.id !== LIBRARY_ID || relative !== "Nested" || ownerUserId !== "hidden-owner",
+  });
+  try {
+    await assert.rejects(
+      queue.add(
+        "Film",
+        { url: "http://127.0.0.1:1/film.mp4" },
+        undefined,
+        { subfolder: "Nested", layout: "structured", libraryId: LIBRARY_ID },
+        "hidden-owner",
+      ),
+      (error: unknown) => error instanceof AppError && error.messageKey === "err.targetFolderMissing",
+    );
+    const visible = await queue.add(
+      "Film",
+      { url: "http://127.0.0.1:1/film2.mp4" },
+      undefined,
+      { subfolder: "Nested", layout: "structured", libraryId: LIBRARY_ID },
+      "visible-owner",
+    );
+    assert.equal(visible.status, "queued");
+    assert.deepEqual(queue.list().map((job) => job.id), [visible.id]);
+    // The naming rules put a film in a folder of its own name: a title spelled like the nested
+    // library's folder lands inside it without any subfolder being asked for.
+    await assert.rejects(
+      queue.add(
+        "Nested",
+        { url: "http://127.0.0.1:1/film3.mp4" },
+        undefined,
+        { subfolder: "", layout: "structured", libraryId: LIBRARY_ID },
+        "hidden-owner",
+      ),
+      (error: unknown) => error instanceof AppError && error.messageKey === "err.targetFolderMissing",
+    );
+    assert.deepEqual(queue.list().map((job) => job.id), [visible.id]);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("freezing persistence suppresses a progress save", async (t) => {
   const { directory, queue } = await tempQueue({ ownerAllowed: () => false });
   try {

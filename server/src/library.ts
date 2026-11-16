@@ -268,6 +268,20 @@ export function holdsLibraryRoot(
   return false;
 }
 
+/** True when `relative` is another library's root or sits inside one. Folded like
+ *  `holdsLibraryRoot`, and for the same reason: an unknown fold folds. */
+export function withinLibraryRoot(
+  carveOuts: ReadonlySet<string> | undefined,
+  relative: string,
+  caseInsensitive?: boolean,
+): boolean {
+  if (!relative || !carveOuts?.size) return false;
+  const fold = caseInsensitive ?? true;
+  const item = foldPath(relative, fold);
+  for (const carveOut of carveOuts) if (isPathWithin(item, foldPath(carveOut, fold))) return true;
+  return false;
+}
+
 /** Catalogue titles nothing in the library points at once the path is deleted.
  * What another path still holds -- a series split across two folders, say -- stays:
  * deleting one of them does not mean the title left the library. */

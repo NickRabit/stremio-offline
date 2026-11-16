@@ -59,7 +59,7 @@ import { apiRequestLimiter, authRequestLimiter, isMediaTransferRequest, pageRequ
 import { WalkCache } from "./walk-cache.js";
 import { FreshValueCache } from "./value-cache.js";
 import { killRunningMedia } from "./media-tools.js";
-import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, listVideos, listVideosChecked, pageFiles, summarize, buildLibrary, type FoundFile, type LibraryEntry } from "./library.js";
+import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, listVideos, listVideosChecked, pageFiles, summarize, buildLibrary, withinLibraryRoot, type FoundFile, type LibraryEntry } from "./library.js";
 import { createArtworkSweep, type SweepDeps, type SweepLibrary } from "./artwork-sweep.js";
 import { createMaintenance } from "./maintenance.js";
 import { createShutdown, installSignalHandlers } from "./server-shutdown.js";
@@ -410,6 +410,10 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   defaultLibrary: downloadDefaultLibrary,
   legacyOwnerId: migratedAdminId,
   ownerAllowed: ownerMayUseQueue,
+  targetAllowed: (library, relative, ownerUserId) => {
+    const owner = ownerUserId ? findUserById(store.users(), ownerUserId) : undefined;
+    return !owner || !nestedHidden(library, relative, { id: owner.id, role: owner.role });
+  },
   existingLocalCopy: ({ ownerUserId, source, sourceAdmission }) =>
     findAdequateExistingLocalCopy(
       { ownerUserId, type: source.type, videoId: source.videoId, sourceAdmission },
@@ -688,7 +692,9 @@ const trackMedia = (owner: ResourceOwner, res: express.Response, resourceId?: st
  *  scan, the artwork queue -- passes none and keeps seeing every library. */
 const libraryTarget = async (value: string, viewer: Viewer | undefined) => {
   const resolved = await resolveLibraryPath(store.libraries(), value);
-  if (!resolved || (viewer !== undefined && !libraryVisible(resolved.library, viewer))) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  if (!resolved
+    || (viewer !== undefined && !libraryVisible(resolved.library, viewer))
+    || nestedHidden(resolved.library, resolved.relative, viewer)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
   const real = await realpath(resolved.absolute).catch(() => undefined);
   if (!real) {
     // The resource was found; the file behind it was not. "Select the source again" would
@@ -1133,6 +1139,24 @@ const carveOutsOf = (library: LibraryRecord) => {
     ...carveOuts(libraries.map(resolved), resolved(library)),
   ]);
 };
+/** True when `relative` lies in a library nested inside `library` that this viewer may not
+ *  see. No viewer is the server's own work, which sees every library. */
+const nestedHidden = (library: LibraryRecord, relative: string, viewer: Viewer | undefined): boolean => {
+  if (!viewer || !relative) return false;
+  const spelled = (entry: LibraryRecord) => ({ id: entry.id, root: path.resolve(entry.root) });
+  const resolved = (entry: LibraryRecord) => ({ id: entry.id, root: realRootOf(entry) });
+  const parentSpelled = spelled(library);
+  const parentResolved = resolved(library);
+  for (const other of store.libraries()) {
+    if (other.id === library.id || libraryVisible(other, viewer)) continue;
+    const paths = new Set([
+      ...carveOuts([spelled(other)], parentSpelled),
+      ...carveOuts([resolved(other)], parentResolved),
+    ]);
+    if (withinLibraryRoot(paths, relative, healthOf(library).caseInsensitive)) return true;
+  }
+  return false;
+};
 /** The library a key names, with the key's part below it. A key without a library id is
  *  the single-library pass-through; `singleLibrary` throws if there is no such library.
  *
@@ -1487,15 +1511,18 @@ const maintenance = createMaintenance({
   ],
 });
 registerCatalogRoutes(app, {
-  ...routeContext, tmdbProvider, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey,
+  ...routeContext, tmdbProvider, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, nestedHidden,
   // The walk caches are declared below this call, so they are read inside the body rather
   // than captured here: a direct reference would throw in the temporal dead zone at start-up.
   localCopies: async (type, id, viewer) => {
     const visible = visibleLibraries(store.libraries(), viewer);
     const [files, units] = await Promise.all([libraryFiles({ stale: true }), libraryUnits({ stale: true })]);
-    const visibleIds = new Set(visible.map((library) => library.id));
     const records = Object.fromEntries(Object.entries(metaStore.qualifiedMeta())
-      .filter(([key]) => visibleIds.has(parseLibraryPath(key)?.libraryId ?? "")));
+      .filter(([key]) => {
+        const parsed = parseLibraryPath(key);
+        const library = parsed ? libraryFor(visible, parsed.libraryId) : undefined;
+        return Boolean(parsed && library && !nestedHidden(library, parsed.relative, viewer));
+      }));
     const apiKey = store.settings().tmdbApiKey;
     const titleIds = await localTitleIds(type, id, records, apiKey ? { apiKey, language: "en" } : undefined);
     const copies = localCopies({ type, id, titleIds, files, units, records, libraries: visible });
@@ -1506,9 +1533,13 @@ registerCatalogRoutes(app, {
     }));
   },
   ownedTitles: (viewer) => {
-    const visibleIds = new Set(visibleLibraries(store.libraries(), viewer).map((library) => library.id));
+    const visible = visibleLibraries(store.libraries(), viewer);
     const records = Object.entries(metaStore.qualifiedMeta())
-      .filter(([key]) => visibleIds.has(parseLibraryPath(key)?.libraryId ?? ""))
+      .filter(([key]) => {
+        const parsed = parseLibraryPath(key);
+        const library = parsed ? libraryFor(visible, parsed.libraryId) : undefined;
+        return Boolean(parsed && library && !nestedHidden(library, parsed.relative, viewer));
+      })
       .map(([, record]) => record);
     return ownedTitleKeys(records, (kind, imdb) => tmdbIds.tmdbOf(kind, imdb));
   },
@@ -2303,7 +2334,7 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
   // Resolve against the libraries this account may see, so a library it was not granted
   // answers exactly like one that does not exist -- the way the read side already filters.
   const resolved = relative ? await resolveLibraryPath(visibleLibraries(store.libraries(), { id: owner.id, role: owner.role }), relative) : undefined;
-  if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
+  if (!resolved || nestedHidden(resolved.library, resolved.relative, { id: owner.id, role: owner.role })) throw new AppError("Invalid path.", "err.invalidPath");
   // A path bound to a title stars that title too, and unstarring either side clears both: the
   // catalogue star and the paths that stand for it are one favourite.
   const records = metaStore.qualifiedMeta();
@@ -2334,7 +2365,7 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
   });
 };
 
-const personal = registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls: (key) => titleArtworkUrls(key), thumbUrl, updateData, updateDataLater, updateDataUnlessUnchanged, watchlistOf, wirePath, remotePersonal: mediaServerPersonal, authorityOf });
+const personal = registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, nestedHidden, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls: (key) => titleArtworkUrls(key), thumbUrl, updateData, updateDataLater, updateDataUnlessUnchanged, watchlistOf, wirePath, remotePersonal: mediaServerPersonal, authorityOf });
 
 /** The followed series: the daily check reads the owner's addons in the owner's language,
  *  past the cache, so a new episode is seen the day it appears. */
@@ -2367,11 +2398,14 @@ const followService = new FollowService({
   queue: createFollowQueueAdapter(queue),
   // The owner may queue into the pinned library right now: the account, its rights, the
   // addons and the library are read again on every ask, never from when the rule was saved.
-  mayDownload: (ownerUserId, selection) => ownerMayDownload({
-    owner: findUserById(store.users(), ownerUserId),
-    addons: store.addons(),
-    libraries: store.libraries(),
-  }, { targetSettings: selection.targetSettings }),
+  mayDownload: (ownerUserId, selection) => {
+    const owner = findUserById(store.users(), ownerUserId);
+    const libraries = store.libraries();
+    const target = selection.targetSettings;
+    const library = target.libraryId ? libraryFor(libraries, target.libraryId) : undefined;
+    return ownerMayDownload({ owner, addons: store.addons(), libraries }, { targetSettings: target })
+      && (!owner || !library || !nestedHidden(library, target.subfolder, { id: owner.id, role: owner.role }));
+  },
   admitSourceProfile: (ownerUserId, reference, mediaKind) => {
     const owner = findUserById(store.users(), ownerUserId);
     if (!owner) throw new SourceAdmissionRejected("operationForbidden");
@@ -2398,7 +2432,7 @@ const followService = new FollowService({
 queue.setRemovalGuard((job, reason) => followService.jobRemoving(job, reason));
 queue.setClearCompletedGuard((jobs) => followService.jobsClearing(jobs));
 
-registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, updateData, posterOf, cachedMeta, defaultDownloadLibrary: downloadDefaultLibrary });
+registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, nestedHidden, prefsOf, markersOf, dataOf, updateData, posterOf, cachedMeta, defaultDownloadLibrary: downloadDefaultLibrary });
 
 // The file operations on library items live in `library-actions.ts`; these bindings keep the
 // call sites and the route dependency objects unchanged.
@@ -2567,7 +2601,7 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({
@@ -2936,7 +2970,7 @@ await libraryOps.load();
 
 registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId), progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps });
 
-const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
+const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, nestedHidden, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 
 registerShuffleRoutes(app, {
   ...routeContext,
@@ -2968,7 +3002,7 @@ registerShuffleRoutes(app, {
     if (!parsed) return false;
     const library = libraryFor(store.libraries(), parsed.libraryId);
     if (!library) return false;
-    return [...carveOutsOf(library)].some((carveOut) => isPathWithin(parsed.relative, carveOut));
+    return withinLibraryRoot(carveOutsOf(library), parsed.relative, healthOf(library).caseInsensitive);
   },
 });
 
@@ -2976,7 +3010,7 @@ registerShuffleRoutes(app, {
 // route exists.
 const homeCatalogs = new HomeCatalogCache();
 const warmHomeCatalogs = () => { if (!homeCatalogs.idle) homeCatalogs.warm(homeCatalogTargets(store.addons())); };
-registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, remotePersonal: mediaServerPersonal, authorityOf, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched, include) => followService.newEpisodes(ownerUserId, watched, include), describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows,
+registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, remotePersonal: mediaServerPersonal, authorityOf, nestedHidden, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched, include) => followService.newEpisodes(ownerUserId, watched, include), describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows,
   imdbOfTmdb: (type, tmdbId) => tmdbIds.imdbOf(type, tmdbId),
   learnImdbOfTmdb: (type, tmdbId) => {
     const config = tmdbConfigOf(prefsOf().uiLanguage);
@@ -2985,7 +3019,7 @@ registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, remotePersona
 });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, mediaSources: mediaServerSources, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
-registerDownloadRoutes(app, { ...routeContext, queue, mediaSources: mediaServerSources, deviceTransfers, jobView, sourceOf, ownerOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf, defaultDownloadLibrary: downloadDefaultLibrary });
+registerDownloadRoutes(app, { ...routeContext, queue, mediaSources: mediaServerSources, deviceTransfers, jobView, sourceOf, ownerOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, nestedHidden, cachedMeta, prefsOf, defaultDownloadLibrary: downloadDefaultLibrary });
 const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }

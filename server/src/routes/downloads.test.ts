@@ -91,7 +91,7 @@ const mount = async (
   addons: unknown[] = [streamAddon("stream-addon")],
   options: {
     viewer?: UserRecord;
-    jobs?: Array<{ id: string; ownerUserId?: string }>;
+    jobs?: Array<{ id: string; ownerUserId?: string; target?: string }>;
     libraries?: unknown[];
     connections?: unknown[];
     remoteLibraries?: unknown[];
@@ -132,6 +132,7 @@ const mount = async (
     window?: DownloadWindowState | null;
     drainFor?: (viewer: { id?: string; admin: boolean }) => DownloadDrainView | null;
     downloadNowError?: (id: string) => AppError | undefined;
+    nestedHidden?: (library: LibraryRecord, relative: string, viewer: { id: string; role: "admin" | "user" } | undefined) => boolean;
   } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
@@ -214,6 +215,7 @@ const mount = async (
       userData: () => ({ addonOrder: options.addonOrder }),
       sourceProfiles: () => profiles,
     } as unknown as Store,
+    nestedHidden: options.nestedHidden ?? (() => false),
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: () => held.viewer,
@@ -1429,6 +1431,57 @@ test("POST /api/downloads refuses an unusable explicit target and queues nothing
     assert.equal(await keyOf(response), item.key, `case ${index}`);
     assert.deepEqual(harness.added, [], `case ${index} queues nothing`);
   }
+});
+
+test("a nested download target follows what its owner may see, and their job stays listed", async (t) => {
+  const parent = library("lib_d10ad10a", "movie", { visibleTo: [BOB] });
+  mkdirSync(path.join(parent.root, "Nested"), { recursive: true });
+  const nestedRoot = path.join(parent.root, "Nested");
+  const hiddenNested = library("lib_d20ad20a", "movie", { root: nestedRoot });
+  const visibleNested = library("lib_d20ad20a", "movie", { root: nestedRoot, visibleTo: [BOB] });
+  const nestedHidden = (nested: LibraryRecord) =>
+    (record: LibraryRecord, relative: string, viewer: { id: string; role: "admin" | "user" } | undefined) =>
+      record.id === parent.id && relative.startsWith("Nested")
+      && viewer?.role !== "admin" && !(nested.visibleTo ?? []).includes(viewer?.id ?? "");
+
+  const denied = await mount(undefined, {
+    viewer: ordinary,
+    libraries: [parent, hiddenNested],
+    jobs: [{ id: "job-hidden", ownerUserId: BOB, target: `${parent.id}/Nested/Film.mkv` }],
+    nestedHidden: nestedHidden(hiddenNested),
+  });
+  t.after(denied.close);
+  const refused = await api(denied.base, "/api/downloads", {
+    method: "POST",
+    body: { title: "Film", target: { libraryId: parent.id, subfolder: "Nested" } },
+  });
+  const missing = await api(denied.base, "/api/downloads", {
+    method: "POST",
+    body: { title: "Film", target: { libraryId: parent.id, subfolder: "Missing" } },
+  });
+  assert.equal(refused.status, missing.status);
+  assert.equal(await keyOf(refused), await keyOf(missing));
+  assert.deepEqual(denied.added, []);
+  // The owner's own row stays where they can remove it; the queue refuses to run it.
+  const deniedList = await (await api(denied.base, "/api/downloads")).json() as { jobs: Array<{ id: string }> };
+  assert.deepEqual(deniedList.jobs.map((job) => job.id), ["job-hidden"]);
+
+  const allowed = await mount(undefined, {
+    viewer: ordinary,
+    libraries: [parent, visibleNested],
+    jobs: [{ id: "job-visible", ownerUserId: BOB, target: `${parent.id}/Nested/Film.mkv` }],
+    nestedHidden: nestedHidden(visibleNested),
+  });
+  t.after(allowed.close);
+  const accepted = await api(allowed.base, "/api/downloads", {
+    method: "POST",
+    body: { title: "Film", target: { libraryId: parent.id, subfolder: "Nested" } },
+  });
+  assert.equal(accepted.status, 201);
+  assert.equal(allowed.added[0]?.settings?.subfolder, "Nested");
+
+  const listed = await (await api(allowed.base, "/api/downloads")).json() as { jobs: Array<{ id: string }> };
+  assert.deepEqual(listed.jobs.map((job) => job.id), ["job-visible"]);
 });
 
 test("a library invisible to the caller answers exactly like one that does not exist", async (t) => {
