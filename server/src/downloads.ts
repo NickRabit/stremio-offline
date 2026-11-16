@@ -458,6 +458,8 @@ export interface QueueHooks {
   createWriteStream?: (file: string, options: { flags: string }) => NodeJS.WritableStream;
   /** Replaces only the final video rename, so tests can hold publication open. */
   renamePublication?: (from: string, to: string) => Promise<void>;
+  /** Replaces the unlink used by strict partial cleanup, so failures can be injected portably. */
+  unlinkFile?: (file: string) => Promise<void>;
   /** Writes the queue's own state file; tests use it to fail one particular write. */
   writeState?: (file: string, data: string) => Promise<void>;
   /** How long a failed best-effort save waits before it is tried again. */
@@ -870,6 +872,7 @@ export class DownloadQueue {
   private readonly freeSpace: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   private readonly createWriteStream: (file: string, options: { flags: string }) => NodeJS.WritableStream;
   private readonly renamePublication: (from: string, to: string) => Promise<void>;
+  private readonly unlinkFile: (file: string) => Promise<void>;
   private readonly writeState: (file: string, data: string) => Promise<void>;
   private readonly stallInitialMs: number;
   private readonly stallTransferMs: number;
@@ -925,6 +928,7 @@ export class DownloadQueue {
     this.freeSpace = hooks.freeSpace ?? volumeSpace;
     this.createWriteStream = hooks.createWriteStream ?? fsCreateWriteStream;
     this.renamePublication = hooks.renamePublication ?? rename;
+    this.unlinkFile = hooks.unlinkFile ?? unlink;
     this.writeState = hooks.writeState ?? ((file, data) => writeFile(file, data, { mode: 0o600 }));
     this.saveRetryMs = hooks.saveRetryMs ?? SAVE_RETRY_MS;
     this.stallInitialMs = hooks.stallInitialMs ?? 15_000;
@@ -3432,7 +3436,7 @@ export class DownloadQueue {
 
   private async unlinkIfPresent(file: string): Promise<void> {
     try {
-      await unlink(file);
+      await this.unlinkFile(file);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -4269,15 +4273,41 @@ export class DownloadQueue {
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, wait);
       } else if (job.source && job.stream?.url) {
+        const abandoned = this.jobPath(job);
+        const subtitleFiles = this.subtitleFiles(job);
+        const partials = [
+          ...(job.target && abandoned ? [`${abandoned}.part`] : []),
+          ...(subtitleFiles ? [subtitleFiles.partial] : []),
+        ];
+        let cleanupError: unknown;
+        for (const partial of partials) {
+          try {
+            await this.unlinkIfPresent(partial);
+          } catch (error) {
+            cleanupError ??= error;
+          }
+        }
+        if (cleanupError !== undefined) {
+          job.status = "failed";
+          job.speed = 0;
+          this.setError(
+            job,
+            "Could not remove the previous download's temporary files. Check storage access and retry.",
+            "err.downloadCleanupFailed",
+          );
+          log("ERROR", "Download failed because its previous temporary files could not be removed", {
+            id: job.id,
+            title: job.title,
+            reason: (cleanupError as NodeJS.ErrnoException).code
+              ?? (cleanupError instanceof Error ? cleanupError.message : String(cleanupError)),
+          });
+          return;
+        }
         // A lazy job tries the next source in order; the address of the failed one is never used again.
         job.source.tried.push(job.stream.url);
         // A link Real-Debrid produced keeps its torrent identity; without it the same torrent
         // would be chosen again on the next resolve.
         if (job.stream.infoHash) job.source.tried.push(torrentKey(job.stream));
-        const abandoned = this.jobPath(job);
-        if (job.target && abandoned) await unlink(`${abandoned}.part`).catch(() => undefined);
-        const subtitleFiles = this.subtitleFiles(job);
-        if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
         job.stream = undefined; job.subtitle = undefined; job.resolution = undefined; delete job.sourceStreamAddonIdentity; delete job.sourceSubtitleAddonIdentity; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.rangesIgnored = undefined; job.retryCount = 0; job.notBefore = undefined;
         job.status = "queued"; this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
         retryScheduled = true; log("WARN", "The source failed, trying the next one", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });

@@ -1680,6 +1680,7 @@ export const de: Catalog = {
   "err.downloadNeedsHttp": "Es kann nur ein direkter HTTP-Stream heruntergeladen werden.",
   "err.downloadLibraryNotAllowed": "Dieses Konto darf nicht in die Bibliothek heruntergeladen werden.",
   "err.revokedDownloadCleanupFailed": "Der Download konnte nach dem Entzug der Berechtigung nicht aus der Bibliothek entfernt werden.",
+  "err.downloadCleanupFailed": "Die temporären Dateien des vorherigen Downloads konnten nicht entfernt werden. Prüfe den Speicherzugriff und versuche es erneut.",
   "err.clientLogTooLarge": "Das Log-Bündel ist zu groß.",
   "err.clientLogTooMany": "Zu viele Log-Bündel. Später erneut versuchen.",
   "err.downloadDeviceNotAllowed": "Dieses Konto wird möglicherweise nicht auf dem Gerät gespeichert.",
