@@ -570,6 +570,11 @@ write only when the file is missing or its content would change.
 
 ## Engineering health
 
+The current cross-application audit and refactoring assignment is in
+[system-audit-refactor-agent-task.md](system-audit-refactor-agent-task.md).
+It starts from the remaining reliability boundaries and treats the dated
+file sizes and implementation notes below as historical evidence.
+
 Status last recorded on 2026-10-07: the items below shipped in #304–#324 and
 the branch audited then —
 P0 H1–H3; P1 recoverable moves, copies and re-roots, the destructive-path,
