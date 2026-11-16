@@ -14,9 +14,23 @@ export interface AvatarDeps extends RouteContext {
 
 const notFound = () => new AppError("There is no such picture.", "err.avatarNotFound", 404);
 
-/** Raw bytes for the two upload routes only. The limit sits a little above the rule so the
- *  handler, not the parser, is what answers an oversized picture. */
-const imageBody = express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: AVATAR_MAX_BYTES + 16 * 1024 });
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+/** The picture is read off the request stream here, not through a body parser: what arrives is
+ *  bytes and nothing else, and the count stops the read as soon as it passes the limit. */
+async function readImage(req: express.Request): Promise<Buffer> {
+  const declared = String(req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+  if (!IMAGE_TYPES.has(declared)) throw new AppError("Send a PNG, JPEG or WebP picture.", "err.avatarFormat", 400);
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.byteLength;
+    if (size > AVATAR_MAX_BYTES) throw new AppError("The picture is too large.", "err.avatarTooLarge", 413);
+    chunks.push(chunk);
+  }
+  if (size === 0) throw new AppError("Send a PNG, JPEG or WebP picture.", "err.avatarFormat", 400);
+  return Buffer.concat(chunks, size);
+}
 
 export function registerAvatarRoutes(app: express.Application, deps: AvatarDeps): void {
   const { store, currentUser, avatars } = deps;
@@ -65,9 +79,7 @@ export function registerAvatarRoutes(app: express.Application, deps: AvatarDeps)
   };
 
   const upload = async (req: express.Request, userId: string, actor: UserRecord) => {
-    const body: unknown = req.body;
-    if (!Buffer.isBuffer(body) || body.length === 0) throw new AppError("Send a PNG, JPEG or WebP picture.", "err.avatarFormat", 400);
-    if (body.length > AVATAR_MAX_BYTES) throw new AppError("The picture is too large.", "err.avatarTooLarge", 413);
+    const body = await readImage(req);
     const type = sniffImage(body);
     if (!type) throw new AppError("Send a PNG, JPEG or WebP picture.", "err.avatarFormat", 400);
     await avatars.write(userId, body);
@@ -106,7 +118,7 @@ export function registerAvatarRoutes(app: express.Application, deps: AvatarDeps)
     const account = signedIn(req);
     res.json(await choosePreset(req, account.id, account));
   }));
-  app.put("/api/auth/avatar/image", imageBody, asyncRoute(async (req, res) => {
+  app.put("/api/auth/avatar/image", asyncRoute(async (req, res) => {
     const account = signedIn(req);
     res.json(await upload(req, account.id, account));
   }));
@@ -114,7 +126,7 @@ export function registerAvatarRoutes(app: express.Application, deps: AvatarDeps)
     const actor = administrator(req);
     res.json(await choosePreset(req, target(String(req.params.id)).id, actor));
   }));
-  app.put("/api/users/:id/avatar/image", imageBody, asyncRoute(async (req, res) => {
+  app.put("/api/users/:id/avatar/image", asyncRoute(async (req, res) => {
     const actor = administrator(req);
     res.json(await upload(req, target(String(req.params.id)).id, actor));
   }));
