@@ -27,6 +27,7 @@ const alwaysRefused = [
   ["PUT", "/api/follows/defaults"],
   ["PATCH", "/api/auth/password"],
   ["PATCH", "/api/auth/pin"],
+  ["PUT", "/api/auth/avatar/image"],
   ["PUT", "/api/addons/order"],
   ["POST", "/api/auth/pair/inspect"],
   ["POST", "/api/auth/pair/approve"],

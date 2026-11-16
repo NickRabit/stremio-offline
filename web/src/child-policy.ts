@@ -25,6 +25,7 @@ const REFUSED_FOR_CHILD: readonly Rule[] = [
   rule("PUT", /^\/api\/follows\/defaults$/),
   rule("PATCH", /^\/api\/auth\/password$/),
   rule("PATCH", /^\/api\/auth\/pin$/),
+  rule("PUT", /^\/api\/auth\/avatar\/image$/),
   rule("PUT", /^\/api\/addons\/order$/),
   rule("POST", /^\/api\/auth\/pair\/(?:inspect|approve|deny)$/),
 ];
