@@ -10,7 +10,7 @@ import type { LibraryHealth } from "./library-probe.js";
 import { libraryPath, parseLibraryPath, posixBase, posixJoin, resolveLibraryPath, toPosix, type LibraryRecord } from "./libraries.js";
 import { placeholderOnly, removePlaceholder, transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 import { log } from "./logger.js";
-import { renamedSidecar, subtitleSidecars } from "./library-sidecars.js";
+import { isSidecarOf, renamedSidecar, subtitleSidecars } from "./library-sidecars.js";
 import type { LibraryOp, OpsJournal } from "./library-ops.js";
 import type { LibrarySeenStore } from "./library-seen.js";
 import type { Store, StoredProgress, WatchlistEntry } from "./store.js";
@@ -71,6 +71,9 @@ export type TransferStep = {
   from: string;
   to: string;
   carried: string[];
+  /** The subtitle files that travel with a single video: bare file names, `from` beside the
+   *  source and `to` beside the destination. Absent on a record an older build wrote. */
+  sidecars?: Array<{ from: string; to: string }>;
   cover?: string;
 };
 
@@ -294,8 +297,19 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     if (typeof step.copy !== "boolean" || typeof step.from !== "string" || typeof step.to !== "string") return undefined;
     if (!Array.isArray(step.carried) || !step.carried.every((item) => typeof item === "string")) return undefined;
     if (step.cover !== undefined && typeof step.cover !== "string") return undefined;
+    const bareName = (name: unknown): name is string =>
+      typeof name === "string" && name.length > 0 && name !== "." && name !== ".." && path.basename(name) === name;
+    const sidecar = (item: unknown): item is { from: string; to: string } => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+      const pair = item as { from?: unknown; to?: unknown };
+      return bareName(pair.from) && bareName(pair.to);
+    };
+    const sidecars = (value as { sidecars?: unknown }).sidecars;
+    if (sidecars !== undefined && !Array.isArray(sidecars)) return undefined;
     return {
       phase: step.phase, copy: step.copy, from: step.from, to: step.to, carried: step.carried,
+      // A pair that could leave its folder is dropped on its own: the video's recovery still runs.
+      ...(sidecars !== undefined ? { sidecars: sidecars.filter(sidecar).map((pair) => ({ from: pair.from, to: pair.to })) } : {}),
       ...(step.cover !== undefined ? { cover: step.cover } : {}),
     };
   };
@@ -314,6 +328,36 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
   /** Plain existence, for the two absolute ends of a re-root: unlike `fileExists` a broken
    *  symlink still counts, which is what the recovery has to see. */
   const pathPresent = async (target: string) => { try { await lstat(target); return true; } catch { return false; } };
+
+  const carrySidecars = async (
+    pairs: ReadonlyArray<{ from: string; to: string }>,
+    sourceDir: string,
+    targetDir: string,
+    copy: boolean,
+    replay = false,
+  ): Promise<void> => {
+    for (const pair of pairs) {
+      try {
+        const from = path.join(sourceDir, pair.from);
+        const to = path.join(targetDir, pair.to);
+        if (!await fileExists(from)) continue;
+        if (await fileExists(to)) {
+          // Only a crashed run leaves a reservation behind; on a first run an empty file is somebody's own.
+          if (replay && await placeholderOnly(from, to)) {
+            await removePlaceholder(from, to);
+          } else {
+            log("INFO", "A subtitle stayed behind, the destination already has one of that name", { file: pair.from });
+            continue;
+          }
+        }
+        await transferLibraryPath(from, to, !copy);
+      } catch (error) {
+        log("WARN", "A subtitle could not follow its video", {
+          file: pair.from, reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  };
 
   /** The metadata half of a transfer, everything after the bytes have landed, and the way a
    *  record a crash left behind is finished. `sourceLeft` is the interrupted transfer's own
@@ -394,6 +438,20 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     // the one an interrupted transfer already reports.
     const interrupted = sourceExists && !step.copy;
     if (interrupted) log("WARN", "An interrupted move left its source behind", { from: step.from, to: step.to });
+    if (source && target) {
+      const stemOf = (key: string) => posixBase(key).slice(0, posixBase(key).length - path.extname(key).length);
+      const sourceStem = stemOf(source.key);
+      const targetStem = stemOf(target.key);
+      // The record is read back from disk: it may only name subtitles of these two videos.
+      let sidecars = step.sidecars?.filter((pair) => isSidecarOf(pair.from, sourceStem) && isSidecarOf(pair.to, targetStem));
+      if (sidecars === undefined && await lstat(target.absolute).then((info) => info.isFile(), () => false)) {
+        const discovered = await subtitleSidecars(source.absolute);
+        sidecars = discovered.names.map((name) => ({
+          from: name, to: renamedSidecar(name, discovered.stem, targetStem),
+        }));
+      }
+      if (sidecars) await carrySidecars(sidecars, path.dirname(source.absolute), path.dirname(target.absolute), step.copy, true);
+    }
     await recordPublished(step, journal);
     return finishTransfer(step, interrupted ? "interrupted" : undefined, true);
   };
@@ -447,30 +505,20 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     // The folder a title is bound through, when the item does not carry the binding itself: its
     // picture is the title's and has to travel with it.
     const cover = knownTitleEntry(resolved.key, metaStore.qualifiedMeta());
-    const step: TransferStep = {
-      phase: "moving", copy, from: resolved.key, to: target.key, carried,
-      ...(cover && cover.key !== resolved.key && isPathWithin(resolved.key, cover.key) ? { cover: cover.key } : {}),
-    };
     // A single video's subtitles sit beside it, not inside it, so a move or copy of the file
     // alone would leave them behind and the player would stop offering them.
     const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };
+    const targetName = posixBase(target.key);
+    const targetStem = targetName.slice(0, targetName.length - path.extname(targetName).length);
+    const sidecarPairs = sidecars.names.map((name) => ({ from: name, to: renamedSidecar(name, sidecars.stem, targetStem) }));
+    const step: TransferStep = {
+      phase: "moving", copy, from: resolved.key, to: target.key, carried, sidecars: sidecarPairs,
+      ...(cover && cover.key !== resolved.key && isPathWithin(resolved.key, cover.key) ? { cover: cover.key } : {}),
+    };
     // What is about to happen is on disk before the disk is touched.
     await journal?.record(step);
     const transferred = await transferLibraryPath(resolved.absolute, target.absolute, !copy, progress);
-    const targetStem = posixBase(target.key).slice(0, posixBase(target.key).length - path.extname(target.key).length);
-    for (const name of sidecars.names) {
-      const from = path.join(path.dirname(resolved.absolute), name);
-      const to = path.join(path.dirname(target.absolute), renamedSidecar(name, sidecars.stem, targetStem));
-      try {
-        if (await fileExists(to)) {
-          log("INFO", "A subtitle stayed behind, the destination already has one of that name", { file: name });
-          continue;
-        }
-        await transferLibraryPath(from, to, !copy);
-      } catch (error) {
-        log("WARN", "A subtitle could not follow its video", { file: name, reason: error instanceof Error ? error.message : String(error) });
-      }
-    }
+    await carrySidecars(sidecarPairs, path.dirname(resolved.absolute), path.dirname(target.absolute), copy);
     await recordPublished(step, journal);
     return finishTransfer(step, transferred.sourceLeft);
   };

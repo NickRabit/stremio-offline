@@ -35,3 +35,7 @@ export async function subtitleSidecars(videoPath: string): Promise<SubtitleSidec
 
 /** A subtitle's name under the video's new stem, keeping its language and extension. */
 export const renamedSidecar = (name: string, from: string, to: string): string => `${to}${name.slice(from.length)}`;
+
+/** Whether a bare file name reads as a subtitle of the video with that stem. */
+export const isSidecarOf = (name: string, stem: string): boolean =>
+  name.slice(0, stem.length).toLowerCase() === stem.toLowerCase() && SUBTITLE_SUFFIX.test(name.slice(stem.length));
