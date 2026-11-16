@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { domainToUnicode } from "node:url";
 import { INTERNAL_TOKEN } from "./auth.js";
 import { normalizeLanguage } from "./language.js";
 import { isRemoteMediaStream, openRemoteContent } from "./media-server-reference.js";
@@ -30,23 +31,124 @@ export class ResourceError extends Error {
   }
 }
 
+const decoded = (value: string) => {
+  try { return decodeURIComponent(value); } catch { return value; }
+};
+const decodedForms = (value: string) => {
+  const forms = new Set([value]);
+  let current = value;
+  for (let pass = 0; pass < 2; pass += 1) {
+    const next = decoded(current);
+    if (next === current) break;
+    forms.add(next);
+    current = next;
+  }
+  return forms;
+};
+const escapePattern = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const percentEncoded = (value: string) =>
+  [...Buffer.from(value)].map((byte) => `%${byte.toString(16).padStart(2, "0")}`).join("");
+const fullwidth = (value: string) =>
+  [...value].map((character) => {
+    const code = character.codePointAt(0)!;
+    return code >= 0x21 && code <= 0x7e ? String.fromCodePoint(code + 0xfee0) : character;
+  }).join("");
+const HOST_DOT = "(?:\\.|%2e|。|．|｡|%e3%80%82|%ef%bc%8e|%ef%bd%a1)";
+const hostPatterns = new Map<string, RegExp>();
+/** A hostname is case-insensitive and may be raw, NFC/NFD, or percent-encoded
+ *  character by character. */
+const hostPattern = (host: string) => {
+  const cached = hostPatterns.get(host);
+  if (cached) return cached;
+  const inside = (host.match(/\P{M}\p{M}*|\p{M}+/gu) ?? [...host]).map((graph) => {
+    if (".。．｡".includes(graph)) return HOST_DOT;
+    const forms = [graph.normalize("NFC"), graph.normalize("NFD")];
+    const lower = forms.map((form) => form.toLowerCase());
+    const upper = forms.map((form) => form.toUpperCase());
+    const variants = new Set([...forms, ...lower, ...upper, ...forms.map(fullwidth)]);
+    const encoded = [...variants].map((form) =>
+      [...form].map((character) => `(?:${escapePattern(character)}|${escapePattern(percentEncoded(character))})`).join(""));
+    return `(?:${[...variants].map(escapePattern).join("|")}|${encoded.join("|")})`;
+  }).join("");
+  const pattern = new RegExp(`(^|[^a-z0-9-])(?:[a-z0-9-]+${HOST_DOT})*${inside}${HOST_DOT}?(?=$|[^a-z0-9-])`, "giu");
+  if (hostPatterns.size >= 128) hostPatterns.delete(hostPatterns.keys().next().value!);
+  hostPatterns.set(host, pattern);
+  return pattern;
+};
+
 export function safeSourceText(value: unknown, stream: StreamItem): string | undefined {
   if (typeof value !== "string") return undefined;
   let text = value.slice(0, 4096);
   const secrets: string[] = [];
+  const hosts = new Set<string>();
+  const canonicalHosts = new Set<string>();
   for (const raw of [stream.url, stream.externalUrl, ...(stream.subtitles ?? []).map((item) => item.url)]) {
     if (!raw) continue;
     secrets.push(raw);
     try {
       const url = new URL(raw);
-      secrets.push(url.host, ...url.pathname.split("/").filter((part) => part.length >= 8), ...url.searchParams.values());
+      const pathParts = url.pathname.split("/").filter(Boolean);
+      const last = pathParts.length - 1;
+      const displayNames = new Set(decodedForms(stream.behaviorHints?.filename ?? ""));
+      const host = url.hostname.replace(/\.+$/, "");
+      const unicodeHost = domainToUnicode(host);
+      hosts.add(host);
+      hosts.add(unicodeHost);
+      canonicalHosts.add(host);
+      if (url.port) {
+        hosts.add(`${host}:${url.port}`);
+        hosts.add(`${unicodeHost}:${url.port}`);
+      }
+      secrets.push(
+        ...(url.username ? [url.username] : []),
+        ...(url.password ? [url.password] : []),
+        ...pathParts.filter((part, index) => part.length >= 8 && !(index === last && [...decodedForms(part)].some((form) => displayNames.has(form)))),
+        ...url.searchParams.values(),
+      );
     } catch { /* Invalid source addresses are never returned. */ }
   }
   for (const value of Object.values(stream.behaviorHints?.proxyHeaders?.request ?? {})) secrets.push(value, ...value.split(/\s+/));
-  for (const secret of secrets.filter((item) => item.length >= 3).sort((a, b) => b.length - a.length)) {
-    for (const form of [secret, encodeURIComponent(secret), Buffer.from(secret).toString("base64"), Buffer.from(secret).toString("base64url")]) {
-      text = text.split(form).join("[redacted]");
+  for (const secret of secrets.sort((a, b) => b.length - a.length)) {
+    for (const base of decodedForms(secret)) {
+      if (base.length < 3) continue;
+      for (const form of [base, encodeURIComponent(base), Buffer.from(base).toString("base64"), Buffer.from(base).toString("base64url")]) {
+        text = text.split(form).join("[redacted]");
+      }
     }
+  }
+  const redactHost = (host: string) => {
+    const pattern = hostPattern(host);
+    pattern.lastIndex = 0;
+    text = text.replace(pattern, (_match, before: string) => `${before}[redacted]`);
+  };
+  for (const host of [...hosts].filter((item) => item.length >= 3).sort((a, b) => b.length - a.length)) {
+    redactHost(host);
+    for (const base of decodedForms(host)) {
+      if (base.length < 3) continue;
+      for (const form of [Buffer.from(base).toString("base64"), Buffer.from(base).toString("base64url")])
+        text = text.split(form).join("[redacted]");
+    }
+  }
+  if (canonicalHosts.size) {
+    text = text.replace(/(?<![a-z0-9-])(?:\[[0-9a-f:.%]+\]|(?:[0-9a-fx]+\.)*[0-9a-fx]+)(?::\d+)?(?![a-z0-9-])/gi,
+      (candidate) => {
+        try {
+          const host = new URL(`http://${candidate}`).hostname.replace(/\.+$/, "");
+          return canonicalHosts.has(host) ? "[redacted]" : candidate;
+        } catch { return candidate; }
+    });
+    text = text.replace(/\S+/gu, (token) => {
+      if (!/[^\x00-\x7f]/u.test(token) && !/[.。．｡%]/.test(token)) return token;
+      let start = 0;
+      let end = token.length;
+      while (start < end && `([{"'“‘<`.includes(token[start])) start += 1;
+      while (end > start && `.,;!?)]}>"'”’`.includes(token[end - 1])) end -= 1;
+      const candidate = token.slice(start, end);
+      try {
+        const host = new URL(`http://${candidate}`).hostname.replace(/\.+$/, "");
+        return canonicalHosts.has(host) ? `${token.slice(0, start)}[redacted]${token.slice(end)}` : token;
+      } catch { return token; }
+    });
   }
   return text.replace(/(?:https?:\/\/|https?%3a%2f%2f|file:\/\/)\S+/gi, "[redacted]")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
