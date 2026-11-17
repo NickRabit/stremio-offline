@@ -95,4 +95,22 @@ describe("ViewBoundary", () => {
     await act(async () => { close!.click(); });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+  it("catches an error thrown while a function child builds its elements", async () => {
+    const build = (): never => { throw new Error("built badly"); };
+    await act(async () => {
+      root.render(<div><ViewBoundary resetKey="a">{() => <p>{build()}</p>}</ViewBoundary><p>sibling</p></div>);
+    });
+
+    expect(alertBox()?.textContent).toContain(en["viewError.message"]);
+    expect(host.textContent).toContain("sibling");
+  });
+
+  it("adds the container's class to the fallback", async () => {
+    await act(async () => {
+      root.render(<ViewBoundary resetKey="a" fallbackClassName="person-view"><Crash crash/></ViewBoundary>);
+    });
+
+    expect(alertBox()?.classList.contains("person-view")).toBe(true);
+    expect(alertBox()?.classList.contains("view-error")).toBe(true);
+  });
 });

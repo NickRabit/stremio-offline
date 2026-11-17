@@ -3903,7 +3903,7 @@ export function App() {
       </>}
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{catalogsKnown ? addons.filter((a) => a.enabled).length : "–"}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}${catalogueDetail ? " view-title-detail" : ""}${personLayer ? " person-open" : ""}`}>
-      {personLayer && <ViewBoundary resetKey={String(personLayer.id)}><PersonView key={personLayer.id} person={personLayer} language={settings.uiLanguage} shape={settings.searchTileShape}
+      {personLayer && <ViewBoundary resetKey={String(personLayer.id)} fallbackClassName="person-view"><PersonView key={personLayer.id} person={personLayer} language={settings.uiLanguage} shape={settings.searchTileShape}
         onToggleShape={() => void toggleShape("searchTileShape")} onSearchText={searchTypedText}
         {...(personLayer.fromTitle ? { fromTitle: personLayer.fromTitle } : {})}
         {...(personLayer.backLabel ? { backLabel: personLayer.backLabel } : {})}
@@ -3990,7 +3990,7 @@ export function App() {
       </section>}
       {/* The library stays mounted under a catalogue detail opened from it: a remote title lives
           in the browser, and unmounting it would land Back on the list instead of that title. */}
-      <ViewBoundary resetKey={view}>{(!catalogueDetail || view === "library") && <>
+      <ViewBoundary resetKey={view}>{() => (!catalogueDetail || view === "library") && <>
       {view === "home" && buildKnown && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}

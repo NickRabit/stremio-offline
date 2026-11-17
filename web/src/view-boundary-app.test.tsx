@@ -6,7 +6,7 @@ import { en } from "./i18n/en";
 import type { Catalog, Meta, Settings } from "./types";
 import { emptyViews } from "./views";
 
-const crash = vi.hoisted(() => ({ home: false }));
+const crash = vi.hoisted(() => ({ home: false, genre: false }));
 
 vi.mock("./Home", () => ({
   Home: () => {
@@ -14,6 +14,17 @@ vi.mock("./Home", () => ({
     return null;
   },
 }));
+
+vi.mock("./genres", async () => {
+  const actual = await vi.importActual<typeof import("./genres")>("./genres");
+  return {
+    ...actual,
+    genreLabel: (genre: string) => {
+      if (crash.genre) throw new Error("genre label crashed");
+      return actual.genreLabel(genre);
+    },
+  };
+});
 
 vi.mock("./CatalogueTitleDetail", async () => {
   const actual = await vi.importActual<typeof import("./CatalogueTitleDetail")>("./CatalogueTitleDetail");
@@ -39,7 +50,10 @@ const settings: Settings = {
   realDebridConfigured: false, tmdbConfigured: false,
 };
 
-const catalogs: Catalog[] = [{ addonKey: "alpha", addonName: "Alpha", type: "movie", id: "top", name: "Top" }];
+const catalogs: Catalog[] = [{
+  addonKey: "alpha", addonName: "Alpha", type: "movie", id: "top", name: "Top",
+  extra: [{ name: "genre", options: ["Action"] }],
+}];
 const film: Meta = { id: "tt1", type: "movie", name: "Heat" };
 
 const json = (body: unknown, status = 200) =>
@@ -55,6 +69,7 @@ beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
   crash.home = false;
+  crash.genre = false;
   settings.startView = "catalog";
   consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
   vi.stubGlobal("matchMedia", () => ({
@@ -138,6 +153,17 @@ describe("view boundaries in App", () => {
 
     await act(async () => { navButton(en["nav.library"])!.click(); });
     await until(() => host.querySelector("[role=alert]") === null, "alert cleared by the library view");
+    expect(host.querySelector("aside.sidebar")).not.toBeNull();
+  });
+
+  // The catalogue is written inline in App, so its elements are built while App renders; the
+  // boundary has to build them itself to catch an error thrown there.
+  it("keeps the sidebar when an expression inside the inline catalogue throws", async () => {
+    crash.genre = true;
+    await act(async () => { root.render(<App/>); });
+    await until(() => host.querySelector("main [role=alert]") !== null, "catalogue alert");
+
+    expect(host.querySelector("main [role=alert]")?.textContent).toContain(en["viewError.message"]);
     expect(host.querySelector("aside.sidebar")).not.toBeNull();
   });
 
