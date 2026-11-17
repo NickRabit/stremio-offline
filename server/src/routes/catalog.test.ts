@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { ExternalIdStore } from "../external-ids.js";
@@ -2282,6 +2284,32 @@ test("a file subtitle re-checks its library after the held target", async (t) =>
   assert.equal(response.status, 404);
   assert.equal((await response.text()).includes("secret subtitle"), false);
   assert.deepEqual(asked, [undefined, "lib_00000001"]);
+});
+
+test("a file subtitle re-checks its library after the file read itself", { skip: process.platform === "win32" ? "named pipes are POSIX" : false }, async (t) => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), "catalog-subtitle-read-recheck-"));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  // A named pipe holds the handler inside its own read: opening it for writing completes only
+  // once the handler has opened it to read, and the read ends only when the writer closes.
+  const pipe = path.join(folder, "secret.srt");
+  await promisify(execFile)("mkfifo", [pipe]);
+  const subtitleId = mediaResources.add({ url: "file://lib_00000001/secret.srt" }, subtitleOwner, "subtitle");
+  t.after(() => mediaResources.remove(subtitleId));
+  let allowed = true;
+  const harness = await mount([], null, {
+    access: () => { if (!allowed) throw Object.assign(new Error("revoked"), { status: 404 }); },
+    libraryTarget: async () => pipe,
+  });
+  t.after(harness.close);
+
+  const pending = api(harness.base, `/api/subtitle/${subtitleId}`);
+  const writer = await open(pipe, "w");
+  allowed = false;
+  await writer.writeFile("1\n00:00:01,000 --> 00:00:02,000\nsecret subtitle\n");
+  await writer.close();
+  const response = await prompt(pending, "the subtitle revoked during its read");
+  assert.equal(response.status, 404);
+  assert.equal((await response.text()).includes("secret subtitle"), false);
 });
 
 test("a file subtitle re-checks its resource after the held target", async (t) => {
