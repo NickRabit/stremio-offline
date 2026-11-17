@@ -48,6 +48,7 @@ the primary agent, and shipped in its own pull request.
 | SA-9 / P3 | Confirmed; fixed in #842 | `GET /api/subtitle/:subtitleId`, the library sidecar (`file://`) branch: after `libraryTarget` and `readFile` the cues are sent without the second `requireAccess` / `mediaResources.get` / destroyed-socket check that the addon branch of the same handler makes, and that its tests pin. |
 | SA-10 / P4 | Confirmed; fixed in #842 | `GET /api/stream-sources/:type/:id` answers addon keys and names after `streamCandidates` without re-checking the grants. Names only, no playable resource. The same class of gap remains unchecked in `GET /api/catalog`, `/api/meta` and `/api/search`. |
 | SA-11 / P4 | Observed locally | `server/src/downloads.test.ts` runs for about a minute on its own; under the full local gate with another job loading the machine it crossed the 120-second per-file limit twice (2026-11-16 and 2026-11-17) and failed the gate, while passing alone and on CI. A fixed limit and a growing file; splitting the file or raising the limit for it is a separate decision. |
+| SA-12 / P3 | Reproduced, fixed in #843 | CI flake in `playback.test.ts`, "real FFmpeg stops writing while suspended…": the test reported segment 1 as fetched as soon as the remux was handed over, which happens once segment 0 is listed; on a slow runner the ledger could not count it yet. Reproduced in `node:26-trixie-slim` with Debian's FFmpeg at 0.2 CPU (1 of 6 runs failed); the test now waits for the playlist, woken by writes to the folder (10 of 10 passed under the same limit). A test race, not a playback defect. |
 | Historical H1/H2/H3 | Already fixed in source; not all rerun here | Admissions use the admission/persist machinery; `remove` writes before deleting its partial; unreadable queue/journal tests exist. Do not repeat the October JSON-store findings as current defects. Current queues also support SQLite. A new power-loss/fsync claim was not tested. |
 | Follow reserve/enqueue/adopt replay | Existing implementation verified within harness limits | `follows.test.ts`: reserved-before-queue, queued-before-link, adoption, completion, history removal and repeated restart scenarios. 21 selected tests passed. The queue collaborator is fake in several replay cases: this is not a spawned-process, two-real-store crash campaign. |
 | Missing library root | Existing protection inspected, full campaign not verified | `library.test.ts` contains an incomplete-walk test for a missing root; no evidence here establishes behavior for every unmount/scan/artwork interleaving. Never equate missing with empty. |
@@ -185,6 +186,8 @@ Fourth delivery, 2026-11-17, against `main` at `22ef96c9` (0.7.113):
   against the unmodified handler. The independent review found that an addon
   switched off during a search dropped out of the list being checked; fixed
   by reading the list before the wait.
+- #843 (SA-12): the intermittent real-FFmpeg test failure that hit this
+  documentation pull request's own CI run.
 
 Audit-only work does not change runtime and has no version bump. Build, complete
 unit/e2e and Docker deployment belong to each implementation PR. No production
