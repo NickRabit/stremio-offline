@@ -104,7 +104,9 @@ rows appearing per addon, local copies beside a failed addon lookup, and the nex
 the prefetched sources and staying with the playing addon. #850 moved that slice into
 `web/src/use-title-sources.ts`. The library browsing slice is pinned by
 `web/src/library-browse-app.test.tsx` and lives in `web/src/use-library-browse.ts`. Scroll and
-view-anchor restoration is the remaining candidate.
+view-anchor restoration is pinned by the Playwright specs `rotation.spec.ts`, `safari-scroll.spec.ts`,
+`layout/catalog-header.spec.ts`, `layout/catalogue-detail.spec.ts` and `scroll-return.spec.ts`: it
+depends on real layout, so jsdom tests through `App` cannot hold it. Its move is next.
 
 ### 4. Inject the remaining queue faults — done
 
