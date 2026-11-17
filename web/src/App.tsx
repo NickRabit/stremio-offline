@@ -69,7 +69,7 @@ import { SearchEverywhere } from "./SearchEverywhere";
 import { PersonView } from "./PersonView";
 import { captureScroll, restoreScroll, snapshotScrollTop, type ScrollSnapshot } from "./scroll-snapshot";
 import { useSearchEverywhere } from "./useSearchEverywhere";
-import { CatalogSearchStartNotFound, catalogSearchHasMore, catalogSearchSession, newCatalogSearchSlot, runCatalogSearch, type CatalogSearchCursor } from "./catalog-search-session";
+import { useCatalogLoader } from "./use-catalog-loader";
 import type { HomeCardActions } from "./HomeCard";
 import { useHome } from "./useHome";
 import type { ShowAllTarget } from "./home-cards";
@@ -291,7 +291,7 @@ export function App() {
     if (changed) update(next);
   }
   type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
-  const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
+  const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [localStreams, setLocalStreams] = useState<Stream[]>([]); const [localLoading, setLocalLoading] = useState(false); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
   const nextEpisodePrefetchRef = useRef<{ id: string; at: number; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
   /** The next episode of what the shared detail is playing, read while this one runs. */
@@ -933,7 +933,7 @@ export function App() {
   const loadSearchState = () => api.searchState().then(setSearchState).catch(() => undefined);
   // A query is remembered once somebody acted on it -- Enter, a suggestion, an opened result --
   // and only after its first page came back. Whatever was merely typed past is not.
-  const firstPageOk = useRef<string | null>(null); const recordIntent = useRef<string | null>(null); const recordedQuery = useRef<string | null>(null);
+  const recordedQuery = useRef<string | null>(null);
   // Another account must never see this one's history, nor the library marks cached for the previous one.
   useEffect(() => { setSearchState(null); recordedQuery.current = null; clearTitleExtrasCache(); }, [session?.username]);
   const recordSearch = (query: string) => {
@@ -951,10 +951,6 @@ export function App() {
     if (recordedQuery.current === query) recordedQuery.current = null;
     api.forgetSearch(query).then(setSearchState).catch((error) => { fail(error); void loadSearchState(); });
   };
-  const actOnSearch = (query: string) => {
-    if (firstPageOk.current === query) recordSearch(query);
-    else recordIntent.current = query;
-  };
   const poolRef = useRef<CandidatePool | null>(null);
   if (!poolRef.current) poolRef.current = new CandidatePool();
   const pool = poolRef.current;
@@ -970,36 +966,18 @@ export function App() {
     const picked = parseSearchScope(value);
     if (picked.catalogId) setSelectedCatalog(`${picked.addonKey}:${picked.catalogType}:${picked.catalogId}`);
   };
-  const [skip, setSkip] = useState(0); const [cursor, setCursor] = useState(""); const [hasMore, setHasMore] = useState(false); const [loadingMore, setLoadingMore] = useState(false); const [sourceCount, setSourceCount] = useState(0);
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); /** The viewer chose the playing source by hand, so the next episode stays with its provider. */ const viewerChoseSourceRef = useRef(false); const sourcesRequestRef = useRef(0);
   const sourcesBusyRef = useRef(false);
   const subtitlesReadyRef = useRef<Promise<unknown>>(Promise.resolve());
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
-  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null); const sourceListRef = useRef<HTMLDivElement>(null);
-  const searchAbortRef = useRef<AbortController | null>(null);
-  const catalogSearchSlotRef = useRef<string | null>(null);
-  if (catalogSearchSlotRef.current === null) catalogSearchSlotRef.current = newCatalogSearchSlot();
-  const catalogSearchGenerationRef = useRef(0);
-  const catalogSearchSessionRef = useRef<CatalogSearchCursor>({ id: null, revision: 0 });
-  const catalogSessionUnsupportedRef = useRef(false);
-  const loadedSearchRef = useRef<{ query: string; scope: string; type: string; genre: string; catalog: string; reset: number } | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null); const sourceListRef = useRef<HTMLDivElement>(null);
   const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
   const viewAnchor = useRef<ViewAnchor | null>(null); const anchorFrozen = useRef(false); const anchorFrame = useRef(0);
-  // A toolbar folds to give a scrolling list more room. A list that already fits has nothing to
-  // scroll, so nothing could ever unfold the toolbar again: it opens instead of staying folded.
-  useEffect(() => {
-    const target = view === "library" ? { compact: libraryCompact, set: setLibraryCompact, element: browseScrollRef.current }
-      : view === "catalog" ? { compact: catalogCompact, set: setCatalogCompact, element: gridRef.current } : null;
-    const element = target?.element;
-    if (!target?.compact || !element) return;
-    const unfoldIfFits = () => { if (element.scrollHeight <= element.clientHeight + 1) target.set(false); };
-    const observer = new ResizeObserver(unfoldIfFits);
-    observer.observe(element);
-    const settled = window.setTimeout(unfoldIfFits, 450);
-    return () => { observer.disconnect(); window.clearTimeout(settled); };
-  }, [view, libraryCompact, catalogCompact, items, browse]);
   const currentCatalog = catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
+  const genreOptions = currentCatalog?.extra?.find((extra) => extra.name === "genre")?.options ?? [];
+  // Switching catalogues drops a genre the new catalogue does not know.
+  const activeGenre = genreOptions.includes(genre) ? genre : "";
   const panelAddonKey = (streamAddonKey?: string) => panelProgressAddonKey({
     searching: Boolean(submittedQuery), scopeAddonKey: searchScope.addonKey,
     catalogAddonKey: currentCatalog?.addonKey, streamAddonKey,
@@ -1059,6 +1037,43 @@ export function App() {
     // A failure with a reference stays long enough to copy the reference down.
     setError(describeError(value)); setTimeout(() => setError(""), value instanceof ApiError && value.reference ? 15000 : 6000);
   };
+  const {
+    items, hasMore, loadingMore, sourceCount, loadPage, actOnSearch, clearPendingRecord,
+  } = useCatalogLoader({
+    view,
+    query: submittedQuery,
+    scopeValue: searchScopeValue,
+    scope: searchScope,
+    typeFilter,
+    effectiveTypeFilter,
+    genre: activeGenre,
+    catalog: currentCatalog,
+    resetKey: catalogReset,
+    searchSessionEnabled: buildInfo?.searchEverywhere === true,
+    onFirstPageStart: () => {
+      setSelected(null); setStreams([]); setLocalStreams([]); setLocalLoading(false);
+    },
+    onItems: (loaded, addonKey) => pool.add(loaded, addonKey),
+    onRecordSearch: recordSearch,
+    onSearchReset: (query) => {
+      if (recordedQuery.current !== query) recordedQuery.current = null;
+    },
+    onError: fail,
+    onBusyChange: setBusy,
+  });
+  // A toolbar folds to give a scrolling list more room. A list that already fits has nothing to
+  // scroll, so nothing could ever unfold the toolbar again: it opens instead of staying folded.
+  useEffect(() => {
+    const target = view === "library" ? { compact: libraryCompact, set: setLibraryCompact, element: browseScrollRef.current }
+      : view === "catalog" ? { compact: catalogCompact, set: setCatalogCompact, element: gridRef.current } : null;
+    const element = target?.element;
+    if (!target?.compact || !element) return;
+    const unfoldIfFits = () => { if (element.scrollHeight <= element.clientHeight + 1) target.set(false); };
+    const observer = new ResizeObserver(unfoldIfFits);
+    observer.observe(element);
+    const settled = window.setTimeout(unfoldIfFits, 450);
+    return () => { observer.disconnect(); window.clearTimeout(settled); };
+  }, [view, libraryCompact, catalogCompact, items, browse]);
   /** Writes wait for the hand to stop: one PATCH per gesture, not per click of a shape
    *  someone is flipping through. The latest patch wins, and nothing here runs on its own --
    *  a stored view is only ever written by the control somebody just touched. */
@@ -2380,144 +2395,6 @@ export function App() {
     return () => { stopped = true; clearTimeout(timer); document.removeEventListener("visibilitychange", wake); };
   }, [view, ready]);
 
-  const genreOptions = currentCatalog?.extra?.find((extra) => extra.name === "genre")?.options ?? [];
-  // A genre belongs to one catalogue. Switching catalogues drops it from the menu but leaves
-  // it in state, and a catalogue returns nothing for a genre it does not know. So we only take it
-  // when it exists.
-  const activeGenre = genreOptions.includes(genre) ? genre : "";
-
-  /** The same entries can come back from several addons and from several pages. */
-  const merge = (previous: Meta[], incoming: Meta[]) => {
-    const seen = new Set(previous.map((item) => `${item.type}:${item.id}`));
-    return [...previous, ...incoming.filter((item) => !seen.has(`${item.type}:${item.id}`))];
-  };
-
-  const deleteCatalogSearchSession = () => {
-    const id = catalogSearchSessionRef.current.id;
-    catalogSearchSessionRef.current = { id: null, revision: 0 };
-    if (id !== null) catalogSearchSession.delete(id);
-  };
-
-  const loadPage = async (reset: boolean) => {
-    if (!submittedQuery && !currentCatalog) return;
-    // Paging may be dropped, a new query may not -- that one has to override the run before it.
-    if (!reset && loadingRef.current) return;
-    const request = reset ? ++requestRef.current : requestRef.current;
-    const stale = () => request !== requestRef.current;
-    loadingRef.current = true;
-    const from = reset ? 0 : skip;
-    if (reset) {
-      searchAbortRef.current?.abort();
-      searchAbortRef.current = null;
-      deleteCatalogSearchSession();
-      catalogSearchGenerationRef.current += 1;
-      setBusy(true); setSelected(null); setStreams([]); setLocalStreams([]); setLocalLoading(false);
-    } else setLoadingMore(true);
-    try {
-      if (submittedQuery) {
-        const controller = new AbortController();
-        searchAbortRef.current = controller;
-        const loadCurrentSearch = async () => {
-          const result = await api.search(submittedQuery, { ...searchScope, type: effectiveTypeFilter, cursor: reset ? "" : cursor, signal: controller.signal });
-          if (stale()) return;
-          const next = reset ? result.items : merge(itemsRef.current, result.items);
-          // An addon may keep returning the same thing; without this guard paging would never end.
-          const gainedNothing = !reset && next.length === itemsRef.current.length;
-          itemsRef.current = next; setItems(next);
-          setSourceCount(result.sources); setCursor(result.cursor); setHasMore(result.hasMore && !gainedNothing);
-          pool.add(result.items, searchScope.addonKey);
-          if (reset) {
-            firstPageOk.current = submittedQuery;
-            if (recordIntent.current === submittedQuery) { recordIntent.current = null; recordSearch(submittedQuery); }
-          }
-        };
-
-        if (!buildInfo?.searchEverywhere || catalogSessionUnsupportedRef.current) {
-          await loadCurrentSearch();
-        } else {
-          const before = new Set(itemsRef.current.map((item) => `${item.type}:${item.id}`));
-          let gained = false;
-          try {
-            await runCatalogSearch({
-              reset,
-              request: {
-                query: submittedQuery,
-                ...(effectiveTypeFilter === "movie" || effectiveTypeFilter === "series"
-                  ? { type: effectiveTypeFilter }
-                  : {}),
-                ...(searchScope.addonKey === undefined
-                  ? {}
-                  : {
-                    scope: {
-                      addonKey: searchScope.addonKey,
-                      ...(searchScope.catalogType === undefined ? {} : { catalogType: searchScope.catalogType }),
-                      ...(searchScope.catalogId === undefined ? {} : { catalogId: searchScope.catalogId }),
-                    },
-                  }),
-                slotId: catalogSearchSlotRef.current!,
-                generation: catalogSearchGenerationRef.current,
-              },
-              cursor: catalogSearchSessionRef.current,
-              signal: controller.signal,
-              onSnapshot: (snapshot) => {
-                if (stale()) return;
-                const next = snapshot.items;
-                for (const item of next) {
-                  if (!before.has(`${item.type}:${item.id}`)) {
-                    gained = true;
-                    break;
-                  }
-                }
-                itemsRef.current = next;
-                setItems(next);
-                setCursor("");
-                setSourceCount(snapshot.sources);
-                setHasMore(catalogSearchHasMore(snapshot, reset, gained));
-                pool.add(next, searchScope.addonKey);
-                if (next.length > 0 || snapshot.state === "complete") setBusy(false);
-              },
-              onFirstSnapshot: () => {
-                if (reset) {
-                  firstPageOk.current = submittedQuery;
-                  if (recordIntent.current === submittedQuery) { recordIntent.current = null; recordSearch(submittedQuery); }
-                }
-              },
-            });
-          } catch (error) {
-            if (!(error instanceof CatalogSearchStartNotFound)) throw error;
-            catalogSessionUnsupportedRef.current = true;
-            deleteCatalogSearchSession();
-            await loadCurrentSearch();
-          }
-        }
-      } else {
-        const metas = await api.catalog(currentCatalog!, "", from, activeGenre);
-        if (stale()) return;
-        pool.add(metas, currentCatalog!.addonKey);
-        const next = reset ? metas : merge(itemsRef.current, metas);
-        const gainedNothing = !reset && next.length === itemsRef.current.length;
-        itemsRef.current = next; setItems(next);
-        setSkip(from + metas.length); setHasMore(metas.length > 0 && !gainedNothing);
-      }
-    } catch (e) {
-      // A superseded search aborts the fetch in the browser; that is not a failure to report.
-      if ((e as { name?: unknown } | null)?.name === "AbortError") return;
-      if (!stale()) { if (reset) { itemsRef.current = []; setItems([]); recordIntent.current = null; } fail(e); setHasMore(false); }
-    }
-    finally { if (!stale()) { loadingRef.current = false; setBusy(false); setLoadingMore(false); } }
-  };
-
-  useEffect(() => {
-    if (view !== "catalog") {
-      searchAbortRef.current?.abort();
-      deleteCatalogSearchSession();
-    }
-  }, [view]);
-  useEffect(() => () => {
-    searchAbortRef.current?.abort();
-    deleteCatalogSearchSession();
-  }, []);
-
   // After Enter or a debounced commit the committed query changes, so the note is recomputed.
   useEffect(() => { if (liveSearchOn) live.update(search, submittedQuery); }, [submittedQuery]);
   useEffect(() => { if (!liveSearchOn) live.cancel(); }, [liveSearchOn]);
@@ -2540,24 +2417,6 @@ export function App() {
     actOnSearch(suggestion.text);
     setSubmittedQuery(suggestion.text);
   };
-  // A changed catalogue, query or filter starts from the first page. The scope only
-  // decides what a search asks for, so on its own it reloads nothing.
-  useEffect(() => {
-    const snapshot = { query: submittedQuery, scope: searchScopeValue, type: typeFilter, genre: activeGenre, catalog: `${currentCatalog?.addonKey}:${currentCatalog?.type}:${currentCatalog?.id}`, reset: catalogReset };
-    const previous = loadedSearchRef.current;
-    loadedSearchRef.current = snapshot;
-    firstPageOk.current = null;
-    if (recordIntent.current !== submittedQuery) recordIntent.current = null;
-    if (recordedQuery.current !== submittedQuery) recordedQuery.current = null;
-    // Only a new query text inside the same search keeps the previous results on screen; every
-    // other reset -- new scope, filter, catalogue or built-in list -- starts from nothing.
-    const queryOnly = previous !== null && previous.query !== "" && snapshot.query !== "" && previous.query !== snapshot.query
-      && previous.scope === snapshot.scope && previous.type === snapshot.type && previous.genre === snapshot.genre
-      && previous.catalog === snapshot.catalog && previous.reset === snapshot.reset;
-    if (!queryOnly) { itemsRef.current = []; setItems([]); setSourceCount(0); }
-    setSkip(0); setCursor(""); setHasMore(false); void loadPage(true);
-  },
-    [submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id, catalogReset]);
   // Entering search starts from the addon order; browse keeps its own sort untouched.
   useEffect(() => { setSearchSort(searchStateRef.current?.defaultOrder === "titleMatch" ? "titleMatch" : "default"); }, [Boolean(submittedQuery)]);
 
@@ -2577,7 +2436,7 @@ export function App() {
     };
     grid.addEventListener("scroll", onScroll, { passive: true });
     return () => grid.removeEventListener("scroll", onScroll);
-  }, [hasMore, skip, cursor, submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
+  }, [hasMore, submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
 
   /** Every addon files the same film under its own id. We merge by name and year and keep
    *  the entry with an IMDb id, because that is what source addons look streams up by. */
@@ -4608,7 +4467,7 @@ export function App() {
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} queueWindow={queueWindow} speedLimitMbps={speedLimitMbps} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <LazyScreenBoundary><Suspense fallback={null}><StatsPanel.Screen key={statsReset} onError={fail}/></Suspense></LazyScreenBoundary>}
       {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} libraries={libraries} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
-      {view === "settings" && <LazyScreenBoundary><Suspense fallback={null}><SettingsPage.Screen build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSourceProfilesChanged={reloadSourceRules} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
+      {view === "settings" && <LazyScreenBoundary><Suspense fallback={null}><SettingsPage.Screen build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) clearPendingRecord(); setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSourceProfilesChanged={reloadSourceRules} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
         rememberChosenStartView(restored.settings.startView);
