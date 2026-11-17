@@ -103,7 +103,8 @@ late local and addon answers of a previous title, a failure that answers after t
 rows appearing per addon, local copies beside a failed addon lookup, and the next episode taking
 the prefetched sources and staying with the playing addon. #850 moved that slice into
 `web/src/use-title-sources.ts`. The library browsing slice is pinned by
-`web/src/library-browse-app.test.tsx`; its move is next.
+`web/src/library-browse-app.test.tsx` and lives in `web/src/use-library-browse.ts`. Scroll and
+view-anchor restoration is the remaining candidate.
 
 ### 4. Inject the remaining queue faults — done
 

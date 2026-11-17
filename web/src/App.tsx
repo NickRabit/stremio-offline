@@ -70,6 +70,7 @@ import { PersonView } from "./PersonView";
 import { captureScroll, restoreScroll, snapshotScrollTop, type ScrollSnapshot } from "./scroll-snapshot";
 import { useSearchEverywhere } from "./useSearchEverywhere";
 import { useCatalogLoader } from "./use-catalog-loader";
+import { useLibraryBrowse } from "./use-library-browse";
 import { useTitleSources } from "./use-title-sources";
 import type { HomeCardActions } from "./HomeCard";
 import { useHome } from "./useHome";
@@ -87,7 +88,7 @@ import { layoutKey, rememberedLayout, rememberLayout } from "./layout-memory";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
-import type { Addon, Avatar, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, Avatar, BuildInfo, BrowseItem, BrowseLibrary, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 import type { DownloadDrainView, DownloadWindowState } from "../../server/src/api-types";
 
 export const queueDrainNotice = (
@@ -374,7 +375,6 @@ export function App() {
   const [favoritesFilter, setFavoritesFilter] = useState<FavoriteFilter>("all");
   const [favoritesBusy, setFavoritesBusy] = useState(false);
   const [favoritesLoadingMore, setFavoritesLoadingMore] = useState(false);
-  const [browse, setBrowse] = useState<BrowseResult | null>(null);
   const [libraries, setLibraries] = useState<LibraryView[]>([]);
   const refreshLibraries = () => api.libraries().then(setLibraries).catch(() => undefined);
   const libraryIds = useMemo(() => libraries.map((library) => library.id), [libraries]);
@@ -386,7 +386,6 @@ export function App() {
   const [browseSort, setBrowseSort] = useState<LibrarySort>("name");
   const [browseDesc, setBrowseDesc] = useState(false);
   const [browseView, setBrowseView] = useState<"grid" | "list">("grid");
-  const [browseBusy, setBrowseBusy] = useState(false);
   /** The local file or matched-movie folder open in the library's detail, and where its listing
    *  sat, so Back returns to the exact spot. */
   const [localDetail, setLocalDetail] = useState<{ item: TreeItem } | null>(null);
@@ -455,14 +454,10 @@ export function App() {
   const finishingOps = useRef(new Set<string>());
   const scanWanted = useRef(false);
   const [scanEpoch, setScanEpoch] = useState(0);
-  const browseRequest = useRef(0);
-  const browseLocation = useRef("");
-  const browseSeed = useRef(String(Date.now()));
   const [menuFor, setMenuFor] = useState<string | null>(null);
   // Not remembered between visits: this one is for working through what the scan proposed,
   // and once that queue is empty it has nothing to show.
   const [onlyUnconfirmed, setOnlyUnconfirmed] = useState(false);
-  browseLocation.current = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyUnconfirmed]);
   // Preserve the favorites breadcrumb when entering a folder from favorites.
   const [fromFavorites, setFromFavorites] = useState(false);
   const [resume, setResume] = useState<ProgressEntry[]>([]);
@@ -1017,24 +1012,39 @@ export function App() {
   };
   const openStoredGallery = async (path: string) => {
     const request = ++galleryRequest.current;
-    const location = browseLocation.current;
+    const location = browseLocation();
     const openedView = viewRef.current;
     setMenuFor(null);
     try {
       const { images } = await api.libraryGallery(path);
-      if (request !== galleryRequest.current || openedView !== viewRef.current || location !== browseLocation.current) return;
+      if (request !== galleryRequest.current || openedView !== viewRef.current || location !== browseLocation()) return;
       presentGallery(images.map(localGalleryImage));
     } catch (error) { fail(error); }
   };
   const notify = (text: string) => { setMessage(text); setTimeout(() => setMessage(""), 3200); };
   const [pairLink, setPairLink] = useState(() => pairLinkCode());
   useEffect(() => { if (pairLink) clearPairLink(); }, []);
+  const ready = Boolean(session);
   const fail = (value: unknown) => {
     if (value instanceof ChildRefusedError) return;
     if (value instanceof ApiError && value.status === 401) { setSession(null); return; }
     // A failure with a reference stays long enough to copy the reference down.
     setError(describeError(value)); setTimeout(() => setError(""), value instanceof ApiError && value.reference ? 15000 : 6000);
   };
+  const {
+    browse, busy: browseBusy, load: loadBrowse, refresh: refreshBrowse, location: browseLocation,
+  } = useLibraryBrowse({
+    ready,
+    active: view === "library",
+    applied: browseApplied,
+    path: browsePath,
+    query: browseQuery,
+    sort: browseSort,
+    desc: browseDesc,
+    unconfirmed: onlyUnconfirmed,
+    scanEpoch,
+    fail,
+  });
   const {
     streams, localStreams, localLoading, subtitles, sourcesLoaded, sourcesComplete, pendingSources,
     setStreams, setLocalStreams, setLocalLoading, setSubtitles, setSourcesLoaded, setPendingSources,
@@ -1650,7 +1660,6 @@ export function App() {
       })
       .catch(() => setSession(null));
   }, []);
-  const ready = Boolean(session);
   // Loading data only makes sense after signing in; before that it would just throw 401s.
   // Every settings answer is merged into the state rather than assigned over it: an ordinary
   // account is not told the instance keys, and the defaults above stand in for them.
@@ -1779,33 +1788,6 @@ export function App() {
   // An empty path with more than one library configured is the library list; a
   // single-library install still opens straight into the tree.
   const libraryList = browsePath === "" && libraries.length > 1;
-  const loadBrowse = async (target = browsePath, skip = 0) => {
-    const request = ++browseRequest.current;
-    const wanted = JSON.stringify([target, browseQuery, browseSort, browseDesc, onlyUnconfirmed]);
-    setBrowseBusy(true);
-    try {
-      const options = { skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
-      // Favorites include entries from the entire library tree.
-      const page = target === ":favorites"
-        ? await api.favorites(options)
-        : await api.browse({ ...options, path: target, query: browseQuery, unconfirmed: onlyUnconfirmed });
-      if (request !== browseRequest.current || wanted !== browseLocation.current) return;
-      setBrowse((previous) => skip && previous ? { ...page, items: [...previous.items, ...page.items] } : page);
-    } catch (error) { if (request === browseRequest.current && wanted === browseLocation.current) fail(error); }
-    finally { if (request === browseRequest.current) setBrowseBusy(false); }
-  };
-  const refreshBrowse = async (limit: number) => {
-    const location = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyUnconfirmed]);
-    if (location !== browseLocation.current) return;
-    const request = browseRequest.current;
-    try {
-      const options = { limit: Math.max(60, limit), sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
-      const page = browsePath === ":favorites"
-        ? await api.favorites(options)
-        : await api.browse({ ...options, path: browsePath, query: browseQuery, unconfirmed: onlyUnconfirmed });
-      if (location === browseLocation.current && request === browseRequest.current) setBrowse(page);
-    } catch { /* Artwork refresh is optional. */ }
-  };
   useEffect(() => {
     if (!ready) return;
     if (startupPersonalRefresh.current) {
@@ -1917,12 +1899,6 @@ export function App() {
     setBrowseView(prefs.view);
     setBrowseApplied(true);
   }, [viewsReady, scopeKey, views]);
-  // The first listing waits for that apply: an account that sorts by size must not see the
-  // name order first and then watch it jump.
-  useEffect(() => {
-    if (!ready || view !== "library" || !browseApplied) return;
-    void loadBrowse(browsePath);
-  }, [ready, view, browseApplied, browsePath, browseQuery, browseSort, browseDesc, onlyUnconfirmed, scanEpoch]);
   useEffect(() => { setSelectionMode(false); setSelectedPaths(new Set()); }, [browsePath]);
   // Polling only means something while a scan is on; otherwise one look on entry is enough.
   const scanning = libraryScan?.status === "running" || libraryScan?.status === "paused";
@@ -2024,23 +2000,6 @@ export function App() {
     window.clearTimeout(focusTimer.current);
     focusTimer.current = window.setTimeout(() => setBrowseFocus(null), 5000);
   }, [view, browse, browseBusy, browseFocus]);
-
-  // Artwork is finished in the background; once it is ready the page refreshes itself.
-  // Asking once was not enough: a poster fetched from a catalogue takes longer than a
-  // second, and the answer still said "pending", which left the tile bare until the user
-  // reloaded the page. The wait doubles instead, and gives up rather than polling forever
-  // over a file that will never produce a thumbnail.
-  const artworkPolls = useRef(0);
-  useEffect(() => { artworkPolls.current = 0; }, [browsePath, browseQuery, browseSort, browseDesc, onlyUnconfirmed, scanEpoch]);
-  useEffect(() => {
-    if (view !== "library" || !browse?.pending) return;
-    const attempt = artworkPolls.current;
-    if (attempt >= 8) return;
-    // Only as many entries as are already loaded are refreshed, so the list does not scroll back.
-    const nactenych = browse.items.length;
-    const timer = setTimeout(() => { artworkPolls.current = attempt + 1; void refreshBrowse(nactenych); }, Math.min(8000, 1000 * 2 ** attempt));
-    return () => clearTimeout(timer);
-  }, [view, browse, browsePath, browseQuery, browseSort, browseDesc, onlyUnconfirmed]);
 
   /** Jumping from the download queue: opens the folder the file sits in and finds it there.
    * The filters have to be cleared, or the wanted file would stay filtered out of the listing. */
