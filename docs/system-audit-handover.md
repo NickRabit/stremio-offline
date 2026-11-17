@@ -101,7 +101,9 @@ unrelated `App` state into a hook; a slice that needs it is not a slice yet.
 The characterization tests for the first candidate are in `web/src/title-sources-app.test.tsx`:
 late local and addon answers of a previous title, a failure that answers after the detail closed,
 rows appearing per addon, local copies beside a failed addon lookup, and the next episode taking
-the prefetched sources and staying with the playing addon. The move itself is still to do.
+the prefetched sources and staying with the playing addon. #850 moved that slice into
+`web/src/use-title-sources.ts`. The library browsing slice is pinned by
+`web/src/library-browse-app.test.tsx`; its move is next.
 
 ### 4. Inject the remaining queue faults — done
 
