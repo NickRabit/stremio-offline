@@ -4,7 +4,7 @@ import { EventEmitter, once } from "node:events";
 import { execFile } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
 import { createServer } from "node:http";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, watch, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -1954,6 +1954,22 @@ setInterval(() => {}, 1000);
 
 /** The playlist read behind a forward fetch is a chain of promises on the generation's ledger:
  *  waiting for that chain is waiting for the read itself, however slow the disk is. */
+/** Resolves once the generation's playlist lists `segment`, woken by writes to the folder rather
+ *  than by a clock: a real FFmpeg on a slow runner may not have written it yet. */
+const playlistLists = async (directory: string, segment: string) => {
+  const listed = () => readFile(path.join(directory, "index-0.m3u8"), "utf8").then((text) => text.includes(segment), () => false);
+  const stop = new AbortController();
+  const changes = watch(directory, { signal: stop.signal });
+  try {
+    if (await listed()) return;
+    for await (const _change of changes) if (await listed()) return;
+  } catch (error) {
+    if ((error as { name?: string }).name !== "AbortError") throw error;
+  } finally {
+    stop.abort();
+  }
+};
+
 const waitForLedger = async (session: any, condition: () => boolean) => {
   for (const entry of session.ledger.generations.values()) await entry.fetchedRead;
   assert.equal(condition(), true, "the ledger read settled");
@@ -2178,6 +2194,9 @@ test("real FFmpeg stops writing while suspended and resumes without a segment ga
     .sort((left, right) => left - right);
 
   const stopped = nextSignal();
+  // The ledger counts a fetched segment from the playlist, so the client asks only for a segment
+  // FFmpeg has already listed, as a real player does.
+  await playlistLists(session.directory, "seg-0-000001.m4s");
   manager.fetched(session.id, String(generation), "seg-0-000001.m4s");
   await waitForLedger(session, () => (session.ledger.generations.get(generation)?.fetchedSeconds ?? 0) > 0);
   assert.equal(await stopped, "SIGSTOP");
