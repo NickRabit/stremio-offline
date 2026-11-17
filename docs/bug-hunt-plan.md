@@ -102,7 +102,7 @@ Files: `store.ts`, `state-file.ts`, `fs-retry.ts`, `library-meta-store.ts`,
       It deliberately leaves the download queue to resume after restart.
       Test SIGTERM during a download, a scan and a conversion: verify queue
       recovery, scan persistence, child coverage and bounded exit.
-      Progress: #505 adds the traffic log to the shutdown flushes (up to a minute of transfer bytes was lost on restart). The three cases are covered by unit tests rather than a spawned-server run (which would need the outbound guard opened to a local source): `downloads.test.ts` requeues a downloading job from its `.part` after load; `library-scan.test.ts` resumes an interrupted scan and recheck; `playback.test.ts` stops media and subtitle readers and a preserved fallback conversion; `server-shutdown.test.ts` covers step order, a failing flush, the one-second follow bound and exit on the first signal.
+      Progress: #505 adds the traffic log to the shutdown flushes (up to a minute of transfer bytes was lost on restart). The three cases are covered by unit tests rather than a spawned-server run (which would need the outbound guard opened to a local source): `downloads-transfer.test.ts` requeues a downloading job from its `.part` after load; `library-scan.test.ts` resumes an interrupted scan and recheck; `playback.test.ts` stops media and subtitle readers and a preserved fallback conversion; `server-shutdown.test.ts` covers step order, a failing flush, the one-second follow bound and exit on the first signal.
 - [x] **BH-1.3 Timers and intervals.** Every `setInterval` across
       server/web/desktop. Each one: is it cleared on stop, `unref()`'d on the
       server, and is its period justified? Coalesce intervals that poll the
