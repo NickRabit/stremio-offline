@@ -7,7 +7,7 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
 import { DownloadQueue, PROGRESS_SAVE_MS, type DownloadJob } from "./downloads.js";
-import { MB, deferred, downloadLibrary, listen, queuedFile, send, tempQueue, waitFor } from "./downloads-test-support.js";
+import { MB, deferred, downloadLibrary, filled, listen, queuedFile, send, tempQueue, waitFor } from "./downloads-test-support.js";
 
 const GiB = 1024 ** 3;
 
@@ -364,6 +364,94 @@ test("a 206 that restarts at byte 0 does not append onto the .part file", async 
     assert.equal(body.length, size);
     assert.ok(body.every((byte) => byte === 2), "the restarted payload must replace the partial, not follow it");
   } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a 416 on a resumed transfer discards the part file and finishes from byte 0", async () => {
+  const total = 2 * MB;
+  const drop = 512 * 1024;
+  const payload = filled(0, total);
+  const firstCut = deferred();
+  const requests: Array<{ range?: string; status: number }> = [];
+  let first = true;
+  const { server, port } = await listen(async (req, res) => {
+    const range = req.headers.range;
+    if (range) {
+      requests.push({ range, status: 416 });
+      res.writeHead(416, { "content-range": `bytes */${total}` });
+      res.end();
+      return;
+    }
+    requests.push({ status: 200 });
+    res.writeHead(200, { "content-length": String(total), "content-type": "video/mp4" });
+    if (!first) {
+      res.end(payload);
+      return;
+    }
+    first = false;
+    await send(res, drop);
+    req.socket.destroy();
+    firstCut.release();
+  });
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await firstCut.promise;
+    await waitFor(queue, () => (queue.list()[0]?.retryCount ?? 0) >= 1);
+    await waitFor(queue, () => queue.list()[0]?.status === "completed" || queue.list()[0]?.status === "failed");
+    const job = queue.list()[0];
+    assert.equal(job.status, "completed", job.error);
+    const body = await readFile(queuedFile(downloads, job.target));
+    assert.equal(body.equals(payload), true, "the published file must match the complete payload");
+    const rejectedRange = requests.findIndex((request) => request.range && request.status === 416);
+    assert.notEqual(rejectedRange, -1, "the server must reject at least one ranged resume");
+    assert.ok(requests.slice(rejectedRange + 1).some((request) => !request.range && request.status === 200),
+      "a rejected resume must be followed by a request without Range");
+    await assert.rejects(stat(`${queuedFile(downloads, job.target)}.part`), { code: "ENOENT" });
+  } finally {
+    firstCut.release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a source that ignores the resume range is rewritten from byte 0, not appended to", async () => {
+  const total = 2 * MB;
+  const drop = 512 * 1024;
+  const payload = filled(0, total);
+  const firstCut = deferred();
+  let first = true;
+  let sawRange = false;
+  const { server, port } = await listen(async (req, res) => {
+    if (req.headers.range) sawRange = true;
+    res.writeHead(200, { "content-length": String(total), "content-type": "video/mp4" });
+    if (!first) {
+      res.end(payload);
+      return;
+    }
+    first = false;
+    await send(res, drop);
+    req.socket.destroy();
+    firstCut.release();
+  });
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await firstCut.promise;
+    await waitFor(queue, () => (queue.list()[0]?.retryCount ?? 0) >= 1);
+    await waitFor(queue, () => queue.list()[0]?.status === "completed" || queue.list()[0]?.status === "failed");
+    const job = queue.list()[0];
+    assert.equal(job.status, "completed", job.error);
+    assert.equal(sawRange, true, "the retry must carry a resume range");
+    const body = await readFile(queuedFile(downloads, job.target));
+    assert.equal(body.length, total, "the ignored range response must replace the partial");
+    assert.equal(body.equals(payload), true, "the published file must match the complete payload");
+  } finally {
+    firstCut.release();
     await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });

@@ -98,7 +98,7 @@ leaves those tests untouched. Candidates, in order: the selected title's sources
 browsing (`loadBrowse` and its refs), and scroll and view-anchor restoration. Do not pass a bag of
 unrelated `App` state into a hook; a slice that needs it is not a slice yet.
 
-### 4. Inject the remaining queue faults
+### 4. Inject the remaining queue faults — done
 
 The table "Partial-file removals in the queue" in the progress file marks three branches as read but
 not injected: HTTP 416, a source that ignores byte ranges after promising them, and a remote job
