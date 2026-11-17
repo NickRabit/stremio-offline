@@ -25,10 +25,12 @@ the primary agent, and shipped in its own pull request.
 - [ ] Decide whether a manual retry should keep the sources already tried (SA-4).
 - [x] First independent pass over the routes an ordinary user or a child can reach; fix the nested-library gap it found: #838.
 - [ ] Finish the route matrix: remote-library items and artwork, playback and media ownership past the mint, follows, watchlist, profiles and PIN, avatars, pairing, the image route, device-download tickets.
-- [ ] Owner's decision on SA-7 (a child without catalogue browsing and the IMDb lookup behind local copies).
-- [ ] Complete account/grant/library revocation and final filesystem boundary campaign.
+- [x] Owner's decision on SA-7: kept open (2026-11-17).
+- [x] Second independent pass over the routes the first one did not reach (remote libraries, playback and media ownership past the mint, device tickets, follows, watchlist, profiles and PIN, avatars, pairing, settings, images).
+- [ ] Owner's decision on SA-8 to SA-10 (re-checks after an await in three catalogue routes).
+- [x] Account/grant/library revocation while a transfer or playback runs: not pursued. The owner relaxed these re-checks on purpose because they multiplied request counts; a revoked account finishing an in-flight transfer or playback is the accepted trade-off, not a defect.
 - [ ] Complete playback interruption/resource measurements on supported hardware.
-- [ ] Characterize catalogue/search orchestration before extraction.
+- [x] Characterize catalogue/search orchestration before extraction: #840.
 - [ ] Perform bounded App.tsx extraction; CSS, desktop and TV remain separate work.
 
 ## Findings and evidence
@@ -41,7 +43,11 @@ the primary agent, and shipped in its own pull request.
 | SA-4 / P3 | Inspected, not reproduced | `DownloadQueue.retry` clears `source.tried` before a lazy job resumes. After #834 a job that failed on cleanup keeps its selected stream, but a later failover may pick a source that had already been abandoned. Raised by the review of #834; no data loss is implied. |
 | SA-5 / P2 | Confirmed, reproduced | `DownloadQueue.download`, the `sourceAdmission` failover branch, and `discardProfileSelection`. The twin of SA-1 for a download chosen by a source profile: with the folder made unwritable after a partial was written, the selection was discarded, the next source finished as `Film (2).mp4` and `Film.mp4.part` stayed. Fix in #837: strict removal before the source is abandoned; the job fails with its selection kept, a retry is refused until the partial can go, and a restart keeps the name. The other callers stay best-effort and now log the leftover. |
 | SA-6 / P1 | Confirmed, reproduced twice | Authorization. An account granted a parent library but not a library nested inside it could browse the nested folders (`GET /api/library/browse`, `/folders`), mint a playable source (`POST /api/library/source`) and queue a download into it, by naming the parent's id with the nested folder in the path. Reproduced by the independent reviewer through the real role middleware and handlers, and again by running the new regressions against the unmodified route modules. Fix in #838: such a key is refused when the account may not see the nested library; whoever may see it keeps the previous behaviour. Residual: identity and gallery answer a hidden nested key differently from an absent folder, which confirms a guessed name without returning content; a symlink planted inside the parent is not detected. |
-| SA-7 / P3 | Reproduced by the reviewer, not treated as a defect yet | `GET /api/local-streams/:type/:id` for a child account with catalogue browsing off: an id that is not an IMDb id makes the server ask a granted addon's metadata endpoint for the IMDb id (`subtitleTarget`), while `/api/streams` and `/api/meta` answer 403. Nothing about the title is returned. Closing it would also hide the child's own local copies of a title bound under an addon-specific id, so it is left for the owner to decide. |
+| SA-7 / P3 | Decided: kept open | `GET /api/local-streams/:type/:id` for a child account with catalogue browsing off: an id that is not an IMDb id makes the server ask a granted addon's metadata endpoint for the IMDb id (`subtitleTarget`), while `/api/streams` and `/api/meta` answer 403. Nothing about the title is returned. Closing it would also hide the child's own local copies of a title bound under an addon-specific id, The owner decided on 2026-11-17 to keep it open. |
+| SA-8 / P3 | Confirmed by reading, awaiting the owner | `GET /api/streams/:type/:id`: the addon grants are re-checked after the addon wait, but when a rules profile exists the handler then awaits the title metadata before `mediaResources.listing` mints the playable sources. The code comment says nothing is awaited between the check and the listing. A grant withdrawn, or a child's catalogue switched off, during that wait still receives sources. The fix is an in-memory re-check, no extra request. |
+| SA-9 / P3 | Confirmed by reading, awaiting the owner | `GET /api/subtitle/:subtitleId`, the library sidecar (`file://`) branch: after `libraryTarget` and `readFile` the cues are sent without the second `requireAccess` / `mediaResources.get` / destroyed-socket check that the addon branch of the same handler makes, and that its tests pin. |
+| SA-10 / P4 | Confirmed by reading, awaiting the owner | `GET /api/stream-sources/:type/:id` answers addon keys and names after `streamCandidates` without re-checking the grants. Names only, no playable resource. The same class of gap remains unchecked in `GET /api/catalog`, `/api/meta` and `/api/search`. |
+| SA-11 / P4 | Observed locally | `server/src/downloads.test.ts` runs for about a minute on its own; under the full local gate with another job loading the machine it crossed the 120-second per-file limit twice (2026-11-16 and 2026-11-17) and failed the gate, while passing alone and on CI. A fixed limit and a growing file; splitting the file or raising the limit for it is a separate decision. |
 | Historical H1/H2/H3 | Already fixed in source; not all rerun here | Admissions use the admission/persist machinery; `remove` writes before deleting its partial; unreadable queue/journal tests exist. Do not repeat the October JSON-store findings as current defects. Current queues also support SQLite. A new power-loss/fsync claim was not tested. |
 | Follow reserve/enqueue/adopt replay | Existing implementation verified within harness limits | `follows.test.ts`: reserved-before-queue, queued-before-link, adoption, completion, history removal and repeated restart scenarios. 21 selected tests passed. The queue collaborator is fake in several replay cases: this is not a spawned-process, two-real-store crash campaign. |
 | Missing library root | Existing protection inspected, full campaign not verified | `library.test.ts` contains an incomplete-walk test for a missing root; no evidence here establishes behavior for every unmount/scan/artwork interleaving. Never equate missing with empty. |
@@ -161,6 +167,18 @@ Third delivery, 2026-11-16, against `main` at `c9cb4a90` (0.7.111):
   routes, the library grant on browse, carve-outs in the index and shuffle,
   search everywhere and Home for a child without catalogue, ownership of
   download jobs, and the library list hiding filesystem roots.
+
+Fourth delivery, 2026-11-17, against `main` at `22ef96c9` (0.7.113):
+
+- #840: characterization tests for the catalogue and search loading in
+  `App.tsx` (9 tests through the rendered app). A mutation check removed the
+  stale-page guard and the abort on leaving the view; each made its test fail.
+- The second independent route pass found no access to another account's
+  rows, sessions, tickets or files. Areas it found sound: remote-library member
+  routes, artwork, state and playback reports; source, playback, media and
+  device-ticket ownership by session; follows, watchlist, profiles, PIN,
+  avatars, pairing, the settings key split and the image route. Its three
+  findings are SA-8 to SA-10.
 
 Audit-only work does not change runtime and has no version bump. Build, complete
 unit/e2e and Docker deployment belong to each implementation PR. No production
