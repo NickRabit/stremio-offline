@@ -122,6 +122,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
       const items = await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined, true, disconnect.signal);
       if (disconnect.signal.aborted) return;
+      requireAccess(req, { addonKey: addon.key });
       res.json(items.map((item) => images.rewriteMeta(item)));
     } catch (error) {
       if (disconnect.signal.aborted) return;
@@ -139,13 +140,20 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       res.set("Cache-Control", "no-store");
       const type = req.query.type ? String(req.query.type) : undefined;
       const addonKey = req.query.addon ? String(req.query.addon) : undefined;
-      const found = await searchAll(inOrder(req), query, type, req.query.cursor ? String(req.query.cursor) : undefined, {
+      const addons = inOrder(req);
+      const scope = {
         addonKey,
         catalogType: addonKey && req.query.catalogType ? String(req.query.catalogType) : undefined,
         catalogId: addonKey && req.query.catalogId ? String(req.query.catalogId) : undefined,
         respectGlobalSearch: !addonKey,
-      }, true, { signal: disconnect.signal, key: currentUser(req)?.id ?? "" });
+      };
+      // Read before the wait: an addon switched off meanwhile drops out of a list read after it,
+      // and would then escape the check. The results do not say reliably which addon produced
+      // them, so every addon asked is checked.
+      const asked = new Set(searchableCatalogs(addons, type, scope).map(({ addon }) => addon.key));
+      const found = await searchAll(addons, query, type, req.query.cursor ? String(req.query.cursor) : undefined, scope, true, { signal: disconnect.signal, key: currentUser(req)?.id ?? "" });
       if (disconnect.signal.aborted) return;
+      for (const addonKey of asked) requireAccess(req, { addonKey });
       res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
     } catch (error) {
       if (disconnect.signal.aborted) return;
@@ -171,13 +179,18 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
         { artwork: true, signal: disconnect.signal },
       );
       if (disconnect.signal.aborted) return;
-      if (!meta) throw new AppError("The metadata was not found.", "err.metaNotFound", 404);
+      if (!meta) {
+        requireAccess(req);
+        throw new AppError("The metadata was not found.", "err.metaNotFound", 404);
+      }
       if (gallery) {
         const pictures = await detailGallery.get(String(req.params.type), String(req.params.id), language, store.settings().tmdbApiKey, disconnect.signal);
         if (disconnect.signal.aborted) return;
+        requireAccess(req);
         res.json(images.rewriteMeta({ ...meta, images: pictures.map((picture) => ({ ...picture, shape: picture.kind === "poster" ? "poster" : "wide" })) }, true));
         return;
       }
+      requireAccess(req);
       res.json(images.rewriteMeta(meta, true));
     } catch (error) {
       if (disconnect.signal.aborted) return;
@@ -203,6 +216,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
         signal: disconnect.signal,
       });
       if (disconnect.signal.aborted) return;
+      requireAccess(req);
       res.json(imageProxy.rewriteExtras(extras));
     } catch (error) {
       if (disconnect.signal.aborted) return;
@@ -427,6 +441,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/stream-sources/:type/:id", asyncRoute(async (req, res) => {
     // The picker lists these in the caller's own order, the same one `GET /api/addons` answers.
     const candidates = await streamCandidates(inOrder(req), String(req.params.type), String(req.params.id), true);
+    for (const { addon } of candidates) requireAccess(req, { addonKey: addon.key });
     res.json(candidates.map(({ addon }) => ({ key: addon.key, name: addon.manifest.name })));
   }));
   app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
@@ -449,14 +464,14 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
         : Promise.resolve(null);
       const items = await streams(inOrder(req), type, id, req.query.addon ? String(req.query.addon) : undefined, true, disconnect.signal);
       if (disconnect.signal.aborted) return;
+      const metaLanguage = titleLanguage((await titleMeta)?.language);
+      if (disconnect.signal.aborted) return;
       // The listing hands out one resource per source, and the addons that answered took as
       // long as they liked: an addon switched off, or a grant withdrawn, while they were
       // answering must not get one. Nothing is awaited between the check and the listing.
       for (const addonKey of new Set(items.map((item) => item.addonKey).filter((key): key is string => Boolean(key)))) {
         requireAccess(req, { addonKey });
       }
-      if (disconnect.signal.aborted) return;
-      const metaLanguage = titleLanguage((await titleMeta)?.language);
       const candidates = items.map((stream, providerResponseIndex) => {
         const addonKey = stream.addonKey;
         if (typeof addonKey !== "string" || addonKey.length === 0) return undefined;
@@ -600,11 +615,18 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     trackMedia(owner, res, resource.parent ?? resource.id);
     const raw = resource.stream.url!;
     if (raw.startsWith("file://")) {
-      const target = await libraryTarget(raw.slice(7), currentUser(req));
+      const key = raw.slice(7);
+      const parsed = parseLibraryPath(key);
+      const target = await libraryTarget(key, currentUser(req));
       let text = subtitleVtt(await readFile(target), subtitleLanguage(req.query.lang));
       // Shifted like an addon's: the player asks with the same offset and delay for both.
       const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
       if (shift) text = shiftVtt(text, shift);
+      const need = contentOf(resource.stream);
+      if (parsed) need.libraryId = parsed.libraryId;
+      requireAccess(req, need);
+      mediaResources.get(resource.id, owner.sid, "subtitle");
+      if (res.destroyed || res.writableEnded) return;
       return void res.type("text/vtt; charset=utf-8").setHeader("x-content-type-options", "nosniff").send(text);
     }
     const disconnect = routeDisconnectSignal(req, res);
