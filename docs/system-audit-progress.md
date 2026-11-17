@@ -19,7 +19,7 @@ the primary agent, and shipped in its own pull request.
 - [x] Inspect and run existing follow reconciliation tests.
 - [x] Run selected authorization, network, transfer, journal, shutdown and playback regressions.
 - [x] Read every partial-file removal in the queue and classify it (table below); fix the profile failover twin of SA-1: #837.
-- [ ] Inject the remaining queue faults (range fallback, HTTP 416, remote restore) instead of reasoning about them.
+- [x] Inject the remaining queue faults (range fallback, HTTP 416, remote restore) instead of reasoning about them: two new direct-download tests; the remote cases were already covered.
 - [x] Ship the legacy source-failover cleanup fix: #834 (merged).
 - [x] Design and ship a separate subtitle-journal fix: #835.
 - [ ] Decide whether the unjournaled rename route needs the same sidecar recovery (SA-3).
@@ -95,10 +95,10 @@ Only the first three rows were fault-injected; the rest are read from the code.
 | Profile failover (`sourceAdmission`) | No | The same | Fixed, #837 |
 | `discardProfileSelection` from pause, resume, load, storage halt; `remove` | No | Orphan partial; a later pick takes a `(2)` name | Best-effort by design, now logged (#837) |
 | Fresh rule pick before the transfer | Yes | Could resume onto stale bytes, but target assignment never hands out a name whose partial exists | Not reachable as read; not injected |
-| Source ignored byte ranges | Yes | Next request asks from the full size; a source that ignores ranges restarts from zero with a truncating write, one that honours them answers 416 | Reads as failing closed; not injected |
-| HTTP 416 | Yes | The same request repeats until the retry budget fails the job | Fails closed; not injected |
+| Source ignored byte ranges | Yes | A resume answered 200 with the whole file is rewritten from byte 0 with a truncating write | Injected: "a source that ignores the resume range is rewritten from byte 0, not appended to" (direct), "a source that ignores a resume range restarts safely from zero" (remote) |
+| HTTP 416 | Yes | The part file is removed and the next attempt starts from byte 0 without a Range header; one retry is spent | Injected: "a 416 on a resumed transfer discards the part file and finishes from byte 0". Without the removal the job fails after three 416s |
 | Segment plan no longer matches the file | Yes | The next write truncates | Safe as read |
-| Remote job restored with a segment plan | Yes | Resume from the full size is refused by the server | Not injected |
+| Remote job restored with a segment plan | Yes | `load` drops the plan before the job runs | Injected: "a legacy sealed address and a restored segment plan are refused, never run" (`download-remote.test.ts`) |
 | Playlist assembly | Yes | FFmpeg overwrites | Safe as read |
 
 ## Follow and filesystem replay
