@@ -70,6 +70,7 @@ import { PersonView } from "./PersonView";
 import { captureScroll, restoreScroll, snapshotScrollTop, type ScrollSnapshot } from "./scroll-snapshot";
 import { useSearchEverywhere } from "./useSearchEverywhere";
 import { useCatalogLoader } from "./use-catalog-loader";
+import { useTitleSources } from "./use-title-sources";
 import type { HomeCardActions } from "./HomeCard";
 import { useHome } from "./useHome";
 import type { ShowAllTarget } from "./home-cards";
@@ -293,8 +294,7 @@ export function App() {
   }
   type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
-  const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [localStreams, setLocalStreams] = useState<Stream[]>([]); const [localLoading, setLocalLoading] = useState(false); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
-  const nextEpisodePrefetchRef = useRef<{ id: string; at: number; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
   /** The next episode of what the shared detail is playing, read while this one runs. */
   const detailNextPrefetchRef = useRef<{ id: string; at: number; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
   /** Bumped while the player stays open, so each next-episode prefetch is read again before the
@@ -318,7 +318,7 @@ export function App() {
   const remoteNextPrefetchRef = useRef<{ id: string; libraryId: string; at: number; controller: AbortController; promise: Promise<Stream[]> } | null>(null);
   const remoteTargetNonce = useRef(0);
   useEffect(() => () => { remoteAbortRef.current?.abort(); remoteNextPrefetchRef.current?.controller.abort(); }, []);
-  const [sourcesLoaded, setSourcesLoaded] = useState(false); const [sourcesComplete, setSourcesComplete] = useState(false); const [metaLoading, setMetaLoading] = useState(false);
+  const [metaLoading, setMetaLoading] = useState(false);
   const [titleLinks, setTitleLinks] = useState<SiteLink[]>([]);
   const [libraryLinks, setLibraryLinks] = useState<Record<string, SiteLink[]>>({});
   const [titleTrailer, setTitleTrailer] = useState<Trailer | null>(null);
@@ -967,10 +967,7 @@ export function App() {
     const picked = parseSearchScope(value);
     if (picked.catalogId) setSelectedCatalog(`${picked.addonKey}:${picked.catalogType}:${picked.catalogId}`);
   };
-  const [pendingSources, setPendingSources] = useState(0);
-  const pickedRef = useRef(false); /** The viewer chose the playing source by hand, so the next episode stays with its provider. */ const viewerChoseSourceRef = useRef(false); const sourcesRequestRef = useRef(0);
-  const sourcesBusyRef = useRef(false);
-  const subtitlesReadyRef = useRef<Promise<unknown>>(Promise.resolve());
+  const pickedRef = useRef(false); /** The viewer chose the playing source by hand, so the next episode stays with its provider. */ const viewerChoseSourceRef = useRef(false);
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
   const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null); const sourceListRef = useRef<HTMLDivElement>(null);
   const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
@@ -1039,6 +1036,16 @@ export function App() {
     setError(describeError(value)); setTimeout(() => setError(""), value instanceof ApiError && value.reference ? 15000 : 6000);
   };
   const {
+    streams, localStreams, localLoading, subtitles, sourcesLoaded, sourcesComplete, pendingSources,
+    setStreams, setLocalStreams, setLocalLoading, setSubtitles, setSourcesLoaded, setPendingSources,
+    begin: beginSourcesRequest, current: currentSourcesRequest, isCurrent: isCurrentSourcesRequest,
+    invalidate: invalidateSourcesRequest, load: loadTitleSources,
+    resetRows: resetTitleSourceRows, resetSources: resetTitleSources,
+    resetParts: resetTitleSourceParts, resetEpisode: resetTitleEpisodeSources,
+    dropWork: dropTitleSourcesWork, episodeSources, loadStreamPart,
+    prefetchedEpisode, prefetchEpisode, subtitlesReady,
+  } = useTitleSources({ setBusy, fail });
+  const {
     items, hasMore, loadingMore, sourceCount, loadPage, actOnSearch, clearPendingRecord,
   } = useCatalogLoader({
     view,
@@ -1052,7 +1059,7 @@ export function App() {
     resetKey: catalogReset,
     searchSessionEnabled: buildInfo?.searchEverywhere === true,
     onFirstPageStart: () => {
-      setSelected(null); setStreams([]); setLocalStreams([]); setLocalLoading(false);
+      setSelected(null); resetTitleSourceRows();
     },
     onItems: (loaded, addonKey) => pool.add(loaded, addonKey),
     onRecordSearch: recordSearch,
@@ -1399,7 +1406,7 @@ export function App() {
     setView("catalog");
     setSearch(""); setSubmittedQuery(""); setSearchScopeValue(""); setTypeFilter(""); setGenre(""); setSort("default"); setSearchSort("default");
     setSelectedCatalog(firstCatalog ? `${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}` : "");
-    setSelected(null); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setSourcesComplete(false);
+    setSelected(null); setSelectedVideo(null); resetTitleSources(); setSelectedStream(null);
     setGalleryIndex(null);
     setStreamAddon(""); setStreamLanguage(""); setStreamSort(defaultStreamSort);
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
@@ -2577,15 +2584,6 @@ export function App() {
     : [];
   const activeOption = activeSuggestion < suggestions.length ? activeSuggestion : -1;
   const staleGrid = busy && items.length > 0;
-  /** One addon's answer, with a failure turned into nothing. */
-  const loadStreamPart = async (type: string, id: string, source: { key: string; name: string }) => {
-    try { return await api.streams(type, id, source.key); }
-    catch (error) {
-      // One unreachable addon must neither bring the rest down nor flood the screen with errors.
-      report("WARN", `Sources from the addon could not be loaded: ${source.name}`, { addon: source.name, reason: error instanceof Error ? error.message : String(error) });
-      return [] as Stream[];
-    }
-  };
   const remoteProviderLabel = providerLabel;
   const cancelRemoteWork = () => {
     remoteAbortRef.current?.abort();
@@ -2650,59 +2648,24 @@ export function App() {
     const target = remoteTargetForRef.current;
     if (target) void loadRemoteGroups(target.type, target.id, target.nameHint);
   };
-  /** Each addon is asked separately, so results show up as they arrive instead of waiting for the slowest. */
-  /** Drops what a superseded or closed sources fetch left switched on. `busy` is shared with the
-   *  catalogue's own loading, so only a fetch that set it clears it here. */
-  const dropSourcesWork = () => {
-    if (!sourcesBusyRef.current) return;
-    sourcesBusyRef.current = false;
-    setBusy(false); setPendingSources(0); setLocalLoading(false);
-  };
   const fetchSources = async (type: string, id: string, video?: Video, nameHint?: string) => {
-    const request = ++sourcesRequestRef.current;
-    const stale = () => request !== sourcesRequestRef.current;
+    const request = beginSourcesRequest();
     cancelRemoteWork();
-    sourcesBusyRef.current = true;
-    setSelectedVideo(video ?? null); setSourcesLoaded(false); setSourcesComplete(false); setBusy(true);
-    setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0);
+    setSelectedVideo(video ?? null); setSelectedStream(null);
     pickedRef.current = false; viewerChoseSourceRef.current = false;
     // Remote libraries are asked separately: an addon or subtitle failure cannot hide them.
     void loadRemoteGroups(type, id, nameHint);
-    // Local copies are asked for beside the addons and outside the try: an addon or subtitle
-    // failure must not drop them.
-    setLocalLoading(true);
-    void api.localStreams(type, id)
-      .then((found) => { if (!stale()) setLocalStreams(found.filter(isLocalStream)); })
-      .catch(() => undefined)
-      .finally(() => { if (!stale()) setLocalLoading(false); });
-    // Subtitles never hold up the sources; a play waits for them instead (startCatalogPlayback),
-    // because the server binds a film's addon subtitles to the session it starts.
-    subtitlesReadyRef.current = api.subtitles(type, id)
-      .then((next) => { if (!stale()) setSubtitles(next); })
-      .catch(() => undefined);
-    try {
-      const sources = await api.streamSources(type, id);
-      if (stale()) return;
-      setSourcesLoaded(true); setBusy(false); sourcesBusyRef.current = false; setPendingSources(sources.length);
-      await Promise.all(sources.map(async (source) => {
-        const part = await loadStreamPart(type, id, source);
-        if (!stale() && part.length) setStreams((previous) => [...previous, ...part]);
-        if (!stale()) setPendingSources((count) => count - 1);
-      }));
-      // Every provider has answered: the shared detail may take these rows instead of asking again.
-      if (!stale()) setSourcesComplete(true);
-    } catch (e) { if (!stale()) { fail(e); setSourcesLoaded(true); } }
-    finally { if (!stale()) { setBusy(false); sourcesBusyRef.current = false; } }
+    await loadTitleSources(type, id, request);
   };
   const openMeta = async (item: Meta, resume?: ResumeTarget["episode"]) => {
-    let request = ++sourcesRequestRef.current;
-    dropSourcesWork();
+    let request = beginSourcesRequest();
+    dropTitleSourcesWork();
     const linksRequest = ++linksRequestRef.current;
     const trailerRequest = ++trailerRequestRef.current;
     setMetaLoading(true);
     // The row the grid drew from, kept beside the merged detail: its pictures are the ones on
     // screen, and they are what a download has to carry into the library.
-    setSelected(item); setSelectedSummary(item); setSelectedDownloadTitle(item.name); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setSourcesComplete(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
+    setSelected(item); setSelectedSummary(item); setSelectedDownloadTitle(item.name); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); resetTitleSources(); setSelectedStream(null); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
     requestAnimationFrame(() => detailRef.current?.scrollTo({ top: 0 }));
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
@@ -2711,23 +2674,22 @@ export function App() {
       const metadata = api.meta(type, item.id, settings.uiLanguage);
       if (type === "movie" && !item.videos?.length && !resume) {
         void fetchSources(type, item.id, undefined, item.name);
-        request = sourcesRequestRef.current;
+        request = currentSourcesRequest();
         earlySources = true;
       }
       const answered = await metadata;
       detail = mergeMetaDetail(item, answered); setSelected(detail); setSelectedDownloadTitle(localizedDownloadTitle(item, answered, downloadTitleLanguage));
     } catch { /* catalog item is still useful */ }
-    finally { if (request === sourcesRequestRef.current) setMetaLoading(false); }
+    finally { if (isCurrentSourcesRequest(request)) setMetaLoading(false); }
     // The sources fetch moves the same token, so an abandoned open must not start one.
-    if (request !== sourcesRequestRef.current) return;
+    if (!isCurrentSourcesRequest(request)) return;
     if (earlySources && detail.videos?.length) {
       // A "film" in parts: the early fetch is dropped and the parts are chosen as for a series.
       // It set the busy and loading state; nothing stale may leave it on.
-      request = ++sourcesRequestRef.current;
+      request = beginSourcesRequest();
       cancelRemoteWork();
-      dropSourcesWork();
-      setSourcesLoaded(false); setSourcesComplete(false); setPendingSources(0);
-      setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]);
+      dropTitleSourcesWork();
+      resetTitleSourceParts(); setSelectedStream(null);
     }
     // The links never hold up the description, and only the title on screen keeps them.
     if (!child) {
@@ -2745,20 +2707,15 @@ export function App() {
     } else if (!earlySources && type !== "series" && !detail.videos?.length) await fetchSources(type, item.id, undefined, detail.name);
   };
   const closeMeta = () => {
-    sourcesRequestRef.current += 1;
-    dropSourcesWork();
+    invalidateSourcesRequest();
+    dropTitleSourcesWork();
     cancelRemoteWork();
     linksRequestRef.current += 1;
     trailerRequestRef.current += 1;
-    setSelected(null); setSelectedSummary(null); setSelectedDownloadTitle(""); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setSourcesComplete(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
+    setSelected(null); setSelectedSummary(null); setSelectedDownloadTitle(""); setSelectedVideo(null); resetTitleSources(); setSelectedStream(null); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
   };
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video, selected.name);
-  };
-  const fetchEpisodeSources = async (type: string, id: string) => {
-    const [sources, nextSubtitles] = await Promise.all([api.streamSources(type, id), api.subtitles(type, id).catch(() => [] as Subtitle[])]);
-    const parts = await Promise.all(sources.map((source) => loadStreamPart(type, id, source)));
-    return { streams: parts.flat(), subtitles: nextSubtitles };
   };
   const orderedEpisodes = useMemo(() => (selected?.videos ?? []).map((video, index) => ({ video, index })).sort((a, b) => {
     const season = (value: Video) => value.season === 0 ? Number.MAX_SAFE_INTEGER : value.season ?? Number.MAX_SAFE_INTEGER - 1;
@@ -2796,10 +2753,7 @@ export function App() {
       remoteNextPrefetchRef.current = { id, libraryId, at: Date.now(), controller, promise };
       return;
     }
-    const promise = fetchEpisodeSources(type, id);
-    // The viewer may never ask for this one, and nobody would be waiting to hear it failed.
-    void promise.catch(() => undefined);
-    nextEpisodePrefetchRef.current = { id, at: Date.now(), promise };
+    prefetchEpisode(type, id);
   }, [playerOpen, localStream, detailPlaying, selected?.id, selected?.type, catalogueNext?.id, currentCatalog?.type, prefetchRound]);
   const stopPlayback = () => {
     endShuffle();
@@ -2821,11 +2775,11 @@ export function App() {
   /** Remote hand-off: the same library and version, or that episode's own selector. */
   const playNextRemoteEpisode = async (type: string, id: string, current: Stream, episode: Video, nameHint: string | undefined) => {
     const libraryId = current.remoteItem!.libraryId;
-    const request = sourcesRequestRef.current;
+    const request = currentSourcesRequest();
     const titleId = selectedIdRef.current;
     const sourceId = current.sourceId;
     const remoteEpoch = remoteEpochRef.current;
-    const stale = () => request !== sourcesRequestRef.current || remoteEpoch !== remoteEpochRef.current
+    const stale = () => !isCurrentSourcesRequest(request) || remoteEpoch !== remoteEpochRef.current
       || titleId !== selectedIdRef.current || selectedStreamRef.current?.sourceId !== sourceId
       || !playerOpenRef.current;
     const prefetched = freshPrefetch(remoteNextPrefetchRef.current);
@@ -2844,7 +2798,7 @@ export function App() {
     const pick = failure || !wanted ? null : streams.find((stream) => stream.provider === current.provider && stream.name?.trim() === wanted) ?? null;
     setSelectedVideo(episode); setEpisodesOpen(false);
     followEpisode(type, id, episode);
-    setStreams([]); setLocalStreams([]); setLocalLoading(false); setSubtitles([]); setPendingSources(0);
+    resetTitleEpisodeSources();
     setRemoteDiscoveryError("");
     setRemoteGroups([{ libraryId, name: current.libraryName ?? "", provider: current.provider!, order: 0, streams, error: failure ? describeError(failure) : "" }]);
     setRemoteLoading(0);
@@ -2869,11 +2823,11 @@ export function App() {
       try { return await playNextRemoteEpisode(type, id, currentStream, nextCatalogEpisode, selected.name); }
       finally { nextBusyRef.current = false; setNextBusy(false); }
     }
-    const request = ++sourcesRequestRef.current;
-    const stale = () => request !== sourcesRequestRef.current;
+    const request = beginSourcesRequest();
+    const stale = () => !isCurrentSourcesRequest(request);
     setSelectedVideo(nextCatalogEpisode); setEpisodesOpen(false); setSourcesLoaded(false); setBusy(true);
     followEpisode(type, id, nextCatalogEpisode);
-    setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0); pickedRef.current = false;
+    resetTitleEpisodeSources(); setSelectedStream(null); pickedRef.current = false;
     // A rule sort chooses from the new episode's local copies and addon rows; other sorts pick
     // from the addon rows as before and only fill the library list.
     setLocalLoading(true);
@@ -2887,10 +2841,10 @@ export function App() {
       // picked lets the rule choose again, among this episode's library copies too.
       const keepProvider = viewerChoseSourceRef.current;
       const ruleId = keepProvider ? undefined : sortRuleId(defaultStreamSort);
-      const prefetched = freshPrefetch(nextEpisodePrefetchRef.current);
-      const addonRequest = prefetched?.id === id
-        ? prefetched.promise.catch(() => fetchEpisodeSources(type, id))
-        : fetchEpisodeSources(type, id);
+      const prefetched = prefetchedEpisode(id);
+      const addonRequest = prefetched
+        ? prefetched.promise.catch(() => episodeSources(type, id))
+        : episodeSources(type, id);
       // Both lookups run side by side; the library one only holds up the pick under a rule.
       const [addonAnswer, localRows] = await Promise.all([
         addonRequest,
@@ -2979,8 +2933,8 @@ export function App() {
     if (isLocalStream(stream) && stream.localPath) { void playLocal(videoTitle, stream.localPath, selected.poster, Boolean(selectedVideo), anchor, false, catalogue ?? undefined, { key, panel: true }); return; }
     // The addon subtitles are asked for with the sources and are usually here by now; the server
     // binds them to the session it starts, so a play waits for any still on their way.
-    const request = sourcesRequestRef.current;
-    void subtitlesReadyRef.current.then(() => { if (request === sourcesRequestRef.current) openPlayer(anchor, subject); });
+    const request = currentSourcesRequest();
+    void subtitlesReady().then(() => { if (isCurrentSourcesRequest(request)) openPlayer(anchor, subject); });
   };
   const enqueue = async (target?: SaveTarget) => {
     if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;
@@ -3637,7 +3591,7 @@ export function App() {
     if (isLocalStream(detailPlaying.stream) || isRemoteStream(detailPlaying.stream)) return;
     const target = detailEpisodeTarget(nextDetailEpisode);
     const id = catalogueStreamId(target);
-    const promise = fetchEpisodeSources(target.type, id);
+    const promise = episodeSources(target.type, id);
     void promise.catch(() => undefined);
     detailNextPrefetchRef.current = { id, at: Date.now(), promise };
   }, [playerOpen, detailPlaying?.target.videoId, detailPlaying?.target.season, detailPlaying?.target.episode, detailPlaying?.stream.sourceId, nextDetailEpisode?.id, prefetchRound]);
@@ -3656,7 +3610,7 @@ export function App() {
       const prefetched = freshPrefetch(detailNextPrefetchRef.current);
       const answer = libraryId
         ? { streams: await api.remoteLibraryStreams(libraryId, target.type, id, undefined, target.name) }
-        : prefetched?.id === id ? await prefetched.promise : await fetchEpisodeSources(target.type, id);
+        : prefetched?.id === id ? await prefetched.promise : await episodeSources(target.type, id);
       // The viewer keeps the provider and the language they were watching where the next episode
       // has them; only a show whose row is gone moves to the best version there is.
       const preferred = playbackPreferences.audioLanguage ?? (current ? streamLanguages(current, metaLanguage)[0] : undefined) ?? settings.audioLanguage;
