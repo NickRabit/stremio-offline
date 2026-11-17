@@ -163,6 +163,8 @@ export const es: Catalog = {
   "common.sorting": "Clasificación",
   "common.ascending": "Ascendente",
   "common.descending": "Descendente",
+  "viewError.message": "Esta pantalla ha tenido un problema y no se ha podido mostrar.",
+  "viewError.reload": "Recargar la aplicación",
   "api.timeout": "El servidor no respondió a tiempo.",
   "api.unreachable": "No se puede conectar con el servidor. Comprueba que esté en marcha e inténtalo de nuevo.",
   "api.badResponse": "El servidor respondió algo que la aplicación no puede leer. Si hay un proxy delante, vuelve a iniciar sesión en él.",

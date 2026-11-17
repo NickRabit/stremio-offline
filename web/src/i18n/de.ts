@@ -163,6 +163,8 @@ export const de: Catalog = {
   "common.sorting": "Sortieren",
   "common.ascending": "Aufsteigend",
   "common.descending": "Absteigend",
+  "viewError.message": "Diese Ansicht konnte wegen eines Fehlers nicht angezeigt werden.",
+  "viewError.reload": "App neu laden",
   "api.timeout": "Der Server antwortete nicht rechtzeitig.",
   "api.unreachable": "Der Server ist nicht erreichbar. Prüfen Sie, ob er läuft, und versuchen Sie es erneut.",
   "api.badResponse": "Der Server hat etwas geantwortet, das die App nicht lesen kann. Steht ein Proxy davor, melden Sie sich dort erneut an.",

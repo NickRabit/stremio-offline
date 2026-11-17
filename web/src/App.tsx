@@ -80,6 +80,7 @@ import { MediaGallery } from "./MediaGallery";
 import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage } from "./gallery-images";
 import { loadTitleGallery, useCatalogueStills, type CatalogueRef } from "./title-enrichment";
 import { lazyScreen, LazyScreenBoundary } from "./lazy-screen";
+import { ViewBoundary } from "./view-boundary";
 import { rememberedStartView, rememberStartView, resolveStartView } from "./start-view";
 import { layoutKey, rememberedLayout, rememberLayout } from "./layout-memory";
 import { useLibrarySources } from "./library-sources";
@@ -3870,6 +3871,7 @@ export function App() {
   const playerOnPrevious = shuffleActive
     ? (shuffleState?.hasPrevious ? previousRandom : undefined)
     : previousFile ? () => playAdjacent(previousFile) : undefined;
+  const playerStreamKey = playingStream ? sourceIdentity(playingStream) : "none";
 
   return <ChildModeProvider child={child} catalogue={childCatalogue}>
   <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
@@ -3901,7 +3903,7 @@ export function App() {
       </>}
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{catalogsKnown ? addons.filter((a) => a.enabled).length : "–"}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}${catalogueDetail ? " view-title-detail" : ""}${personLayer ? " person-open" : ""}`}>
-      {personLayer && <PersonView key={personLayer.id} person={personLayer} language={settings.uiLanguage} shape={settings.searchTileShape}
+      {personLayer && <ViewBoundary resetKey={String(personLayer.id)} fallbackClassName="person-view"><PersonView key={personLayer.id} person={personLayer} language={settings.uiLanguage} shape={settings.searchTileShape}
         onToggleShape={() => void toggleShape("searchTileShape")} onSearchText={searchTypedText}
         {...(personLayer.fromTitle ? { fromTitle: personLayer.fromTitle } : {})}
         {...(personLayer.backLabel ? { backLabel: personLayer.backLabel } : {})}
@@ -3932,7 +3934,7 @@ export function App() {
           setPersonLayer(null);
           if (notice === "noImdb") notify(t("person.noImdb"));
         }}
-        onNotify={notify}/>}
+        onNotify={notify}/></ViewBoundary>}
       {/* The shared catalogue detail is hosted over the page that opened it, so closing it simply
           puts that page back: Home is never turned into an unfiltered catalogue on the way. Its
           browse bar holds its place while the body inside the panel is the only thing that
@@ -3945,6 +3947,7 @@ export function App() {
           </nav>
         </div></div>
         <div className="browse-scroll" ref={catalogueDetailScroll}>
+          <ViewBoundary resetKey={`${catalogueDetail.type}:${catalogueDetail.id}`}>
           <CatalogueTitleDetail
             target={catalogueDetail}
             {...(catalogueDetail.initialSources ? { initialSources: catalogueDetail.initialSources } : {})}
@@ -3982,11 +3985,12 @@ export function App() {
             {...(bulkDownloadAllowed ? { onBulkDownload: setSeriesBulk } : {})}
             saveSupported={(stream) => canQueue(stream, settings.realDebridConfigured)}
             onDownloadToDevice={(stream, effective) => void downloadCatalogueStream(effective, stream)}/>
+          </ViewBoundary>
         </div>
       </section>}
       {/* The library stays mounted under a catalogue detail opened from it: a remote title lives
           in the browser, and unmounting it would land Back on the list instead of that title. */}
-      {(!catalogueDetail || view === "library") && <>
+      <ViewBoundary resetKey={view}>{() => (!catalogueDetail || view === "library") && <>
       {view === "home" && buildKnown && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
@@ -4477,7 +4481,7 @@ export function App() {
         if (restored.remapped) notify(t("settings.importRemapped", { count: restored.remapped }));
         await refresh(true);
       }} onNotify={notify} onError={fail}/></Suspense></LazyScreenBoundary>}
-      </>}
+      </>}</ViewBoundary>
     </main>
     <TrailerPlayer trailer={trailerOpen} onClose={() => setTrailerOpen(null)}/>
     {switcherOpen && <ProfileSwitcher confirmStop={confirmStop} preselectId={switcherTarget} onClose={() => { setSwitcherOpen(false); setSwitcherTarget(undefined); }} {...(child ? { onSignOut: () => void signOut() } : {})}/>}
@@ -4489,6 +4493,7 @@ export function App() {
       onUpload={async (image) => applyOwnAvatar(await api.uploadAvatar(image))}
       onClose={() => setAvatarPickerOpen(false)}
     />}
+    <ViewBoundary resetKey={playerOpen ? `open:${playerStreamKey}` : "closed"} {...(playerOpen ? { onClose: stopPlayback } : {})}>
     <Player nextTitle={playerNextTitle} nextBusy={nextBusy} onNext={playerOnNext} autoNext={playerAutoNext} previousTitle={playerPreviousTitle} onPrevious={playerOnPrevious} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} upNextAt={settings.upNextAt} skipSegmentsAuto={settings.skipSegmentsAuto} shuffle={shuffleActive} onPreferences={setPlaybackPreferences}
       catalogueKey={localStream && playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
@@ -4513,6 +4518,8 @@ export function App() {
       defaultSort={defaultStreamSort}
       {...(startAtSeconds !== undefined ? { startAtSeconds } : {})}
       onClose={stopPlayback}/>
+    </ViewBoundary>
+    <ViewBoundary resetKey={alternative ? `open:${sourceIdentity(alternative.stream)}` : "closed"} {...(alternative ? { onClose: () => { setAlternative(null); } } : {})}>
     {alternative && <Player open title={alternative.stream.localPath ? alternative.stream.behaviorHints?.filename ?? alternative.title : alternative.title} stream={alternative.stream} subtitles={alternative.subtitles}
       subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage}
       {...(alternative.stream.localPath ? { progressKey: `file:${alternative.stream.localPath}` } : alternative.owner.kind === "remote" ? {} : { progressKey: alternative.owner.progressKey })}
@@ -4560,6 +4567,7 @@ export function App() {
       onClose={() => {
         setAlternative(null);
       }}/>}
+    </ViewBoundary>
     {libraryManagerOpen && <LibraryManagerDialog restricted={restricted || !admin} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
     {movePath && <MoveDialog path={movePath.path} paths={movePath.paths} copy={movePath.copy} label={movePath.label}
       itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)}

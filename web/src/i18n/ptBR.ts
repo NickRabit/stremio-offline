@@ -163,6 +163,8 @@ export const ptBR: Catalog = {
   "common.sorting": "Classificando",
   "common.ascending": "Ascendente",
   "common.descending": "Descendente",
+  "viewError.message": "Esta tela encontrou um problema e não pôde ser exibida.",
+  "viewError.reload": "Recarregar o app",
   "api.timeout": "O servidor não respondeu a tempo.",
   "api.unreachable": "Não foi possível conectar ao servidor. Verifique se ele está em execução e tente novamente.",
   "api.badResponse": "O servidor respondeu algo que o aplicativo não consegue ler. Se houver um proxy na frente dele, entre nele novamente.",

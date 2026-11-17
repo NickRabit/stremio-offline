@@ -163,6 +163,8 @@ export const fr: Catalog = {
   "common.sorting": "Tri",
   "common.ascending": "Ascendant",
   "common.descending": "Décroissant",
+  "viewError.message": "Cet écran a rencontré un problème et n’a pas pu s’afficher.",
+  "viewError.reload": "Recharger l’application",
   "api.timeout": "Le serveur n'a pas répondu à temps.",
   "api.unreachable": "Le serveur est injoignable. Vérifiez qu'il est démarré, puis réessayez.",
   "api.badResponse": "Le serveur a renvoyé une réponse que l'application ne peut pas lire. Si un proxy se trouve devant lui, reconnectez-vous à ce proxy.",

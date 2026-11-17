@@ -194,6 +194,9 @@ export const en = {
   "common.ascending": "Ascending",
   "common.descending": "Descending",
 
+  "viewError.message": "This screen ran into a problem and could not be shown.",
+  "viewError.reload": "Reload the app",
+
   "api.timeout": "The server did not answer in time.",
 
   "api.unreachable": "The server cannot be reached. Check that it is running and try again.",
