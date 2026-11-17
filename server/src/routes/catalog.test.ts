@@ -69,6 +69,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   localCopyFacts?: CatalogDeps["localCopyFacts"];
   units?: TitleUnit[];
   cachedMeta?: CatalogDeps["cachedMeta"];
+  libraryTarget?: CatalogDeps["libraryTarget"];
   tmdbApiKey?: string;
   externalIds?: ExternalIdStore;
   imageProxy?: ImageProxy;
@@ -110,7 +111,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
       return meta;
     }),
     prefsOf: () => prefs,
-    libraryTarget: async (value) => value,
+    libraryTarget: options.libraryTarget ?? (async (value) => value),
     ownerOf: () => ({ userId: "usr_00000001", sid: "session-1", expiresAt: Number.MAX_SAFE_INTEGER }),
     trackMedia: () => undefined,
     libraryKey: (value) => value,
@@ -2204,6 +2205,278 @@ test("an external subtitle re-checks its resource after the held body", async (t
     assert.equal(response.status, 404);
     assert.equal((await response.text()).includes("secret subtitle"), false);
   });
+});
+
+test("GET /api/streams re-checks addon access after title metadata before minting", async (t) => {
+  const records = [addon("stream-held", [], { role: "source", resources: ["stream"] })];
+  let allowed = true;
+  let accessChecks = 0;
+  const titleMeta = deferred<MetaItem | null>();
+  const metaAwaited = deferred();
+  const observeMetaAwait = (promise: Promise<MetaItem | null>): Promise<MetaItem | null> => ({
+    then(resolve: (value: MetaItem | null) => void, reject: (reason?: unknown) => void) {
+      metaAwaited.resolve();
+      return promise.then(resolve, reject);
+    },
+    catch(reject: (reason?: unknown) => unknown) {
+      return observeMetaAwait(promise.then(undefined, reject as (reason: unknown) => MetaItem | null));
+    },
+  }) as unknown as Promise<MetaItem | null>;
+  const heldMeta = observeMetaAwait(titleMeta.promise);
+  const harness = await mount(records, null, {
+    profiles: storedRulePresets(),
+    access: (_req, need) => {
+      accessChecks += 1;
+      if (!allowed) throw Object.assign(new Error("revoked"), { status: 404 });
+      assert.equal(need?.addonKey, "stream-held");
+    },
+    cachedMeta: () => heldMeta,
+  });
+  t.after(harness.close);
+  const held = heldJson();
+
+  await withStubbedAddons(() => held.response, async () => {
+    const pending = api(harness.base, "/api/streams/movie/tt1");
+    held.activate();
+    await prompt(held.readStarted, "the stream body before metadata");
+    held.release({ streams: [{ url: "https://cdn.example/secret.mp4", name: "Secret source" }] });
+    await prompt(metaAwaited.promise, "the metadata await");
+    allowed = false;
+    titleMeta.resolve({ id: "tt1", type: "movie", name: "Held title" });
+    const response = await prompt(pending, "the revoked stream response");
+    assert.equal(response.status, 404);
+    assert.equal((await response.text()).includes("sourceId"), false);
+  });
+
+  assert.equal(accessChecks, 1);
+});
+
+test("a file subtitle re-checks its library after the held target", async (t) => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), "catalog-subtitle-recheck-"));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const file = path.join(folder, "secret.srt");
+  await writeFile(file, "1\n00:00:01,000 --> 00:00:02,000\nsecret subtitle\n");
+  const subtitleId = mediaResources.add({ url: "file://lib_00000001/secret.srt" }, subtitleOwner, "subtitle");
+  t.after(() => mediaResources.remove(subtitleId));
+  const target = deferred<string>();
+  const entered = deferred();
+  let allowed = true;
+  const asked: Array<string | undefined> = [];
+  const harness = await mount([], null, {
+    access: (_req, need) => {
+      asked.push(need?.libraryId);
+      if (!allowed) throw Object.assign(new Error("revoked"), { status: 404 });
+    },
+    libraryTarget: async () => {
+      entered.resolve();
+      return target.promise;
+    },
+  });
+  t.after(harness.close);
+
+  const pending = api(harness.base, `/api/subtitle/${subtitleId}`);
+  await prompt(entered.promise, "the held subtitle target");
+  allowed = false;
+  target.resolve(file);
+  const response = await prompt(pending, "the revoked file subtitle response");
+  assert.equal(response.status, 404);
+  assert.equal((await response.text()).includes("secret subtitle"), false);
+  assert.deepEqual(asked, [undefined, "lib_00000001"]);
+});
+
+test("a file subtitle re-checks its resource after the held target", async (t) => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), "catalog-subtitle-resource-recheck-"));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const file = path.join(folder, "secret.srt");
+  await writeFile(file, "1\n00:00:01,000 --> 00:00:02,000\nsecret subtitle\n");
+  const subtitleId = mediaResources.add({ url: "file://lib_00000001/secret.srt" }, subtitleOwner, "subtitle");
+  const target = deferred<string>();
+  const entered = deferred();
+  const harness = await mount([], null, {
+    libraryTarget: async () => {
+      entered.resolve();
+      return target.promise;
+    },
+  });
+  t.after(harness.close);
+
+  const pending = api(harness.base, `/api/subtitle/${subtitleId}`);
+  await prompt(entered.promise, "the held subtitle target");
+  mediaResources.remove(subtitleId);
+  target.resolve(file);
+  const response = await prompt(pending, "the removed file subtitle response");
+  assert.equal(response.status, 404);
+  assert.equal((await response.text()).includes("secret subtitle"), false);
+});
+
+test("GET /api/stream-sources re-checks each addon after the held lookup", async (t) => {
+  resetImdbTargets();
+  t.after(resetImdbTargets);
+  const meta = addon("title-held", [], { role: "both", resources: ["meta"] });
+  const source = addon("source-held", [], { role: "source", resources: ["stream"] });
+  source.manifest.resources = [{ name: "stream", types: ["movie"], idPrefixes: ["tt"] }];
+  let allowed = true;
+  const asked: Array<string | undefined> = [];
+  const harness = await mount([meta, source], null, {
+    access: (_req, need) => {
+      asked.push(need?.addonKey);
+      if (!allowed) throw Object.assign(new Error("revoked"), { status: 404 });
+    },
+  });
+  t.after(harness.close);
+  const held = heldJson();
+
+  await withStubbedAddons(() => held.response, async () => {
+    const pending = api(harness.base, `/api/stream-sources/movie/${encodeURIComponent("mpa:held")}`);
+    held.activate();
+    await prompt(held.readStarted, "the stream target body");
+    allowed = false;
+    held.release({ meta: { id: "mpa:held", type: "movie", name: "Held", imdb_id: "tt1099999" } });
+    const response = await prompt(pending, "the revoked stream source response");
+    assert.equal(response.status, 404);
+    assert.equal((await response.text()).includes("source-held"), false);
+  });
+
+  assert.deepEqual(asked, ["source-held"]);
+});
+
+test("GET /api/catalog re-checks its addon after the held listing", async (t) => {
+  const records = [addon("catalog-held", [{ type: "movie", id: "top" }])];
+  let allowed = true;
+  const asked: Array<string | undefined> = [];
+  const harness = await mount(records, null, {
+    access: (_req, need) => {
+      asked.push(need?.addonKey);
+      if (!allowed) throw Object.assign(new Error("revoked"), { status: 404 });
+    },
+  });
+  t.after(harness.close);
+  const held = heldJson();
+
+  await withStubbedAddons(() => held.response, async () => {
+    const pending = api(harness.base, "/api/catalog?addon=catalog-held&type=movie&id=top");
+    held.activate();
+    await prompt(held.readStarted, "the catalogue body");
+    allowed = false;
+    held.release({ metas: [{ id: "tt1", type: "movie", name: "Secret catalogue item" }] });
+    const response = await prompt(pending, "the revoked catalogue response");
+    assert.equal(response.status, 404);
+    assert.equal((await response.text()).includes("Secret catalogue item"), false);
+  });
+
+  assert.deepEqual(asked, ["catalog-held"]);
+});
+
+test("GET /api/search re-checks every addon named by the held results", async (t) => {
+  const records = [addon("search-held", [{ type: "movie", id: "top", extra: [{ name: "search" }] }])];
+  let allowed = true;
+  const asked: Array<string | undefined> = [];
+  const harness = await mount(records, null, {
+    access: (_req, need) => {
+      asked.push(need?.addonKey);
+      if (!allowed) throw Object.assign(new Error("revoked"), { status: 404 });
+    },
+  });
+  t.after(harness.close);
+  const held = heldJson();
+
+  await withStubbedAddons(() => held.response, async () => {
+    const pending = api(harness.base, "/api/search?query=held");
+    held.activate();
+    await prompt(held.readStarted, "the search body");
+    allowed = false;
+    held.release({ metas: [{ id: "tt1", type: "movie", name: "Secret search item" }] });
+    const response = await prompt(pending, "the revoked search response");
+    assert.equal(response.status, 404);
+    assert.equal((await response.text()).includes("Secret search item"), false);
+  });
+
+  assert.deepEqual(asked, ["search-held"]);
+});
+
+test("GET /api/search still checks an addon switched off while it was answering", async (t) => {
+  const records = [addon("search-switched", [{ type: "movie", id: "top", extra: [{ name: "search" }] }])];
+  const asked: Array<string | undefined> = [];
+  const harness = await mount(records, null, {
+    access: (_req, need) => {
+      asked.push(need?.addonKey);
+      if (need?.addonKey === "search-switched" && records[0]!.enabled === false) {
+        throw Object.assign(new Error("switched off"), { status: 404 });
+      }
+    },
+  });
+  t.after(harness.close);
+  const held = heldJson();
+
+  // The settings route switches an addon off by changing the record the request already holds;
+  // here that happens at the moment the search reaches the addon.
+  await withStubbedAddons(() => { records[0]!.enabled = false; return held.response; }, async () => {
+    const pending = api(harness.base, "/api/search?query=held");
+    held.activate();
+    await prompt(held.readStarted, "the search body");
+    held.release({ metas: [{ id: "tt1", type: "movie", name: "Switched-off item" }] });
+    const response = await prompt(pending, "the switched-off search response");
+    assert.equal(response.status, 404);
+    assert.equal((await response.text()).includes("Switched-off item"), false);
+  });
+
+  assert.deepEqual(asked, ["search-switched"]);
+});
+
+test("GET /api/meta re-checks the session after held metadata", async (t) => {
+  let allowed = true;
+  let accessChecks = 0;
+  const metadataAnswer = deferred<MetaItem | null>();
+  const entered = deferred();
+  const harness = await mount([], null, {
+    access: () => {
+      accessChecks += 1;
+      if (!allowed) throw Object.assign(new Error("revoked"), { status: 404 });
+    },
+    cachedMeta: async () => {
+      entered.resolve();
+      return metadataAnswer.promise;
+    },
+  });
+  t.after(harness.close);
+
+  const pending = api(harness.base, "/api/meta/movie/tt1");
+  await prompt(entered.promise, "the held metadata lookup");
+  allowed = false;
+  metadataAnswer.resolve({ id: "tt1", type: "movie", name: "Secret metadata" });
+  const response = await prompt(pending, "the revoked metadata response");
+  assert.equal(response.status, 404);
+  assert.equal((await response.text()).includes("Secret metadata"), false);
+  assert.equal(accessChecks, 1);
+});
+
+test("GET /api/meta/:type/:id/extras re-checks the session after held metadata", async (t) => {
+  clearTitleExtrasCache();
+  t.after(clearTitleExtrasCache);
+  let allowed = true;
+  let accessChecks = 0;
+  const metadataAnswer = deferred<MetaItem | null>();
+  const entered = deferred();
+  const harness = await mount([], null, {
+    access: () => {
+      accessChecks += 1;
+      if (!allowed) throw Object.assign(new Error("revoked"), { status: 404 });
+    },
+    cachedMeta: async () => {
+      entered.resolve();
+      return metadataAnswer.promise;
+    },
+  });
+  t.after(harness.close);
+
+  const pending = api(harness.base, "/api/meta/movie/mpa:held/extras");
+  await prompt(entered.promise, "the held extras metadata lookup");
+  allowed = false;
+  metadataAnswer.resolve({ id: "mpa:held", type: "movie", name: "Secret extras", cast: ["Secret person"] });
+  const response = await prompt(pending, "the revoked extras response");
+  assert.equal(response.status, 404);
+  assert.equal((await response.text()).includes("Secret person"), false);
+  assert.equal(accessChecks, 1);
 });
 
 test("a subtitle beside a library file is shifted to the playing position like an addon's", async (t) => {
