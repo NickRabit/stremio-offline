@@ -163,6 +163,8 @@ export const sk: Catalog = {
   "common.sorting": "Triedenie",
   "common.ascending": "Vzostupne",
   "common.descending": "Zostupne",
+  "viewError.message": "Túto obrazovku sa pre chybu nepodarilo zobraziť.",
+  "viewError.reload": "Načítať aplikáciu znova",
   "api.timeout": "Server neodpovedal včas.",
   "api.unreachable": "Server nie je dostupný. Skontrolujte, či beží, a skúste to znova.",
   "api.badResponse": "Server odpovedal niečím, čo aplikácia nevie prečítať. Ak je pred ním proxy, prihláste sa do nej znova.",

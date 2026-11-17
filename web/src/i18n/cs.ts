@@ -190,6 +190,9 @@ export const cs: Catalog = {
   "common.ascending": "Vzestupně",
   "common.descending": "Sestupně",
 
+  "viewError.message": "Tuto obrazovku se kvůli chybě nepodařilo zobrazit.",
+  "viewError.reload": "Načíst aplikaci znovu",
+
   "api.timeout": "Server neodpověděl včas.",
 
   "api.unreachable": "Server není dostupný. Zkontrolujte, že běží, a zkuste to znovu.",

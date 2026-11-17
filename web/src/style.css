@@ -1962,6 +1962,11 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 @keyframes home-pulse{0%,100%{opacity:1}50%{opacity:.55}}
 .home-note{font-size:11px;color:var(--muted);margin:-4px 0 8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-height:24px}
 .home-note.bad{color:var(--red)}
+/* A crashed view. The overlay sits above .player-overlay (z-index: 100). */
+.view-error{display:flex;flex-direction:column;align-items:center;gap:14px;padding:32px 16px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
+.view-error p{margin:0}
+.view-error-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
+.view-error-overlay{position:fixed;inset:0;z-index:110;background:var(--bg);justify-content:center;padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
 .home-retry{min-height:44px;padding:0 12px}
 .home-shuffle{width:44px;height:44px;min-height:44px;padding:0;flex:0 0 auto;border:0;background:transparent;color:var(--muted)}
 .home-shuffle:hover{color:var(--text)}
