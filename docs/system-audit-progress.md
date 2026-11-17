@@ -1,6 +1,7 @@
 # System audit progress
 
 Baseline: `origin/main` at `a0bb6ce7`, version 0.7.108, checked 2026-11-15.
+The next agent continues from [system-audit-handover.md](system-audit-handover.md).
 This is the first bounded delivery from `system-audit-refactor-agent-task.md`,
 not a completed whole-application audit. The primary agent performed the
 analysis and reproductions. Initial delegated audits were stopped at the
@@ -24,14 +25,14 @@ the primary agent, and shipped in its own pull request.
 - [ ] Decide whether the unjournaled rename route needs the same sidecar recovery (SA-3).
 - [ ] Decide whether a manual retry should keep the sources already tried (SA-4).
 - [x] First independent pass over the routes an ordinary user or a child can reach; fix the nested-library gap it found: #838.
-- [ ] Finish the route matrix: remote-library items and artwork, playback and media ownership past the mint, follows, watchlist, profiles and PIN, avatars, pairing, the image route, device-download tickets.
+- [x] Finish the route matrix: covered by the second independent pass below (SA-8 to SA-10).
 - [x] Owner's decision on SA-7: kept open (2026-11-17).
 - [x] Second independent pass over the routes the first one did not reach (remote libraries, playback and media ownership past the mint, device tickets, follows, watchlist, profiles and PIN, avatars, pairing, settings, images).
 - [x] SA-8 to SA-10: the owner approved in-memory re-checks after the awaits; fixed in #842.
 - [x] Account/grant/library revocation while a transfer or playback runs: not pursued. The owner relaxed these re-checks on purpose because they multiplied request counts; a revoked account finishing an in-flight transfer or playback is the accepted trade-off, not a defect.
 - [ ] Complete playback interruption/resource measurements on supported hardware.
 - [x] Characterize catalogue/search orchestration before extraction: #840.
-- [ ] Perform bounded App.tsx extraction; CSS, desktop and TV remain separate work.
+- [x] First bounded App.tsx extraction: catalogue and search loading moved to `use-catalog-loader.ts` (#844). Further slices, CSS, desktop and TV remain separate work.
 
 ## Findings and evidence
 
@@ -49,6 +50,7 @@ the primary agent, and shipped in its own pull request.
 | SA-10 / P4 | Confirmed; fixed in #842 | `GET /api/stream-sources/:type/:id` answers addon keys and names after `streamCandidates` without re-checking the grants. Names only, no playable resource. The same class of gap remains unchecked in `GET /api/catalog`, `/api/meta` and `/api/search`. |
 | SA-11 / P4 | Observed locally | `server/src/downloads.test.ts` runs for about a minute on its own; under the full local gate with another job loading the machine it crossed the 120-second per-file limit twice (2026-11-16 and 2026-11-17) and failed the gate, while passing alone and on CI. A fixed limit and a growing file; splitting the file or raising the limit for it is a separate decision. |
 | SA-12 / P3 | Reproduced, fixed in #843 | CI flake in `playback.test.ts`, "real FFmpeg stops writing while suspended…": the test reported segment 1 as fetched as soon as the remux was handed over, which happens once segment 0 is listed; on a slow runner the ledger could not count it yet. Reproduced in `node:26-trixie-slim` with Debian's FFmpeg at 0.2 CPU (1 of 6 runs failed); the test now waits for the playlist, woken by writes to the folder (10 of 10 passed under the same limit). A test race, not a playback defect. |
+| SA-13 / P3 | Observed once on CI, not reproduced | The `windows` job hung for 19 minutes in `server/src/downloads.test.ts` (2026-11-17, on #841) and was cancelled by the job limit, reporting `Promise resolution is still pending but the event loop has already resolved` and no per-test output. One occurrence in the last 40 CI runs; the rerun passed. Splitting the file (SA-11) is the next step to make it attributable. |
 | Historical H1/H2/H3 | Already fixed in source; not all rerun here | Admissions use the admission/persist machinery; `remove` writes before deleting its partial; unreadable queue/journal tests exist. Do not repeat the October JSON-store findings as current defects. Current queues also support SQLite. A new power-loss/fsync claim was not tested. |
 | Follow reserve/enqueue/adopt replay | Existing implementation verified within harness limits | `follows.test.ts`: reserved-before-queue, queued-before-link, adoption, completion, history removal and repeated restart scenarios. 21 selected tests passed. The queue collaborator is fake in several replay cases: this is not a spawned-process, two-real-store crash campaign. |
 | Missing library root | Existing protection inspected, full campaign not verified | `library.test.ts` contains an incomplete-walk test for a missing root; no evidence here establishes behavior for every unmount/scan/artwork interleaving. Never equate missing with empty. |
@@ -56,7 +58,7 @@ the primary agent, and shipped in its own pull request.
 | Role allowlists | Existing gate verified; application-wide ownership review not verified | `roles.ts` defaults unlisted user routes to administrator-only; `index.ts` mounts authentication then role/password/restricted gates. Role tests passed. Handler tests and a role allowlist separately do not prove the full middleware/resource composition. |
 | Playback interruption | Selected existing fixes verified | 11 selected playback tests passed, covering serialization, failed operations, AC-3 descriptor/seek behavior, short conversion, fallback retirement and closing during seek. No physical NAS/TV/iPhone or measured concurrency/storage claim. |
 | Bounded storage | Not verified / not implemented as a full byte bound | Current playback has configurable storage, lead suspension and lifecycle tests. The older proposed buffer brief is not a statement of today's entire implementation. Lead control is not a byte-bounded eviction/regeneration contract. |
-| React error boundary | Absence confirmed by source inspection, failure not reproduced | No ErrorBoundary in App.tsx/main.tsx. Do not add more lazy chunks before characterization and a deliberate recovery boundary. |
+| React error boundary | Partial, corrected 2026-11-17 | `LazyScreenBoundary` (`lazy-screen.tsx`) wraps three lazy screens (remote-library browser, statistics, settings) and recovers only from a failed chunk import. The catalogue, library, title detail and player have no boundary, so a render error there blanks the application. The earlier statement that no boundary exists was inaccurate. |
 
 ## Queue transitions and replay
 
@@ -188,6 +190,16 @@ Fourth delivery, 2026-11-17, against `main` at `22ef96c9` (0.7.113):
   by reading the list before the wait.
 - #843 (SA-12): the intermittent real-FFmpeg test failure that hit this
   documentation pull request's own CI run.
+
+Fifth delivery, 2026-11-17, `main` at `037e1304` (0.7.114):
+
+- #844: catalogue and search loading moved from `App.tsx` into
+  `use-catalog-loader.ts`. Reviewed by the primary agent: the nine
+  characterization tests from #840 pass unchanged, and breaking the
+  stale-page guard or the abort on leaving the view inside the new hook fails
+  the matching test. Web suite 1,856 passed.
+- SA-11 reproduced locally under load (1 of 12 stress runs); SA-13 recorded.
+- The remaining work is ordered in [system-audit-handover.md](system-audit-handover.md).
 
 Audit-only work does not change runtime and has no version bump. Build, complete
 unit/e2e and Docker deployment belong to each implementation PR. No production
