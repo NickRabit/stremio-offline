@@ -61,7 +61,7 @@ Do not reopen these without a new reason.
 
 ## Remaining work, in priority order
 
-### 1. Split `server/src/downloads.test.ts` (SA-11, SA-13)
+### 1. Split `server/src/downloads.test.ts` (SA-11, SA-13) — done in #846
 
 5,218 lines and about a minute on its own. Under load it crosses the 120-second per-file limit
 (reproduced locally: `node scripts/test-stress.mjs server/src/downloads.test.ts --runs 12 --parallel 4
@@ -76,7 +76,7 @@ helper module. Done means: every test that passed before passes, the count is un
 takes more than about 20 seconds alone, and the stress command above passes 12 of 12. Smaller files
 also make the Windows hang attributable: if it recurs, CI names the file.
 
-### 2. A crash boundary for the main views
+### 2. A crash boundary for the main views — done in #847
 
 `LazyScreenBoundary` (`web/src/lazy-screen.tsx`) wraps three lazily loaded screens in `App.tsx`
 (the remote-library browser, statistics and settings), but only to recover from a failed chunk
