@@ -1,6 +1,9 @@
 package cz.stremiooffline.tv.ui.profiles
 
 import android.content.Context
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.ApiClient
 import cz.stremiooffline.tv.data.AvatarDto
@@ -12,6 +15,9 @@ import cz.stremiooffline.tv.ui.SessionViewModel
 import cz.stremiooffline.tv.ui.shell.Section
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import okhttp3.mockwebserver.MockResponse
@@ -21,13 +27,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -36,16 +40,46 @@ class SessionViewModelSwitchTest {
 
   private val server = MockWebServer()
   private val context: Context = ApplicationProvider.getApplicationContext()
+  private val viewModels = ViewModelStore()
+  private var session: SessionViewModel? = null
 
   @Before
   fun mainDispatcher() {
     Dispatchers.setMain(Dispatchers.Unconfined)
   }
 
+  /**
+   * No request of the session may outlive the test: a coroutine still running here would resume
+   * after the next test has started, and an uncaught failure from it would be blamed on that test.
+   */
   @After
   fun shutdown() {
-    Dispatchers.resetMain()
+    val work = session?.viewModelScope?.coroutineContext?.job
+    viewModels.clear()
     server.shutdown()
+    work?.let { runBlocking { it.join() } }
+    Dispatchers.resetMain()
+  }
+
+  private fun session(store: SessionStore): SessionViewModel =
+    ViewModelProvider.create(viewModels, SessionViewModel.factory(store, context))[SessionViewModel::class]
+      .also { session = it }
+
+  /** Waits until every request the session started has answered, then reads its state. */
+  private fun settle(session: SessionViewModel): SessionState = runBlocking {
+    val work = session.viewModelScope.coroutineContext.job
+    while (true) {
+      val running = work.children.toList()
+      if (running.isEmpty()) break
+      running.joinAll()
+    }
+    session.state
+  }
+
+  private fun signedIn(session: SessionViewModel): SessionState.SignedIn {
+    val state = settle(session)
+    assertTrue("expected a signed-in session, was $state", state is SessionState.SignedIn)
+    return state as SessionState.SignedIn
   }
 
   @Test
@@ -53,13 +87,13 @@ class SessionViewModelSwitchTest {
     server.start()
     val address = ServerAddress.parse(server.url("/").toString())!!
     val store = MemoryStore(context)
-    val session = SessionViewModel(store, context)
+    val session = session(store)
     store.serverUrl = address.display
     store.saveSession(address.origin, "old-token")
     val firstApi = ApiClient(address, CookieStore(address.origin, store))
     server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs","canSwitch":true}"""))
     session.signedIn("ondra", "cs", Section.Home, firstApi)
-    awaitSignedIn(session, "ondra", canSwitch = true)
+    assertTrue(signedIn(session).canSwitch)
 
     store.saveSession(address.origin, "new-token")
     server.enqueue(
@@ -69,7 +103,7 @@ class SessionViewModelSwitchTest {
     )
     server.enqueue(MockResponse().setBody("""{"startView":"catalog"}"""))
     session.switchedProfile()
-    val signedIn = awaitSignedIn(session, "jana")
+    val signedIn = signedIn(session)
     assertNotSame(firstApi, signedIn.api)
     assertEquals("jana", signedIn.username)
     assertEquals(Section.Catalog, signedIn.start)
@@ -84,11 +118,11 @@ class SessionViewModelSwitchTest {
     val address = ServerAddress.parse(server.url("/").toString())!!
     val store = MemoryStore(context)
     store.serverUrl = address.display
-    val session = SessionViewModel(store, context)
+    val session = session(store)
     val api = ApiClient(address, CookieStore(address.origin, store))
     server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs"}"""))
     session.signedIn("ondra", "cs", Section.Home, api)
-    awaitSignedIn(session, "ondra")
+    assertEquals("ondra", signedIn(session).username)
 
     val avatar = AvatarDto(kind = "custom", url = "/api/avatar/usr_1?v=2")
     session.setAvatar(avatar)
@@ -101,17 +135,18 @@ class SessionViewModelSwitchTest {
     server.start()
     val address = ServerAddress.parse(server.url("/").toString())!!
     val store = MemoryStore(context)
-    val session = SessionViewModel(store, context)
+    val session = session(store)
     store.serverUrl = address.display
     store.saveSession(address.origin, "token")
     val api = ApiClient(address, CookieStore(address.origin, store))
     server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs","canSwitch":true}"""))
     session.signedIn("ondra", "cs", Section.Home, api)
-    awaitSignedIn(session, "ondra", canSwitch = true)
+    assertTrue(signedIn(session).canSwitch)
 
     server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs","canSwitch":false}"""))
     session.refreshCanSwitch()
-    val signedIn = awaitSignedIn(session, "ondra", canSwitch = false)
+    val signedIn = signedIn(session)
+    assertEquals(false, signedIn.canSwitch)
     assertSame(api, signedIn.api)
   }
 
@@ -124,9 +159,10 @@ class SessionViewModelSwitchTest {
     store.saveSession(address.origin, "token")
     server.enqueue(MockResponse().setBody("""{"username":"kid","language":"en","child":true}"""))
 
-    val session = SessionViewModel(store, context)
+    val session = session(store)
 
-    val signedIn = awaitSignedIn(session, "kid")
+    val signedIn = signedIn(session)
+    assertEquals("kid", signedIn.username)
     assertEquals(Section.Home, signedIn.start)
     assertTrue(signedIn.child)
     assertEquals(1, server.requestCount)
@@ -142,15 +178,13 @@ class SessionViewModelSwitchTest {
     server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs"}"""))
     server.enqueue(MockResponse().setBody("""{"startView":"library"}"""))
 
-    val session = SessionViewModel(store, context)
-    val initial = awaitSignedIn(session, "ondra")
-    server.takeRequest(5, TimeUnit.SECONDS)
-    server.takeRequest(5, TimeUnit.SECONDS)
+    val session = session(store)
+    val initial = signedIn(session)
+    assertEquals("ondra", initial.username)
 
     server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs","child":true,"catalogue":true}"""))
     session.refreshPolicy()
-    server.takeRequest(5, TimeUnit.SECONDS)
-    val child = awaitPolicy(session, child = true, catalogue = true)
+    val child = signedIn(session)
     assertTrue(child.child)
     assertTrue(child.catalogue)
     assertEquals(Section.Home, child.start)
@@ -158,9 +192,8 @@ class SessionViewModelSwitchTest {
 
     server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs","child":true,"catalogue":true}"""))
     session.refreshPolicy()
-    server.takeRequest(5, TimeUnit.SECONDS)
-    Thread.sleep(100)
-    assertSame(child.api, (session.state as SessionState.SignedIn).api)
+    assertSame(child.api, signedIn(session).api)
+    assertEquals(4, server.requestCount)
   }
 
   @Test
@@ -172,14 +205,16 @@ class SessionViewModelSwitchTest {
     store.saveSession(address.origin, "token")
     server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs"}"""))
     server.enqueue(MockResponse().setBody("""{"startView":"library"}"""))
-    val session = SessionViewModel(store, context)
-    val initial = awaitSignedIn(session, "ondra")
+    val session = session(store)
+    val initial = signedIn(session)
+    assertEquals("ondra", initial.username)
 
     server.enqueue(
       MockResponse().setBody("""{"username":"ondra","language":"cs","avatar":{"kind":"preset","id":"fox"}}"""),
     )
     session.refreshPolicy()
-    val updated = awaitSignedIn(session, "ondra", avatar = AvatarDto(kind = "preset", id = "fox"))
+    val updated = signedIn(session)
+    assertEquals(AvatarDto(kind = "preset", id = "fox"), updated.avatar)
     assertSame(initial.api, updated.api)
     assertEquals(Section.Library, updated.start)
     assertEquals(3, server.requestCount)
@@ -195,50 +230,14 @@ class SessionViewModelSwitchTest {
     server.enqueue(MockResponse().setBody("""{"username":"ondra","language":"cs"}"""))
     server.enqueue(MockResponse().setBody("""{"startView":"home"}"""))
 
-    val session = SessionViewModel(store, context)
-    val initial = awaitSignedIn(session, "ondra")
-    server.takeRequest(5, TimeUnit.SECONDS)
-    server.takeRequest(5, TimeUnit.SECONDS)
+    val session = session(store)
+    val initial = signedIn(session)
+    assertEquals("ondra", initial.username)
 
     server.enqueue(MockResponse().setResponseCode(500))
     session.refreshPolicy()
-    server.takeRequest(5, TimeUnit.SECONDS)
-    Thread.sleep(100)
-    assertSame(initial.api, (session.state as SessionState.SignedIn).api)
-  }
-
-  private fun awaitSignedIn(
-    session: SessionViewModel,
-    username: String,
-    canSwitch: Boolean? = null,
-    avatar: AvatarDto? = null,
-  ): SessionState.SignedIn {
-    val deadline = System.currentTimeMillis() + 5_000
-    while (System.currentTimeMillis() < deadline) {
-      val state = session.state as? SessionState.SignedIn
-      if (state?.username == username &&
-        (canSwitch == null || state.canSwitch == canSwitch) &&
-        (avatar == null || state.avatar == avatar)
-      ) return state
-      Thread.sleep(25)
-    }
-    fail("expected signed in as $username, was ${session.state}")
-    error("unreachable")
-  }
-
-  private fun awaitPolicy(
-    session: SessionViewModel,
-    child: Boolean,
-    catalogue: Boolean,
-  ): SessionState.SignedIn {
-    val deadline = System.currentTimeMillis() + 5_000
-    while (System.currentTimeMillis() < deadline) {
-      val state = session.state as? SessionState.SignedIn
-      if (state?.child == child && state.catalogue == catalogue) return state
-      Thread.sleep(25)
-    }
-    fail("expected child=$child catalogue=$catalogue, was ${session.state}")
-    error("unreachable")
+    assertSame(initial.api, signedIn(session).api)
+    assertEquals(3, server.requestCount)
   }
 
   private class MemoryStore(context: Context) : SessionStore(context) {
