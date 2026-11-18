@@ -87,7 +87,7 @@ navigation, how to leave it, that it resets when the view changes), with transla
 ten catalogues, and tests that throw inside each wrapped view. Correct the "React error boundary"
 row in `system-audit-progress.md` at the same time.
 
-### 3. The next `App.tsx` slice
+### 3. The next `App.tsx` slice — done in #849–#854
 
 `web/src/App.tsx` is 4,619 lines with 68 effects after #844 moved catalogue and search loading into
 `web/src/use-catalog-loader.ts`. Repeat the same two steps for each further slice: first
@@ -106,7 +106,9 @@ the prefetched sources and staying with the playing addon. #850 moved that slice
 `web/src/library-browse-app.test.tsx` and lives in `web/src/use-library-browse.ts`. Scroll and
 view-anchor restoration is pinned by the Playwright specs `rotation.spec.ts`, `safari-scroll.spec.ts`,
 `layout/catalog-header.spec.ts`, `layout/catalogue-detail.spec.ts` and `scroll-return.spec.ts`: it
-depends on real layout, so jsdom tests through `App` cannot hold it. Its move is next.
+depends on real layout, so jsdom tests through `App` cannot hold it; #853 added the two missing
+cases and #854 moved it into `web/src/use-scroll-memory.ts`. `App.tsx` is 4,357 lines after the three
+moves.
 
 ### 4. Inject the remaining queue faults — done
 
@@ -122,10 +124,10 @@ loses or corrupts bytes, fix it in its own pull request.
   the two before proposing a journal: a same-volume rename makes the window short.
 - **SA-4.** `DownloadQueue.retry` clears `source.tried`, so a later failover may choose a source
   that already failed. Decide with the owner whether a manual retry should start over.
-- **Residue of #838.** `GET /api/library/identity` and `/gallery` answer a parent-spelled key inside
-  a hidden nested library differently from an absent folder, which confirms a guessed folder name
-  without returning content. A symlink planted inside the parent that points into the nested root is
-  not detected.
+- **Residue of #838.** Identity and gallery now answer an absent path like a hidden nested key.
+  Still open: a symlink planted inside the parent that points into the nested root is not detected.
+  Planting one needs write access to the library folder; detecting it would mean resolving every
+  key's real path against the hidden roots, a filesystem call on each request.
 
 ### 6. Remote media-server sync (BH-6.3, BH-6.4)
 

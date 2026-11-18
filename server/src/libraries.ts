@@ -278,6 +278,9 @@ export async function resolveLibraryPath(libraries: LibraryRecord[], value: stri
   }
   if (!library || !library.enabled) return undefined;
   if (relative.split("/").some((segment) => segment === "." || segment === "..")) return undefined;
+  // No filesystem name holds a NUL byte, and Node throws on one instead of answering "absent":
+  // let it through and a visible path errors where a hidden or missing one is refused.
+  if (relative.includes("\0")) return undefined;
 
   const root = path.resolve(library.root);
   const absolute = path.resolve(root, toFs(relative));

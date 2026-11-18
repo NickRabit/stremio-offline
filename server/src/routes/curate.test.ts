@@ -609,6 +609,31 @@ test("identity and source refuse a nested library's parent-spelled key like a mi
   assert.deepEqual(await source.json(), await missingSource.json());
 });
 
+test("identity answers an absent visible path like a hidden nested one", async (t) => {
+  const root = await makeRoot("stremio-curate-nested-absent-");
+  await put(root, "Nested/Season 1/secret.mkv");
+  const parent = library("lib_00000001", root, 0, [BOB]);
+  const nested = library("lib_00000002", path.join(root, "Nested"), 1);
+  const harness = await mount({
+    as: users[1],
+    libraries: [parent, nested],
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const hiddenKey = `${parent.id}/Nested/Season 1/secret.mkv`;
+  const missingKey = `${parent.id}/Missing/Season 1/secret.mkv`;
+  const hidden = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(hiddenKey)}`);
+  const missing = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(missingKey)}`);
+  assert.equal(hidden.status, missing.status);
+  assert.deepEqual(await hidden.json(), await missing.json());
+
+  // A NUL byte reaches the filesystem call only for a visible path; it must not answer differently.
+  const hiddenNul = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(`${parent.id}/Nested/Season 1/se\0cret.mkv`)}`);
+  const missingNul = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(`${parent.id}/Missing/Season 1/se\0cret.mkv`)}`);
+  assert.equal(hiddenNul.status, missingNul.status);
+  assert.deepEqual(await hiddenNul.json(), await missingNul.json());
+});
+
 test("identity follows the volume's case folding for a carve-out", async (t) => {
   const root = await makeRoot("stremio-curate-nested-case-");
   await put(root, "Nested/Season 1/secret.mkv");
