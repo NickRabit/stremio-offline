@@ -2447,7 +2447,6 @@ const { clearGeneratedArt, deleteLibraryItem, carryHandMove, relocateLibraryPath
   healthOf,
   libraryOfKey,
   wirePath,
-  mediaPath,
   fileExists,
   isFileKey,
   removeGeneratedArt,

@@ -250,6 +250,8 @@ test("a published record finishes a move whose bytes already reached the target"
     await bootFresh(env);
     await seedState(env);
     await env.server!.stop();
+    const customPoster = Buffer.from("original artwork");
+    await writeFile(path.join(env.aRoot, "Show", "poster.jpg"), customPoster);
     await moveItemToTarget(env);
     await writeCrashJob(env, {
       phase: "published", copy: false, from: `${env.a}/${ITEM}`, to: `${env.b}/${TARGET_NAME}`,
@@ -262,6 +264,11 @@ test("a published record finishes a move whose bytes already reached the target"
     assert.equal(job.results[0]?.ok, true, JSON.stringify(job.results));
     assert.equal(await exists(path.join(env.bRoot, TARGET_NAME)), true, "the file stays at the target");
     assert.equal(await exists(path.join(env.aRoot, ITEM)), false, "the source stays gone");
+    assert.equal(await exists(path.join(env.aRoot, "Show", "Season 1")), false,
+      "the empty season left by the replay is pruned");
+    assert.equal(await exists(path.join(env.aRoot, "Show")), true, "the custom poster retains its folder");
+    assert.deepEqual(await readFile(path.join(env.aRoot, "Show", "poster.jpg")), customPoster);
+    assert.equal(await exists(env.aRoot), true, "the library root is retained");
     await assertMovedState(env);
   });
 });

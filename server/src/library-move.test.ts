@@ -465,6 +465,23 @@ const identify = (target: string) =>
 const identityOf = async (target: string) =>
   (await (await api(`/api/library/identity?path=${encodeURIComponent(target)}`)).json()) as { match?: string; bound?: { id?: string } };
 
+test("moving the last video leaves the original poster and removes empty descendants", async () => {
+  const title = "Custom art";
+  const episode = title + "/Unused/Season 1/Episode.mkv";
+  const poster = path.join(showsRoot, title, "poster.jpg");
+  const original = Buffer.from("original artwork");
+  await put(showsRoot, episode);
+  await writeFile(poster, original);
+
+  const response = await move({ path: `${shows}/${episode}`, folder: archive });
+  assert.equal(response.status, 200);
+  assert.equal(await readFile(path.join(archiveRoot, "Episode.mkv"), "utf8"), "video");
+  assert.equal(await exists(path.join(showsRoot, title, "Unused")), false);
+  assert.equal(await exists(path.join(showsRoot, title, "Season 1")), false);
+  assert.deepEqual(await readFile(poster), original);
+  assert.equal(await exists(showsRoot), true, "the library root is retained");
+});
+
 test("a queued move into another library carries the item's state", async () => {
   const from = carriedWire("01 - Carried.mkv");
   const relative = carried("01 - Carried.mkv");

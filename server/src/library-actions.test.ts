@@ -10,7 +10,7 @@ import type { FoundFile } from "./library.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import type { LibraryMetaRecord } from "./library-match.js";
 import { LibrarySeenStore } from "./library-seen.js";
-import type { LibraryRecord } from "./libraries.js";
+import { parseLibraryPath, type LibraryRecord } from "./libraries.js";
 import type { UserData } from "./users.js";
 
 /** The operations are exercised through the factory with fakes: no server boot, and the only
@@ -32,6 +32,7 @@ const harness = (options: {
   seen?: LibraryActionDeps["seen"];
   updateEveryData?: LibraryActionDeps["updateEveryData"];
   progressOf?: LibraryActionDeps["progressOf"];
+  carveOuts?: ReadonlySet<string>;
 } = {}) => {
   const calls = {
     relocate: [] as Array<{ from: string; to: string; pin: boolean }>,
@@ -42,8 +43,15 @@ const harness = (options: {
     libraryFilesReads: 0,
   };
   const holds = options.holds ?? (() => false);
+  const libraries = options.libraries ?? (() => [library]);
+  const libraryOfKey = (key: string) => {
+    const parsed = parseLibraryPath(key);
+    const found = parsed ? libraries().find((entry) => entry.id === parsed.libraryId) : libraries()[0];
+    if (!found) throw new Error(`No library for ${key}`);
+    return { library: found, relative: parsed?.relative ?? key };
+  };
   const deps: LibraryActionDeps = {
-    store: { libraries: options.libraries ?? (() => [library]) },
+    store: { libraries },
     metaStore: options.metaStore ?? {
       qualifiedMeta: () => ({}),
       update: async () => undefined,
@@ -61,11 +69,10 @@ const harness = (options: {
       return (options.files ?? []) as FoundFile[];
     },
     libraryUnits: async () => [],
-    carveOutsOf: () => new Set<string>(),
+    carveOutsOf: () => options.carveOuts ?? new Set<string>(),
     healthOf: (entry) => ({ unreachable: false, readOnly: false, realRoot: entry.root, caseInsensitive: false }),
-    libraryOfKey: () => ({ library, relative: "" }),
+    libraryOfKey,
     wirePath: (key) => key,
-    mediaPath: (key) => `/library/${key}`,
     fileExists: exists,
     isFileKey: (key) => key.endsWith(".mkv"),
     removeGeneratedArt: async (key) => { calls.cleared.push(key); },
@@ -124,6 +131,68 @@ test("a changed binding clears the item's pictures, its files' and the folders b
     `${LIBRARY_ID}/Show/01 serie/S01E02.mkv`,
     `${LIBRARY_ID}/Show/extra.mkv`,
   ], "a season folder's own picture goes stale with its episodes, and a similar name is another item");
+});
+
+test("empty parents are pruned deepest-first and a retained poster protects its ancestors", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "library-prune-"));
+  const poster = Buffer.from([0x00, 0xff, 0x13, 0x37, 0x42]);
+  try {
+    await mkdir(path.join(root, "Show", "Unused", "Season", "Disc"), { recursive: true });
+    await writeFile(path.join(root, "Show", "poster.jpg"), poster);
+    const state = {
+      version: 1,
+      meta: {
+        "Show/Unused/Season/Disc": { type: "movie" as const, id: "tt-unused", source: "user" as const, locked: true },
+        Show: { type: "series" as const, id: "tt-show", source: "user" as const, locked: true },
+      },
+      suggestions: {},
+    };
+    const metaStore: LibraryActionDeps["metaStore"] = {
+      qualifiedMeta: () => Object.fromEntries(Object.entries(state.meta).map(([key, value]) => [`${LIBRARY_ID}/${key}`, value])),
+      update: async (_libraryId, mutate) => { mutate(state, {}); },
+      relocate: async () => undefined,
+      copy: async () => undefined,
+      holds: () => false,
+      flush: async () => undefined,
+    };
+    const { actions, calls } = harness({ libraries: () => [{ ...library, root }], metaStore });
+
+    assert.deepEqual(
+      await actions.pruneEmptiedFolders(`${LIBRARY_ID}/Show/Unused/Season/Disc/movie.mkv`),
+      ["Show/Unused/Season/Disc", "Show/Unused/Season", "Show/Unused"],
+    );
+    assert.deepEqual(calls.cleared, [
+      `${LIBRARY_ID}/Show/Unused/Season/Disc`,
+      `${LIBRARY_ID}/Show/Unused/Season`,
+      `${LIBRARY_ID}/Show/Unused`,
+    ]);
+    assert.deepEqual(Object.keys(state.meta), ["Show"], "state stays for the folder the poster retained");
+    assert.equal(await exists(path.join(root, "Show")), true);
+    assert.deepEqual(await readFile(path.join(root, "Show", "poster.jpg")), poster);
+    assert.equal(await exists(root), true, "the library root is never an ancestor to remove");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("pruning stops at a carve-out and cannot escape the library root", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "library-prune-guard-"));
+  try {
+    await mkdir(path.join(root, "Inbox"), { recursive: true });
+    const guarded = harness({
+      libraries: () => [{ ...library, root }],
+      carveOuts: new Set(["Inbox/Other Library"]),
+    });
+    assert.deepEqual(await guarded.actions.pruneEmptiedFolders(`${LIBRARY_ID}/Inbox/movie.mkv`), []);
+    assert.equal(await exists(path.join(root, "Inbox")), true);
+    assert.deepEqual(guarded.calls.cleared, []);
+
+    const outside = harness({ libraries: () => [{ ...library, root }] });
+    assert.deepEqual(await outside.actions.pruneEmptiedFolders(`${LIBRARY_ID}/../outside/movie.mkv`), []);
+    assert.deepEqual(outside.calls.cleared, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("resumeTransfer drops a reserved placeholder and runs the transfer from the start", async () => {
@@ -604,6 +673,31 @@ test("deleting a video deletes its subtitles, not another title's", async () => 
     assert.equal(await exists(path.join(root, "Films/Heat.srt")), false);
     assert.equal(await exists(path.join(root, "Films/Heat.cs.vtt")), false);
     assert.equal(await exists(path.join(root, "Films/Heat 2.srt")), true);
+  });
+});
+
+test("deleting a video prunes its empty parents and keeps a custom poster", async () => {
+  const poster = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
+  await withRoot(["Films/Show/Season/movie.mkv", "Films/Show/poster.jpg"], async (root, actions) => {
+    await writeFile(path.join(root, "Films/Show/poster.jpg"), poster);
+    await actions.deleteLibraryItem(`${LIBRARY_ID}/Films/Show/Season/movie.mkv`);
+    assert.equal(await exists(path.join(root, "Films/Show/Season")), false);
+    assert.equal(await exists(path.join(root, "Films/Show")), true);
+    assert.deepEqual(await readFile(path.join(root, "Films/Show/poster.jpg")), poster);
+    assert.equal(await exists(root), true);
+  });
+});
+
+test("deleting the requested folder stays explicit while its parent cleanup is conservative", async () => {
+  await withRoot([
+    "Films/Requested/Inner/movie.mkv",
+    "Films/Requested/poster.jpg",
+    "Films/unrelated.txt",
+  ], async (root, actions) => {
+    await actions.deleteLibraryItem(`${LIBRARY_ID}/Films/Requested`);
+    assert.equal(await exists(path.join(root, "Films/Requested")), false, "the requested folder is still deleted recursively");
+    assert.equal(await exists(path.join(root, "Films")), true, "the parent holding another file is retained");
+    assert.equal(await exists(path.join(root, "Films/unrelated.txt")), true);
   });
 });
 
