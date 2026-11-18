@@ -63,6 +63,13 @@ jobs:
         env:
           GRADLE_TASKS: ${{ matrix.tasks }}
         working-directory: android-tv
+      # The XML results keep every stack trace in full, suppressed causes included.
+      - if: failure() && matrix.name == 'tests-lint'
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-test-results
+          path: android-tv/app/build/test-results/testDebugUnitTest/
+          if-no-files-found: ignore
       # One of the four signing variables on its own must not break the build: the signing config
       # is created only when all four are set, so this still produces the unsigned APK.
       - if: matrix.name == 'packages'
