@@ -1,13 +1,13 @@
-import { lstat, rm, stat } from "node:fs/promises";
+import { lstat, rm, rmdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { ART_VARIANTS, artVariantKey } from "./artwork.js";
 import type { ArtworkCache } from "./artwork-cache.js";
 import { AppError } from "./errors.js";
-import { emptiedFolders, foldersBetween, holdsLibraryRoot, isPathWithin, moveDestination, orphanedCatalogKeys, remapPath, type FoundFile } from "./library.js";
+import { foldersBetween, holdsLibraryRoot, isPathWithin, moveDestination, orphanedCatalogKeys, remapPath, withinLibraryRoot, type FoundFile } from "./library.js";
 import { dropKeyed, isAutomaticRecord, knownTitleEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import type { LibraryMetaStore } from "./library-meta-store.js";
 import type { LibraryHealth } from "./library-probe.js";
-import { libraryPath, parseLibraryPath, posixBase, posixJoin, resolveLibraryPath, toPosix, type LibraryRecord } from "./libraries.js";
+import { libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, resolveLibraryPath, toPosix, type LibraryRecord } from "./libraries.js";
 import { placeholderOnly, removePlaceholder, transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 import { log } from "./logger.js";
 import { isSidecarOf, renamedSidecar, subtitleSidecars } from "./library-sidecars.js";
@@ -29,7 +29,6 @@ export interface LibraryActionDeps {
   healthOf(library: LibraryRecord): LibraryHealth;
   libraryOfKey(key: string): { library: LibraryRecord; relative: string };
   wirePath(key: string): string;
-  mediaPath(key: string, ...rest: string[]): string;
   fileExists(file: string): Promise<boolean>;
   isFileKey(key: string): boolean;
   removeGeneratedArt(key: string): Promise<void>;
@@ -90,7 +89,7 @@ export type RerootStep = {
 export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
   const {
     store, metaStore, artworks, libraryFiles, libraryUnits, carveOutsOf, healthOf, libraryOfKey,
-    wirePath, mediaPath, fileExists, isFileKey, removeGeneratedArt, ownRecord, progressOf, watchlistOf,
+    wirePath, fileExists, isFileKey, removeGeneratedArt, ownRecord, progressOf, watchlistOf,
     updateEveryData, invalidateLibrary, seen, setLibraryOpsWriting,
   } = deps;
 
@@ -204,14 +203,30 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     }
   };
 
-  /** The folder the last video just left is litter, so it goes too -- up the tree for as long
-   *  as the parent holds nothing to watch either. */
+  /** The folders the moved or deleted item left behind are removed only while each is truly
+   *  empty. A picture, subtitle or any other file keeps its folder and everything above it. */
   const pruneEmptiedFolders = async (key: string) => {
     const { library, relative } = libraryOfKey(key);
-    const gone = await emptiedFolders(library.root, relative, carveOutsOf(library), healthOf(library).caseInsensitive);
-    for (const folder of gone) {
+    const carveOuts = carveOutsOf(library);
+    const caseInsensitive = healthOf(library).caseInsensitive;
+    const gone: string[] = [];
+    for (let folder = posixDir(relative); folder; folder = posixDir(folder)) {
+      if (holdsLibraryRoot(carveOuts, folder, caseInsensitive) || withinLibraryRoot(carveOuts, folder, caseInsensitive)) break;
       const folderKey = libraryPath(library.id, folder);
-      await rm(mediaPath(folderKey), { recursive: true, force: true });
+      const resolved = await resolveLibraryPath([library], folderKey);
+      if (!resolved?.relative) break;
+      try {
+        await rmdir(resolved.absolute);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "ENOENT") {
+          log("WARN", "Emptied-folder cleanup stopped", {
+            folder: folderKey, reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+        break;
+      }
+      gone.push(folder);
       await removeGeneratedArt(folderKey);
       await forgetLibraryPath(folderKey);
     }

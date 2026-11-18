@@ -295,36 +295,6 @@ export function orphanedCatalogKeys(meta: Record<string, { type: string; id: str
   return removed;
 }
 
-/** Folders on the way up from a removed item that hold no video any more.
- * A folder whose last film is gone is litter, even when a subtitle or a poster stayed behind,
- * so the whole folder goes rather than an empty shell of it. Ordered deepest first.
- * A folder that holds another library is never emptied: deleting it would delete that
- * library, so the walk stops there whether or not it holds videos of its own. */
-export async function emptiedFolders(
-  root: string,
-  relative: string,
-  exclude?: ReadonlySet<string>,
-  // The prune stops at a carve-out like every other caller, so it needs the same answer about
-  // the volume. Inheriting the default here meant the one path that deletes folders was the
-  // one path not using the fold the probe went and measured.
-  caseInsensitive?: boolean,
-): Promise<string[]> {
-  const gone: string[] = [];
-  let folder = posixDir(relative);
-  while (folder) {
-    if (!resolveInside(root, folder)) break;
-    if (holdsLibraryRoot(exclude, folder, caseInsensitive)) break;
-    // The prune deletes what this returns, so a folder it could not read in full is kept:
-    // an unreadable season is not an empty one.
-    const report = { complete: true };
-    const found = await walkVideos(root, folder, 0, exclude, limiter(WALK_CONCURRENCY), report);
-    if (found.length || !report.complete) break;
-    gone.push(folder);
-    folder = posixDir(folder);
-  }
-  return gone;
-}
-
 /** Subfolders of one folder. The destination picker lists these: unlike browsing, a folder
  *  holding no video is still somewhere an item can be moved to, so nothing is filtered out. */
 export async function listFolders(root: string, relative: string, exclude?: ReadonlySet<string>): Promise<{ path: string; name: string }[]> {

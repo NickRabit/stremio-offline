@@ -357,6 +357,7 @@ test("an abandoned flight cannot remove a retry committed after its rename", asy
     assert.equal(await abandoned, undefined);
     assert.deepEqual(await readFile(retried.file), retryBytes, "the abandoned flight cannot roll back the retry");
     assert.equal(proxy.takeFetched(id), true, "the retry remains the fetch that published the image");
+    await proxy.flush();
     assert.deepEqual((await readdir(dir)).filter((name) => name.endsWith(".tmp")), []);
   } finally {
     releaseFirst();

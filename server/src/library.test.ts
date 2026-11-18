@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, foldersBetween, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, withinLibraryRoot, type BrowseResult } from "./library.js";
+import { browseDirectory, buildLibrary, clearBrowseCache, describePath, foldersBetween, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, withinLibraryRoot, type BrowseResult } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -743,45 +743,6 @@ test("a move that changes nothing and a folder swallowing itself are refused", (
   assert.deepEqual(moveDestination("serialy", "serialy"), { error: "intoItself" });
 });
 
-test("the folder of the last deleted video is emptied up the tree", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "stremio-empty-"));
-  try {
-    const season = "Přátelé/01 serie";
-    await mkdir(path.join(root, season), { recursive: true });
-    await writeFile(path.join(root, season, "01.mkv"), "x");
-    await writeFile(path.join(root, season, "01.srt"), "x", "utf8");
-    const episode = `${season}/01.mkv`;
-    assert.deepEqual(await emptiedFolders(root, episode), [], "the episode is still there");
-
-    await rm(path.join(root, episode));
-    assert.deepEqual(await emptiedFolders(root, episode), [season, "Přátelé"],
-      "a leftover subtitle does not keep the folder alive");
-
-    await writeFile(path.join(root, "Přátelé", "special.mkv"), "x");
-    assert.deepEqual(await emptiedFolders(root, episode), [season], "the show folder still holds a video");
-  } finally { await rm(root, { recursive: true, force: true }); }
-});
-
-test("a folder that could not be read is never taken for empty", async (t) => {
-  // A permission bit is the portable way to make one folder unreadable; Windows ignores it and
-  // root reads through it, so the check would prove nothing there.
-  if (process.platform === "win32" || process.getuid?.() === 0) { t.skip("needs POSIX permissions and a non-root user"); return; }
-  const root = await mkdtemp(path.join(tmpdir(), "stremio-unreadable-"));
-  const locked = path.join(root, "Show", "02 serie");
-  try {
-    await mkdir(path.join(root, "Show", "01 serie"), { recursive: true });
-    await mkdir(locked, { recursive: true });
-    await writeFile(path.join(locked, "01.mkv"), "x");
-    await chmod(locked, 0o000);
-    // The last episode of season 1 is gone; season 2 is still there but cannot be read now.
-    assert.deepEqual(await emptiedFolders(root, "Show/01 serie/01.mkv"), ["Show/01 serie"],
-      "the show folder is kept: an unreadable season is not an empty one");
-  } finally {
-    await chmod(locked, 0o755).catch(() => undefined);
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test("a folder another library owns is carved out of every walk", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-carve-"));
   try {
@@ -806,8 +767,6 @@ test("a folder another library owns is carved out of every walk", async () => {
     assert.deepEqual(await listVideos(root, "Inbox", 0, exclude), [], "the parent's own content is gone");
     assert.deepEqual((await listVideos(root, "Inbox")).map((entry) => entry.relative), ["Inbox/Seriály/Show/01.mkv"],
       "and the child library's file is the only thing left in it");
-    assert.deepEqual(await emptiedFolders(root, "Inbox/volný.mkv", exclude), [],
-      "so a folder holding another library is never emptied, or the delete would take that library with it");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
