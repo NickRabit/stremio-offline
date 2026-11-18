@@ -149,6 +149,7 @@ import { SearchError } from "./search-contracts.js";
 import { STREAM_SORTS } from "./stream-sort.js";
 import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 import { createMetaCache } from "./meta-cache.js";
+import { PathReservations } from "./path-reservations.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -2584,8 +2585,10 @@ async function titleArtworkUrls(key: string): Promise<{ poster?: string; wide?: 
  *  The whole request is asked at once because resolving a key walks the filesystem for its
  *  real ancestor: a 500-item operation checked against a 500-item job one key at a time
  *  would be a quarter of a million of those walks before anything is queued. */
+const pathReservations = new PathReservations();
 const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
-  const items = libraryOps.activeItems();
+  // A rename finishes inside its request and never enters the queue; it holds its names here.
+  const items = [...libraryOps.activeItems(), ...pathReservations.keys()];
   if (!items.length) return undefined;
   const libraries = store.libraries();
   const active = (await Promise.all(items.map(async (item) =>
@@ -2601,7 +2604,7 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, pathReservations, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({

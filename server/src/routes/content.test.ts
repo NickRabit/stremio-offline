@@ -14,6 +14,7 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isPathWithin, withinLibraryRoot, type LibraryEntry } from "../library.js";
 import type { Store, StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
 import { emptyUserData, type UserRecord } from "../users.js";
+import { PathReservations } from "../path-reservations.js";
 import { registerContentRoutes, type ContentDeps } from "./content.js";
 
 const instancePrefs: UserPrefs = {
@@ -71,6 +72,8 @@ interface LibraryState {
   artStamp?: (file: string) => Promise<string>;
   caseInsensitive?: boolean;
   relocateError?: Error;
+  /** Holds the next binding write until the test lets it go; `reached` settles when it starts. */
+  relocateHold?: { reached: () => void; release: Promise<void> };
 }
 
 const library = (id: string, root: string, order = 0, visibleTo?: string[]): LibraryRecord => ({
@@ -96,6 +99,7 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
  *  instance over fake collaborators that record what they were asked to do. The filesystem
  *  is real: the resolver, the browse walk and the name checks are module singletons. */
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], activeItems: () => string[] = () => [], state: LibraryState = {}): Promise<Harness> => {
+  const pathReservations = new PathReservations();
   const calls: Calls = { invalidated: 0, browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
   const nestedRelative = (library: LibraryRecord, other: LibraryRecord): string | undefined => {
     const relative = path.relative(path.resolve(library.root), path.resolve(other.root));
@@ -148,13 +152,14 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
       for (const key of keys) {
         const wanted = await resolveLibraryPath(libraries, key);
         if (!wanted) continue;
-        for (const item of activeItems()) {
+        for (const item of [...activeItems(), ...pathReservations.keys()]) {
           const active = await resolveLibraryPath(libraries, item);
           if (active && (isPathWithin(active.absolute, wanted.absolute) || isPathWithin(wanted.absolute, active.absolute))) return item;
         }
       }
       return undefined;
     },
+    pathReservations,
     libraryRootBrowse: async (viewer, options) => {
       calls.rootBrowses += 1;
       calls.rootPrewarm.push(options?.prewarm === true);
@@ -177,6 +182,10 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     relativeKeyIn: (libraryId, key) => (key.startsWith(`${libraryId}/`) ? key.slice(libraryId.length + 1) : undefined),
     relocateLibraryPath: async (key, nextKey) => {
       calls.relocated.push({ key, nextKey });
+      // One write only: a second rename must answer, held or not, so a test fails instead of hanging.
+      const hold = state.relocateHold;
+      state.relocateHold = undefined;
+      if (hold) { hold.reached(); await hold.release; }
       if (state.relocateError) throw state.relocateError;
     },
     scheduleFileArtwork: (key) => { calls.scheduledFile.push(key); },
@@ -903,6 +912,32 @@ test("POST /api/library/rename takes the subtitles along when the bindings canno
   assert.equal(await exists(path.join(root, "Films/Heat.cs.srt")), false);
   assert.equal(await exists(path.join(root, "Films/Heat.en.srt")), false);
   assert.equal(harness.calls.invalidated, 1, "the listing that names the old file is dropped");
+});
+
+test("POST /api/library/rename holds both names until the bindings have moved", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  let reached!: () => void;
+  const started = new Promise<void>((resolve) => { reached = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const state: LibraryState = { relocateHold: { reached, release: hold } };
+  const harness = await mount([library("lib_00000001", root)], [], () => [], state);
+  t.after(async () => { release(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const first = api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "Thief" } });
+  await started;
+  // The video is already called Thief, its bindings are still under Heat.
+  const second = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Thief.mkv", name: "Ronin" } });
+  assert.equal(second.status, 409);
+  assert.equal((await second.json() as { messageKey?: string }).messageKey, "err.pathBusy");
+  assert.equal(await exists(path.join(root, "Films/Thief.mkv")), true, "the second rename touched the disk");
+
+  release();
+  assert.equal((await first).status, 200);
+  const later = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Thief.mkv", name: "Ronin" } });
+  assert.equal(later.status, 200, "the names are released once the first rename is done");
+  assert.deepEqual(harness.calls.relocated.map((call) => call.nextKey), ["lib_00000001/Films/Thief.mkv", "lib_00000001/Films/Ronin.mkv"]);
 });
 
 test("POST /api/library/rename refuses a target that already exists", async (t) => {

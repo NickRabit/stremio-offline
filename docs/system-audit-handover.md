@@ -121,9 +121,15 @@ loses or corrupts bytes, fix it in its own pull request.
 
 - **SA-3 — done.** Reproduced a real case: a failed binding write after the video's rename left
   the subtitles under the old name and the listing stale. The subtitles now move right after the
-  video and the listing is dropped either way. No journal: a stop between two same-volume renames
-  is a window of microseconds. `rerootItem` needs nothing: each top-level name, a loose subtitle
-  included, is its own journaled item, and the persisted job continues after a restart.
+  video and the listing is dropped either way. The route also holds the old and the new name
+  (`server/src/path-reservations.ts`, read by `libraryPathBusy`) until the bindings have moved, so
+  a second rename, move or delete of the same item is refused meanwhile instead of leaving the
+  bindings under an intermediate name. Remaining risk, accepted without a journal: a crash after
+  the video's rename leaves the subtitles not yet moved under the old name, and nothing finishes
+  that after a restart. How long that lasts depends on the number of subtitles and on the disk's
+  latency (each one is a check and a rename). `rerootItem` needs nothing: each top-level name, a
+  loose subtitle included, is its own journaled item, and the persisted job continues after a
+  restart.
 - **SA-4 — decided (owner, 2026-11-18).** A manual retry starts over and clears `source.tried`:
   it follows a change (connection back, account fixed, new rules), failures are often temporary,
   and keeping them would refuse every source after an outage. Within one attempt a failed source is
