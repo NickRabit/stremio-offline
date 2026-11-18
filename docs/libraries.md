@@ -115,14 +115,19 @@ time: a job that is still running covers every item it was given, and the file
 inside a folder it holds, so a second move, rename or delete of any of them is
 refused rather than racing it.
 
-A move or copy survives the server stopping halfway. Before the bytes move, the
-queue writes down where the item is going; on the next start it looks at both
-places and finishes what is left: the match, the favourites, the resume positions
-and the thumbnails follow a file that already arrived, and a file that never left
-is moved again. When the bytes turn out to be in both places, both are kept and
-the item counts as moved with its source left behind, the same as when the
-source cannot be deleted. When they are in neither, the item fails and nothing
-is changed.
+Before a queued move or copy starts, it records the source object's filesystem
+identity. For a folder this includes the identities, names, sizes and modification
+times of its descendants. The check reads filesystem metadata without hashing
+video contents. A copy also records the completed staging object's identity before
+publishing it. On restart, the server checks the source and destination against
+the saved operation before it updates matches, favourites, progress or artwork.
+
+If recovery reports a conflict, the batch stops at that item. This can happen
+when a file was replaced, the NAS cannot supply a stable identity, or an older
+server wrote the interrupted operation. Check both locations and the operation
+results before deciding which items still need moving. Keep both versions if
+their origin is uncertain. A zero-byte file or an empty folder can belong to
+another application. Items completed earlier in the batch stay where they landed.
 
 ## Files moved outside the app
 

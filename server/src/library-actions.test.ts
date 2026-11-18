@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { captureTransferIdentity } from "./library-recovery.js";
 import { createLibraryActions, type LibraryActionDeps, type TransferStep } from "./library-actions.js";
 import { ART_VARIANTS, artVariantKey } from "./artwork.js";
 import { carryMovePairs, type FingerprintPair } from "./library-fingerprints.js";
@@ -102,16 +103,27 @@ const recordingJournal = (recorded?: unknown) => {
   };
 };
 
+const identityAt = (root: string, relative: string) => captureTransferIdentity(path.join(root, relative));
+
+const verifiedStep = (
+  sourceIdentity: TransferStep["sourceIdentity"],
+  publishedIdentity: TransferStep["publishedIdentity"],
+  step: Omit<TransferStep, "sourceIdentity" | "publishedIdentity" | "sidecars">
+    & Partial<Pick<TransferStep, "sidecars">>,
+): TransferStep => ({ sidecars: [], ...step, sourceIdentity, publishedIdentity });
+
 test("resumeTransfer finishes a published record from what it says", async () => {
-  const step: TransferStep = {
-    phase: "published", copy: false,
-    from: `${LIBRARY_ID}/Old/movie.mkv`, to: `${LIBRARY_ID}/New/movie.mkv`, carried: [],
-  };
-  const { actions, calls } = harness();
-  assert.equal(await actions.resumeTransfer(step), step.to);
-  // A replay only relocates when the source still holds rows or the destination does not.
-  assert.deepEqual(calls.relocate, [{ from: step.from, to: step.to, pin: true }]);
-  assert.equal(calls.invalidated, 1);
+  await withRoot(["New/movie.mkv"], async (root, actions, calls) => {
+    const identity = await identityAt(root, "New/movie.mkv");
+    const step: TransferStep = verifiedStep(identity, identity, {
+      phase: "published", copy: false,
+      from: `${LIBRARY_ID}/Old/movie.mkv`, to: `${LIBRARY_ID}/New/movie.mkv`, carried: [],
+    });
+    assert.equal(await actions.resumeTransfer(step), step.to);
+    // A replay only relocates when the source still holds rows or the destination does not.
+    assert.deepEqual(calls.relocate, [{ from: step.from, to: step.to, pin: true }]);
+    assert.equal(calls.invalidated, 1);
+  });
 });
 
 test("a changed binding clears the item's pictures, its files' and the folders between them", async () => {
@@ -195,7 +207,7 @@ test("pruning stops at a carve-out and cannot escape the library root", async ()
   }
 });
 
-test("resumeTransfer drops a reserved placeholder and runs the transfer from the start", async () => {
+test("resumeTransfer never removes an unverified empty target", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "library-actions-"));
   try {
     await mkdir(path.join(root, "Old"));
@@ -203,30 +215,49 @@ test("resumeTransfer drops a reserved placeholder and runs the transfer from the
     await writeFile(path.join(root, "Old/movie.mkv"), "video");
     await writeFile(path.join(root, "New/movie.mkv"), "");
     const { actions } = harness({ libraries: () => [{ ...library, root }] });
-    const step: TransferStep = {
+    const step: TransferStep = verifiedStep(await identityAt(root, "Old/movie.mkv"), null, {
       phase: "moving", copy: false,
       from: `${LIBRARY_ID}/Old/movie.mkv`, to: `${LIBRARY_ID}/New/movie.mkv`, carried: [],
-    };
-    assert.equal(await actions.resumeTransfer(step), undefined);
-    assert.equal(await exists(path.join(root, "New/movie.mkv")), false, "the placeholder is gone");
+    });
+    await assert.rejects(actions.resumeTransfer(step), { messageKey: "err.libraryRecoveryConflict" });
+    assert.equal(await exists(path.join(root, "New/movie.mkv")), true, "the unverified target is untouched");
     assert.equal(await exists(path.join(root, "Old/movie.mkv")), true, "the source is still there");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("resumeTransfer refuses when neither end holds the item", async () => {
+test("resumeTransfer treats an inaccessible target as a conflict rather than a missing one", {
+  skip: process.platform === "win32" ? "file modes are not enforced on NTFS"
+    : process.getuid?.() === 0 ? "needs a user that write permission applies to" : false,
+}, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "library-actions-"));
   try {
+    await mkdir(path.join(root, "Old"));
+    await mkdir(path.join(root, "New"));
+    await writeFile(path.join(root, "Old/movie.mkv"), "video");
     const { actions } = harness({ libraries: () => [{ ...library, root }] });
-    const step: TransferStep = {
+    const step = verifiedStep(await identityAt(root, "Old/movie.mkv"), null, {
       phase: "moving", copy: false,
       from: `${LIBRARY_ID}/Old/movie.mkv`, to: `${LIBRARY_ID}/New/movie.mkv`, carried: [],
-    };
-    await assert.rejects(actions.resumeTransfer(step), /The file or folder does not exist\./);
+    });
+    await chmod(path.join(root, "New"), 0o000);
+    await assert.rejects(actions.resumeTransfer(step), { messageKey: "err.libraryRecoveryConflict" });
+    assert.equal(await readFile(path.join(root, "Old/movie.mkv"), "utf8"), "video");
   } finally {
+    await chmod(path.join(root, "New"), 0o755).catch(() => undefined);
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("resumeTransfer refuses when neither end holds the item", async () => {
+  await withRoot(["reference.mkv"], async (root, actions) => {
+    const step: TransferStep = verifiedStep(await identityAt(root, "reference.mkv"), null, {
+      phase: "moving", copy: false,
+      from: `${LIBRARY_ID}/Old/movie.mkv`, to: `${LIBRARY_ID}/New/movie.mkv`, carried: [],
+    });
+    await assert.rejects(actions.resumeTransfer(step), { messageKey: "err.libraryRecoveryConflict" });
+  });
 });
 
 test("resumeTransfer carries recorded sidecars after the video landed and is repeatable", async () => {
@@ -234,37 +265,38 @@ test("resumeTransfer carries recorded sidecars after the video landed and is rep
   const to = `${LIBRARY_ID}/New/movie.mkv`;
   await withRoot(["Old/movie.en.srt", "New/movie.mkv"], async (root, actions) => {
     const { journal } = recordingJournal();
-    const step: TransferStep = {
+    const identity = await identityAt(root, "New/movie.mkv");
+    const step: TransferStep = verifiedStep(identity, identity, {
       phase: "moving", copy: false, from, to, carried: [],
-      sidecars: [{ from: "movie.en.srt", to: "movie.en.srt" }],
-    };
+      sidecars: [{ from: "movie.en.srt", to: "movie.en.srt", identity: await identityAt(root, "Old/movie.en.srt") }],
+    });
     assert.equal(await actions.resumeTransfer(step, journal), to);
     assert.equal(await readFile(path.join(root, "New/movie.en.srt"), "utf8"), "Old/movie.en.srt");
-    assert.equal(await exists(path.join(root, "Old/movie.en.srt")), false);
+    assert.equal(await readFile(path.join(root, "Old/movie.en.srt"), "utf8"), "Old/movie.en.srt", "the source subtitle is preserved");
 
     assert.equal(await actions.resumeTransfer(step, journal), to);
     assert.equal(await readFile(path.join(root, "New/movie.en.srt"), "utf8"), "Old/movie.en.srt");
-    assert.equal(await exists(path.join(root, "Old/movie.en.srt")), false);
+    assert.equal(await readFile(path.join(root, "Old/movie.en.srt"), "utf8"), "Old/movie.en.srt");
   });
 });
 
-test("resumeTransfer derives sidecars when a moving record predates the field", async () => {
+test("an old moving record without identities conflicts without touching its sidecars", async () => {
   const from = `${LIBRARY_ID}/Old/movie.mkv`;
   const to = `${LIBRARY_ID}/New/movie.mkv`;
   await withRoot(["Old/movie.en.srt", "New/movie.mkv"], async (root, actions) => {
-    const step: TransferStep = { phase: "moving", copy: false, from, to, carried: [] };
-    assert.equal(await actions.resumeTransfer(step), to);
-    assert.equal(await readFile(path.join(root, "New/movie.en.srt"), "utf8"), "Old/movie.en.srt");
-    assert.equal(await exists(path.join(root, "Old/movie.en.srt")), false);
+    const step = { phase: "moving", copy: false, from, to, carried: [] } as unknown as TransferStep;
+    await assert.rejects(actions.resumeTransfer(step), { messageKey: "err.libraryRecoveryConflict" });
+    assert.equal(await exists(path.join(root, "New/movie.en.srt")), false);
+    assert.equal(await readFile(path.join(root, "Old/movie.en.srt"), "utf8"), "Old/movie.en.srt");
   });
 });
 
-test("a legacy replay leaves a shared-stem subtitle at the source", async () => {
+test("an old published record without identities conflicts", async () => {
   const from = `${LIBRARY_ID}/Old/movie.mkv`;
   const to = `${LIBRARY_ID}/New/movie.mkv`;
   await withRoot(["Old/movie.mp4", "Old/movie.srt", "New/movie.mkv"], async (root, actions) => {
-    const step: TransferStep = { phase: "moving", copy: false, from, to, carried: [] };
-    assert.equal(await actions.resumeTransfer(step), to);
+    const step = { phase: "published", copy: false, from, to, carried: [] } as unknown as TransferStep;
+    await assert.rejects(actions.resumeTransfer(step), { messageKey: "err.libraryRecoveryConflict" });
     assert.equal(await exists(path.join(root, "Old/movie.srt")), true);
     assert.equal(await exists(path.join(root, "New/movie.srt")), false);
   });
@@ -274,28 +306,30 @@ test("a replay never overwrites a subtitle already at the destination", async ()
   const from = `${LIBRARY_ID}/Old/movie.mkv`;
   const to = `${LIBRARY_ID}/New/movie.mkv`;
   await withRoot(["Old/movie.srt", "New/movie.mkv", "New/movie.srt"], async (root, actions) => {
-    const step: TransferStep = {
+    const identity = await identityAt(root, "New/movie.mkv");
+    const step: TransferStep = verifiedStep(identity, identity, {
       phase: "moving", copy: false, from, to, carried: [],
-      sidecars: [{ from: "movie.srt", to: "movie.srt" }],
-    };
+      sidecars: [{ from: "movie.srt", to: "movie.srt", identity: await identityAt(root, "Old/movie.srt") }],
+    });
     assert.equal(await actions.resumeTransfer(step), to);
     assert.equal(await readFile(path.join(root, "New/movie.srt"), "utf8"), "New/movie.srt");
     assert.equal(await exists(path.join(root, "Old/movie.srt")), true);
   });
 });
 
-test("a replay replaces an empty destination subtitle placeholder", async () => {
+test("a replay leaves an empty destination subtitle in place", async () => {
   const from = `${LIBRARY_ID}/Old/movie.mkv`;
   const to = `${LIBRARY_ID}/New/movie.mkv`;
   await withRoot(["Old/movie.srt", "New/movie.mkv"], async (root, actions) => {
     await writeFile(path.join(root, "New/movie.srt"), "");
-    const step: TransferStep = {
+    const identity = await identityAt(root, "New/movie.mkv");
+    const step: TransferStep = verifiedStep(identity, identity, {
       phase: "moving", copy: false, from, to, carried: [],
-      sidecars: [{ from: "movie.srt", to: "movie.srt" }],
-    };
+      sidecars: [{ from: "movie.srt", to: "movie.srt", identity: await identityAt(root, "Old/movie.srt") }],
+    });
     assert.equal(await actions.resumeTransfer(step), to);
-    assert.equal(await readFile(path.join(root, "New/movie.srt"), "utf8"), "Old/movie.srt");
-    assert.equal(await exists(path.join(root, "Old/movie.srt")), false);
+    assert.equal(await readFile(path.join(root, "New/movie.srt"), "utf8"), "");
+    assert.equal(await readFile(path.join(root, "Old/movie.srt"), "utf8"), "Old/movie.srt");
   });
 });
 
@@ -303,10 +337,14 @@ test("a copy replay leaves sidecars at both ends", async () => {
   const from = `${LIBRARY_ID}/Old/movie.mkv`;
   const to = `${LIBRARY_ID}/New/movie.mkv`;
   await withRoot(["Old/movie.mkv", "Old/movie.srt", "New/movie.mkv"], async (root, actions) => {
-    const step: TransferStep = {
+    const step: TransferStep = verifiedStep(
+      await identityAt(root, "Old/movie.mkv"),
+      await identityAt(root, "New/movie.mkv"),
+      {
       phase: "moving", copy: true, from, to, carried: [],
-      sidecars: [{ from: "movie.srt", to: "movie.srt" }],
-    };
+      sidecars: [{ from: "movie.srt", to: "movie.srt", identity: await identityAt(root, "Old/movie.srt") }],
+      },
+    );
     assert.equal(await actions.resumeTransfer(step), to);
     assert.equal(await readFile(path.join(root, "Old/movie.srt"), "utf8"), "Old/movie.srt");
     assert.equal(await readFile(path.join(root, "New/movie.srt"), "utf8"), "Old/movie.srt");
@@ -317,21 +355,22 @@ test("a replay carries only sidecars that have not already followed the video", 
   const from = `${LIBRARY_ID}/Old/movie.mkv`;
   const to = `${LIBRARY_ID}/New/movie.mkv`;
   await withRoot(["Old/movie.cs.srt", "New/movie.en.srt", "New/movie.mkv"], async (root, actions) => {
-    const step: TransferStep = {
+    const identity = await identityAt(root, "New/movie.mkv");
+    const step: TransferStep = verifiedStep(identity, identity, {
       phase: "moving", copy: false, from, to, carried: [],
       sidecars: [
         { from: "movie.en.srt", to: "movie.en.srt" },
-        { from: "movie.cs.srt", to: "movie.cs.srt" },
+        { from: "movie.cs.srt", to: "movie.cs.srt", identity: await identityAt(root, "Old/movie.cs.srt") },
       ],
-    };
+    });
     assert.equal(await actions.resumeTransfer(step), to);
     assert.equal(await readFile(path.join(root, "New/movie.en.srt"), "utf8"), "New/movie.en.srt");
     assert.equal(await readFile(path.join(root, "New/movie.cs.srt"), "utf8"), "Old/movie.cs.srt");
-    assert.equal(await exists(path.join(root, "Old/movie.cs.srt")), false);
+    assert.equal(await readFile(path.join(root, "Old/movie.cs.srt"), "utf8"), "Old/movie.cs.srt");
   });
 });
 
-test("transferLibraryItem ignores journal sidecar names that leave their folders", async () => {
+test("transferLibraryItem rejects journal sidecar names that leave their folders", async () => {
   await withRoot(["x.srt", "a/x.srt", "Old/a/b.srt", "New/movie.mkv"], async (root, actions) => {
     for (const name of ["../x.srt", "a/b.srt"]) {
       const { journal } = recordingJournal({
@@ -339,9 +378,9 @@ test("transferLibraryItem ignores journal sidecar names that leave their folders
         from: `${LIBRARY_ID}/Old/movie.mkv`, to: `${LIBRARY_ID}/New/movie.mkv`,
         sidecars: [{ from: name, to: "../carried.srt" }],
       });
-      assert.equal(
-        await actions.transferLibraryItem(`${LIBRARY_ID}/Old/movie.mkv`, `${LIBRARY_ID}/New`, false, undefined, false, journal),
-        `${LIBRARY_ID}/New/movie.mkv`,
+      await assert.rejects(
+        actions.transferLibraryItem(`${LIBRARY_ID}/Old/movie.mkv`, `${LIBRARY_ID}/New`, false, undefined, false, journal),
+        { messageKey: "err.libraryRecoveryConflict" },
       );
     }
     assert.equal(await readFile(path.join(root, "x.srt"), "utf8"), "x.srt");
@@ -352,19 +391,20 @@ test("transferLibraryItem ignores journal sidecar names that leave their folders
   });
 });
 
-test("a replay carries nothing a record names that is not a subtitle of the video", async () => {
+test("a replay rejects sidecar names that are not subtitles of the two videos", async () => {
   const from = `${LIBRARY_ID}/Old/movie.mkv`;
   const to = `${LIBRARY_ID}/New/movie.mkv`;
   await withRoot(["Old/other.mkv", "Old/other.srt", "Old/movie.srt", "New/movie.mkv"], async (root, actions) => {
-    const step: TransferStep = {
+    const identity = await identityAt(root, "New/movie.mkv");
+    const step: TransferStep = verifiedStep(identity, identity, {
       phase: "moving", copy: false, from, to, carried: [],
       sidecars: [
         { from: "other.mkv", to: "movie.srt" },
         { from: "other.srt", to: "other.srt" },
         { from: "movie.srt", to: "stolen.mkv" },
       ],
-    };
-    assert.equal(await actions.resumeTransfer(step), to);
+    });
+    await assert.rejects(actions.resumeTransfer(step), { messageKey: "err.libraryRecoveryConflict" });
     assert.equal(await exists(path.join(root, "Old/other.mkv")), true);
     assert.equal(await exists(path.join(root, "Old/other.srt")), true);
     assert.equal(await exists(path.join(root, "Old/movie.srt")), true);
@@ -374,10 +414,10 @@ test("a replay carries nothing a record names that is not a subtitle of the vide
 });
 
 test("a replayed finishTransfer leaves the destination's carried rows unpinned", async () => {
-  const step: TransferStep = {
+  const step: TransferStep = verifiedStep("a".repeat(64), null, {
     phase: "moving", copy: false,
     from: `${LIBRARY_ID}/Old/movie.mkv`, to: `${LIBRARY_ID}/New/movie.mkv`, carried: [],
-  };
+  });
   const replayed = harness({ holds: (key) => key === step.to });
   assert.equal(await replayed.actions.finishTransfer(step, undefined, true), step.to);
   assert.deepEqual(replayed.calls.relocate, [], "the rows already at the destination are not pinned over");
@@ -737,6 +777,7 @@ test("a subtitle already at the destination is never overwritten", async () => {
 test("a video transfer records its subtitle sidecars before moving it", async () => {
   await withRoot(["Films/Heat.mkv", "Films/Heat.en.srt", "Archive/.keep"],
     async (root, actions) => {
+      const subtitleIdentity = await identityAt(root, "Films/Heat.en.srt");
       const written: unknown[] = [];
       const sourceThere: boolean[] = [];
       const journal = {
@@ -744,9 +785,116 @@ test("a video transfer records its subtitle sidecars before moving it", async ()
         record: async (data: unknown) => { written.push(data); sourceThere.push(await exists(path.join(root, "Films/Heat.mkv"))); },
       };
       await actions.transferLibraryItem(`${LIBRARY_ID}/Films/Heat.mkv`, `${LIBRARY_ID}/Archive`, false, undefined, false, journal);
-      assert.deepEqual((written[0] as TransferStep).sidecars, [{ from: "Heat.en.srt", to: "Heat.en.srt" }]);
+      assert.deepEqual((written[0] as TransferStep).sidecars, [{ from: "Heat.en.srt", to: "Heat.en.srt", identity: subtitleIdentity }]);
       assert.equal(sourceThere[0], true);
     });
+});
+
+test("a failed moving-journal write prevents a transfer before the source is touched", async () => {
+  await withRoot(["Films/Heat.mkv", "Archive/.keep"], async (root, actions) => {
+    const journal = {
+      recorded: undefined,
+      record: async () => { throw new Error("journal unavailable"); },
+    };
+    await assert.rejects(
+      actions.transferLibraryItem(`${LIBRARY_ID}/Films/Heat.mkv`, `${LIBRARY_ID}/Archive`, false, undefined, false, journal),
+      /journal unavailable/,
+    );
+    assert.equal(await readFile(path.join(root, "Films/Heat.mkv"), "utf8"), "Films/Heat.mkv");
+    assert.equal(await exists(path.join(root, "Archive/Heat.mkv")), false);
+  });
+});
+
+test("a failed re-root journal write prevents publication", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "library-actions-"));
+  try {
+    await mkdir(path.join(root, "Old/item"), { recursive: true });
+    await mkdir(path.join(root, "New"), { recursive: true });
+    await writeFile(path.join(root, "Old/item/movie.mkv"), "video");
+    const { actions } = harness({ libraries: () => [{ ...library, root }] });
+    const journal = {
+      recorded: undefined,
+      record: async () => { throw new Error("journal unavailable"); },
+    };
+    await assert.rejects(
+      actions.rerootItem(
+        { op: "reroot", items: ["item"], libraryId: LIBRARY_ID, from: path.join(root, "Old"), to: path.join(root, "New") },
+        "item",
+        () => undefined,
+        journal,
+      ),
+      /journal unavailable/,
+    );
+    assert.equal(await readFile(path.join(root, "Old/item/movie.mkv"), "utf8"), "video");
+    assert.equal(await exists(path.join(root, "New/item")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a cross-filesystem move preserves a source replaced after staging", { skip: process.platform !== "linux" }, async (t) => {
+  const sourceRoot = await mkdtemp(path.join(tmpdir(), "library-source-"));
+  t.after(() => rm(sourceRoot, { recursive: true, force: true }));
+  const targetRoot = await mkdtemp("/dev/shm/library-target-");
+  t.after(() => rm(targetRoot, { recursive: true, force: true }));
+  if ((await stat(sourceRoot)).dev === (await stat(targetRoot)).dev) return t.skip("requires two filesystems");
+  const source = path.join(sourceRoot, "movie.mkv");
+  const target = path.join(targetRoot, "movie.mkv");
+  await writeFile(source, "original");
+  const archive = { ...library, id: "lib_1234abcd", root: targetRoot };
+  const { actions, calls } = harness({ libraries: () => [{ ...library, root: sourceRoot }, archive] });
+  const journal = {
+    recorded: undefined,
+    record: async (data: unknown) => {
+      const step = data as TransferStep;
+      if (step.phase === "moving" && step.publishedIdentity) {
+        await rm(source);
+        await writeFile(source, "new file");
+      }
+    },
+  };
+  await assert.rejects(actions.transferLibraryItem(`${library.id}/movie.mkv`, archive.id, false, undefined, false, journal),
+    { messageKey: "err.libraryRecoveryConflict" });
+  assert.equal(await readFile(source, "utf8"), "new file");
+  assert.equal(await readFile(target, "utf8"), "original");
+  assert.deepEqual(calls.relocate, []);
+});
+
+test("a changed episode inside a published directory stops recovery before remapping", async () => {
+  await withRoot(["New/Show/Season/movie.mkv"], async (root, actions, calls) => {
+    const identity = await identityAt(root, "New/Show");
+    await writeFile(path.join(root, "New/Show/Season/movie.mkv"), "replaced episode");
+    const step = verifiedStep(identity, identity, {
+      phase: "published", copy: false, from: `${LIBRARY_ID}/Old/Show`, to: `${LIBRARY_ID}/New/Show`, carried: [],
+    });
+    await assert.rejects(actions.resumeTransfer(step), { messageKey: "err.libraryRecoveryConflict" });
+    assert.deepEqual(calls.relocate, []);
+  });
+});
+
+test("a real copy records the source and completed staged object before publication", async () => {
+  await withRoot(["Films/Heat.mkv", "Archive/.keep"], async (root, actions) => {
+    const written: TransferStep[] = [];
+    const targetDuringWrite: boolean[] = [];
+    const journal = {
+      recorded: undefined,
+      record: async (data: unknown) => {
+        written.push(structuredClone(data) as TransferStep);
+        targetDuringWrite.push(await exists(path.join(root, "Archive/Heat.mkv")));
+      },
+    };
+    await actions.transferLibraryItem(`${LIBRARY_ID}/Films/Heat.mkv`, `${LIBRARY_ID}/Archive`, true, undefined, false, journal);
+    assert.equal(written[0]?.phase, "moving");
+    assert.equal(written[0]?.publishedIdentity, null);
+    assert.deepEqual(written[0]?.sourceIdentity, await identityAt(root, "Films/Heat.mkv"));
+    const staged = written[1];
+    assert.equal(staged?.phase, "moving");
+    assert.ok(staged?.publishedIdentity, "the completed staged object is recorded");
+    assert.deepEqual(staged?.publishedIdentity, await identityAt(root, "Archive/Heat.mkv"));
+    assert.deepEqual(staged?.sourceIdentity, written[0]?.sourceIdentity, "publication keeps the source proof");
+    assert.equal(targetDuringWrite[1], false, "the proof was written before the target name was published");
+    assert.deepEqual(written.at(-1)?.publishedIdentity, staged?.publishedIdentity, "the final record keeps the publication proof");
+  });
 });
 
 test("a folder transfer records an empty sidecar list", async () => {

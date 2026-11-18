@@ -1638,6 +1638,7 @@ export const ptBR: Catalog = {
   "err.libraryTypeUnknown": "Tipo de biblioteca desconhecido.",
   "err.libraryDefaultType": "Esta biblioteca não aceita esse tipo, portanto não pode ser o padrão.",
   "err.libraryTypeMismatch": "Essa biblioteca não leva esse tipo de título.",
+  "err.libraryRecoveryConflict": "Não foi possível verificar a operação interrompida na biblioteca. Confira a origem e o destino antes de tentar novamente.",
   "err.noLibraryForMovies": "Nenhuma biblioteca aceita filmes.",
   "err.noLibraryForSeries": "Nenhuma biblioteca aceita séries.",
   "err.libraryRootRequired": "Uma biblioteca precisa de uma pasta raiz.",

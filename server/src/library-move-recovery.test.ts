@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
+import { captureTransferIdentity } from "./library-recovery.js";
 import { toPosix } from "./libraries.js";
 import { spawnServer, type SpawnedServer } from "./test-server.js";
 
@@ -33,6 +34,7 @@ const SECOND_ITEM = `${SECOND}/movie.mkv`;
 
 interface OpsJob {
   id: string; status: string; done: number; failed: number;
+  error?: string; errorKey?: string;
   results: Array<{ path: string; ok: boolean; to?: string; error?: string; errorKey?: string }>;
 }
 
@@ -143,7 +145,7 @@ const writeCrashJob = async (env: Env, data: Record<string, unknown>, item = `${
   await writeFile(path.join(env.dataDir, "library-ops.json"), JSON.stringify({
     version: 1,
     jobs: [{
-      id: "recover-1", operation: { op: "move", items: [item], target: env.b }, op: "move",
+      id: "recover-1", operation: { op: data.copy ? "copy" : "move", items: [item], target: env.b }, op: data.copy ? "copy" : "move",
       status: "running", total: 1, done: 0, failed: 0, bytes: 0, bytesTotal: 0, current: item,
       startedAt: new Date().toISOString(), results: [], step: { item, data },
     }],
@@ -192,6 +194,8 @@ const progressAt = async (env: Env, key: string) => (await api(env, `/api/progre
 
 const identityOf = async (env: Env, target: string) =>
   (await (await api(env, `/api/library/identity?path=${encodeURIComponent(target)}`)).json()) as { bound?: { id?: string } };
+
+const fileIdentity = (target: string): Promise<string> => captureTransferIdentity(target);
 
 /** The favourite rows as they sit in SQLite: the browse route skips a path that is not on
  *  disk, so a stored star for a gone file can only be read back here. */
@@ -249,14 +253,17 @@ test("a published record finishes a move whose bytes already reached the target"
   await withEnv(async (env) => {
     await bootFresh(env);
     await seedState(env);
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
     await env.server!.stop();
     const customPoster = Buffer.from("original artwork");
     await writeFile(path.join(env.aRoot, "Show", "poster.jpg"), customPoster);
     await moveItemToTarget(env);
-    await writeCrashJob(env, {
+    const record = {
       phase: "published", copy: false, from: `${env.a}/${ITEM}`, to: `${env.b}/${TARGET_NAME}`,
-      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`,
-    });
+      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`, sidecars: [],
+      sourceIdentity, publishedIdentity: sourceIdentity,
+    };
+    await writeCrashJob(env, record);
     await bootAgain(env);
     const job = await finishedJob(env);
     assert.equal(job.status, "completed");
@@ -270,6 +277,12 @@ test("a published record finishes a move whose bytes already reached the target"
     assert.deepEqual(await readFile(path.join(env.aRoot, "Show", "poster.jpg")), customPoster);
     assert.equal(await exists(env.aRoot), true, "the library root is retained");
     await assertMovedState(env);
+    await env.server!.stop();
+    await writeCrashJob(env, record);
+    await bootAgain(env);
+    assert.equal((await finishedJob(env)).status, "completed");
+    await assertMovedState(env);
+    assert.deepEqual(await readFile(path.join(env.aRoot, "Show", "poster.jpg")), customPoster);
   });
 });
 
@@ -277,11 +290,13 @@ test("a moving record whose source is gone and target exists is finished", async
   await withEnv(async (env) => {
     await bootFresh(env);
     await seedState(env);
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
     await env.server!.stop();
     await moveItemToTarget(env);
     await writeCrashJob(env, {
       phase: "moving", copy: false, from: `${env.a}/${ITEM}`, to: `${env.b}/${TARGET_NAME}`,
-      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`,
+      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`, sidecars: [],
+      sourceIdentity, publishedIdentity: null,
     });
     await bootAgain(env);
     const job = await finishedJob(env);
@@ -297,10 +312,12 @@ test("a moving record that never landed runs the move from the start", async () 
   await withEnv(async (env) => {
     await bootFresh(env);
     await seedState(env);
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
     await env.server!.stop();
     await writeCrashJob(env, {
       phase: "moving", copy: false, from: `${env.a}/${ITEM}`, to: `${env.b}/${TARGET_NAME}`,
-      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`,
+      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`, sidecars: [],
+      sourceIdentity, publishedIdentity: null,
     });
     await bootAgain(env);
     const job = await finishedJob(env);
@@ -318,12 +335,15 @@ test("a moving record with the bytes at both ends leaves both files and finishes
   await withEnv(async (env) => {
     await bootFresh(env);
     await seedState(env);
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
     await env.server!.stop();
     // A copy landed; the source was not removed before the crash.
     await copyFile(path.join(env.aRoot, ITEM), path.join(env.bRoot, TARGET_NAME));
+    const publishedIdentity = await fileIdentity(path.join(env.bRoot, TARGET_NAME));
     await writeCrashJob(env, {
-      phase: "moving", copy: false, from: `${env.a}/${ITEM}`, to: `${env.b}/${TARGET_NAME}`,
-      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`,
+      phase: "published", copy: false, from: `${env.a}/${ITEM}`, to: `${env.b}/${TARGET_NAME}`,
+      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`, sidecars: [],
+      sourceIdentity, publishedIdentity,
     });
     await bootAgain(env);
     const job = await finishedJob(env);
@@ -336,56 +356,46 @@ test("a moving record with the bytes at both ends leaves both files and finishes
   });
 });
 
-test("a queued move of a file whose destination is the empty reservation runs from the start", async () => {
+test("a queued move whose destination is an unverified empty file conflicts without deleting either end", async () => {
   await withEnv(async (env) => {
     await bootFresh(env);
     await seedState(env);
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
     await env.server!.stop();
-    // The crash fell between the reservation and the rename: the destination name exists as a
-    // zero-byte file while the source still holds the bytes.
     await writeFile(path.join(env.bRoot, TARGET_NAME), "");
     await writeCrashJob(env, {
       phase: "moving", copy: false, from: `${env.a}/${ITEM}`, to: `${env.b}/${TARGET_NAME}`,
-      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`,
+      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`, sidecars: [],
+      sourceIdentity, publishedIdentity: null,
     });
     await bootAgain(env);
     const job = await finishedJob(env);
-    assert.equal(job.status, "completed", JSON.stringify(job.results));
-    assert.equal(job.done, 1);
-    assert.equal(job.results[0]?.ok, true, JSON.stringify(job.results));
-    assert.equal(await readFile(path.join(env.bRoot, TARGET_NAME), "utf8"), "video", "the destination holds the source's bytes");
-    assert.equal(await exists(path.join(env.aRoot, ITEM)), false, "the source is gone");
-    await assertMovedState(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(env.bRoot, TARGET_NAME), "utf8"), "", "the empty target is not ours to remove");
+    assert.equal(await readFile(path.join(env.aRoot, ITEM), "utf8"), "video", "the source is untouched");
   });
 });
 
-test("a queued move of a folder whose destination is the empty reservation runs from the start", async () => {
+test("a queued folder move whose destination is an unverified empty folder conflicts", async () => {
   await withEnv(async (env) => {
     await bootFresh(env);
     await seedState(env);
     const from = `${env.a}/Show`;
     const to = `${env.b}/Show`;
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, "Show"));
     await env.server!.stop();
-    // The reservation for a folder is an empty folder of the same name.
     await mkdir(path.join(env.bRoot, "Show"), { recursive: true });
     await writeCrashJob(env, {
       phase: "moving", copy: false, from, to,
-      carried: [from], cover: from,
+      carried: [from], cover: from, sidecars: [], sourceIdentity, publishedIdentity: null,
     }, from);
     await bootAgain(env);
     const job = await finishedJob(env);
-    assert.equal(job.status, "completed", JSON.stringify(job.results));
-    assert.equal(job.done, 1);
-    assert.equal(job.results[0]?.ok, true, JSON.stringify(job.results));
-    assert.equal(await readFile(path.join(env.bRoot, ITEM), "utf8"), "video", "the folder arrived with its file");
-    assert.equal(await exists(path.join(env.aRoot, "Show")), false, "the source folder is gone");
-    const moved = `${env.b}/${ITEM}`;
-    const stars = await favouritePaths(env);
-    assert.ok(stars.includes(moved), "the star follows the item");
-    assert.ok(!stars.includes(`${env.a}/${ITEM}`), "the old path is not a favourite any more");
-    assert.notEqual(await progressAt(env, `file:${moved}`), null, "the position is under the new key");
-    assert.equal(await progressAt(env, `file:${env.a}/${ITEM}`), null, "the old key holds nothing");
-    assert.equal((await identityOf(env, moved)).bound?.id, "tt0000001", "the moved item resolves to the matched title");
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(env.aRoot, ITEM), "utf8"), "video", "the source folder is untouched");
+    assert.equal(await exists(path.join(env.bRoot, ITEM)), false, "nothing was published into the empty folder");
   });
 });
 
@@ -395,13 +405,14 @@ test("a queued move over a destination that already holds real content keeps bot
     await seedState(env);
     const from = `${env.a}/Show`;
     const to = `${env.b}/Show`;
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, "Show"));
     await env.server!.stop();
-    // A landed copy: the destination folder holds real content, so it is not a reservation.
     await mkdir(path.dirname(path.join(env.bRoot, ITEM)), { recursive: true });
     await writeFile(path.join(env.bRoot, ITEM), "video");
+    const publishedIdentity = await fileIdentity(path.join(env.bRoot, "Show"));
     await writeCrashJob(env, {
-      phase: "moving", copy: false, from, to,
-      carried: [from], cover: from,
+      phase: "published", copy: false, from, to,
+      carried: [from], cover: from, sidecars: [], sourceIdentity, publishedIdentity,
     }, from);
     await bootAgain(env);
     const job = await finishedJob(env);
@@ -418,20 +429,190 @@ test("a moving record with the bytes at neither end fails and leaves the old pat
     await bootFresh(env);
     await seedState(env);
     const from = `${env.a}/${ITEM}`;
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
     await env.server!.stop();
     await removeItem(env);
     await writeCrashJob(env, {
       phase: "moving", copy: false, from, to: `${env.b}/${TARGET_NAME}`,
-      carried: [from], cover: `${env.a}/Show`,
+      carried: [from], cover: `${env.a}/Show`, sidecars: [], sourceIdentity, publishedIdentity: null,
     });
     await bootAgain(env);
     const job = await finishedJob(env);
     assert.equal(job.status, "failed");
     assert.equal(job.failed, 1);
-    assert.equal(job.results[0]?.errorKey, "err.pathMissing");
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
     const stars = await storedFavorites(env);
     assert.ok(stars.includes(from), "the favourite still names the old path");
     assert.ok(!stars.includes(`${env.b}/${TARGET_NAME}`), "nothing was written for the new path");
+  });
+});
+
+test("a same-size target with another identity conflicts before metadata moves", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    await seedState(env);
+    const from = `${env.a}/${ITEM}`;
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
+    await env.server!.stop();
+    await writeFile(path.join(env.bRoot, TARGET_NAME), "VIDEO");
+    await writeCrashJob(env, {
+      phase: "moving", copy: false, from, to: `${env.b}/${TARGET_NAME}`,
+      carried: [from], cover: `${env.a}/Show`, sidecars: [], sourceIdentity, publishedIdentity: null,
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.deepEqual(await storedFavorites(env), [from], "the favourite was not remapped");
+    assert.ok((await storedProgress(env)).some(([key, row]) => key === `file:${from}` && row.path === from));
+    assert.equal((await identityOf(env, from)).bound?.id, "tt0000001");
+    assert.equal((await identityOf(env, `${env.b}/${TARGET_NAME}`)).bound, undefined);
+    assert.equal(await readFile(path.join(env.aRoot, ITEM), "utf8"), "video");
+    assert.equal(await readFile(path.join(env.bRoot, TARGET_NAME), "utf8"), "VIDEO");
+  });
+});
+
+test("a replaced source fails closed even when the published target is genuine", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    await seedState(env);
+    const from = `${env.a}/${ITEM}`;
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
+    await env.server!.stop();
+    await moveItemToTarget(env);
+    await writeFile(path.join(env.aRoot, ITEM), "VIDEO");
+    await writeCrashJob(env, {
+      phase: "published", copy: false, from, to: `${env.b}/${TARGET_NAME}`,
+      carried: [from], cover: `${env.a}/Show`, sidecars: [], sourceIdentity, publishedIdentity: sourceIdentity,
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(env.aRoot, ITEM), "utf8"), "VIDEO", "the replacement source stays");
+    assert.equal(await readFile(path.join(env.bRoot, TARGET_NAME), "utf8"), "video", "the target stays");
+    assert.deepEqual(await storedFavorites(env), [from]);
+  });
+});
+
+test("a published target that was replaced is not finished", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    await seedState(env);
+    const from = `${env.a}/${ITEM}`;
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
+    await env.server!.stop();
+    await moveItemToTarget(env);
+    await rm(path.join(env.bRoot, TARGET_NAME));
+    await writeFile(path.join(env.bRoot, TARGET_NAME), "VIDEO");
+    await writeCrashJob(env, {
+      phase: "published", copy: false, from, to: `${env.b}/${TARGET_NAME}`,
+      carried: [from], cover: `${env.a}/Show`, sidecars: [], sourceIdentity, publishedIdentity: sourceIdentity,
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(env.bRoot, TARGET_NAME), "utf8"), "VIDEO", "the replacement target stays");
+    assert.deepEqual(await storedFavorites(env), [from]);
+  });
+});
+
+test("a published target that disappeared is not finished or recreated", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    const from = `${env.a}/${ITEM}`;
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
+    await env.server!.stop();
+    await rm(path.join(env.aRoot, ITEM));
+    await writeCrashJob(env, {
+      phase: "published", copy: false, from, to: `${env.b}/${TARGET_NAME}`,
+      carried: [from], cover: `${env.a}/Show`, sidecars: [], sourceIdentity, publishedIdentity: sourceIdentity,
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await exists(path.join(env.bRoot, TARGET_NAME)), false);
+  });
+});
+
+test("an old source-only record conflicts instead of guessing from the source's presence", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    const from = `${env.a}/${ITEM}`;
+    await env.server!.stop();
+    await writeCrashJob(env, {
+      phase: "moving", copy: false, from, to: `${env.b}/${TARGET_NAME}`,
+      carried: [from], cover: `${env.a}/Show`, sidecars: [],
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(env.aRoot, ITEM), "utf8"), "video");
+    assert.equal(await exists(path.join(env.bRoot, TARGET_NAME)), false);
+  });
+});
+
+test("an old published record conflicts instead of accepting the target by shape", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    const from = `${env.a}/${ITEM}`;
+    await env.server!.stop();
+    await moveItemToTarget(env);
+    await writeCrashJob(env, {
+      phase: "published", copy: false, from, to: `${env.b}/${TARGET_NAME}`,
+      carried: [from], cover: `${env.a}/Show`, sidecars: [],
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(env.bRoot, TARGET_NAME), "utf8"), "video");
+  });
+});
+
+test("a mismatched journal endpoint is rejected rather than treated as a fresh move", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
+    await env.server!.stop();
+    await writeCrashJob(env, {
+      phase: "moving", copy: false, from: `${env.a}/Show/another.mkv`, to: `${env.b}/another.mkv`,
+      carried: [`${env.a}/Show/another.mkv`], sidecars: [], sourceIdentity, publishedIdentity: null,
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(env.aRoot, ITEM), "utf8"), "video");
+    assert.equal(await exists(path.join(env.bRoot, TARGET_NAME)), false);
+  });
+});
+
+test("a verified copy replay keeps both ends and carries metadata once", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    await seedState(env);
+    const from = `${env.a}/${ITEM}`;
+    const to = `${env.b}/${TARGET_NAME}`;
+    const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
+    await env.server!.stop();
+    await copyFile(path.join(env.aRoot, ITEM), path.join(env.bRoot, TARGET_NAME));
+    const publishedIdentity = await fileIdentity(path.join(env.bRoot, TARGET_NAME));
+    await writeCrashJob(env, {
+      phase: "published", copy: true, from, to,
+      carried: [from], cover: `${env.a}/Show`, sidecars: [], sourceIdentity, publishedIdentity,
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "completed", JSON.stringify(job.results));
+    assert.equal(await readFile(path.join(env.aRoot, ITEM), "utf8"), "video");
+    assert.equal(await readFile(path.join(env.bRoot, TARGET_NAME), "utf8"), "video");
+    assert.ok((await storedFavorites(env)).includes(from));
+    assert.ok(!(await storedFavorites(env)).includes(to));
+    assert.equal((await identityOf(env, to)).bound?.id, "tt0000001");
   });
 });
 
@@ -476,10 +657,17 @@ const rerootRecovered = async (
   const to = env.cRoot;
   const items = [SECOND, "Show"];
   const current = items[0]!;
+  const sourceIdentity = await fileIdentity(path.join(from, current));
   await prepare(from, to, current);
+  const publishedIdentity = phase === "published" && await exists(path.join(to, current))
+    ? await fileIdentity(path.join(to, current))
+    : null;
   await writeCrashReroot(env, {
     from, to, items, current,
-    data: { kind: "reroot", phase, from: path.join(from, current), to: path.join(to, current) },
+    data: {
+      kind: "reroot", phase, from: path.join(from, current), to: path.join(to, current),
+      sourceIdentity, publishedIdentity,
+    },
   });
   await bootAgain(env);
   const job = await finishedJob(env);
@@ -504,8 +692,6 @@ const rerootRecovered = async (
 
 const movedAhead = (from: string, to: string, current: string) => rename(path.join(from, current), path.join(to, current));
 const nothingMoved = async () => undefined;
-/** The crash fell between the reservation and the rename: the destination name exists as the
- *  empty folder the move made, with the item's data still in the old root. */
 const reservedFolder = async (from: string, to: string, current: string) => {
   await mkdir(path.join(to, current), { recursive: true });
 };
@@ -522,6 +708,105 @@ test("a re-root whose first item never moved runs that item from the start", asy
   await withEnv((env) => rerootRecovered(env, nothingMoved, "moving"));
 });
 
-test("a re-root whose first item is only the reserved empty folder runs that item from the start", async () => {
-  await withEnv((env) => rerootRecovered(env, reservedFolder, "moving"));
+test("a re-root never treats an empty destination folder as its own placeholder", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    const from = env.aRoot;
+    const to = env.cRoot;
+    await env.server!.stop();
+    await seedSecondItem(env);
+    const current = SECOND;
+    const sourceIdentity = await fileIdentity(path.join(from, current));
+    await reservedFolder(from, to, current);
+    await writeCrashReroot(env, {
+      from, to, items: [current, "Show"], current,
+      data: {
+        kind: "reroot", phase: "moving", from: path.join(from, current), to: path.join(to, current),
+        sourceIdentity, publishedIdentity: null,
+      },
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(from, SECOND_ITEM), "utf8"), "video", "the source stays");
+    assert.equal(await exists(path.join(to, SECOND_ITEM)), false, "the empty destination stays empty");
+    assert.equal(await libraryRoot(env, env.a), toPosix(from), "the library did not switch roots");
+  });
+});
+
+test("an old re-root record without identities conflicts and does not switch the library", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    await env.server!.stop();
+    await seedSecondItem(env);
+    const from = env.aRoot;
+    const to = env.cRoot;
+    const current = SECOND;
+    await writeCrashReroot(env, {
+      from, to, items: [current, "Show"], current,
+      data: { kind: "reroot", phase: "moving", from: path.join(from, current), to: path.join(to, current) },
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(from, SECOND_ITEM), "utf8"), "video");
+    assert.equal(await exists(path.join(to, SECOND)), false);
+    assert.equal(await libraryRoot(env, env.a), toPosix(from));
+  });
+});
+
+test("a re-root journal naming another endpoint conflicts before moving anything", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    await env.server!.stop();
+    await seedSecondItem(env);
+    const from = env.aRoot;
+    const to = env.cRoot;
+    const current = SECOND;
+    await writeCrashReroot(env, {
+      from, to, items: [current, "Show"], current,
+      data: {
+        kind: "reroot", phase: "moving", from: path.join(from, "Elsewhere"), to: path.join(to, current),
+        sourceIdentity: await fileIdentity(path.join(from, current)), publishedIdentity: null,
+      },
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(from, SECOND_ITEM), "utf8"), "video");
+    assert.equal(await exists(path.join(to, SECOND)), false);
+    assert.equal(await libraryRoot(env, env.a), toPosix(from));
+  });
+});
+
+test("a replaced published re-root target is not finished and the root stays put", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    await env.server!.stop();
+    await seedSecondItem(env);
+    const from = env.aRoot;
+    const to = env.cRoot;
+    const current = SECOND;
+    const sourceIdentity = await fileIdentity(path.join(from, current));
+    await movedAhead(from, to, current);
+    await rm(path.join(to, current), { recursive: true, force: true });
+    await mkdir(path.join(to, current), { recursive: true });
+    await writeFile(path.join(to, SECOND_ITEM), "video");
+    await writeCrashReroot(env, {
+      from, to, items: [current, "Show"], current,
+      data: {
+        kind: "reroot", phase: "published", from: path.join(from, current), to: path.join(to, current),
+        sourceIdentity, publishedIdentity: sourceIdentity,
+      },
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "failed", JSON.stringify(job.results));
+    assert.equal(job.results[0]?.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(await readFile(path.join(to, SECOND_ITEM), "utf8"), "video", "the replacement target stays");
+    assert.equal(await libraryRoot(env, env.a), toPosix(from));
+  });
 });
