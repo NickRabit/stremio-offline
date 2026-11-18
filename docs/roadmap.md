@@ -13,9 +13,10 @@ Rechecked against `origin/main` at `b2d225e0` (0.7.95) on 2026-11-12.
 The delivery order was set by the owner on 2026-10-30; shipped work has been
 removed from the remaining priorities without changing their relative order.
 The rows marked **Proposed** come from a comparison with Plex, Jellyfin, Emby,
-Stremio and Nuvio on 2026-11-05 (see
+Stremio and Nuvio on 2026-11-05, extended on 2026-11-18 (see
 [Ideas from comparable apps](#ideas-from-comparable-apps)); they have no order
-until the owner sets one. The dated engineering audit later in this file is
+until the owner sets one. [Implementation risk](#implementation-risk) says
+which items need the strongest model for design and review. The dated engineering audit later in this file is
 retained as a historical record, not a description of today's stores, probes
 or file counts.
 
@@ -41,6 +42,10 @@ metadata store, or scheduler for each platform.
 | Proposed | Collections and shared lists | Film series from TMDB and hand-made lists an account can share with others in the household. See [Collections and lists](#collections-and-lists). |
 | Proposed | Library metadata in NFO files | Read and write `.nfo` files beside the media, so a library survives a reinstall and agrees with Jellyfin or Emby on the same NAS. See [NFO files](#nfo-files). |
 | Proposed | More ratings | Rotten Tomatoes, Metacritic and Letterboxd beside IMDb and TMDB, through MDBList with a key in Settings → Services. |
+| Proposed | Subtitle sync and styling | Automatic alignment of addon subtitles to the audio, and subtitle size, colour, background and position, with a separate style for HDR. See [Subtitles](#subtitles). |
+| Proposed | Night audio on the television | Dynamic range compression and a centre-channel boost inside the Android TV player, so a quiet evening needs no server transcode. See [Night audio on the television](#night-audio-on-the-television). |
+| Proposed | Smarter Home rows | Rows defined by a filter and a sort, a "Because you watched" row from similar titles, and MDBList lists as rows. See [Smarter Home rows](#smarter-home-rows). |
+| Proposed | Idle screen on the television | A slideshow of library artwork when the TV app is left idle. See [Idle screen on the television](#idle-screen-on-the-television). |
 | Proposed, later | Send to the television; watch together | Pick a title on the phone and play it on the TV app with the phone as a remote; two devices playing in step. Larger work, after the items above. |
 | Implemented | Play random | Shuffle a local, Jellyfin or Emby library or folder on the web, desktop and Android TV; the player moves on to the next random title with its own sources and subtitles. |
 | Implemented | Android TV launcher and queue | Continue watching appears in the launcher's Play Next row (Android 8 and newer), and the download queue opens on the television. |
@@ -562,11 +567,87 @@ write one after a confirmed match. Writing is off by default and respects
 read-only libraries and the owner's wish to avoid needless writes on the NAS:
 write only when the file is missing or its content would change.
 
+### Rechecked on 2026-11-18
+
+Compared again with NuvioTV 1.1, Nuvio Mobile 1.4, Stremio 5 (updates from
+April to October 2026), Plex (June 2026), Emby 4.10 and Jellyfin 12.0, and
+checked against `main`. The items below are new; the ones above still stand.
+None of them exists in the code today unless the item says so.
+
+### Subtitles
+
+- **Automatic subtitle sync** (NuvioTV 1.1 AutoSync, on by default; Stremio
+  redesigned its live sync in October 2026): align an addon subtitle to the
+  audio without manual offsets. Today only the manual timing adjustment exists.
+  Run the alignment on the server once per subtitle and source, cache the
+  offset, and keep the manual adjustment as the override.
+- **Subtitle styling** (Nuvio, Stremio): size, colour, background, outline and
+  vertical position per account, with an optional separate style for HDR and
+  Dolby Vision, where white text is blinding. Android TV has a basic size
+  setting in the tracks panel; extend it and give the web player the same
+  choices. Fuller ASS/SSA rendering belongs here too.
+
+### Night audio on the television
+
+NuvioTV has a night mode and an LFE downmix level in its player. On Android TV
+this can be an audio processor in the player itself: dynamic range
+compression and a centre-channel boost while direct play stays direct play.
+That is cheaper for the NAS than the server-side dialogue boost under
+[Player extras](#player-extras), which remains the route for the web. Check it
+on the owner's Android 9 television, where audio passthrough to a receiver
+cannot be processed and the option must say so.
+
+### Smarter Home rows
+
+- **Rows from a filter** (Emby 4.10 dynamic sections): a Home row defined by
+  library, genre, watched state, length and sort, such as unwatched comedies
+  under 100 minutes. It extends the personal Home layout; it does not replace
+  the fixed rows.
+- **Because you watched** (Plex's planned match score is the heavy version):
+  one row built from the similar titles of something the account finished
+  recently, local copies first. The title detail already loads similar titles.
+- **MDBList lists as rows** (NuvioTV 1.1): an account's MDBList watchlist and
+  lists as Home rows, using the same MDBList key as [More ratings](#direction-and-delivery-order).
+- **Missing items in a collection** (Emby 4.10): once
+  [Collections and lists](#collections-and-lists) exist, show which films of a
+  series are not in the library and offer to download them.
+
+### Idle screen on the television
+
+NuvioTV's Ambient Mode: after a period without input outside the player, show
+a slow slideshow of backdrops from the libraries the account may see, with the
+title and a press of OK opening its detail. A child account sees only its own
+libraries. It must not keep the screen on longer than the television's own
+power settings allow.
+
+### Watch together, as the others do it
+
+NuvioTV 1.1 joins a watch party by scanning a QR code, previews it before
+joining and lets a late viewer catch up. When
+[watch together](#direction-and-delivery-order) is taken up, reuse the TV
+sign-in pairing pattern (short code, QR link, explicit confirmation) rather
+than inventing another invitation flow.
+
 ### Considered and declined
 
 - Live TV and a programme guide (Stremio, Plex, Emby): a different product.
-- Music, audiobooks and e-books (Emby, Jellyfin, Plexamp).
+- Music, audiobooks and e-books (Emby, Jellyfin, Plexamp; Jellyfin 12 merged
+  book support into the server).
 - A public social network of lists, reactions and follows (Plex 2026).
+- Anime episode renumbering and AniSkip (Nuvio): only if the household starts
+  watching anime.
+
+### Implementation risk
+
+Where a mistake loses data, leaks access or needs real design, the strongest
+model writes the specification and reviews the result, and preferably
+implements it too. Elsewhere a cheaper implementer with a clear task is enough.
+
+| Risk | Items | Why |
+| --- | --- | --- |
+| Strongest model throughout | Library bulk rename, guided library split, the system audit and refactoring, send to the television and watch together | Moving files on the NAS together with metadata, favourites and progress must survive a crash and never delete on uncertainty; real-time sync spans three clients. |
+| Strongest model for design and review | Trakt and Simkl, NFO files, the remote bitrate cap, notifications, automatic subtitle sync | Tokens and two-way sync conflicts; writes on the NAS; telling LAN from remote; never revealing a title an account or a child may not see; audio alignment that must not make subtitles worse. |
+| Cheaper implementer | Picture in picture, playback speed, finish time, progressive seeking, spoiler-safe Up next, interface scale, more ratings, subtitle styling, night audio, smarter Home rows, idle screen, collections | Contained client or read-only server work with existing patterns to follow. |
 
 ## Engineering health
 
