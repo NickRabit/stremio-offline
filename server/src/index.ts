@@ -2938,11 +2938,16 @@ const libraryOps = new LibraryOps({
     }
     const parsed = parseLibraryPath(item);
     const resolved = await resolveLibraryPath(store.libraries(), item);
-    // A job queued while a request held the same item -- or the folder a move is going to --
-    // waits until that request is done: its check could not see a reservation taken after it.
-    const destination = operation.op === "move" || operation.op === "copy" ? await resolveLibraryPath(store.libraries(), operation.target) : undefined;
-    const held = reservationPause(pathReservations, operation, [...(resolved ? [resolved.key] : []), ...(destination ? [destination.key] : [])]);
-    if (held) return held;
+    // A job queued while a request held the same item -- or the name a move gives it in its
+    // destination -- waits until that request is done: its check could not see a reservation
+    // taken after it. Nothing held, nothing to resolve.
+    if (pathReservations.keys().length) {
+      const destination = (operation.op === "move" || operation.op === "copy") && resolved
+        ? await resolveLibraryPath(store.libraries(), posixJoin(operation.target, posixBase(resolved.relative)))
+        : undefined;
+      const held = reservationPause(pathReservations, operation, [...(resolved ? [resolved.key] : []), ...(destination ? [destination.key] : [])]);
+      if (held) return held;
+    }
     const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : resolved?.library;
     if (library) {
       await refreshLibraryHealth();

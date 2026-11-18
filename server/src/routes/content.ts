@@ -415,7 +415,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const folder = String(req.body.folder ?? "").trim();
     // The source, and the name it will take in the destination: a rename of either while the
     // transfer runs -- which can take minutes across volumes -- would act under the copy.
-    const held = await heldKeys([relative, ...(folder ? [posixJoin(folder, posixBase(relative))] : [])]);
+    const held = await heldKeys([relative, posixJoin(folder, posixBase(relative))]);
     const moved = await holdingPaths(held, () => transferLibraryItem(relative, folder,
       req.body.copy === true, undefined, req.body.confirmTypeMismatch === true));
     res.json({ path: moved });

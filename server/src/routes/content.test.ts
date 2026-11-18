@@ -988,6 +988,27 @@ test("a direct move holds its item: a rename or delete of it meanwhile is refuse
   assert.equal(later.status, 204, "the item is free once the transfer is done");
 });
 
+test("a direct move holds the name it takes in its destination, and nothing else there", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Archive/Other.mkv");
+  let reached!: () => void;
+  const started = new Promise<void>((resolve) => { reached = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { transferHold: { reached, release: hold } });
+  t.after(async () => { release(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const move = api(harness.base, "/api/library/move", { method: "POST", body: { path: "Films/Heat.mkv", folder: "Archive" } });
+  await started;
+  const onto = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Archive/Other.mkv", name: "Heat" } });
+  assert.equal(onto.status, 409, "a rename onto the name the moved file takes");
+  const beside = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Archive/Other.mkv", name: "Ronin" } });
+  assert.equal(beside.status, 200, "another name in the same folder is free");
+  release();
+  assert.equal((await move).status, 200);
+});
+
 test("a delete held by a rename in flight is refused", async (t) => {
   const root = await makeRoot();
   await put(root, "Films/Heat.mkv");
