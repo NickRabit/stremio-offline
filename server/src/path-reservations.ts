@@ -13,15 +13,23 @@ export class PathReservations {
    *  both pass. Folded for the comparison, which only ever refuses more: a case-sensitive
    *  volume loses nothing but a concurrent rename of two names that differ in case. */
   reserve(keys: string[]): (() => void) | undefined {
+    if (this.overlaps(keys)) return undefined;
+    const entry = { keys: [...keys], folded: keys.map((key) => key.toLowerCase()) };
+    this.held.add(entry);
+    return () => { this.held.delete(entry); };
+  }
+
+  /** Whether any of these keys overlaps a key held right now, either way round. The operations
+   *  queue asks before it touches an item, so a job queued while a rename was in flight waits
+   *  for the rename instead of running against a name that just moved. */
+  overlaps(keys: string[]): boolean {
     const folded = keys.map((key) => key.toLowerCase());
     for (const entry of this.held) {
       for (const held of entry.folded) {
-        if (folded.some((key) => isPathWithin(key, held) || isPathWithin(held, key))) return undefined;
+        if (folded.some((key) => isPathWithin(key, held) || isPathWithin(held, key))) return true;
       }
     }
-    const entry = { keys: [...keys], folded };
-    this.held.add(entry);
-    return () => { this.held.delete(entry); };
+    return false;
   }
 
   /** Every key held right now, as it was spelled. */

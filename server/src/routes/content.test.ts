@@ -148,11 +148,11 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     libraryEntries: async (read?: { stale?: boolean }) => { calls.entriesAsked += 1; calls.entriesStale.push(read?.stale === true); return entries; },
     libraryKey: (value) => qualify(value),
     // The same question the server asks: is the key an active job's business, either way round.
-    libraryPathBusy: async (keys) => {
+    libraryPathBusy: async (keys, options) => {
       for (const key of keys) {
         const wanted = await resolveLibraryPath(libraries, key);
         if (!wanted) continue;
-        for (const item of [...activeItems(), ...pathReservations.keys()]) {
+        for (const item of options?.ignoreReservations ? activeItems() : [...activeItems(), ...pathReservations.keys()]) {
           const active = await resolveLibraryPath(libraries, item);
           if (active && (isPathWithin(active.absolute, wanted.absolute) || isPathWithin(wanted.absolute, active.absolute))) return item;
         }
@@ -938,6 +938,23 @@ test("POST /api/library/rename holds both names until the bindings have moved", 
   const later = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Thief.mkv", name: "Ronin" } });
   assert.equal(later.status, 200, "the names are released once the first rename is done");
   assert.deepEqual(harness.calls.relocated.map((call) => call.nextKey), ["lib_00000001/Films/Thief.mkv", "lib_00000001/Films/Ronin.mkv"]);
+});
+
+test("POST /api/library/rename refuses a job queued for the item while it was checking the name", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  // The first look at the queue finds nothing; the move is queued while the rename reads the
+  // disk, so every later look finds it.
+  let reads = 0;
+  const harness = await mount([library("lib_00000001", root)], [], () => (reads++ === 0 ? [] : ["lib_00000001/Films/Heat.mkv"]));
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "Thief" } });
+
+  assert.equal(response.status, 409);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.pathBusy");
+  assert.equal(await exists(path.join(root, "Films/Heat.mkv")), true, "the queued job's item was renamed under it");
+  assert.equal(harness.calls.relocated.length, 0);
 });
 
 test("POST /api/library/rename refuses a target that already exists", async (t) => {

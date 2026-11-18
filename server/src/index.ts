@@ -2604,9 +2604,10 @@ async function titleArtworkUrls(key: string): Promise<{ poster?: string; wide?: 
  *  real ancestor: a 500-item operation checked against a 500-item job one key at a time
  *  would be a quarter of a million of those walks before anything is queued. */
 const pathReservations = new PathReservations();
-const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
+const libraryPathBusy = async (keys: string[], options: { ignoreReservations?: boolean } = {}): Promise<string | undefined> => {
   // A rename finishes inside its request and never enters the queue; it holds its names here.
-  const items = [...libraryOps.activeItems(), ...pathReservations.keys()];
+  // The rename itself asks with its own names already held, so it only wants the queue.
+  const items = options.ignoreReservations ? libraryOps.activeItems() : [...libraryOps.activeItems(), ...pathReservations.keys()];
   if (!items.length) return undefined;
   const libraries = store.libraries();
   const active = (await Promise.all(items.map(async (item) =>
@@ -2921,6 +2922,8 @@ const libraryOps = new LibraryOps({
     // guard below would be skipped. The two blockers that still apply are the same ones:
     // a disk that is away, and a file a session or a download is using right now.
     if (operation.op === "reroot") {
+      // A rename in flight inside this library holds its names; the whole tree is about to move.
+      if (pathReservations.keys().some((key) => parseLibraryPath(key)?.libraryId === operation.libraryId)) return "queue";
       await refreshLibraryHealth();
       if (libraryHealth.get(operation.libraryId)?.unreachable) return "library";
       const source = path.join(operation.from, item);
@@ -2934,6 +2937,9 @@ const libraryOps = new LibraryOps({
     }
     const parsed = parseLibraryPath(item);
     const resolved = await resolveLibraryPath(store.libraries(), item);
+    // A job queued while a rename of the same item was in flight waits until the rename has
+    // moved the bindings too: its check could not see a reservation taken after it.
+    if (resolved && pathReservations.overlaps([resolved.key])) return "queue";
     const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : resolved?.library;
     if (library) {
       await refreshLibraryHealth();

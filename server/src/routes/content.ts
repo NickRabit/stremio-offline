@@ -43,7 +43,7 @@ export interface ContentDeps extends RouteContext {
   invalidateLibrary(): void;
   libraryEntries(read?: { stale?: boolean }): Promise<LibraryEntry[]>;
   libraryKey(value: string): string;
-  libraryPathBusy(keys: string[]): Promise<string | undefined>;
+  libraryPathBusy(keys: string[], options?: { ignoreReservations?: boolean }): Promise<string | undefined>;
   /** Keys a request is changing on disk outside the queue; `libraryPathBusy` reads them too. */
   pathReservations: PathReservations;
   libraryRootBrowse(viewer: Viewer, options?: { prewarm?: boolean }): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
@@ -326,6 +326,12 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const release = pathReservations.reserve([resolved.key, target.key]);
     if (!release) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
     try {
+      // Asked again with both names held: a job queued since the first check above would
+      // otherwise run against a name this rename is about to move. A job queued after this
+      // point waits for the reservation in the queue's own pause check.
+      if (await libraryPathBusy([resolved.key, target.key], { ignoreReservations: true })) {
+        throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
+      }
       // Read before the rename: the player finds a video's subtitles by its name, so they take
       // the new one with it or the player stops offering them.
       const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };

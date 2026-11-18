@@ -21,3 +21,16 @@ test("a held key refuses itself, anything inside it and anything around it until
   assert.deepEqual(reservations.keys(), []);
   assert.ok(reservations.reserve(["lib_00000001/Films/Thief.mkv"]));
 });
+
+test("overlaps answers for a held key, its folder and another case, without holding anything", () => {
+  const reservations = new PathReservations();
+  assert.equal(reservations.overlaps(["lib_00000001/Films/Heat.mkv"]), false);
+  const release = reservations.reserve(["lib_00000001/Films/Heat.mkv"])!;
+  assert.equal(reservations.overlaps(["lib_00000001/Films/Heat.mkv"]), true);
+  assert.equal(reservations.overlaps(["lib_00000001/Films"]), true, "the folder around it");
+  assert.equal(reservations.overlaps(["lib_00000001/films/heat.MKV"]), true, "another case");
+  assert.equal(reservations.overlaps(["lib_00000001/Films/Heat 2.mkv"]), false, "a sibling");
+  assert.deepEqual(reservations.keys(), ["lib_00000001/Films/Heat.mkv"], "asking holds nothing");
+  release();
+  assert.equal(reservations.overlaps(["lib_00000001/Films/Heat.mkv"]), false);
+});
