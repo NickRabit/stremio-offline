@@ -22,6 +22,10 @@ export const INSTANCE_DIRECTORY = "instance";
 export const DOWNLOADS_DIRECTORY = "downloads";
 export const PORT_FILE = "local-backend.json";
 export const STOP_TIMEOUT_MS = 5_000;
+/** The outer bound of a start, the ready report and the status check together. It is far beyond
+ *  any slow cold start, and is there only so a child that lives on without ever answering still
+ *  ends on the failure screen. A slow start is waited for; a newer request aborts it sooner. */
+export const START_LIMIT_MS = 3 * 60_000;
 /** Where the tools a desktop install needs are installed on macOS. A Finder launch inherits
  *  `/usr/bin:/bin:/usr/sbin:/sbin`, so neither is on the child's `PATH` by itself. */
 export const MACOS_TOOL_DIRECTORIES = ["/opt/homebrew/bin", "/usr/local/bin"] as const;
@@ -102,7 +106,7 @@ export interface LocalBackendOptions {
   userDataDir: string;
   fork: LocalBackendFork;
   /** The shell's own status probe, so the local server passes the same check as a remote one.
-   *  It has no deadline of its own: the signal ends it when the start is abandoned. */
+   *  The signal ends it when the start is abandoned or the child exits. */
   probeStatus: (origin: string, signal: AbortSignal) => Promise<ProbeResult>;
   readPort?: (dir: string) => Promise<number | null>;
   writePort?: (dir: string, port: number) => Promise<void>;
@@ -120,6 +124,7 @@ export interface LocalBackendOptions {
   /** What the running child reports about its traffic, published or not. */
   onActivity?: (activity: { streaming: boolean; downloading: boolean }) => void;
   stopTimeoutMs?: number;
+  startLimitMs?: number;
   /** How a child that ignores the graceful signal is finished off. */
   forceKill?: (pid: number) => void;
   onUnexpectedExit?: () => void;
@@ -352,8 +357,18 @@ const forceKillProcess = (pid: number) => {
 
 const CANCELLED = "The local server start was cancelled.";
 
-/** A start ends on what the child says or does, never on the clock: a cold machine can take far
- *  longer than usual, and whoever no longer wants to wait aborts the start instead. */
+class StartLimitError extends Error {
+  constructor(limitMs: number) {
+    super(`The local server did not start within ${Math.round(limitMs / 1000)} seconds.`);
+  }
+}
+
+/** Why an aborted start ended: the outer limit names itself, anything else is a cancel. */
+const abandoned = (signal: AbortSignal): Error =>
+  signal.reason instanceof StartLimitError ? signal.reason : new Error(CANCELLED);
+
+/** A start ends on what the child says or does: a cold machine can take far longer than usual, and
+ *  whoever no longer wants to wait aborts the start. Only the generous outer limit is a clock. */
 const awaitReady = (child: LocalBackendChild, signal: AbortSignal): Promise<BoundAddress> =>
   new Promise<BoundAddress>((resolve, reject) => {
     const finish = (error: Error | null, address?: BoundAddress) => {
@@ -363,7 +378,7 @@ const awaitReady = (child: LocalBackendChild, signal: AbortSignal): Promise<Boun
       if (error) reject(error);
       else resolve(address as BoundAddress);
     };
-    const onAbort = () => finish(new Error(CANCELLED));
+    const onAbort = () => finish(abandoned(signal));
     const onMessage = (message: unknown) => {
       const address = readReadyMessage(message);
       if (address) return finish(null, address);
@@ -410,7 +425,10 @@ export class LocalBackend {
     if (this.startPromise) return this.startPromise;
     const abort = new AbortController();
     this.startAbort = abort;
+    const limitMs = this.options.startLimitMs ?? START_LIMIT_MS;
+    const limit = setTimeout(() => abort.abort(new StartLimitError(limitMs)), limitMs);
     this.startPromise = this.ensureStarted(abort.signal).finally(() => {
+      clearTimeout(limit);
       this.startPromise = null;
       this.startAbort = null;
     });
@@ -494,7 +512,7 @@ export class LocalBackend {
 
   private async launch(port: number, settings: LocalSettings, signal: AbortSignal): Promise<LocalBackendConnection> {
     const { options } = this;
-    if (signal.aborted) throw new Error(CANCELLED);
+    if (signal.aborted) throw abandoned(signal);
     this.launchedWith = settings;
     const toolsOverride = settings.useSystemFfmpeg ? options.systemTools ?? null : null;
     const platform = process.platform;
@@ -514,7 +532,7 @@ export class LocalBackend {
     env[MEDIA_SERVER_KEY_FILE_ENV] = keyFile;
     if (signal.aborted) {
       this.launchedWith = null;
-      throw new Error(CANCELLED);
+      throw abandoned(signal);
     }
     const child = options.fork(options.entry, {
       env,
@@ -536,10 +554,21 @@ export class LocalBackend {
       throw error;
     }
     const server = parseServerOrigin(`http://${LOCAL_HOST}:${ready.port}`);
-    const probe = server ? await options.probeStatus(server.origin, signal) : null;
+    // The check ends with the start, and also when the child exits under it.
+    const checking = new AbortController();
+    const endCheck = () => checking.abort();
+    signal.addEventListener("abort", endCheck, { once: true });
+    child.on("exit", endCheck);
+    let probe: ProbeResult | null;
+    try {
+      probe = server && !signal.aborted ? await options.probeStatus(server.origin, checking.signal) : null;
+    } finally {
+      signal.removeEventListener("abort", endCheck);
+      child.removeListener("exit", endCheck);
+    }
     if (signal.aborted || !server || !probe?.ok) {
       await this.stopTracked();
-      throw new Error(signal.aborted ? CANCELLED : "The local server did not answer its own status check.");
+      throw signal.aborted ? abandoned(signal) : new Error("The local server did not answer its own status check.");
     }
     const onActivity = options.onActivity;
     if (onActivity) {
