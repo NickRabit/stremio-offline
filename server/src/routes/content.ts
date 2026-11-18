@@ -25,6 +25,7 @@ import { fileProgressKeys, newestProgress, titleProgressKey } from "../progress-
 import type { StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
 import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
+import type { PathReservations } from "../path-reservations.js";
 
 /** Browsing a library and the file operations under it. */
 export interface ContentDeps extends RouteContext {
@@ -43,6 +44,8 @@ export interface ContentDeps extends RouteContext {
   libraryEntries(read?: { stale?: boolean }): Promise<LibraryEntry[]>;
   libraryKey(value: string): string;
   libraryPathBusy(keys: string[]): Promise<string | undefined>;
+  /** Keys a request is changing on disk outside the queue; `libraryPathBusy` reads them too. */
+  pathReservations: PathReservations;
   libraryRootBrowse(viewer: Viewer, options?: { prewarm?: boolean }): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
   /** Every title unit of every library, the walk the browse folder mosaic groups. */
   libraryUnits(read?: { stale?: boolean }): Promise<TitleUnit[]>;
@@ -76,7 +79,7 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, pathReservations, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
   const fileSnaps = deps.fileSnaps ?? new FileSnapCache();
   const mosaics = deps.mosaics ?? new MosaicCache(path.join(os.tmpdir(), `mosaics-${randomBytes(6).toString("hex")}`));
 
@@ -317,26 +320,41 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // write is what closes the window without risking an inconsistency: refuse now and nothing
     // has happened; refuse after the rename and the state would describe a file that moved.
     assertStillAdmin(store.users(), actor);
-    // Read before the rename: the player finds a video's subtitles by its name, so they take
-    // the new one with it or the player stops offering them.
-    const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };
-    await rename(resolved.absolute, target.absolute);
-    await relocateLibraryPath(resolved.key, target.key);
-    for (const name of sidecars.names) {
-      const from = path.join(path.dirname(resolved.absolute), name);
-      const to = path.join(path.dirname(target.absolute), renamedSidecar(name, sidecars.stem, wanted));
-      try {
-        // Never over another file; a case-only rename on a folding volume is the same file.
-        if (!sameFile(to, from) && await fileExists(to)) {
-          log("INFO", "A subtitle kept its name, another file already has the new one", { file: name });
-          continue;
+    // Both names stay held until the bindings have moved: a second rename of the new name in
+    // the meantime would find no bindings under it, and this one would then write them under a
+    // name the video has already left.
+    const release = pathReservations.reserve([resolved.key, target.key]);
+    if (!release) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
+    try {
+      // Read before the rename: the player finds a video's subtitles by its name, so they take
+      // the new one with it or the player stops offering them.
+      const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };
+      await rename(resolved.absolute, target.absolute);
+      // A failed binding write must not leave the subtitles under the old name.
+      for (const name of sidecars.names) {
+        const from = path.join(path.dirname(resolved.absolute), name);
+        const to = path.join(path.dirname(target.absolute), renamedSidecar(name, sidecars.stem, wanted));
+        try {
+          // Never over another file; a case-only rename on a folding volume is the same file.
+          if (!sameFile(to, from) && await fileExists(to)) {
+            log("INFO", "A subtitle kept its name, another file already has the new one", { file: name });
+            continue;
+          }
+          await rename(from, to);
+        } catch (error) {
+          log("WARN", "A subtitle could not follow its renamed video", { file: name, reason: error instanceof Error ? error.message : String(error) });
         }
-        await rename(from, to);
-      } catch (error) {
-        log("WARN", "A subtitle could not follow its renamed video", { file: name, reason: error instanceof Error ? error.message : String(error) });
       }
+      // The disk has changed either way: a failed binding write still has to drop the listing
+      // that names the old file.
+      try {
+        await relocateLibraryPath(resolved.key, target.key);
+      } finally {
+        invalidateLibrary();
+      }
+    } finally {
+      release();
     }
-    invalidateLibrary();
     log("INFO", "Renamed in the library", { from: relative, to: nextRelative });
     res.json({ path: nextRelative });
   }));

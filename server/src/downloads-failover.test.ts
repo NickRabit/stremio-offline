@@ -766,3 +766,43 @@ test("explicit retry signals the failed lazy source once before resolving it aga
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("explicit retry clears a failed lazy source so it can be offered again", async () => {
+  const bad = "/failed.mp4";
+  const good = "/recovered.mp4";
+  const { server, port } = await listen((req, res) => {
+    if (req.url === bad) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { "content-length": "64" });
+    res.end(Buffer.alloc(64));
+  });
+  const { directory, queue } = await tempQueue();
+  let repaired = false;
+  const offered: string[][] = [];
+  queue.setResolver(async ({ tried }) => {
+    offered.push([...tried]);
+    if (tried.includes(`http://127.0.0.1:${port}${bad}`)) return undefined;
+    return { stream: { url: `http://127.0.0.1:${port}${repaired ? good : bad}` }, settings: defaultDownloadSettings() };
+  });
+  try {
+    await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    const job = (queue as unknown as { jobs: DownloadJob[] }).jobs[0]!;
+    await waitFor(queue, () => job.status === "failed");
+    const failedUrl = `http://127.0.0.1:${port}${bad}`;
+    assert.deepEqual(job.source?.tried, [failedUrl]);
+
+    repaired = true;
+    await queue.retry(job.id);
+    await waitFor(queue, () => job.status === "completed" || job.status === "failed");
+
+    assert.equal(job.status, "completed", job.error);
+    assert.deepEqual(offered.at(-1), [], "the manual retry offers the source again");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
