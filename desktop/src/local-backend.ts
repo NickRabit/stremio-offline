@@ -21,7 +21,6 @@ export const PUBLISHED_HOST = "0.0.0.0";
 export const INSTANCE_DIRECTORY = "instance";
 export const DOWNLOADS_DIRECTORY = "downloads";
 export const PORT_FILE = "local-backend.json";
-export const READY_TIMEOUT_MS = 30_000;
 export const STOP_TIMEOUT_MS = 5_000;
 /** Where the tools a desktop install needs are installed on macOS. A Finder launch inherits
  *  `/usr/bin:/bin:/usr/sbin:/sbin`, so neither is on the child's `PATH` by itself. */
@@ -102,8 +101,9 @@ export interface LocalBackendOptions {
   /** `<userData>/instance` and `<userData>/downloads` are derived from this. */
   userDataDir: string;
   fork: LocalBackendFork;
-  /** The shell's own status probe, so the local server passes the same check as a remote one. */
-  probeStatus: (origin: string) => Promise<ProbeResult>;
+  /** The shell's own status probe, so the local server passes the same check as a remote one.
+   *  It has no deadline of its own: the signal ends it when the start is abandoned. */
+  probeStatus: (origin: string, signal: AbortSignal) => Promise<ProbeResult>;
   readPort?: (dir: string) => Promise<number | null>;
   writePort?: (dir: string, port: number) => Promise<void>;
   /** Read on every launch, so a switch thrown in the shell applies to the next start. */
@@ -119,7 +119,6 @@ export interface LocalBackendOptions {
   prepareMediaServerKey?: PrepareMediaServerKey;
   /** What the running child reports about its traffic, published or not. */
   onActivity?: (activity: { streaming: boolean; downloading: boolean }) => void;
-  readyTimeoutMs?: number;
   stopTimeoutMs?: number;
   /** How a child that ignores the graceful signal is finished off. */
   forceKill?: (pid: number) => void;
@@ -351,16 +350,20 @@ const forceKillProcess = (pid: number) => {
   }
 };
 
-const awaitReady = (child: LocalBackendChild, timeoutMs: number): Promise<BoundAddress> =>
+const CANCELLED = "The local server start was cancelled.";
+
+/** A start ends on what the child says or does, never on the clock: a cold machine can take far
+ *  longer than usual, and whoever no longer wants to wait aborts the start instead. */
+const awaitReady = (child: LocalBackendChild, signal: AbortSignal): Promise<BoundAddress> =>
   new Promise<BoundAddress>((resolve, reject) => {
     const finish = (error: Error | null, address?: BoundAddress) => {
-      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
       child.removeListener("message", onMessage);
       child.removeListener("exit", onExit);
       if (error) reject(error);
       else resolve(address as BoundAddress);
     };
-    const timer = setTimeout(() => finish(new Error("The local server did not report its address in time.")), timeoutMs);
+    const onAbort = () => finish(new Error(CANCELLED));
     const onMessage = (message: unknown) => {
       const address = readReadyMessage(message);
       if (address) return finish(null, address);
@@ -373,6 +376,8 @@ const awaitReady = (child: LocalBackendChild, timeoutMs: number): Promise<BoundA
     const onExit = (code: number) => finish(new Error(`The local server exited before it was ready (code ${code}).`));
     child.on("message", onMessage);
     child.once("exit", onExit);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
   });
 
 /**
@@ -384,6 +389,7 @@ export class LocalBackend {
   private tracked: TrackedChild | null = null;
   private connection: LocalBackendConnection | null = null;
   private startPromise: Promise<LocalBackendConnection> | null = null;
+  private startAbort: AbortController | null = null;
   private launchedWith: LocalSettings | null = null;
   private stopPromise: Promise<void> | null = null;
 
@@ -402,24 +408,34 @@ export class LocalBackend {
 
   start(): Promise<LocalBackendConnection> {
     if (this.startPromise) return this.startPromise;
-    this.startPromise = this.ensureStarted().finally(() => { this.startPromise = null; });
+    const abort = new AbortController();
+    this.startAbort = abort;
+    this.startPromise = this.ensureStarted(abort.signal).finally(() => {
+      this.startPromise = null;
+      this.startAbort = null;
+    });
     return this.startPromise;
+  }
+
+  /** Ends a start still waiting for its child: the child is stopped and the start rejects. */
+  abortStart(): void {
+    this.startAbort?.abort();
   }
 
   /** A backend still running from before keeps its environment, so one started with other
    *  settings than those now stored is replaced: the connection form can come back after a failed
    *  page load while the child lives on, and a switch turned off there must not stay on. */
-  private async ensureStarted(): Promise<LocalBackendConnection> {
+  private async ensureStarted(signal: AbortSignal): Promise<LocalBackendConnection> {
     if (this.connection) {
       const wanted = await (this.options.readSettings ?? readLocalSettings)(this.options.userDataDir);
       if (this.launchedWith && sameSettings(wanted, this.launchedWith)) return this.connection;
       this.options.log?.("The local settings changed, restarting the local server.");
       await this.stopTracked();
     }
-    return this.startBackend();
+    return this.startBackend(signal);
   }
 
-  private async startBackend(): Promise<LocalBackendConnection> {
+  private async startBackend(signal: AbortSignal): Promise<LocalBackendConnection> {
     const settings = await (this.options.readSettings ?? readLocalSettings)(this.options.userDataDir);
     // Publishing has one fixed port: no remembered port, no port-0 fallback.
     if (settings.publish) {
@@ -427,14 +443,14 @@ export class LocalBackend {
       // and the kernel then hands this shell's loopback connections to that program: the window
       // would show it while the network reached the child. So such a port counts as taken.
       if (await (this.options.loopbackTaken ?? loopbackAnswers)(settings.publishPort)) throw new LocalPortBusyError(settings.publishPort);
-      return this.launch(settings.publishPort, settings);
+      return this.launch(settings.publishPort, settings, signal);
     }
     const remembered = await (this.options.readPort ?? readRememberedPort)(this.options.userDataDir);
     const attempts = remembered === null ? [0] : [remembered, 0];
     let failure: unknown = null;
     for (const port of attempts) {
       try {
-        return await this.launch(port, settings);
+        return await this.launch(port, settings, signal);
       } catch (error) {
         failure = error;
         // Only an occupied remembered port is worth a second try, and only with port 0.
@@ -447,13 +463,20 @@ export class LocalBackend {
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
     const starting = this.startPromise;
-    this.stopPromise = (starting ? starting.catch(() => {}).then(() => this.stopTracked()) : this.stopTracked())
+    this.abortStart();
+    // The chain stops the child itself: `stopTracked` would hand it back to itself once a failed
+    // start has already let go of its child, and the stop would wait for itself forever.
+    this.stopPromise = (starting ? starting.catch(() => {}).then(() => this.stopChild()) : this.stopChild())
       .finally(() => { this.stopPromise = null; });
     return this.stopPromise;
   }
 
   private stopTracked(): Promise<void> {
     if (this.stopPromise && this.tracked === null) return this.stopPromise;
+    return this.stopChild();
+  }
+
+  private stopChild(): Promise<void> {
     const tracked = this.tracked;
     this.tracked = null;
     this.connection = null;
@@ -469,8 +492,9 @@ export class LocalBackend {
     })();
   }
 
-  private async launch(port: number, settings: LocalSettings): Promise<LocalBackendConnection> {
+  private async launch(port: number, settings: LocalSettings, signal: AbortSignal): Promise<LocalBackendConnection> {
     const { options } = this;
+    if (signal.aborted) throw new Error(CANCELLED);
     this.launchedWith = settings;
     const toolsOverride = settings.useSystemFfmpeg ? options.systemTools ?? null : null;
     const platform = process.platform;
@@ -488,6 +512,10 @@ export class LocalBackend {
     }
     const env = localBackendEnv(process.env, options.userDataDir, port, platform, isDirectory, settings, options.tools ?? null, isCharacterDevice, toolsOverride);
     env[MEDIA_SERVER_KEY_FILE_ENV] = keyFile;
+    if (signal.aborted) {
+      this.launchedWith = null;
+      throw new Error(CANCELLED);
+    }
     const child = options.fork(options.entry, {
       env,
       cwd: options.userDataDir,
@@ -500,7 +528,7 @@ export class LocalBackend {
     const expectedAddress = settings.publish ? PUBLISHED_HOST : LOCAL_HOST;
     let ready: BoundAddress;
     try {
-      ready = await awaitReady(child, options.readyTimeoutMs ?? READY_TIMEOUT_MS);
+      ready = await awaitReady(child, signal);
       if (ready.address !== expectedAddress) throw new Error("The local server did not bind to the expected address.");
     } catch (error) {
       await this.stopTracked();
@@ -508,10 +536,10 @@ export class LocalBackend {
       throw error;
     }
     const server = parseServerOrigin(`http://${LOCAL_HOST}:${ready.port}`);
-    const probe = server ? await options.probeStatus(server.origin) : null;
-    if (!server || !probe?.ok) {
+    const probe = server ? await options.probeStatus(server.origin, signal) : null;
+    if (signal.aborted || !server || !probe?.ok) {
       await this.stopTracked();
-      throw new Error("The local server did not answer its own status check.");
+      throw new Error(signal.aborted ? CANCELLED : "The local server did not answer its own status check.");
     }
     const onActivity = options.onActivity;
     if (onActivity) {

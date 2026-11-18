@@ -150,16 +150,13 @@ async function stubDialogs(app: ElectronApplication, options: StubOptions): Prom
 
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function waitForPage(
-  app: ElectronApplication,
-  match: (url: string) => boolean,
-  timeoutMs = 60_000,
-): Promise<Page> {
-  const deadline = Date.now() + timeoutMs;
+// The waits below have no deadline of their own: a cold runner can be far slower than usual, and
+// the test's own timeout is the one bound. A wait ends on what the app does, never on the clock.
+
+export async function waitForPage(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
   for (;;) {
     const found = app.context().pages().filter((page) => !page.isClosed() && match(page.url())).at(-1);
     if (found) return found;
-    if (Date.now() > deadline) throw new Error("No window answered in time.");
     await delay(100);
   }
 }
@@ -177,19 +174,18 @@ export const stateOf = (page: Page): Promise<ShellState> =>
 /** The main process's own strings for a state's language, which is what its dialogs say. */
 export const shellStrings = (state: ShellState) => catalogue(state.locale, state.platform);
 
-/** Waits for a state the shell reaches on its own, reporting the last one when it does not. */
+/** Waits for a state the shell reaches on its own. A failure screen the wait is not for ends it
+ *  at once, since the shell leaves one only when asked to. */
 export async function until(
   read: () => Promise<ShellState>,
   ready: (state: ShellState) => boolean,
   label: string,
-  timeoutMs = 60_000,
 ): Promise<ShellState> {
-  const deadline = Date.now() + timeoutMs;
   for (;;) {
     const state = await read();
     if (ready(state)) return state;
-    if (Date.now() > deadline) {
-      throw new Error(`Timed out waiting for ${label}; the screen is ${JSON.stringify(state.screen)}.`);
+    if (state.screen.kind === "error") {
+      throw new Error(`The shell failed while waiting for ${label}; the screen is ${JSON.stringify(state.screen)}.`);
     }
     await delay(150);
   }
@@ -218,12 +214,10 @@ export const boxes = (box: Sandbox) => jsonLines<Box>(box.boxes);
 export const openDialogs = (box: Sandbox) => jsonLines<OpenDialogCall>(box.openDialogs);
 export const openedLinks = (box: Sandbox) => jsonLines<string>(box.openedLinks);
 
-export async function waitForBoxes(box: Sandbox, count: number, timeoutMs = 30_000): Promise<Box[]> {
-  const deadline = Date.now() + timeoutMs;
+export async function waitForBoxes(box: Sandbox, count: number): Promise<Box[]> {
   for (;;) {
     const found = await boxes(box);
     if (found.length >= count) return found;
-    if (Date.now() > deadline) throw new Error(`Only ${found.length} of ${count} dialogs were asked for.`);
     await delay(150);
   }
 }
@@ -241,12 +235,9 @@ export const webContentsCount = (app: ElectronApplication): Promise<number> =>
 export const appQuit = (app: ElectronApplication): Promise<void> =>
   app.evaluate(({ app: application }) => application.quit());
 
-export function waitForExit(app: ElectronApplication, timeoutMs = 30_000): Promise<void> {
+export function waitForExit(app: ElectronApplication): Promise<void> {
   if (app.process().exitCode !== null) return Promise.resolve();
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("The app did not quit in time.")), timeoutMs);
-    app.once("close", () => { clearTimeout(timer); resolve(); });
-  });
+  return new Promise<void>((resolve) => { app.once("close", () => resolve()); });
 }
 
 export const backendStatus = (app: ElectronApplication, origin: string): Promise<number> =>

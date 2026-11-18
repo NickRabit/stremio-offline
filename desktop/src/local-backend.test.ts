@@ -179,14 +179,96 @@ test("a child that exits before readiness rejects and is not left behind", async
   assert.equal(fork.child.kills, 0);
 });
 
-test("a readiness timeout stops the child", async (t) => {
+/** Whether a promise has settled by the time the event loop has run everything already queued. */
+const settled = async (promise: Promise<unknown>): Promise<boolean> => {
+  let done = false;
+  void promise.then(() => { done = true; }, () => { done = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  return done;
+};
+
+test("a slow child is waited for, however long its start takes", async (t) => {
   const dir = await tempDir(t);
-  const harness = makeBackend(dir, { readyTimeoutMs: 20 });
+  const harness = makeBackend(dir);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const started = start(harness);
   const fork = await harness.nextChild();
-  await assert.rejects(started, /did not report its address in time/);
+  t.mock.timers.tick(10 * 60_000);
+  assert.equal(await settled(started), false);
+  assert.equal(fork.child.kills, 0);
+  fork.child.emit("message", READY);
+  assert.equal((await started).server.origin, "http://127.0.0.1:51234");
+  t.mock.timers.reset();
+  await harness.backend.stop();
+});
+
+test("an aborted start stops the child it was waiting for", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir);
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  harness.backend.abortStart();
+  await assert.rejects(started, /cancelled/);
   assert.equal(fork.child.kills, 1);
   assert.equal(harness.backend.current(), null);
+  assert.equal(harness.backend.launchedSettings(), null);
+});
+
+test("a start aborted before its child exists forks none", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir);
+  const started = start(harness);
+  harness.backend.abortStart();
+  await assert.rejects(started, /cancelled/);
+  assert.equal(harness.forks.length, 0);
+  assert.equal(harness.backend.launchedSettings(), null);
+});
+
+test("an aborted start ends the status check it was waiting for", async (t) => {
+  const dir = await tempDir(t);
+  let probing!: () => void;
+  const probed = new Promise<void>((resolve) => { probing = resolve; });
+  const harness = makeBackend(dir, {
+    probeStatus: (_origin, signal) => new Promise((resolve) => {
+      signal.addEventListener("abort", () => resolve({ ok: false, reason: "unreachable" }), { once: true });
+      probing();
+    }),
+  });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  fork.child.emit("message", READY);
+  await probed;
+  harness.backend.abortStart();
+  await assert.rejects(started, /cancelled/);
+  assert.equal(fork.child.kills, 1);
+  assert.equal(await readRememberedPort(dir), null);
+});
+
+test("stopping during a start does not wait for the child to become ready", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir);
+  // No clock runs: a stop that waited for readiness would never return.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  await harness.backend.stop();
+  t.mock.timers.reset();
+  await assert.rejects(started, /cancelled/);
+  assert.equal(fork.child.kills, 1);
+  assert.equal(harness.backend.current(), null);
+});
+
+test("aborting touches no backend that is already running", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir);
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  fork.child.emit("message", READY);
+  await started;
+  harness.backend.abortStart();
+  assert.equal(fork.child.kills, 0);
+  assert.notEqual(harness.backend.current(), null);
+  await harness.backend.stop();
 });
 
 test("stop is idempotent and stops the child once", async (t) => {
