@@ -481,6 +481,12 @@ test("gallery answers an absent visible path like a hidden nested one", async (t
   assert.equal(hidden.status, missing.status);
   assert.deepEqual(await hidden.json(), await missing.json());
 
+  // A NUL byte reaches the filesystem call only for a visible path; it must not answer differently.
+  const hiddenNul = await api(harness.base, `/api/library/gallery?path=${encodeURIComponent("lib_00000001/Nested/Season 1/se\0cret.mkv")}`, { user: BOB });
+  const missingNul = await api(harness.base, `/api/library/gallery?path=${encodeURIComponent("lib_00000001/Missing/Season 1/se\0cret.mkv")}`, { user: BOB });
+  assert.equal(hiddenNul.status, missingNul.status);
+  assert.deepEqual(await hiddenNul.json(), await missingNul.json());
+
   const visible = await api(harness.base, `/api/library/gallery?path=${encodeURIComponent("lib_00000001/Public/Visible.mkv")}`, { user: BOB });
   assert.equal(visible.status, 200);
   assert.equal((await visible.json() as { images: unknown[] }).images.length, 1);

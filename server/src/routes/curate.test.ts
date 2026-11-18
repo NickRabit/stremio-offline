@@ -626,6 +626,12 @@ test("identity answers an absent visible path like a hidden nested one", async (
   const missing = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(missingKey)}`);
   assert.equal(hidden.status, missing.status);
   assert.deepEqual(await hidden.json(), await missing.json());
+
+  // A NUL byte reaches the filesystem call only for a visible path; it must not answer differently.
+  const hiddenNul = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(`${parent.id}/Nested/Season 1/se\0cret.mkv`)}`);
+  const missingNul = await api(harness.base, `/api/library/identity?path=${encodeURIComponent(`${parent.id}/Missing/Season 1/se\0cret.mkv`)}`);
+  assert.equal(hiddenNul.status, missingNul.status);
+  assert.deepEqual(await hiddenNul.json(), await missingNul.json());
 });
 
 test("identity follows the volume's case folding for a carve-out", async (t) => {

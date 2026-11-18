@@ -144,6 +144,9 @@ test("a single configured library keeps the unqualified wire format", async () =
     assert.equal((await resolveLibraryPath([only], "/Show/01.mkv"))?.key, `${only.id}/Show/01.mkv`);
     assert.equal(await resolveLibraryPath([only], "C:\\Films\\01.mkv"), undefined);
     assert.equal(await resolveLibraryPath([only], "\\\\nas\\films\\01.mkv"), undefined);
+    // No filesystem name holds a NUL byte; Node would throw on it instead of answering absent.
+    assert.equal(await resolveLibraryPath([only], "Show/0\u00001.mkv"), undefined);
+    assert.equal(await resolveLibraryPath([only], `${only.id}/Show/0\u00001.mkv`), undefined);
 
     const qualified = await resolveLibraryPath([only], `${only.id}/Show`);
     assert.equal(qualified?.absolute, path.join(root, "Show"));
