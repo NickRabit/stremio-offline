@@ -380,6 +380,9 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const relative = String(req.query.path ?? "").trim();
     const key = libraryKey(relative);
     if (!keyVisible(key, viewer)) throw new AppError("The item was not found.", "err.itemNotFound", 404);
+    const resolved = await resolveLibraryPath(store.libraries(), key);
+    // An absent path must answer like a hidden nested one: the difference confirms a guessed folder.
+    if (!resolved || !(await statUnlessMissing(resolved.absolute))) throw new AppError("The item was not found.", "err.itemNotFound", 404);
     const wire = wirePath(key);
     res.json({
       images: await Promise.all(galleryOf(key).map(async (entry, index) => {

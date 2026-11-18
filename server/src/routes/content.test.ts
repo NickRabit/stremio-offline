@@ -461,6 +461,31 @@ test("browse and folders answer a nested library's parent-spelled key like a mis
   assert.deepEqual((await ordinary.json() as { items: Array<{ path: string }> }).items.map((item) => item.path), ["lib_00000001/Public/Visible.mkv"]);
 });
 
+test("gallery answers an absent visible path like a hidden nested one", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Nested/Season 1/secret.mkv");
+  await put(root, "Public/Visible.mkv");
+  const libraries = [
+    library("lib_00000001", root, 0, [BOB]),
+    library("lib_00000002", path.join(root, "Nested"), 1),
+  ];
+  const harness = await mount(libraries, [], () => [], {
+    gallery: [{ kind: "still", shape: "wide" }],
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const hiddenKey = "lib_00000001/Nested/Season 1/secret.mkv";
+  const missingKey = "lib_00000001/Missing/Season 1/secret.mkv";
+  const hidden = await api(harness.base, `/api/library/gallery?path=${encodeURIComponent(hiddenKey)}`, { user: BOB });
+  const missing = await api(harness.base, `/api/library/gallery?path=${encodeURIComponent(missingKey)}`, { user: BOB });
+  assert.equal(hidden.status, missing.status);
+  assert.deepEqual(await hidden.json(), await missing.json());
+
+  const visible = await api(harness.base, `/api/library/gallery?path=${encodeURIComponent("lib_00000001/Public/Visible.mkv")}`, { user: BOB });
+  assert.equal(visible.status, 200);
+  assert.equal((await visible.json() as { images: unknown[] }).images.length, 1);
+});
+
 test("the parent-spelled carved-out key remains refused when the volume folds case", async (t) => {
   const root = await makeRoot();
   await put(root, "Nested/Season 1/secret.mkv");
@@ -927,6 +952,7 @@ test("GET /api/library/thumb answers 404 for a key whose artwork is missing", as
 test("stored gallery addresses carry a replacement-sensitive version and use safe browser caching", async (t) => {
   const root = await makeRoot();
   t.after(() => rm(root, { recursive: true, force: true }));
+  await put(root, "Films/Heat.mkv");
   const art = path.join(root, "gallery.jpg");
   await writeFile(art, "first");
   const replacedAt = new Date("2026-01-02T03:04:05.000Z");

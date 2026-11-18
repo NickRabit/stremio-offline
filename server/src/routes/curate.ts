@@ -2,6 +2,7 @@ import type express from "express";
 import path from "node:path";
 import { readdir, stat } from "node:fs/promises";
 import { AppError } from "../errors.js";
+import { statUnlessMissing } from "../folder-access.js";
 import { assertStillAdmin } from "../roles.js";
 import { normalizeLanguage } from "../language.js";
 import { libraryFor, libraryVisible, parseLibraryPath, posixBase, resolveLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
@@ -69,6 +70,8 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const relative = String(req.query.path ?? "").trim();
     const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
     if (!resolved || !libraryVisible(resolved.library, viewer) || nestedHidden(resolved.library, resolved.relative, viewer)) throw new AppError("Invalid path.", "err.invalidPath");
+    // An absent path must answer like a hidden nested one: the difference confirms a guessed folder.
+    if (!(await statUnlessMissing(resolved.absolute))) throw new AppError("Invalid path.", "err.invalidPath");
     // The unit the clicked row belongs to, and the title that unit is read as: a folder named
     // for a film keeps the folder title, a loose film in a collection keeps its own name.
     const unit = unitFor(resolved.key, await libraryUnits());
