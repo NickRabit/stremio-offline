@@ -54,7 +54,7 @@ export function reservationPause(reservations: PathReservations, operation: Libr
 /** Where a move or copy puts one item: its own name inside the destination folder, the path
  *  `transferLibraryItem` writes. Shared by the queue's busy list, its pause check and the direct
  *  move route, so all three name the same place. */
-export const destinationOf = (target: string, item: string): string => posixJoin(target, posixBase(item));
+export const destinationOf = (target: string, item: string): string => posixJoin(target, posixBase(item.replace(/\/+$/, "")));
 
 /** The qualified keys one queued item is about to touch: the item, and for a move or copy the
  *  name it takes in the destination. A path that does not resolve contributes nothing; the

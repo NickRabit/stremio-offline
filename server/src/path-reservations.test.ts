@@ -71,6 +71,7 @@ test("a queued item touches itself, and a move or copy the name it takes in the 
   const move = (target: string) => ({ op: "move", items: [], target }) as unknown as LibraryOp;
 
   assert.equal(destinationOf("Archive", "Films/Heat.mkv"), "Archive/Heat.mkv");
+  assert.equal(destinationOf("lib_00000001/Archive", "lib_00000001/Films/"), "lib_00000001/Archive/Films", "a trailing slash names the folder, not the target");
   assert.deepEqual(await queuedItemKeys(one, { op: "delete", items: [] } as unknown as LibraryOp, "Films/Heat.mkv"), ["lib_00000001/Films/Heat.mkv"], "a delete touches only its item");
   assert.deepEqual(await queuedItemKeys(one, move("Archive"), "Films/Heat.mkv"), ["lib_00000001/Films/Heat.mkv", "lib_00000001/Archive/Heat.mkv"], "an unqualified target in one library");
   assert.deepEqual(await queuedItemKeys(one, move("lib_00000001"), "lib_00000001/Films/Heat.mkv"), ["lib_00000001/Films/Heat.mkv", "lib_00000001/Heat.mkv"], "the library root as target");
