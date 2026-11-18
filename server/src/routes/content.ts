@@ -321,7 +321,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // the new one with it or the player stops offering them.
     const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };
     await rename(resolved.absolute, target.absolute);
-    await relocateLibraryPath(resolved.key, target.key);
+    // A failed binding write must not leave the subtitles under the old name.
     for (const name of sidecars.names) {
       const from = path.join(path.dirname(resolved.absolute), name);
       const to = path.join(path.dirname(target.absolute), renamedSidecar(name, sidecars.stem, wanted));
@@ -336,7 +336,13 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         log("WARN", "A subtitle could not follow its renamed video", { file: name, reason: error instanceof Error ? error.message : String(error) });
       }
     }
-    invalidateLibrary();
+    // The disk has changed either way: a failed binding write still has to drop the listing
+    // that names the old file.
+    try {
+      await relocateLibraryPath(resolved.key, target.key);
+    } finally {
+      invalidateLibrary();
+    }
     log("INFO", "Renamed in the library", { from: relative, to: nextRelative });
     res.json({ path: nextRelative });
   }));

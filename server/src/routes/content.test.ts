@@ -26,6 +26,7 @@ const instancePrefs: UserPrefs = {
 };
 
 interface Calls {
+  invalidated: number;
   browsed: string[];
   rootBrowses: number;
   deleted: string[];
@@ -69,6 +70,7 @@ interface LibraryState {
   galleryArtwork?: (key: string, index: number) => string | undefined;
   artStamp?: (file: string) => Promise<string>;
   caseInsensitive?: boolean;
+  relocateError?: Error;
 }
 
 const library = (id: string, root: string, order = 0, visibleTo?: string[]): LibraryRecord => ({
@@ -94,7 +96,7 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
  *  instance over fake collaborators that record what they were asked to do. The filesystem
  *  is real: the resolver, the browse walk and the name checks are module singletons. */
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], activeItems: () => string[] = () => [], state: LibraryState = {}): Promise<Harness> => {
-  const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
+  const calls: Calls = { invalidated: 0, browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
   const nestedRelative = (library: LibraryRecord, other: LibraryRecord): string | undefined => {
     const relative = path.relative(path.resolve(library.root), path.resolve(other.root));
     if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
@@ -138,7 +140,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     galleryOf: () => state.gallery ?? [],
     galleryArtwork: (key, index) => state.galleryArtwork?.(key, index),
     healthOf: (record) => ({ unreachable: false, readOnly: false, realRoot: record.root, caseInsensitive: state.caseInsensitive ?? false }),
-    invalidateLibrary: () => undefined,
+    invalidateLibrary: () => { calls.invalidated += 1; },
     libraryEntries: async (read?: { stale?: boolean }) => { calls.entriesAsked += 1; calls.entriesStale.push(read?.stale === true); return entries; },
     libraryKey: (value) => qualify(value),
     // The same question the server asks: is the key an active job's business, either way round.
@@ -173,7 +175,10 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     prefsOf: () => instancePrefs,
     progressOf: () => state.progress ?? {},
     relativeKeyIn: (libraryId, key) => (key.startsWith(`${libraryId}/`) ? key.slice(libraryId.length + 1) : undefined),
-    relocateLibraryPath: async (key, nextKey) => { calls.relocated.push({ key, nextKey }); },
+    relocateLibraryPath: async (key, nextKey) => {
+      calls.relocated.push({ key, nextKey });
+      if (state.relocateError) throw state.relocateError;
+    },
     scheduleFileArtwork: (key) => { calls.scheduledFile.push(key); },
     scheduleFolderArtwork: (key) => { calls.scheduledFolder.push(key); },
     sweepArtwork: async () => { calls.swept += 1; },
@@ -877,6 +882,27 @@ test("POST /api/library/rename takes the video's subtitles along under its new n
   assert.equal(await exists(path.join(root, "Films/Heat.srt")), false);
   assert.equal(await exists(path.join(root, "Films/Heat.cs.vtt")), false);
   assert.equal(await exists(path.join(root, "Films/Heat 2.srt")), true, "another title's subtitle stays");
+});
+
+test("POST /api/library/rename takes the subtitles along when the bindings cannot move", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Films/Heat.cs.srt");
+  await put(root, "Films/Heat.en.srt");
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    relocateError: new Error("metadata write failed"),
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "Thief" } });
+
+  assert.equal(response.status, 400);
+  assert.equal(await exists(path.join(root, "Films/Thief.mkv")), true);
+  assert.equal(await exists(path.join(root, "Films/Thief.cs.srt")), true);
+  assert.equal(await exists(path.join(root, "Films/Thief.en.srt")), true);
+  assert.equal(await exists(path.join(root, "Films/Heat.cs.srt")), false);
+  assert.equal(await exists(path.join(root, "Films/Heat.en.srt")), false);
+  assert.equal(harness.calls.invalidated, 1, "the listing that names the old file is dropped");
 });
 
 test("POST /api/library/rename refuses a target that already exists", async (t) => {

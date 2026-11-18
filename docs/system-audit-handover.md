@@ -119,11 +119,15 @@ loses or corrupts bytes, fix it in its own pull request.
 
 ### 5. Small findings
 
-- **SA-3.** The library rename route (`routes/content.ts`) renames the video, then its subtitles,
-  with no journal; `rerootItem` has a similar window for a loose video. Reproduce the stop between
-  the two before proposing a journal: a same-volume rename makes the window short.
-- **SA-4.** `DownloadQueue.retry` clears `source.tried`, so a later failover may choose a source
-  that already failed. Decide with the owner whether a manual retry should start over.
+- **SA-3 — done.** Reproduced a real case: a failed binding write after the video's rename left
+  the subtitles under the old name and the listing stale. The subtitles now move right after the
+  video and the listing is dropped either way. No journal: a stop between two same-volume renames
+  is a window of microseconds. `rerootItem` needs nothing: each top-level name, a loose subtitle
+  included, is its own journaled item, and the persisted job continues after a restart.
+- **SA-4 — decided (owner, 2026-11-18).** A manual retry starts over and clears `source.tried`:
+  it follows a change (connection back, account fixed, new rules), failures are often temporary,
+  and keeping them would refuse every source after an outage. Within one attempt a failed source is
+  still not tried twice. Pinned by a test in `downloads-failover.test.ts`.
 - **Residue of #838.** Identity and gallery now answer an absent path like a hidden nested key.
   Still open: a symlink planted inside the parent that points into the nested root is not detected.
   Planting one needs write access to the library folder; detecting it would mean resolving every

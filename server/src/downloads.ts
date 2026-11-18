@@ -2140,6 +2140,8 @@ export class DownloadQueue {
     job.notBefore = undefined;
     if (job.source) {
       if (selection && !job.stream && job.sourceAdmission === undefined) job.source.selection = selection;
+      // A manual retry starts a fresh attempt after an upstream change; within one attempt,
+      // failed sources stay marked and are not tried twice.
       job.source.tried = [];
       if (!job.stream) { job.target = ""; job.received = 0; job.total = undefined; }
     }
