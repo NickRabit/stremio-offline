@@ -287,7 +287,7 @@ const bumpGeneration = (generation: number): number => {
   return generation + 1;
 };
 
-const requestItemId = (value: unknown): string => {
+export const requestItemId = (value: unknown): string => {
   if (typeof value !== "string" || value.length === 0 || value.length > MEDIA_SERVER_LIMITS.upstreamId) throw invalid("The media-server item id is missing or too long.");
   if (/[/\\?#%\u0000-\u001f\u007f]/.test(value) || value === "." || value === "..") throw invalid("The media-server item id is not allowed.");
   return value;
