@@ -139,11 +139,13 @@ loses or corrupts bytes, fix it in its own pull request.
   Planting one needs write access to the library folder; detecting it would mean resolving every
   key's real path against the hidden roots, a filesystem call on each request.
 
-### 6. Remote media-server sync (BH-6.3, BH-6.4)
+### 6. Remote media-server sync (BH-6.3, BH-6.4) — examined
 
-Not yet examined: an interrupted sync, stale remote items after deletion upstream, and the
-playback/progress bridge. Do not test against a third-party server with quota limits; use a local
-test server.
+The library index is an in-memory snapshot replaced whole, and its failure, interruption and
+deletion cases are already tested; the playback bridge serialises, throttles on refusal and cleans
+up idle sessions (rows BH-6.3 and BH-6.4 in the progress file). One defect: a resume or favourite
+card of an item deleted upstream could not be removed (SA-14, fixed). Not done: a run against a live
+local Jellyfin. Never test against a third-party server with quota limits.
 
 ### Not possible without hardware
 
