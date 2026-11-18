@@ -2856,15 +2856,19 @@ test("a connection's pacing queue refuses a request beyond its 128-waiter bound"
     // reaches the pacer with its own live-session read because the reads are not shared here.
     const connection = await connect(harness);
     const controllers = Array.from({ length: 200 }, () => new AbortController());
-    let refused = 0;
+    // The first refusal is the event the test waits for: it happens only once the queue is full,
+    // and nothing leaves the queue while the start interval holds every waiter. Waiting on a
+    // polled condition instead gave up after a fixed number of timer turns, which a loaded
+    // machine did not always reach (seen once in the full server suite).
+    const firstRefusal = deferred();
     const outcomes = controllers.map((controller) =>
       harness.manager.discoverLibraries(harness.admin, connection.id, controller.signal).then(() => "ok", (error: unknown) => {
-        if (error instanceof MediaServerError && error.code === "busy") refused += 1;
+        if (error instanceof MediaServerError && error.code === "busy") firstRefusal.resolve();
         return error;
       }));
     let settled: PromiseSettledResult<unknown>[] = [];
     try {
-      await until(() => pacerQueueLength(harness, connection.id) >= 128 && refused > 0);
+      await firstRefusal.promise;
       assert.equal(pacerQueueLength(harness, connection.id), 128, "the pacing queue fills to its bound");
     } finally {
       for (const controller of controllers) controller.abort();
