@@ -64,7 +64,12 @@ const RENDERER_PAGE = fileURLToPath(new URL("../renderer/desktop.html", import.m
 const SHELL_PRELOAD = fileURLToPath(new URL("./shell-preload.js", import.meta.url));
 const LOCAL_PRELOAD = fileURLToPath(new URL("./local-preload.js", import.meta.url));
 /** The staged runtime keeps the server's `../../web` layout: `runtime/server/dist` and `runtime/web`. */
-const LOCAL_BACKEND_ENTRY = fileURLToPath(new URL("../runtime/server/dist/index.js", import.meta.url));
+const STAGED_BACKEND_ENTRY = fileURLToPath(new URL("../runtime/server/dist/index.js", import.meta.url));
+/** A development run may name another entry, so the desktop e2e can stand in a child that never
+ *  answers. A packaged app always runs its own server. */
+const LOCAL_BACKEND_ENTRY = !app.isPackaged && process.env.STREMIO_OFFLINE_LOCAL_BACKEND_ENTRY?.trim()
+  ? process.env.STREMIO_OFFLINE_LOCAL_BACKEND_ENTRY.trim()
+  : STAGED_BACKEND_ENTRY;
 /** CI starts the packaged app with this flag instead of a window: start, probe, stop, exit. */
 const SMOKE_LOCAL_BACKEND = "--smoke-local-backend";
 
