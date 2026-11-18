@@ -211,9 +211,44 @@ test("a child that lives on without ever answering ends at the outer limit", asy
   const started = start(harness);
   const fork = await harness.nextChild();
   t.mock.timers.tick(START_LIMIT_MS);
-  await assert.rejects(started, /did not start within 180 seconds/);
+  await assert.rejects(started, /said nothing for 180 seconds/);
   assert.equal(fork.child.kills, 1);
   assert.equal(harness.backend.current(), null);
+  t.mock.timers.reset();
+});
+
+test("a child that keeps reporting progress is waited for well past the silence limit", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  // A long first start after an upgrade: ten load steps, each just inside the limit.
+  for (let step = 0; step < 10; step += 1) {
+    t.mock.timers.tick(START_LIMIT_MS - 1);
+    fork.child.emit("message", { type: "progress" });
+  }
+  assert.equal(await settled(started), false);
+  assert.equal(fork.child.kills, 0);
+  fork.child.emit("message", READY);
+  assert.equal((await started).server.origin, "http://127.0.0.1:51234");
+  t.mock.timers.reset();
+  await harness.backend.stop();
+});
+
+test("the silence limit counts from the last progress report, not from the start", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  t.mock.timers.tick(START_LIMIT_MS - 1);
+  fork.child.emit("message", { type: "progress" });
+  t.mock.timers.tick(START_LIMIT_MS - 1);
+  assert.equal(await settled(started), false);
+  t.mock.timers.tick(1);
+  await assert.rejects(started, /said nothing for 180 seconds/);
+  assert.equal(fork.child.kills, 1);
   t.mock.timers.reset();
 });
 
@@ -238,7 +273,7 @@ test("a status check that never answers ends at the outer limit", async (t) => {
   fork.child.emit("message", READY);
   await silent.probed;
   t.mock.timers.tick(START_LIMIT_MS);
-  await assert.rejects(started, /did not start within/);
+  await assert.rejects(started, /said nothing for/);
   assert.equal(fork.child.kills, 1);
   t.mock.timers.reset();
 });

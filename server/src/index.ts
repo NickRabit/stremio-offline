@@ -52,7 +52,7 @@ import { ExternalIdStore } from "./external-ids.js";
 import { FollowService, FollowStore } from "./follows.js";
 import { createFollowQueueAdapter } from "./follow-queue.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
-import { resolveListenTarget, startServer, utilityParentPort } from "./server-start.js";
+import { reportProgress, resolveListenTarget, startServer, utilityParentPort } from "./server-start.js";
 import { loopbackHostCheck } from "./host-check.js";
 import { InFlight } from "./in-flight.js";
 import { apiRequestLimiter, authRequestLimiter, isMediaTransferRequest, pageRequestLimiter } from "./request-limits.js";
@@ -155,6 +155,7 @@ const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
 // Before anything reads the state: a v1 file gains its library and qualified keys.
 const libraryMigration = await migrateStateFile(DATA_DIR, DOWNLOAD_DIR);
+reportProgress();
 const app = express(); const store = new Store(DATA_DIR, DOWNLOAD_DIR);
 /** The match history, kept per library instead of inside `state.json`. */
 const metaStore = new LibraryMetaStore(DATA_DIR);
@@ -175,6 +176,7 @@ const clientLogs = new ClientLogStore(DATA_DIR);
  *  on a genuine first run. An override, an existing key, or an install that already holds
  *  credentials is left untouched; the vault then fails closed and the app still boots. */
 const mediaServerKeyFile = await prepareContainerMediaKey(DATA_DIR, process.env, (level, line) => log(level, line));
+reportProgress();
 process.env.MEDIA_SERVER_KEY_FILE = mediaServerKeyFile;
 const mediaServerVault = new MediaServerSecrets(path.join(DATA_DIR, "media-server-secrets"), mediaServerKeyFile);
 /** The disk and memory cache in front of remote posters and backdrops, and the memory copy of
@@ -198,6 +200,7 @@ const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; 
 let database: AppDatabase | undefined;
 try {
   database = await chooseStorageMode(DATA_DIR, (dataDir) => openAppDatabase({ dataDir }));
+  reportProgress();
   if (database) {
     store.attachDatabase(database);
     tmdbIds.attachDatabase(database);
@@ -217,15 +220,25 @@ try {
   throw error;
 }
 await store.load();
+reportProgress();
 await mediaServers.initialize();
+reportProgress();
 await externalIds.load();
+reportProgress();
 await metaStore.load();
+reportProgress();
 await tmdbIds.load(path.join(DATA_DIR, "tmdb-ids.json"));
+reportProgress();
 await attachTitleExtrasDisk(path.join(DATA_DIR, "title-extras"));
+reportProgress();
 await debridReady.load();
+reportProgress();
 await followStore.load(store.sourceProfiles());
+reportProgress();
 await seen.load();
+reportProgress();
 await fingerprints.load();
+reportProgress();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
 if (libraryMigration.metadata) log("INFO", "Library metadata moved out of the state", { rows: libraryMigration.metadata });
 if (libraryMigration.artworkSetting) log("INFO", "The global artwork location was retired", { libraries: libraryMigration.artworkSetting });
@@ -242,6 +255,7 @@ if (preAccountsAccount) {
 // and after accounts a session has to name one. It is a working install, so it gets a real
 // administrator from the credentials it already carries rather than the setup screen.
 const adopted = await store.adoptEnvCredentials(envCredentials());
+reportProgress();
 if (adopted) log("WARN", "An administrator was created from the environment credentials, they can now be removed", { username: adopted.username });
 // The operator's recovery. The store answers against the value it acted on last, so a
 // variable left in the container configuration does nothing on the next boot.
@@ -256,11 +270,15 @@ if (savedLevel) setLevel(savedLevel);
 log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
 configureSecureMode(() => store.settings().secureMode !== false);
 await initLogger(); startLogMaintenance();
+reportProgress();
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
 if (database) images.attachDatabase(database);
 await images.load();
+reportProgress();
 await artworks.load();
+reportProgress();
 await remoteImages.load();
+reportProgress();
 // Preheat is a background copy of what is already on disk: it never delays listen or /api/status.
 void images.preheat();
 void preheatFileSnaps(fileSnaps, artworks.hotFiles());
@@ -514,6 +532,7 @@ queue.setTravelResolver(createTravelProfileResolver(queueResolverDeps));
 queue.setProviderPriorityResolver(createProviderPriorityProfileResolver(queueResolverDeps));
 queue.setRulesResolver(createRulesProfileResolver(queueResolverDeps));
 await playback.load();
+reportProgress();
 
 /** With no account at all and no fallback credentials, nothing can be done. */
 const needsSetup = () => !store.users().length && !envCredentials();
@@ -2775,11 +2794,17 @@ queue.setDebrid({
   ),
 });
 await stats.load();
+reportProgress();
 await imageStats.load();
+reportProgress();
 await providerStats.load();
+reportProgress();
 await queue.load();
+reportProgress();
 await libraryScan.load();
+reportProgress();
 await followService.reconcile();
+reportProgress();
 if (autoScanAllowed) {
   libraryAutoScan.start();
 }
@@ -2788,6 +2813,7 @@ followService.start();
 // be deleted, though, so from now on a record of our own is kept. Only what predates that
 // record is filled in -- anything newer is already in it.
 await stats.seed(queue.history().map(statEvent));
+reportProgress();
 
 type LibraryMatchRequest = { path?: unknown; key?: unknown; id?: unknown; type?: unknown; scope?: unknown; season?: unknown; episode?: unknown; skipLookup?: unknown; skipMosaic?: unknown; replacesId?: unknown };
 
@@ -2969,6 +2995,7 @@ const libraryOps = new LibraryOps({
   }),
 });
 await libraryOps.load();
+reportProgress();
 
 registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId), progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps });
 

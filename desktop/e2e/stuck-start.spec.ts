@@ -28,7 +28,26 @@ test("the settings stay usable while a local start never answers", async () => {
   expect(after.localeChoice).toBe("cs");
   expect(after.screen.kind).toBe("connecting");
 
-  // A change to the local server is: the stuck start gives way, and the window says it failed.
+  // Nor is a server on the network: it is saved and removed again while the start carries on.
+  const saved = await settings.evaluate(() =>
+    window.stremioShell.saveProfile({ id: null, name: "Living room", origin: "http://192.168.1.20:8090" }));
+  expect(saved.ok).toBe(true);
+  expect((await stateOf(shell.page)).screen.kind).toBe("connecting");
+  const removed = await settings.evaluate((id) => window.stremioShell.deleteProfile(id), saved.ok ? saved.profile.id : "");
+  expect(removed.ok).toBe(true);
+  expect((await stateOf(shell.page)).screen.kind).toBe("connecting");
+
+  // Local settings that change nothing, or a folder that is refused, end no start either.
+  const unchanged = await settings.evaluate((current) => window.stremioShell.setLocalSettings(current), after.local.settings);
+  expect(unchanged.ok).toBe(true);
+  const refused = await settings.evaluate(
+    (current) => window.stremioShell.setLocalSettings({ ...current, downloadDir: "/a/folder/never/prepared" }),
+    after.local.settings,
+  );
+  expect(refused.ok).toBe(false);
+  expect((await stateOf(shell.page)).screen.kind).toBe("connecting");
+
+  // A real change to the local server is: the stuck start gives way, and the window says it failed.
   const stored = await settings.evaluate(
     (current) => window.stremioShell.setLocalSettings({ ...current, allowPrivateAddons: !current.allowPrivateAddons }),
     after.local.settings,

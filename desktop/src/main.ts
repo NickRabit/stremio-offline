@@ -35,6 +35,7 @@ import type { AppPrefs, FailureReason, MainScreen, ProfileResult, ProbeResult, S
 import { effectiveLocale, readShellPrefs, readShellPrefsSync, SHELL_LOCALES, writeShellPrefs, type ShellLocale } from "./shell-prefs.js";
 import { downloadFraction, nextToastId, safeFileName } from "./shell-text.js";
 import { SerialQueue } from "./serial-queue.js";
+import { StartGate } from "./start-gate.js";
 import { SleepGuard } from "./sleep-guard.js";
 import { MAX_TARGET_ID, LatestRequest, fallbackApplies, launchPlan, readStartupChoice, writeStartupChoice, STARTUP_FILE } from "./startup.js";
 import { fetchStatus, type ProbeFailure } from "./status.js";
@@ -147,31 +148,17 @@ const queue = new SerialQueue();
 const prefsQueue = new SerialQueue();
 /** The newest connect request wins; a stale result is dropped instead of applied. */
 const requests = new LatestRequest();
-/** A local start made for a request is in flight. It may take minutes on a cold machine, so a
- *  newer request ends it: otherwise a slow or stuck child would hold the queue the request waits in. */
-let requestedLocalStart = false;
-const abortRequestedStart = (): void => {
-  if (requestedLocalStart) localBackend?.abortStart();
-};
+/** Profiles have writers of their own: saving a server never waits for or ends a local start. */
+const profileQueue = new SerialQueue();
+/** A local start may take minutes on a cold machine and holds the queue; a newer request or a
+ *  settings change that alters what the start is for goes first. */
+const startGate = new StartGate();
 const nextRequest = (): number => {
-  abortRequestedStart();
+  startGate.abort();
   return requests.next();
 };
-/** What the settings window asks of the queue. It is asked while the main window may still wait
- *  for a local start, and it changes what that start is for, so the start gives way to it. */
-const runFromSettings = <T>(task: () => Promise<T>): Promise<T> => {
-  abortRequestedStart();
-  return queue.run(task);
-};
-/** The backend start a request asked for, which the next request may abort. */
-const startForRequest = async (backend: LocalBackend): Promise<LocalBackendConnection> => {
-  requestedLocalStart = true;
-  try {
-    return await backend.start();
-  } finally {
-    requestedLocalStart = false;
-  }
-};
+const runFromSettings = <T>(task: () => Promise<T>): Promise<T> => startGate.runFromSettings(queue, task);
+const startForRequest = (backend: LocalBackend): Promise<LocalBackendConnection> => startGate.start(backend);
 let repoll: NodeJS.Timeout | null = null;
 let repollNotified = false;
 let toastTimer: NodeJS.Timeout | null = null;
@@ -422,6 +409,11 @@ const refreshInitialized = () => {
 };
 
 /** The running backend was started with other settings than those stored now. */
+/** The first library's root is fixed once the instance exists, and only a folder that passed the
+ *  check may become it. */
+const folderRefused = (folder: string | null): boolean =>
+  folder !== localSettings.downloadDir && (localInitialized || (folder !== null && !preparedDirs.has(folder)));
+
 const localRestartNeeded = (): boolean => {
   if (localConnection === null) return false;
   const launched = localBackend?.launchedSettings() ?? null;
@@ -1322,26 +1314,30 @@ const resetLocal = async (
       }
     }
     // Sign-ins go only once the data has: a reset that stopped above leaves them as they were.
-    const leftovers = await forgetLocalState([
-      () => session.fromPartition(LOCAL_PARTITION).clearStorageData(),
-      ...[SETTINGS_FILE, STARTUP_FILE, PORT_FILE, OWNERSHIP_FILE].map((file) => () => removeIfPresent(path.join(userDataDir, file))),
-      ...(options.forgetServers ? [
-        () => writeProfiles(userDataDir, { profiles: [], selectedProfileId: null }),
-        ...profileStore.profiles.map((profile) => () => session.fromPartition(partitionForOrigin(profile.origin)).clearStorageData()),
-      ] : []),
-    ]);
+    // The profiles are forgotten and read back in the profile queue, so no save lands in between.
+    const leftovers = await profileQueue.run(async () => {
+      const forgotten = await forgetLocalState([
+        () => session.fromPartition(LOCAL_PARTITION).clearStorageData(),
+        ...[SETTINGS_FILE, STARTUP_FILE, PORT_FILE, OWNERSHIP_FILE].map((file) => () => removeIfPresent(path.join(userDataDir, file))),
+        ...(options.forgetServers ? [
+          () => writeProfiles(userDataDir, { profiles: [], selectedProfileId: null }),
+          ...profileStore.profiles.map((profile) => () => session.fromPartition(partitionForOrigin(profile.origin)).clearStorageData()),
+        ] : []),
+      ]);
+      try {
+        profileStore = await readProfiles(userDataDir);
+      } catch (error) {
+        profileStore = { profiles: [], selectedProfileId: null };
+        forgotten.push(error instanceof Error ? error.message : String(error));
+      }
+      return forgotten;
+    });
     localSettings = defaultLocalSettings();
     ownership = null;
     preparedDirs.clear();
     shellState.chosen = null;
     shellState.connection = null;
     connected = null;
-    try {
-      profileStore = await readProfiles(userDataDir);
-    } catch (error) {
-      profileStore = { profiles: [], selectedProfileId: null };
-      leftovers.push(error instanceof Error ? error.message : String(error));
-    }
     refreshInitialized();
     shellState.screen = { kind: "welcome" };
     pushState();
@@ -1383,7 +1379,7 @@ const persistProfiles = async (next: ProfileStore): Promise<boolean> => {
 };
 
 const saveProfile = (input: { id: string | null; name: unknown; origin: unknown }): Promise<ProfileResult> =>
-  runFromSettings(async (): Promise<ProfileResult> => {
+  profileQueue.run(async (): Promise<ProfileResult> => {
     const name = normalizeProfileName(input.name);
     if (name === null) return { ok: false, reason: "invalid-name" };
     const origin = normalizeProfileOrigin(input.origin);
@@ -1399,24 +1395,39 @@ const saveProfile = (input: { id: string | null; name: unknown; origin: unknown 
     return profile ? { ok: true, profile } : { ok: false, reason: "not-found" };
   });
 
+/** Whether the main window shows, waits for or stands in for this profile. */
+const profileInUse = (id: string): boolean => {
+  const isIt = (target: Target | null | undefined) => target?.kind === "profile" && target.id === id;
+  const screen = shellState.screen;
+  return isIt(shellState.chosen) || isIt(shellState.connection?.target) || ("target" in screen && isIt(screen.target));
+};
+
+/** Only a profile in use is any concern of the queue the main window waits in: removing the server
+ *  this Mac stands in for ends the stand-in, and its start with it. Any other goes on at once. */
 const deleteProfile = (id: string | null): Promise<{ ok: boolean }> =>
-  runFromSettings(async (): Promise<{ ok: boolean }> => {
-    if (id === null || !findProfile(profileStore, id)) return { ok: false };
-    // The profile the main window is showing must not vanish under it.
-    if (shellState.connection?.target.kind === "profile" && shellState.connection.target.id === id) return { ok: false };
-    if (!await persistProfiles(removeProfile(profileStore, id))) return { ok: false };
-    // Removing the server this Mac stands in for ends the stand-in: nothing is left to wait for.
-    if (shellState.chosen?.kind === "profile" && shellState.chosen.id === id) {
-      stopRepoll();
-      if (shellState.toast?.kind === "fallback" || shellState.toast?.kind === "server-back") hideToast();
-      const local: Target = { kind: "local" };
-      shellState.chosen = shellState.connection?.target.kind === "local" ? local : null;
-      if (shellState.connection) shellState.connection = { ...shellState.connection, fallbackFrom: null };
-      await writeStartupChoice(app.getPath("userData"), shellState.chosen).catch(() => {});
-    }
-    pushState();
-    return { ok: true };
-  });
+  id !== null && profileInUse(id)
+    ? runFromSettings(() => profileQueue.run(() => removeProfileNow(id)))
+    : profileQueue.run(() => removeProfileNow(id));
+
+const removeProfileNow = async (id: string | null): Promise<{ ok: boolean }> => {
+  if (id === null || !findProfile(profileStore, id)) return { ok: false };
+  // The profile the main window is showing, or is connecting to, must not vanish under it.
+  if (shellState.connection?.target.kind === "profile" && shellState.connection.target.id === id) return { ok: false };
+  const screen = shellState.screen;
+  if (screen.kind !== "error" && "target" in screen && screen.target.kind === "profile" && screen.target.id === id) return { ok: false };
+  if (!await persistProfiles(removeProfile(profileStore, id))) return { ok: false };
+  // Removing the server this Mac stands in for ends the stand-in: nothing is left to wait for.
+  if (shellState.chosen?.kind === "profile" && shellState.chosen.id === id) {
+    stopRepoll();
+    if (shellState.toast?.kind === "fallback" || shellState.toast?.kind === "server-back") hideToast();
+    const local: Target = { kind: "local" };
+    shellState.chosen = shellState.connection?.target.kind === "local" ? local : null;
+    if (shellState.connection) shellState.connection = { ...shellState.connection, fallbackFrom: null };
+    await writeStartupChoice(app.getPath("userData"), shellState.chosen).catch(() => {});
+  }
+  pushState();
+  return { ok: true };
+};
 
 /** Exactly the two switches, both booleans; anything else is a page that has drifted. */
 const parseAppPrefs = (value: unknown): AppPrefs | null => {
@@ -1552,14 +1563,15 @@ const registerHandlers = () => {
     assertShellSender(event);
     const settings = parseLocalSettings(input);
     if (!settings) return { ok: false, restartNeeded: false };
+    // Nothing to store, or a folder that is refused below anyway: no start is ended for it.
+    if (sameLocalSettings(settings, localSettings) && settings.downloadDir === localSettings.downloadDir) return { ok: true, restartNeeded: localRestartNeeded() };
+    if (folderRefused(settings.downloadDir)) return { ok: false, restartNeeded: false };
     return runFromSettings(async (): Promise<{ ok: boolean; restartNeeded: boolean }> => {
       // Checked here, in the queue: a first start may still be creating the instance while the page asks.
       refreshInitialized();
       const folder = settings.downloadDir;
       const changing = folder !== localSettings.downloadDir;
-      // The first library's root is fixed once the instance exists, and only a folder that passed
-      // the check may become it.
-      if (changing && (localInitialized || (folder !== null && !preparedDirs.has(folder)))) return { ok: false, restartNeeded: false };
+      if (folderRefused(folder)) return { ok: false, restartNeeded: false };
       try {
         await writeLocalSettings(app.getPath("userData"), settings);
         if (changing) {

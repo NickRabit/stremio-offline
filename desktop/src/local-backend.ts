@@ -22,9 +22,9 @@ export const INSTANCE_DIRECTORY = "instance";
 export const DOWNLOADS_DIRECTORY = "downloads";
 export const PORT_FILE = "local-backend.json";
 export const STOP_TIMEOUT_MS = 5_000;
-/** The outer bound of a start, the ready report and the status check together. It is far beyond
- *  any slow cold start, and is there only so a child that lives on without ever answering still
- *  ends on the failure screen. A slow start is waited for; a newer request aborts it sooner. */
+/** How long a starting child may stay silent. The server reports progress between its load steps,
+ *  and each report starts this again, so a slow first start after an upgrade is waited for however
+ *  long it takes. Only a child that lives on without saying anything ends on the failure screen. */
 export const START_LIMIT_MS = 3 * 60_000;
 /** Where the tools a desktop install needs are installed on macOS. A Finder launch inherits
  *  `/usr/bin:/bin:/usr/sbin:/sbin`, so neither is on the child's `PATH` by itself. */
@@ -154,6 +154,10 @@ export function readReadyMessage(message: unknown): BoundAddress | null {
   if (typeof address !== "string" || address.length === 0 || address.length > 128) return null;
   return { port: record.port, address };
 }
+
+/** The server is still loading: a starting child that reports this is not silent. */
+export const isProgressMessage = (message: unknown): boolean =>
+  typeof message === "object" && message !== null && (message as Record<string, unknown>).type === "progress";
 
 export function readErrorMessage(message: unknown): { code: string | null } | null {
   if (typeof message !== "object" || message === null) return null;
@@ -359,7 +363,7 @@ const CANCELLED = "The local server start was cancelled.";
 
 class StartLimitError extends Error {
   constructor(limitMs: number) {
-    super(`The local server did not start within ${Math.round(limitMs / 1000)} seconds.`);
+    super(`The local server said nothing for ${Math.round(limitMs / 1000)} seconds while starting.`);
   }
 }
 
@@ -405,6 +409,8 @@ export class LocalBackend {
   private connection: LocalBackendConnection | null = null;
   private startPromise: Promise<LocalBackendConnection> | null = null;
   private startAbort: AbortController | null = null;
+  /** Starts the silence limit of the start in flight again. */
+  private startHeard: (() => void) | null = null;
   private launchedWith: LocalSettings | null = null;
   private stopPromise: Promise<void> | null = null;
 
@@ -426,11 +432,17 @@ export class LocalBackend {
     const abort = new AbortController();
     this.startAbort = abort;
     const limitMs = this.options.startLimitMs ?? START_LIMIT_MS;
-    const limit = setTimeout(() => abort.abort(new StartLimitError(limitMs)), limitMs);
+    const giveUp = () => abort.abort(new StartLimitError(limitMs));
+    let limit = setTimeout(giveUp, limitMs);
+    this.startHeard = () => {
+      clearTimeout(limit);
+      limit = setTimeout(giveUp, limitMs);
+    };
     this.startPromise = this.ensureStarted(abort.signal).finally(() => {
       clearTimeout(limit);
       this.startPromise = null;
       this.startAbort = null;
+      this.startHeard = null;
     });
     return this.startPromise;
   }
@@ -543,6 +555,20 @@ export class LocalBackend {
     const tracked = track(child);
     this.tracked = tracked;
     child.on("exit", (code) => this.onExit(tracked, code));
+    // A fresh child gets the whole limit, and every progress report starts it again.
+    const heard = this.startHeard ?? (() => {});
+    heard();
+    const onProgress = (message: unknown) => { if (isProgressMessage(message)) heard(); };
+    child.on("message", onProgress);
+    try {
+      return await this.connect(child, port, settings, signal, heard);
+    } finally {
+      child.removeListener("message", onProgress);
+    }
+  }
+
+  private async connect(child: LocalBackendChild, port: number, settings: LocalSettings, signal: AbortSignal, heard: () => void): Promise<LocalBackendConnection> {
+    const { options } = this;
     const expectedAddress = settings.publish ? PUBLISHED_HOST : LOCAL_HOST;
     let ready: BoundAddress;
     try {
@@ -553,6 +579,7 @@ export class LocalBackend {
       if (settings.publish && error instanceof PortBusyError) throw new LocalPortBusyError(port);
       throw error;
     }
+    heard();
     const server = parseServerOrigin(`http://${LOCAL_HOST}:${ready.port}`);
     // The check ends with the start, and also when the child exits under it.
     const checking = new AbortController();
