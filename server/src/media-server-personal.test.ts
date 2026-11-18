@@ -471,6 +471,96 @@ test("clearing a remote position is written at once, without final", async () =>
   });
 });
 
+const failItemDetail = (harness: Harness, itemId: string): void => {
+  const real = harness.manager.itemDetail.bind(harness.manager);
+  harness.manager.itemDetail = (async (...args) => {
+    if (args[2] === itemId) throw new MediaServerError("not-found", "The item is gone upstream.");
+    return real(...args);
+  }) as typeof harness.manager.itemDetail;
+};
+
+test("a resume row of an item gone upstream can still be cleared", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true });
+    assert.equal((await harness.personal.cards(harness.admin, { filter: "resume" })).items.length, 1, "the card is drawn before");
+    failItemDetail(harness, "m1");
+
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 0, duration: 0, final: true });
+
+    assert.equal(recordOf(harness, "m1")?.position, 0);
+    assert.equal(recordOf(harness, "m1")?.duration, 0);
+    assert.deepEqual((await harness.personal.cards(harness.admin, { filter: "resume" })).items, []);
+  });
+});
+
+test("a favourite row of an item gone upstream can still be unstarred", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "tm", { favorite: true });
+    assert.deepEqual(Object.keys(harness.store.userData(ADA).watchlist!), ["movie:tt0078748"]);
+    assert.equal((await harness.personal.cards(harness.admin, { filter: "favorites" })).items.length, 1, "the card is drawn before");
+    failItemDetail(harness, "tm");
+
+    await harness.personal.patch(harness.admin, harness.libraryId, "tm", { favorite: false });
+
+    assert.equal(recordOf(harness, "tm")?.favorite, false);
+    assert.deepEqual(Object.keys(harness.store.userData(ADA).watchlist!), []);
+    assert.deepEqual((await harness.personal.cards(harness.admin, { filter: "favorites" })).items, []);
+  });
+});
+
+test("a gone-upstream clear that sets anything else still fails and writes nothing", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, favorite: true, final: true });
+    const before = structuredClone(recordOf(harness, "m1"));
+    failItemDetail(harness, "m1");
+
+    for (const body of [{ watched: true }, { position: 30 }, { position: 0, duration: 0, watched: true }]) {
+      await assert.rejects(harness.personal.patch(harness.admin, harness.libraryId, "m1", body), { code: "not-found" }, JSON.stringify(body));
+      assert.deepEqual(recordOf(harness, "m1"), before, JSON.stringify(body));
+    }
+  });
+});
+
+test("a gone-upstream clear without a stored row still fails and writes nothing", async () => {
+  await withHarness(async (harness) => {
+    failItemDetail(harness, "m1");
+
+    await assert.rejects(harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 0, duration: 0 }), { code: "not-found" });
+    assert.deepEqual(harness.store.userData(ADA).remoteMedia ?? {}, {});
+  });
+});
+
+test("a grant withdrawn while the item is read still refuses a gone-upstream clear", async () => {
+  await withHarness(async (harness) => {
+    await harness.manager.patchLibrary(harness.admin, harness.libraryId, { allowedUsers: [BOB] });
+    await harness.personal.patch(harness.bob, harness.libraryId, "m1", { position: 120, duration: 3600 });
+    const before = structuredClone(recordOf(harness, "m1", BOB));
+    // The grant goes while the provider is being asked, so the first library check passed and only
+    // the check after the read can refuse.
+    harness.manager.itemDetail = (async () => {
+      await harness.manager.patchLibrary(harness.admin, harness.libraryId, { allowedUsers: [] });
+      throw new MediaServerError("not-found", "The item is gone upstream.");
+    }) as typeof harness.manager.itemDetail;
+
+    await assert.rejects(harness.personal.patch(harness.bob, harness.libraryId, "m1", { position: 0, duration: 0 }), { code: "not-found" });
+    assert.deepEqual(recordOf(harness, "m1", BOB), before);
+  });
+});
+
+test("a gone-upstream clear through one library never clears a row stored through another", async () => {
+  await withHarness(async (harness) => {
+    const other = await addLibraryWithRow(harness, "remote-2", "m2", 40);
+    const before = structuredClone(recordOf(harness, "m2"));
+    assert.equal(before?.remoteLibraryId, "remote-2");
+    // Asked through the first library, the item is not in it: the same not-found an absent item gives.
+    failItemDetail(harness, "m2");
+
+    await assert.rejects(harness.personal.patch(harness.admin, harness.libraryId, "m2", { position: 0, duration: 0, final: true }), { code: "not-found" });
+    assert.deepEqual(recordOf(harness, "m2"), before);
+    assert.notEqual(other.id, harness.libraryId);
+  });
+});
+
 test("two concurrent watched toggles never confirm a change the disk refused", async () => {
   await withHarness(async (harness) => {
     await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 120, duration: 3600, final: true });

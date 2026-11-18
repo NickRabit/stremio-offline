@@ -228,11 +228,13 @@ largest), `routes/media-servers.ts`.
 - [x] **BH-6.2 Swallowed errors.** The silent catches in
       `media-server-security.ts` and `media-server-manager.ts` from BH-0.4.
       Progress: verified. What is left silent is cleanup that must not mask the error already being thrown (body and reader cancels, transport and agent closes), the stored token read for a best-effort remote logout on removal, and the secret-cleanup queue, whose failures stay queued for the next drain or are logged. Malformed URLs and cursors rethrow as typed errors.
-- [ ] **BH-6.3 Index and sync.** Incremental vs full sync, server
+- [x] **BH-6.3 Index and sync.** Incremental vs full sync, server
       unreachable mid-sync, deleted items, quota and retention edge cases.
-- [ ] **BH-6.4 Playback and progress bridging.** `media-server-playing.ts`,
+      Progress: verified by reading and the existing index suite; the one gap, unremovable cards of items deleted upstream, is SA-14 in `system-audit-progress.md`. Quota and retention were not re-examined here.
+- [x] **BH-6.4 Playback and progress bridging.** `media-server-playing.ts`,
       `-personal.ts`: expected progress cadence and duplicate suppression,
       session cleanup, and behaviour when the remote server rejects an update.
+      Progress: verified by reading and the existing suites (row BH-6.4 in `system-audit-progress.md`); not run against a live server.
 
 ## Unit 7 — Server: auth, roles and the HTTP boundary
 

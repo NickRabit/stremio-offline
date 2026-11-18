@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { remoteLibraryVisibleTo } from "./media-server-access.js";
 import type { RemoteHomeCard } from "./home.js";
-import type { MediaServerAuthority, MediaServerManager } from "./media-server-manager.js";
+import { requestItemId, type MediaServerAuthority, type MediaServerDetail, type MediaServerManager } from "./media-server-manager.js";
 import type { ProviderItem, ProviderItemType } from "./media-server-provider.js";
 import { remoteArtworkPath, remoteProgressKey } from "./media-server-types.js";
 import {
@@ -62,12 +62,18 @@ interface RemoteMediaRecord {
   updatedAt: string;
 }
 
-interface Resolved {
+interface Captured {
+  library: RemoteLibraryRecord;
+  connection: MediaConnectionRecord;
+}
+
+interface ResolvedBase extends Captured {
   userId: string;
   actorSecret: string;
   user: UserRecord;
-  library: RemoteLibraryRecord;
-  connection: MediaConnectionRecord;
+}
+
+interface Resolved extends ResolvedBase {
   item: ProviderItem;
   key: string;
   playable: boolean;
@@ -256,6 +262,15 @@ const readPatch = (body: unknown): Patch => {
   return patch;
 };
 
+const clearsOnly = (patch: Patch): boolean => {
+  const positionClear = patch.position === 0 && patch.duration === 0;
+  const favoriteClear = patch.favorite === false;
+  if (!positionClear && !favoriteClear) return false;
+  if (patch.favorite !== undefined && patch.favorite !== false) return false;
+  if (patch.watched !== undefined || patch.mediaSourceId !== undefined) return false;
+  return (patch.position === undefined || positionClear) && (patch.duration === undefined || positionClear);
+};
+
 const sameRemoteRecord = (left: RemoteMediaRecord, right: RemoteMediaRecord): boolean => {
   if (Math.abs(left.position - right.position) >= 1) return false;
   const { position: _leftPosition, updatedAt: _leftUpdatedAt, ...leftRest } = left;
@@ -381,6 +396,30 @@ const stateOf = (record: RemoteMediaRecord, watchlist: Record<string, unknown> =
   ...(record.updatedAt ? { updatedAt: record.updatedAt } : {}),
 });
 
+const sameCapture = (left: Captured, right: Captured): boolean =>
+  right.connection.id === left.connection.id && right.connection.generation === left.connection.generation
+  && right.connection.secretRef === left.connection.secretRef && right.connection.provider === left.connection.provider
+  && right.connection.serverId === left.connection.serverId && right.connection.accountId === left.connection.accountId
+  && right.library.id === left.library.id && right.library.remoteId === left.library.remoteId;
+
+const unstarTitle = (
+  map: Record<string, unknown>,
+  data: UserData,
+  title: RemoteTitle,
+  pathTitle?: (path: string) => string | undefined,
+): { watchlist: Record<string, unknown>; favorites: string[] } => {
+  const watchlist = { ...watchlistOf(data) };
+  const titleKey = titleKeyOf(title);
+  delete watchlist[titleKey];
+  for (const [key, value] of Object.entries(map)) {
+    const other = validRecord(value);
+    if (other?.title && other.favorite && titleKeyOf(other.title) === titleKey) map[key] = { ...other, favorite: false };
+  }
+  let favorites: string[] = Array.isArray(data.favorites) ? [...data.favorites] : [];
+  if (pathTitle) favorites = favorites.filter((path) => pathTitle(path) !== titleKey);
+  return { watchlist, favorites };
+};
+
 const seriesOf = (item: ProviderItem): RemoteSeries | undefined => {
   if (item.type === "episode") {
     const series: RemoteSeries = {};
@@ -418,7 +457,7 @@ export class MediaServerPersonal {
     return user;
   }
 
-  private capture(handle: string, user: UserRecord): { library: RemoteLibraryRecord; connection: MediaConnectionRecord } {
+  private capture(handle: string, user: UserRecord): Captured {
     const library = this.store.remoteLibraries().find((candidate) => candidate.id === handle);
     if (!library) throw notFound("That remote library does not exist.");
     const connection = this.store.mediaConnections().find((candidate) => candidate.id === library.connectionId);
@@ -427,19 +466,25 @@ export class MediaServerPersonal {
     return { library, connection };
   }
 
-  private async resolve(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<Resolved> {
+  private beginResolve(authority: MediaServerAuthority, libraryId: unknown): ResolvedBase {
     const user = this.currentActor(authority);
     if (typeof libraryId !== "string" || !REMOTE_LIBRARY_ID.test(libraryId)) throw notFound("That remote library does not exist.");
     const before = this.capture(libraryId, user);
-    const detail = await this.manager.itemDetail(authority, libraryId, itemId, signal);
+    return { userId: user.id, actorSecret: user.secret, user, ...before };
+  }
+
+  private finishResolve(authority: MediaServerAuthority, before: ResolvedBase, detail: MediaServerDetail): Resolved {
     authority.assertCurrent();
-    const fresh = this.capture(libraryId, user);
-    if (fresh.connection.id !== before.connection.id || fresh.connection.generation !== before.connection.generation
-      || fresh.connection.secretRef !== before.connection.secretRef || fresh.connection.provider !== before.connection.provider
-      || fresh.connection.serverId !== before.connection.serverId || fresh.connection.accountId !== before.connection.accountId
-      || fresh.library.id !== before.library.id || fresh.library.remoteId !== before.library.remoteId) throw notFound("That remote library does not exist.");
+    const fresh = this.capture(before.library.id, before.user);
+    if (!sameCapture(before, fresh)) throw notFound("That remote library does not exist.");
     const key = remoteProgressKey({ provider: fresh.connection.provider, serverId: fresh.connection.serverId, accountId: fresh.connection.accountId, itemId: detail.item.id });
-    return { userId: user.id, actorSecret: user.secret, user, library: fresh.library, connection: fresh.connection, item: detail.item, key, playable: detail.item.type === "movie" || detail.item.type === "episode" };
+    return { ...before, library: fresh.library, connection: fresh.connection, item: detail.item, key, playable: detail.item.type === "movie" || detail.item.type === "episode" };
+  }
+
+  private async resolve(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<Resolved> {
+    const before = this.beginResolve(authority, libraryId);
+    const detail = await this.manager.itemDetail(authority, libraryId, itemId, signal);
+    return this.finishResolve(authority, before, detail);
   }
 
   async read(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<RemoteItemState> {
@@ -466,9 +511,86 @@ export class MediaServerPersonal {
     return { title, name: parent!.item.name };
   }
 
+  /** A card of an item gone upstream must stay removable. Only the caller's own stored row is
+   *  touched, after the same library and write checks as a live item. */
+  private async patchGoneUpstream(
+    authority: MediaServerAuthority,
+    before: ResolvedBase,
+    itemId: unknown,
+    patch: Patch,
+    gone: MediaServerError,
+  ): Promise<RemoteItemState> {
+    let requested: string;
+    try {
+      requested = requestItemId(itemId);
+    } catch {
+      throw gone;
+    }
+    const key = remoteProgressKey({
+      provider: before.connection.provider,
+      serverId: before.connection.serverId,
+      accountId: before.connection.accountId,
+      itemId: requested,
+    });
+    // The key names the item on the connection, not the library: a row stored through another
+    // library of the same server must not be cleared through this one.
+    const ownRow = (record: RemoteMediaRecord | undefined) => record !== undefined && record.remoteLibraryId === before.library.remoteId;
+    if (!ownRow(projectableRecord(key, this.mapOf(before.userId)[key]))) throw gone;
+    const pathTitle = patch.favorite === false ? await this.titleOfPath?.() : undefined;
+    authority.assertCurrent();
+    let fresh: Captured;
+    try {
+      fresh = this.capture(before.library.id, before.user);
+    } catch (error) {
+      if (error instanceof MediaServerError && error.code === "not-found") throw gone;
+      throw error;
+    }
+    if (!sameCapture(before, fresh)) throw gone;
+    const proof: ResolvedBase = { ...before, library: fresh.library, connection: fresh.connection };
+    let state!: RemoteItemState;
+    try {
+      await this.store.update((next) => {
+        this.assertWrite(next, authority, proof);
+        const map = this.mapOf(before.userId, next);
+        const stored = projectableRecord(key, map[key]);
+        if (!stored || !ownRow(stored) || stored.remoteLibraryId !== fresh.library.remoteId) throw gone;
+        const cleared = { ...stored, updatedAt: new Date().toISOString() };
+        if (patch.position === 0 && patch.duration === 0) {
+          cleared.position = 0;
+          cleared.duration = 0;
+        }
+        if (patch.favorite === false) cleared.favorite = false;
+        map[key] = cleared;
+        const data = next.userData?.[before.userId] ?? emptyUserData();
+        let watchlist = { ...watchlistOf(data) };
+        let favorites: string[] = Array.isArray(data.favorites) ? [...data.favorites] : [];
+        if (patch.favorite === false && cleared.title) {
+          ({ watchlist, favorites } = unstarTitle(map, data, cleared.title, pathTitle));
+        }
+        next.userData = { ...(next.userData ?? {}), [before.userId]: { ...data, remoteMedia: map, watchlist, favorites } };
+        state = stateOf(validRecord(map[key]) ?? cleared, watchlist);
+      });
+    } catch (error) {
+      if (error instanceof MediaServerError && error.code === "not-found") throw gone;
+      throw error;
+    }
+    authority.assertCurrent();
+    return state;
+  }
+
   async patch(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, body: unknown, signal?: AbortSignal): Promise<RemoteItemState> {
     const patch = readPatch(body);
-    const resolved = await this.resolve(authority, libraryId, itemId, signal);
+    const before = this.beginResolve(authority, libraryId);
+    let detail: MediaServerDetail;
+    try {
+      detail = await this.manager.itemDetail(authority, libraryId, itemId, signal);
+    } catch (error) {
+      if (clearsOnly(patch) && error instanceof MediaServerError && error.code === "not-found") {
+        return this.patchGoneUpstream(authority, before, itemId, patch, error);
+      }
+      throw error;
+    }
+    const resolved = this.finishResolve(authority, before, detail);
     if (resolved.item.type === "folder") throw invalid("That folder has no personal playback state.");
     if (!resolved.playable && (patch.position !== undefined || patch.duration !== undefined || patch.mediaSourceId !== undefined)) {
       throw invalid("That item has no playable media.");
@@ -511,7 +633,7 @@ export class MediaServerPersonal {
       const data = next.userData?.[resolved.userId] ?? emptyUserData();
       // One star per title: starring a remote item stars its title, and clearing the star clears
       // every remote record of that title with it.
-      const watchlist = { ...watchlistOf(data) };
+      let watchlist = { ...watchlistOf(data) };
       let favorites: string[] = Array.isArray(data.favorites) ? [...data.favorites] : [];
       if (patch.favorite !== undefined && built.title) {
         const titleKey = titleKeyOf(built.title);
@@ -523,12 +645,7 @@ export class MediaServerPersonal {
             };
           }
         } else {
-          delete watchlist[titleKey];
-          for (const [key, value] of Object.entries(map)) {
-            const other = validRecord(value);
-            if (other?.title && other.favorite && titleKeyOf(other.title) === titleKey) map[key] = { ...other, favorite: false };
-          }
-          if (pathTitle) favorites = favorites.filter((path) => pathTitle(path) !== titleKey);
+          ({ watchlist, favorites } = unstarTitle(map, data, built.title, pathTitle));
         }
       }
       next.userData = { ...(next.userData ?? {}), [resolved.userId]: { ...data, remoteMedia: map, watchlist, favorites } };
@@ -829,7 +946,7 @@ export class MediaServerPersonal {
     return { ...(data?.remoteMedia ?? {}) };
   }
 
-  private assertWrite(state: WriteState, authority: MediaServerAuthority, resolved: Resolved): void {
+  private assertWrite(state: WriteState, authority: MediaServerAuthority, resolved: ResolvedBase): void {
     authority.assertCurrent();
     const user = (state.users ?? []).find((candidate) => candidate.id === resolved.userId);
     if (!user || user.secret !== resolved.actorSecret || user.disabled || user.mustChangePassword) throw new ResourceError(401, "AUTH_REQUIRED");
