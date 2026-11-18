@@ -129,6 +129,20 @@ results before deciding which items still need moving. Keep both versions if
 their origin is uncertain. A zero-byte file or an empty folder can belong to
 another application. Items completed earlier in the batch stay where they landed.
 
+### Renaming an item
+
+Before renaming a file or folder, the server saves both names, the filesystem
+identity and a list of its subtitles and cached pictures under
+`DATA_DIR/library-rename-intents/`. Startup replays unfinished renames before
+scanning the library. Each account keeps its favourites and resume positions.
+A subtitle whose new name is already occupied stays under its original name.
+
+A conflicting picture or a replaced video leaves the rename pending. The server
+log identifies the operation and both paths. Keep the journal and both versions
+while inspecting the files. If a share was unavailable, restore it and restart
+the server to retry recovery. A NAS that cannot supply a stable identity may
+refuse a rename before any files move.
+
 ## Files moved outside the app
 
 The next maintenance walk, normally within six hours, recognizes a file renamed or
