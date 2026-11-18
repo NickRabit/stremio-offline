@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.testing.TestDescriptor
+import org.gradle.api.tasks.testing.TestListener
 import org.gradle.api.tasks.testing.TestResult
 
 plugins {
@@ -80,12 +81,17 @@ android {
         // kotlinx-coroutines-test fails the next runTest with UncaughtExceptionsBeforeTest when an
         // earlier test leaks a coroutine failure, and carries that failure only as a suppressed
         // exception, which Gradle's console output drops. Printing it names the leak in the CI log.
-        it.afterTest(
-          KotlinClosure2<TestDescriptor, TestResult, Unit>({ test, result ->
-            for (cause in result.exceptions.flatMap { failure -> failure.suppressed.asList() }) {
-              System.err.println("${test.className} > ${test.name}, suppressed: ${cause.stackTraceToString()}")
+        it.addTestListener(
+          object : TestListener {
+            override fun beforeSuite(suite: TestDescriptor) = Unit
+            override fun afterSuite(suite: TestDescriptor, result: TestResult) = Unit
+            override fun beforeTest(test: TestDescriptor) = Unit
+            override fun afterTest(test: TestDescriptor, result: TestResult) {
+              for (cause in result.exceptions.flatMap { failure -> failure.suppressed.asList() }) {
+                System.err.println("${test.className} > ${test.name}, suppressed: ${cause.stackTraceToString()}")
+              }
             }
-          }),
+          },
         )
       }
     }
