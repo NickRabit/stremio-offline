@@ -45,11 +45,16 @@ jobs:
       # The runner's Ubuntu mirror sometimes serves the 63 MB of packages at 60 kB/s, which once
       # took 16 minutes and pushed the job over its timeout. The .deb files are cached per runner
       # image instead, so a hit installs them without touching the network.
+      # ImageOS and ImageVersion are runner environment variables, not part of the env context.
+      - id: runner-image
+        run: |
+          echo "os=$ImageOS" >> "$GITHUB_OUTPUT"
+          echo "version=$ImageVersion" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
         with:
           path: ~/ffmpeg-debs
-          key: ffmpeg-debs-${{ env.ImageOS }}-${{ env.ImageVersion }}
-          restore-keys: ffmpeg-debs-${{ env.ImageOS }}-
+          key: ffmpeg-debs-${{ steps.runner-image.outputs.os }}-${{ steps.runner-image.outputs.version }}
+          restore-keys: ffmpeg-debs-${{ steps.runner-image.outputs.os }}-
       - run: scripts/ci/install-ffmpeg-debs.sh ~/ffmpeg-debs
       - run: npm run build -w @stremio-offline/source-selection
       - run: npx tsc -p desktop
