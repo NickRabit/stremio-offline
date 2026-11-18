@@ -1,2 +1,2 @@
-FROM mcr.microsoft.com/playwright:v1.65.0-noble
+FROM mcr.microsoft.com/playwright:v1.65.1-noble
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
