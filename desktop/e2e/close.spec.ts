@@ -56,7 +56,7 @@ test("quitting while something runs asks first, and cancelling keeps the app", a
   const cookie = await signIn(origin);
   const transfer = await holdDeviceTransfer(origin, cookie, box.downloads);
   try {
-    await until(() => stateOf(shell.page), (state) => state.local.busy, "the app to report work in progress", 120_000);
+    await until(() => stateOf(shell.page), (state) => state.local.busy, "the app to report work in progress");
 
     await appQuit(shell.app);
     const asked = await waitForBoxes(box, 1);
@@ -103,7 +103,7 @@ test("on Linux closing the window asks while something runs", async () => {
   const cookie = await signIn(origin);
   const transfer = await holdDeviceTransfer(origin, cookie, box.downloads);
   try {
-    await until(() => stateOf(shell.page), (state) => state.local.busy, "the app to report work in progress", 120_000);
+    await until(() => stateOf(shell.page), (state) => state.local.busy, "the app to report work in progress");
 
     await closeWindows(shell.app);
     const asked = await waitForBoxes(box, 1);

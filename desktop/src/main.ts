@@ -140,6 +140,22 @@ const deviceDownloads = new Map<object, number>();
 const queue = new SerialQueue();
 /** The newest connect request wins; a stale result is dropped instead of applied. */
 const requests = new LatestRequest();
+/** A local start made for a request is in flight. Such a start has no deadline, so a newer
+ *  request ends it: otherwise a slow or stuck child would hold the queue the request waits in. */
+let requestedLocalStart = false;
+const nextRequest = (): number => {
+  if (requestedLocalStart) localBackend?.abortStart();
+  return requests.next();
+};
+/** The backend start a request asked for, which the next request may abort. */
+const startForRequest = async (backend: LocalBackend): Promise<LocalBackendConnection> => {
+  requestedLocalStart = true;
+  try {
+    return await backend.start();
+  } finally {
+    requestedLocalStart = false;
+  }
+};
 let repoll: NodeJS.Timeout | null = null;
 let repollNotified = false;
 let toastTimer: NodeJS.Timeout | null = null;
@@ -775,7 +791,7 @@ const startLocal = async (ticket: number, target: Target, fallback: { profileNam
   if (!backend) { failWith("local-startup"); return; }
   let connection: LocalBackendConnection;
   try {
-    connection = await backend.start();
+    connection = await startForRequest(backend);
   } catch (error) {
     console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
     refreshInitialized();
@@ -939,7 +955,7 @@ const connectTarget = (target: Target, options: { launch: boolean }): Promise<vo
   // With the window closed a connection has nowhere to show, and the local backend would be
   // stopped for it: the window comes back first, on this target.
   if (!shell) return showMainWindow(target);
-  const ticket = requests.next();
+  const ticket = nextRequest();
   return queue.run(async () => {
     stopRepoll();
     signIn = null;
@@ -981,7 +997,7 @@ const restartLocal = async (): Promise<{ ok: boolean }> => {
     // A stand-in stays a stand-in: the profile it replaces and its re-poll carry on.
     const standIn = connection.fallbackFrom !== null && shellState.chosen?.kind === "profile"
       ? findProfile(profileStore, shellState.chosen.id) : null;
-    const ticket = requests.next();
+    const ticket = nextRequest();
     const ok = await queue.run(async () => {
       setScreen({ kind: "connecting", target: { kind: "local" }, name: "", origin: null });
       await dropCurrentPage();
@@ -1017,13 +1033,13 @@ const restartLocal = async (): Promise<{ ok: boolean }> => {
 const startLocalHidden = (): Promise<void> => {
   // In the queue with a ticket of its own, so a reset or a connect asked from the tray meanwhile
   // is not undone by a start that finishes after it.
-  const ticket = requests.next();
+  const ticket = nextRequest();
   return queue.run(async () => {
     const backend = localBackend;
     if (!backend || !requests.isCurrent(ticket)) return;
     let connection: LocalBackendConnection;
     try {
-      connection = await backend.start();
+      connection = await startForRequest(backend);
     } catch (error) {
       console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
       return;
@@ -1199,7 +1215,7 @@ const showMainWindow = (asked?: Target): Promise<void> => {
     createShell(saved);
     if (standIn && chosen) {
       // Still standing in: the profile stays the remembered choice and its re-poll carries on.
-      const ticket = requests.next();
+      const ticket = nextRequest();
       await queue.run(() => startLocal(ticket, chosen, { profileName: standIn.name, origin: standIn.origin }, false));
       return;
     }
@@ -1266,7 +1282,7 @@ const resetLocal = async (
   const result = await queue.run(async (): Promise<{ ok: boolean; touched: boolean; downloadsKept: boolean; trashFailure: string | null; leftovers: string[] }> => {
     if (effectiveDownloadDir() !== shownDir) return { ok: false, touched: false, downloadsKept: true, trashFailure: null, leftovers: [] };
     // A fresh ticket, so a connect still probing cannot land on the reset state afterwards.
-    requests.next();
+    nextRequest();
     stopRepoll();
     hideToast();
     await dropCurrentPage();
@@ -1493,7 +1509,7 @@ const registerHandlers = () => {
     const previous = setupReturn;
     setupReturn = null;
     if (previous) { await connectTarget(previous, { launch: false }); return; }
-    requests.next();
+    nextRequest();
     await queue.run(async () => {
       if (shellState.screen.kind === "setup") setScreen({ kind: "welcome" });
     });
@@ -1676,7 +1692,7 @@ const createLocalBackend = (): LocalBackend => new LocalBackend({
   entry: LOCAL_BACKEND_ENTRY,
   userDataDir: app.getPath("userData"),
   fork: (entry, options) => utilityProcess.fork(entry, [], options),
-  probeStatus: fetchStatus,
+  probeStatus: (origin, signal) => fetchStatus(origin, fetch, signal),
   tools: bundledMediaTools(app.isPackaged ? process.resourcesPath : null, undefined, PLATFORM),
   systemTools: systemFfmpeg,
   onActivity: (activity) => {

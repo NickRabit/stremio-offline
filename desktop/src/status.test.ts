@@ -86,3 +86,22 @@ test("a server that never answers is unreachable within the given timeout", asyn
   assert.ok(elapsed >= 150, `the probe gave up after ${elapsed} ms, before the timeout`);
   assert.ok(elapsed < 5000, `the probe gave up after ${elapsed} ms, past the default timeout`);
 });
+
+test("the local probe has no deadline and ends when its signal is aborted", async () => {
+  const sockets = new Set<Socket>();
+  const abort = new AbortController();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    abort.abort();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  let result: unknown;
+  try {
+    result = await fetchStatus(`http://127.0.0.1:${port}`, fetch, abort.signal);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  assert.deepEqual(result, { ok: false, reason: "unreachable" });
+});

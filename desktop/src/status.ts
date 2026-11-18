@@ -39,13 +39,14 @@ export function accessChallenge(response: Response): boolean {
   return false;
 }
 
-export async function fetchStatus(input: string, fetchImpl: StatusFetch = fetch, timeoutMs = 5000): Promise<ProbeResult> {
+/** A remote server gets a deadline in milliseconds; the shell's own local server gets a signal. */
+export async function fetchStatus(input: string, fetchImpl: StatusFetch = fetch, timeout: number | AbortSignal = 5000): Promise<ProbeResult> {
   const server = parseServerOrigin(input);
   if (!server) return { ok: false, reason: "invalid" };
   if (!httpAllowed(server)) return { ok: false, reason: "insecure-transport" };
   let response: Response;
   try {
-    response = await fetchImpl(server.origin + "/api/status", { redirect: "manual", signal: AbortSignal.timeout(timeoutMs) });
+    response = await fetchImpl(server.origin + "/api/status", { redirect: "manual", signal: typeof timeout === "number" ? AbortSignal.timeout(timeout) : timeout });
   } catch {
     return { ok: false, reason: "unreachable" };
   }
