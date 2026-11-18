@@ -41,6 +41,13 @@ jobs:
             tasks: assembleDebug assembleRelease
           - name: tests-lint
             tasks: testDebugUnitTest lintDebug
+          - {name: probe-1, tasks: testDebugUnitTest lintDebug}
+          - {name: probe-2, tasks: testDebugUnitTest lintDebug}
+          - {name: probe-3, tasks: testDebugUnitTest lintDebug}
+          - {name: probe-4, tasks: testDebugUnitTest lintDebug}
+          - {name: probe-5, tasks: testDebugUnitTest lintDebug}
+          - {name: probe-6, tasks: testDebugUnitTest lintDebug}
+          - {name: probe-7, tasks: testDebugUnitTest lintDebug}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -59,10 +66,21 @@ jobs:
           node-version: "26"
       - run: node scripts/android-strings.mjs --check
       # assembleRelease also runs R8, so the minified build is proven on every change.
-      - run: ./gradlew $GRADLE_TASKS --no-daemon
+      - run: ./gradlew -I leakprobe.gradle $GRADLE_TASKS --no-daemon
         env:
           GRADLE_TASKS: ${{ matrix.tasks }}
+          LEAK_PROBE_LOG: ${{ runner.temp }}/leakprobe.log
+          LEAK_PROBE_ORDER: ${{ runner.temp }}/order.log
         working-directory: android-tv
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: probe-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/leakprobe.log
+            ${{ runner.temp }}/order.log
+            android-tv/app/build/test-results/testDebugUnitTest/
+          if-no-files-found: ignore
       # One of the four signing variables on its own must not break the build: the signing config
       # is created only when all four are set, so this still produces the unsigned APK.
       - if: matrix.name == 'packages'

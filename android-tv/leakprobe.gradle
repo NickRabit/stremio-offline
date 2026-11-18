@@ -1,0 +1,8 @@
+allprojects {
+  tasks.withType(Test).configureEach {
+    def f = new File(System.getenv("LEAK_PROBE_ORDER") ?: "/tmp/order.log")
+    beforeTest { d -> f << "${System.currentTimeMillis()} START ${d.className} > ${d.name}\n" }
+    afterTest { d, r -> f << "${System.currentTimeMillis()} END ${r.resultType} ${d.className} > ${d.name}\n" }
+    testLogging { exceptionFormat "full"; showStackTraces true; showCauses true }
+  }
+}
