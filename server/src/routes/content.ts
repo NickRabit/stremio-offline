@@ -263,11 +263,31 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     });
   }));
 
+  /** Holds `keys` for one piece of library work done inside a request, then asks the queue with
+   *  them held, so neither another request nor a job queued meanwhile can work on the same item.
+   *  Refuses as busy when either already does. */
+  const holdingPaths = async <T>(keys: string[], work: () => Promise<T>): Promise<T> => {
+    const busy = () => new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
+    const release = pathReservations.reserve(keys);
+    if (!release) throw busy();
+    try {
+      if (await libraryPathBusy(keys, { ignoreReservations: true })) throw busy();
+      return await work();
+    } finally {
+      release();
+    }
+  };
+
+  /** The qualified keys of the paths that resolve. One that does not is left to the work itself,
+   *  which refuses it with its own error. */
+  const heldKeys = async (values: string[]): Promise<string[]> =>
+    (await Promise.all(values.map((value) => resolveLibraryPath(store.libraries(), value)))).flatMap((resolved) => resolved ? [resolved.key] : []);
+
   app.delete("/api/library/item", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
     assertStillAdmin(store.users(), currentUser(req));
     if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    await deleteLibraryItem(relative);
+    await holdingPaths(await heldKeys([relative]), () => deleteLibraryItem(relative));
     res.status(204).end();
   }));
 
@@ -392,8 +412,12 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
     // `copy` is honoured rather than ignored: the field was silently dropped before, so a client
     // that asked for a copy got a move -- the original deleted -- with a success in the response.
-    const moved = await transferLibraryItem(relative, String(req.body.folder ?? "").trim(),
-      req.body.copy === true, undefined, req.body.confirmTypeMismatch === true);
+    const folder = String(req.body.folder ?? "").trim();
+    // The source, and the name it will take in the destination: a rename of either while the
+    // transfer runs -- which can take minutes across volumes -- would act under the copy.
+    const held = await heldKeys([relative, ...(folder ? [posixJoin(folder, posixBase(relative))] : [])]);
+    const moved = await holdingPaths(held, () => transferLibraryItem(relative, folder,
+      req.body.copy === true, undefined, req.body.confirmTypeMismatch === true));
     res.json({ path: moved });
   }));
 

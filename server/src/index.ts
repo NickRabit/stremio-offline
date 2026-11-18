@@ -149,7 +149,7 @@ import { SearchError } from "./search-contracts.js";
 import { STREAM_SORTS } from "./stream-sort.js";
 import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 import { createMetaCache } from "./meta-cache.js";
-import { PathReservations } from "./path-reservations.js";
+import { PathReservations, reservationPause } from "./path-reservations.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -2923,7 +2923,8 @@ const libraryOps = new LibraryOps({
     // a disk that is away, and a file a session or a download is using right now.
     if (operation.op === "reroot") {
       // A rename in flight inside this library holds its names; the whole tree is about to move.
-      if (pathReservations.keys().some((key) => parseLibraryPath(key)?.libraryId === operation.libraryId)) return "queue";
+      const held = reservationPause(pathReservations, operation, []);
+      if (held) return held;
       await refreshLibraryHealth();
       if (libraryHealth.get(operation.libraryId)?.unreachable) return "library";
       const source = path.join(operation.from, item);
@@ -2937,9 +2938,11 @@ const libraryOps = new LibraryOps({
     }
     const parsed = parseLibraryPath(item);
     const resolved = await resolveLibraryPath(store.libraries(), item);
-    // A job queued while a rename of the same item was in flight waits until the rename has
-    // moved the bindings too: its check could not see a reservation taken after it.
-    if (resolved && pathReservations.overlaps([resolved.key])) return "queue";
+    // A job queued while a request held the same item -- or the folder a move is going to --
+    // waits until that request is done: its check could not see a reservation taken after it.
+    const destination = operation.op === "move" || operation.op === "copy" ? await resolveLibraryPath(store.libraries(), operation.target) : undefined;
+    const held = reservationPause(pathReservations, operation, [...(resolved ? [resolved.key] : []), ...(destination ? [destination.key] : [])]);
+    if (held) return held;
     const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : resolved?.library;
     if (library) {
       await refreshLibraryHealth();

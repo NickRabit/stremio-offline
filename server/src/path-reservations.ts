@@ -1,4 +1,6 @@
+import { parseLibraryPath } from "./libraries.js";
 import { isPathWithin } from "./library.js";
+import type { LibraryOp } from "./library-ops.js";
 
 /** Library keys a request is changing on disk right now without going through the operations
  *  queue -- the rename route. The queue's own items are guarded by `libraryPathBusy`; this is
@@ -36,4 +38,15 @@ export class PathReservations {
   keys(): string[] {
     return [...this.held].flatMap((entry) => entry.keys);
   }
+}
+
+/** What the operations queue's pause check answers for one item while requests hold names:
+ *  `"queue"` (wait and look again) when a held name overlaps the item or the place it is going,
+ *  and for a re-root when anything inside its library is held -- the whole tree is about to move.
+ *  `keys` are the item's qualified key and, for a move or copy, its destination's. */
+export function reservationPause(reservations: PathReservations, operation: LibraryOp, keys: string[]): "queue" | undefined {
+  if (operation.op === "reroot") {
+    return reservations.keys().some((key) => parseLibraryPath(key)?.libraryId === operation.libraryId) ? "queue" : undefined;
+  }
+  return reservations.overlaps(keys) ? "queue" : undefined;
 }
