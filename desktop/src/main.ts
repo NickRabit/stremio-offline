@@ -35,6 +35,7 @@ import type { AppPrefs, FailureReason, MainScreen, ProfileResult, ProbeResult, S
 import { effectiveLocale, readShellPrefs, readShellPrefsSync, SHELL_LOCALES, writeShellPrefs, type ShellLocale } from "./shell-prefs.js";
 import { downloadFraction, nextToastId, safeFileName } from "./shell-text.js";
 import { SerialQueue } from "./serial-queue.js";
+import { StartGate } from "./start-gate.js";
 import { SleepGuard } from "./sleep-guard.js";
 import { MAX_TARGET_ID, LatestRequest, fallbackApplies, launchPlan, readStartupChoice, writeStartupChoice, STARTUP_FILE } from "./startup.js";
 import { fetchStatus, type ProbeFailure } from "./status.js";
@@ -64,7 +65,12 @@ const RENDERER_PAGE = fileURLToPath(new URL("../renderer/desktop.html", import.m
 const SHELL_PRELOAD = fileURLToPath(new URL("./shell-preload.js", import.meta.url));
 const LOCAL_PRELOAD = fileURLToPath(new URL("./local-preload.js", import.meta.url));
 /** The staged runtime keeps the server's `../../web` layout: `runtime/server/dist` and `runtime/web`. */
-const LOCAL_BACKEND_ENTRY = fileURLToPath(new URL("../runtime/server/dist/index.js", import.meta.url));
+const STAGED_BACKEND_ENTRY = fileURLToPath(new URL("../runtime/server/dist/index.js", import.meta.url));
+/** A development run may name another entry, so the desktop e2e can stand in a child that never
+ *  answers. A packaged app always runs its own server. */
+const LOCAL_BACKEND_ENTRY = !app.isPackaged && process.env.STREMIO_OFFLINE_LOCAL_BACKEND_ENTRY?.trim()
+  ? process.env.STREMIO_OFFLINE_LOCAL_BACKEND_ENTRY.trim()
+  : STAGED_BACKEND_ENTRY;
 /** CI starts the packaged app with this flag instead of a window: start, probe, stop, exit. */
 const SMOKE_LOCAL_BACKEND = "--smoke-local-backend";
 
@@ -138,24 +144,21 @@ let localInitialized = false;
 /** Electron shows the newest of these while a download runs; the shell counts them for `busy`. */
 const deviceDownloads = new Map<object, number>();
 const queue = new SerialQueue();
+/** `shell-prefs.json` has writers of its own: a language or a preference never waits for a start. */
+const prefsQueue = new SerialQueue();
 /** The newest connect request wins; a stale result is dropped instead of applied. */
 const requests = new LatestRequest();
-/** A local start made for a request is in flight. Such a start has no deadline, so a newer
- *  request ends it: otherwise a slow or stuck child would hold the queue the request waits in. */
-let requestedLocalStart = false;
+/** Profiles have writers of their own: saving a server never waits for or ends a local start. */
+const profileQueue = new SerialQueue();
+/** A local start may take minutes on a cold machine and holds the queue; a newer request or a
+ *  settings change that alters what the start is for goes first. */
+const startGate = new StartGate();
 const nextRequest = (): number => {
-  if (requestedLocalStart) localBackend?.abortStart();
+  startGate.abort();
   return requests.next();
 };
-/** The backend start a request asked for, which the next request may abort. */
-const startForRequest = async (backend: LocalBackend): Promise<LocalBackendConnection> => {
-  requestedLocalStart = true;
-  try {
-    return await backend.start();
-  } finally {
-    requestedLocalStart = false;
-  }
-};
+const runFromSettings = <T>(task: () => Promise<T>): Promise<T> => startGate.runFromSettings(queue, task);
+const startForRequest = (backend: LocalBackend): Promise<LocalBackendConnection> => startGate.start(backend);
 let repoll: NodeJS.Timeout | null = null;
 let repollNotified = false;
 let toastTimer: NodeJS.Timeout | null = null;
@@ -406,6 +409,11 @@ const refreshInitialized = () => {
 };
 
 /** The running backend was started with other settings than those stored now. */
+/** The first library's root is fixed once the instance exists, and only a folder that passed the
+ *  check may become it. */
+const folderRefused = (folder: string | null): boolean =>
+  folder !== localSettings.downloadDir && (localInitialized || (folder !== null && !preparedDirs.has(folder)));
+
 const localRestartNeeded = (): boolean => {
   if (localConnection === null) return false;
   const launched = localBackend?.launchedSettings() ?? null;
@@ -1014,7 +1022,7 @@ const restartLocal = async (): Promise<{ ok: boolean }> => {
   return queue.run(async () => {
     await closeLocalBackend();
     try {
-      localConnection = await backend.start();
+      localConnection = await startForRequest(backend);
     } catch (error) {
       console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
       pushState();
@@ -1087,7 +1095,7 @@ const showTrayNotice = (): void => {
   trayNoticeShown = true;
   const strings = catalogue(shellState.locale, PLATFORM);
   tray.displayBalloon({ iconType: "info", title: strings["tray.stillRunningTitle"], content: strings["tray.stillRunningBody"] });
-  void queue.run(async () => {
+  void prefsQueue.run(async () => {
     await writeShellPrefs(app.getPath("userData"),
       { locale: shellState.localeChoice, checkUpdates: shellState.app.prefs.checkUpdates, trayNoticeShown: true });
   }).catch(() => {});
@@ -1279,7 +1287,7 @@ const resetLocal = async (
   });
   if (answer.response !== 0) return { ok: false, cancelled: true, downloadsKept: true };
   const previous = shellState.connection?.target ?? null;
-  const result = await queue.run(async (): Promise<{ ok: boolean; touched: boolean; downloadsKept: boolean; trashFailure: string | null; leftovers: string[] }> => {
+  const result = await runFromSettings(async (): Promise<{ ok: boolean; touched: boolean; downloadsKept: boolean; trashFailure: string | null; leftovers: string[] }> => {
     if (effectiveDownloadDir() !== shownDir) return { ok: false, touched: false, downloadsKept: true, trashFailure: null, leftovers: [] };
     // A fresh ticket, so a connect still probing cannot land on the reset state afterwards.
     nextRequest();
@@ -1306,26 +1314,30 @@ const resetLocal = async (
       }
     }
     // Sign-ins go only once the data has: a reset that stopped above leaves them as they were.
-    const leftovers = await forgetLocalState([
-      () => session.fromPartition(LOCAL_PARTITION).clearStorageData(),
-      ...[SETTINGS_FILE, STARTUP_FILE, PORT_FILE, OWNERSHIP_FILE].map((file) => () => removeIfPresent(path.join(userDataDir, file))),
-      ...(options.forgetServers ? [
-        () => writeProfiles(userDataDir, { profiles: [], selectedProfileId: null }),
-        ...profileStore.profiles.map((profile) => () => session.fromPartition(partitionForOrigin(profile.origin)).clearStorageData()),
-      ] : []),
-    ]);
+    // The profiles are forgotten and read back in the profile queue, so no save lands in between.
+    const leftovers = await profileQueue.run(async () => {
+      const forgotten = await forgetLocalState([
+        () => session.fromPartition(LOCAL_PARTITION).clearStorageData(),
+        ...[SETTINGS_FILE, STARTUP_FILE, PORT_FILE, OWNERSHIP_FILE].map((file) => () => removeIfPresent(path.join(userDataDir, file))),
+        ...(options.forgetServers ? [
+          () => writeProfiles(userDataDir, { profiles: [], selectedProfileId: null }),
+          ...profileStore.profiles.map((profile) => () => session.fromPartition(partitionForOrigin(profile.origin)).clearStorageData()),
+        ] : []),
+      ]);
+      try {
+        profileStore = await readProfiles(userDataDir);
+      } catch (error) {
+        profileStore = { profiles: [], selectedProfileId: null };
+        forgotten.push(error instanceof Error ? error.message : String(error));
+      }
+      return forgotten;
+    });
     localSettings = defaultLocalSettings();
     ownership = null;
     preparedDirs.clear();
     shellState.chosen = null;
     shellState.connection = null;
     connected = null;
-    try {
-      profileStore = await readProfiles(userDataDir);
-    } catch (error) {
-      profileStore = { profiles: [], selectedProfileId: null };
-      leftovers.push(error instanceof Error ? error.message : String(error));
-    }
     refreshInitialized();
     shellState.screen = { kind: "welcome" };
     pushState();
@@ -1367,7 +1379,7 @@ const persistProfiles = async (next: ProfileStore): Promise<boolean> => {
 };
 
 const saveProfile = (input: { id: string | null; name: unknown; origin: unknown }): Promise<ProfileResult> =>
-  queue.run(async (): Promise<ProfileResult> => {
+  profileQueue.run(async (): Promise<ProfileResult> => {
     const name = normalizeProfileName(input.name);
     if (name === null) return { ok: false, reason: "invalid-name" };
     const origin = normalizeProfileOrigin(input.origin);
@@ -1383,24 +1395,39 @@ const saveProfile = (input: { id: string | null; name: unknown; origin: unknown 
     return profile ? { ok: true, profile } : { ok: false, reason: "not-found" };
   });
 
+/** Whether the main window shows, waits for or stands in for this profile. */
+const profileInUse = (id: string): boolean => {
+  const isIt = (target: Target | null | undefined) => target?.kind === "profile" && target.id === id;
+  const screen = shellState.screen;
+  return isIt(shellState.chosen) || isIt(shellState.connection?.target) || ("target" in screen && isIt(screen.target));
+};
+
+/** Only a profile in use is any concern of the queue the main window waits in: removing the server
+ *  this Mac stands in for ends the stand-in, and its start with it. Any other goes on at once. */
 const deleteProfile = (id: string | null): Promise<{ ok: boolean }> =>
-  queue.run(async (): Promise<{ ok: boolean }> => {
-    if (id === null || !findProfile(profileStore, id)) return { ok: false };
-    // The profile the main window is showing must not vanish under it.
-    if (shellState.connection?.target.kind === "profile" && shellState.connection.target.id === id) return { ok: false };
-    if (!await persistProfiles(removeProfile(profileStore, id))) return { ok: false };
-    // Removing the server this Mac stands in for ends the stand-in: nothing is left to wait for.
-    if (shellState.chosen?.kind === "profile" && shellState.chosen.id === id) {
-      stopRepoll();
-      if (shellState.toast?.kind === "fallback" || shellState.toast?.kind === "server-back") hideToast();
-      const local: Target = { kind: "local" };
-      shellState.chosen = shellState.connection?.target.kind === "local" ? local : null;
-      if (shellState.connection) shellState.connection = { ...shellState.connection, fallbackFrom: null };
-      await writeStartupChoice(app.getPath("userData"), shellState.chosen).catch(() => {});
-    }
-    pushState();
-    return { ok: true };
-  });
+  id !== null && profileInUse(id)
+    ? runFromSettings(() => profileQueue.run(() => removeProfileNow(id)))
+    : profileQueue.run(() => removeProfileNow(id));
+
+const removeProfileNow = async (id: string | null): Promise<{ ok: boolean }> => {
+  if (id === null || !findProfile(profileStore, id)) return { ok: false };
+  // The profile the main window is showing, or is connecting to, must not vanish under it.
+  if (shellState.connection?.target.kind === "profile" && shellState.connection.target.id === id) return { ok: false };
+  const screen = shellState.screen;
+  if (screen.kind !== "error" && "target" in screen && screen.target.kind === "profile" && screen.target.id === id) return { ok: false };
+  if (!await persistProfiles(removeProfile(profileStore, id))) return { ok: false };
+  // Removing the server this Mac stands in for ends the stand-in: nothing is left to wait for.
+  if (shellState.chosen?.kind === "profile" && shellState.chosen.id === id) {
+    stopRepoll();
+    if (shellState.toast?.kind === "fallback" || shellState.toast?.kind === "server-back") hideToast();
+    const local: Target = { kind: "local" };
+    shellState.chosen = shellState.connection?.target.kind === "local" ? local : null;
+    if (shellState.connection) shellState.connection = { ...shellState.connection, fallbackFrom: null };
+    await writeStartupChoice(app.getPath("userData"), shellState.chosen).catch(() => {});
+  }
+  pushState();
+  return { ok: true };
+};
 
 /** Exactly the two switches, both booleans; anything else is a page that has drifted. */
 const parseAppPrefs = (value: unknown): AppPrefs | null => {
@@ -1479,7 +1506,7 @@ const applyAppPrefs = async (prefs: AppPrefs): Promise<{ ok: boolean }> => {
   }
   await refreshLoginItem();
   shellState.app = { ...shellState.app, prefs: { ...shellState.app.prefs, checkUpdates: prefs.checkUpdates } };
-  await queue.run(async () => {
+  await prefsQueue.run(async () => {
     await writeShellPrefs(app.getPath("userData"),
       { locale: shellState.localeChoice, checkUpdates: prefs.checkUpdates, trayNoticeShown });
   });
@@ -1536,14 +1563,15 @@ const registerHandlers = () => {
     assertShellSender(event);
     const settings = parseLocalSettings(input);
     if (!settings) return { ok: false, restartNeeded: false };
-    return queue.run(async (): Promise<{ ok: boolean; restartNeeded: boolean }> => {
+    // Nothing to store, or a folder that is refused below anyway: no start is ended for it.
+    if (sameLocalSettings(settings, localSettings) && settings.downloadDir === localSettings.downloadDir) return { ok: true, restartNeeded: localRestartNeeded() };
+    if (folderRefused(settings.downloadDir)) return { ok: false, restartNeeded: false };
+    return runFromSettings(async (): Promise<{ ok: boolean; restartNeeded: boolean }> => {
       // Checked here, in the queue: a first start may still be creating the instance while the page asks.
       refreshInitialized();
       const folder = settings.downloadDir;
       const changing = folder !== localSettings.downloadDir;
-      // The first library's root is fixed once the instance exists, and only a folder that passed
-      // the check may become it.
-      if (changing && (localInitialized || (folder !== null && !preparedDirs.has(folder)))) return { ok: false, restartNeeded: false };
+      if (folderRefused(folder)) return { ok: false, restartNeeded: false };
       try {
         await writeLocalSettings(app.getPath("userData"), settings);
         if (changing) {
@@ -1570,7 +1598,7 @@ const registerHandlers = () => {
     assertShellSender(event);
     if (input !== null && !SHELL_LOCALES.includes(input as ShellLocale)) throw new Error("shell: invalid locale");
     const choice = input as ShellLocale | null;
-    await queue.run(async () => {
+    await prefsQueue.run(async () => {
       await writeShellPrefs(app.getPath("userData"),
         { locale: choice, checkUpdates: shellState.app.prefs.checkUpdates, trayNoticeShown });
     });

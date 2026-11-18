@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import express from "express";
-import { resolveListenTarget, startServer, utilityParentPort, type UtilityParentPort } from "./server-start.js";
+import { reportProgress, resolveListenTarget, startServer, utilityParentPort, type UtilityParentPort } from "./server-start.js";
 
 const close = (server: ReturnType<typeof createServer>) => new Promise<void>((resolve) => server.close(() => resolve()));
 
@@ -22,6 +22,15 @@ test("host defaults to every interface and port to 8080", () => {
 
 test("a plain node process has no utility parent", () => {
   assert.equal(utilityParentPort(), null);
+});
+
+test("a load step tells the desktop shell the start goes on, and outside it says nothing", () => {
+  const { messages, parentPort } = collector();
+  reportProgress(parentPort);
+  reportProgress(parentPort);
+  assert.deepEqual(messages, [{ type: "progress" }, { type: "progress" }]);
+  assert.doesNotThrow(() => reportProgress(null));
+  assert.doesNotThrow(() => reportProgress());
 });
 
 test("a bound listener reports its actual address and writes the port back", async () => {

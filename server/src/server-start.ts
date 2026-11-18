@@ -39,6 +39,12 @@ export function utilityParentPort(): UtilityParentPort | null {
   return typeof (parent as { postMessage?: unknown }).postMessage === "function" ? parent as UtilityParentPort : null;
 }
 
+/** Tells the desktop shell that a start is still loading, so a slow first start after an
+ *  upgrade is waited for and only a child that falls silent is given up on. */
+export function reportProgress(parentPort: UtilityParentPort | null = utilityParentPort()): void {
+  parentPort?.postMessage({ type: "progress" });
+}
+
 /**
  * Binds the listener and answers with the address the OS handed out. The parent is told only
  * after the bind succeeded, and the actual port is written back to `process.env.PORT` first:

@@ -7,6 +7,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   INSTANCE_DIRECTORY,
+  START_LIMIT_MS,
   MACOS_TOOL_DIRECTORIES,
   LOCAL_HOST,
   LOCAL_PARTITION,
@@ -187,19 +188,107 @@ const settled = async (promise: Promise<unknown>): Promise<boolean> => {
   return done;
 };
 
-test("a slow child is waited for, however long its start takes", async (t) => {
+test("a slow child is waited for up to the outer limit, far beyond a usual start", async (t) => {
   const dir = await tempDir(t);
   const harness = makeBackend(dir);
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const started = start(harness);
   const fork = await harness.nextChild();
-  t.mock.timers.tick(10 * 60_000);
+  assert.ok(START_LIMIT_MS >= 2 * 60_000);
+  t.mock.timers.tick(START_LIMIT_MS - 1);
   assert.equal(await settled(started), false);
   assert.equal(fork.child.kills, 0);
   fork.child.emit("message", READY);
   assert.equal((await started).server.origin, "http://127.0.0.1:51234");
   t.mock.timers.reset();
   await harness.backend.stop();
+});
+
+test("a child that lives on without ever answering ends at the outer limit", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  t.mock.timers.tick(START_LIMIT_MS);
+  await assert.rejects(started, /said nothing for 180 seconds/);
+  assert.equal(fork.child.kills, 1);
+  assert.equal(harness.backend.current(), null);
+  t.mock.timers.reset();
+});
+
+test("a child that keeps reporting progress is waited for well past the silence limit", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  // A long first start after an upgrade: ten load steps, each just inside the limit.
+  for (let step = 0; step < 10; step += 1) {
+    t.mock.timers.tick(START_LIMIT_MS - 1);
+    fork.child.emit("message", { type: "progress" });
+  }
+  assert.equal(await settled(started), false);
+  assert.equal(fork.child.kills, 0);
+  fork.child.emit("message", READY);
+  assert.equal((await started).server.origin, "http://127.0.0.1:51234");
+  t.mock.timers.reset();
+  await harness.backend.stop();
+});
+
+test("the silence limit counts from the last progress report, not from the start", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  t.mock.timers.tick(START_LIMIT_MS - 1);
+  fork.child.emit("message", { type: "progress" });
+  t.mock.timers.tick(START_LIMIT_MS - 1);
+  assert.equal(await settled(started), false);
+  t.mock.timers.tick(1);
+  await assert.rejects(started, /said nothing for 180 seconds/);
+  assert.equal(fork.child.kills, 1);
+  t.mock.timers.reset();
+});
+
+/** A probe that answers only when its signal ends it, and says when it has been asked. */
+const silentProbe = () => {
+  let asked!: () => void;
+  const probed = new Promise<void>((resolve) => { asked = resolve; });
+  const probeStatus: LocalBackendOptions["probeStatus"] = (_origin, signal) => new Promise((resolve) => {
+    signal.addEventListener("abort", () => resolve({ ok: false, reason: "unreachable" }), { once: true });
+    asked();
+  });
+  return { probed, probeStatus };
+};
+
+test("a status check that never answers ends at the outer limit", async (t) => {
+  const dir = await tempDir(t);
+  const silent = silentProbe();
+  const harness = makeBackend(dir, { probeStatus: silent.probeStatus });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  fork.child.emit("message", READY);
+  await silent.probed;
+  t.mock.timers.tick(START_LIMIT_MS);
+  await assert.rejects(started, /said nothing for/);
+  assert.equal(fork.child.kills, 1);
+  t.mock.timers.reset();
+});
+
+test("a child that exits during the status check ends the check", async (t) => {
+  const dir = await tempDir(t);
+  const silent = silentProbe();
+  const harness = makeBackend(dir, { probeStatus: silent.probeStatus });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  fork.child.emit("message", READY);
+  await silent.probed;
+  fork.child.emit("exit", 1);
+  await assert.rejects(started, /status check/);
+  assert.equal(harness.backend.current(), null);
 });
 
 test("an aborted start stops the child it was waiting for", async (t) => {
