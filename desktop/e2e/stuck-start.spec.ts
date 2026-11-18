@@ -5,14 +5,14 @@ import { cleanup, track } from "./helpers/lifecycle";
 
 test.afterEach(cleanup);
 
-const SILENT_BACKEND = path.join(DESKTOP_DIR, "e2e", "fixtures", "silent-backend.cjs");
+const SILENT_BACKEND = path.join(DESKTOP_DIR, "e2e", "fixtures", "silent-backend.mjs");
 
 test("the settings stay usable while a local start never answers", async () => {
   const box = await sandbox();
   const shell = await launchShell({
     box,
     openDialogPath: box.downloads,
-    env: { NODE_OPTIONS: `--require=${SILENT_BACKEND}` },
+    env: { STREMIO_OFFLINE_LOCAL_BACKEND_ENTRY: SILENT_BACKEND },
   });
   track(shell.app, box.root);
 
