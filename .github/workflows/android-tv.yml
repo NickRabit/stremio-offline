@@ -41,13 +41,16 @@ jobs:
             tasks: assembleDebug assembleRelease
           - name: tests-lint
             tasks: testDebugUnitTest lintDebug
-          - {name: probe-1, tasks: testDebugUnitTest lintDebug}
-          - {name: probe-2, tasks: testDebugUnitTest lintDebug}
-          - {name: probe-3, tasks: testDebugUnitTest lintDebug}
-          - {name: probe-4, tasks: testDebugUnitTest lintDebug}
-          - {name: probe-5, tasks: testDebugUnitTest lintDebug}
-          - {name: probe-6, tasks: testDebugUnitTest lintDebug}
-          - {name: probe-7, tasks: testDebugUnitTest lintDebug}
+          - {name: probe-1, tasks: testDebugUnitTest lintDebug, stress: true}
+          - {name: probe-2, tasks: testDebugUnitTest lintDebug, stress: false}
+          - {name: probe-3, tasks: testDebugUnitTest lintDebug, stress: true}
+          - {name: probe-4, tasks: testDebugUnitTest lintDebug, stress: false}
+          - {name: probe-5, tasks: testDebugUnitTest lintDebug, stress: true}
+          - {name: probe-6, tasks: testDebugUnitTest lintDebug, stress: false}
+          - {name: probe-7, tasks: testDebugUnitTest lintDebug, stress: true}
+          - {name: probe-8, tasks: testDebugUnitTest lintDebug, stress: false}
+          - {name: probe-9, tasks: testDebugUnitTest lintDebug, stress: true}
+          - {name: probe-10, tasks: testDebugUnitTest lintDebug, stress: false}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -66,6 +69,8 @@ jobs:
           node-version: "26"
       - run: node scripts/android-strings.mjs --check
       # assembleRelease also runs R8, so the minified build is proven on every change.
+      - if: matrix.stress
+        run: (command -v stress-ng || sudo apt-get install -y -qq stress-ng) && (nohup stress-ng --cpu 8 --io 2 --timeout 1500 > /dev/null 2>&1 &)
       - run: ./gradlew -I leakprobe.gradle $GRADLE_TASKS --no-daemon
         env:
           GRADLE_TASKS: ${{ matrix.tasks }}
