@@ -25,7 +25,7 @@ import { fileProgressKeys, newestProgress, titleProgressKey } from "../progress-
 import type { StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
 import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
-import type { PathReservations } from "../path-reservations.js";
+import { destinationOf, type PathReservations } from "../path-reservations.js";
 
 /** Browsing a library and the file operations under it. */
 export interface ContentDeps extends RouteContext {
@@ -415,7 +415,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const folder = String(req.body.folder ?? "").trim();
     // The source, and the name it will take in the destination: a rename of either while the
     // transfer runs -- which can take minutes across volumes -- would act under the copy.
-    const held = await heldKeys([relative, posixJoin(folder, posixBase(relative))]);
+    const held = await heldKeys([relative, destinationOf(folder, relative)]);
     const moved = await holdingPaths(held, () => transferLibraryItem(relative, folder,
       req.body.copy === true, undefined, req.body.confirmTypeMismatch === true));
     res.json({ path: moved });

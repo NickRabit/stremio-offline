@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PathReservations, reservationPause } from "./path-reservations.js";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import type { LibraryRecord } from "./libraries.js";
+import { destinationOf, PathReservations, queuedItemKeys, reservationPause } from "./path-reservations.js";
 import type { LibraryOp } from "./library-ops.js";
 
 test("a held key refuses itself, anything inside it and anything around it until released", () => {
@@ -54,4 +58,23 @@ test("the queue waits for an item, a move's destination or a re-rooted library a
   assert.equal(reservationPause(reservations, move, ["lib_00000001/Other/Ronin.mkv", "lib_00000001/Archive"]), "queue", "the destination");
   folder();
   assert.equal(reservationPause(reservations, move, ["lib_00000001/Films/Heat.mkv", "lib_00000001/Archive"]), undefined, "released");
+});
+
+test("a queued item touches itself, and a move or copy the name it takes in the destination", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-held-"));
+  const other = await mkdtemp(path.join(tmpdir(), "stremio-held-other-"));
+  t.after(async () => { await rm(root, { recursive: true, force: true }); await rm(other, { recursive: true, force: true }); });
+  await mkdir(path.join(root, "Films"), { recursive: true });
+  const record = (id: string, at: string): LibraryRecord => ({ id, name: id, type: "movie", root: at, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true });
+  const one = [record("lib_00000001", root)];
+  const two = [record("lib_00000001", root), record("lib_00000002", other)];
+  const move = (target: string) => ({ op: "move", items: [], target }) as unknown as LibraryOp;
+
+  assert.equal(destinationOf("Archive", "Films/Heat.mkv"), "Archive/Heat.mkv");
+  assert.deepEqual(await queuedItemKeys(one, { op: "delete", items: [] } as unknown as LibraryOp, "Films/Heat.mkv"), ["lib_00000001/Films/Heat.mkv"], "a delete touches only its item");
+  assert.deepEqual(await queuedItemKeys(one, move("Archive"), "Films/Heat.mkv"), ["lib_00000001/Films/Heat.mkv", "lib_00000001/Archive/Heat.mkv"], "an unqualified target in one library");
+  assert.deepEqual(await queuedItemKeys(one, move("lib_00000001"), "lib_00000001/Films/Heat.mkv"), ["lib_00000001/Films/Heat.mkv", "lib_00000001/Heat.mkv"], "the library root as target");
+  assert.deepEqual(await queuedItemKeys(one, move("lib_00000001/Archive"), "lib_00000001/Films"), ["lib_00000001/Films", "lib_00000001/Archive/Films"], "a folder keeps its own name");
+  assert.deepEqual(await queuedItemKeys(two, { op: "copy", items: [], target: "lib_00000002/Kept" } as unknown as LibraryOp, "lib_00000001/Films/Heat.mkv"), ["lib_00000001/Films/Heat.mkv", "lib_00000002/Kept/Heat.mkv"], "a copy into another library");
+  assert.deepEqual(await queuedItemKeys(two, move("Archive"), "Films/Heat.mkv"), [], "an unqualified item with two libraries resolves to nothing");
 });

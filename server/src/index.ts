@@ -149,7 +149,7 @@ import { SearchError } from "./search-contracts.js";
 import { STREAM_SORTS } from "./stream-sort.js";
 import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 import { createMetaCache } from "./meta-cache.js";
-import { PathReservations, reservationPause } from "./path-reservations.js";
+import { PathReservations, queuedItemKeys, reservationPause } from "./path-reservations.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -2942,10 +2942,7 @@ const libraryOps = new LibraryOps({
     // destination -- waits until that request is done: its check could not see a reservation
     // taken after it. Nothing held, nothing to resolve.
     if (pathReservations.keys().length) {
-      const destination = (operation.op === "move" || operation.op === "copy") && resolved
-        ? await resolveLibraryPath(store.libraries(), posixJoin(operation.target, posixBase(resolved.relative)))
-        : undefined;
-      const held = reservationPause(pathReservations, operation, [...(resolved ? [resolved.key] : []), ...(destination ? [destination.key] : [])]);
+      const held = reservationPause(pathReservations, operation, await queuedItemKeys(store.libraries(), operation, item));
       if (held) return held;
     }
     const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : resolved?.library;

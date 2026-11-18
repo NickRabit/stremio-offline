@@ -1,4 +1,4 @@
-import { parseLibraryPath } from "./libraries.js";
+import { parseLibraryPath, posixBase, posixJoin, resolveLibraryPath, type LibraryRecord } from "./libraries.js";
 import { isPathWithin } from "./library.js";
 import type { LibraryOp } from "./library-ops.js";
 
@@ -49,4 +49,20 @@ export function reservationPause(reservations: PathReservations, operation: Libr
     return reservations.keys().some((key) => parseLibraryPath(key)?.libraryId === operation.libraryId) ? "queue" : undefined;
   }
   return reservations.overlaps(keys) ? "queue" : undefined;
+}
+
+/** Where a move or copy puts one item: its own name inside the destination folder, the path
+ *  `transferLibraryItem` writes. Shared by the queue's busy list, its pause check and the direct
+ *  move route, so all three name the same place. */
+export const destinationOf = (target: string, item: string): string => posixJoin(target, posixBase(item));
+
+/** The qualified keys one queued item is about to touch: the item, and for a move or copy the
+ *  name it takes in the destination. A path that does not resolve contributes nothing; the
+ *  job itself refuses it. */
+export async function queuedItemKeys(libraries: LibraryRecord[], operation: LibraryOp, item: string): Promise<string[]> {
+  const source = await resolveLibraryPath(libraries, item);
+  if (!source) return [];
+  if (operation.op !== "move" && operation.op !== "copy") return [source.key];
+  const destination = await resolveLibraryPath(libraries, destinationOf(operation.target, source.relative));
+  return destination ? [source.key, destination.key] : [source.key];
 }

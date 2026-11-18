@@ -470,7 +470,7 @@ test("activeItems covers every item of a running job, not only the one under way
   try {
     const job = await h.queue.enqueue({ op: "copy", items: ["one", "two"], target: "Archive" });
     await waitFor(() => h.queue.snapshot().jobs.find((candidate) => candidate.id === job.id)?.status === "running");
-    assert.deepEqual(h.queue.activeItems(), ["one", "two"], "the item behind the one under way is about to be touched");
+    assert.deepEqual(h.queue.activeItems(), ["one", "two", "Archive/one", "Archive/two"], "the item behind the one under way is about to be touched, and so are the names the copy writes");
 
     release!();
     await waitFor(() => h.queue.snapshot().jobs.find((candidate) => candidate.id === job.id)?.status === "completed");
