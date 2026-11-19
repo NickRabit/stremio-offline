@@ -71,6 +71,7 @@ internal fun SeriesRows(
    *  null, only [resumeEpisode] shows progress and the episodes before it read as finished. */
   cardProgress: ((VideoDto) -> Float?)? = null,
   cardCompleted: ((VideoDto) -> Boolean)? = null,
+  hideSpoilers: Boolean = false,
 ) {
   val seasons = seasonsOf(videos)
   val current = season ?: seasons.firstOrNull()
@@ -140,12 +141,14 @@ internal fun SeriesRows(
       } else {
         null
       }
+      val completed = cardCompleted?.invoke(video) ?: (resumeIndex >= 0 && index < resumeIndex)
       WideCard(
         label = video.numbered ?: video.label,
         caption = video.title ?: video.name,
         imageUrl = imageUrl(video.thumbnail),
         progress = progress,
-        completed = cardCompleted?.invoke(video) ?: (resumeIndex >= 0 && index < resumeIndex),
+        completed = completed,
+        spoilerHidden = hideSpoilers && !completed && (progress == null || progress <= 0f),
         cardTag = cardTag(video),
         selected = index == focusIndex,
         onClick = { onSelect(video) },

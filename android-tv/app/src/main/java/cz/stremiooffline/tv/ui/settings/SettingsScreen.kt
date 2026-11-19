@@ -101,6 +101,7 @@ const val TagSettingsRowStreamSort = "settings_row_stream_sort"
 const val TagSettingsRowStartView = "settings_row_start_view"
 const val TagSettingsRowUpNext = "settings_row_up_next"
 const val TagSettingsRowSkipSegments = "settings_row_skip_segments"
+const val TagSettingsRowHideSpoilers = "settings_row_hide_spoilers"
 const val TagSettingsRowHomeLayout = "settings_row_home_layout"
 const val TagSettingsRowPreferConversion = "settings_row_prefer_conversion"
 const val TagSettingsRowClearHistory = "settings_row_clear_history"
@@ -192,6 +193,7 @@ fun SettingsRoute(
     onStartView = viewModel::setStartView,
     onUpNextAt = viewModel::setUpNextAt,
     onToggleSkipSegmentsAuto = viewModel::toggleSkipSegmentsAuto,
+    onToggleHideSpoilers = viewModel::toggleHideSpoilers,
     homeLayout = viewModel.homeLayout,
     onToggleHomeRow = viewModel::toggleHomeRow,
     onMoveHomeRow = viewModel::moveHomeRow,
@@ -240,6 +242,7 @@ fun SettingsScreen(
   onStartView: (String) -> Unit,
   onUpNextAt: (String) -> Unit,
   onToggleSkipSegmentsAuto: () -> Unit,
+  onToggleHideSpoilers: () -> Unit,
   homeLayout: HomeLayoutState,
   onToggleHomeRow: (String) -> Unit,
   onMoveHomeRow: (String, Int) -> Unit,
@@ -273,6 +276,7 @@ fun SettingsScreen(
   val startFocus = remember { FocusRequester() }
   val upNextFocus = remember { FocusRequester() }
   val skipSegmentsFocus = remember { FocusRequester() }
+  val hideSpoilersFocus = remember { FocusRequester() }
   val homeFocus = remember { FocusRequester() }
   val clearHistoryFocus = remember { FocusRequester() }
   val panelFocus = remember { FocusRequester() }
@@ -425,6 +429,13 @@ fun SettingsScreen(
         value = stringResource(if (state.skipSegmentsAuto) R.string.tv_on else R.string.tv_off),
         onToggle = onToggleSkipSegmentsAuto,
         modifier = Modifier.testTag(TagSettingsRowSkipSegments).focusRequester(skipSegmentsFocus),
+      )
+      ToggleRow(
+        label = stringResource(R.string.tv_hide_spoilers),
+        note = "",
+        value = stringResource(if (state.hideSpoilers) R.string.tv_on else R.string.tv_off),
+        onToggle = onToggleHideSpoilers,
+        modifier = Modifier.testTag(TagSettingsRowHideSpoilers).focusRequester(hideSpoilersFocus),
       )
       SettingsRow(
         label = stringResource(R.string.tv_home_layout),

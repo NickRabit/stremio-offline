@@ -112,6 +112,8 @@ export interface UserPrefs {
   upNextAt: UpNextAt;
   /** Skip intro and recap segments without asking. */
   skipSegmentsAuto: boolean;
+  /** Blur stills of episodes this account has not watched. */
+  hideSpoilers: boolean;
   /** One account's own Home: the row order it placed, the rows it hid and the extra feeds it
    *  added. Absent means the instance's default Home. */
   homeLayout?: HomeLayout;
@@ -192,7 +194,7 @@ export interface State { schemaVersion?: number;
    *  only: it never leaves the process except as a store write, and never names a token. */
   mediaSecretCleanup?: string[] }
 const baseInstanceSettings: InstanceSettings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
-const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", upNextAt: "end", skipSegmentsAuto: false };
+const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", upNextAt: "end", skipSegmentsAuto: false, hideSpoilers: false };
 
 /** A fresh install starts with the one library the download directory has always been,
  *  so it never runs the migration an upgrade needs. */

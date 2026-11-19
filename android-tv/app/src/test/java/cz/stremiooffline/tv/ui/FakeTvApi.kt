@@ -652,6 +652,7 @@ open class FakeTvApi : TvApi {
     settingsFailure?.let { throw ApiError(it) }
     settingsValue = when (field) {
       "skipSegmentsAuto" -> settingsValue.copy(skipSegmentsAuto = value)
+      "hideSpoilers" -> settingsValue.copy(hideSpoilers = value)
       else -> settingsValue
     }
     return settingsValue

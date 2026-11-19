@@ -39,6 +39,7 @@ data class SettingsResponse(
   val downloadSourceProfile: String? = null,
   val upNextAt: String? = null,
   val skipSegmentsAuto: Boolean = false,
+  val hideSpoilers: Boolean = false,
 )
 
 /** One content language `GET /api/languages` offers. The name is the server's Czech label
