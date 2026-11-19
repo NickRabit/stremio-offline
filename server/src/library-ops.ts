@@ -158,7 +158,9 @@ export class LibraryOps {
     }
     for (const job of this.jobs) {
       const last = job.results.at(-1);
-      if (job.status !== "failed" || job.errorKey !== "err.libraryArtworkWrite" ||
+      const retryStorageWrite = job.errorKey === "err.libraryArtworkWrite" ||
+        (job.operation.op === "move" && job.errorKey === "err.libraryMetadataWrite");
+      if (job.status !== "failed" || !retryStorageWrite ||
           !job.step || last?.path !== job.step.item || last.errorKey !== job.errorKey ||
           job.operation.items[job.done + job.failed - 1] !== job.step.item) continue;
       job.results.pop();
