@@ -59,7 +59,7 @@ const harness = (options: {
       relocate: async (from: string, to: string, pin = false) => { calls.relocate.push({ from, to, pin }); },
       copy: async () => undefined,
       holds,
-      flush: async () => undefined,
+      flushLibrary: async () => undefined,
     },
     artworks: options.artworks ?? {
       moveKey: async (from: string) => { calls.moved.push(from); return { carried: true as const }; },
@@ -165,7 +165,7 @@ test("empty parents are pruned deepest-first and a retained poster protects its 
       relocate: async () => undefined,
       copy: async () => undefined,
       holds: () => false,
-      flush: async () => undefined,
+      flushLibrary: async () => undefined,
     };
     const { actions, calls } = harness({ libraries: () => [{ ...library, root }], metaStore });
 
@@ -411,6 +411,25 @@ test("a replay rejects sidecar names that are not subtitles of the two videos", 
     assert.equal(await exists(path.join(root, "New/movie.srt")), false);
     assert.equal(await exists(path.join(root, "New/stolen.mkv")), false);
   });
+});
+
+test("a failed metadata commit leaves the empty source folder and its artwork alone", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), "library-commit-"));
+  const metaStore = new LibraryMetaStore(path.join(root, "data"));
+  t.after(async () => { await metaStore.flush(); await rm(root, { recursive: true, force: true }); });
+  await mkdir(path.join(root, "Old"));
+  await metaStore.load();
+  await metaStore.update(LIBRARY_ID, file => {
+    file.meta["Old/movie.mkv"] = { type: "movie", id: "tt1", source: "user" };
+  });
+  await mkdir(path.join(root, "data", "library", `${LIBRARY_ID}.json.tmp`));
+  const { actions, calls } = harness({ libraries: () => [{ ...library, root }], metaStore });
+  const step = verifiedStep("a".repeat(64), null, {
+    phase: "moving", copy: false, from: `${LIBRARY_ID}/Old/movie.mkv`, to: `${LIBRARY_ID}/New/movie.mkv`, carried: [],
+  });
+  await assert.rejects(actions.finishTransfer(step), { messageKey: "err.libraryRecoveryConflict" });
+  assert.equal(await exists(path.join(root, "Old")), true);
+  assert.deepEqual(calls.cleared, []);
 });
 
 test("a replayed finishTransfer leaves the destination's carried rows unpinned", async () => {

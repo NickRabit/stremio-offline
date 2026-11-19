@@ -22,7 +22,7 @@ import type { UserData } from "./users.js";
  *  imported straight into this module and named here only when it holds state. */
 export interface LibraryActionDeps {
   store: Pick<Store, "libraries">;
-  metaStore: Pick<LibraryMetaStore, "qualifiedMeta" | "update" | "relocate" | "copy" | "holds" | "flush">;
+  metaStore: Pick<LibraryMetaStore, "qualifiedMeta" | "update" | "relocate" | "copy" | "holds" | "flushLibrary">;
   artworks: Pick<ArtworkCache, "moveKey" | "copyKey">;
   libraryFiles(): Promise<FoundFile[]>;
   libraryUnits(): Promise<TitleUnit[]>;
@@ -395,14 +395,17 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
       if (!replay || metaStore.holds(step.from) || !metaStore.holds(step.to)) await metaStore.relocate(step.from, step.to, true);
       await remapPersonalState(step.from, step.to);
     }
+    const targetId = libraryOfKey(step.to).library.id;
+    const sourceId = libraryOfKey(step.from).library.id;
+    await metaStore.flushLibrary(targetId);
+    if (!step.copy && sourceId !== targetId) await metaStore.flushLibrary(sourceId);
     // Only the library the item left: the destination gained a folder, it did not lose one.
     const pruned = step.copy ? [] : await pruneEmptiedFolders(step.from);
+    if (pruned.length) await metaStore.flushLibrary(sourceId);
     invalidateLibrary();
     const moved = wirePath(step.to);
     log("INFO", step.copy ? "Copied in the library" : "Moved in the library",
       { from: step.from, to: moved, library: parseLibraryPath(step.from)?.libraryId, pruned, ...(sourceLeft ? { sourceLeft } : {}) });
-    // The item is not done while its metadata is still in the debounce.
-    await metaStore.flush();
     return moved;
   };
 

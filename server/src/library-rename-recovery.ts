@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import { ART_VARIANTS, artVariantKey, type ArtVariant } from "./artwork.js";
 import type { ArtworkCache } from "./artwork-cache.js";
 import { AppError } from "./errors.js";
-import { renameWithRetry } from "./fs-retry.js";
+import { renameWithRetry, syncDirectory } from "./fs-retry.js";
 import type { LibraryActions } from "./library-actions.js";
 import { holdsLibraryRoot, withinLibraryRoot, isPathWithin } from "./library.js";
 import type { LibraryHealth } from "./library-probe.js";
@@ -108,25 +108,6 @@ async function artworkDigest(file: string): Promise<string | undefined> {
   if (!info) return undefined;
   if (!info.isFile()) throw recoveryConflict();
   return createHash("sha256").update(await readFile(file)).digest("hex");
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  const unsupported = (code: string | undefined) => ["EINVAL", "ENOTSUP", "EOPNOTSUPP"].includes(code ?? "");
-  const handle = await open(directory, "r").catch((error: NodeJS.ErrnoException) => {
-    if (unsupported(error.code) || (process.platform === "win32" && ["EISDIR", "EPERM", "EACCES"].includes(error.code ?? ""))) {
-      return undefined;
-    }
-    throw error;
-  });
-  if (!handle) return;
-  try {
-    await handle.sync().catch((error: NodeJS.ErrnoException) => {
-      if (unsupported(error.code) || (process.platform === "win32" && ["EPERM", "EACCES"].includes(error.code ?? ""))) return;
-      throw error;
-    });
-  } finally {
-    await handle.close();
-  }
 }
 
 async function syncFile(file: string): Promise<void> {

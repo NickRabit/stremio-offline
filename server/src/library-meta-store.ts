@@ -1,6 +1,9 @@
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { renameWithRetry } from "./fs-retry.js";
+import { isDeepStrictEqual } from "node:util";
+import { AppError } from "./errors.js";
+import { recoveryConflict } from "./library-recovery.js";
+import { renameWithRetry, syncDirectory } from "./fs-retry.js";
 import { dropKeyed, pinInherited, remapKeyed, type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion } from "./library-match.js";
 import { isPathWithin, remapPath } from "./library.js";
 import { LIBRARY_ID, libraryPath, parseLibraryPath } from "./libraries.js";
@@ -79,8 +82,9 @@ const metadataFileName = (name: string) => name === "episodes.json" || LIBRARY_I
 async function writeAtomic(file: string, data: string) {
   await mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.tmp`;
-  await writeFile(temp, data, { mode: 0o600 });
+  await writeFile(temp, data, { mode: 0o600, flush: true });
   await renameWithRetry(temp, file);
+  await syncDirectory(path.dirname(file));
 }
 
 /** Written by the migration as well, which runs before any store exists. */
@@ -407,31 +411,41 @@ export class LibraryMetaStore {
     if (!source || !target || !source.relative || !target.relative) return;
     const file = this.files.get(source.libraryId);
     if (!file) return;
-    const pinned = pin
+    const bindings = () => pin
       ? pinInherited(file.meta, file.suggestions, source.relative, source.libraryId === target.libraryId ? target.relative : undefined)
-      : { meta: file.meta, suggestions: file.suggestions };
+      : file;
     if (source.libraryId === target.libraryId) {
+      const pinned = bindings();
       file.meta = remapKeyed(pinned.meta, source.relative, target.relative);
       file.suggestions = remapKeyed(pinned.suggestions, source.relative, target.relative);
     } else {
       const carried = <T,>(records: Record<string, T>) => Object.fromEntries(Object.entries(records)
         .filter(([key]) => isPathWithin(key, source.relative))
         .map(([key, value]) => [remapPath(key, source.relative, target.relative), value]));
-      const meta = carried(pinned.meta);
-      const suggestions = carried(pinned.suggestions);
-      file.meta = dropKeyed(pinned.meta, source.relative);
-      file.suggestions = dropKeyed(pinned.suggestions, source.relative);
+      const arriving = () => {
+        const pinned = bindings();
+        return { meta: carried(pinned.meta), suggestions: carried(pinned.suggestions) };
+      };
+      const rows = arriving();
+      const expected = structuredClone(rows);
       const destination = this.file(target.libraryId);
-      // A row already at the destination path described a file that is not there any more;
-      // the one arriving is the one that exists.
-      destination.meta = { ...destination.meta, ...meta };
-      destination.suggestions = { ...destination.suggestions, ...suggestions };
+      destination.meta = { ...destination.meta, ...rows.meta };
+      destination.suggestions = { ...destination.suggestions, ...rows.suggestions };
+      this.invalidate(target.libraryId);
+      this.save(target.libraryId);
+      // A rejected target write or a crash here leaves the source rows available for replay.
+      await this.flushLibrary(target.libraryId);
+      if (this.files.get(source.libraryId) !== file || this.files.get(target.libraryId) !== destination
+        || !isDeepStrictEqual(arriving(), expected)
+        || Object.entries(expected.meta).some(([key, value]) => !isDeepStrictEqual(destination.meta[key], value))
+        || Object.entries(expected.suggestions).some(([key, value]) => !isDeepStrictEqual(destination.suggestions[key], value))) {
+        throw recoveryConflict();
+      }
+      file.meta = dropKeyed(file.meta, source.relative);
+      file.suggestions = dropKeyed(file.suggestions, source.relative);
     }
     this.invalidate(source.libraryId);
     this.save(source.libraryId);
-    if (source.libraryId === target.libraryId) return;
-    this.invalidate(target.libraryId);
-    this.save(target.libraryId);
   }
 
   async copy(from: string, to: string) {
@@ -596,7 +610,7 @@ export class LibraryMetaStore {
   async flushLibrary(libraryId: string): Promise<void> {
     await this.write(libraryId);
     if (this.dirty.has(libraryId) || this.protectedNames.has(libraryId)) {
-      throw new Error("The library metadata could not be committed.");
+      throw new AppError("The library metadata could not be committed.", "err.libraryRecoveryConflict", 409);
     }
   }
 

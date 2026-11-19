@@ -361,6 +361,30 @@ test("an unreadable library file stays protected and is never imported or writte
   assert.equal(await fixtureState.database.get("SELECT key FROM library_meta WHERE library_id = ?", [libA]), undefined);
 });
 
+test("a failed cross-library destination transaction leaves the source rows durable", async t => {
+  const state = await fixture(t);
+  const match = record("tt1");
+  const proposed = suggestion("tt2", "Film");
+  await state.seedLibrary(libA, { Film: match }, { Film: proposed });
+  const { database, control } = controllableBatch(state.database, []);
+  const store = state.store(database);
+  await store.load();
+  control.failNext = true;
+  await assert.rejects(store.relocate(`${libA}/Film`, `${libB}/Archive/Film`), /could not be committed/);
+
+  const disk = state.store();
+  await disk.load();
+  assert.deepEqual(disk.meta(libA).Film, match);
+  assert.deepEqual(disk.suggestions(libA).Film, proposed);
+  await store.relocate(`${libA}/Film`, `${libB}/Archive/Film`);
+  await store.flushLibrary(libA);
+  const recovered = state.store();
+  await recovered.load();
+  assert.deepEqual(recovered.meta(libB)["Archive/Film"], match);
+  assert.deepEqual(recovered.suggestions(libB)["Archive/Film"], proposed);
+  assert.equal(recovered.meta(libA).Film, undefined);
+});
+
 test("a failing batch keeps the name dirty and a later flush writes it", async (t) => {
   const fixtureState = await fixture(t);
   const batches: Statement[][] = [];
