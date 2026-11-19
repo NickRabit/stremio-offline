@@ -1638,6 +1638,7 @@ export const es: Catalog = {
   "err.libraryTypeUnknown": "Tipo de biblioteca desconocido.",
   "err.libraryDefaultType": "Esta biblioteca no acepta ese tipo, por lo que no puede ser la predeterminada.",
   "err.libraryTypeMismatch": "Esa biblioteca no lleva este tipo de título.",
+  "err.libraryRecoveryConflict": "No se pudo verificar la operación interrumpida en la biblioteca. Comprueba el origen y el destino antes de volver a intentarlo.",
   "err.noLibraryForMovies": "Ninguna biblioteca acepta películas.",
   "err.noLibraryForSeries": "Ninguna biblioteca acepta series.",
   "err.libraryRootRequired": "Una biblioteca necesita una carpeta raíz.",

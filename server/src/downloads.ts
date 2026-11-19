@@ -985,13 +985,12 @@ export class DownloadQueue {
    *  save recreates the file underneath them. */
   async stop() {
     this.stopped = true;
-    if (this.saveTimer) clearTimeout(this.saveTimer);
     if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.saveRetryTimer) clearTimeout(this.saveRetryTimer);
     if (this.spaceWatch) clearInterval(this.spaceWatch);
     if (this.libraryWatch) clearInterval(this.libraryWatch);
     if (this.windowTimer) clearInterval(this.windowTimer);
-    this.saveTimer = undefined; this.retryTimer = undefined; this.saveRetryTimer = undefined; this.spaceWatch = undefined; this.libraryWatch = undefined; this.windowTimer = undefined;
+    this.retryTimer = undefined; this.saveRetryTimer = undefined; this.spaceWatch = undefined; this.libraryWatch = undefined; this.windowTimer = undefined;
     for (const timer of this.debridTimers.values()) clearTimeout(timer);
     this.debridTimers.clear();
     for (const controller of this.active.values()) controller.abort();
@@ -2158,7 +2157,13 @@ export class DownloadQueue {
 
   private scheduleDebrid(id: string, delay = 0) {
     this.clearDebrid(id);
-    const timer = setTimeout(() => { this.debridTimers.delete(id); void this.pollDebrid(id); }, delay);
+    if (this.stopped) return;
+    const timer = setTimeout(() => {
+      this.debridTimers.delete(id);
+      const poll = this.pollDebrid(id);
+      this.running.add(poll);
+      void poll.finally(() => this.running.delete(poll));
+    }, delay);
     timer.unref?.();
     this.debridTimers.set(id, timer);
   }

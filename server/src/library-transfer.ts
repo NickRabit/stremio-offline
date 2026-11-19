@@ -1,12 +1,16 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { lstat, mkdir, open, readdir, rename, rmdir, rm, stat, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rmdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { AppError } from "./errors.js";
 import { log } from "./logger.js";
 
 export type TransferProgress = (bytes: number, total: number) => void;
+interface TransferChecks {
+  beforePublish(staged: string): Promise<void>;
+  beforeSourceRemoval(): Promise<void>;
+}
 
 const byteSize = async (source: string): Promise<number> => {
   const info = await lstat(source);
@@ -112,33 +116,6 @@ const releaseTarget = async (target: string, directory: boolean, reserved?: { in
   }
 };
 
-/** Whether the target holds nothing but the reservation a transfer leaves before its rename:
- *  an empty folder for a folder source, an empty file for a non-empty file source. A zero-byte
- *  source cannot be told from its own placeholder, so its target counts as landed. A symlink
- *  target is somebody's own item, never a placeholder. */
-export const placeholderOnly = async (source: string, target: string): Promise<boolean> => {
-  const [sourceInfo, targetInfo] = await Promise.all([lstat(source), lstat(target)]).catch(() => [undefined, undefined] as const);
-  if (!sourceInfo || !targetInfo || targetInfo.isSymbolicLink()) return false;
-  if (sourceInfo.isDirectory()) return targetInfo.isDirectory() && (await readdir(target)).length === 0;
-  return sourceInfo.isFile() && sourceInfo.size > 0 && targetInfo.isFile() && targetInfo.size === 0;
-};
-
-/** Drops the placeholder a crashed transfer left at the target, so the transfer can run from
- *  the start: a folder through `rmdir`, which refuses one that gained content, and an empty
- *  file only after an immediate re-check that it is still empty. */
-export const removePlaceholder = async (source: string, target: string): Promise<void> => {
-  const info = await lstat(source).catch(() => undefined);
-  if (!info) return;
-  if (info.isDirectory()) {
-    await rmdir(target).catch(() => undefined);
-    return;
-  }
-  if (!info.isFile() || info.size === 0) return;
-  const now = await lstat(target).catch(() => undefined);
-  if (!now?.isFile() || now.size !== 0) return;
-  await unlink(target).catch(() => undefined);
-};
-
 /** Renames onto the reserved placeholder. Windows cannot rename a folder over an existing
  *  folder, not even the empty placeholder of its own making, so the placeholder goes first
  *  there, and for a moment the name is free. Another transfer that takes it in that moment
@@ -226,7 +203,13 @@ export async function renameAcross(source: string, target: string): Promise<bool
   }
 }
 
-export async function transferLibraryPath(source: string, target: string, move: boolean, report: TransferProgress = () => undefined): Promise<TransferResult> {
+export async function transferLibraryPath(
+  source: string,
+  target: string,
+  move: boolean,
+  report: TransferProgress = () => undefined,
+  checks?: TransferChecks,
+): Promise<TransferResult> {
   // The destination's parent is stat'd, not for its device -- that is the kernel's to know --
   // but because a transfer into a folder that is not there is a mistake, not a folder to create.
   const [sourceInfo] = await Promise.all([stat(source), stat(path.dirname(target))]);
@@ -252,6 +235,7 @@ export async function transferLibraryPath(source: string, target: string, move: 
   const progress = { bytes: 0, total, report };
   try {
     await copyTree(source, temporary, progress);
+    await checks?.beforePublish(temporary);
     await publish(temporary, target, sourceInfo.isDirectory());
   } catch (error) {
     // Only the staging path this call reserved is cleared; the item itself stays where it was.
@@ -261,6 +245,7 @@ export async function transferLibraryPath(source: string, target: string, move: 
   // Past this point the copy is durable and in place. A failure now is about the source
   // that is left behind, not about the transfer: throwing would report a move that did
   // not happen, and the retry would only meet its own result as `err.nameTaken`.
+  if (move) await checks?.beforeSourceRemoval();
   const sourceLeft = move ? await removeMovedSource(source) : undefined;
   report(total, total);
   return { bytes: total, total, ...(sourceLeft ? { sourceLeft } : {}) };

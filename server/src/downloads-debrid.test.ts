@@ -553,3 +553,28 @@ test("a lazy torrent job that is waiting resumes polling after a restart", async
     if (directory) await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("stopping the queue drains an in-flight debrid poll and persists its handle", async () => {
+  let polling = false;
+  let finish!: (result: DebridAdvance) => void;
+  const pending = new Promise<DebridAdvance>((resolve) => { finish = resolve; });
+  const { directory, queue } = await tempQueue({
+    debrid: { configured: () => true, advance: () => { polling = true; return pending; } },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await waitFor(queue, () => polling);
+    let stopped = false;
+    const stopping = queue.stop().then(() => { stopped = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(stopped, false);
+    finish({ ready: false, torrentId: "in-flight", status: "downloading" });
+    await stopping;
+    const jobs = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8"));
+    assert.equal(jobs[0].debrid.torrentId, "in-flight");
+  } finally {
+    finish({ ready: false, torrentId: "in-flight", status: "downloading" });
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
