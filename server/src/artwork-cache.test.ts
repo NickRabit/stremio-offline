@@ -65,6 +65,19 @@ test("the ceiling keeps everything above the headroom floor and drops the oldest
   });
 });
 
+test("cache pressure retains artwork held by an unresolved rename", async () => {
+  await withCache(1024, async (cache) => {
+    const file = cache.file("lib_aaaaaaaa/Held.mkv");
+    cache.protectFromEviction(candidate => candidate === file);
+    await put(cache, "lib_aaaaaaaa/Held.mkv", 2048);
+    await cache.maintain();
+    assert.equal((await stat(file)).size, 2048);
+    cache.protectFromEviction(() => false);
+    await cache.maintain();
+    await assert.rejects(stat(file), { code: "ENOENT" });
+  });
+});
+
 test("serving a thumbnail keeps it out of the eviction order", async () => {
   await withCache(10 * 1024, async (cache) => {
     const first = await put(cache, "lib_aaaaaaaa/One.mkv", 4096);
