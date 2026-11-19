@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { MediaServerAuthority } from "./media-server-manager.js";
 import type { ProviderPlaybackReport } from "./media-server-provider.js";
-import { MediaServerPlaybackReporter, readPlaybackReport, type PlaybackReport } from "./media-server-playing.js";
+import { MediaServerPlaybackReporter, closePlaybackReporting, readPlaybackReport, type PlaybackReport } from "./media-server-playing.js";
 import { MediaServerError } from "./media-server-types.js";
 
 const authority = (actorId = "usr_playback"): MediaServerAuthority => ({
@@ -418,6 +418,57 @@ test("close stops every live session and report swallows manager failures", asyn
   await reporter.close();
   const stopped = fake.calls.filter((call) => call.report.kind === "stopped").map((call) => call.itemId).sort();
   assert.deepEqual(stopped, ["item-1", "item-2"], "the failed start left nothing for close to stop");
+});
+
+test("shutdown delivers the stop of a live session before the manager closes its transports", async () => {
+  // The real manager refuses every call once close() has run, so a stop queued behind it is lost
+  // and the provider keeps showing the title as playing until its own cleanup minutes later.
+  let managerClosed = false;
+  const delivered: string[] = [];
+  const manager = {
+    reportPlayback: async (_actor: MediaServerAuthority, _libraryId: unknown, itemId: unknown, value: ProviderPlaybackReport) => {
+      if (managerClosed) throw new MediaServerError("closed", "The media-server manager is closed.");
+      delivered.push(`${value.kind}:${String(itemId)}`);
+      return undefined;
+    },
+    close: async () => { managerClosed = true; },
+  };
+  const reporter = new MediaServerPlaybackReporter(manager, () => authority());
+  await reporter.report(authority(), "rlib_1", "item-1", report("start", { position: 700 }));
+  await closePlaybackReporting(reporter, manager);
+  assert.equal(managerClosed, true);
+  assert.deepEqual(delivered, ["playing:item-1", "stopped:item-1"]);
+});
+
+test("shutdown waits for a progress still in flight before its stop and the manager close", async () => {
+  let managerClosed = false;
+  let releaseProgress!: () => void;
+  const progressHeld = new Promise<void>((resolve) => { releaseProgress = resolve; });
+  let progressArrived!: () => void;
+  const progressStarted = new Promise<void>((resolve) => { progressArrived = resolve; });
+  const delivered: string[] = [];
+  const manager = {
+    reportPlayback: async (_actor: MediaServerAuthority, _libraryId: unknown, itemId: unknown, value: ProviderPlaybackReport) => {
+      if (managerClosed) throw new MediaServerError("closed", "The media-server manager is closed.");
+      if (value.kind === "progress") {
+        progressArrived();
+        await progressHeld;
+      }
+      delivered.push(`${value.kind}:${String(itemId)}`);
+      return undefined;
+    },
+    close: async () => { managerClosed = true; },
+  };
+  const reporter = new MediaServerPlaybackReporter(manager, () => authority());
+  await reporter.report(authority(), "rlib_1", "item-1", report("start", { position: 700 }));
+  const progress = reporter.report(authority(), "rlib_1", "item-1", report("progress", { position: 710 }));
+  await progressStarted;
+  const closing = closePlaybackReporting(reporter, manager);
+  assert.equal(managerClosed, false, "the manager stays open while the session's chain is busy");
+  releaseProgress();
+  await Promise.all([progress, closing]);
+  assert.equal(managerClosed, true);
+  assert.deepEqual(delivered, ["playing:item-1", "progress:item-1", "stopped:item-1"]);
 });
 
 test("readPlaybackReport accepts the required fields and an optional valid play id", () => {
