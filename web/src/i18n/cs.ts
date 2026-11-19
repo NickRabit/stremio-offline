@@ -1720,6 +1720,7 @@ export const cs: Catalog = {
   "err.libraryTypeUnknown": "Neznámý typ knihovny.",
   "err.libraryDefaultType": "Tahle knihovna daný druh nepřijímá, nemůže pro něj být výchozí.",
   "err.libraryTypeMismatch": "Tato knihovna nebere tento druh titulku.",
+  "err.libraryMetadataWrite": "Metadata knihovny se nepodařilo uložit. Zkontrolujte volné místo a přístup k úložišti.",
   "err.libraryRecoveryConflict": "Přerušenou operaci v knihovně se nepodařilo ověřit. Před dalším pokusem zkontrolujte zdroj i cíl.",
   "err.noLibraryForMovies": "Žádná knihovna nepřijímá filmy.",
   "err.noLibraryForSeries": "Žádná knihovna nepřijímá seriály.",

@@ -338,7 +338,7 @@ export class LibraryOps {
         const reason = error instanceof Error ? error.message : String(error);
         const errorKey = messageKeyOf(error);
         job.results.push({ path: item, ok: false, error: reason, errorKey });
-        if (errorKey === "err.libraryRecoveryConflict") {
+        if (errorKey === "err.libraryRecoveryConflict" || errorKey === "err.libraryMetadataWrite") {
           // Keep the disputed step for inspection, and leave the rest of this batch alone.
           job.status = "failed";
           job.current = undefined;

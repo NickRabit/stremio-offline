@@ -607,28 +607,31 @@ test("record writes the step before it resolves, and the item's end clears it", 
   } finally { await cleanup(h.dataDir, queues); }
 });
 
-test("the step is cleared when the item fails", async () => {
-  const h = await harness();
-  const queues: LibraryOps[] = [h.queue];
-  try {
-    const file = path.join(h.dataDir, "record-failed.json");
-    const queue = new LibraryOps({
-      file, retryMs: 10,
-      execute: async (_operation, _item, _progress, journal) => {
-        await journal.record({ phase: "moving" });
-        throw new AppError("Missing", "err.pathMissing");
-      },
-    });
-    queues.push(queue);
-    await queue.load();
-    await queue.enqueue({ op: "move", items: ["one"], target: "Archive" });
-    await waitFor(() => queue.snapshot().jobs[0]?.status === "failed");
-    await queue.settled();
-    const finished = JSON.parse(await readFile(file, "utf8")).jobs[0];
-    assert.equal(finished.status, "failed");
-    assert.equal("step" in finished, false, "a failed item leaves no step behind");
-  } finally { await cleanup(h.dataDir, queues); }
-});
+for (const key of ["err.pathMissing", "err.libraryMetadataWrite"]) {
+  test(`the journal retains the step only for storage failures (${key})`, async () => {
+    const h = await harness();
+    const queues: LibraryOps[] = [h.queue];
+    try {
+      const file = path.join(h.dataDir, "record-failed.json");
+      const queue = new LibraryOps({
+        file, retryMs: 10,
+        execute: async (_operation, _item, _progress, journal) => {
+          await journal.record({ phase: "moving" });
+          throw new AppError("Operation failed", key);
+        },
+      });
+      queues.push(queue);
+      await queue.load();
+      await queue.enqueue({ op: "move", items: ["one"], target: "Archive" });
+      await waitFor(() => queue.snapshot().jobs[0]?.status === "failed");
+      await queue.settled();
+      const finished = JSON.parse(await readFile(file, "utf8")).jobs[0];
+      assert.equal(finished.status, "failed");
+      assert.equal(finished.results[0].errorKey, key);
+      assert.equal("step" in finished, key === "err.libraryMetadataWrite");
+    } finally { await cleanup(h.dataDir, queues); }
+  });
+}
 
 test("a resumed item is handed its recorded step, and one naming another item stops its batch", async () => {
   const h = await harness();

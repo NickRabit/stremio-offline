@@ -1640,6 +1640,7 @@ export const sk: Catalog = {
   "err.libraryTypeUnknown": "Neznámy typ knižnice.",
   "err.libraryDefaultType": "Táto knižnica tento druh neberie, takže nemôže byť jej predvolená.",
   "err.libraryTypeMismatch": "Táto knižnica neprijíma tento druh titulu.",
+  "err.libraryMetadataWrite": "Metadáta knižnice sa nepodarilo uložiť. Skontrolujte voľné miesto a prístup k úložisku.",
   "err.libraryRecoveryConflict": "Prerušenú operáciu v knižnici sa nepodarilo overiť. Pred ďalším pokusom skontrolujte zdroj aj cieľ.",
   "err.noLibraryForMovies": "Žiadna knižnica neberie filmy.",
   "err.noLibraryForSeries": "Žiadna knižnica neberie série.",

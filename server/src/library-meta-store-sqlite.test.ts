@@ -361,6 +361,29 @@ test("an unreadable library file stays protected and is never imported or writte
   assert.equal(await fixtureState.database.get("SELECT key FROM library_meta WHERE library_id = ?", [libA]), undefined);
 });
 
+test("a destination commit accepts an unrelated scan write and an already removed source row", async t => {
+  const state = await fixture(t);
+  const match = record("tt1");
+  await state.seedLibrary(libA, { Film: match });
+  const store = state.store();
+  await store.load();
+  const commit = state.database.batch.bind(state.database);
+  const duringWrite = t.mock.method(state.database, "batch", async (statements: Statement[]) => {
+    duringWrite.mock.restore();
+    await store.update(libB, file => { file.meta.Other = record("tt2"); });
+    await store.update(libA, file => { delete file.meta.Film; });
+    return commit(statements);
+  });
+  await store.relocate(`${libA}/Film`, `${libB}/Archive/Film`);
+  assert.equal(duringWrite.mock.callCount(), 1);
+  await store.flush();
+  const reloaded = state.store();
+  await reloaded.load();
+  assert.deepEqual(reloaded.meta(libB)["Archive/Film"], match);
+  assert.equal(reloaded.meta(libB).Other?.id, "tt2");
+  assert.equal(reloaded.meta(libA).Film, undefined);
+});
+
 test("a failed cross-library destination transaction leaves the source rows durable", async t => {
   const state = await fixture(t);
   const match = record("tt1");

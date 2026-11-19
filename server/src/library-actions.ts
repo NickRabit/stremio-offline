@@ -387,12 +387,12 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
       await duplicateArtwork(step.carried, step.from, step.to);
     }
     else {
-      await relocateArtwork(step.carried, step.from, step.to);
-      if (step.cover) await carryCoveringArtwork(step.cover, step.to);
       // A replay must not pin the folder's identity over the rows the first run already
       // carried: once the source holds nothing and the destination does, only the personal
       // rows are remapped. A first run always relocates, over any stale row at the target.
-      if (!replay || metaStore.holds(step.from) || !metaStore.holds(step.to)) await metaStore.relocate(step.from, step.to, true);
+      if (!replay || metaStore.holds(step.from) || !metaStore.holds(step.to)) await metaStore.relocate(step.from, step.to, true, replay ? "replay" : "replace");
+      await relocateArtwork(step.carried, step.from, step.to);
+      if (step.cover) await carryCoveringArtwork(step.cover, step.to);
       await remapPersonalState(step.from, step.to);
     }
     const targetId = libraryOfKey(step.to).library.id;
@@ -419,10 +419,17 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
           .filter((item) => item !== toKey && isPathWithin(item, toKey))
           .map((item) => fromKey + item.slice(toKey.length))]
       : [fromKey];
-    await relocateArtwork(carried, fromKey, toKey);
     const target = metaStore.qualifiedMeta()[toKey];
     const manualTarget = Boolean(target && !isAutomaticRecord(target));
-    if (metaStore.holds(fromKey) && !manualTarget) await metaStore.relocate(fromKey, toKey, true);
+    const acrossLibraries = parsedFrom.libraryId !== parsedTo.libraryId;
+    if (metaStore.holds(fromKey) && (acrossLibraries || !manualTarget)) {
+      await metaStore.relocate(fromKey, toKey, true, manualTarget ? "keep-target" : "replace");
+    }
+    if (acrossLibraries) {
+      await metaStore.flushLibrary(parsedTo.libraryId);
+      await metaStore.flushLibrary(parsedFrom.libraryId);
+    }
+    await relocateArtwork(carried, fromKey, toKey);
     await remapPersonalState(fromKey, toKey);
     seen.move(parsedFrom.libraryId, parsedFrom.relative, parsedTo.libraryId, parsedTo.relative);
   };
@@ -563,7 +570,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     const transferred = await runTransfer(step, resolved.absolute, target.absolute, !copy, progress, journal);
     await carrySidecars(sidecarPairs, path.dirname(resolved.absolute), path.dirname(target.absolute), copy);
     await recordPublished(step, journal);
-    return finishTransfer(step, transferred.sourceLeft);
+    return finishTransfer(step, transferred.sourceLeft, Boolean(recorded));
   };
 
   /** One item of a `reroot`: a bare name of the old root joined onto both roots. Resolving it

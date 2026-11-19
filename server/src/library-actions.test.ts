@@ -427,9 +427,73 @@ test("a failed metadata commit leaves the empty source folder and its artwork al
   const step = verifiedStep("a".repeat(64), null, {
     phase: "moving", copy: false, from: `${LIBRARY_ID}/Old/movie.mkv`, to: `${LIBRARY_ID}/New/movie.mkv`, carried: [],
   });
-  await assert.rejects(actions.finishTransfer(step), { messageKey: "err.libraryRecoveryConflict" });
+  await assert.rejects(actions.finishTransfer(step), { messageKey: "err.libraryMetadataWrite", status: 503 });
   assert.equal(await exists(path.join(root, "Old")), true);
   assert.deepEqual(calls.cleared, []);
+});
+
+test("cross-library finish and replay preserve a destination edited during the first commit", async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), "library-finish-replay-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const a = { ...library, root: path.join(dir, "A") };
+  const b = { ...library, id: "lib_12345678", root: path.join(dir, "B") };
+  const from = `${a.id}/Film.mkv`, to = `${b.id}/Film.mkv`;
+  const dataDir = path.join(dir, "state");
+  const store = new LibraryMetaStore(dataDir);
+  await store.load();
+  const original: LibraryMetaRecord = { type: "movie", id: "tt1", source: "user" };
+  const edited = { ...original, id: "tt2" };
+  await store.update(a.id, file => { file.meta["Film.mkv"] = original; });
+  await store.flush();
+  const commit = store.flushLibrary.bind(store);
+  const edit = t.mock.method(store, "flushLibrary", async (id: string) => {
+    edit.mock.restore();
+    await commit(id);
+    await store.update(b.id, file => { file.meta["Film.mkv"] = edited; });
+  });
+  const step = verifiedStep("a".repeat(64), "a".repeat(64), {
+    from, to, phase: "published", copy: false, carried: [from],
+  });
+  const options = { libraries: () => [a, b] };
+  const first = harness({ ...options, metaStore: store });
+  await assert.rejects(first.actions.finishTransfer(step), { messageKey: "err.libraryRecoveryConflict" });
+  assert.deepEqual(first.calls.moved, []);
+  await store.flush();
+  const reopened = new LibraryMetaStore(dataDir);
+  await reopened.load();
+  const replay = harness({ ...options, metaStore: reopened });
+  await assert.rejects(replay.actions.finishTransfer(step, undefined, true), { messageKey: "err.libraryRecoveryConflict" });
+  assert.deepEqual(reopened.qualifiedMeta()[to], edited);
+  assert.deepEqual(reopened.qualifiedMeta()[from], original);
+  assert.deepEqual(replay.calls.moved, []);
+  await reopened.update(b.id, file => { file.meta["Film.mkv"] = original; });
+  await replay.actions.finishTransfer(step, undefined, true);
+  assert.equal(reopened.qualifiedMeta()[from], undefined);
+  assert.deepEqual(reopened.qualifiedMeta()[to], original);
+});
+
+test("a cross-library hand move retries a failed commit before carrying artwork", async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), "library-hand-retry-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new LibraryMetaStore(dir);
+  await store.load();
+  const other = "lib_12345678";
+  const from = `${LIBRARY_ID}/Film`, to = `${other}/Film`;
+  await store.update(LIBRARY_ID, file => { file.meta.Film = { type: "movie", id: "tt1", source: "user", locked: true }; });
+  await store.flush();
+  const blocker = path.join(dir, "library", `${other}.json.tmp`);
+  await mkdir(blocker);
+  const { actions, calls } = harness({ metaStore: store });
+  await assert.rejects(actions.carryHandMove(from, to, false), { messageKey: "err.libraryMetadataWrite", status: 503 });
+  assert.equal(calls.moved.length, 0);
+  assert.deepEqual(calls.seenMoves, []);
+  await rm(blocker, { recursive: true });
+  await actions.carryHandMove(from, to, false);
+  assert.equal(store.qualifiedMeta()[from], undefined);
+  assert.equal(store.qualifiedMeta()[to]?.id, "tt1");
+  assert.ok(calls.moved.includes(from));
+  assert.equal(calls.seenMoves.length, 1);
+  await store.flush();
 });
 
 test("a replayed finishTransfer leaves the destination's carried rows unpinned", async () => {

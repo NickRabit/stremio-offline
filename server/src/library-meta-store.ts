@@ -79,12 +79,12 @@ const libraryDir = (dataDir: string) => path.join(dataDir, "library");
 const fileIn = (dataDir: string, name: string) => path.join(libraryDir(dataDir), name);
 const metadataFileName = (name: string) => name === "episodes.json" || LIBRARY_ID.test(name.slice(0, -".json".length));
 
-async function writeAtomic(file: string, data: string) {
+async function writeAtomic(file: string, data: string, durable = false) {
   await mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.tmp`;
-  await writeFile(temp, data, { mode: 0o600, flush: true });
+  await writeFile(temp, data, { mode: 0o600, flush: durable });
   await renameWithRetry(temp, file);
-  await syncDirectory(path.dirname(file));
+  if (durable) await syncDirectory(path.dirname(file));
 }
 
 /** Written by the migration as well, which runs before any store exists. */
@@ -99,6 +99,11 @@ function parseFile(raw: string): LibraryMetaFile {
   return { version: parsed.version ?? 1, meta: records<LibraryMetaRecord>(parsed.meta), suggestions: records<LibrarySuggestion>(parsed.suggestions) };
 }
 
+const containsRows = <T>(stored: Record<string, T>, required: Record<string, T>): boolean =>
+  Object.entries(required).every(([key, row]) => Object.hasOwn(stored, key) && isDeepStrictEqual(stored[key], row));
+
+const metadataWriteError = () => new AppError("The library metadata could not be committed.", "err.libraryMetadataWrite", 503);
+
 /** Where `state.json` used to keep the match history: one file per library, plus the
  *  episode rows, which are keyed by catalogue identity and shared by every library. */
 export class LibraryMetaStore {
@@ -112,6 +117,7 @@ export class LibraryMetaStore {
   private timers = new Map<string, NodeJS.Timeout>();
   private writes = new Map<string, Promise<void>>();
   private dirty = new Set<string>();
+  private syncedJson = new Set<string>();
   private episodesTouched = false;
   /** Store names whose file could not be read or preserved: a later write must not put a
    *  fresh file over bytes the owner may still be able to recover. */
@@ -405,7 +411,7 @@ export class LibraryMetaStore {
    *  rename in place; across libraries the rows leave one file and land in the other, which
    *  is why the store owns it -- two files have to change together or the move is half done.
    *  `pin` is for a move into another folder, see `pinInherited`. */
-  async relocate(from: string, to: string, pin = false) {
+  async relocate(from: string, to: string, pin = false, policy: "replace" | "replay" | "keep-target" = "replace") {
     const source = parseLibraryPath(from);
     const target = parseLibraryPath(to);
     if (!source || !target || !source.relative || !target.relative) return;
@@ -422,23 +428,25 @@ export class LibraryMetaStore {
       const carried = <T,>(records: Record<string, T>) => Object.fromEntries(Object.entries(records)
         .filter(([key]) => isPathWithin(key, source.relative))
         .map(([key, value]) => [remapPath(key, source.relative, target.relative), value]));
-      const arriving = () => {
-        const pinned = bindings();
-        return { meta: carried(pinned.meta), suggestions: carried(pinned.suggestions) };
-      };
-      const rows = arriving();
-      const expected = structuredClone(rows);
+      const pinned = bindings();
+      const expected = structuredClone({ meta: carried(pinned.meta), suggestions: carried(pinned.suggestions) });
+      const original = structuredClone({ meta: carried(file.meta), suggestions: carried(file.suggestions) });
       const destination = this.file(target.libraryId);
-      destination.meta = { ...destination.meta, ...rows.meta };
-      destination.suggestions = { ...destination.suggestions, ...rows.suggestions };
+      const targetMatches = () => containsRows(destination.meta, expected.meta)
+        && containsRows(destination.suggestions, expected.suggestions);
+      if (policy !== "replace" && this.holds(to) && !targetMatches()) {
+        if (policy === "keep-target") return;
+        throw recoveryConflict();
+      }
+      destination.meta = { ...destination.meta, ...structuredClone(expected.meta) };
+      destination.suggestions = { ...destination.suggestions, ...structuredClone(expected.suggestions) };
       this.invalidate(target.libraryId);
       this.save(target.libraryId);
-      // A rejected target write or a crash here leaves the source rows available for replay.
       await this.flushLibrary(target.libraryId);
+      // A scan may already have removed the missing file. Only surviving rows would be deleted here.
       if (this.files.get(source.libraryId) !== file || this.files.get(target.libraryId) !== destination
-        || !isDeepStrictEqual(arriving(), expected)
-        || Object.entries(expected.meta).some(([key, value]) => !isDeepStrictEqual(destination.meta[key], value))
-        || Object.entries(expected.suggestions).some(([key, value]) => !isDeepStrictEqual(destination.suggestions[key], value))) {
+        || !containsRows(original.meta, carried(file.meta))
+        || !containsRows(original.suggestions, carried(file.suggestions)) || !targetMatches()) {
         throw recoveryConflict();
       }
       file.meta = dropKeyed(file.meta, source.relative);
@@ -503,6 +511,7 @@ export class LibraryMetaStore {
     this.timers.delete(libraryId);
     this.dirty.delete(libraryId);
     this.protectedNames.delete(libraryId);
+    this.syncedJson.delete(libraryId);
     this.files.delete(libraryId);
     this.views = undefined;
     // A write already under way would put the file back after the removal; it finds nothing owed
@@ -542,18 +551,20 @@ export class LibraryMetaStore {
   /** One write per file at a time: two would share the temporary file, and a rename could move
    *  the other's half-written bytes into place -- a file that then loads as damaged, with the
    *  library's matches copied aside. Each write takes the rows as they are when it runs. */
-  private write(name: string): Promise<void> {
-    const run = (this.writes.get(name) ?? Promise.resolve()).then(() => this.writeNow(name));
-    this.writes.set(name, run);
+  private write(name: string, durable = false): Promise<void> {
+    const run = (this.writes.get(name) ?? Promise.resolve()).then(() => this.writeNow(name, durable));
+    this.writes.set(name, run.catch(() => undefined));
     return run;
   }
 
-  private async writeNow(name: string) {
-    if (!this.dirty.delete(name)) return;
+  private async writeNow(name: string, durable: boolean) {
+    const dirty = this.dirty.delete(name);
     if (this.protectedNames.has(name)) {
+      if (durable) throw recoveryConflict();
       log("WARN", "Library metadata was not saved over a file that could not be read", { file: path.basename(this.fileFor(name)) });
       return;
     }
+    if (!dirty && !(durable && !this.database && this.files.has(name) && !this.syncedJson.has(name))) return;
     const file = this.fileFor(name);
     if (this.database) {
       try {
@@ -593,25 +604,26 @@ export class LibraryMetaStore {
       } catch (error) {
         this.dirty.add(name);
         log("WARN", "Library metadata could not be saved", { file: path.basename(file), reason: String(error).slice(0, 120) });
+        if (durable) throw metadataWriteError();
         return;
       }
     }
     const data = JSON.stringify(name === "episodes" ? this.episodeRows : (this.files.get(name) ?? emptyFile()), null, 2);
     try {
-      await writeAtomic(file, data);
+      this.syncedJson.delete(name);
+      await writeAtomic(file, data, durable);
+      if (durable) this.syncedJson.add(name);
     } catch (error) {
       // Still owed: the next save or flush writes it, rather than a restart dropping the change.
       this.dirty.add(name);
       log("WARN", "Library metadata could not be saved", { file: path.basename(file), reason: String(error).slice(0, 120) });
+      if (durable) throw metadataWriteError();
     }
   }
 
   /** A journal can be retired only after the affected bindings have reached storage. */
   async flushLibrary(libraryId: string): Promise<void> {
-    await this.write(libraryId);
-    if (this.dirty.has(libraryId) || this.protectedNames.has(libraryId)) {
-      throw new AppError("The library metadata could not be committed.", "err.libraryRecoveryConflict", 409);
-    }
+    await this.write(libraryId, true);
   }
 
   /** Called on shutdown and before an export, so nothing is lost to the debounce. */
