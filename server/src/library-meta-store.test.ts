@@ -383,9 +383,9 @@ test("a write that failed is made by the next flush, and two flushes never overl
     await store.update("lib_aaaaaaaa", (file) => { file.meta["Heat.mkv"] = record("tt1"); });
     // A directory where the temporary file goes makes the write fail, the way a full disk would.
     await mkdir(`${libraryFile(dataDir, "lib_aaaaaaaa")}.tmp`, { recursive: true });
-    await store.flush();
+    await assert.rejects(store.flushLibrary("lib_aaaaaaaa"), /could not be committed/);
     await rm(`${libraryFile(dataDir, "lib_aaaaaaaa")}.tmp`, { recursive: true });
-    await store.flush();
+    await store.flushLibrary("lib_aaaaaaaa");
     assert.deepEqual(Object.keys(JSON.parse(await readFile(libraryFile(dataDir, "lib_aaaaaaaa"), "utf8")).meta), ["Heat.mkv"],
       "the binding the failed write carried reaches the disk");
 

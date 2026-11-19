@@ -98,6 +98,7 @@ import { FileSnapCache, preheatFileSnaps } from "./byte-cache.js";
 import { RemoteImageCache } from "./remote-image-cache.js";
 import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
 import { createLibraryActions } from "./library-actions.js";
+import { LibraryRenameRecovery } from "./library-rename-recovery.js";
 import { LibraryOps } from "./library-ops.js";
 import { registerAddonsRoutes } from "./routes/addons.js";
 import { registerAdminSourceProfilesRoutes } from "./routes/admin-source-profiles.js";
@@ -149,7 +150,7 @@ import { SearchError } from "./search-contracts.js";
 import { STREAM_SORTS } from "./stream-sort.js";
 import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 import { createMetaCache } from "./meta-cache.js";
-import { PathReservations, queuedItemKeys, reservationPause } from "./path-reservations.js";
+import { PathReservations, placesOverlap, queuedItemPaths, reservationPause } from "./path-reservations.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -275,6 +276,7 @@ if (restrictedMode()) log("INFO", "Restricted mode enabled");
 if (database) images.attachDatabase(database);
 await images.load();
 reportProgress();
+artworks.protectFromEviction(() => true);
 await artworks.load();
 reportProgress();
 await remoteImages.load();
@@ -1448,7 +1450,7 @@ const sweepDeps: SweepDeps = {
   }),
   directoryOf: (libraryId) => artworks.dirOf(libraryId),
   remove: (file) => removeArtwork(file),
-  busy: () => libraryOpsWriting || libraryOps.activeItems().length > 0,
+  busy: () => libraryOpsWriting || renameRecovery.hasUnresolved() || libraryOps.activeItems().length > 0,
   epoch: () => libraryEpoch,
   now: () => Date.now(),
   signal: new AbortController().signal,
@@ -2456,7 +2458,7 @@ registerFollowRoutes(app, { ...routeContext, follows: followService, followStore
 
 // The file operations on library items live in `library-actions.ts`; these bindings keep the
 // call sites and the route dependency objects unchanged.
-const { clearGeneratedArt, deleteLibraryItem, carryHandMove, relocateLibraryPath, transferLibraryItem, rerootItem } = createLibraryActions({
+const libraryActions = createLibraryActions({
   store,
   metaStore,
   artworks,
@@ -2477,6 +2479,26 @@ const { clearGeneratedArt, deleteLibraryItem, carryHandMove, relocateLibraryPath
   seen,
   setLibraryOpsWriting: (writing) => { libraryOpsWriting = writing; },
 });
+const { clearGeneratedArt, deleteLibraryItem, carryHandMove, transferLibraryItem, rerootItem } = libraryActions;
+
+const renameRecovery = new LibraryRenameRecovery({
+  dataDir: DATA_DIR,
+  libraries: () => store.libraries(),
+  users: () => store.users(),
+  carveOutsOf,
+  healthOf,
+  refreshHealth: refreshLibraryHealth,
+  actions: libraryActions,
+  metaStore,
+  artworks,
+  store,
+  invalidateLibrary,
+});
+// Recovery runs before scans and watchers can interpret the interrupted tree as an ordinary
+// external move. An unresolved record deliberately remains on disk and keeps mutations away.
+await renameRecovery.load();
+artworks.protectFromEviction(file => renameRecovery.conflicts([path.basename(path.dirname(file))]));
+await artworks.maintain();
 
 // Manual binding of a title to a folder, for a file that did not arrive through the queue.
 /** Binds the folder the file will land in to a catalogue title, so metadata need not be guessed. */
@@ -2606,8 +2628,10 @@ async function titleArtworkUrls(key: string): Promise<{ poster?: string; wide?: 
 const pathReservations = new PathReservations();
 const libraryPathBusy = async (keys: string[], options: { ignoreReservations?: boolean } = {}): Promise<string | undefined> => {
   // A rename finishes inside its request and never enters the queue; it holds its names here.
-  // The rename itself asks with its own names already held, so it only wants the queue.
-  const items = options.ignoreReservations ? libraryOps.activeItems() : [...libraryOps.activeItems(), ...pathReservations.keys()];
+  if (renameRecovery.hasUnreadableRecord()) return "rename";
+  // The rename itself asks with its own names already held, so it only wants the queue and
+  // the rename journal.
+  const items = [...libraryOps.activeItems(), ...(options.ignoreReservations ? [] : pathReservations.keys()), ...renameRecovery.busyKeys()];
   if (!items.length) return undefined;
   const libraries = store.libraries();
   const active = (await Promise.all(items.map(async (item) =>
@@ -2616,14 +2640,17 @@ const libraryPathBusy = async (keys: string[], options: { ignoreReservations?: b
   for (const key of keys) {
     const wanted = await resolveLibraryPath(libraries, key);
     if (!wanted) continue;
-    const covering = active.find(({ resolved }) =>
-      isPathWithin(resolved.absolute, wanted.absolute) || isPathWithin(wanted.absolute, resolved.absolute));
+    if (renameRecovery.conflicts([wanted.key])) return wanted.key;
+    // On a volume that folds case, `archive` is the folder `Archive`: compared as the volume
+    // reads them, or a rename of a destination folder spelled in another case would pass.
+    const covering = active.find(({ resolved }) => placesOverlap(resolved.absolute, wanted.absolute,
+      healthOf(resolved.library).caseInsensitive || healthOf(wanted.library).caseInsensitive));
     if (covering) return covering.item;
   }
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, pathReservations, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, pathReservations, prefsOf, progressOf, relativeKeyIn, renameLibraryItem: (request) => renameRecovery.rename(request), scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({
@@ -2688,7 +2715,7 @@ const libraryScan = new LibraryScan({
   },
   deleteGeneratedArt: (key) => clearGeneratedArt(key),
   busy: () => {
-    if (libraryOpsWriting) return "operation";
+    if (libraryOpsWriting || renameRecovery.hasUnresolved()) return "operation";
     if (playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS)) return "playback";
     if (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "downloading")) return "download";
     const searchHosts = new Set(searchableCatalogs(store.addons()).map(({ addon }) => hostOf(addon.manifestUrl)));
@@ -2716,7 +2743,8 @@ const libraryAutoScan = new LibraryAutoScan({
   status: () => libraryScan.snapshot(),
   // Scoped to what changed: an automatic run never widens to a library nobody touched.
   start: (libraryIds: string[]) => libraryScan.start({ automatic: true, libraryIds }),
-  busy: () => playbackBusy() || libraryOpsWriting || (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "checking" || job.status === "downloading")),
+  busy: () => playbackBusy() || libraryOpsWriting || renameRecovery.hasUnresolved()
+    || (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "checking" || job.status === "downloading")),
   watch: (onChange) => {
     const watches = walkableLibraries().map((library) => watchLibrary(library.root, () => { invalidateLibrary(); onChange(); }));
     return { active: watches.some((watch) => watch.active), close: () => { for (const watch of watches) watch.close(); } };
@@ -2918,6 +2946,9 @@ const playbackUnder = (root: string) =>
 const libraryOps = new LibraryOps({
   file: path.join(DATA_DIR, "library-ops.json"),
   pause: async (operation, item) => {
+    const renameKeys = operation.op === "reroot" ? [operation.libraryId] : [libraryKey(item)];
+    if (operation.op === "move" || operation.op === "copy") renameKeys.push(libraryKey(operation.target));
+    if (renameRecovery.conflicts(renameKeys)) return "library";
     // A `reroot` item is a bare name, so it resolves to no library path at all and every
     // guard below would be skipped. The two blockers that still apply are the same ones:
     // a disk that is away, and a file a session or a download is using right now.
@@ -2942,7 +2973,7 @@ const libraryOps = new LibraryOps({
     // destination -- waits until that request is done: its check could not see a reservation
     // taken after it. Nothing held, nothing to resolve.
     if (pathReservations.keys().length) {
-      const held = reservationPause(pathReservations, operation, await queuedItemKeys(store.libraries(), operation, item));
+      const held = reservationPause(pathReservations, operation, await queuedItemPaths(store.libraries(), operation, item));
       if (held) return held;
     }
     const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : resolved?.library;

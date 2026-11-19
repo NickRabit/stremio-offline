@@ -8,8 +8,9 @@ import { dropKeyed, isAutomaticRecord, knownTitleEntry, type LibraryMetaRecord, 
 import type { LibraryMetaStore } from "./library-meta-store.js";
 import type { LibraryHealth } from "./library-probe.js";
 import { libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, resolveLibraryPath, toPosix, type LibraryRecord } from "./libraries.js";
-import { placeholderOnly, removePlaceholder, transferLibraryPath, type TransferProgress } from "./library-transfer.js";
+import { transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 import { log } from "./logger.js";
+import { captureTransferIdentity, hasEvidence, reconcileTransfer, recoveryConflict, type RecoveryEvidence } from "./library-recovery.js";
 import { isSidecarOf, renamedSidecar, subtitleSidecars } from "./library-sidecars.js";
 import type { LibraryOp, OpsJournal } from "./library-ops.js";
 import type { LibrarySeenStore } from "./library-seen.js";
@@ -53,10 +54,8 @@ export interface LibraryActions {
   pruneEmptiedFolders(key: string): Promise<string[]>;
   deleteLibraryItem(relative: string): Promise<void>;
   assertMoveType(key: string, destination: LibraryRecord, confirmed?: boolean): Promise<void>;
-  pathPresent(target: string): Promise<boolean>;
   finishTransfer(step: TransferStep, sourceLeft?: string, replay?: boolean): Promise<string>;
   carryHandMove(fromKey: string, toKey: string, folder: boolean, files?: string[]): Promise<void>;
-  recordPublished(step: { from: string; to: string }, journal?: OpsJournal): Promise<void>;
   resumeTransfer(step: TransferStep, journal?: OpsJournal): Promise<string | undefined>;
   transferLibraryItem(relative: string, folder: string, copy?: boolean, progress?: TransferProgress, confirmTypeMismatch?: boolean, journal?: OpsJournal): Promise<string>;
   rerootItem(operation: Extract<LibraryOp, { op: "reroot" }>, item: string, progress: (bytes: number, total?: number) => void, journal: OpsJournal): Promise<{ to: string }>;
@@ -64,23 +63,21 @@ export interface LibraryActions {
 
 /** What a queued move or copy is halfway through, written to the journal before the bytes
  *  move so a crash can be finished from it. */
-export type TransferStep = {
-  phase: "moving" | "published";
+export type TransferStep = RecoveryEvidence & {
   copy: boolean;
   from: string;
   to: string;
   carried: string[];
   /** The subtitle files that travel with a single video: bare file names, `from` beside the
    *  source and `to` beside the destination. Absent on a record an older build wrote. */
-  sidecars?: Array<{ from: string; to: string }>;
+  sidecars: Array<{ from: string; to: string; identity?: string }>;
   cover?: string;
 };
 
 /** What a queued `reroot` is halfway through: the item's bare name joined onto both roots,
  *  so the two ends are absolute paths rather than library keys. */
-export type RerootStep = {
+export type RerootStep = RecoveryEvidence & {
   kind: "reroot";
-  phase: "moving" | "published";
   from: string;
   to: string;
 };
@@ -303,49 +300,54 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     }
   };
 
-  /** A record the journal kept, read back defensively: anything that does not match is a
-   *  record this build does not understand and is treated as no record at all. */
+  /** A record the journal kept, read back defensively. A present but malformed record is a
+   *  conflict; only an absent record allows a fresh operation. */
   const asTransferStep = (value: unknown): TransferStep | undefined => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw recoveryConflict();
     const step = value as Partial<TransferStep>;
-    if (step.phase !== "moving" && step.phase !== "published") return undefined;
-    if (typeof step.copy !== "boolean" || typeof step.from !== "string" || typeof step.to !== "string") return undefined;
-    if (!Array.isArray(step.carried) || !step.carried.every((item) => typeof item === "string")) return undefined;
-    if (step.cover !== undefined && typeof step.cover !== "string") return undefined;
+    if (step.phase !== "moving" && step.phase !== "published") throw recoveryConflict();
+    if (typeof step.copy !== "boolean" || typeof step.from !== "string" || typeof step.to !== "string") throw recoveryConflict();
+    if (!Array.isArray(step.carried) || !step.carried.every((item) => typeof item === "string")) throw recoveryConflict();
+    const from = step.from;
+    if (!step.carried.every(key => isPathWithin(key, from) && !key.split("/").some(part => part === "." || part === ".."))) throw recoveryConflict();
+    if (step.cover !== undefined && (typeof step.cover !== "string" || !isPathWithin(from, step.cover))) throw recoveryConflict();
     const bareName = (name: unknown): name is string =>
       typeof name === "string" && name.length > 0 && name !== "." && name !== ".." && path.basename(name) === name;
-    const sidecar = (item: unknown): item is { from: string; to: string } => {
+    const sidecar = (item: unknown): item is TransferStep["sidecars"][number] => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-      const pair = item as { from?: unknown; to?: unknown };
-      return bareName(pair.from) && bareName(pair.to);
+      const pair = item as { from?: unknown; to?: unknown; identity?: unknown };
+      return bareName(pair.from) && bareName(pair.to) && (pair.identity === undefined || typeof pair.identity === "string");
     };
     const sidecars = (value as { sidecars?: unknown }).sidecars;
-    if (sidecars !== undefined && !Array.isArray(sidecars)) return undefined;
+    if (!Array.isArray(sidecars) || !sidecars.every(sidecar)) throw recoveryConflict();
+    if (!hasEvidence(step)) throw recoveryConflict();
+    const { sourceIdentity, publishedIdentity } = step;
     return {
       phase: step.phase, copy: step.copy, from: step.from, to: step.to, carried: step.carried,
-      // A pair that could leave its folder is dropped on its own: the video's recovery still runs.
-      ...(sidecars !== undefined ? { sidecars: sidecars.filter(sidecar).map((pair) => ({ from: pair.from, to: pair.to })) } : {}),
+      sourceIdentity, publishedIdentity,
+      sidecars,
       ...(step.cover !== undefined ? { cover: step.cover } : {}),
     };
   };
 
-  /** A re-root record the journal kept, read back defensively: anything else is a record this
-   *  build does not understand and is treated as no record at all. */
+  /** A re-root record the journal kept, read back defensively. */
   const asRerootStep = (value: unknown): RerootStep | undefined => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw recoveryConflict();
     const step = value as Partial<RerootStep>;
-    if (step.kind !== "reroot") return undefined;
-    if (step.phase !== "moving" && step.phase !== "published") return undefined;
-    if (typeof step.from !== "string" || typeof step.to !== "string") return undefined;
-    return { kind: "reroot", phase: step.phase, from: step.from, to: step.to };
+    if (step.kind !== "reroot") throw recoveryConflict();
+    if (step.phase !== "moving" && step.phase !== "published") throw recoveryConflict();
+    if (typeof step.from !== "string" || typeof step.to !== "string") throw recoveryConflict();
+    if (!hasEvidence(step)) throw recoveryConflict();
+    const { sourceIdentity, publishedIdentity } = step;
+    return {
+      kind: "reroot", phase: step.phase, from: step.from, to: step.to, sourceIdentity, publishedIdentity,
+    };
   };
 
-  /** Plain existence, for the two absolute ends of a re-root: unlike `fileExists` a broken
-   *  symlink still counts, which is what the recovery has to see. */
-  const pathPresent = async (target: string) => { try { await lstat(target); return true; } catch { return false; } };
-
   const carrySidecars = async (
-    pairs: ReadonlyArray<{ from: string; to: string }>,
+    pairs: TransferStep["sidecars"],
     sourceDir: string,
     targetDir: string,
     copy: boolean,
@@ -357,15 +359,16 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
         const to = path.join(targetDir, pair.to);
         if (!await fileExists(from)) continue;
         if (await fileExists(to)) {
-          // Only a crashed run leaves a reservation behind; on a first run an empty file is somebody's own.
-          if (replay && await placeholderOnly(from, to)) {
-            await removePlaceholder(from, to);
-          } else {
-            log("INFO", "A subtitle stayed behind, the destination already has one of that name", { file: pair.from });
-            continue;
-          }
+          log("INFO", "A subtitle stayed behind, the destination already has one of that name", { file: pair.from });
+          continue;
         }
-        await transferLibraryPath(from, to, !copy);
+        if (!pair.identity || await captureTransferIdentity(from) !== pair.identity) {
+          log("WARN", "A subtitle stayed behind because its identity could not be verified", { file: pair.from });
+          continue;
+        }
+        // A replay cannot know whether a subtitle still at the source was already handed to
+        // the move. Keep that source and copy it, so no later folder prune can destroy it.
+        await transferLibraryPath(from, to, replay ? false : !copy);
       } catch (error) {
         log("WARN", "A subtitle could not follow its video", {
           file: pair.from, reason: error instanceof Error ? error.message : String(error),
@@ -424,66 +427,61 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
   /** The `published` record is a shortcut for the next start, not a condition for finishing:
    *  the bytes have moved, so a failed write is logged and the metadata half still runs. The
    *  next start would read the `moving` record against the disk and land in the same place. */
-  const recordPublished = async (step: { from: string; to: string }, journal?: OpsJournal) => {
+  const recordPublished = async (step: TransferStep | RerootStep, journal?: OpsJournal) => {
     await journal?.record({ ...step, phase: "published" }).catch((error: unknown) =>
       log("WARN", "A finished transfer could not be recorded, finishing it anyway", { from: step.from, to: step.to, reason: error instanceof Error ? error.message : String(error) }));
+  };
+
+  const runTransfer = async (
+    step: TransferStep | RerootStep, source: string, target: string, move: boolean,
+    progress: TransferProgress | undefined, journal: OpsJournal | undefined,
+  ) => {
+    await journal?.record({ ...step });
+    const result = await transferLibraryPath(source, target, move, progress, {
+      beforePublish: async (staged) => {
+        step.publishedIdentity = await captureTransferIdentity(staged);
+        await journal?.record({ ...step });
+      },
+      beforeSourceRemoval: async () => {
+        const [original, published] = await Promise.all([captureTransferIdentity(source), captureTransferIdentity(target)])
+          .catch(() => { throw recoveryConflict(); });
+        if (!original || !published || original !== step.sourceIdentity || published !== step.publishedIdentity) throw recoveryConflict();
+      },
+    });
+    step.publishedIdentity ??= step.sourceIdentity;
+    return result;
   };
 
   /** Finishes an item a crash stopped in the middle of, from the record it left. Returns the
    *  wire path when the record was enough, or undefined when the transfer never landed and the
    *  normal path has to run from the start. */
   const resumeTransfer = async (step: TransferStep, journal?: OpsJournal): Promise<string | undefined> => {
+    const parsed = asTransferStep(step);
+    if (!parsed) throw recoveryConflict();
+    step = parsed;
     const source = await resolveLibraryPath(store.libraries(), step.from);
     const target = await resolveLibraryPath(store.libraries(), step.to);
-    const sourceExists = source ? await fileExists(source.absolute) : false;
-    const targetExists = target ? await fileExists(target.absolute) : false;
-    if (step.phase === "published") return finishTransfer(step, undefined, true);
-    // Neither end holds the bytes: nothing is guessed and nothing is deleted.
-    if (!sourceExists && !targetExists) throw new AppError("The file or folder does not exist.", "err.pathMissing");
-    // The transfer never landed: run the normal path from the start.
-    if (sourceExists && !targetExists) return undefined;
-    // Both ends hold something, but a target that is only the destination's reservation is not
-    // a landed copy: the placeholder goes and the transfer runs from the start.
-    if (sourceExists && source && target && await placeholderOnly(source.absolute, target.absolute)) {
-      log("INFO", "A reserved destination held nothing, running the transfer again", { from: step.from, to: step.to });
-      await removePlaceholder(source.absolute, target.absolute);
-      return undefined;
+    if (!source || !target) throw recoveryConflict();
+    const decision = await reconcileTransfer(step, source.absolute, target.absolute, source.library.root, target.library.root, step.copy);
+    const stemOf = (key: string) => posixBase(key).slice(0, posixBase(key).length - path.extname(key).length);
+    const sourceStem = stemOf(source.key);
+    const targetStem = stemOf(target.key);
+    if (step.sidecars?.some((pair) => !isSidecarOf(pair.from, sourceStem) || !isSidecarOf(pair.to, targetStem))) {
+      throw recoveryConflict();
     }
-    // The copy landed but the source was not removed: nothing is deleted, and the outcome is
-    // the one an interrupted transfer already reports.
-    const interrupted = sourceExists && !step.copy;
-    if (interrupted) log("WARN", "An interrupted move left its source behind", { from: step.from, to: step.to });
-    if (source && target) {
-      const stemOf = (key: string) => posixBase(key).slice(0, posixBase(key).length - path.extname(key).length);
-      const sourceStem = stemOf(source.key);
-      const targetStem = stemOf(target.key);
-      // The record is read back from disk: it may only name subtitles of these two videos.
-      let sidecars = step.sidecars?.filter((pair) => isSidecarOf(pair.from, sourceStem) && isSidecarOf(pair.to, targetStem));
-      if (sidecars === undefined && await lstat(target.absolute).then((info) => info.isFile(), () => false)) {
-        const discovered = await subtitleSidecars(source.absolute);
-        sidecars = discovered.names.map((name) => ({
-          from: name, to: renamedSidecar(name, discovered.stem, targetStem),
-        }));
-      }
-      if (sidecars) await carrySidecars(sidecars, path.dirname(source.absolute), path.dirname(target.absolute), step.copy, true);
-    }
-    await recordPublished(step, journal);
-    return finishTransfer(step, interrupted ? "interrupted" : undefined, true);
+    if (decision === "retry") return undefined;
+    await carrySidecars(step.sidecars, path.dirname(source.absolute), path.dirname(target.absolute), step.copy, true);
+    await recordPublished({ ...step, publishedIdentity: step.publishedIdentity ?? step.sourceIdentity }, journal);
+    return finishTransfer(step, undefined, true);
   };
 
   const transferLibraryItem = async (relative: string, folder: string, copy = false, progress?: TransferProgress, confirmTypeMismatch = false, journal?: OpsJournal) => {
     const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
-    if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
-    // A record a crash left for this item is finished from what it says, before the source's
-    // absence is read as a missing item: a finished move leaves the source gone, which is
-    // exactly the state that resumes here.
     const recorded = asTransferStep(journal?.recorded);
-    if (recorded && recorded.from === resolved.key) {
-      const resumed = await resumeTransfer(recorded, journal);
-      if (resumed !== undefined) return resumed;
+    if (!resolved || !resolved.relative) {
+      if (recorded) throw recoveryConflict();
+      throw new AppError("Invalid path.", "err.invalidPath");
     }
-    const info = await stat(resolved.absolute).catch(() => undefined);
-    if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
     // Moving or copying the folder would take the nested library with it, and a copy would
     // leave a second set of its media for the next scan to adopt. The fold comes from the
     // volume the item sits on, which is the tree the carve-outs are compared in.
@@ -492,14 +490,19 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     }
 
     const folderResolved = await resolveLibraryPath(store.libraries(), folder);
-    if (!folderResolved) throw new AppError("Invalid path.", "err.invalidPath");
+    if (!folderResolved) {
+      if (recorded) throw recoveryConflict();
+      throw new AppError("Invalid path.", "err.invalidPath");
+    }
     const folderInfo = await stat(folderResolved.absolute).catch(() => undefined);
-    if (!folderInfo?.isDirectory()) throw new AppError("The destination folder does not exist.", "err.targetMissing");
+    if (!folderInfo?.isDirectory()) {
+      if (recorded) throw recoveryConflict();
+      throw new AppError("The destination folder does not exist.", "err.targetMissing");
+    }
 
     // Into another library the item simply keeps its name: the two folders have nothing to
     // do with one another, so the checks that guard a move inside one do not apply.
     const acrossLibraries = folderResolved.library.id !== resolved.library.id;
-    if (acrossLibraries) await assertMoveType(resolved.key, folderResolved.library, confirmTypeMismatch);
     const destination = acrossLibraries
       ? { path: posixJoin(folderResolved.relative, posixBase(resolved.relative)) }
       : moveDestination(resolved.relative, folderResolved.relative);
@@ -510,7 +513,22 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     }
     // Qualified, so a destination in another library resolves under its own root.
     const target = await resolveLibraryPath(store.libraries(), libraryPath(folderResolved.library.id, destination.path));
-    if (!target) throw new AppError("Invalid path.", "err.invalidPath");
+    if (!target) {
+      if (recorded) throw recoveryConflict();
+      throw new AppError("Invalid path.", "err.invalidPath");
+    }
+    // The stored record must describe this same queued operation. A record for another item,
+    // destination, or direction is not a safe starting point.
+    if (recorded && (recorded.from !== resolved.key || recorded.to !== target.key || recorded.copy !== copy)) {
+      throw recoveryConflict();
+    }
+    if (recorded) {
+      const resumed = await resumeTransfer(recorded, journal);
+      if (resumed !== undefined) return resumed;
+    }
+    if (acrossLibraries) await assertMoveType(resolved.key, folderResolved.library, confirmTypeMismatch);
+    const info = await lstat(resolved.absolute, { bigint: true }).catch(() => undefined);
+    if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
     if (await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
     // The thumbnails are keyed by path, so they are carried over rather than dropped:
@@ -525,14 +543,21 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };
     const targetName = posixBase(target.key);
     const targetStem = targetName.slice(0, targetName.length - path.extname(targetName).length);
-    const sidecarPairs = sidecars.names.map((name) => ({ from: name, to: renamedSidecar(name, sidecars.stem, targetStem) }));
+    const sidecarPairs = recorded?.sidecars ?? await Promise.all(sidecars.names.map(async (name) => ({
+      from: name,
+      to: renamedSidecar(name, sidecars.stem, targetStem),
+      identity: await captureTransferIdentity(path.join(path.dirname(resolved.absolute), name)),
+    })));
+    const sourceIdentity = await captureTransferIdentity(resolved.absolute).catch(() => {
+      throw recoveryConflict();
+    });
     const step: TransferStep = {
-      phase: "moving", copy, from: resolved.key, to: target.key, carried, sidecars: sidecarPairs,
+      phase: "moving", copy, from: resolved.key, to: target.key, sourceIdentity, publishedIdentity: null,
+      carried, sidecars: sidecarPairs,
       ...(cover && cover.key !== resolved.key && isPathWithin(resolved.key, cover.key) ? { cover: cover.key } : {}),
     };
-    // What is about to happen is on disk before the disk is touched.
-    await journal?.record(step);
-    const transferred = await transferLibraryPath(resolved.absolute, target.absolute, !copy, progress);
+    if (recorded && recorded.sourceIdentity !== sourceIdentity) throw recoveryConflict();
+    const transferred = await runTransfer(step, resolved.absolute, target.absolute, !copy, progress, journal);
     await carrySidecars(sidecarPairs, path.dirname(resolved.absolute), path.dirname(target.absolute), copy);
     await recordPublished(step, journal);
     return finishTransfer(step, transferred.sourceLeft);
@@ -543,39 +568,25 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
   const rerootItem = async (operation: Extract<LibraryOp, { op: "reroot" }>, item: string, progress: (bytes: number, total?: number) => void, journal: OpsJournal) => {
     setLibraryOpsWriting(true);
     try {
+      if (!item || item === "." || item === ".." || item.includes("/") || item.includes("\\") || item.includes("\0")) throw recoveryConflict();
       const source = path.join(operation.from, item);
       const target = path.join(operation.to, item);
-      // A record a crash left for this same item is finished from what it says, before the
-      // source's absence is read as a missing item: a finished re-root leaves the source
-      // gone, which is exactly the state that resumes here.
       const recorded = asRerootStep(journal.recorded);
-      if (recorded && recorded.from === source && recorded.to === target) {
-        const sourceExists = await pathPresent(source);
-        const targetExists = await pathPresent(target);
-        if (recorded.phase === "published") return { to: toPosix(target) };
-        // The move landed: the source is gone and the target holds it.
-        if (!sourceExists && targetExists) return { to: toPosix(target) };
-        // Both ends hold it: nothing is deleted, and the outcome is the one an interrupted
-        // move already reports.
-        if (sourceExists && targetExists) {
-          // A target that is only the destination's reservation is not a landed copy: the
-          // placeholder goes and the move runs from the start, below.
-          if (await placeholderOnly(source, target)) {
-            log("INFO", "A reserved re-root destination held nothing, running the move again", { from: source, to: target });
-            await removePlaceholder(source, target);
-          } else {
-            log("WARN", "An interrupted re-root left its source behind", { from: source, to: target });
-            return { to: toPosix(target) };
-          }
-        }
-        // Neither end holds it: nothing is guessed and nothing is deleted.
-        if (!sourceExists && !targetExists) throw new AppError("The file or folder does not exist.", "err.pathMissing");
-        // The move never landed: run it from the start, below.
+      if (recorded && (recorded.from !== source || recorded.to !== target)) throw recoveryConflict();
+      if (recorded) {
+        const owner = store.libraries().find(library => library.id === operation.libraryId);
+        if (!owner || path.resolve(owner.root) !== path.resolve(operation.from)) throw recoveryConflict();
+        const decision = await reconcileTransfer(recorded, source, target, operation.from, operation.to);
+        if (decision === "finish") return { to: toPosix(target) };
       }
-      const step: RerootStep = { kind: "reroot", phase: "moving", from: source, to: target };
-      // What is about to happen is on disk before the disk is touched.
-      await journal.record(step);
-      await transferLibraryPath(source, target, true, progress);
+      const sourceIdentity = await captureTransferIdentity(source).catch(() => {
+        throw recoveryConflict();
+      });
+      const step: RerootStep = {
+        kind: "reroot", phase: "moving", from: source, to: target, sourceIdentity, publishedIdentity: null,
+      };
+      if (recorded && recorded.sourceIdentity !== sourceIdentity) throw recoveryConflict();
+      await runTransfer(step, source, target, true, progress, journal);
       await recordPublished(step, journal);
       return { to: toPosix(target) };
     } finally { setLibraryOpsWriting(false); }
@@ -583,7 +594,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
 
   return {
     forgetLibraryPath, clearGeneratedArt, remapPersonalState, relocateLibraryPath, relocateArtwork, duplicateArtwork,
-    carryCoveringArtwork, pruneEmptiedFolders, deleteLibraryItem, assertMoveType, pathPresent,
-    finishTransfer, carryHandMove, recordPublished, resumeTransfer, transferLibraryItem, rerootItem,
+    carryCoveringArtwork, pruneEmptiedFolders, deleteLibraryItem, assertMoveType,
+    finishTransfer, carryHandMove, resumeTransfer, transferLibraryItem, rerootItem,
   };
 }

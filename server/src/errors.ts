@@ -99,6 +99,7 @@ const TABLE: Record<string, ErrorClassification> = {
   "err.nameTaken": { category: "library", retry: "action" },
   "err.libraryHoldsAnother": { category: "library", retry: "action" },
   "err.libraryTypeMismatch": { category: "library", retry: "action" },
+  "err.libraryRecoveryConflict": { category: "library", retry: "action" },
   "err.targetMissing": { category: "library", retry: "action" },
   "err.sameFolder": { category: "library", retry: "permanent" },
   "err.moveIntoItself": { category: "library", retry: "permanent" },

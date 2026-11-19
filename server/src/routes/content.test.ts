@@ -15,6 +15,8 @@ import { isPathWithin, withinLibraryRoot, type LibraryEntry } from "../library.j
 import type { Store, StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
 import { emptyUserData, type UserRecord } from "../users.js";
 import { PathReservations } from "../path-reservations.js";
+import { LibraryRenameRecovery } from "../library-rename-recovery.js";
+import { ArtworkCache } from "../artwork-cache.js";
 import { registerContentRoutes, type ContentDeps } from "./content.js";
 
 const instancePrefs: UserPrefs = {
@@ -182,14 +184,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     prefsOf: () => instancePrefs,
     progressOf: () => state.progress ?? {},
     relativeKeyIn: (libraryId, key) => (key.startsWith(`${libraryId}/`) ? key.slice(libraryId.length + 1) : undefined),
-    relocateLibraryPath: async (key, nextKey) => {
-      calls.relocated.push({ key, nextKey });
-      // One write only: a second rename must answer, held or not, so a test fails instead of hanging.
-      const hold = state.relocateHold;
-      state.relocateHold = undefined;
-      if (hold) { hold.reached(); await hold.release; }
-      if (state.relocateError) throw state.relocateError;
-    },
+    renameLibraryItem: (request) => renames.rename(request),
     scheduleFileArtwork: (key) => { calls.scheduledFile.push(key); },
     scheduleFolderArtwork: (key) => { calls.scheduledFolder.push(key); },
     sweepArtwork: async () => { calls.swept += 1; },
@@ -208,6 +203,26 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
       favorite: starredPath(qualify(item.path), new Set(data.favorites), data.watchlist as Record<string, unknown>, records, units),
     })),
   };
+  const dataDir = await makeRoot();
+  const renames = new LibraryRenameRecovery({
+    dataDir, libraries: () => libraries, users: () => [admin, ordinary],
+    carveOutsOf, healthOf: deps.healthOf, refreshHealth: async () => undefined,
+    actions: {
+      relocateLibraryPath: async (key, nextKey) => {
+        calls.relocated.push({ key, nextKey });
+        // One write only: a second rename must answer, held or not, so a test fails instead of hanging.
+        const hold = state.relocateHold;
+        state.relocateHold = undefined;
+        if (hold) { hold.reached(); await hold.release; }
+        if (state.relocateError) throw state.relocateError;
+      },
+    },
+    metaStore: { flushLibrary: async () => undefined },
+    artworks: new ArtworkCache(path.join(dataDir, "artwork")),
+    store: { flush: async () => undefined },
+    invalidateLibrary: () => undefined,
+  });
+  await renames.load();
   const app = express();
   app.use(express.json());
   registerContentRoutes(app, deps);
@@ -227,6 +242,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(dataDir, { recursive: true, force: true });
     },
   };
 };

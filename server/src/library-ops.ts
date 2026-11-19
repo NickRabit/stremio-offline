@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { AppError, messageKeyOf } from "./errors.js";
 import { renameWithRetry } from "./fs-retry.js";
+import { recoveryConflict } from "./library-recovery.js";
 import { log } from "./logger.js";
 import { destinationOf } from "./path-reservations.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
@@ -76,7 +77,7 @@ interface StoredJob extends OpsState {
   notifyPending?: boolean;
 }
 
-interface StoredState { version: 1; jobs: StoredJob[] }
+interface StoredState { version: 1 | 2; jobs: StoredJob[] }
 
 /** What a `finished` hook returns when the work the items did could not be completed. */
 export interface FinishOutcome { error: string; errorKey?: string; vars?: Record<string, string | number> }
@@ -128,12 +129,12 @@ export class LibraryOps {
       try { saved = JSON.parse(state.raw); } catch { saved = undefined; }
       const object = saved !== null && typeof saved === "object" && !Array.isArray(saved);
       const version = object ? (saved as { version?: unknown }).version : undefined;
-      if (object && typeof version === "number" && version > 1) {
+      if (object && typeof version === "number" && version > 2) {
         this.unreadable = true;
         log("ERROR", "The library operations file was written by a newer version, it is left as it is", { file: this.options.file, version });
         return;
       }
-      const shaped = object && version === 1 && Array.isArray((saved as { jobs?: unknown }).jobs);
+      const shaped = object && (version === 1 || version === 2) && Array.isArray((saved as { jobs?: unknown }).jobs);
       if (shaped) stored = state.raw;
       if (!shaped) {
         try {
@@ -147,7 +148,7 @@ export class LibraryOps {
         saved = undefined;
       }
     }
-    if ((saved as StoredState | undefined)?.version === 1 && Array.isArray((saved as StoredState).jobs)) {
+    if (saved && Array.isArray((saved as StoredState).jobs)) {
       this.jobs = (saved as StoredState).jobs.filter((job) => Array.isArray(job.operation?.items) && typeof job.id === "string")
         .map((job) => job.status === "running" || (job.status === "paused" && job.pauseReason !== "queue")
         ? { ...job, status: "paused", pauseReason: "queue", current: undefined }
@@ -311,6 +312,9 @@ export class LibraryOps {
         continue;
       }
       try {
+        if (job.step !== undefined && (job.step?.item !== item || job.step.data == null)) {
+          throw recoveryConflict();
+        }
         const result = await this.options.execute(job.operation, item, (bytes, total = bytes) => {
           job.bytes = baseBytes + Math.max(0, bytes);
           job.bytesTotal = Math.max(baseTotal, baseBytes + Math.max(0, total));
@@ -319,7 +323,19 @@ export class LibraryOps {
         job.results.push({ path: item, ok: true, ...result });
       } catch (error) {
         job.failed += 1;
-        job.results.push({ path: item, ok: false, error: error instanceof Error ? error.message : String(error), errorKey: messageKeyOf(error) });
+        const reason = error instanceof Error ? error.message : String(error);
+        const errorKey = messageKeyOf(error);
+        job.results.push({ path: item, ok: false, error: reason, errorKey });
+        if (errorKey === "err.libraryRecoveryConflict") {
+          // Keep the disputed step for inspection, and leave the rest of this batch alone.
+          job.status = "failed";
+          job.current = undefined;
+          job.finishedAt = new Date().toISOString();
+          job.error = reason;
+          job.errorKey = errorKey;
+          await this.finish(job);
+          continue;
+        }
       }
       job.current = undefined;
       job.step = undefined;
@@ -369,7 +385,7 @@ export class LibraryOps {
       this.finishing.delete(job.id);
       return;
     }
-    if (job.error !== undefined) {
+    if (job.error !== undefined && job.errorKey !== "err.libraryRecoveryConflict") {
       job.error = undefined;
       job.errorKey = undefined;
       job.errorVars = undefined;
@@ -386,7 +402,7 @@ export class LibraryOps {
     // A job still waiting on its hook is kept past the cut, or the next start would never retry it.
     const ended = this.jobs.filter((job) => job.status !== "running" && job.status !== "paused");
     const finished = ended.filter((job, index) => job.notifyPending || index >= ended.length - 20);
-    const state: StoredState = { version: 1, jobs: [...active, ...finished].sort((a, b) => a.startedAt.localeCompare(b.startedAt)) };
+    const state: StoredState = { version: 2, jobs: [...active, ...finished].sort((a, b) => a.startedAt.localeCompare(b.startedAt)) };
     const serialized = JSON.stringify(state, null, 2);
     if (serialized === this.stored) return Promise.resolve();
     this.saveTail = this.saveTail.catch(() => undefined).then(async () => {

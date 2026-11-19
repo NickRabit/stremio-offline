@@ -2,7 +2,7 @@ import type express from "express";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, rename, stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { askedSurface, imageSurface, logPoster, noteImage, type ImageFrom } from "../image-stats.js";
 import { etagMatches, FileSnapCache, fileEtag } from "../byte-cache.js";
@@ -18,14 +18,13 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryHealth } from "../library-probe.js";
 import type { TransferProgress } from "../library-transfer.js";
 import { localSeriesId, markerCovers } from "../local-series.js";
-import { log } from "../logger.js";
 import { assertUsableName } from "../naming.js";
-import { renamedSidecar, subtitleSidecars } from "../library-sidecars.js";
 import { fileProgressKeys, newestProgress, titleProgressKey } from "../progress-identity.js";
 import type { StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
 import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
-import { destinationOf, type PathReservations } from "../path-reservations.js";
+import { destinationOf, type HeldPath, type PathReservations } from "../path-reservations.js";
+import type { RenameRequest } from "../library-rename-recovery.js";
 
 /** Browsing a library and the file operations under it. */
 export interface ContentDeps extends RouteContext {
@@ -59,7 +58,7 @@ export interface ContentDeps extends RouteContext {
   prefsOf(req?: express.Request): UserPrefs;
   progressOf(data: UserData): Record<string, StoredProgress>;
   relativeKeyIn(libraryId: string, key: string): string | undefined;
-  relocateLibraryPath(key: string, nextKey: string, pin?: boolean): Promise<void>;
+  renameLibraryItem(request: RenameRequest): Promise<void>;
   scheduleFileArtwork(key: string, shape?: ArtShape): void;
   scheduleFolderArtwork(key: string, shape?: ArtShape): void;
   sweepArtwork(): Promise<void>;
@@ -79,7 +78,7 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, pathReservations, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, pathReservations, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, renameLibraryItem, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
   const fileSnaps = deps.fileSnaps ?? new FileSnapCache();
   const mosaics = deps.mosaics ?? new MosaicCache(path.join(os.tmpdir(), `mosaics-${randomBytes(6).toString("hex")}`));
 
@@ -263,31 +262,31 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     });
   }));
 
-  /** Holds `keys` for one piece of library work done inside a request, then asks the queue with
+  /** Holds `paths` for one piece of library work done inside a request, then asks the queue with
    *  them held, so neither another request nor a job queued meanwhile can work on the same item.
    *  Refuses as busy when either already does. */
-  const holdingPaths = async <T>(keys: string[], work: () => Promise<T>): Promise<T> => {
+  const holdingPaths = async <T>(paths: HeldPath[], work: () => Promise<T>): Promise<T> => {
     const busy = () => new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    const release = pathReservations.reserve(keys);
+    const release = pathReservations.reserve(paths);
     if (!release) throw busy();
     try {
-      if (await libraryPathBusy(keys, { ignoreReservations: true })) throw busy();
+      if (await libraryPathBusy(paths.map((held) => held.key), { ignoreReservations: true })) throw busy();
       return await work();
     } finally {
       release();
     }
   };
 
-  /** The qualified keys of the paths that resolve. One that does not is left to the work itself,
-   *  which refuses it with its own error. */
-  const heldKeys = async (values: string[]): Promise<string[]> =>
-    (await Promise.all(values.map((value) => resolveLibraryPath(store.libraries(), value)))).flatMap((resolved) => resolved ? [resolved.key] : []);
+  /** The paths that resolve. One that does not is left to the work itself, which refuses it
+   *  with its own error. */
+  const heldPaths = async (values: string[]): Promise<HeldPath[]> =>
+    (await Promise.all(values.map((value) => resolveLibraryPath(store.libraries(), value)))).flatMap((resolved) => resolved ? [resolved] : []);
 
   app.delete("/api/library/item", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
     assertStillAdmin(store.users(), currentUser(req));
     if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    await holdingPaths(await heldKeys([relative]), () => deleteLibraryItem(relative));
+    await holdingPaths(await heldPaths([relative]), () => deleteLibraryItem(relative));
     res.status(204).end();
   }));
 
@@ -334,7 +333,8 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (!target) throw new AppError("Invalid path.", "err.invalidPath");
     // A rename that only changes the case of a name is a real rename where the filesystem folds
     // case; there the target is the same file, and `fileExists` must not be read as a clash.
-    if (!sameFile(target.absolute, resolved.absolute) && await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
+    if (!sameFile(target.absolute, resolved.absolute, healthOf(resolved.library).caseInsensitive)
+      && await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
     // The last moment before anything on disk moves. Checking here rather than at the state
     // write is what closes the window without risking an inconsistency: refuse now and nothing
@@ -343,7 +343,8 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // Both names stay held until the bindings have moved: a second rename of the new name in
     // the meantime would find no bindings under it, and this one would then write them under a
     // name the video has already left.
-    const release = pathReservations.reserve([resolved.key, target.key]);
+    if (await libraryPathBusy([target.key])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
+    const release = pathReservations.reserve([resolved, target]);
     if (!release) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
     try {
       // Asked again with both names held: a job queued since the first check above would
@@ -352,36 +353,11 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       if (await libraryPathBusy([resolved.key, target.key], { ignoreReservations: true })) {
         throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
       }
-      // Read before the rename: the player finds a video's subtitles by its name, so they take
-      // the new one with it or the player stops offering them.
-      const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };
-      await rename(resolved.absolute, target.absolute);
-      // A failed binding write must not leave the subtitles under the old name.
-      for (const name of sidecars.names) {
-        const from = path.join(path.dirname(resolved.absolute), name);
-        const to = path.join(path.dirname(target.absolute), renamedSidecar(name, sidecars.stem, wanted));
-        try {
-          // Never over another file; a case-only rename on a folding volume is the same file.
-          if (!sameFile(to, from) && await fileExists(to)) {
-            log("INFO", "A subtitle kept its name, another file already has the new one", { file: name });
-            continue;
-          }
-          await rename(from, to);
-        } catch (error) {
-          log("WARN", "A subtitle could not follow its renamed video", { file: name, reason: error instanceof Error ? error.message : String(error) });
-        }
-      }
-      // The disk has changed either way: a failed binding write still has to drop the listing
-      // that names the old file.
-      try {
-        await relocateLibraryPath(resolved.key, target.key);
-      } finally {
-        invalidateLibrary();
-      }
+      await renameLibraryItem({ actor, source: resolved, target });
     } finally {
+      invalidateLibrary();
       release();
     }
-    log("INFO", "Renamed in the library", { from: relative, to: nextRelative });
     res.json({ path: nextRelative });
   }));
 
@@ -415,7 +391,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const folder = String(req.body.folder ?? "").trim();
     // The source, and the name it will take in the destination: a rename of either while the
     // transfer runs -- which can take minutes across volumes -- would act under the copy.
-    const held = await heldKeys([relative, destinationOf(folder, relative)]);
+    const held = await heldPaths([relative, destinationOf(folder, relative)]);
     const moved = await holdingPaths(held, () => transferLibraryItem(relative, folder,
       req.body.copy === true, undefined, req.body.confirmTypeMismatch === true));
     res.json({ path: moved });

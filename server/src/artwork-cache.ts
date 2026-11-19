@@ -471,6 +471,11 @@ export class ArtworkCache {
       .sort((left, right) => right.at - left.at);
   }
 
+  private evictionGuard?: (file: string) => boolean;
+  protectFromEviction(guard: (file: string) => boolean): void {
+    this.evictionGuard = guard;
+  }
+
   private evict(): Promise<void> { return this.exclusively(() => this.evictOnce()); }
 
   /** Oldest first, down to `evictionFloor(cap)` so this does not run on every write. */
@@ -494,6 +499,7 @@ export class ArtworkCache {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") { this.entries.delete(name); total -= current.bytes; removed += 1; }
         continue;
       }
+      if (this.evictionGuard?.(file)) continue;
       try {
         await rm(file, { force: true });
       } catch (error) {

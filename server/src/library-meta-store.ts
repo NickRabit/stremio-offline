@@ -592,6 +592,14 @@ export class LibraryMetaStore {
     }
   }
 
+  /** A journal can be retired only after the affected bindings have reached storage. */
+  async flushLibrary(libraryId: string): Promise<void> {
+    await this.write(libraryId);
+    if (this.dirty.has(libraryId) || this.protectedNames.has(libraryId)) {
+      throw new Error("The library metadata could not be committed.");
+    }
+  }
+
   /** Called on shutdown and before an export, so nothing is lost to the debounce. */
   async flush() {
     for (const timer of this.timers.values()) clearTimeout(timer);

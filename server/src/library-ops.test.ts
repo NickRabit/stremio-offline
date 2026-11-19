@@ -102,7 +102,7 @@ test("load does not rewrite an already-normal operations file", async () => {
   const file = path.join(dataDir, "library-ops.json");
   const queue = new LibraryOps({ file, execute: async () => ({}) });
   try {
-    await writeFile(file, JSON.stringify({ version: 1, jobs: [] }, null, 2));
+    await writeFile(file, JSON.stringify({ version: 2, jobs: [] }, null, 2));
     await mkdir(`${file}.tmp`);
     await queue.load();
     assert.deepEqual(queue.snapshot().jobs, []);
@@ -526,7 +526,7 @@ test("enqueue has written the journal when it resolves", async () => {
   try {
     const job = await h.queue.enqueue({ op: "delete", items: ["one"] });
     const saved = JSON.parse(await readFile(path.join(h.dataDir, "library-ops.json"), "utf8"));
-    assert.equal(saved.version, 1);
+    assert.equal(saved.version, 2);
     assert.ok(saved.jobs.some((row: { id: string }) => row.id === job.id), "the job is in the journal");
   } finally {
     release();
@@ -542,7 +542,7 @@ test("an absent journal file loads as an empty queue and is written out", async 
     const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}) });
     queues.push(queue);
     await queue.load();
-    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { version: 1, jobs: [] });
+    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { version: 2, jobs: [] });
   } finally { await cleanup(h.dataDir, queues); }
 });
 
@@ -551,7 +551,7 @@ test("a journal with a newer version loads as empty and is left alone", async ()
   const queues = [h.queue];
   try {
     const file = path.join(h.dataDir, "future.json");
-    const original = JSON.stringify({ version: 2, jobs: [] });
+    const original = JSON.stringify({ version: 3, jobs: [] });
     await writeFile(file, original);
     const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}) });
     queues.push(queue);
@@ -627,7 +627,7 @@ test("the step is cleared when the item fails", async () => {
   } finally { await cleanup(h.dataDir, queues); }
 });
 
-test("a resumed item is handed its recorded step, and one naming another item is ignored", async () => {
+test("a resumed item is handed its recorded step, and one naming another item stops its batch", async () => {
   const h = await harness();
   const queues: LibraryOps[] = [h.queue];
   const recorded: Array<[string, unknown]> = [];
@@ -641,7 +641,7 @@ test("a resumed item is handed its recorded step, and one naming another item is
     const file = path.join(h.dataDir, "resumed.json");
     await writeFile(file, JSON.stringify({ version: 1, jobs: [
       job("mine", "one", { item: "one", data: step }),
-      job("other", "two", { item: "elsewhere", data: step }),
+      { ...job("other", "two", { item: "elsewhere", data: step }), total: 2, operation: { op: "move", items: ["two", "three"], target: "Archive" } },
     ] }));
     const queue = new LibraryOps({
       file, retryMs: 10,
@@ -649,9 +649,16 @@ test("a resumed item is handed its recorded step, and one naming another item is
     });
     queues.push(queue);
     await queue.load();
-    await waitFor(() => recorded.length === 2);
+    await waitFor(() => queue.snapshot().jobs.find((entry) => entry.id === "other")?.status === "failed");
+    await queue.settled();
     assert.deepEqual(recorded.find(([item]) => item === "one")?.[1], step, "the step stored for the item under way is handed over");
-    assert.equal(recorded.find(([item]) => item === "two")?.[1], undefined, "a step naming another item is not");
+    assert.deepEqual(recorded.map(([item]) => item), ["one"]);
+    const failed = queue.snapshot().jobs.find((entry) => entry.id === "other")!;
+    assert.equal(failed.errorKey, "err.libraryRecoveryConflict");
+    assert.equal(failed.failed, 1);
+    assert.equal(failed.done, 0);
+    const saved = JSON.parse(await readFile(file, "utf8")).jobs.find((entry: { id: string }) => entry.id === "other");
+    assert.deepEqual(saved.step, { item: "elsewhere", data: step });
   } finally { await cleanup(h.dataDir, queues); }
 });
 

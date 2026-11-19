@@ -115,14 +115,33 @@ time: a job that is still running covers every item it was given, and the file
 inside a folder it holds, so a second move, rename or delete of any of them is
 refused rather than racing it.
 
-A move or copy survives the server stopping halfway. Before the bytes move, the
-queue writes down where the item is going; on the next start it looks at both
-places and finishes what is left: the match, the favourites, the resume positions
-and the thumbnails follow a file that already arrived, and a file that never left
-is moved again. When the bytes turn out to be in both places, both are kept and
-the item counts as moved with its source left behind, the same as when the
-source cannot be deleted. When they are in neither, the item fails and nothing
-is changed.
+Before a queued move or copy starts, it records the source object's filesystem
+identity. For a folder this includes the identities, names, sizes and modification
+times of its descendants. The check reads filesystem metadata without hashing
+video contents. A copy also records the completed staging object's identity before
+publishing it. On restart, the server checks the source and destination against
+the saved operation before it updates matches, favourites, progress or artwork.
+
+If recovery reports a conflict, the batch stops at that item. This can happen
+when a file was replaced, the NAS cannot supply a stable identity, or an older
+server wrote the interrupted operation. Check both locations and the operation
+results before deciding which items still need moving. Keep both versions if
+their origin is uncertain. A zero-byte file or an empty folder can belong to
+another application. Items completed earlier in the batch stay where they landed.
+
+### Renaming an item
+
+Before renaming a file or folder, the server saves both names, the filesystem
+identity and a list of its subtitles and cached pictures under
+`DATA_DIR/library-rename-intents/`. Startup replays unfinished renames before
+scanning the library. Each account keeps its favourites and resume positions.
+A subtitle whose new name is already occupied stays under its original name.
+
+A conflicting picture or a replaced video leaves the rename pending. The server
+log identifies the operation and both paths. Keep the journal and both versions
+while inspecting the files. If a share was unavailable, restore it and restart
+the server to retry recovery. A NAS that cannot supply a stable identity may
+refuse a rename before any files move.
 
 ## Files moved outside the app
 
