@@ -181,7 +181,7 @@ fun Osd(
   onForward10: () -> Unit,
   onToggle: () -> Unit,
   /** A LEFT/RIGHT press on the focused progress bar: -1 rewinds, +1 forwards, with the event time. */
-  onSeekStep: (Int, Long) -> Unit,
+  onSeekStep: (Int, Long, Boolean) -> Unit,
   onActivity: () -> Unit,
   onTracks: () -> Unit = {},
   tracksText: String = "",
@@ -251,8 +251,13 @@ fun Osd(
           }
         }
       }
-      // The time of day, top right: a paused film tells the viewer how late it is.
-      PlayerClock(Modifier.padding(start = 24.dp))
+      Column(
+        modifier = Modifier.padding(start = 24.dp),
+        horizontalAlignment = Alignment.End,
+      ) {
+        PlayerClock()
+        PlayerEndsAt(position, duration)
+      }
     }
 
     Column(
@@ -378,7 +383,7 @@ private fun Timeline(
   chapters: List<PlaybackChapterDto>,
   segments: IntroSegmentsDto?,
   duration: Double,
-  onSeekStep: (Int, Long) -> Unit,
+  onSeekStep: (Int, Long, Boolean) -> Unit,
   onActivity: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -396,8 +401,8 @@ private fun Timeline(
       .onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         when (event.key) {
-          Key.DirectionLeft -> { onActivity(); onSeekStep(-1, event.nativeKeyEvent.eventTime); true }
-          Key.DirectionRight -> { onActivity(); onSeekStep(1, event.nativeKeyEvent.eventTime); true }
+          Key.DirectionLeft -> { onActivity(); onSeekStep(-1, event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount > 0); true }
+          Key.DirectionRight -> { onActivity(); onSeekStep(1, event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount > 0); true }
           else -> false
         }
       },

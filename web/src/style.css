@@ -910,7 +910,9 @@ html.dialog-locked,html.dialog-locked body{overflow:hidden;overscroll-behavior:n
 .player-head .player-star span{display:none}
 .player-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
 .player-badges i{font-style:normal;font-size:10px;font-weight:800;padding:2px 6px;border:1px solid #ffffff33;border-radius:5px;color:var(--text)}
-.player-chapter{font-size:11px;color:var(--muted);margin:0 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.player-meta{display:flex;align-items:baseline;gap:12px;margin:0 0 4px;min-width:0}
+.player-chapter{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.player-ends-at{margin-left:auto;font-size:11px;color:var(--muted);white-space:nowrap;flex-shrink:0}
 .player-chapters{display:grid;gap:2px;max-height:220px;overflow:auto}
 .player-chapters button{justify-content:space-between;font-size:11px;padding:7px 9px}
 .player-chapters button[aria-current="true"]{border-color:var(--accent);color:var(--accent2)}

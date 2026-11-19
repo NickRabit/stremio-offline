@@ -158,13 +158,11 @@ fun PlayerOverlayShell(
     bubble = seekBubble((target - previewStart).toLong())
   }
 
-  fun pressSeek(direction: Int, eventTime: Long) {
+  fun pressSeek(direction: Int, eventTime: Long, repeat: Boolean) {
     val base = if (preview.isNaN()) position else preview
     if (preview.isNaN()) previewStart = position
-    if (previewDirection != direction) {
-      previewDirection = direction
-      holdStart = eventTime
-    }
+    if (!repeat || previewDirection != direction) holdStart = eventTime
+    previewDirection = direction
     stripToken++
     val limit = if (duration > 0) duration else Double.MAX_VALUE
     preview = (base + direction * seekStep(eventTime - holdStart)).coerceIn(0.0, limit)
@@ -289,8 +287,8 @@ fun PlayerOverlayShell(
         activity++
         // The media keys seek like the pad, held or not.
         when (event.key) {
-          Key.MediaFastForward -> { pressSeek(1, event.nativeKeyEvent.eventTime); return@onPreviewKeyEvent true }
-          Key.MediaRewind -> { pressSeek(-1, event.nativeKeyEvent.eventTime); return@onPreviewKeyEvent true }
+          Key.MediaFastForward -> { pressSeek(1, event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount > 0); return@onPreviewKeyEvent true }
+          Key.MediaRewind -> { pressSeek(-1, event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount > 0); return@onPreviewKeyEvent true }
         }
         val key = playerKeyOf(event.key) ?: return@onPreviewKeyEvent false
         if (key == PlayerKey.Center && !controls && onSkip != null) {
@@ -298,7 +296,7 @@ fun PlayerOverlayShell(
           return@onPreviewKeyEvent true
         }
         val intent = playerKeyIntent(key, controls) ?: return@onPreviewKeyEvent false
-        intent.seekDirection?.let { pressSeek(it, event.nativeKeyEvent.eventTime) }
+        intent.seekDirection?.let { pressSeek(it, event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount > 0) }
         if (intent.exit) onExit()
         if (intent.showControls) controls = true
         if (intent.hideControls) controls = false
@@ -320,7 +318,7 @@ fun PlayerOverlayShell(
         onBack10 = { seekBy(-SEEK_STEP_SECONDS) },
         onForward10 = { seekBy(SEEK_STEP_SECONDS) },
         onToggle = { activity++; onTogglePause() },
-        onSeekStep = { direction, eventTime -> pressSeek(direction, eventTime) },
+        onSeekStep = { direction, eventTime, repeat -> pressSeek(direction, eventTime, repeat) },
         onActivity = { activity++ },
         onTracks = onTracks,
         tracksText = tracksText,
