@@ -97,6 +97,8 @@ const publicJob = ({ operation: _operation, step: _step, cancelRequested: _cance
 
 const isTerminal = (status: OpsStatus) => status === "completed" || status === "failed" || status === "cancelled";
 
+const stopsBatch = (key?: string) => key === "err.libraryRecoveryConflict" || key === "err.libraryMetadataWrite";
+
 export class LibraryOps {
   private jobs: StoredJob[] = [];
   private pumping = false;
@@ -338,7 +340,7 @@ export class LibraryOps {
         const reason = error instanceof Error ? error.message : String(error);
         const errorKey = messageKeyOf(error);
         job.results.push({ path: item, ok: false, error: reason, errorKey });
-        if (errorKey === "err.libraryRecoveryConflict" || errorKey === "err.libraryMetadataWrite") {
+        if (stopsBatch(errorKey)) {
           // Keep the disputed step for inspection, and leave the rest of this batch alone.
           job.status = "failed";
           job.current = undefined;
@@ -408,7 +410,13 @@ export class LibraryOps {
       this.finishing.delete(job.id);
       return;
     }
-    if (job.error !== undefined && job.errorKey !== "err.libraryRecoveryConflict") {
+    const itemFailure = job.results.at(-1);
+    if (itemFailure && !itemFailure.ok && stopsBatch(itemFailure.errorKey)) {
+      job.status = "failed";
+      job.error = itemFailure.error;
+      job.errorKey = itemFailure.errorKey;
+      job.errorVars = undefined;
+    } else if (job.error !== undefined && !stopsBatch(job.errorKey)) {
       job.error = undefined;
       job.errorKey = undefined;
       job.errorVars = undefined;
@@ -424,7 +432,7 @@ export class LibraryOps {
     const active = this.jobs.filter((job) => job.status === "running" || job.status === "paused");
     // A job still waiting on its hook is kept past the cut, or the next start would never retry it.
     const ended = this.jobs.filter((job) => job.status !== "running" && job.status !== "paused");
-    const finished = ended.filter((job, index) => job.notifyPending || index >= ended.length - 20);
+    const finished = ended.filter((job, index) => job.step || job.notifyPending || index >= ended.length - 20);
     const state: StoredState = { version: 2, jobs: [...active, ...finished].sort((a, b) => a.startedAt.localeCompare(b.startedAt)) };
     const serialized = JSON.stringify(state, null, 2);
     if (serialized === this.stored) return Promise.resolve();

@@ -633,6 +633,52 @@ for (const key of ["err.pathMissing", "err.libraryMetadataWrite"]) {
   });
 }
 
+test("a metadata write failure keeps the batch failed and its checkpoint across history trimming and restart", async () => {
+  const h = await harness();
+  const file = path.join(h.dataDir, "transfer.json");
+  const queues = [h.queue];
+  const seen: string[] = [];
+  const checkpoint = { phase: "published", from: "one", to: "Archive/one" };
+  const openQueue = async () => {
+    const queue = new LibraryOps({
+      file,
+      execute: async (_operation, item, _progress, journal) => {
+        seen.push(item);
+        if (item === "one") {
+          await journal.record(checkpoint);
+          throw new AppError("Could not save library metadata", "err.libraryMetadataWrite", 503);
+        }
+        return {};
+      },
+    });
+    queues.push(queue);
+    await queue.load();
+    return queue;
+  };
+  try {
+    const queue = await openQueue();
+    const job = await queue.enqueue({ op: "move", items: ["first", "one", "last"], target: "Archive" });
+    await queue.settled();
+    const assertFailure = (current: LibraryOps) => {
+      const saved = current.snapshot().jobs.find(entry => entry.id === job.id);
+      assert.equal(saved?.status, "failed");
+      assert.equal(saved?.errorKey, "err.libraryMetadataWrite");
+      assert.equal(saved?.done, 1);
+      assert.equal(saved?.failed, 1);
+    };
+    assertFailure(queue);
+    for (let i = 0; i < 21; i++) {
+      await queue.enqueue({ op: "favorite", favorite: true, items: [`other-${i}`] });
+      await queue.settled();
+    }
+    queue.stop();
+    const stored = JSON.parse(await readFile(file, "utf8")).jobs.find((entry: { id: string }) => entry.id === job.id);
+    assert.deepEqual(stored?.step, { item: "one", data: checkpoint });
+    assertFailure(await openQueue());
+    assert.equal(seen.includes("last"), false);
+  } finally { await cleanup(h.dataDir, queues); }
+});
+
 test("a resumed item is handed its recorded step, and one naming another item stops its batch", async () => {
   const h = await harness();
   const queues: LibraryOps[] = [h.queue];
