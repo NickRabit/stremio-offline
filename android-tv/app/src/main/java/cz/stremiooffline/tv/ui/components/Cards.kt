@@ -376,11 +376,11 @@ fun WideCard(
         }
       }
     }
-    Spacer(Modifier.height(5.dp))
+    Spacer(Modifier.height(6.dp))
     Text(
       label,
       color = Tokens.Text,
-      fontSize = 10.sp,
+      fontSize = 13.sp,
       fontWeight = FontWeight.SemiBold,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
@@ -390,10 +390,10 @@ fun WideCard(
       Text(
         caption,
         color = Tokens.Muted,
-        fontSize = 9.5.sp,
+        fontSize = 12.5.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.width(190.dp).alpha(if (focused || selected) 1f else 0.9f),
+        modifier = Modifier.width(190.dp).padding(top = 1.dp).alpha(if (focused || selected) 1f else 0.9f),
       )
     }
   }
