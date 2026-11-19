@@ -591,19 +591,11 @@ test("a reader that hangs up after a jump is not handed the rest of the film", a
   t.after(harness.close);
   const { opens } = rangedOriginal(harness, 64 * 1024);
   const resourceId = harness.seedRemote();
-  const url = new URL(harness.base);
-  await new Promise<void>((resolve, reject) => {
-    const request = http.request({ host: url.hostname, port: url.port, path: `/api/media/${resourceId}`, headers: { "x-user": "ada", range: "bytes=100-" } }, (response) => {
-      response.once("data", () => {
-        response.pause();
-        setTimeout(() => { request.destroy(); resolve(); }, 15);
-      });
-    });
-    request.on("error", () => undefined);
-    request.on("close", () => resolve());
-    request.end();
-  });
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  await readSome(harness, resourceId, 100, 8192);
+  // Advance the grace period after the server has observed the reader disconnect.
+  t.mock.timers.runAll();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(opens, ["bytes=100-4195", "bytes=4196-8291"]);
 });
 
