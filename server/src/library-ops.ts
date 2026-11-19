@@ -178,8 +178,7 @@ export class LibraryOps {
    *  wait for it. A `reroot` job names its library instead: those items are relative to the
    *  folder the library is leaving, which is not a path on the wire. */
   activeItems(): string[] {
-    return this.jobs
-      .filter((job) => job.status === "running" || job.status === "paused")
+    return this.activeJobs()
       // A move or copy also covers the names it is writing in its destination: a request that
       // renamed or deleted that folder meanwhile would act under the transfer.
       .flatMap((job) => {
@@ -188,6 +187,19 @@ export class LibraryOps {
         if (operation.op === "move" || operation.op === "copy") return [...operation.items, ...operation.items.map((item) => destinationOf(operation.target, item))];
         return operation.items;
       });
+  }
+
+  /** The folders a `reroot` job that has not finished moves between, as absolute paths: the root
+   *  it leaves and the one it writes into, which may sit inside another library. */
+  activeRoots(): string[] {
+    return this.activeJobs().flatMap((job) => job.operation.op === "reroot" ? [job.operation.from, job.operation.to] : []);
+  }
+
+  /** Jobs still running or paused, and terminal ones whose `finished` hook is still at work: a
+   *  re-root's hook switches the library's root, and until it has the store still names the
+   *  old one while the content is already in the new one. */
+  private activeJobs(): StoredJob[] {
+    return this.jobs.filter((job) => job.status === "running" || job.status === "paused" || this.finishing.has(job.id));
   }
 
   /** Jobs whose items all ran but whose `finished` hook reported it could not complete them,
@@ -360,10 +372,21 @@ export class LibraryOps {
    *  allowed to stop the pump. The flag only comes off once the hook is through, so a
    *  crash between the two saves is repaired by `load()`. */
   private async finish(job: StoredJob) {
-    await this.save();
-    if (this.notified.has(job.id)) return;
+    if (this.notified.has(job.id)) {
+      await this.save();
+      return;
+    }
+    // Marked before the save, in the same turn the job turned terminal: a re-root's roots and a
+    // transfer's items stay covered without a gap until the hook is through.
     this.notified.add(job.id);
     this.finishing.add(job.id);
+    try {
+      await this.save();
+    } catch (error) {
+      this.notified.delete(job.id);
+      this.finishing.delete(job.id);
+      throw error;
+    }
     let outcome: FinishOutcome | void;
     try {
       outcome = await this.options.finished?.(publicJob(job), job.operation);

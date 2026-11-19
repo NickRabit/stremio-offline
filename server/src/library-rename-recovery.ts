@@ -14,12 +14,13 @@ import { holdsLibraryRoot, withinLibraryRoot, isPathWithin } from "./library.js"
 import type { LibraryHealth } from "./library-probe.js";
 import { renameAcross } from "./library-transfer.js";
 import {
-  libraryPath, parseLibraryPath, posixBase, posixDir, resolveLibraryPath, sameFile,
+  libraryPath, parseLibraryPath, placed, posixBase, posixDir, resolveLibraryPath, sameFile,
   type LibraryRecord, type ResolvedPath,
 } from "./libraries.js";
 import { captureTransferIdentity, hasEvidence, reconcileTransfer, recoveryConflict, type RecoveryEvidence } from "./library-recovery.js";
 import { isSidecarOf, renamedSidecar, subtitleSidecars } from "./library-sidecars.js";
 import { log } from "./logger.js";
+import { heldOverlap, type HeldPlace } from "./path-reservations.js";
 import { assertStillAdmin } from "./roles.js";
 import type { UserRecord } from "./users.js";
 
@@ -210,6 +211,21 @@ export class LibraryRenameRecovery {
   conflicts(keys: readonly string[]): boolean {
     if (this.damaged) return true;
     return [...this.records.values()].some(({ intent }) => keys.some(key => this.overlaps(intent, key)));
+  }
+
+  /** Whether a rename in flight holds any of these places on disk. `conflicts` compares keys,
+   *  which misses the same file reached through a nested library or a root typed through a
+   *  link; this resolves the journaled names and compares where they are. */
+  async holdsPlaces(places: readonly HeldPlace[]): Promise<boolean> {
+    if (this.damaged) return true;
+    const keys = this.busyKeys();
+    if (!keys.length || !places.length) return false;
+    const libraries = this.deps.libraries();
+    const held = await Promise.all(keys.map(async (key) => {
+      const resolved = await resolveLibraryPath(libraries, key).catch(() => undefined);
+      return resolved && placed(resolved);
+    }));
+    return held.some((at) => at !== undefined && places.some((place) => heldOverlap(at, place, true)));
   }
 
   async load(): Promise<void> {
@@ -586,6 +602,12 @@ export class LibraryRenameRecovery {
       const to = path.join(targetDir, sidecar.to);
       const caseOnly = sameFile(from, to, this.deps.healthOf(library).caseInsensitive) && path.basename(from) !== path.basename(to);
       if (caseOnly) {
+        // On a volume that folds case either spelling finds the file; nothing under any spelling
+        // means it was removed while the rename ran, as below. A different file is still a conflict.
+        if (await optionalIdentity(from) === undefined) {
+          log("WARN", "A subtitle disappeared before the rename could carry it", { file: sidecar.from });
+          continue;
+        }
         const result = await this.caseOnlyEntry(from, to, sidecar.sourceIdentity, library);
         if (result === "retry") {
           await renameWithRetry(from, to);
@@ -609,7 +631,13 @@ export class LibraryRenameRecovery {
         }
         throw recoveryConflict();
       }
-      if (sourceIdentity === undefined) throw recoveryConflict();
+      if (sourceIdentity === undefined) {
+        // Gone under both names: removed outside the server while the rename ran. There is
+        // nothing left to carry, and refusing would hold the journal -- and every scan behind
+        // it -- for good, with the video and its bindings apart.
+        log("WARN", "A subtitle disappeared before the rename could carry it", { file: sidecar.from });
+        continue;
+      }
       const moved = await renameAcross(from, to);
       if (!moved) throw recoveryConflict();
       await syncDirectory(targetDir);

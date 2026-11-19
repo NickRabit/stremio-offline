@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import type { Role } from "./users.js";
@@ -254,6 +254,32 @@ export interface ResolvedPath {
   /** Qualified path: the library id, then `relative`. */
   key: string;
   absolute: string;
+}
+
+/** A resolved path with `place`: where the entry sits on disk, every link on the way to it
+ *  resolved and the part that does not exist yet kept on the end. Two libraries, one with its
+ *  root typed through a link, reach one file under two spellings, and only this one is shared.
+ *  The entry's own name is kept, not followed: a rename, move or delete acts on a link itself,
+ *  in the folder it sits in. Only a root is followed, since there the link is the library.
+ *  `via` names, the same way, every link inside the library the path passes through: moving
+ *  `Alias` while something works on `Alias/Heat.mkv` pulls the path from under that work. */
+export type PlacedPath = ResolvedPath & { place: string; via: string[] };
+
+/** Where one entry sits: its folder with links resolved, its own name kept. */
+const entryPlace = async (absolute: string): Promise<string> =>
+  path.join(await realTarget(path.dirname(absolute)), path.basename(absolute)).normalize("NFC");
+
+/** Adds `place` and `via`. Done only where holds are compared, not on every resolution: it
+ *  walks the disk. */
+export async function placed(resolved: ResolvedPath): Promise<PlacedPath> {
+  if (!resolved.relative) return { ...resolved, place: (await realTarget(resolved.absolute)).normalize("NFC"), via: [] };
+  const root = path.resolve(resolved.library.root);
+  const via: string[] = [];
+  for (let folder = path.dirname(resolved.absolute); folder !== root && isInside(folder, root); folder = path.dirname(folder)) {
+    const info = await lstat(folder).catch(() => undefined);
+    if (info?.isSymbolicLink()) via.push(await entryPlace(folder));
+  }
+  return { ...resolved, place: await entryPlace(resolved.absolute), via };
 }
 
 /** Resolve, guard and return the absolute filesystem path behind a wire path.
