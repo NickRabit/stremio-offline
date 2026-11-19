@@ -5,6 +5,7 @@ import { AppError, messageKeyOf } from "./errors.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { recoveryConflict } from "./library-recovery.js";
 import { log } from "./logger.js";
+import { destinationOf } from "./path-reservations.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 
 /** Who asked for the operation. A job is carried out long after the request that queued it,
@@ -179,7 +180,14 @@ export class LibraryOps {
   activeItems(): string[] {
     return this.jobs
       .filter((job) => job.status === "running" || job.status === "paused")
-      .flatMap((job) => job.operation.op === "reroot" ? [job.operation.libraryId] : job.operation.items);
+      // A move or copy also covers the names it is writing in its destination: a request that
+      // renamed or deleted that folder meanwhile would act under the transfer.
+      .flatMap((job) => {
+        const operation = job.operation;
+        if (operation.op === "reroot") return [operation.libraryId];
+        if (operation.op === "move" || operation.op === "copy") return [...operation.items, ...operation.items.map((item) => destinationOf(operation.target, item))];
+        return operation.items;
+      });
   }
 
   /** Jobs whose items all ran but whose `finished` hook reported it could not complete them,

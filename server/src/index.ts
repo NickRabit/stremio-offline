@@ -150,7 +150,7 @@ import { SearchError } from "./search-contracts.js";
 import { STREAM_SORTS } from "./stream-sort.js";
 import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 import { createMetaCache } from "./meta-cache.js";
-import { PathReservations } from "./path-reservations.js";
+import { PathReservations, placesOverlap, queuedItemPaths, reservationPause } from "./path-reservations.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -2626,10 +2626,12 @@ async function titleArtworkUrls(key: string): Promise<{ poster?: string; wide?: 
  *  real ancestor: a 500-item operation checked against a 500-item job one key at a time
  *  would be a quarter of a million of those walks before anything is queued. */
 const pathReservations = new PathReservations();
-const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
+const libraryPathBusy = async (keys: string[], options: { ignoreReservations?: boolean } = {}): Promise<string | undefined> => {
   // A rename finishes inside its request and never enters the queue; it holds its names here.
   if (renameRecovery.hasUnreadableRecord()) return "rename";
-  const items = [...libraryOps.activeItems(), ...pathReservations.keys(), ...renameRecovery.busyKeys()];
+  // The rename itself asks with its own names already held, so it only wants the queue and
+  // the rename journal.
+  const items = [...libraryOps.activeItems(), ...(options.ignoreReservations ? [] : pathReservations.keys()), ...renameRecovery.busyKeys()];
   if (!items.length) return undefined;
   const libraries = store.libraries();
   const active = (await Promise.all(items.map(async (item) =>
@@ -2639,8 +2641,10 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
     const wanted = await resolveLibraryPath(libraries, key);
     if (!wanted) continue;
     if (renameRecovery.conflicts([wanted.key])) return wanted.key;
-    const covering = active.find(({ resolved }) =>
-      isPathWithin(resolved.absolute, wanted.absolute) || isPathWithin(wanted.absolute, resolved.absolute));
+    // On a volume that folds case, `archive` is the folder `Archive`: compared as the volume
+    // reads them, or a rename of a destination folder spelled in another case would pass.
+    const covering = active.find(({ resolved }) => placesOverlap(resolved.absolute, wanted.absolute,
+      healthOf(resolved.library).caseInsensitive || healthOf(wanted.library).caseInsensitive));
     if (covering) return covering.item;
   }
   return undefined;
@@ -2949,6 +2953,9 @@ const libraryOps = new LibraryOps({
     // guard below would be skipped. The two blockers that still apply are the same ones:
     // a disk that is away, and a file a session or a download is using right now.
     if (operation.op === "reroot") {
+      // A rename in flight inside this library holds its names; the whole tree is about to move.
+      const held = reservationPause(pathReservations, operation, []);
+      if (held) return held;
       await refreshLibraryHealth();
       if (libraryHealth.get(operation.libraryId)?.unreachable) return "library";
       const source = path.join(operation.from, item);
@@ -2962,6 +2969,13 @@ const libraryOps = new LibraryOps({
     }
     const parsed = parseLibraryPath(item);
     const resolved = await resolveLibraryPath(store.libraries(), item);
+    // A job queued while a request held the same item -- or the name a move gives it in its
+    // destination -- waits until that request is done: its check could not see a reservation
+    // taken after it. Nothing held, nothing to resolve.
+    if (pathReservations.keys().length) {
+      const held = reservationPause(pathReservations, operation, await queuedItemPaths(store.libraries(), operation, item));
+      if (held) return held;
+    }
     const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : resolved?.library;
     if (library) {
       await refreshLibraryHealth();

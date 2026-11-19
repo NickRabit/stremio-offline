@@ -74,6 +74,8 @@ interface LibraryState {
   artStamp?: (file: string) => Promise<string>;
   caseInsensitive?: boolean;
   relocateError?: Error;
+  /** Holds the next transfer until the test lets it go; `reached` settles when it starts. */
+  transferHold?: { reached: () => void; release: Promise<void> };
   /** Holds the next binding write until the test lets it go; `reached` settles when it starts. */
   relocateHold?: { reached: () => void; release: Promise<void> };
 }
@@ -150,11 +152,11 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     libraryEntries: async (read?: { stale?: boolean }) => { calls.entriesAsked += 1; calls.entriesStale.push(read?.stale === true); return entries; },
     libraryKey: (value) => qualify(value),
     // The same question the server asks: is the key an active job's business, either way round.
-    libraryPathBusy: async (keys) => {
+    libraryPathBusy: async (keys, options) => {
       for (const key of keys) {
         const wanted = await resolveLibraryPath(libraries, key);
         if (!wanted) continue;
-        for (const item of [...activeItems(), ...pathReservations.keys()]) {
+        for (const item of options?.ignoreReservations ? activeItems() : [...activeItems(), ...pathReservations.keys()]) {
           const active = await resolveLibraryPath(libraries, item);
           if (active && (isPathWithin(active.absolute, wanted.absolute) || isPathWithin(wanted.absolute, active.absolute))) return item;
         }
@@ -189,6 +191,9 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     thumbUrl: async (param, value, art) => (art ? `${param}:${value}` : undefined),
     transferLibraryItem: async (relative, folder, copy, _progress, confirmTypeMismatch) => {
       calls.transfers.push({ relative, folder, copy, confirmTypeMismatch });
+      const hold = state.transferHold;
+      state.transferHold = undefined;
+      if (hold) { hold.reached(); await hold.release; }
       return `library/${relative}`;
     },
     wirePath: (key) => (libraries.length === 1 ? relativeWithin(libraries[0]!.id, key) : key),
@@ -954,6 +959,89 @@ test("POST /api/library/rename holds both names until the bindings have moved", 
   const later = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Thief.mkv", name: "Ronin" } });
   assert.equal(later.status, 200, "the names are released once the first rename is done");
   assert.deepEqual(harness.calls.relocated.map((call) => call.nextKey), ["lib_00000001/Films/Thief.mkv", "lib_00000001/Films/Ronin.mkv"]);
+});
+
+test("POST /api/library/rename refuses a job queued for the item while it was checking the name", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  // The first look at the queue finds nothing; the move is queued while the rename reads the
+  // disk, so every later look finds it.
+  let reads = 0;
+  const harness = await mount([library("lib_00000001", root)], [], () => (reads++ === 0 ? [] : ["lib_00000001/Films/Heat.mkv"]));
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "Thief" } });
+
+  assert.equal(response.status, 409);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.pathBusy");
+  assert.equal(await exists(path.join(root, "Films/Heat.mkv")), true, "the queued job's item was renamed under it");
+  assert.equal(harness.calls.relocated.length, 0);
+});
+
+test("a direct move holds its item: a rename or delete of it meanwhile is refused, and works after", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  let reached!: () => void;
+  const started = new Promise<void>((resolve) => { reached = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const state: LibraryState = { transferHold: { reached, release: hold } };
+  const harness = await mount([library("lib_00000001", root)], [], () => [], state);
+  t.after(async () => { release(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const move = api(harness.base, "/api/library/move", { method: "POST", body: { path: "Films/Heat.mkv", folder: "Archive" } });
+  await started;
+  const rename = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "Thief" } });
+  assert.equal(rename.status, 409, "a rename under a running transfer");
+  const remove = await api(harness.base, "/api/library/item?path=Films%2FHeat.mkv", { method: "DELETE" });
+  assert.equal(remove.status, 409, "a delete under a running transfer");
+  assert.deepEqual(harness.calls.deleted, []);
+  assert.equal(await exists(path.join(root, "Films/Heat.mkv")), true);
+
+  release();
+  assert.equal((await move).status, 200);
+  const later = await api(harness.base, "/api/library/item?path=Films%2FHeat.mkv", { method: "DELETE" });
+  assert.equal(later.status, 204, "the item is free once the transfer is done");
+});
+
+test("a direct move holds the name it takes in its destination, and nothing else there", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Archive/Other.mkv");
+  let reached!: () => void;
+  const started = new Promise<void>((resolve) => { reached = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { transferHold: { reached, release: hold } });
+  t.after(async () => { release(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const move = api(harness.base, "/api/library/move", { method: "POST", body: { path: "Films/Heat.mkv", folder: "Archive" } });
+  await started;
+  const onto = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Archive/Other.mkv", name: "Heat" } });
+  assert.equal(onto.status, 409, "a rename onto the name the moved file takes");
+  const beside = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Archive/Other.mkv", name: "Ronin" } });
+  assert.equal(beside.status, 200, "another name in the same folder is free");
+  release();
+  assert.equal((await move).status, 200);
+});
+
+test("a delete held by a rename in flight is refused", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  let reached!: () => void;
+  const started = new Promise<void>((resolve) => { reached = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { relocateHold: { reached, release: hold } });
+  t.after(async () => { release(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const rename = api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "Thief" } });
+  await started;
+  const remove = await api(harness.base, "/api/library/item?path=Films%2FThief.mkv", { method: "DELETE" });
+  assert.equal(remove.status, 409);
+  assert.deepEqual(harness.calls.deleted, []);
+  release();
+  assert.equal((await rename).status, 200);
 });
 
 test("POST /api/library/rename refuses a target that already exists", async (t) => {

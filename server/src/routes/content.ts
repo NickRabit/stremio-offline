@@ -23,7 +23,7 @@ import { fileProgressKeys, newestProgress, titleProgressKey } from "../progress-
 import type { StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
 import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
-import type { PathReservations } from "../path-reservations.js";
+import { destinationOf, type HeldPath, type PathReservations } from "../path-reservations.js";
 import type { RenameRequest } from "../library-rename-recovery.js";
 
 /** Browsing a library and the file operations under it. */
@@ -42,7 +42,7 @@ export interface ContentDeps extends RouteContext {
   invalidateLibrary(): void;
   libraryEntries(read?: { stale?: boolean }): Promise<LibraryEntry[]>;
   libraryKey(value: string): string;
-  libraryPathBusy(keys: string[]): Promise<string | undefined>;
+  libraryPathBusy(keys: string[], options?: { ignoreReservations?: boolean }): Promise<string | undefined>;
   /** Keys a request is changing on disk outside the queue; `libraryPathBusy` reads them too. */
   pathReservations: PathReservations;
   libraryRootBrowse(viewer: Viewer, options?: { prewarm?: boolean }): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
@@ -262,11 +262,31 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     });
   }));
 
+  /** Holds `paths` for one piece of library work done inside a request, then asks the queue with
+   *  them held, so neither another request nor a job queued meanwhile can work on the same item.
+   *  Refuses as busy when either already does. */
+  const holdingPaths = async <T>(paths: HeldPath[], work: () => Promise<T>): Promise<T> => {
+    const busy = () => new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
+    const release = pathReservations.reserve(paths);
+    if (!release) throw busy();
+    try {
+      if (await libraryPathBusy(paths.map((held) => held.key), { ignoreReservations: true })) throw busy();
+      return await work();
+    } finally {
+      release();
+    }
+  };
+
+  /** The paths that resolve. One that does not is left to the work itself, which refuses it
+   *  with its own error. */
+  const heldPaths = async (values: string[]): Promise<HeldPath[]> =>
+    (await Promise.all(values.map((value) => resolveLibraryPath(store.libraries(), value)))).flatMap((resolved) => resolved ? [resolved] : []);
+
   app.delete("/api/library/item", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
     assertStillAdmin(store.users(), currentUser(req));
     if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    await deleteLibraryItem(relative);
+    await holdingPaths(await heldPaths([relative]), () => deleteLibraryItem(relative));
     res.status(204).end();
   }));
 
@@ -324,9 +344,15 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // the meantime would find no bindings under it, and this one would then write them under a
     // name the video has already left.
     if (await libraryPathBusy([target.key])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    const release = pathReservations.reserve([resolved.key, target.key]);
+    const release = pathReservations.reserve([resolved, target]);
     if (!release) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
     try {
+      // Asked again with both names held: a job queued since the first check above would
+      // otherwise run against a name this rename is about to move. A job queued after this
+      // point waits for the reservation in the queue's own pause check.
+      if (await libraryPathBusy([resolved.key, target.key], { ignoreReservations: true })) {
+        throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
+      }
       await renameLibraryItem({ actor, source: resolved, target });
     } finally {
       invalidateLibrary();
@@ -362,8 +388,12 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
     // `copy` is honoured rather than ignored: the field was silently dropped before, so a client
     // that asked for a copy got a move -- the original deleted -- with a success in the response.
-    const moved = await transferLibraryItem(relative, String(req.body.folder ?? "").trim(),
-      req.body.copy === true, undefined, req.body.confirmTypeMismatch === true);
+    const folder = String(req.body.folder ?? "").trim();
+    // The source, and the name it will take in the destination: a rename of either while the
+    // transfer runs -- which can take minutes across volumes -- would act under the copy.
+    const held = await heldPaths([relative, destinationOf(folder, relative)]);
+    const moved = await holdingPaths(held, () => transferLibraryItem(relative, folder,
+      req.body.copy === true, undefined, req.body.confirmTypeMismatch === true));
     res.json({ path: moved });
   }));
 
