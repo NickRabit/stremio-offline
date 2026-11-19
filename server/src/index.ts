@@ -133,7 +133,7 @@ import { SourceAdmissionRejected } from "./source-admission.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
 import { remoteDownloadAccessible } from "./media-server-download.js";
 import { MediaServerPersonal } from "./media-server-personal.js";
-import { MediaServerPlaybackReporter } from "./media-server-playing.js";
+import { MediaServerPlaybackReporter, closePlaybackReporting } from "./media-server-playing.js";
 import { MediaServerPlaybackGuard, readMediaServerPlaybackConfig } from "./media-server-playback.js";
 import { isRemoteMediaStream, remoteSecretStamp, type RemoteContentRef } from "./media-server-reference.js";
 import { MediaServerSources } from "./media-server-sources.js";
@@ -3276,7 +3276,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [flushDatabaseStores, () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  flushes: [flushDatabaseStores, () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => closePlaybackReporting(playbackReports, mediaServers)],
   lateFlushes: [flushDatabaseStores],
   store,
   closeStorage: async () => {

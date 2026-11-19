@@ -334,6 +334,19 @@ export class MediaServerPlaybackReporter {
   }
 }
 
+/** The live sessions' stops go out through the manager, which refuses every call once closed, so
+ *  it closes only after the stops have settled or the reporter's three-second cap has passed. */
+export async function closePlaybackReporting(
+  reporter: Pick<MediaServerPlaybackReporter, "close">,
+  manager: { close(): Promise<void> },
+): Promise<void> {
+  try {
+    await reporter.close();
+  } finally {
+    await manager.close();
+  }
+}
+
 const logFailure = (kind: ProviderPlaybackReport["kind"], error: unknown): void => {
   log("DEBUG", "Media-server playback report failed", {
     kind,
