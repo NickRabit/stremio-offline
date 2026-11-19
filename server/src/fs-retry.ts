@@ -1,4 +1,4 @@
-import { rename } from "node:fs/promises";
+import { open, rename } from "node:fs/promises";
 
 /** The refusals Windows answers with while another process still holds the file: an antivirus
  *  scan, the search indexer, a backup tool, or a player reading the copy about to be replaced. */
@@ -31,5 +31,24 @@ export async function renameWithRetry(from: string, to: string, {
       await new Promise((resolve) => setTimeout(resolve, wait));
       wait *= 2;
     }
+  }
+}
+
+export async function syncDirectory(directory: string): Promise<void> {
+  const unsupported = (code: string | undefined) => ["EINVAL", "ENOTSUP", "EOPNOTSUPP"].includes(code ?? "");
+  const handle = await open(directory, "r").catch((error: NodeJS.ErrnoException) => {
+    if (unsupported(error.code) || (process.platform === "win32" && ["EISDIR", "EPERM", "EACCES"].includes(error.code ?? ""))) {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!handle) return;
+  try {
+    await handle.sync().catch((error: NodeJS.ErrnoException) => {
+      if (unsupported(error.code) || (process.platform === "win32" && ["EPERM", "EACCES"].includes(error.code ?? ""))) return;
+      throw error;
+    });
+  } finally {
+    await handle.close();
   }
 }

@@ -1638,6 +1638,7 @@ export const de: Catalog = {
   "err.libraryTypeUnknown": "Unbekannter Bibliothekstyp.",
   "err.libraryDefaultType": "Diese Bibliothek akzeptiert diesen Typ nicht und kann daher nicht ihre Standardbibliothek sein.",
   "err.libraryTypeMismatch": "Diese Bibliothek trägt keinen solchen Titel.",
+  "err.libraryMetadataWrite": "Die Bibliotheksmetadaten konnten nicht gespeichert werden. Prüfen Sie Speicherplatz und Zugriffsrechte.",
   "err.libraryRecoveryConflict": "Der unterbrochene Bibliotheksvorgang konnte nicht überprüft werden. Prüfen Sie vor einem neuen Versuch Quelle und Ziel.",
   "err.noLibraryForMovies": "Keine Bibliothek nimmt Filme auf.",
   "err.noLibraryForSeries": "Keine Bibliothek nimmt Serien auf.",

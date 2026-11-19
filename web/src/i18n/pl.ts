@@ -1640,6 +1640,7 @@ export const pl: Catalog = {
   "err.libraryTypeUnknown": "Nieznany typ biblioteki.",
   "err.libraryDefaultType": "Ta biblioteka nie obsługuje tego typu bibliotek, więc nie może być jej domyślną.",
   "err.libraryTypeMismatch": "Ta biblioteka nie przyjmuje tego rodzaju tytułu.",
+  "err.libraryMetadataWrite": "Nie udało się zapisać metadanych biblioteki. Sprawdź wolne miejsce i uprawnienia dostępu.",
   "err.libraryRecoveryConflict": "Nie udało się zweryfikować przerwanej operacji w bibliotece. Przed ponowną próbą sprawdź źródło i miejsce docelowe.",
   "err.noLibraryForMovies": "Żadna biblioteka nie bierze filmów.",
   "err.noLibraryForSeries": "Żadna biblioteka nie przyjmuje serii.",

@@ -1638,6 +1638,7 @@ export const fr: Catalog = {
   "err.libraryTypeUnknown": "Type de bibliothèque inconnu.",
   "err.libraryDefaultType": "Cette bibliothèque ne prend pas ce type de bibliothèque, elle ne peut donc pas être sa bibliothèque par défaut.",
   "err.libraryTypeMismatch": "Cette bibliothèque ne prend pas ce genre de titre.",
+  "err.libraryMetadataWrite": "Impossible d’enregistrer les métadonnées de la bibliothèque. Vérifiez l’espace libre et les droits d’accès.",
   "err.libraryRecoveryConflict": "Impossible de vérifier l’opération interrompue dans la bibliothèque. Vérifiez la source et la destination avant de réessayer.",
   "err.noLibraryForMovies": "Aucune bibliothèque ne prend des films.",
   "err.noLibraryForSeries": "Aucune bibliothèque ne prend de séries.",

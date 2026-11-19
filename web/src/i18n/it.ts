@@ -1638,6 +1638,7 @@ export const it: Catalog = {
   "err.libraryTypeUnknown": "Tipo di libreria sconosciuto.",
   "err.libraryDefaultType": "Questa libreria non accetta questo tipo, quindi non può essere quella predefinita.",
   "err.libraryTypeMismatch": "Quella biblioteca non ha questo tipo di titolo.",
+  "err.libraryMetadataWrite": "Impossibile salvare i metadati della libreria. Controlla lo spazio libero e i permessi di accesso.",
   "err.libraryRecoveryConflict": "Impossibile verificare l’operazione interrotta nella libreria. Controlla l’origine e la destinazione prima di riprovare.",
   "err.noLibraryForMovies": "Nessuna biblioteca accetta film.",
   "err.noLibraryForSeries": "Nessuna biblioteca accetta serie.",

@@ -123,6 +123,46 @@ test("a move into another library writes both files and pins the inherited title
   });
 });
 
+test("a failed target commit keeps the source match and suggestion through restart", async () => {
+  await withStore(async (store, dataDir) => {
+    const match = record("tt1");
+    const suggestion = { type: "movie", id: "tt9", score: 90 };
+    await seed(dataDir, libA, { Film: match }, { Film: suggestion });
+    await store.load();
+    const blocked = `${libraryFile(dataDir, libB)}.tmp`;
+    await mkdir(blocked, { recursive: true });
+    await assert.rejects(store.relocate(`${libA}/Film`, `${libB}/Archive/Film`), /could not be committed/);
+    await store.flush();
+    assert.deepEqual(store.meta(libA).Film, match);
+    assert.deepEqual(store.suggestions(libA).Film, suggestion);
+    await rm(blocked, { recursive: true });
+    const reopened = new LibraryMetaStore(dataDir);
+    await reopened.load();
+    assert.deepEqual(reopened.meta(libA).Film, match);
+    await reopened.relocate(`${libA}/Film`, `${libB}/Archive/Film`);
+    const target = JSON.parse(await readFile(libraryFile(dataDir, libB), "utf8"));
+    assert.deepEqual(target.meta["Archive/Film"], match);
+    assert.deepEqual(target.suggestions["Archive/Film"], suggestion);
+    await reopened.flush();
+    assert.deepEqual(JSON.parse(await readFile(libraryFile(dataDir, libA), "utf8")).meta, {});
+  });
+});
+
+test("a source match changed during a destination write stays in the source library", async t => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, libA, { Film: record("tt1") });
+    await store.load();
+    const commit = store.flushLibrary.bind(store);
+    t.mock.method(store, "flushLibrary", async (id: string) => {
+      await commit(id);
+      if (id === libB) await store.update(libA, file => { file.meta.Film = record("tt2"); });
+    });
+    await assert.rejects(store.relocate(`${libA}/Film`, `${libB}/Film`), /could not be verified/);
+    assert.equal(store.meta(libA).Film?.id, "tt2");
+    assert.equal(store.meta(libB).Film?.id, "tt1");
+  });
+});
+
 test("copy duplicates metadata without changing the source", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-meta-"));
   const store = new LibraryMetaStore(dataDir);

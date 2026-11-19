@@ -22,7 +22,7 @@ import type { UserData } from "./users.js";
  *  imported straight into this module and named here only when it holds state. */
 export interface LibraryActionDeps {
   store: Pick<Store, "libraries">;
-  metaStore: Pick<LibraryMetaStore, "qualifiedMeta" | "update" | "relocate" | "copy" | "holds" | "flush">;
+  metaStore: Pick<LibraryMetaStore, "qualifiedMeta" | "update" | "relocate" | "copy" | "holds" | "flushLibrary">;
   artworks: Pick<ArtworkCache, "moveKey" | "copyKey">;
   libraryFiles(): Promise<FoundFile[]>;
   libraryUnits(): Promise<TitleUnit[]>;
@@ -387,22 +387,25 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
       await duplicateArtwork(step.carried, step.from, step.to);
     }
     else {
-      await relocateArtwork(step.carried, step.from, step.to);
-      if (step.cover) await carryCoveringArtwork(step.cover, step.to);
       // A replay must not pin the folder's identity over the rows the first run already
       // carried: once the source holds nothing and the destination does, only the personal
       // rows are remapped. A first run always relocates, over any stale row at the target.
-      if (!replay || metaStore.holds(step.from) || !metaStore.holds(step.to)) await metaStore.relocate(step.from, step.to, true);
+      if (!replay || metaStore.holds(step.from) || !metaStore.holds(step.to)) await metaStore.relocate(step.from, step.to, true, replay ? "replay" : "replace");
+      await relocateArtwork(step.carried, step.from, step.to);
+      if (step.cover) await carryCoveringArtwork(step.cover, step.to);
       await remapPersonalState(step.from, step.to);
     }
+    const targetId = libraryOfKey(step.to).library.id;
+    const sourceId = libraryOfKey(step.from).library.id;
+    await metaStore.flushLibrary(targetId);
+    if (!step.copy && sourceId !== targetId) await metaStore.flushLibrary(sourceId);
     // Only the library the item left: the destination gained a folder, it did not lose one.
     const pruned = step.copy ? [] : await pruneEmptiedFolders(step.from);
+    if (pruned.length) await metaStore.flushLibrary(sourceId);
     invalidateLibrary();
     const moved = wirePath(step.to);
     log("INFO", step.copy ? "Copied in the library" : "Moved in the library",
       { from: step.from, to: moved, library: parseLibraryPath(step.from)?.libraryId, pruned, ...(sourceLeft ? { sourceLeft } : {}) });
-    // The item is not done while its metadata is still in the debounce.
-    await metaStore.flush();
     return moved;
   };
 
@@ -416,10 +419,17 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
           .filter((item) => item !== toKey && isPathWithin(item, toKey))
           .map((item) => fromKey + item.slice(toKey.length))]
       : [fromKey];
-    await relocateArtwork(carried, fromKey, toKey);
     const target = metaStore.qualifiedMeta()[toKey];
     const manualTarget = Boolean(target && !isAutomaticRecord(target));
-    if (metaStore.holds(fromKey) && !manualTarget) await metaStore.relocate(fromKey, toKey, true);
+    const acrossLibraries = parsedFrom.libraryId !== parsedTo.libraryId;
+    if (metaStore.holds(fromKey) && (acrossLibraries || !manualTarget)) {
+      await metaStore.relocate(fromKey, toKey, true, manualTarget ? "keep-target" : "replace");
+    }
+    if (acrossLibraries) {
+      await metaStore.flushLibrary(parsedTo.libraryId);
+      await metaStore.flushLibrary(parsedFrom.libraryId);
+    }
+    await relocateArtwork(carried, fromKey, toKey);
     await remapPersonalState(fromKey, toKey);
     seen.move(parsedFrom.libraryId, parsedFrom.relative, parsedTo.libraryId, parsedTo.relative);
   };
@@ -560,7 +570,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     const transferred = await runTransfer(step, resolved.absolute, target.absolute, !copy, progress, journal);
     await carrySidecars(sidecarPairs, path.dirname(resolved.absolute), path.dirname(target.absolute), copy);
     await recordPublished(step, journal);
-    return finishTransfer(step, transferred.sourceLeft);
+    return finishTransfer(step, transferred.sourceLeft, Boolean(recorded));
   };
 
   /** One item of a `reroot`: a bare name of the old root joined onto both roots. Resolving it
