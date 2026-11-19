@@ -440,6 +440,37 @@ test("shutdown delivers the stop of a live session before the manager closes its
   assert.deepEqual(delivered, ["playing:item-1", "stopped:item-1"]);
 });
 
+test("shutdown waits for a progress still in flight before its stop and the manager close", async () => {
+  let managerClosed = false;
+  let releaseProgress!: () => void;
+  const progressHeld = new Promise<void>((resolve) => { releaseProgress = resolve; });
+  let progressArrived!: () => void;
+  const progressStarted = new Promise<void>((resolve) => { progressArrived = resolve; });
+  const delivered: string[] = [];
+  const manager = {
+    reportPlayback: async (_actor: MediaServerAuthority, _libraryId: unknown, itemId: unknown, value: ProviderPlaybackReport) => {
+      if (managerClosed) throw new MediaServerError("closed", "The media-server manager is closed.");
+      if (value.kind === "progress") {
+        progressArrived();
+        await progressHeld;
+      }
+      delivered.push(`${value.kind}:${String(itemId)}`);
+      return undefined;
+    },
+    close: async () => { managerClosed = true; },
+  };
+  const reporter = new MediaServerPlaybackReporter(manager, () => authority());
+  await reporter.report(authority(), "rlib_1", "item-1", report("start", { position: 700 }));
+  const progress = reporter.report(authority(), "rlib_1", "item-1", report("progress", { position: 710 }));
+  await progressStarted;
+  const closing = closePlaybackReporting(reporter, manager);
+  assert.equal(managerClosed, false, "the manager stays open while the session's chain is busy");
+  releaseProgress();
+  await Promise.all([progress, closing]);
+  assert.equal(managerClosed, true);
+  assert.deepEqual(delivered, ["playing:item-1", "progress:item-1", "stopped:item-1"]);
+});
+
 test("readPlaybackReport accepts the required fields and an optional valid play id", () => {
   assert.deepEqual(readPlaybackReport({ mediaSourceId: " source-1 ", position: 12.5, paused: true, event: "progress" }), {
     mediaSourceId: "source-1", position: 12.5, paused: true, event: "progress",
