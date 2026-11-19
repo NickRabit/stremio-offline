@@ -80,7 +80,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { AppError, classifyError, explainedError, messageKeyOf } from "./errors.js";
 import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
-import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
+import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, placed, realAncestor, realTarget, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type PlacedPath, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -2632,20 +2632,30 @@ const libraryPathBusy = async (keys: string[], options: { ignoreReservations?: b
   // The rename itself asks with its own names already held, so it only wants the queue and
   // the rename journal.
   const items = [...libraryOps.activeItems(), ...(options.ignoreReservations ? [] : pathReservations.keys()), ...renameRecovery.busyKeys()];
-  if (!items.length) return undefined;
+  // A re-root's two roots are absolute folders, not keys: the one it writes into may sit inside
+  // another library, and a request there would act under the move.
+  const roots = libraryOps.activeRoots();
+  if (!items.length && !roots.length) return undefined;
   const libraries = store.libraries();
-  const active = (await Promise.all(items.map(async (item) =>
-    ({ item, resolved: await resolveLibraryPath(libraries, item) }))))
-    .filter((entry): entry is { item: string; resolved: ResolvedPath } => entry.resolved !== undefined);
+  const active = (await Promise.all(items.map(async (item) => {
+    const resolved = await resolveLibraryPath(libraries, item);
+    return { item, resolved: resolved && await placed(resolved) };
+  }))).filter((entry): entry is { item: string; resolved: PlacedPath } => entry.resolved !== undefined);
+  const rootPlaces = await Promise.all(roots.map((root) => realTarget(root)));
   for (const key of keys) {
-    const wanted = await resolveLibraryPath(libraries, key);
-    if (!wanted) continue;
-    if (renameRecovery.conflicts([wanted.key])) return wanted.key;
-    // On a volume that folds case, `archive` is the folder `Archive`: compared as the volume
-    // reads them, or a rename of a destination folder spelled in another case would pass.
-    const covering = active.find(({ resolved }) => placesOverlap(resolved.absolute, wanted.absolute,
+    const found = await resolveLibraryPath(libraries, key);
+    if (!found) continue;
+    if (renameRecovery.conflicts([found.key])) return found.key;
+    const wanted = await placed(found);
+    // Compared where they are on disk, links resolved: the same file through a nested library or
+    // a root typed through a symlink is one place. On a volume that folds case, `archive` is the
+    // folder `Archive`: compared as the volume reads them, or a rename of a destination folder
+    // spelled in another case would pass.
+    const covering = active.find(({ resolved }) => placesOverlap(resolved.place, wanted.place,
       healthOf(resolved.library).caseInsensitive || healthOf(wanted.library).caseInsensitive));
     if (covering) return covering.item;
+    const root = rootPlaces.findIndex((place) => placesOverlap(place, wanted.place, healthOf(wanted.library).caseInsensitive));
+    if (root >= 0) return roots[root];
   }
   return undefined;
 };
@@ -2949,12 +2959,20 @@ const libraryOps = new LibraryOps({
     const renameKeys = operation.op === "reroot" ? [operation.libraryId] : [libraryKey(item)];
     if (operation.op === "move" || operation.op === "copy") renameKeys.push(libraryKey(operation.target));
     if (renameRecovery.conflicts(renameKeys)) return "library";
+    // The same names by where they are on disk: a rename journaled through a nested library or a
+    // root typed through a link holds this item under another key. Resolved only while something
+    // is held, or every item of a large job would walk the disk for nothing.
+    const touched = !renameRecovery.busyKeys().length && !pathReservations.keys().length ? []
+      : operation.op === "reroot"
+      ? await Promise.all([operation.from, operation.to].map(async (root) => ({ absolute: root, place: await realTarget(root) })))
+      : await queuedItemPaths(store.libraries(), operation, item);
+    if (await renameRecovery.holdsPlaces(touched.map((held) => held.place))) return "library";
     // A `reroot` item is a bare name, so it resolves to no library path at all and every
     // guard below would be skipped. The two blockers that still apply are the same ones:
     // a disk that is away, and a file a session or a download is using right now.
     if (operation.op === "reroot") {
       // A rename in flight inside this library holds its names; the whole tree is about to move.
-      const held = reservationPause(pathReservations, operation, []);
+      const held = reservationPause(pathReservations, operation, touched);
       if (held) return held;
       await refreshLibraryHealth();
       if (libraryHealth.get(operation.libraryId)?.unreachable) return "library";
@@ -2973,7 +2991,7 @@ const libraryOps = new LibraryOps({
     // destination -- waits until that request is done: its check could not see a reservation
     // taken after it. Nothing held, nothing to resolve.
     if (pathReservations.keys().length) {
-      const held = reservationPause(pathReservations, operation, await queuedItemPaths(store.libraries(), operation, item));
+      const held = reservationPause(pathReservations, operation, touched);
       if (held) return held;
     }
     const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : resolved?.library;

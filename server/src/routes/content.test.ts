@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -78,6 +78,9 @@ interface LibraryState {
   transferHold?: { reached: () => void; release: Promise<void> };
   /** Holds the next binding write until the test lets it go; `reached` settles when it starts. */
   relocateHold?: { reached: () => void; release: Promise<void> };
+  /** Holds the rename journal's second health refresh -- after the intent (with its subtitles)
+   *  is written, before anything on disk moves -- until the test lets it go. */
+  recoverHold?: { reached: () => void; release: Promise<void> };
 }
 
 const library = (id: string, root: string, order = 0, visibleTo?: string[]): LibraryRecord => ({
@@ -204,9 +207,14 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     })),
   };
   const dataDir = await makeRoot();
+  let refreshes = 0;
   const renames = new LibraryRenameRecovery({
     dataDir, libraries: () => libraries, users: () => [admin, ordinary],
-    carveOutsOf, healthOf: deps.healthOf, refreshHealth: async () => undefined,
+    carveOutsOf, healthOf: deps.healthOf, refreshHealth: async () => {
+      refreshes += 1;
+      const hold = refreshes === 2 ? state.recoverHold : undefined;
+      if (hold) { state.recoverHold = undefined; hold.reached(); await hold.release; }
+    },
     actions: {
       relocateLibraryPath: async (key, nextKey) => {
         calls.relocated.push({ key, nextKey });
@@ -1206,4 +1214,112 @@ test("a fresh thumbnail address never serves the bytes of the picture it replace
   const after = await fetch(address("two"));
   assert.equal(after.status, 200);
   assert.equal(await after.text(), "the picture the new binding wrote");
+});
+
+// ---- review/path-reservations-a: proof tests ----
+
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+};
+
+test("a rename holds its subtitle sidecars, so a delete of one meanwhile is refused", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Films/Heat.en.srt");
+  const reached = deferred();
+  const release = deferred();
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { recoverHold: { reached: reached.resolve, release: release.promise } });
+  t.after(async () => { release.resolve(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const rename = api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "Thief" } });
+  await reached.promise;
+  // The intent already names Heat.en.srt as a sidecar that will follow the video.
+  const remove = await api(harness.base, "/api/library/item?path=Films%2FHeat.en.srt", { method: "DELETE" });
+  release.resolve();
+  await rename;
+  assert.equal(remove.status, 409, "a delete of a sidecar the rename is about to carry");
+  assert.deepEqual(harness.calls.deleted, []);
+});
+
+test("a subtitle removed while a rename is under way does not leave the video and its bindings apart", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Films/Heat.en.srt");
+  const reached = deferred();
+  const release = deferred();
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { recoverHold: { reached: reached.resolve, release: release.promise } });
+  t.after(async () => { release.resolve(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const rename = api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "Thief" } });
+  await reached.promise;
+  // What the admitted DELETE /api/library/item?path=Films/Heat.en.srt does on disk.
+  await unlink(path.join(root, "Films/Heat.en.srt"));
+  release.resolve();
+  const response = await rename;
+  const videoMoved = await exists(path.join(root, "Films/Thief.mkv"));
+  const bindingsMoved = harness.calls.relocated.some((call) => call.nextKey === "lib_00000001/Films/Thief.mkv");
+  assert.equal(videoMoved, bindingsMoved, `video renamed=${videoMoved}, bindings relocated=${bindingsMoved}, status ${response.status} ${JSON.stringify(await response.json())}`);
+});
+
+test("a name held by a rename is held in its other Unicode normalisation too", async (t) => {
+  const root = await makeRoot();
+  const nfc = "Films/Amélie.mkv";
+  const nfd = "Films/Amélie.mkv";
+  await put(root, nfc);
+  const reached = deferred();
+  const release = deferred();
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { recoverHold: { reached: reached.resolve, release: release.promise }, caseInsensitive: process.platform === "darwin" });
+  t.after(async () => { release.resolve(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const rename = api(harness.base, "/api/library/rename", { method: "POST", body: { path: nfc, name: "Thief" } });
+  await reached.promise;
+  const sameFile = await exists(path.join(root, nfd));
+  const remove = await api(harness.base, `/api/library/item?path=${encodeURIComponent(nfd)}`, { method: "DELETE" });
+  release.resolve();
+  await rename;
+  assert.equal(remove.status, 409, `the NFD spelling of the held NFC name was admitted (the NFD spelling opens the held file on this volume: ${sameFile})`);
+});
+
+test("a file held through a nested library is held through a parent whose root is spelled through a symlink", async (t) => {
+  const work = await makeRoot();
+  const real = path.join(work, "real");
+  const alias = path.join(work, "alias");
+  await mkdir(path.join(real, "Films"), { recursive: true });
+  await symlink(real, alias, "dir");
+  await put(real, "Films/Heat.mkv");
+  const parent = library("lib_0000000a", alias, 0);
+  const child = library("lib_0000000b", path.join(await realpath(real), "Films"), 1);
+  const reached = deferred();
+  const release = deferred();
+  const harness = await mount([parent, child], [], () => [], { relocateHold: { reached: reached.resolve, release: release.promise } });
+  t.after(async () => { release.resolve(); await harness.close(); await rm(work, { recursive: true, force: true }); });
+
+  const rename = api(harness.base, "/api/library/rename", { method: "POST", body: { path: "lib_0000000b/Heat.mkv", name: "Thief" } });
+  await reached.promise;
+  // The video is already Thief.mkv on disk; its bindings are still being moved.
+  const remove = await api(harness.base, `/api/library/item?path=${encodeURIComponent("lib_0000000a/Films/Thief.mkv")}`, { method: "DELETE" });
+  release.resolve();
+  assert.equal((await rename).status, 200);
+  assert.equal(remove.status, 409, "the same file reached through the parent library was admitted");
+});
+
+test("a new folder cannot take the name a rename in flight is moving to", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat/Heat.mkv");
+  const reached = deferred();
+  const release = deferred();
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { recoverHold: { reached: reached.resolve, release: release.promise } });
+  t.after(async () => { release.resolve(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const rename = api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat", name: "Thief" } });
+  await reached.promise;
+  const created = await api(harness.base, "/api/library/folder", { method: "POST", body: { path: "Films", name: "Thief" } });
+  release.resolve();
+  const renamed = await rename;
+  // Once the stray folder is gone, the same rename should simply be possible again.
+  await rm(path.join(root, "Films/Thief"), { recursive: true, force: true });
+  const again = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat", name: "Thief" } });
+  assert.equal(created.status, 409, `folder create admitted onto a held rename target; rename answered ${renamed.status} ${JSON.stringify(await renamed.json())}; a retry after removing the stray folder answered ${again.status} ${JSON.stringify(await again.json())}`);
 });

@@ -256,6 +256,21 @@ export interface ResolvedPath {
   absolute: string;
 }
 
+/** A resolved path with `place`: where the entry sits on disk, every link on the way to it
+ *  resolved and the part that does not exist yet kept on the end. Two libraries, one with its
+ *  root typed through a link, reach one file under two spellings, and only this one is shared.
+ *  The entry's own name is kept, not followed: a rename, move or delete acts on a link itself,
+ *  in the folder it sits in. Only a root is followed, since there the link is the library. */
+export type PlacedPath = ResolvedPath & { place: string };
+
+/** Adds `place`. Done only where holds are compared, not on every resolution: it walks the disk. */
+export async function placed(resolved: ResolvedPath): Promise<PlacedPath> {
+  const place = resolved.relative
+    ? path.join(await realTarget(path.dirname(resolved.absolute)), path.basename(resolved.absolute))
+    : await realTarget(resolved.absolute);
+  return { ...resolved, place: place.normalize("NFC") };
+}
+
 /** Resolve, guard and return the absolute filesystem path behind a wire path.
  *  An unqualified value is the single-library pass-through: it is accepted only
  *  while exactly one library is configured, so today's installs keep today's

@@ -11,7 +11,7 @@ import { folderMosaicUnits, mosaicIdentities, mosaicSkipped, pendingSuggestionKe
 import { AppError } from "../errors.js";
 import { statUnlessMissing } from "../folder-access.js";
 import { assertStillAdmin } from "../roles.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, placed, posixBase, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
 import { composeMosaic, MOSAIC_CACHE_CONTROL, MOSAIC_IMMUTABLE_CACHE_CONTROL, MosaicCache, mosaicShape } from "../mosaic.js";
 import { browseDirectory, holdsLibraryRoot, isVideo, listFolders, type LibraryEntry } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
@@ -264,13 +264,15 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
 
   /** Holds `paths` for one piece of library work done inside a request, then asks the queue with
    *  them held, so neither another request nor a job queued meanwhile can work on the same item.
-   *  Refuses as busy when either already does. */
-  const holdingPaths = async <T>(paths: HeldPath[], work: () => Promise<T>): Promise<T> => {
+   *  Refuses as busy when either already does, and refuses an `actor` who is no longer an
+   *  administrator after that wait -- the last moment before anything on disk changes. */
+  const holdingPaths = async <T>(paths: HeldPath[], actor: Parameters<typeof assertStillAdmin>[1], work: () => Promise<T>): Promise<T> => {
     const busy = () => new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
     const release = pathReservations.reserve(paths);
     if (!release) throw busy();
     try {
       if (await libraryPathBusy(paths.map((held) => held.key), { ignoreReservations: true })) throw busy();
+      assertStillAdmin(store.users(), actor);
       return await work();
     } finally {
       release();
@@ -280,13 +282,14 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
   /** The paths that resolve. One that does not is left to the work itself, which refuses it
    *  with its own error. */
   const heldPaths = async (values: string[]): Promise<HeldPath[]> =>
-    (await Promise.all(values.map((value) => resolveLibraryPath(store.libraries(), value)))).flatMap((resolved) => resolved ? [resolved] : []);
+    Promise.all((await Promise.all(values.map((value) => resolveLibraryPath(store.libraries(), value))))
+      .flatMap((resolved) => resolved ? [placed(resolved)] : []));
 
   app.delete("/api/library/item", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
     assertStillAdmin(store.users(), currentUser(req));
     if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    await holdingPaths(await heldPaths([relative]), () => deleteLibraryItem(relative));
+    await holdingPaths(await heldPaths([relative]), currentUser(req), () => deleteLibraryItem(relative));
     res.status(204).end();
   }));
 
@@ -301,8 +304,8 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const target = await resolveLibraryPath(store.libraries(), libraryPath(resolved.library.id, relative));
     if (!target) throw new AppError("Invalid path.", "err.invalidPath");
     if (await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
-    assertStillAdmin(store.users(), currentUser(req));
-    await mkdir(target.absolute);
+    // Held like any other change: a rename or move in flight may be about to take this name.
+    await holdingPaths([await placed(target)], currentUser(req), () => mkdir(target.absolute));
     invalidateLibrary();
     res.status(201).json({ path: wirePath(target.key) });
   }));
@@ -344,7 +347,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // the meantime would find no bindings under it, and this one would then write them under a
     // name the video has already left.
     if (await libraryPathBusy([target.key])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    const release = pathReservations.reserve([resolved, target]);
+    const release = pathReservations.reserve(await Promise.all([placed(resolved), placed(target)]));
     if (!release) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
     try {
       // Asked again with both names held: a job queued since the first check above would
@@ -355,8 +358,11 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       }
       await renameLibraryItem({ actor, source: resolved, target });
     } finally {
-      invalidateLibrary();
-      release();
+      try {
+        invalidateLibrary();
+      } finally {
+        release();
+      }
     }
     res.json({ path: nextRelative });
   }));
@@ -392,7 +398,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // The source, and the name it will take in the destination: a rename of either while the
     // transfer runs -- which can take minutes across volumes -- would act under the copy.
     const held = await heldPaths([relative, destinationOf(folder, relative)]);
-    const moved = await holdingPaths(held, () => transferLibraryItem(relative, folder,
+    const moved = await holdingPaths(held, currentUser(req), () => transferLibraryItem(relative, folder,
       req.body.copy === true, undefined, req.body.confirmTypeMismatch === true));
     res.json({ path: moved });
   }));

@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import type { LibraryRecord } from "./libraries.js";
+import { placed, resolveLibraryPath, type LibraryRecord } from "./libraries.js";
 import type { LibraryOp } from "./library-ops.js";
 import { destinationOf, PathReservations, placesOverlap, queuedItemPaths, reservationPause, type HeldPath } from "./path-reservations.js";
+
+const resolvePlaced = async (libraries: LibraryRecord[], key: string) => {
+  const resolved = await resolveLibraryPath(libraries, key);
+  return resolved && placed(resolved);
+};
+
+const libraryAt = (id: string, root: string): LibraryRecord => ({ id, name: id, type: "movie", root, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true });
 
 // The parent library at /media, a nested one at /media/Nested: two keys, one place on disk.
 const at = (key: string): HeldPath => {
@@ -107,4 +114,68 @@ test("the queue's busy check reads a folding volume's names as the volume does",
   assert.equal(placesOverlap("/media/Archive/Heat.mkv", "/media/archive", false), false, "two different folders on a case-sensitive volume");
   assert.equal(placesOverlap("/media/Archive", "/media/Archive/Heat.mkv", false), true, "either way round");
   assert.equal(placesOverlap("/media/Archive 2", "/media/Archive", true), false, "a name that only starts the same");
+});
+
+// ---- review/path-reservations-a: proof tests ----
+
+test("a held name is held in its other Unicode normalisation (one file on APFS/HFS+)", () => {
+  const reservations = new PathReservations();
+  assert.ok(reservations.reserve([{ key: "lib_00000001/Films/Amélie.mkv", absolute: "/media/Films/Amélie.mkv" }]));
+  assert.equal(reservations.reserve([{ key: "lib_00000001/Films/Amélie.mkv", absolute: "/media/Films/Amélie.mkv" }]), undefined);
+});
+
+test("a held file is held when a library root reaches it through a symlink", async (t) => {
+  const work = await mkdtemp(path.join(tmpdir(), "reservations-alias-"));
+  t.after(() => rm(work, { recursive: true, force: true }));
+  await mkdir(path.join(work, "real", "Films"), { recursive: true });
+  await symlink(path.join(work, "real"), path.join(work, "alias"), "dir");
+  const libraries = [libraryAt("lib_0000000a", path.join(work, "real")), libraryAt("lib_0000000b", path.join(work, "alias"))];
+  const direct = await resolvePlaced(libraries, "lib_0000000a/Films/Heat.mkv");
+  const aliased = await resolvePlaced(libraries, "lib_0000000b/Films/Heat.mkv");
+  assert.ok(direct && aliased);
+  const reservations = new PathReservations();
+  assert.ok(reservations.reserve([direct]));
+  assert.equal(reservations.overlaps([aliased]), true);
+  assert.equal(reservations.reserve([aliased]), undefined);
+});
+
+test("a video and the subtitles under its stem hold each other, and nothing else beside them", () => {
+  assert.equal(placesOverlap("/media/Films/Heat.mkv", "/media/Films/Heat.en.srt", false), true);
+  assert.equal(placesOverlap("/media/Films/heat.EN.SRT", "/media/Films/Heat.mkv", true), true);
+  assert.equal(placesOverlap("/media/Films/Heat.mkv", "/media/Films/Heat 2.en.srt", false), false);
+  assert.equal(placesOverlap("/media/Films/Heat.mkv", "/media/Films/Heat.nfo", false), false);
+  assert.equal(placesOverlap("/media/Films/Heat.mkv", "/media/Archive/Heat.en.srt", false), false);
+  assert.equal(placesOverlap("/media/Films/Heat.mkv", "/media/Films/Heat.avi", false), false);
+});
+
+test("a held symlink entry still holds the folder it sits in", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "reservations-link-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "Store", "d"), { recursive: true });
+  await mkdir(path.join(root, "Films"));
+  await symlink(path.join(root, "Store", "d"), path.join(root, "Films", "Link"), "dir");
+  const libraries = [libraryAt("lib_00000001", root)];
+  const link = await resolvePlaced(libraries, "lib_00000001/Films/Link");
+  const parent = await resolvePlaced(libraries, "lib_00000001/Films");
+  assert.ok(link && parent);
+  const reservations = new PathReservations();
+  assert.ok(reservations.reserve([link]));
+  assert.equal(reservations.overlaps([parent]), true, "a rename of the link holds the folder it sits in");
+});
+
+test("a held symlinked video still holds its subtitle beside it", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "reservations-link-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "Store"), { recursive: true });
+  await mkdir(path.join(root, "Films"));
+  await writeFile(path.join(root, "Store", "abc.mkv"), "v");
+  await writeFile(path.join(root, "Films", "Heat.srt"), "s");
+  await symlink(path.join(root, "Store", "abc.mkv"), path.join(root, "Films", "Heat.mkv"));
+  const libraries = [libraryAt("lib_00000001", root)];
+  const video = await resolvePlaced(libraries, "lib_00000001/Films/Heat.mkv");
+  const subtitle = await resolvePlaced(libraries, "lib_00000001/Films/Heat.srt");
+  assert.ok(video && subtitle);
+  const reservations = new PathReservations();
+  assert.ok(reservations.reserve([video]));
+  assert.equal(reservations.overlaps([subtitle]), true);
 });

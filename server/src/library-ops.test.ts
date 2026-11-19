@@ -706,3 +706,27 @@ test("a record whose write fails rejects", async () => {
     assert.equal(outcome, "rejected", "the executor hears that its record never reached the disk");
   } finally { await cleanup(h.dataDir, queues); }
 });
+
+// ---- review/path-reservations-a: proof tests ----
+
+test("a re-root still covers its library while the finished hook is switching the root", async (t) => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-review-"));
+  let reached!: () => void;
+  const inHook = new Promise<void>((resolve) => { reached = resolve; });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const queue = new LibraryOps({
+    file: path.join(dataDir, "library-ops.json"), retryMs: 10,
+    execute: async () => ({}),
+    // switchRerootedRoot: the store still names the old root until this write lands.
+    finished: async () => { reached(); await held; },
+  });
+  t.after(async () => { release(); queue.stop(); await queue.settled(); await rm(dataDir, { recursive: true, force: true }); });
+  await queue.load();
+  await queue.enqueue({ op: "reroot", items: ["Films"], libraryId: "lib_00000001", from: "/old", to: "/new" });
+  await inHook;
+  const snapshot = queue.snapshot().jobs[0]!.status;
+  const covered = queue.activeItems();
+  release();
+  assert.deepEqual(covered, ["lib_00000001"], `snapshot says ${snapshot}, but libraryPathBusy is told nothing covers the library while its root is being switched`);
+});
