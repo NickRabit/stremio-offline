@@ -48,6 +48,16 @@ page padding, the head of a full-screen dialog. The bottom edge already uses
 nothing there, and it must not be tested away on a desktop: check it on a real
 device in standalone mode.
 
+## Interface scale
+
+Root CSS `zoom` multiplies viewport units and any measured pixel value written
+back into CSS. Write viewport units as
+`calc(Nvh / var(--ui-scale, 1))` (likewise for `vw`, `dvh` and the other
+viewport units). Rects, client coordinates and window scroll are viewport
+pixels, while element offsets, element scroll values and CSS are CSS pixels;
+use `toCssPx()` when crossing that boundary, and multiply by `uiScale()` when
+moving in the other direction.
+
 ## Form controls
 
 - **Select:** styled globally. The arrow is drawn by the stylesheet and set in

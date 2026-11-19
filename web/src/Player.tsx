@@ -21,6 +21,7 @@ import { CHANNELS, playingBadges } from "./player-badges";
 import { chapterAt, chapterLabel } from "./player-chapters";
 import { activeSegment, fitSegments, introQueryOf, upNextPoint, type SegmentKind } from "./player-segments";
 import type { Capabilities, IntroSegments, PlaybackChapter, PlaybackMode, PlaybackSession, SourceProfile, Stream, Subtitle, Track, UpNextAt } from "./types";
+import { toCssPx } from "./ui-scale";
 
 /** The title's sources as the place that plays it holds them: the rows it leads with, every other
  *  group of the title, and the two actions over them. The host reads the groups through
@@ -468,7 +469,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     void loadHls().catch(() => undefined);
     const bottom = bottomRef.current;
     if (!bottom) return;
-    const measure = () => overlayRef.current?.style.setProperty("--player-bottom-height", `${bottom.getBoundingClientRect().height}px`);
+    const measure = () => overlayRef.current?.style.setProperty("--player-bottom-height", `${toCssPx(bottom.getBoundingClientRect().height)}px`);
     const observer = new ResizeObserver(measure);
     observer.observe(bottom);
     measure();
@@ -1417,8 +1418,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const overlay = overlayRef.current;
     if (!open || !mobileLandscape || !viewport || !overlay) return;
     const fit = () => {
-      overlay.style.setProperty("--player-viewport-height", `${viewport.height}px`);
-      overlay.style.setProperty("--player-viewport-top", `${viewport.offsetTop}px`);
+      overlay.style.setProperty("--player-viewport-height", `${toCssPx(viewport.height)}px`);
+      overlay.style.setProperty("--player-viewport-top", `${toCssPx(viewport.offsetTop)}px`);
     };
     fit();
     viewport.addEventListener("resize", fit);

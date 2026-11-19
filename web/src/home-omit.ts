@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { toCssPx } from "./ui-scale";
 
 /** How long the page has to stay still before an empty shelf on screen is taken away. */
 export const OMIT_IDLE_MS = 1500;
@@ -89,7 +90,10 @@ export function useOmission(omit: boolean, element: RefObject<HTMLElement | null
     if (!gone || !kept) return;
     pending.current = null;
     const delta = kept.anchor.getBoundingClientRect().top - kept.top;
-    if (delta !== 0) (kept.scroller ?? window).scrollBy(0, delta);
+    if (delta !== 0) {
+      if (kept.scroller) kept.scroller.scrollBy(0, toCssPx(delta));
+      else window.scrollBy(0, delta);
+    }
   }, [gone]);
 
   return gone;

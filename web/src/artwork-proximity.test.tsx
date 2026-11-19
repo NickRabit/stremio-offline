@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ARTWORK_AHEAD_MIN_PX, ArtworkProximity, artworkAhead, NearImage, scrollingAncestor } from "./artwork-proximity";
 import { PosterMosaic, TileArt } from "./TileArt";
+import { writeUiScale } from "./ui-scale";
 
 class StubIntersectionObserver {
   static instances: StubIntersectionObserver[] = [];
@@ -145,6 +146,9 @@ afterEach(() => {
   host.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  writeUiScale(1);
+  localStorage.removeItem("ui-scale");
+  document.documentElement.removeAttribute("style");
 });
 
 describe("ArtworkProximity", () => {
@@ -325,5 +329,12 @@ describe("ArtworkProximity", () => {
     Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
     Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 200 });
     expect(artworkAhead(scroller)).toBe(`${ARTWORK_AHEAD_MIN_PX}px ${ARTWORK_AHEAD_MIN_PX / 2}px`);
+  });
+
+  it("expresses a page-fallback reach in CSS pixels", () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1920);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(1080);
+    writeUiScale(1.5);
+    expect(artworkAhead(null)).toBe("720px 640px");
   });
 });

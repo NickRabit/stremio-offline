@@ -1,5 +1,6 @@
 import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { View } from "./App";
+import { toCssPx, uiScale } from "./ui-scale";
 
 export type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
 /** What a list is looking at, in terms the layout cannot invalidate: the item on top and
@@ -59,7 +60,7 @@ export function useScrollMemory(options: ScrollMemoryOptions): ScrollMemory {
     const element = anchor && findPlaybackAnchor(anchor);
     const scroller = scrollerOf(anchor?.kind);
     const viewportTop = scroller?.getBoundingClientRect().top ?? 0;
-    const viewportHeight = scroller?.clientHeight || window.innerHeight;
+    const viewportHeight = scroller && scroller.clientHeight > 0 ? scroller.clientHeight * uiScale() : window.innerHeight;
     return {
       view,
       windowY: window.scrollY,
@@ -96,7 +97,7 @@ export function useScrollMemory(options: ScrollMemoryOptions): ScrollMemory {
     const scroller = anchorScroller();
     const delta = element.getBoundingClientRect().top - (scroller?.getBoundingClientRect().top ?? 0) - saved.offset;
     if (Math.abs(delta) < 1) return;
-    if (scroller) scroller.scrollTop += delta;
+    if (scroller) scroller.scrollTop += toCssPx(delta);
     else window.scrollBy(0, delta);
   };
 
@@ -205,7 +206,7 @@ export function useScrollMemory(options: ScrollMemoryOptions): ScrollMemory {
       if (scroller && anchor) {
         if (element) {
           const current = element.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-          scroller.scrollTop += current - anchor.ratio * scroller.clientHeight;
+          scroller.scrollTop += toCssPx(current) - anchor.ratio * scroller.clientHeight;
         } else if (saved.gridY != null) scroller.scrollTop = saved.gridY;
       } else if (element && anchor) {
         window.scrollBy(0, element.getBoundingClientRect().top - anchor.ratio * window.innerHeight);

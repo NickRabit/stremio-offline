@@ -1,4 +1,5 @@
 import { RefObject, useEffect } from "react";
+import { toCssPx } from "./ui-scale";
 
 let locks = 0;
 
@@ -41,8 +42,8 @@ export function useDialogViewport(ref: RefObject<HTMLElement | null>) {
     const overlay = ref.current;
     if (!viewport || !overlay) return;
     const fit = () => {
-      overlay.style.setProperty("--dialog-viewport-height", `${viewport.height}px`);
-      overlay.style.setProperty("--dialog-viewport-top", `${viewport.offsetTop}px`);
+      overlay.style.setProperty("--dialog-viewport-height", `${toCssPx(viewport.height)}px`);
+      overlay.style.setProperty("--dialog-viewport-top", `${toCssPx(viewport.offsetTop)}px`);
     };
     fit();
     viewport.addEventListener("resize", fit);
