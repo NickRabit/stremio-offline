@@ -372,10 +372,21 @@ export class LibraryOps {
    *  allowed to stop the pump. The flag only comes off once the hook is through, so a
    *  crash between the two saves is repaired by `load()`. */
   private async finish(job: StoredJob) {
-    await this.save();
-    if (this.notified.has(job.id)) return;
+    if (this.notified.has(job.id)) {
+      await this.save();
+      return;
+    }
+    // Marked before the save, in the same turn the job turned terminal: a re-root's roots and a
+    // transfer's items stay covered without a gap until the hook is through.
     this.notified.add(job.id);
     this.finishing.add(job.id);
+    try {
+      await this.save();
+    } catch (error) {
+      this.notified.delete(job.id);
+      this.finishing.delete(job.id);
+      throw error;
+    }
     let outcome: FinishOutcome | void;
     try {
       outcome = await this.options.finished?.(publicJob(job), job.operation);

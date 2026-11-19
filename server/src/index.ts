@@ -150,7 +150,7 @@ import { SearchError } from "./search-contracts.js";
 import { STREAM_SORTS } from "./stream-sort.js";
 import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 import { createMetaCache } from "./meta-cache.js";
-import { PathReservations, placesOverlap, queuedItemPaths, reservationPause } from "./path-reservations.js";
+import { heldOverlap, PathReservations, queuedItemPaths, reservationPause } from "./path-reservations.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -2651,10 +2651,10 @@ const libraryPathBusy = async (keys: string[], options: { ignoreReservations?: b
     // a root typed through a symlink is one place. On a volume that folds case, `archive` is the
     // folder `Archive`: compared as the volume reads them, or a rename of a destination folder
     // spelled in another case would pass.
-    const covering = active.find(({ resolved }) => placesOverlap(resolved.place, wanted.place,
+    const covering = active.find(({ resolved }) => heldOverlap(resolved, wanted,
       healthOf(resolved.library).caseInsensitive || healthOf(wanted.library).caseInsensitive));
     if (covering) return covering.item;
-    const root = rootPlaces.findIndex((place) => placesOverlap(place, wanted.place, healthOf(wanted.library).caseInsensitive));
+    const root = rootPlaces.findIndex((place) => heldOverlap({ place }, wanted, healthOf(wanted.library).caseInsensitive));
     if (root >= 0) return roots[root];
   }
   return undefined;
@@ -2966,7 +2966,7 @@ const libraryOps = new LibraryOps({
       : operation.op === "reroot"
       ? await Promise.all([operation.from, operation.to].map(async (root) => ({ absolute: root, place: await realTarget(root) })))
       : await queuedItemPaths(store.libraries(), operation, item);
-    if (await renameRecovery.holdsPlaces(touched.map((held) => held.place))) return "library";
+    if (await renameRecovery.holdsPlaces(touched)) return "library";
     // A `reroot` item is a bare name, so it resolves to no library path at all and every
     // guard below would be skipped. The two blockers that still apply are the same ones:
     // a disk that is away, and a file a session or a download is using right now.

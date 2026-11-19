@@ -20,7 +20,7 @@ import {
 import { captureTransferIdentity, hasEvidence, reconcileTransfer, recoveryConflict, type RecoveryEvidence } from "./library-recovery.js";
 import { isSidecarOf, renamedSidecar, subtitleSidecars } from "./library-sidecars.js";
 import { log } from "./logger.js";
-import { placesOverlap } from "./path-reservations.js";
+import { heldOverlap, type HeldPlace } from "./path-reservations.js";
 import { assertStillAdmin } from "./roles.js";
 import type { UserRecord } from "./users.js";
 
@@ -216,16 +216,16 @@ export class LibraryRenameRecovery {
   /** Whether a rename in flight holds any of these places on disk. `conflicts` compares keys,
    *  which misses the same file reached through a nested library or a root typed through a
    *  link; this resolves the journaled names and compares where they are. */
-  async holdsPlaces(places: readonly string[]): Promise<boolean> {
+  async holdsPlaces(places: readonly HeldPlace[]): Promise<boolean> {
     if (this.damaged) return true;
     const keys = this.busyKeys();
     if (!keys.length || !places.length) return false;
     const libraries = this.deps.libraries();
     const held = await Promise.all(keys.map(async (key) => {
       const resolved = await resolveLibraryPath(libraries, key).catch(() => undefined);
-      return resolved && (await placed(resolved)).place;
+      return resolved && placed(resolved);
     }));
-    return held.some((at) => at !== undefined && places.some((place) => placesOverlap(at, place, true)));
+    return held.some((at) => at !== undefined && places.some((place) => heldOverlap(at, place, true)));
   }
 
   async load(): Promise<void> {
@@ -602,6 +602,12 @@ export class LibraryRenameRecovery {
       const to = path.join(targetDir, sidecar.to);
       const caseOnly = sameFile(from, to, this.deps.healthOf(library).caseInsensitive) && path.basename(from) !== path.basename(to);
       if (caseOnly) {
+        // On a volume that folds case either spelling finds the file; nothing under any spelling
+        // means it was removed while the rename ran, as below. A different file is still a conflict.
+        if (await optionalIdentity(from) === undefined) {
+          log("WARN", "A subtitle disappeared before the rename could carry it", { file: sidecar.from });
+          continue;
+        }
         const result = await this.caseOnlyEntry(from, to, sidecar.sourceIdentity, library);
         if (result === "retry") {
           await renameWithRetry(from, to);

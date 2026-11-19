@@ -1263,6 +1263,49 @@ test("a subtitle removed while a rename is under way does not leave the video an
   assert.equal(videoMoved, bindingsMoved, `video renamed=${videoMoved}, bindings relocated=${bindingsMoved}, status ${response.status} ${JSON.stringify(await response.json())}`);
 });
 
+test("a subtitle removed during a case-only rename does not keep the journal unresolved", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Films/Heat.en.srt");
+  // Only a volume that folds case makes `HEAT.mkv` the same file; elsewhere this is an ordinary rename.
+  if (!(await exists(path.join(root, "Films/HEAT.mkv")))) { t.skip("the volume is case-sensitive"); return; }
+  const reached = deferred();
+  const release = deferred();
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { recoverHold: { reached: reached.resolve, release: release.promise }, caseInsensitive: true });
+  t.after(async () => { release.resolve(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const rename = api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "HEAT" } });
+  await reached.promise;
+  await unlink(path.join(root, "Films/Heat.en.srt"));
+  release.resolve();
+  const response = await rename;
+  const body = await response.text();
+  assert.equal(response.status, 200, body);
+  assert.ok(harness.calls.relocated.some((call) => call.nextKey === "lib_00000001/Films/HEAT.mkv"), "the bindings followed the video");
+  const again = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/HEAT.mkv", name: "Heat" } });
+  assert.equal(again.status, 200, `the journal is resolved: ${await again.text()}`);
+});
+
+test("a subtitle replaced by another file during a case-only rename is still a conflict", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Films/Heat.en.srt");
+  if (!(await exists(path.join(root, "Films/HEAT.mkv")))) { t.skip("the volume is case-sensitive"); return; }
+  const reached = deferred();
+  const release = deferred();
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { recoverHold: { reached: reached.resolve, release: release.promise }, caseInsensitive: true });
+  t.after(async () => { release.resolve(); await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const rename = api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "HEAT" } });
+  await reached.promise;
+  await unlink(path.join(root, "Films/Heat.en.srt"));
+  await writeFile(path.join(root, "Films/Heat.en.srt"), "a different subtitle");
+  release.resolve();
+  const response = await rename;
+  assert.equal(response.status, 409);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.libraryRecoveryConflict");
+});
+
 test("a name held by a rename is held in its other Unicode normalisation too", async (t) => {
   const root = await makeRoot();
   const nfc = "Films/Amélie.mkv";

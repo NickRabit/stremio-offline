@@ -179,3 +179,19 @@ test("a held symlinked video still holds its subtitle beside it", async (t) => {
   assert.ok(reservations.reserve([video]));
   assert.equal(reservations.overlaps([subtitle]), true);
 });
+
+test("two files reached through one link do not hold each other, but the link holds both", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "reservations-via-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "Real"), { recursive: true });
+  await symlink(path.join(root, "Real"), path.join(root, "Alias"), "dir");
+  const libraries = [libraryAt("lib_00000001", root)];
+  const heat = await resolvePlaced(libraries, "lib_00000001/Alias/Heat.mkv");
+  const thief = await resolvePlaced(libraries, "lib_00000001/Alias/Thief.mkv");
+  const link = await resolvePlaced(libraries, "lib_00000001/Alias");
+  assert.ok(heat && thief && link);
+  const reservations = new PathReservations();
+  assert.ok(reservations.reserve([heat]));
+  assert.ok(reservations.reserve([thief]), "another file through the same link is free");
+  assert.equal(reservations.reserve([link]), undefined, "the link itself is held");
+});

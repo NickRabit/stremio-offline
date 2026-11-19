@@ -10,7 +10,7 @@ import { messageKeyOf } from "./errors.js";
 import { LibraryRenameRecovery } from "./library-rename-recovery.js";
 import { LibraryOps, type LibraryOp } from "./library-ops.js";
 import { libraryPath, placed, realTarget, resolveLibraryPath, type LibraryRecord } from "./libraries.js";
-import { PathReservations, placesOverlap, reservationPause } from "./path-reservations.js";
+import { heldOverlap, PathReservations, placesOverlap, reservationPause } from "./path-reservations.js";
 import { registerContentRoutes, type ContentDeps } from "./routes/content.js";
 import type { Store, UserPrefs } from "./store.js";
 import type { UserRecord } from "./users.js";
@@ -80,7 +80,7 @@ const mount = async (root: string, hooks: {
         if (!wanted) continue;
         for (const item of items) {
           const active = await resolvePlaced(libraries, item);
-          if (active && placesOverlap(active.absolute, wanted.absolute, false)) return item;
+          if (active && heldOverlap(active, wanted, false)) return item;
         }
       }
       return undefined;
@@ -230,8 +230,8 @@ test("a rename journal holds the same file reached through a symlink", async () 
     assert.equal(recovery.hasUnreadableRecord(), false, "the fixture journal has to be readable");
     assert.equal(recovery.hasUnresolved(), true, "recovery leaves the read-only library's journal in place");
     assert.equal(recovery.conflicts([realKey]), true, "the journaled key itself is busy");
-    assert.equal(await recovery.holdsPlaces([viaAlias.place]), true, `${aliasKey} is ${realKey} on disk`);
-    assert.equal(await recovery.holdsPlaces([path.join(path.dirname(viaAlias.place), "Thief.mkv")]), false);
+    assert.equal(await recovery.holdsPlaces([viaAlias]), true, `${aliasKey} is ${realKey} on disk`);
+    assert.equal(await recovery.holdsPlaces([{ place: path.join(path.dirname(viaAlias.place), "Thief.mkv") }]), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -364,6 +364,31 @@ test("a direct move holds the subtitle beside the video", async () => {
     hold.open();
     await moving;
     assert.deepEqual(observed, { status: 409, body: BUSY, deleted: [] });
+  } finally {
+    hold.open();
+    await harness.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a move of a folder link waits while something works on a file reached through it", { skip: process.platform === "win32" }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-move-link-"));
+  const hold = gate();
+  let transfers = 0;
+  // Only the first transfer waits: a second one let through answers at once instead of hanging.
+  const harness = await mount(root, { onTransfer: async () => { transfers += 1; if (transfers === 1) { hold.reached(); await hold.release; } } });
+  try {
+    await mkdir(path.join(root, "Real"), { recursive: true });
+    await mkdir(path.join(root, "Archive"), { recursive: true });
+    await writeFile(path.join(root, "Real", "Heat.mkv"), "video");
+    await symlink(path.join(root, "Real"), path.join(root, "Alias"), "dir");
+    const moving = call(harness.base, "/api/library/move", { method: "POST", body: { path: "Alias/Heat.mkv", folder: "Archive" } });
+    await hold.entered;
+    const second = await call(harness.base, "/api/library/move", { method: "POST", body: { path: "Alias", folder: "Archive" } });
+    const observed = { status: second.status, body: await second.text() };
+    hold.open();
+    await moving;
+    assert.deepEqual(observed, { status: 409, body: BUSY });
   } finally {
     hold.open();
     await harness.close();

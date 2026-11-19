@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { once } from "node:events";
+import { createReadStream } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -729,4 +732,32 @@ test("a re-root still covers its library while the finished hook is switching th
   const covered = queue.activeItems();
   release();
   assert.deepEqual(covered, ["lib_00000001"], `snapshot says ${snapshot}, but libraryPathBusy is told nothing covers the library while its root is being switched`);
+});
+
+test("a re-root keeps both roots covered from its last item until its hook has switched the root", { skip: process.platform === "win32" }, async (t) => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-roots-"));
+  const file = path.join(dataDir, "library-ops.json");
+  let entered!: () => void;
+  const executing = new Promise<void>((resolve) => { entered = resolve; });
+  let finishItem!: () => void;
+  const itemHeld = new Promise<void>((resolve) => { finishItem = resolve; });
+  const queue = new LibraryOps({
+    file, retryMs: 10,
+    execute: async () => { entered(); await itemHeld; return {}; },
+    finished: async () => undefined,
+  });
+  t.after(async () => { finishItem(); queue.stop(); await queue.settled(); await rm(dataDir, { recursive: true, force: true }); });
+  await queue.load();
+  await queue.enqueue({ op: "reroot", items: ["Films"], libraryId: "lib_00000001", from: "/old", to: "/new" });
+  await executing;
+  // The save that marks the job done writes through this pipe, and the write waits for a reader:
+  // the moment its first bytes arrive is inside the gap between the last item and the hook.
+  execFileSync("mkfifo", [`${file}.tmp`]);
+  finishItem();
+  const reader = createReadStream(`${file}.tmp`);
+  await once(reader, "data");
+  const covered = queue.activeRoots();
+  reader.resume();
+  await once(reader, "end");
+  assert.deepEqual(covered, ["/old", "/new"], "both roots stay covered while the finished state is being saved");
 });
