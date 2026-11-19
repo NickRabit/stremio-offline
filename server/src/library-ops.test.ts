@@ -639,12 +639,13 @@ test("a metadata write failure keeps the batch failed and its checkpoint across 
   const queues = [h.queue];
   const seen: string[] = [];
   const checkpoint = { phase: "published", from: "one", to: "Archive/one" };
-  const openQueue = async () => {
+  const openQueue = async (storageAvailable = false) => {
     const queue = new LibraryOps({
       file,
       execute: async (_operation, item, _progress, journal) => {
         seen.push(item);
-        if (item === "one") {
+        if (item === "one" && storageAvailable) assert.deepEqual(journal.recorded, checkpoint);
+        if (item === "one" && !storageAvailable) {
           await journal.record(checkpoint);
           throw new AppError("Could not save library metadata", "err.libraryMetadataWrite", 503);
         }
@@ -674,8 +675,18 @@ test("a metadata write failure keeps the batch failed and its checkpoint across 
     queue.stop();
     const stored = JSON.parse(await readFile(file, "utf8")).jobs.find((entry: { id: string }) => entry.id === job.id);
     assert.deepEqual(stored?.step, { item: "one", data: checkpoint });
-    assertFailure(await openQueue());
+    const stillBlocked = await openQueue();
+    await stillBlocked.settled();
+    assertFailure(stillBlocked);
+    stillBlocked.stop();
     assert.equal(seen.includes("last"), false);
+    const restored = await openQueue(true);
+    await restored.settled();
+    const finished = restored.snapshot().jobs.find(entry => entry.id === job.id);
+    assert.equal(finished?.status, "completed");
+    assert.equal(finished.failed, 0);
+    assert.deepEqual(finished.results.map(result => result.path), ["first", "one", "last"]);
+    assert.deepEqual(seen.filter(item => !item.startsWith("other-")), ["first", "one", "one", "one", "last"]);
   } finally { await cleanup(h.dataDir, queues); }
 });
 

@@ -1725,6 +1725,7 @@ export const en = {
   "err.libraryDefaultType": "This library does not take that kind, so it cannot be its default.",
   "err.libraryTypeMismatch": "That library does not take this kind of title.",
   "err.libraryMetadataWrite": "Library metadata could not be saved. Check free space and storage access.",
+  "err.libraryArtworkWrite": "Could not save the library artwork.",
   "err.libraryRecoveryConflict": "The interrupted library operation could not be verified. Check the source and destination before trying again.",
   "err.noLibraryForMovies": "No library takes films.",
   "err.noLibraryForSeries": "No library takes series.",

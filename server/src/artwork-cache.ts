@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { copyFile, lstat, mkdir, open, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { renameWithRetry } from "./fs-retry.js";
+import { renameWithRetry, syncDirectory } from "./fs-retry.js";
 import { parseLibraryPath } from "./libraries.js";
 import { log } from "./logger.js";
 import type { AppDatabase, Statement } from "./storage/app-database.js";
@@ -23,7 +24,7 @@ interface Entry {
 
 /** What happened to a picture asked to follow its key. `absent` is the ordinary case -- most
  *  items have no picture of their own -- and `failed` is the one worth saying out loud. */
-export type ArtworkCarry = { carried: true } | { carried: false; reason: "absent" | "failed"; detail?: string };
+export type ArtworkCarry = { carried: true } | { carried: false; reason: "absent" | "conflict" | "failed"; detail?: string };
 
 const hash = (key: string) => createHash("sha1").update(key).digest("hex");
 const STRUCTURAL_SAVE_MS = 2000;
@@ -377,41 +378,51 @@ export class ArtworkCache {
     await this.written(to);
   }
 
-  /** Moves a picture from one key to another, both inside this cache. A library's directory is
-   *  created lazily on its first thumbnail, so a move *between* libraries lands in a directory
-   *  that may not exist yet -- creating it here is what makes the picture follow its item
-   *  instead of failing with `ENOENT` and being swept as an orphan an hour later. */
-  async moveKey(from: string, to: string): Promise<ArtworkCarry> {
-    const source = this.file(from);
-    const target = this.file(to);
-    if (source === target) return { carried: true };
-    await mkdir(path.dirname(target), { recursive: true });
-    try { await rename(source, target); }
-    catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      // Nothing to carry is the ordinary case: most items have no picture of their own.
-      if (code === "ENOENT") return { carried: false, reason: "absent" };
-      return { carried: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
-    }
-    await this.moved(source, target);
-    return { carried: true };
+  moveKey(from: string, to: string): Promise<ArtworkCarry> {
+    return this.carryKey(from, to, true);
   }
 
-  /** The same, for a copy: the source keeps its picture and the destination gains one. */
-  async copyKey(from: string, to: string): Promise<ArtworkCarry> {
-    const source = this.file(from);
-    const target = this.file(to);
+  copyKey(from: string, to: string): Promise<ArtworkCarry> {
+    return this.carryKey(from, to, false);
+  }
+
+  private async carryKey(from: string, to: string, move: boolean): Promise<ArtworkCarry> {
+    const source = this.file(from), target = this.file(to);
     if (source === target) return { carried: true };
-    const data = await readFile(source).catch(() => undefined);
-    if (!data) return { carried: false, reason: "absent" };
+    const conflict = { carried: false, reason: "conflict" } as const;
     try {
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, data, { mode: 0o644 });
+      const original = await lstat(source, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (!original) return { carried: false, reason: "absent" };
+      if (!original.isFile()) return conflict;
+      const data = await readFile(source);
+      const dir = path.dirname(target);
+      if (await mkdir(dir, { recursive: true })) await syncDirectory(path.dirname(dir));
+      await copyFile(source, target, constants.COPYFILE_EXCL).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+      const published = await lstat(target, { bigint: true });
+      if (!published.isFile()) return conflict;
+      const handle = await open(target, process.platform === "win32" ? "r+" : "r");
+      try {
+        if (!(await handle.readFile()).equals(data)) return conflict;
+        await handle.sync();
+      } finally { await handle.close(); }
+      await syncDirectory(dir);
+      const unchanged = (a: typeof original, b: typeof original) =>
+        a.dev === b.dev && a.ino === b.ino && a.ctimeNs === b.ctimeNs && a.size === b.size;
+      if (!unchanged(published, await lstat(target, { bigint: true })) ||
+          !unchanged(original, await lstat(source, { bigint: true }))) return conflict;
+      if (move) {
+        await rm(source);
+        await this.moved(source, target);
+      } else await this.written(target);
+      return { carried: true };
     } catch (error) {
       return { carried: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
     }
-    await this.written(target);
-    return { carried: true };
   }
 
   /** A thumbnail the server deleted. Without this the entry's bytes keep counting against the

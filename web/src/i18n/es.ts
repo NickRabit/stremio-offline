@@ -1639,6 +1639,7 @@ export const es: Catalog = {
   "err.libraryDefaultType": "Esta biblioteca no acepta ese tipo, por lo que no puede ser la predeterminada.",
   "err.libraryTypeMismatch": "Esa biblioteca no lleva este tipo de título.",
   "err.libraryMetadataWrite": "No se pudieron guardar los metadatos de la biblioteca. Comprueba el espacio libre y el acceso al almacenamiento.",
+  "err.libraryArtworkWrite": "No se pudieron guardar las imágenes de la biblioteca.",
   "err.libraryRecoveryConflict": "No se pudo verificar la operación interrumpida en la biblioteca. Comprueba el origen y el destino antes de volver a intentarlo.",
   "err.noLibraryForMovies": "Ninguna biblioteca acepta películas.",
   "err.noLibraryForSeries": "Ninguna biblioteca acepta series.",

@@ -188,6 +188,22 @@ test("a copy leaves the source picture where it is", async () => {
   });
 });
 
+test("copy preserves a different poster and accepts identical bytes on replay", async () => {
+  await withCache(1024 * 1024, async cache => {
+    const from = "lib_aaaaaaaa/one", to = "lib_bbbbbbbb/two";
+    const source = await put(cache, from, 128);
+    const target = await put(cache, to, 128);
+    await writeFile(target, Buffer.alloc(128, 123));
+    assert.deepEqual(await cache.copyKey(from, to), { carried: false, reason: "conflict" });
+    assert.deepEqual(await readFile(target), Buffer.alloc(128, 123));
+    const bytes = await readFile(source);
+    await writeFile(target, bytes);
+    assert.deepEqual(await cache.copyKey(from, to), { carried: true });
+    assert.deepEqual(await readFile(source), bytes);
+    assert.deepEqual(await readFile(target), bytes);
+  });
+});
+
 test("an item with no picture of its own says so rather than failing", async () => {
   await withCache(1024 * 1024, async (cache) => {
     assert.deepEqual(await cache.moveKey("lib_aaaaaaaa/Show/01.mkv", "lib_bbbbbbbb/Archive/01.mkv"), { carried: false, reason: "absent" });
