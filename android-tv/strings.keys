@@ -200,6 +200,7 @@ player.skipRecap
 player.skipOutro
 player.upNext
 player.upNextCountdown
+player.endsAt
 player.playNow
 player.nextEpisode
 diag.title
@@ -255,6 +256,7 @@ tv.on
 tv.off
 tv.chaptersButton
 tv.skipSegmentsAuto
+tv.hideSpoilers
 tv.backToSource
 library.mosaicAlt
 library.showInLibrary
