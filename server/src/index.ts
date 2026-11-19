@@ -1449,6 +1449,7 @@ const sweepDeps: SweepDeps = {
     return file ? [path.basename(file)] : [];
   }),
   directoryOf: (libraryId) => artworks.dirOf(libraryId),
+  protected: libraryId => libraryOps.holdsArtwork(libraryId),
   remove: (file) => removeArtwork(file),
   busy: () => libraryOpsWriting || renameRecovery.hasUnresolved() || libraryOps.activeItems().length > 0,
   epoch: () => libraryEpoch,
@@ -2497,8 +2498,6 @@ const renameRecovery = new LibraryRenameRecovery({
 // Recovery runs before scans and watchers can interpret the interrupted tree as an ordinary
 // external move. An unresolved record deliberately remains on disk and keeps mutations away.
 await renameRecovery.load();
-artworks.protectFromEviction(file => renameRecovery.conflicts([path.basename(path.dirname(file))]));
-await artworks.maintain();
 
 // Manual binding of a title to a folder, for a file that did not arrive through the queue.
 /** Binds the folder the file will land in to a catalogue title, so metadata need not be guessed. */
@@ -3055,6 +3054,11 @@ const libraryOps = new LibraryOps({
   }),
 });
 await libraryOps.load();
+artworks.protectFromEviction(file => {
+  const id = path.basename(path.dirname(file));
+  return renameRecovery.conflicts([id]) || libraryOps.holdsArtwork(id);
+});
+await artworks.maintain();
 reportProgress();
 
 registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId), progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps });

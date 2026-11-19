@@ -1,7 +1,7 @@
 import { lstat, rm, rmdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { ART_VARIANTS, artVariantKey } from "./artwork.js";
-import type { ArtworkCache } from "./artwork-cache.js";
+import type { ArtworkCache, ArtworkCarry } from "./artwork-cache.js";
 import { AppError } from "./errors.js";
 import { foldersBetween, holdsLibraryRoot, isPathWithin, moveDestination, orphanedCatalogKeys, remapPath, withinLibraryRoot, type FoundFile } from "./library.js";
 import { dropKeyed, isAutomaticRecord, knownTitleEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
@@ -151,6 +151,13 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     await remapPersonalState(key, nextKey);
   };
 
+  const checkArtwork = (result: ArtworkCarry, from: string, to: string) => {
+    if (result.carried || result.reason === "absent") return;
+    log("WARN", "Artwork transfer stopped", { from, to, reason: result.reason, detail: result.detail });
+    if (result.reason === "conflict") throw recoveryConflict();
+    throw new AppError("Could not save the library artwork.", "err.libraryArtworkWrite", 503);
+  };
+
   /** Moves the hashed thumbnails of an item and of everything under it to their new keys. The
    *  cache creates the destination library's directory: `data/artwork/<libraryId>/` is made on a
    *  library's first thumbnail, so a move *between* libraries used to fail with `ENOENT` and lose
@@ -162,9 +169,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
         for (const variant of ART_VARIANTS) {
           const moved = artVariantKey(from!, variant), target = artVariantKey(to!, variant);
           const result = await artworks.moveKey(moved, target);
-          if (!result.carried && result.reason === "failed") {
-            log("WARN", "A thumbnail could not follow its item", { from: moved, to: target, detail: result.detail });
-          }
+          checkArtwork(result, moved, target);
         }
       }
     }
@@ -178,9 +183,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
         for (const variant of ART_VARIANTS) {
           const copied = artVariantKey(from!, variant), target = artVariantKey(to!, variant);
           const result = await artworks.copyKey(copied, target);
-          if (!result.carried && result.reason === "failed") {
-            log("WARN", "A thumbnail could not be copied to the item's new key", { from: copied, to: target, detail: result.detail });
-          }
+          checkArtwork(result, copied, target);
         }
       }
     }
@@ -194,9 +197,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     const to = isFileKey(nextKey) ? nextKey : `dir:${nextKey}`;
     for (const variant of ART_VARIANTS) {
       const result = await artworks.copyKey(artVariantKey(`dir:${cover}`, variant), artVariantKey(to, variant));
-      if (!result.carried && result.reason === "failed") {
-        log("WARN", "The picture of the folder a title is bound through could not travel with it", { cover, next: nextKey, variant, detail: result.detail });
-      }
+      checkArtwork(result, cover, nextKey);
     }
   };
 
@@ -381,18 +382,18 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
    *  record a crash left behind is finished. `sourceLeft` is the interrupted transfer's own
    *  report, so a resumed move logs the same warning an in-process one does. */
   const finishTransfer = async (step: TransferStep, sourceLeft?: string, replay = false) => {
+    // Verify the destination artwork before changing bindings. Keep the originals until the move commits.
+    await duplicateArtwork(step.carried, step.from, step.to);
     if (step.copy) {
       await metaStore.copy(step.from, step.to);
-      // Both halves of a copy keep the picture: the item exists twice now.
-      await duplicateArtwork(step.carried, step.from, step.to);
     }
     else {
+      if (step.cover) await carryCoveringArtwork(step.cover, step.to);
       // A replay must not pin the folder's identity over the rows the first run already
       // carried: once the source holds nothing and the destination does, only the personal
       // rows are remapped. A first run always relocates, over any stale row at the target.
       if (!replay || metaStore.holds(step.from) || !metaStore.holds(step.to)) await metaStore.relocate(step.from, step.to, true, replay ? "replay" : "replace");
       await relocateArtwork(step.carried, step.from, step.to);
-      if (step.cover) await carryCoveringArtwork(step.cover, step.to);
       await remapPersonalState(step.from, step.to);
     }
     const targetId = libraryOfKey(step.to).library.id;

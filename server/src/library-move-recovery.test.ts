@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
+import { ArtworkCache } from "./artwork-cache.js";
 import { captureTransferIdentity } from "./library-recovery.js";
 import { toPosix } from "./libraries.js";
 import { spawnServer, type SpawnedServer } from "./test-server.js";
@@ -44,6 +45,7 @@ interface Env {
   aRoot: string;
   bRoot: string;
   cRoot: string;
+  artworkCap?: string;
   server?: SpawnedServer;
   base: string;
   cookie: string;
@@ -64,6 +66,7 @@ const spawn = async (env: Env) => {
     DOWNLOAD_DIR: path.join(env.workDir, "downloads"),
     LIBRARY_ROOTS: path.join(env.workDir, "roots"),
     LIBRARY_AUTO_SCAN: "0",
+    ...(env.artworkCap ? { ARTWORK_CACHE_MB: env.artworkCap } : {}),
     ADDON_AUTO_REFRESH: "0",
   });
   env.base = env.server.base;
@@ -285,6 +288,67 @@ test("a published record finishes a move whose bytes already reached the target"
     assert.deepEqual(await readFile(path.join(env.aRoot, "Show", "poster.jpg")), customPoster);
   });
 });
+
+for (const targetState of ["identical", "different", "unwritable"] as const) {
+  test(`published move recovery with target artwork ${targetState}`, async () => {
+    await withEnv(async env => {
+      await bootFresh(env);
+      await seedState(env);
+      const sourceIdentity = await fileIdentity(path.join(env.aRoot, ITEM));
+      await env.server!.stop();
+      await moveItemToTarget(env);
+      const from = `${env.a}/${ITEM}`, to = `${env.b}/${TARGET_NAME}`;
+      const cache = new ArtworkCache(path.join(env.dataDir, "artwork"));
+      const source = cache.file(from), target = cache.file(to);
+      await mkdir(path.dirname(source), { recursive: true });
+      await writeFile(source, "source poster");
+      if (targetState === "unwritable") {
+        await mkdir(path.dirname(target), { recursive: true });
+        await rename(path.dirname(target), path.join(env.workDir, "saved-artwork"));
+        await writeFile(path.dirname(target), "blocked");
+      } else {
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, targetState === "identical" ? "source poster" : "target poster");
+      }
+      if (targetState === "different") env.artworkCap = "0.000001";
+      const record = {
+        phase: "published", copy: false, from, to, carried: [from], sidecars: [],
+        sourceIdentity, publishedIdentity: sourceIdentity,
+      };
+      await writeCrashJob(env, record);
+      await bootAgain(env);
+      const job = await finishedJob(env);
+      if (targetState === "identical") {
+        assert.equal(job.status, "completed", JSON.stringify(job));
+        await assertMovedState(env);
+        assert.equal(await readFile(target, "utf8"), "source poster");
+        assert.equal(await exists(source), false);
+      } else {
+        assert.equal(job.errorKey, targetState === "different" ? "err.libraryRecoveryConflict" : "err.libraryArtworkWrite");
+        await env.server!.stop();
+        const saved = JSON.parse(await readFile(path.join(env.dataDir, "library-ops.json"), "utf8"));
+        assert.deepEqual(saved.jobs[0].step.data, record);
+        await bootAgain(env);
+        assert.equal((await finishedJob(env)).status, "failed");
+        assert.equal(await readFile(source, "utf8"), "source poster");
+        if (targetState === "different") assert.equal(await readFile(target, "utf8"), "target poster");
+        assert.equal((await identityOf(env, to)).bound, undefined);
+        assert.ok((await storedFavorites(env)).includes(from));
+        assert.ok((await storedProgress(env)).some(([key]) => key === `file:${from}`));
+        assert.ok(await exists(path.join(env.aRoot, SEASON)));
+        if (targetState === "unwritable") {
+          await env.server!.stop();
+          await rm(path.dirname(target));
+          await rename(path.join(env.workDir, "saved-artwork"), path.dirname(target));
+          await bootAgain(env);
+          assert.equal((await finishedJob(env)).status, "completed");
+          assert.equal(await readFile(target, "utf8"), "source poster");
+          await assertMovedState(env);
+        }
+      }
+    });
+  });
+}
 
 test("a moving record whose source is gone and target exists is finished", async () => {
   await withEnv(async (env) => {

@@ -19,6 +19,7 @@ export interface SweepDeps {
   /** Basenames of every `ART_VARIANTS` file of one key. */
   artNames(key: string): string[];
   directoryOf(libraryId: string): string;
+  protected?(libraryId: string): boolean;
   remove(file: string): Promise<void>;
   /** A library operation is writing or active. */
   busy(): boolean;
@@ -123,6 +124,7 @@ export function createArtworkSweep(deps: SweepDeps): () => Promise<{ removed: nu
           const file = path.join(dir, name);
           const info = await stat(file).catch(() => undefined);
           if (!info?.isFile() || deps.now() - info.mtimeMs < FRESH_MS) continue;
+          if (deps.protected?.(library.id)) break;
           try { await deps.remove(file); removed += 1; }
           catch (error) { log("WARN", "A thumbnail could not be deleted", { reason: String(error).slice(0, 200) }); }
         }

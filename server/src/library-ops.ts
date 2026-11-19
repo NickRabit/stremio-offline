@@ -97,7 +97,7 @@ const publicJob = ({ operation: _operation, step: _step, cancelRequested: _cance
 
 const isTerminal = (status: OpsStatus) => status === "completed" || status === "failed" || status === "cancelled";
 
-const stopsBatch = (key?: string) => key === "err.libraryRecoveryConflict" || key === "err.libraryMetadataWrite";
+const stopsBatch = (key?: string) => key === "err.libraryRecoveryConflict" || key === "err.libraryMetadataWrite" || key === "err.libraryArtworkWrite";
 
 export class LibraryOps {
   private jobs: StoredJob[] = [];
@@ -156,6 +156,20 @@ export class LibraryOps {
         ? { ...job, status: "paused", pauseReason: "queue", current: undefined }
         : job);
     }
+    for (const job of this.jobs) {
+      const last = job.results.at(-1);
+      if (job.status !== "failed" || job.errorKey !== "err.libraryArtworkWrite" ||
+          !job.step || last?.path !== job.step.item || last.errorKey !== job.errorKey ||
+          job.operation.items[job.done + job.failed - 1] !== job.step.item) continue;
+      job.results.pop();
+      job.failed -= 1;
+      job.status = "paused";
+      job.pauseReason = "queue";
+      job.finishedAt = undefined;
+      job.error = undefined;
+      job.errorKey = undefined;
+      job.notifyPending = true;
+    }
     this.stored = stored;
     await this.save();
     // A job that ended while the process was going down still carries the flag: its hook
@@ -164,6 +178,15 @@ export class LibraryOps {
       if (job.notifyPending && isTerminal(job.status)) await this.finish(job);
     }
     this.pump();
+  }
+
+  holdsArtwork(libraryId: string): boolean {
+    if (this.unreadable) return true;
+    return this.jobs.some(({ operation, step }) => {
+      if (!step || (operation.op !== "move" && operation.op !== "copy")) return false;
+      const data = step.data as { from?: unknown; to?: unknown } | null;
+      return [data?.from, data?.to].some(key => typeof key !== "string" || key.startsWith(libraryId + "/"));
+    });
   }
 
   snapshot() {
