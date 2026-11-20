@@ -50,8 +50,9 @@ const notify = () => {
   for (const listener of listeners) listener();
 };
 
-export function applyUiScale(): void {
-  const chosen = readUiScale();
+/** Applies the choice held in memory: read from storage once at start, then set by
+ *  [writeUiScale], so a choice storage refused still holds for this page. */
+export function applyUiScale(chosen: UiScale = currentChosen): void {
   const effective = effectiveUiScale(chosen, window.innerWidth, window.innerHeight);
   const root = document.documentElement;
   if (effective === 1) {
@@ -82,7 +83,7 @@ export function writeUiScale(scale: UiScale, anchor?: Element | null): void {
   } catch {
     // Storage may be unavailable (private mode); the choice still applies to this page.
   }
-  applyUiScale();
+  applyUiScale(scale);
   notify();
   if (anchor && before !== undefined) {
     // Both values are viewport pixels, the same space window scrolling uses.
@@ -101,15 +102,17 @@ export function toCssPx(viewportPx: number): number {
   return viewportPx / uiScale();
 }
 
+const onResize = () => applyUiScale();
+
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
   if (listeners.size === 1) {
     applyUiScale();
-    window.addEventListener("resize", applyUiScale);
+    window.addEventListener("resize", onResize);
   }
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) window.removeEventListener("resize", applyUiScale);
+    if (listeners.size === 0) window.removeEventListener("resize", onResize);
   };
 };
 

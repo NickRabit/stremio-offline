@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { effectiveUiScale, readUiScale, toCssPx, viewportConditions, writeUiScale } from "./ui-scale";
+import { applyUiScale, effectiveUiScale, readUiScale, toCssPx, viewportConditions, writeUiScale } from "./ui-scale";
 
 beforeEach(() => {
   localStorage.clear();
@@ -30,6 +30,19 @@ describe("interface scale", () => {
     expect(readUiScale()).toBe(1);
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
     expect(readUiScale()).toBe(1);
+  });
+
+  it("keeps a choice for this page when storage refuses to save it", () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1920);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(1080);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("denied"); });
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
+    writeUiScale(1.5);
+    expect(document.documentElement.style.zoom).toBe("1.5");
+    applyUiScale();
+    expect(document.documentElement.style.zoom).toBe("1.5");
+    writeUiScale(1);
+    expect(document.documentElement.style.zoom).toBe("");
   });
 
   it("applies the effective zoom and removes it at the standard scale", () => {
