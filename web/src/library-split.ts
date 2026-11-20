@@ -1,12 +1,11 @@
 import { t } from "./i18n";
-import type { LibraryView, SplitPlan, SplitPlanChild, SplitPlanFolder, SplitPlanItem } from "./types";
+import type { LibraryView, SplitPlan, SplitPlanChild, SplitPlanItem } from "./types";
 
 export const SPLIT_MOVE_CHUNK = 500;
 export const SPLIT_DISMISSED_KEY = "library-split-dismissed";
 
 export type SplitTarget =
   | { mode: "child"; id: string; name: string }
-  | { mode: "folder"; name: string }
   | { mode: "new"; name: string };
 export type SplitDestination = "movie" | "series" | "leave";
 export type FolderNameError = "nameInvalid" | "nameTaken";
@@ -45,24 +44,12 @@ export function eligibleChildren(plan: SplitPlan, kind: "movie" | "series"): Spl
     child.enabled && !child.unreachable && !child.readOnly && (child.type === kind || child.type === "mixed"));
 }
 
-export function eligibleFolders(plan: SplitPlan, kind: "movie" | "series"): SplitPlanFolder[] {
-  return plan.folders.filter((folder) => kind === "movie"
-    ? folder.movies > 0 && folder.series === 0 && folder.unknown === 0
-    : folder.series > 0 && folder.movies === 0 && folder.unknown === 0);
-}
-
 export function preselectTarget(plan: SplitPlan, kind: "movie" | "series"): SplitTarget {
   const children = eligibleChildren(plan, kind);
   const typed = children.find((child) => child.type === kind);
   if (typed) return { mode: "child", id: typed.id, name: typed.name };
   const mixed = children.find((child) => child.type === "mixed");
   if (mixed) return { mode: "child", id: mixed.id, name: mixed.name };
-  const folders = eligibleFolders(plan, kind);
-  if (folders.length) {
-    const countOf = (folder: SplitPlanFolder) => kind === "movie" ? folder.movies : folder.series;
-    const best = folders.reduce((lead, folder) => countOf(folder) > countOf(lead) ? folder : lead);
-    return { mode: "folder", name: best.name };
-  }
   return { mode: "new", name: kind === "movie" ? t("split.defaultMoviesName") : t("split.defaultSeriesName") };
 }
 
@@ -79,7 +66,6 @@ export function folderNameError(name: string, plan: SplitPlan): FolderNameError 
 
 export function sameTarget(movie: SplitTarget, series: SplitTarget): boolean {
   if (movie.mode === "child" && series.mode === "child") return movie.id === series.id;
-  if (movie.mode === "folder" && series.mode === "folder") return movie.name.toLowerCase() === series.name.toLowerCase();
   if (movie.mode === "new" && series.mode === "new") return movie.name.trim().toLowerCase() === series.name.trim().toLowerCase();
   return false;
 }
@@ -99,31 +85,15 @@ export function targetErrors(plan: SplitPlan, movie: SplitTarget, series: SplitT
   return errors;
 }
 
-export function inPlaceFolderNames(movie: SplitTarget, series: SplitTarget): string[] {
-  const names: string[] = [];
-  if (movie.mode === "folder") names.push(movie.name);
-  if (series.mode === "folder") names.push(series.name);
-  return names;
-}
-
-export function isInPlace(item: SplitPlanItem, folderNames: string[]): boolean {
-  return folderNames.some((name) => item.relative.startsWith(`${name}/`));
-}
-
-export function inPlaceFolderOf(item: SplitPlanItem, folderNames: string[]): string | undefined {
-  return folderNames.find((name) => item.relative.startsWith(`${name}/`));
-}
-
-export function defaultDestination(item: SplitPlanItem, inPlace: boolean): SplitDestination {
-  if (inPlace || item.busy) return "leave";
+export function defaultDestination(item: SplitPlanItem): SplitDestination {
+  if (item.busy) return "leave";
   if (item.kind === "movie" || item.kind === "series") return item.kind;
   return "leave";
 }
 
-export function defaultDestinations(plan: SplitPlan, movie: SplitTarget, series: SplitTarget): Record<string, SplitDestination> {
-  const folders = inPlaceFolderNames(movie, series);
+export function defaultDestinations(plan: SplitPlan): Record<string, SplitDestination> {
   const dest: Record<string, SplitDestination> = {};
-  for (const item of plan.items) dest[item.key] = defaultDestination(item, isInPlace(item, folders));
+  for (const item of plan.items) dest[item.key] = defaultDestination(item);
   return dest;
 }
 
@@ -138,30 +108,25 @@ export function sortedItems(plan: SplitPlan): SplitPlanItem[] {
   return plan.items.slice().sort((a, b) => rowRank(a) - rowRank(b) || a.label.localeCompare(b.label));
 }
 
-export function groupCounts(plan: SplitPlan, movie: SplitTarget, series: SplitTarget):
-  { identified: number; guessed: number; undecided: number; busy: number; inPlace: number } {
-  const folders = inPlaceFolderNames(movie, series);
-  let identified = 0, guessed = 0, undecided = 0, busy = 0, inPlace = 0;
+export function groupCounts(plan: SplitPlan):
+  { identified: number; guessed: number; undecided: number; busy: number } {
+  let identified = 0, guessed = 0, undecided = 0, busy = 0;
   for (const item of plan.items) {
-    if (isInPlace(item, folders)) { inPlace += 1; continue; }
     if (item.busy) { busy += 1; continue; }
     if (item.kind === "unknown") { undecided += 1; continue; }
     if (item.basis === "guessed") guessed += 1;
     else identified += 1;
   }
-  return { identified, guessed, undecided, busy, inPlace };
+  return { identified, guessed, undecided, busy };
 }
 
 export function movableKeys(
   plan: SplitPlan,
   destinations: Record<string, SplitDestination>,
   kind: "movie" | "series",
-  movie: SplitTarget,
-  series: SplitTarget,
 ): string[] {
-  const folders = inPlaceFolderNames(movie, series);
   return plan.items
-    .filter((item) => !item.busy && !isInPlace(item, folders) && destinations[item.key] === kind)
+    .filter((item) => !item.busy && destinations[item.key] === kind)
     .map((item) => item.key);
 }
 
@@ -174,11 +139,8 @@ export function chunkKeys(keys: string[], size = SPLIT_MOVE_CHUNK): string[][] {
 export function leftCount(
   plan: SplitPlan,
   destinations: Record<string, SplitDestination>,
-  movie: SplitTarget,
-  series: SplitTarget,
 ): number {
-  const folders = inPlaceFolderNames(movie, series);
-  return plan.items.filter((item) => !isInPlace(item, folders) && (item.busy || destinations[item.key] === "leave")).length;
+  return plan.items.filter((item) => item.busy || destinations[item.key] === "leave").length;
 }
 
 export function targetName(target: SplitTarget): string {
@@ -197,16 +159,14 @@ export function summaryLines(
   const lines: string[] = [];
   const describe = (target: SplitTarget) => {
     const name = targetName(target);
-    const path = joinLibraryRoot(parentRoot, target.mode === "child" ? name : (target.mode === "new" ? name : target.name));
-    if (target.mode === "new") lines.push(t("split.summaryCreate", { name, path }));
-    else if (target.mode === "folder") lines.push(t("split.summaryFolder", { name, path }));
+    if (target.mode === "new") lines.push(t("split.summaryCreate", { name, path: joinLibraryRoot(parentRoot, name) }));
     else lines.push(t("split.summaryReuse", { name }));
   };
   describe(movie);
   describe(series);
   let moving = false;
   for (const kind of ["movie", "series"] as const) {
-    const keys = movableKeys(plan, destinations, kind, movie, series);
+    const keys = movableKeys(plan, destinations, kind);
     if (!keys.length) continue;
     moving = true;
     lines.push(t("split.summaryMove", {
@@ -220,7 +180,7 @@ export function summaryLines(
   } else {
     lines.push(t("split.summaryNoMoves"));
   }
-  const left = leftCount(plan, destinations, movie, series);
+  const left = leftCount(plan, destinations);
   if (left) lines.push(t("split.summaryLeft", { items: t("split.itemCount", { count: left }), name: parentName }));
   if (defaultsOn) lines.push(t("split.summaryDefaults", { movies: targetName(movie), series: targetName(series) }));
   lines.push(t("split.summaryParent", { name: parentName }));

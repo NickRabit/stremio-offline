@@ -215,8 +215,9 @@ below in three steps; the same card is offered above the list while a mixed
 library holds both films and series and has no library inside it yet.
 
 1. **New libraries.** For films and for series, pick a library that already
-   sits inside the root, a top-level folder that holds only that kind (it
-   becomes the library as it is, nothing in it moves), or a new folder. New
+   sits inside the root or a new folder. An existing folder full of titles is
+   not turned into a library where it stands: its titles move into the new one,
+   because only a move carries their identification, favourites and progress. New
    film and series downloads can be pointed at the new libraries in the same
    step (the *Default for movies/series* switches); an addon whose storage rule
    names a library of its own keeps it. Libraries the wizard creates are

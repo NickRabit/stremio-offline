@@ -5,8 +5,7 @@ import { X } from "lucide-react";
 import { api, describeError } from "./api";
 import { serverText, t, useI18n } from "./i18n";
 import {
-  chunkKeys, defaultDestinations, eligibleChildren, eligibleFolders, groupCounts, inPlaceFolderNames,
-  inPlaceFolderOf, joinLibraryRoot, movableKeys, preselectTarget, sortedItems, summaryLines,
+  chunkKeys, defaultDestinations, eligibleChildren, groupCounts, joinLibraryRoot, movableKeys, preselectTarget, sortedItems, summaryLines,
   targetErrors, targetName, type FolderNameError, type SplitDestination, type SplitTarget,
 } from "./library-split";
 import type { LibraryView, SplitPlan, SplitPlanItem } from "./types";
@@ -38,6 +37,7 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
   const [showRetry, setShowRetry] = useState(false);
   const [moving, setMoving] = useState(false);
   const applied = useRef(false);
+  const notified = useRef(false);
   const closed = useRef(false);
   const intervalRef = useRef<number | null>(null);
 
@@ -54,7 +54,7 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
     setPlan(next);
     setMovie(nextMovie);
     setSeries(nextSeries);
-    setDestinations(defaultDestinations(next, nextMovie, nextSeries));
+    setDestinations(defaultDestinations(next));
     setStep(1);
     setPhase("form");
     setLines([]);
@@ -89,25 +89,36 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  const notifyApplied = () => {
+    if (notified.current) return;
+    notified.current = true;
+    onApplied();
+  };
+  /** Something reached the server. A change that lands after the dialog was closed still has to
+   *  reach the list behind it, or a library created meanwhile never shows up there. */
+  const markApplied = () => {
+    applied.current = true;
+    if (closed.current) notifyApplied();
+  };
+
   const close = () => {
     stopPolling();
     closed.current = true;
-    if (applied.current) onApplied();
+    if (applied.current) notifyApplied();
     onClose();
   };
 
   const errors = plan ? targetErrors(plan, movie, series) : {};
   const parentRoot = library.root || plan?.library.root || "";
   const showCopy = (library.visibleTo?.length ?? 0) > 0;
-  const folders = inPlaceFolderNames(movie, series);
-  const counts = plan ? groupCounts(plan, movie, series) : null;
+  const counts = plan ? groupCounts(plan) : null;
   const leaveLabel = t("split.leave", { name: library.name });
 
   const goNext = () => {
     if (!plan) return;
     if (step === 1) {
       if (errors.movie || errors.series || errors.same) return;
-      setDestinations(defaultDestinations(plan, movie, series));
+      setDestinations(defaultDestinations(plan));
       setStep(2);
       return;
     }
@@ -144,15 +155,17 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
       for (const kind of KINDS) {
         const target = kind === "movie" ? movie : series;
         if (target.mode === "child") { ids[kind] = target.id; continue; }
+        // Always a new folder: a library laid over a folder that already holds titles would take
+        // them without the records a move carries, so existing titles always arrive by moving.
         const name = targetName(target);
         const root = joinLibraryRoot(parentRoot, name);
         upsert(`create-${kind}`, t("split.progressCreating", { name }));
         const made = await api.createLibrary({
-          name, type: kind, root, create: target.mode === "new",
+          name, type: kind, root, create: true,
           autoScanMetadata: library.autoScanMetadata, writeArtwork: library.writeArtwork,
         });
+        markApplied();
         if (closed.current) return;
-        applied.current = true;
         ids[kind] = made.id;
         created.push(made.id);
         upsert(`create-${kind}`, t("split.progressCreated", { name }));
@@ -162,23 +175,23 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
         if (setDefaults) {
           await api.updateLibrary(ids.movie, { defaultMovie: true });
           await api.updateLibrary(ids.series, { defaultSeries: true });
-          applied.current = true;
+          markApplied();
         }
         if (copy) {
           for (const id of created) await api.updateLibrary(id, { visibleTo: library.visibleTo });
-          applied.current = true;
+          markApplied();
         }
         if (closed.current) return;
         upsert("settings", t("split.progressSettings"));
       }
       const jobs: Record<"movie" | "series", string[]> = { movie: [], series: [] };
       for (const kind of KINDS) {
-        const keys = movableKeys(plan, destinations, kind, movie, series);
+        const keys = movableKeys(plan, destinations, kind);
         for (const chunk of chunkKeys(keys)) {
           const queued = await api.startLibraryOp({
             op: "move", items: chunk, target: ids[kind], confirmTypeMismatch: true,
           });
-          applied.current = true;
+          markApplied();
           jobs[kind].push(queued.id);
         }
       }
@@ -311,12 +324,11 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
               {counts.guessed > 0 && <i className="library-badge">{t("split.groupGuessed", { count: counts.guessed })}</i>}
               {counts.undecided > 0 && <i className="library-badge">{t("split.groupUndecided", { count: counts.undecided })}</i>}
               {counts.busy > 0 && <i className="library-badge">{t("split.groupBusy", { count: counts.busy })}</i>}
-              {counts.inPlace > 0 && <i className="library-badge">{t("split.groupInPlace", { count: counts.inPlace })}</i>}
             </div>}
             <table className="library-split-table">
               <thead><tr><th>{t("split.colItem")}</th><th>{t("split.colTarget")}</th></tr></thead>
               <tbody>
-                {sortedItems(plan).map((item) => <ItemRow key={item.key} item={item} inPlace={inPlaceFolderOf(item, folders)}
+                {sortedItems(plan).map((item) => <ItemRow key={item.key} item={item}
                   destination={destinations[item.key] ?? "leave"} movieName={targetName(movie)} seriesName={targetName(series)}
                   leaveLabel={leaveLabel} onChange={(value) => setDestinations((current) => ({ ...current, [item.key]: value }))}/>)}
               </tbody>
@@ -357,11 +369,6 @@ function KindBlock({ kind, heading, plan, target, error, onChange }: {
         onChange={() => onChange({ mode: "child", id: child.id, name: child.name })}/>
       <span>{t("split.targetExisting", { name: child.name })}</span>
     </label>)}
-    {eligibleFolders(plan, kind).map((folder) => <label key={folder.name} className="library-split-option">
-      <input type="radio" name={group} checked={target.mode === "folder" && target.name === folder.name}
-        onChange={() => onChange({ mode: "folder", name: folder.name })}/>
-      <span>{t("split.targetFolder", { name: folder.name })}</span>
-    </label>)}
     <label className="library-split-option">
       <input type="radio" name={group} checked={target.mode === "new"}
         onChange={() => onChange({ mode: "new", name: target.mode === "new" ? target.name : defaultName })}/>
@@ -376,8 +383,8 @@ function KindBlock({ kind, heading, plan, target, error, onChange }: {
   </fieldset>;
 }
 
-function ItemRow({ item, inPlace, destination, movieName, seriesName, leaveLabel, onChange }: {
-  item: SplitPlanItem; inPlace?: string; destination: SplitDestination;
+function ItemRow({ item, destination, movieName, seriesName, leaveLabel, onChange }: {
+  item: SplitPlanItem; destination: SplitDestination;
   movieName: string; seriesName: string; leaveLabel: string;
   onChange: (value: SplitDestination) => void;
 }) {
@@ -393,7 +400,6 @@ function ItemRow({ item, inPlace, destination, movieName, seriesName, leaveLabel
     </td>
     <td>
       {item.busy ? busyText
-        : inPlace ? inPlace
         : <select aria-label={t("split.colTarget")} value={destination}
           onChange={(event) => onChange(event.target.value as SplitDestination)}>
           <option value="movie">{movieName}</option>

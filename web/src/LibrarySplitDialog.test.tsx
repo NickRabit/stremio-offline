@@ -121,13 +121,15 @@ const open = async (plan: SplitPlan, library: LibraryView = parent(), extra?: (u
   await flushUntil(() => host.textContent?.includes(t("split.stepLibraries")) ?? false);
 };
 
-it("preselects an existing series library and a pure films folder, else new folders", async () => {
+it("preselects an existing series library, never offers an existing folder as it is, else new folders", async () => {
   await open(planOf({
     children: [seriesChild],
     folders: [{ name: "Filmy", movies: 3, series: 0, unknown: 0 }],
   }));
   expect(checkedOption(t("split.seriesHeading"))).toBe(t("split.targetExisting", { name: "Shows" }));
-  expect(checkedOption(t("split.moviesHeading"))).toBe(t("split.targetFolder", { name: "Filmy" }));
+  // A library laid over a folder of titles would take them without their records; they move instead.
+  expect(checkedOption(t("split.moviesHeading"))).toBe(t("split.targetNew"));
+  expect(host.textContent).not.toContain("as it is");
 
   await open(planOf({ folders: [{ name: "Misc", movies: 1, series: 1, unknown: 0 }] }));
   expect(checkedOption(t("split.moviesHeading"))).toBe(t("split.targetNew"));
@@ -155,7 +157,7 @@ it("validates new folder names and refuses Next", async () => {
   expect(host.textContent).not.toContain(t("split.colItem"));
 });
 
-it("defaults step 2 destinations, tags guessed and unidentified, and leaves busy and in-place without a select", async () => {
+it("defaults step 2 destinations, tags guessed and unidentified, leaves busy without a select and moves titles from a single-kind folder", async () => {
   await open(planOf({
     children: [seriesChild],
     folders: [{ name: "Filmy", movies: 3, series: 0, unknown: 0 }],
@@ -175,8 +177,7 @@ it("defaults step 2 destinations, tags guessed and unidentified, and leaves busy
   expect(rowOf("Mystery")?.textContent).toContain(t("split.unidentified"));
   expect(rowOf("Downloading")?.querySelector("select")).toBeNull();
   expect(rowOf("Downloading")?.textContent).toContain(t("split.busyDownload"));
-  expect(rowOf("Inception")?.querySelector("select")).toBeNull();
-  expect(host.textContent).toContain(t("split.groupInPlace", { count: 1 }));
+  expect(rowOf("Inception")?.querySelector("select")?.value).toBe("movie");
 });
 
 it("applies a new films folder and an existing series child in the specified request order", async () => {
@@ -320,4 +321,30 @@ it("refuses a new folder name that a top-level title already uses", () => {
   const plan = planOf({ items: [item({ key: "lib_mix/Films", label: "Films", relative: "Films", kind: "movie" })] });
   expect(folderNameError("films", plan)).toBe("nameTaken");
   expect(folderNameError("Series", plan)).toBeUndefined();
+});
+
+it("refreshes the list behind it when a library is created after the dialog was closed", async () => {
+  act(() => root.unmount());
+  root = createRoot(host);
+  let finishCreate: (response: Response) => void = () => undefined;
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (String(url).includes("/split-plan")) return json(planOf({ items: [item({ key: "mov", label: "Movie", kind: "movie" })] }));
+    if (url === "/api/libraries" && init?.method === "POST") return new Promise<Response>((resolve) => { finishCreate = resolve; });
+    return json({});
+  });
+  const onApplied = vi.fn();
+  const onClose = vi.fn();
+  await act(async () => {
+    root.render(<LibrarySplitDialog library={parent()} onClose={onClose} onApplied={onApplied}/>);
+  });
+  await flushUntil(() => host.textContent?.includes(t("split.stepLibraries")) ?? false);
+  await click(t("split.next"));
+  await click(t("split.next"));
+  await click(t("split.start"));
+  await click(t("common.close"));
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(onApplied).not.toHaveBeenCalled();
+  await act(async () => { finishCreate(json(createdLibrary("lib_late", "Films"), 201)); await Promise.resolve(); });
+  await flush(3);
+  expect(onApplied).toHaveBeenCalledTimes(1);
 });
