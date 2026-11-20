@@ -1123,8 +1123,8 @@ export function App() {
   };
 
   const openPlayer = (anchor: PlaybackAnchor | undefined, subject: PlayerSubject) => {
+    if (!playerOpenRef.current) scrollByView.current[view] = viewScrollTop();
     playbackReturn.current = capturePlaybackReturn(anchor);
-    scrollByView.current[view] = viewScrollTop();
     playerOpenRef.current = true;
     pickedRef.current = true;
     setPlayerSubject(subject);

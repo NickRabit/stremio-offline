@@ -1,4 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
+import { addonManifest } from "../../playwright.config";
 import { goToView } from "./nav";
 
 // The Library entry always starts over, and the player gives the list back where it was left.
@@ -75,4 +76,69 @@ test("closing the player gives the catalogue grid back at the title that was pla
 
   await expect(title).toBeInViewport();
   await expect.poll(async () => Math.abs((await ratioIn(title)) - before)).toBeLessThan(0.1);
+});
+
+test.describe("a source switch", () => {
+  // Two sources the test browser can play, so the switch really happens.
+  test.beforeEach(async ({ request }) => {
+    await request.get(new URL("/proxy-control?mode=browser-pair", addonManifest).href);
+  });
+  test.afterEach(async ({ request }) => {
+    await request.get(new URL("/proxy-control?mode=video", addonManifest).href);
+  });
+
+  test("switching the source in the player keeps the catalogue position it was opened from", async ({ page }) => {
+    await page.route("**/api/catalog?**", async (route) => {
+      const response = await route.fetch();
+      const items = await response.json();
+      await route.fulfill({ json: Array.from({ length: 80 }, (_, index) => ({ ...items[0], id: `tt-e2e-switch-${index}`, name: `Switch ${index}` })) });
+    });
+    await page.route("**/api/meta/movie/tt-e2e-switch-*", async (route) => {
+      const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop()!);
+      await route.fulfill({ json: { id, type: "movie", name: `Switch ${id.split("-").pop()}`, description: "Source switch title" } });
+    });
+    await page.goto("/");
+    const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
+    await expect(catalog).toBeVisible();
+    const options = await catalog.locator("option").allTextContents();
+    await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+
+    const grid = page.locator(".poster-grid");
+    await expect(grid.locator(".poster-card")).toHaveCount(80);
+    const title = grid.getByRole("button", { name: /Switch 55\b/ });
+    await title.evaluate((element) => element.scrollIntoView({ block: "center" }));
+    await expect.poll(() => grid.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    const before = await ratioIn(title);
+
+    await title.click();
+    const detail = page.locator(".detail-panel");
+    await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
+    const player = page.locator(".player-overlay");
+    await expect(player).toBeVisible();
+    // A rotation under the player relays the grid out and clamps its offset; a switch made then
+    // must not take that clamped layout for the place to come back to.
+    await grid.evaluate((element) => { element.scrollTop = 0; });
+
+    await player.dispatchEvent("pointermove");
+    await page.getByRole("button", { name: "Zdroje", exact: true }).click();
+    const rows = page.locator("#player-sources .player-source-list button");
+    await expect.poll(() => rows.count()).toBeGreaterThan(1);
+    const next = rows.and(page.locator('button[aria-pressed="false"]')).first();
+    const key = await next.getAttribute("data-row-key");
+    expect(key).toBeTruthy();
+    await next.click();
+    await expect(page.locator("#player-sources")).toHaveCount(0);
+    await player.dispatchEvent("pointermove");
+    const toggle = player.getByRole("button", { name: "Zdroje", exact: true });
+    await toggle.click();
+    await expect(rows.and(page.locator('button[aria-pressed="true"]')).first()).toHaveAttribute("data-row-key", key!);
+    await toggle.click();
+
+    await player.dispatchEvent("pointermove");
+    await player.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
+    await expect(player).toHaveCount(0);
+
+    await expect(title).toBeInViewport();
+    await expect.poll(async () => Math.abs((await ratioIn(title)) - before)).toBeLessThan(0.1);
+  });
 });
