@@ -39,6 +39,7 @@ test.describe("interface scale", () => {
 
     const scale = page.locator(".ui-scale-setting select");
     await expect(scale).toHaveValue("1");
+    await scale.scrollIntoViewIfNeeded();
     await scale.selectOption("1.5");
     await expect.poll(() => page.evaluate(() => document.documentElement.style.zoom)).toBe("1.5");
     // The row the viewer just changed stays on screen while the page grows around it.
@@ -74,6 +75,9 @@ test.describe("interface scale", () => {
 
     await overlay.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
     await expect(overlay).toHaveCount(0);
+    // 1920x1080 at 150 % holds the layout of a 1280x720 window, and the catalogue compacts the
+    // way it does there: its heading gives the series detail the height for its episodes.
+    await expect(page.locator("main.view-catalog .catalog-view > .heading")).toBeHidden();
     await openSettingsHome(page);
     await page.setViewportSize({ width: 1280, height: 720 });
     await expect.poll(() => page.evaluate(() => document.documentElement.style.zoom)).toBe("1.12");

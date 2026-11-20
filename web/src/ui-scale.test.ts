@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { effectiveUiScale, readUiScale, toCssPx, writeUiScale } from "./ui-scale";
+import { effectiveUiScale, readUiScale, toCssPx, viewportConditions, writeUiScale } from "./ui-scale";
 
 beforeEach(() => {
   localStorage.clear();
@@ -61,5 +61,25 @@ describe("interface scale", () => {
     scrollBy.mockClear();
     writeUiScale(1);
     expect(scrollBy).not.toHaveBeenCalled();
+  });
+
+  it("evaluates the old media conditions on the space left after zooming", () => {
+    // A roomy desktop window at the standard size.
+    expect(viewportConditions(1920, 1080)).toEqual(["wide-1100", "wide-1920"]);
+    // The same window at 150 % holds 1280x720 of layout, so it compacts like that window would.
+    expect(viewportConditions(1280, 720)).toEqual(["wide-short", "catalog-tight", "catalog-compact", "narrow-1300", "wide-1100", "short-880"]);
+    expect(viewportConditions(1024, 640)).toContain("landscape-short");
+    expect(viewportConditions(390, 844)).toEqual(["narrow-1300", "short-880"]);
+  });
+
+  it("marks the root with the conditions of the zoomed space", () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1920);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(1080);
+    vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(1080);
+    writeUiScale(1);
+    expect(document.documentElement.dataset.viewport).toBe("wide-1100 wide-1920");
+    writeUiScale(1.5);
+    expect(document.documentElement.dataset.viewport?.split(" ")).toContain("catalog-compact");
+    expect(document.documentElement.dataset.viewport?.split(" ")).not.toContain("wide-1920");
   });
 });
