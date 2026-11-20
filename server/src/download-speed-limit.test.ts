@@ -196,12 +196,19 @@ test("a segmented transfer is limited as one budget", async () => {
   const total = 64 * MB;
   const { directory, queue } = await openQueue(1, 1, { segments: () => 4, speedLimit: () => 1_000_000 });
   const { server, port, peak } = await pacedServer(total);
+  // The window opens only once every segment has written to disk. On Windows the part file is
+  // not sparse: the first write of the last segment makes NTFS zero-fill the file up to its
+  // offset, and every write to the file waits for that. On a slow CI disk the fill took the
+  // whole window, so the first byte of any one segment is not the start of the steady state.
+  const everySegmentWrote = new Promise<void>((resolve) => {
+    queue.onProgress = (job) => {
+      if (job.segments?.length === 4 && job.segments.every((segment) => segment.received > 0)) resolve();
+    };
+  });
   try {
     await queue.add("Segmented", { url: `http://127.0.0.1:${port}/film.mkv` });
-    await waitFor(queue, () => {
-      const job = queue.list()[0];
-      return job?.status === "downloading" && job.segments === 4 && job.received > 0;
-    });
+    await everySegmentWrote;
+    assert.equal(queue.list()[0]?.status, "downloading");
     await sleep(1000);
     const rate = await measureRate(queue, 3000);
     assert.equal(queue.list()[0]?.segments, 4);
