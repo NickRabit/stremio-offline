@@ -9,7 +9,7 @@ import { ART_VARIANTS, artVariantKey } from "./artwork.js";
 import { carryMovePairs, type FingerprintPair } from "./library-fingerprints.js";
 import type { FoundFile } from "./library.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
-import type { LibraryMetaRecord } from "./library-match.js";
+import type { LibraryMetaRecord, TitleUnit } from "./library-match.js";
 import { LibrarySeenStore } from "./library-seen.js";
 import { parseLibraryPath, type LibraryRecord } from "./libraries.js";
 import type { UserData } from "./users.js";
@@ -34,9 +34,10 @@ const harness = (options: {
   updateEveryData?: LibraryActionDeps["updateEveryData"];
   progressOf?: LibraryActionDeps["progressOf"];
   carveOuts?: ReadonlySet<string>;
+  units?: TitleUnit[];
 } = {}) => {
   const calls = {
-    relocate: [] as Array<{ from: string; to: string; pin: boolean }>,
+    relocate: [] as Array<{ from: string; to: string; pin: boolean; unit?: string }>,
     moved: [] as string[],
     invalidated: 0,
     cleared: [] as string[],
@@ -56,7 +57,7 @@ const harness = (options: {
     metaStore: options.metaStore ?? {
       qualifiedMeta: () => ({}),
       update: async () => undefined,
-      relocate: async (from: string, to: string, pin = false) => { calls.relocate.push({ from, to, pin }); },
+      relocate: async (from: string, to: string, pin = false, _policy?: string, unit?: string) => { calls.relocate.push({ from, to, pin, ...(unit ? { unit } : {}) }); },
       copy: async () => undefined,
       holds,
       flushLibrary: async () => undefined,
@@ -69,7 +70,7 @@ const harness = (options: {
       calls.libraryFilesReads += 1;
       return (options.files ?? []) as FoundFile[];
     },
-    libraryUnits: async () => [],
+    libraryUnits: async () => options.units ?? [],
     carveOutsOf: () => options.carveOuts ?? new Set<string>(),
     healthOf: (entry) => ({ unreachable: false, readOnly: false, realRoot: entry.root, caseInsensitive: false }),
     libraryOfKey,
@@ -391,6 +392,23 @@ test("transferLibraryItem rejects journal sidecar names that leave their folders
   });
 });
 
+test("transferLibraryItem marks a video that is a title of its own, and only that", async () => {
+  const loose = `${LIBRARY_ID}/Whisper Man/Harry Potter.mp4`;
+  const units: TitleUnit[] = [
+    { key: loose, relative: loose, kind: "movie", sampleFiles: [loose] },
+    { key: `${LIBRARY_ID}/Heat`, relative: `${LIBRARY_ID}/Heat`, kind: "movie", sampleFiles: [`${LIBRARY_ID}/Heat/movie.mkv`] },
+  ];
+  await withRoot(["Whisper Man/Harry Potter.mp4", "Heat/movie.mkv", "Films/.keep"], async (_root, actions, calls) => {
+    await actions.transferLibraryItem(loose, `${LIBRARY_ID}/Films`);
+    await actions.transferLibraryItem(`${LIBRARY_ID}/Heat/movie.mkv`, `${LIBRARY_ID}/Films`);
+    assert.deepEqual(calls.relocate.map(({ from, unit }) => ({ from, unit })), [
+      { from: loose, unit: loose },
+      // A file of a folder title keeps the folder's identity, as the library shows it.
+      { from: `${LIBRARY_ID}/Heat/movie.mkv`, unit: undefined },
+    ]);
+  }, { units });
+});
+
 test("a replay rejects sidecar names that are not subtitles of the two videos", async () => {
   const from = `${LIBRARY_ID}/Old/movie.mkv`;
   const to = `${LIBRARY_ID}/New/movie.mkv`;
@@ -507,6 +525,17 @@ test("a replayed finishTransfer leaves the destination's carried rows unpinned",
   const fresh = harness();
   assert.equal(await fresh.actions.finishTransfer(step), step.to);
   assert.deepEqual(fresh.calls.relocate, [{ from: step.from, to: step.to, pin: true }]);
+});
+
+test("finishTransfer reads a loose film's identity by its own title, not the folder's", async () => {
+  const step: TransferStep = verifiedStep("a".repeat(64), null, {
+    phase: "moving", copy: false,
+    from: `${LIBRARY_ID}/Whisper Man/Harry Potter.mp4`, to: `${LIBRARY_ID}/Films/Harry Potter.mp4`, carried: [],
+    unit: `${LIBRARY_ID}/Whisper Man/Harry Potter.mp4`,
+  });
+  const run = harness();
+  await run.actions.finishTransfer(step);
+  assert.deepEqual(run.calls.relocate, [{ from: step.from, to: step.to, pin: true, unit: step.unit }]);
 });
 
 const withCarry = async (

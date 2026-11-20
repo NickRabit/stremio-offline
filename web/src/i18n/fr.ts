@@ -2423,4 +2423,5 @@ export const fr: Catalog = {
   "split.retryHint": "Rouvrez la division pour terminer : elle reprend les bibliothèques et les déplacements déjà faits.",
   "split.dismiss": "Pas maintenant",
   "err.libraryRootExists": "Ce dossier existe déjà. Rechargez la division et choisissez un autre nom.",
+  "err.libraryRootChanged": "Le dossier de la bibliothèque a changé. Rechargez la division.",
 };

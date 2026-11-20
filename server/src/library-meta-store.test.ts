@@ -123,6 +123,24 @@ test("a move into another library writes both files and pins the inherited title
   });
 });
 
+test("a loose film moved out of a collection keeps no identity the library never gave it", async () => {
+  await withStore(async (store, dataDir) => {
+    // "Whisper Man" is bound; the library reads "Harry Potter.mp4" beside it as a title of its own
+    // with no match. Moved as that title, it must not land with the folder's film on it.
+    await seed(dataDir, libA, { "Whisper Man": { ...record("tt-whisper"), name: "The Whisper Man" } });
+    await seed(dataDir, libB, {});
+    await store.load();
+    await store.relocate(`${libA}/Whisper Man/Harry Potter.mp4`, `${libB}/Harry Potter.mp4`, true, "replace", `${libA}/Whisper Man/Harry Potter.mp4`);
+    await store.flush();
+    assert.equal(knownTitleOf("Harry Potter.mp4", store.meta(libB)), undefined, "no binding in the destination");
+
+    // A film named like the folder is that folder's film, and keeps it on the way out.
+    await store.relocate(`${libA}/Whisper Man/The Whisper Man (2025).mkv`, `${libB}/The Whisper Man (2025).mkv`, true, "replace", `${libA}/Whisper Man/The Whisper Man (2025).mkv`);
+    await store.flush();
+    assert.equal(store.meta(libB)["The Whisper Man (2025).mkv"]?.id, "tt-whisper");
+  });
+});
+
 test("a failed target commit keeps the source match and suggestion through restart", async () => {
   await withStore(async (store, dataDir) => {
     const match = record("tt1");

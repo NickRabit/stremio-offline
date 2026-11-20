@@ -6,7 +6,7 @@ import { recoveryConflict } from "./library-recovery.js";
 import { renameWithRetry, syncDirectory } from "./fs-retry.js";
 import { dropKeyed, pinInherited, remapKeyed, type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion } from "./library-match.js";
 import { isPathWithin, remapPath } from "./library.js";
-import { LIBRARY_ID, libraryPath, parseLibraryPath } from "./libraries.js";
+import { LIBRARY_ID, libraryPath, parseLibraryPath, relativeWithin } from "./libraries.js";
 import { log } from "./logger.js";
 import { preserveDamaged } from "./state-file.js";
 import type { AppDatabase, Statement } from "./storage/app-database.js";
@@ -32,6 +32,11 @@ export type QualifiedMutator = (
 /** A scan accepting titles arrives in bursts, and one write per library per burst is
  *  enough. The point of the split is that a match never rewrites the whole state. */
 const SAVE_DEBOUNCE_MS = 2000;
+
+/** A qualified title key as the source library's own files spell it, or nothing when it names
+ *  another library. */
+const unitWithin = (libraryId: string, unit: string | undefined) =>
+  unit && parseLibraryPath(unit)?.libraryId === libraryId ? relativeWithin(libraryId, unit) : undefined;
 const LIBRARY_META_MARKER = "domain.libraryMeta.";
 const EPISODES_MARKER = "domain.libraryEpisodes";
 const META_UPSERT = "INSERT INTO library_meta (library_id, kind, key, data) VALUES (?, ?, ?, ?) ON CONFLICT (library_id, kind, key) DO UPDATE SET data = excluded.data";
@@ -411,14 +416,14 @@ export class LibraryMetaStore {
    *  rename in place; across libraries the rows leave one file and land in the other, which
    *  is why the store owns it -- two files have to change together or the move is half done.
    *  `pin` is for a move into another folder, see `pinInherited`. */
-  async relocate(from: string, to: string, pin = false, policy: "replace" | "replay" | "keep-target" = "replace") {
+  async relocate(from: string, to: string, pin = false, policy: "replace" | "replay" | "keep-target" = "replace", unit?: string) {
     const source = parseLibraryPath(from);
     const target = parseLibraryPath(to);
     if (!source || !target || !source.relative || !target.relative) return;
     const file = this.files.get(source.libraryId);
     if (!file) return;
     const bindings = () => pin
-      ? pinInherited(file.meta, file.suggestions, source.relative, source.libraryId === target.libraryId ? target.relative : undefined)
+      ? pinInherited(file.meta, file.suggestions, source.relative, source.libraryId === target.libraryId ? target.relative : undefined, unitWithin(source.libraryId, unit))
       : file;
     if (source.libraryId === target.libraryId) {
       const pinned = bindings();
@@ -456,7 +461,7 @@ export class LibraryMetaStore {
     this.save(source.libraryId);
   }
 
-  async copy(from: string, to: string) {
+  async copy(from: string, to: string, unit?: string) {
     const source = parseLibraryPath(from);
     const target = parseLibraryPath(to);
     if (!source || !target || !source.relative || !target.relative) return;
@@ -464,7 +469,7 @@ export class LibraryMetaStore {
     if (!file) return;
     // The copy is the same title as the original, including one the original only inherits
     // from its folder. The pin is computed on the side: the source keeps its rows as they are.
-    const pinned = pinInherited(file.meta, file.suggestions, source.relative, source.libraryId === target.libraryId ? target.relative : undefined);
+    const pinned = pinInherited(file.meta, file.suggestions, source.relative, source.libraryId === target.libraryId ? target.relative : undefined, unitWithin(source.libraryId, unit));
     const carried = <T,>(records: Record<string, T>) => Object.fromEntries(Object.entries(records)
       .filter(([key]) => isPathWithin(key, source.relative))
       .map(([key, value]) => [remapPath(key, source.relative, target.relative), structuredClone(value)]));

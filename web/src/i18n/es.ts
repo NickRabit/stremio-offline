@@ -2423,4 +2423,5 @@ export const es: Catalog = {
   "split.retryHint": "Vuelve a abrir la división para terminar: retoma las bibliotecas y los movimientos ya hechos.",
   "split.dismiss": "Ahora no",
   "err.libraryRootExists": "Esa carpeta ya existe. Vuelve a cargar la división y elige otro nombre.",
+  "err.libraryRootChanged": "La carpeta de la biblioteca ha cambiado. Vuelve a cargar la división.",
 };

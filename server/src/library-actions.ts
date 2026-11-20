@@ -3,8 +3,8 @@ import path from "node:path";
 import { ART_VARIANTS, artVariantKey } from "./artwork.js";
 import type { ArtworkCache, ArtworkCarry } from "./artwork-cache.js";
 import { AppError } from "./errors.js";
-import { foldersBetween, holdsLibraryRoot, isPathWithin, moveDestination, orphanedCatalogKeys, remapPath, withinLibraryRoot, type FoundFile } from "./library.js";
-import { dropKeyed, isAutomaticRecord, knownTitleEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { foldersBetween, holdsLibraryRoot, isPathWithin, isVideo, moveDestination, orphanedCatalogKeys, remapPath, withinLibraryRoot, type FoundFile } from "./library.js";
+import { dropKeyed, isAutomaticRecord, knownEntryForUnit, knownTitleEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import type { LibraryMetaStore } from "./library-meta-store.js";
 import type { LibraryHealth } from "./library-probe.js";
 import { libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, resolveLibraryPath, toPosix, type LibraryRecord } from "./libraries.js";
@@ -72,6 +72,10 @@ export type TransferStep = RecoveryEvidence & {
    *  source and `to` beside the destination. Absent on a record an older build wrote. */
   sidecars: Array<{ from: string; to: string; identity?: string }>;
   cover?: string;
+  /** The key of the title a single video belongs to when that title is keyed by a file (a loose
+   *  film beside others in a collection folder): its identity is read the way the library view
+   *  reads it, so the folder's binding is not pinned onto a film it does not describe. */
+  unit?: string;
 };
 
 /** What a queued `reroot` is halfway through: the item's bare name joined onto both roots,
@@ -385,14 +389,14 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     // Verify the destination artwork before changing bindings. Keep the originals until the move commits.
     await duplicateArtwork(step.carried, step.from, step.to);
     if (step.copy) {
-      await metaStore.copy(step.from, step.to);
+      await metaStore.copy(step.from, step.to, step.unit);
     }
     else {
       if (step.cover) await carryCoveringArtwork(step.cover, step.to);
       // A replay must not pin the folder's identity over the rows the first run already
       // carried: once the source holds nothing and the destination does, only the personal
       // rows are remapped. A first run always relocates, over any stale row at the target.
-      if (!replay || metaStore.holds(step.from) || !metaStore.holds(step.to)) await metaStore.relocate(step.from, step.to, true, replay ? "replay" : "replace");
+      if (!replay || metaStore.holds(step.from) || !metaStore.holds(step.to)) await metaStore.relocate(step.from, step.to, true, replay ? "replay" : "replace", step.unit);
       await relocateArtwork(step.carried, step.from, step.to);
       await remapPersonalState(step.from, step.to);
     }
@@ -548,7 +552,15 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
       .map((file) => file.relative).filter((item) => item !== resolved.key && isPathWithin(item, resolved.key))];
     // The folder a title is bound through, when the item does not carry the binding itself: its
     // picture is the title's and has to travel with it.
-    const cover = knownTitleEntry(resolved.key, metaStore.qualifiedMeta());
+    // A title keyed by a video of its own does not inherit the folder's binding in the library
+    // view; the move must not give it one either, nor carry the folder's picture to it.
+    const ownTitle = info.isFile()
+      ? (await libraryUnits()).find((unit) => unit.key === resolved.key || unit.sampleFiles.includes(resolved.key))
+      : undefined;
+    const unitKey = ownTitle && isVideo(posixBase(ownTitle.key)) ? ownTitle.key : undefined;
+    const cover = unitKey
+      ? knownEntryForUnit(unitKey, metaStore.qualifiedMeta(), resolved.key)
+      : knownTitleEntry(resolved.key, metaStore.qualifiedMeta());
     // A single video's subtitles sit beside it, not inside it, so a move or copy of the file
     // alone would leave them behind and the player would stop offering them.
     const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };
@@ -566,6 +578,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
       phase: "moving", copy, from: resolved.key, to: target.key, sourceIdentity, publishedIdentity: null,
       carried, sidecars: sidecarPairs,
       ...(cover && cover.key !== resolved.key && isPathWithin(resolved.key, cover.key) ? { cover: cover.key } : {}),
+      ...(unitKey ? { unit: unitKey } : {}),
     };
     if (recorded && recorded.sourceIdentity !== sourceIdentity) throw recoveryConflict();
     const transferred = await runTransfer(step, resolved.absolute, target.absolute, !copy, progress, journal);

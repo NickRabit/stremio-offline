@@ -2493,4 +2493,5 @@ export const cs: Catalog = {
   "split.retryHint": "Pro dokončení spusťte rozdělení znovu: navazuje na už vytvořené knihovny a hotové přesuny.",
   "split.dismiss": "Teď ne",
   "err.libraryRootExists": "Tato složka už existuje. Načtěte rozdělení znovu a zvolte jiný název.",
+  "err.libraryRootChanged": "Složka knihovny se změnila. Načtěte rozdělení znovu.",
 };

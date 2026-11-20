@@ -104,6 +104,19 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (grantsFrom !== undefined && !store.libraries().some((item) => item.id === grantsFrom)) {
       throw new AppError("The library was not found.", "err.libraryNotFound", 404);
     }
+    // The library the new root has to sit directly inside, as that library's root is now: a
+    // flow that read the root a while ago must not create folders under a root that was changed
+    // meanwhile and move the new root's titles back into the old place.
+    const within = req.body?.within === undefined ? undefined : String(req.body.within).trim();
+    const directlyInside = (libraries: LibraryRecord[]) => {
+      const parent = libraries.find((item) => item.id === within);
+      if (!parent) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+      const wanted = path.resolve(String(req.body?.root ?? "").trim());
+      if (!sameFile(path.dirname(wanted), path.resolve(parent.root))) {
+        throw new AppError("The library's folder has changed. Load the split again.", "err.libraryRootChanged", 409);
+      }
+    };
+    if (within !== undefined) directlyInside(store.libraries());
     const root = await requireLibraryRoot(req.body?.root, { create: req.body?.create === true, fresh: req.body?.fresh === true });
     // A fresh answer for the root as it is now: a deleted library's cached verdict must not
     // decide whether the new one is writable.
@@ -141,6 +154,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
         resumedId = departedIdIn(state.departed ?? [], forms);
         if (resumedId && !(state.libraries ?? []).some((item) => item.id === resumedId)) library.id = resumedId;
         else resumedId = undefined;
+        if (within !== undefined) directlyInside(state.libraries ?? []);
         if (grantsFrom !== undefined) {
           const source = (state.libraries ?? []).find((item) => item.id === grantsFrom);
           if (!source) throw new AppError("The library was not found.", "err.libraryNotFound", 404);

@@ -2486,4 +2486,5 @@ export const en = {
   "split.retryHint": "Open the split again to finish: it picks up the libraries and moves already done.",
   "split.dismiss": "Not now",
   "err.libraryRootExists": "That folder already exists. Load the split again and choose another name.",
+  "err.libraryRootChanged": "The library's folder has changed. Load the split again.",
 };

@@ -109,7 +109,9 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
   };
 
   const errors = plan ? targetErrors(plan, movie, series) : {};
-  const parentRoot = library.root || plan?.library.root || "";
+  // The root the plan was computed for, never the list's older copy: if the root was changed
+  // meanwhile, the plan's titles live under the new one.
+  const parentRoot = plan?.library.root ?? "";
   const showCopy = (library.visibleTo?.length ?? 0) > 0;
   const counts = plan ? groupCounts(plan) : null;
   const leaveLabel = t("split.leave", { name: library.name });
@@ -118,7 +120,8 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
     if (!plan) return;
     if (step === 1) {
       if (errors.movie || errors.series || errors.same) return;
-      setDestinations(defaultDestinations(plan));
+      // Destinations are kinds, not libraries, so they survive a change of target; the plan's
+      // load set the defaults, and choices made in step 2 are kept across a visit to step 1.
       setStep(2);
       return;
     }
@@ -166,7 +169,7 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
         const root = joinLibraryRoot(parentRoot, name);
         upsert(`create-${kind}`, t("split.progressCreating", { name }));
         const made = await api.createLibrary({
-          name, type: kind, root, create: true, fresh: true,
+          name, type: kind, root, create: true, fresh: true, within: library.id,
           // The source library's id, not the accounts this page saw: the server copies the grants
           // as they are when it writes, so one removed meanwhile is not given back.
           ...(copyAccess && showCopy ? { grantsFrom: library.id } : {}),

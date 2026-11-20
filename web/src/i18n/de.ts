@@ -2423,4 +2423,5 @@ export const de: Catalog = {
   "split.retryHint": "Öffnen Sie die Aufteilung erneut, um sie abzuschließen: Sie übernimmt angelegte Mediatheken und erledigte Verschiebungen.",
   "split.dismiss": "Nicht jetzt",
   "err.libraryRootExists": "Dieser Ordner existiert bereits. Laden Sie die Aufteilung neu und wählen Sie einen anderen Namen.",
+  "err.libraryRootChanged": "Der Ordner der Mediathek hat sich geändert. Laden Sie die Aufteilung neu.",
 };

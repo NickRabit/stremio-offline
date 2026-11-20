@@ -2437,4 +2437,5 @@ export const sk: Catalog = {
   "split.retryHint": "Na dokončenie spustite rozdelenie znova: nadväzuje na už vytvorené knižnice a hotové presuny.",
   "split.dismiss": "Teraz nie",
   "err.libraryRootExists": "Tento priečinok už existuje. Načítajte rozdelenie znova a zvoľte iný názov.",
+  "err.libraryRootChanged": "Priečinok knižnice sa zmenil. Načítajte rozdelenie znova.",
 };

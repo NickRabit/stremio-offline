@@ -2440,4 +2440,5 @@ export const pl: Catalog = {
   "split.retryHint": "Otwórz podział ponownie, aby dokończyć: uwzględni już utworzone biblioteki i wykonane przeniesienia.",
   "split.dismiss": "Nie teraz",
   "err.libraryRootExists": "Ten folder już istnieje. Wczytaj podział ponownie i wybierz inną nazwę.",
+  "err.libraryRootChanged": "Folder biblioteki się zmienił. Wczytaj podział ponownie.",
 };

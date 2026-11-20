@@ -211,7 +211,7 @@ it("creates a new films folder fresh with its grants in one request, then defaul
 
   expect(mutating()).toEqual([
     { url: "/api/libraries", method: "POST", body: {
-      name: "Films", type: "movie", root: "/downloads/Films", create: true, fresh: true, grantsFrom: "lib_mix",
+      name: "Films", type: "movie", root: "/downloads/Films", create: true, fresh: true, within: "lib_mix", grantsFrom: "lib_mix",
       autoScanMetadata: true, writeArtwork: true,
     } },
     { url: "/api/libraries/lib_created", method: "PATCH", body: { defaultMovie: true } },
@@ -423,4 +423,40 @@ it("moves every file of a title with versions beside it, counting it once", asyn
   await click(t("split.start"));
   await flushUntil(() => mutating().some((call) => call.url === "/api/library/ops"));
   expect(mutating().find((call) => call.url === "/api/library/ops")?.body.items).toEqual(["lib_mix/Heat.mkv", "lib_mix/Heat 1080p.mkv"]);
+});
+
+it("builds new roots from the plan's root, not the list's older copy", async () => {
+  const plan = planOf({
+    library: { id: "lib_mix", name: "Downloads", root: "/media/new-downloads", type: "mixed" },
+    children: [seriesChild],
+    items: [item({ key: "mov", label: "Movie", kind: "movie" })],
+  });
+  await open(plan, parent({ root: "/downloads" }), (url, init) => {
+    if (url === "/api/libraries" && init?.method === "POST") return json(createdLibrary("lib_created", "Films"), 201);
+    if (String(url).startsWith("/api/libraries/") && init?.method === "PATCH") return json(parent());
+    if (url === "/api/library/ops" && init?.method === "POST") return json({ id: "job_1" });
+    if (url === "/api/library/ops") return json({ jobs: [job({ id: "job_1", status: "completed", total: 1, done: 1 })] });
+    return undefined;
+  });
+  await click(t("split.next"));
+  await click(t("split.next"));
+  expect(host.textContent).toContain(t("split.summaryCreate", { name: "Films", path: "/media/new-downloads/Films" }));
+  await click(t("split.start"));
+  await flushUntil(() => mutating().some((call) => call.url === "/api/libraries"));
+  expect(mutating().find((call) => call.url === "/api/libraries")?.body.root).toBe("/media/new-downloads/Films");
+});
+
+it("keeps step 2 choices across a visit back to step 1", async () => {
+  await open(planOf({
+    children: [seriesChild],
+    items: [item({ key: "m1", label: "Alien", kind: "movie", basis: "identified" })],
+  }));
+  await click(t("split.next"));
+  const select = rowOf("Alien")!.querySelector("select")!;
+  await act(async () => { select.value = "leave"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(rowOf("Alien")!.querySelector("select")!.value).toBe("leave");
+  await click(t("split.back"));
+  await fill(folderInputs()[0]!, "Kino");
+  await click(t("split.next"));
+  expect(rowOf("Alien")!.querySelector("select")!.value).toBe("leave");
 });

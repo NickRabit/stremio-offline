@@ -532,6 +532,27 @@ test("POST /api/libraries copies another library's current grants in the same wr
   assert.equal(harness.stored().length, 2, "an unknown source creates nothing");
 });
 
+test("POST /api/libraries with within refuses a root that is not directly inside that library's current root", async (t) => {
+  const { root } = await grantedRoot("within");
+  const moved = path.join(root, "moved");
+  await mkdir(moved);
+  // The source library's root changed to `moved` after the caller read it as `root`.
+  const source = { ...library("alpha", 0), root: moved };
+  const harness = await mount([source], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const stale = path.join(root, "Films new");
+  const refused = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films new", type: "movie", root: stale, create: true, fresh: true, within: "alpha" } });
+  assert.equal(refused.status, 409);
+  assert.equal(((await refused.json()) as { messageKey?: string }).messageKey, "err.libraryRootChanged");
+  await assert.rejects(stat(stale), "no folder is made under the old root");
+  assert.equal(harness.stored().length, 1);
+
+  const inside = path.join(moved, "Films");
+  const made = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: inside, create: true, fresh: true, within: "alpha" } });
+  assert.equal(made.status, 201);
+});
+
 test("POST /api/libraries hands a re-added folder's remembered id to the scanner", async (t) => {
   const { root, films } = await grantedRoot("resume");
   const real = await realpath(films);

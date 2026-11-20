@@ -1091,11 +1091,14 @@ export function pinInherited(
   /** Undefined when the item leaves this library: no folder of it can cover the new place,
    *  even one that happens to share the destination's path. */
   nextRelative: string | undefined,
+  /** The key of the title the item belongs to when that title is keyed by a video (a loose
+   *  film in a collection): the identity is then read as `knownEntryForUnit` reads it. */
+  unitKey?: string,
 ): { meta: Record<string, LibraryMetaRecord>; suggestions: Record<string, LibrarySuggestion> } {
   const stillCovers = (key: string | undefined) => key !== undefined && (key === relative || (nextRelative !== undefined && isPathWithin(nextRelative, key)));
 
   const nextMeta = { ...meta };
-  const bound = knownTitleEntry(relative, meta);
+  const bound = unitKey ? knownEntryForUnit(unitKey, meta, relative) : knownTitleEntry(relative, meta);
   if (bound && !stillCovers(bound.key)) {
     // Whatever the item itself kept out of matching or the mosaic travels with it.
     const own = meta[relative];
