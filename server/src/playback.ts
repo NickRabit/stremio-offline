@@ -1724,8 +1724,8 @@ export class PlaybackManager {
       }
       // Closed while this attempt was opening: nothing failed, and the path it ran on is not to blame.
       if (session.stopped) break;
-      // A source that answers 404 will answer the same to the software attempt.
-      if (session.error === SOURCE_UNREACHABLE) break;
+      // Switching encoders cannot repair an input FFmpeg could not open.
+      if (session.error === SOURCE_UNREACHABLE || /Error opening input files?: Invalid data found when processing input/i.test(session.error ?? "")) break;
       if (hardware) {
         if (accelerator === "videotoolbox") {
           log("WARN", "VideoToolbox failed, falling back to a software conversion", { id: session.id, reason: session.error });

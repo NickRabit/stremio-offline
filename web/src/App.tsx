@@ -71,7 +71,7 @@ import { captureScroll, restoreScroll, snapshotScrollTop, type ScrollSnapshot } 
 import { useSearchEverywhere } from "./useSearchEverywhere";
 import { useCatalogLoader } from "./use-catalog-loader";
 import { useLibraryBrowse } from "./use-library-browse";
-import { useScrollMemory, type PlaybackAnchor } from "./use-scroll-memory";
+import { firstVisibleAnchor, useScrollMemory, type PlaybackAnchor } from "./use-scroll-memory";
 import { useTitleSources } from "./use-title-sources";
 import type { HomeCardActions } from "./HomeCard";
 import { useHome } from "./useHome";
@@ -1043,7 +1043,7 @@ export function App() {
     prefetchedEpisode, prefetchEpisode, subtitlesReady,
   } = useTitleSources({ setBusy, fail });
   const {
-    items, hasMore, loadingMore, sourceCount, loadPage, actOnSearch, clearPendingRecord,
+    items, hasMore, loadingMore, pageFailed, sourceCount, loadPage, actOnSearch, clearPendingRecord,
   } = useCatalogLoader({
     view,
     query: submittedQuery,
@@ -2204,24 +2204,6 @@ export function App() {
   // Entering search starts from the addon order; browse keeps its own sort untouched.
   useEffect(() => { setSearchSort(searchStateRef.current?.defaultOrder === "titleMatch" ? "titleMatch" : "default"); }, [Boolean(submittedQuery)]);
 
-  // The grid scrolls on its own. A plain scroll listener works even where
-  // IntersectionObserver stays quiet (a hidden document, power-saving modes).
-  useEffect(() => {
-    const grid = gridRef.current;
-    if (!grid || !hasMore) return;
-    // A rotation shortens the grid enough to land inside the margin on its own, and the clamp
-    // that follows arrives as a scroll event -- which fetched a page nobody had scrolled for.
-    // The margin follows the viewport so a short one cannot sit permanently at the end, and a
-    // scroll the restore itself caused is not the viewer reaching the bottom.
-    const onScroll = () => {
-      if (restoringScroll.current) return;
-      const margin = Math.min(400, grid.clientHeight);
-      if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - margin) void loadPage(false);
-    };
-    grid.addEventListener("scroll", onScroll, { passive: true });
-    return () => grid.removeEventListener("scroll", onScroll);
-  }, [hasMore, submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
-
   /** Every addon files the same film under its own id. We merge by name and year and keep
    *  the entry with an IMDb id, because that is what source addons look streams up by. */
   const groupByName = (list: Meta[]) => {
@@ -2943,7 +2925,7 @@ export function App() {
    *  scrollers held it: the page itself for Home, a folder or a queue, a box of its own for the
    *  catalogue's grid. The section is unmounted for as long as the detail is up, so this is the
    *  only record of it. */
-  const detailReturn = useRef<{ view: View; windowY: number; pane: "catalog" | null; paneY: number } | null>(null);
+  const detailReturn = useRef<{ view: View; windowY: number; pane: "catalog" | null; paneY: number; anchor: ReturnType<typeof firstVisibleAnchor> } | null>(null);
   /** The chips the shared detail draws, read for the title it holds rather than for whatever the
    *  panel has selected: a Home card or a favourite opens a title the catalogue never listed. */
   const [detailLinks, setDetailLinks] = useState<SiteLink[]>([]);
@@ -3009,7 +2991,8 @@ export function App() {
     if (child && !childCatalogue) return;
     navigated.current = true;
     if (!catalogueDetail) {
-      detailReturn.current = { view, windowY: window.scrollY, pane: view === "catalog" ? "catalog" : null, paneY: gridRef.current?.scrollTop ?? 0 };
+      detailReturn.current = { view, windowY: window.scrollY, pane: view === "catalog" ? "catalog" : null, paneY: gridRef.current?.scrollTop ?? 0,
+        anchor: view === "catalog" && gridRef.current ? firstVisibleAnchor("catalog", gridRef.current) : null };
       detailStack.current = [];
     } else if (!options?.keepStack) detailStack.current = [];
     if (options?.keepStack) pendingCatalogueScroll.current = 0;
@@ -3215,9 +3198,13 @@ export function App() {
     let handle = 0;
     const apply = () => {
       const pane = saved.pane === "catalog" ? gridRef.current : null;
-      if (saved.pane && pane) pane.scrollTop = saved.paneY;
+      const card = saved.anchor && pane?.querySelector<HTMLElement>(`[data-catalog-key="${CSS.escape(saved.anchor.key)}"]`);
+      const wanted = pane && card && saved.anchor
+        ? pane.scrollTop + card.getBoundingClientRect().top - pane.getBoundingClientRect().top - saved.anchor.offset
+        : saved.paneY;
+      if (pane) pane.scrollTop = wanted;
       window.scrollTo(0, saved.windowY);
-      const settled = (!saved.pane || (pane !== null && Math.abs(pane.scrollTop - saved.paneY) <= 1)) && Math.abs(window.scrollY - saved.windowY) <= 1;
+      const settled = (!saved.pane || (pane !== null && Math.abs(pane.scrollTop - wanted) <= 1)) && Math.abs(window.scrollY - saved.windowY) <= 1;
       if (!settled && performance.now() < deadline) { handle = requestAnimationFrame(apply); return; }
       restoringScroll.current = false;
     };
@@ -3817,7 +3804,13 @@ export function App() {
           </div></div></div>
           <div className="catalog-layout"><section className={`panel result-panel${staleGrid ? " refreshing" : ""}`}><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t(hasMore ? "catalog.itemCountMore" : "catalog.itemCount", { count: visibleItems.length })}</span></div>
             {personNameSearch && !buildInfo?.searchEverywhere && <p className="person-name-search" role="note">{t("person.nameSearch")}</p>}
-            <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
+            <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => {
+              compactOnScroll(event, catalogCompact, setCatalogCompact);
+              scheduleViewAnchor();
+              const grid = event.currentTarget;
+              if (hasMore && !pageFailed && !restoringScroll.current && !playerOpenRef.current &&
+                  grid.scrollHeight - grid.scrollTop - grid.clientHeight <= Math.min(400, grid.clientHeight)) void loadPage(false);
+            }}>
               <ArtworkProximity scroller={gridRef}>
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;
@@ -3841,7 +3834,7 @@ export function App() {
                   </span>}
                 </button>;
               })}
-              {hasMore && <div className="load-more">{loadingMore ? <span>{t("common.loadingMore")}</span> : <button onClick={() => void loadPage(false)}>{t("common.loadMore")}</button>}</div>}
+              {hasMore && <div className="load-more">{loadingMore ? <span>{t("common.loadingMore")}</span> : <button onClick={() => void loadPage(false)}>{t(pageFailed ? "common.retry" : "common.loadMore")}</button>}</div>}
               </ArtworkProximity>
             </div>
             {!items.length && !busy && <Empty icon={<Search/>}

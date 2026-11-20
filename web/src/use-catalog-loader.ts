@@ -48,6 +48,7 @@ export interface CatalogLoader {
   items: Meta[];
   hasMore: boolean;
   loadingMore: boolean;
+  pageFailed: boolean;
   sourceCount: number;
   loadPage(reset: boolean): Promise<void>;
   actOnSearch(query: string): void;
@@ -62,6 +63,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
   const [skip, setSkip] = useState(0);
   const [cursor, setCursor] = useState("");
   const [hasMore, setHasMore] = useState(false);
+  const [pageFailed, setPageFailed] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [sourceCount, setSourceCount] = useState(0);
 
@@ -124,6 +126,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
     const request = reset ? ++requestRef.current : requestRef.current;
     const stale = () => request !== requestRef.current;
     loadingRef.current = true;
+    setPageFailed(false);
     const from = reset ? 0 : skipRef.current;
 
     if (reset) {
@@ -230,9 +233,9 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
         if (reset) {
           updateItems([]);
           recordIntentRef.current = null;
-        }
+          setHasMore(false);
+        } else setPageFailed(true);
         optionsRef.current.onError(error);
-        setHasMore(false);
       }
     } finally {
       if (!stale()) {
@@ -308,6 +311,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
     items,
     hasMore,
     loadingMore,
+    pageFailed,
     sourceCount,
     loadPage,
     actOnSearch,
