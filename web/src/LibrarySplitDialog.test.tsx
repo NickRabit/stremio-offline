@@ -422,7 +422,7 @@ it("moves every file of a title with versions beside it, counting it once", asyn
   expect(host.textContent).toContain(t("split.summaryMove", { items: t("split.itemCount", { count: 1 }), name: "Films" }));
   await click(t("split.start"));
   await flushUntil(() => mutating().some((call) => call.url === "/api/library/ops"));
-  expect(mutating().find((call) => call.url === "/api/library/ops")?.body.items).toEqual(["lib_mix/Heat.mkv", "lib_mix/Heat 1080p.mkv"]);
+  expect(mutating().find((call) => call.url === "/api/library/ops")?.body.items).toEqual(["lib_mix/Heat 1080p.mkv", "lib_mix/Heat.mkv"]);
 });
 
 it("builds new roots from the plan's root, not the list's older copy", async () => {

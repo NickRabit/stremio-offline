@@ -317,6 +317,10 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     const from = step.from;
     if (!step.carried.every(key => isPathWithin(key, from) && !key.split("/").some(part => part === "." || part === ".."))) throw recoveryConflict();
     if (step.cover !== undefined && (typeof step.cover !== "string" || !isPathWithin(from, step.cover))) throw recoveryConflict();
+    // The title a single video belongs to is the video itself or a file beside it, in the same
+    // folder and library; anything else is not a record this build wrote.
+    if (step.unit !== undefined && (typeof step.unit !== "string" || posixDir(step.unit) !== posixDir(from)
+      || step.unit.split("/").some((part) => part === "." || part === ".."))) throw recoveryConflict();
     const bareName = (name: unknown): name is string =>
       typeof name === "string" && name.length > 0 && name !== "." && name !== ".." && path.basename(name) === name;
     const sidecar = (item: unknown): item is TransferStep["sidecars"][number] => {
@@ -333,6 +337,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
       sourceIdentity, publishedIdentity,
       sidecars,
       ...(step.cover !== undefined ? { cover: step.cover } : {}),
+      ...(step.unit !== undefined ? { unit: step.unit } : {}),
     };
   };
 

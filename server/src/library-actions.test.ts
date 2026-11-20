@@ -409,6 +409,30 @@ test("transferLibraryItem marks a video that is a title of its own, and only tha
   }, { units });
 });
 
+test("a transfer resumed from its journal after a crash keeps the loose film's own title", async () => {
+  // The video landed in Films, then the server stopped before the metadata half ran.
+  await withRoot(["Films/Harry Potter.mp4", "Whisper Man/.keep"], async (root, actions, calls) => {
+    const identity = await identityAt(root, "Films/Harry Potter.mp4");
+    const from = `${LIBRARY_ID}/Whisper Man/Harry Potter.mp4`;
+    const { journal } = recordingJournal(verifiedStep(identity, identity, {
+      phase: "published", copy: false, from, to: `${LIBRARY_ID}/Films/Harry Potter.mp4`, carried: [], unit: from,
+    }));
+    await actions.transferLibraryItem(from, `${LIBRARY_ID}/Films`, false, undefined, false, journal);
+    assert.deepEqual(calls.relocate.map(({ from: source, unit }) => ({ from: source, unit })), [{ from, unit: from }]);
+  });
+});
+
+test("a journal record whose title lies in another folder is refused", async () => {
+  await withRoot(["Films/Harry Potter.mp4", "Whisper Man/.keep"], async (root, actions) => {
+    const identity = await identityAt(root, "Films/Harry Potter.mp4");
+    const from = `${LIBRARY_ID}/Whisper Man/Harry Potter.mp4`;
+    const { journal } = recordingJournal(verifiedStep(identity, identity, {
+      phase: "published", copy: false, from, to: `${LIBRARY_ID}/Films/Harry Potter.mp4`, carried: [], unit: `${LIBRARY_ID}/Other/Harry Potter.mp4`,
+    }));
+    await assert.rejects(actions.transferLibraryItem(from, `${LIBRARY_ID}/Films`, false, undefined, false, journal), { messageKey: "err.libraryRecoveryConflict" });
+  });
+});
+
 test("a replay rejects sidecar names that are not subtitles of the two videos", async () => {
   const from = `${LIBRARY_ID}/Old/movie.mkv`;
   const to = `${LIBRARY_ID}/New/movie.mkv`;

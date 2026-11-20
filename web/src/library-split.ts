@@ -129,7 +129,9 @@ export function movableKeys(
   destinations: Record<string, SplitDestination>,
   kind: "movie" | "series",
 ): string[] {
-  return movableItems(plan, destinations, kind).flatMap((item) => [item.key, ...(item.files ?? [])]);
+  // The other versions go first: each reads the title's identity from `key` as it leaves and
+  // takes it along. Moved after `key`, they would find its binding already gone from the parent.
+  return movableItems(plan, destinations, kind).flatMap((item) => [...(item.files ?? []), item.key]);
 }
 
 /** The titles that move to `kind`'s target; `movableKeys` spells out every file they hold. */
