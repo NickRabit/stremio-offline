@@ -2,18 +2,18 @@ import type express from "express";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { askedSurface, imageSurface, logPoster, noteImage, type ImageFrom } from "../image-stats.js";
 import { etagMatches, FileSnapCache, fileEtag } from "../byte-cache.js";
 import type { ArtShape } from "../artwork.js";
-import { folderMosaicUnits, mosaicIdentities, mosaicSkipped, pendingSuggestionKeys, unitFor, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
+import { episodeNumberOf, folderMosaicUnits, knownTitleForUnit, mosaicIdentities, mosaicSkipped, pendingSuggestionKeys, unitFor, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
 import { AppError } from "../errors.js";
 import { statUnlessMissing } from "../folder-access.js";
 import { assertStillAdmin } from "../roles.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, placed, posixBase, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, placed, posixBase, posixDir, posixJoin, relativeWithin, resolveLibraryPath, toFs, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
 import { composeMosaic, MOSAIC_CACHE_CONTROL, MOSAIC_IMMUTABLE_CACHE_CONTROL, MosaicCache, mosaicShape } from "../mosaic.js";
-import { browseDirectory, holdsLibraryRoot, isVideo, listFolders, type LibraryEntry } from "../library.js";
+import { browseDirectory, holdsLibraryRoot, isPathWithin, isVideo, listFolders, type LibraryEntry } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryHealth } from "../library-probe.js";
 import type { TransferProgress } from "../library-transfer.js";
@@ -25,6 +25,9 @@ import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import { destinationOf, type HeldPath, type PathReservations } from "../path-reservations.js";
 import type { RenameRequest } from "../library-rename-recovery.js";
+import { parsePattern, planRenames, type RenameCandidate } from "../library-rename-plan.js";
+import { createRenameEntry } from "../library-rename-entry.js";
+import { subtitleSidecars } from "../library-sidecars.js";
 
 /** Browsing a library and the file operations under it. */
 export interface ContentDeps extends RouteContext {
@@ -43,6 +46,7 @@ export interface ContentDeps extends RouteContext {
   libraryEntries(read?: { stale?: boolean }): Promise<LibraryEntry[]>;
   libraryKey(value: string): string;
   libraryPathBusy(keys: string[], options?: { ignoreReservations?: boolean }): Promise<string | undefined>;
+  libraryPathsBusy(keys: string[]): Promise<Set<string>>;
   /** Keys a request is changing on disk outside the queue; `libraryPathBusy` reads them too. */
   pathReservations: PathReservations;
   libraryRootBrowse(viewer: Viewer, options?: { prewarm?: boolean }): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
@@ -78,9 +82,13 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, pathReservations, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, renameLibraryItem, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryPathsBusy, libraryRootBrowse, libraryUnits, locateArtwork, pathReservations, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, renameLibraryItem, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
   const fileSnaps = deps.fileSnaps ?? new FileSnapCache();
   const mosaics = deps.mosaics ?? new MosaicCache(path.join(os.tmpdir(), `mosaics-${randomBytes(6).toString("hex")}`));
+  const renameEntry = createRenameEntry({
+    store, carveOutsOf, healthOf, fileExists, libraryPathBusy, pathReservations,
+    renameLibraryItem, invalidateLibrary,
+  });
 
   /** The distinct films a folder holds, one catalogue picture each, bounded and deduplicated
    *  by identity. A folder that is one film or a series answers with nothing, so it keeps the
@@ -311,60 +319,114 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
   }));
 
   app.post("/api/library/rename", asyncRoute(async (req, res) => {
-    const actor = currentUser(req);
-    const relative = String(req.body.path ?? "").trim();
-    const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
-    if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
-    if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    const info = await statUnlessMissing(resolved.absolute);
-    if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
-    // The fold comes from the volume the folder sits on: the carve-outs are compared as
-    // spellings inside this library's tree, so this library's probe decides.
-    if (holdsLibraryRoot(carveOutsOf(resolved.library), resolved.relative, healthOf(resolved.library).caseInsensitive)) {
-      throw new AppError("This folder holds another library. Move that library out first.", "err.libraryHoldsAnother", 409);
-    }
-
-    const extension = info.isDirectory() ? "" : path.extname(relative);
-    const typed = String(req.body.name ?? "").trim();
-    // Only the item's own extension is taken off what was typed. Any other dot belongs to the
-    // name -- "S.W.A.T. 2017" is not a file called "S.W.A.T" -- and cutting it would rename
-    // the item to something else than was asked for.
-    const stem = extension && typed.toLowerCase().endsWith(extension.toLowerCase()) ? typed.slice(0, -extension.length) : typed;
-    const wanted = assertUsableName(stem);
-    const nextRelative = posixJoin(posixDir(relative), `${wanted}${extension}`);
-    const target = await resolveLibraryPath(store.libraries(), nextRelative);
-    if (!target) throw new AppError("Invalid path.", "err.invalidPath");
-    // A rename that only changes the case of a name is a real rename where the filesystem folds
-    // case; there the target is the same file, and `fileExists` must not be read as a clash.
-    if (!sameFile(target.absolute, resolved.absolute, healthOf(resolved.library).caseInsensitive)
-      && await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
-
-    // The last moment before anything on disk moves. Checking here rather than at the state
-    // write is what closes the window without risking an inconsistency: refuse now and nothing
-    // has happened; refuse after the rename and the state would describe a file that moved.
-    assertStillAdmin(store.users(), actor);
-    // Both names stay held until the bindings have moved: a second rename of the new name in
-    // the meantime would find no bindings under it, and this one would then write them under a
-    // name the video has already left.
-    if (await libraryPathBusy([target.key])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    const release = pathReservations.reserve(await Promise.all([placed(resolved), placed(target)]));
-    if (!release) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    try {
-      // Asked again with both names held: a job queued since the first check above would
-      // otherwise run against a name this rename is about to move. A job queued after this
-      // point waits for the reservation in the queue's own pause check.
-      if (await libraryPathBusy([resolved.key, target.key], { ignoreReservations: true })) {
-        throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-      }
-      await renameLibraryItem({ actor, source: resolved, target });
-    } finally {
-      try {
-        invalidateLibrary();
-      } finally {
-        release();
-      }
-    }
+    const nextRelative = await renameEntry(String(req.body.path ?? "").trim(), String(req.body.name ?? ""), currentUser(req));
     res.json({ path: nextRelative });
+  }));
+
+  app.post("/api/library/rename-plan", asyncRoute(async (req, res) => {
+    const actor = currentUser(req);
+    assertStillAdmin(store.users(), actor);
+    const viewer = viewerOf(actor);
+    const requested = req.body?.items;
+    if (!Array.isArray(requested) || !requested.length) throw new AppError("At least one library item is required.", "err.missingLibraryItems");
+    if (requested.length > 500) throw new AppError("A library operation may contain at most 500 items.", "err.tooManyItems");
+    if (!requested.every((item) => typeof item === "string")) throw new AppError("At least one library item is required.", "err.missingLibraryItems");
+    const items = [...new Set(requested.map((item) => item.trim()).filter(Boolean))];
+    if (!items.length) throw new AppError("At least one library item is required.", "err.missingLibraryItems");
+    const moviePattern = parsePattern(String(req.body.moviePattern ?? ""));
+    const episodePattern = parsePattern(String(req.body.episodePattern ?? ""));
+    const resolved = await Promise.all(items.map((item) => resolveLibraryPath(store.libraries(), item)));
+    if (resolved.some((item) => !item || nestedHidden(item.library, item.relative, viewer))) {
+      throw new AppError("Invalid path.", "err.invalidPath");
+    }
+    const selected = resolved.flatMap((item) => item ? [item] : []);
+    const selectedContains = (key: string) => selected.some((item) =>
+      item.relative === ""
+        ? parseLibraryPath(key)?.libraryId === item.library.id
+        : isPathWithin(key, item.key));
+    const units = await libraryUnits();
+    const covering = new Set(selected.flatMap((item) => {
+      const unit = unitFor(item.key, units);
+      return unit ? [unit] : [];
+    }));
+    const chosen = units.filter((unit) => covering.has(unit) || selectedContains(unit.key));
+    const records = metaStore.qualifiedMeta();
+    const ownRecord = (key: string) => records[key]?.id ? records[key] : undefined;
+    const candidateFields = (record: LibraryMetaRecord | undefined) => ({
+      ...(record?.name ? { title: record.name } : {}),
+      ...(record?.year ? { year: record.year } : {}),
+    });
+    const candidates: RenameCandidate[] = [];
+    for (const unit of chosen) {
+      const identity = knownTitleForUnit(unit, records);
+      const name = posixBase(unit.key);
+      if (!identity) {
+        candidates.push({ key: unit.key, folder: posixDir(unit.key), name, isFile: isVideo(name), kind: "unknown", fields: {} });
+        continue;
+      }
+      // The identification decides, not the folder's shape: a series kept as one flat folder is
+      // still renamed episode by episode, and a film the walk read as a series stays one item.
+      if (identity.type !== "series") {
+        candidates.push({ key: unit.key, folder: posixDir(unit.key), name, isFile: isVideo(name), kind: "movie", fields: candidateFields(identity) });
+        continue;
+      }
+      candidates.push(...unit.sampleFiles
+        .filter(selectedContains)
+        .map((file) => {
+          const parsed = parseLibraryPath(file);
+          const numbers = episodeNumberOf(relativeWithin(parsed?.libraryId ?? "", file), ownRecord(file), { loose: true });
+          return {
+            key: file,
+            folder: posixDir(file),
+            name: posixBase(file),
+            isFile: true,
+            kind: "episode" as const,
+            fields: {
+              ...candidateFields(identity),
+              ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}),
+            },
+          };
+        }));
+    }
+    if (candidates.length > 2000) throw new AppError("A rename preview may hold at most 2000 titles.", "err.tooManyItems");
+
+    const libraries = store.libraries();
+    const folders = [...new Set(candidates.map((candidate) => candidate.folder))];
+    const siblings = new Map<string, string[]>(await Promise.all(folders.map(async (folder): Promise<[string, string[]]> => {
+      const parsed = parseLibraryPath(folder);
+      const library = parsed ? libraryFor(libraries, parsed.libraryId) : undefined;
+      if (!library) return [folder, []];
+      const names = parsed?.relative
+        ? await readdir(path.join(library.root, toFs(parsed.relative)))
+        : await readdir(library.root);
+      return [folder, names];
+    })));
+    const sidecarNames = new Map<string, string[]>(await Promise.all(candidates.map(async (candidate): Promise<[string, string[]]> => {
+      const none: string[] = [];
+      if (!candidate.isFile) return [candidate.key, none];
+      const parsed = parseLibraryPath(candidate.key);
+      const library = parsed ? libraryFor(libraries, parsed.libraryId) : undefined;
+      if (!library || !parsed) return [candidate.key, none];
+      const info = await subtitleSidecars(path.join(library.root, toFs(parsed.relative)));
+      return [candidate.key, info.names];
+    })));
+    const sidecarKeys = [...sidecarNames].flatMap(([key, names]) => names.map((name) => posixJoin(posixDir(key), name)));
+    const busy = await libraryPathsBusy([...candidates.map((candidate) => candidate.key), ...sidecarKeys]);
+    res.json({
+      rows: planRenames({
+        candidates,
+        moviePattern,
+        episodePattern,
+        siblings,
+        caseInsensitive: (folder) => {
+          const parsed = parseLibraryPath(folder);
+          const library = parsed ? libraryFor(libraries, parsed.libraryId) : undefined;
+          return library ? healthOf(library).caseInsensitive : true;
+        },
+        sidecarsOf: (key) => sidecarNames.get(key) ?? [],
+        busy,
+      }),
+    });
   }));
 
   /** The destination picker. Browsing hides folders with no video in them; moving something

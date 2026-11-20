@@ -85,6 +85,21 @@ const mount = async (root: string, hooks: {
       }
       return undefined;
     },
+    libraryPathsBusy: async (keys: string[]) => {
+      const busy = new Set<string>();
+      for (const key of keys) {
+        const wanted = await resolvePlaced(libraries, key);
+        if (!wanted) continue;
+        for (const item of pathReservations.keys()) {
+          const active = await resolvePlaced(libraries, item);
+          if (active && heldOverlap(active, wanted, false)) {
+            busy.add(key);
+            break;
+          }
+        }
+      }
+      return busy;
+    },
     pathReservations,
     libraryRootBrowse: async () => ({ path: "", items: [], total: 0, pending: false }),
     libraryUnits: async () => [],

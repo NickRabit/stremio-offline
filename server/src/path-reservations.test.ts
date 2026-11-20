@@ -106,6 +106,12 @@ test("a queued item touches itself, and a move or copy the name it takes in the 
   assert.deepEqual(await keys(one, move("lib_00000001"), "lib_00000001/Films/Heat.mkv"), ["lib_00000001/Films/Heat.mkv", "lib_00000001/Heat.mkv"], "the library root as target");
   assert.deepEqual(await keys(one, move("lib_00000001/Archive"), "lib_00000001/Films"), ["lib_00000001/Films", "lib_00000001/Archive/Films"], "a folder keeps its own name");
   assert.deepEqual(await keys(two, { op: "copy", items: [], target: "lib_00000002/Kept" } as unknown as LibraryOp, "lib_00000001/Films/Heat.mkv"), ["lib_00000001/Films/Heat.mkv", "lib_00000002/Kept/Heat.mkv"], "a copy into another library");
+  assert.deepEqual(await keys(two, {
+    op: "rename", items: [], names: { "lib_00000001/Films/Heat.mkv": "Thief.mkv" },
+  } as unknown as LibraryOp, "lib_00000001/Films/Heat.mkv"), [
+    "lib_00000001/Films/Heat.mkv",
+    "lib_00000001/Films/Thief.mkv",
+  ], "a rename touches its source and destination");
   assert.deepEqual(await keys(two, move("Archive"), "Films/Heat.mkv"), [], "an unqualified item with two libraries resolves to nothing");
 });
 

@@ -293,6 +293,51 @@ test("POST /api/library/ops refuses a malformed body before the queue sees it", 
   assert.deepEqual(harness.calls.enqueued, [], "the parser refuses it, the queue is never asked");
 });
 
+test("POST /api/library/ops accepts a complete rename batch and rejects malformed or colliding names", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const items = ["lib_00000001/Films/Heat.mkv", "lib_00000001/Films/Ronin.mkv"];
+  const valid = await api(harness.base, "/api/library/ops", {
+    method: "POST",
+    body: {
+      op: "rename",
+      items,
+      names: { [items[0]!]: "Thief.mkv", [items[1]!]: "Ronin (1998).mkv" },
+    },
+  });
+  assert.equal(valid.status, 202);
+  assert.deepEqual(harness.calls.enqueued, [{
+    op: "rename",
+    items,
+    names: { [items[0]!]: "Thief.mkv", [items[1]!]: "Ronin (1998).mkv" },
+    ownerUserId: ADA,
+  }]);
+
+  const invalid = [
+    { op: "rename", items, names: { [items[0]!]: "Thief.mkv" } },
+    { op: "rename", items, names: { [items[0]!]: "Thief.mkv", [items[1]!]: "Ronin.mkv", extra: "x.mkv" } },
+    { op: "rename", items, names: { [items[0]!]: "Archive/Thief.mkv", [items[1]!]: "Ronin.mkv" } },
+    { op: "rename", items, names: { [items[0]!]: "Archive\\Thief.mkv", [items[1]!]: "Ronin.mkv" } },
+    { op: "rename", items, names: { [items[0]!]: "Thief.avi", [items[1]!]: "Ronin.mkv" } },
+    { op: "rename", items, names: { [items[0]!]: "", [items[1]!]: "Ronin.mkv" } },
+  ];
+  for (const body of invalid) {
+    const response = await api(harness.base, "/api/library/ops", { method: "POST", body });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.invalidLibraryOperation");
+  }
+
+  for (const names of [
+    { [items[0]!]: "Same.mkv", [items[1]!]: "same.mkv" },
+    { [items[0]!]: "Ronin.mkv", [items[1]!]: "Thief.mkv" },
+  ]) {
+    const response = await api(harness.base, "/api/library/ops", { method: "POST", body: { op: "rename", items, names } });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.renamePlanConflict");
+  }
+  assert.equal(harness.calls.enqueued.length, 1, "only the valid batch reached the queue");
+});
+
 test("POST /api/library/ops refuses what a running job covers, in either direction", async (t) => {
   const root = await makeRoot("stremio-curate-busy-");
   await put(root, "Films/Heat.mkv");
