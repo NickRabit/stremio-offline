@@ -208,7 +208,34 @@ The common case: `/downloads` has grown into a mixture of films and series, and
 you want them as two libraries — `/downloads/Films` and `/downloads/Series` —
 without moving anything and without losing a single match.
 
-### Split from inside (recommended)
+### Guided split
+
+**Settings → Libraries → Split…** on a mixed library walks through the steps
+below in three steps; the same card is offered above the list while a mixed
+library holds both films and series and has no library inside it yet.
+
+1. **New libraries.** For films and for series, pick a library that already
+   sits inside the root, a top-level folder that holds only that kind (it
+   becomes the library as it is, nothing in it moves), or a new folder. New
+   film and series downloads can be pointed at the new libraries in the same
+   step (the *Default for movies/series* switches); an addon whose storage rule
+   names a library of its own keeps it. Libraries the wizard creates are
+   granted to the same accounts as the original.
+2. **What goes where.** Identified titles go to their kind. A folder whose
+   files carry episode numbers is guessed to be a series and marked as a guess.
+   Anything else unidentified stays in the original library unless you choose a
+   destination. A title that is being downloaded, or that another library
+   operation holds, is left alone and can be moved later.
+3. **Summary**, then the moves run through the operations queue like any
+   **Move**: identification, artwork, favourites and progress travel with each
+   item, and on one volume a move is a `rename`. The original library stays;
+   remove it yourself once it is empty.
+
+A failed item is listed with its reason. Nothing is rolled back: open the split
+again and it continues from the libraries and moves that are already done. The
+moves keep running on the server if the dialog is closed.
+
+### Split from inside by hand
 
 A library may sit inside another library's root; the parent stops counting what
 the child owns.
