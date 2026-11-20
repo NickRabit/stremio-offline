@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { AppError, messageKeyOf } from "./errors.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { recoveryConflict } from "./library-recovery.js";
+import { posixDir, posixJoin } from "./libraries.js";
 import { log } from "./logger.js";
 import { destinationOf } from "./path-reservations.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
@@ -17,6 +18,7 @@ export interface LibraryOpActor { ownerUserId?: string }
 export type LibraryOp = LibraryOpActor & (
   | { op: "move"; items: string[]; target: string; confirmTypeMismatch?: boolean; units?: Record<string, string> }
   | { op: "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean; units?: Record<string, string> }
+  | { op: "rename"; items: string[]; names: Record<string, string> }
   | { op: "reroot"; items: string[]; libraryId: string; from: string; to: string }
   | { op: "delete"; items: string[] }
   | { op: "favorite"; items: string[]; favorite: boolean }
@@ -212,6 +214,7 @@ export class LibraryOps {
         const operation = job.operation;
         if (operation.op === "reroot") return [operation.libraryId];
         if (operation.op === "move" || operation.op === "copy") return [...operation.items, ...operation.items.map((item) => destinationOf(operation.target, item))];
+        if (operation.op === "rename") return [...operation.items, ...operation.items.map((item) => posixJoin(posixDir(item), operation.names[item]!))];
         return operation.items;
       });
   }

@@ -17,6 +17,7 @@ import type { LibraryScan } from "../library-scan.js";
 import { isPathWithin, isVideo } from "../library.js";
 import { mediaResources, ResourceError, type ResourceOwner } from "../media-resources.js";
 import { nextVideoFile } from "../next-file.js";
+import { assertUsableName } from "../naming.js";
 import type { UserPrefs } from "../store.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
@@ -173,6 +174,43 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
       : [];
     if (!items.length) throw new AppError("At least one library item is required.", "err.missingLibraryItems");
     if (items.length > 500) throw new AppError("A library operation may contain at most 500 items.", "err.tooManyItems");
+    if (op === "rename") {
+      const invalid = () => new AppError("Invalid library operation.", "err.invalidLibraryOperation");
+      if (!body.names || typeof body.names !== "object" || Array.isArray(body.names)) throw invalid();
+      const proposed = body.names as Record<string, unknown>;
+      const entries = Object.entries(proposed);
+      if (entries.length !== items.length || entries.some(([item]) => !items.includes(item))) throw invalid();
+      const names: Record<string, string> = {};
+      for (const item of items) {
+        const value = proposed[item];
+        if (typeof value !== "string" || !value || value.includes("/") || value.includes("\\")) throw invalid();
+        const extension = isVideo(posixBase(item)) ? path.extname(item) : "";
+        // Spelled exactly as the source spells it: the rename keeps the source's extension, and a
+        // destination recorded in another case would not name the file on a case-sensitive volume.
+        if (extension && path.extname(value) !== extension) throw invalid();
+        const typed = extension ? value.slice(0, -extension.length) : value;
+        try {
+          names[item] = `${assertUsableName(typed)}${extension ? value.slice(value.length - extension.length) : ""}`;
+        } catch {
+          throw invalid();
+        }
+      }
+      const sameFolder = (left: string, right: string) =>
+        posixDir(left).normalize("NFC").toLowerCase() === posixDir(right).normalize("NFC").toLowerCase();
+      for (let left = 0; left < items.length; left += 1) {
+        for (let right = left + 1; right < items.length; right += 1) {
+          const first = items[left]!;
+          const second = items[right]!;
+          if (!sameFolder(first, second)) continue;
+          if (names[first]!.toLowerCase() === names[second]!.toLowerCase()
+            || names[first]!.toLowerCase() === posixBase(second).toLowerCase()
+            || names[second]!.toLowerCase() === posixBase(first).toLowerCase()) {
+            throw new AppError("The new names collide with each other or with a selected item. Load the preview again.", "err.renamePlanConflict", 400);
+          }
+        }
+      }
+      return { op, items, names };
+    }
     if (op === "move" || op === "copy") {
       const target = String(body.target ?? "").trim();
       if (!target) throw new AppError("A destination folder is required.", "err.targetMissing");

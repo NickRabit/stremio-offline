@@ -627,7 +627,7 @@ const ADMIN_ONLY = new Set([
   "GET /libraries/browse", "POST /libraries/preview",
   "GET /libraries/grants", "POST /libraries/grants", "DELETE /libraries/grants",
   "GET /library/search", "GET /library/suggestions", "DELETE /library/suggestion",
-  "POST /library/match", "POST /library/rename", "POST /library/move", "POST /library/folder",
+  "POST /library/match", "POST /library/rename", "POST /library/rename-plan", "POST /library/move", "POST /library/folder",
   "DELETE /library/item", "GET /library/scan", "POST /library/scan", "POST /library/scan/stop",
   "GET /library/ops", "POST /library/ops", "DELETE /library/ops/:id",
   "DELETE /downloads", "POST /downloads/:id/move",

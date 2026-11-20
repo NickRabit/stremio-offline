@@ -1,5 +1,5 @@
 import path from "node:path";
-import { parseLibraryPath, placed, posixBase, posixJoin, resolveLibraryPath, toPosix, type LibraryRecord, type PlacedPath } from "./libraries.js";
+import { libraryPath, parseLibraryPath, placed, posixBase, posixDir, posixJoin, resolveLibraryPath, toPosix, type LibraryRecord, type PlacedPath } from "./libraries.js";
 import { isPathWithin, isVideo } from "./library.js";
 import { isSidecarOf } from "./library-sidecars.js";
 import type { LibraryOp } from "./library-ops.js";
@@ -127,7 +127,10 @@ export const destinationOf = (target: string, item: string): string => {
 export async function queuedItemPaths(libraries: LibraryRecord[], operation: LibraryOp, item: string): Promise<PlacedPath[]> {
   const source = await resolveLibraryPath(libraries, item);
   if (!source) return [];
-  if (operation.op !== "move" && operation.op !== "copy") return [await placed(source)];
-  const destination = await resolveLibraryPath(libraries, destinationOf(operation.target, source.relative));
+  if (operation.op !== "move" && operation.op !== "copy" && operation.op !== "rename") return [await placed(source)];
+  const destinationKey = operation.op === "rename"
+    ? libraryPath(source.library.id, posixJoin(posixDir(source.relative), operation.names[item] ?? ""))
+    : destinationOf(operation.target, source.relative);
+  const destination = await resolveLibraryPath(libraries, destinationKey);
   return Promise.all((destination ? [source, destination] : [source]).map(placed));
 }

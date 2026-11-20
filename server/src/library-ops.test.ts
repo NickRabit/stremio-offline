@@ -481,6 +481,29 @@ test("activeItems covers every item of a running job, not only the one under way
   } finally { await h.close(); }
 });
 
+test("activeItems covers both sides of a queued rename", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const h = await harness(async (_operation, item) => { if (item === "Films/Heat.mkv") await gate; return {}; });
+  try {
+    await h.queue.enqueue({
+      op: "rename",
+      items: ["Films/Heat.mkv", "Shows/Dark/01.mkv"],
+      names: { "Films/Heat.mkv": "Thief.mkv", "Shows/Dark/01.mkv": "02.mkv" },
+    });
+    await waitFor(() => h.queue.snapshot().jobs[0]?.status === "running");
+    assert.deepEqual(h.queue.activeItems(), [
+      "Films/Heat.mkv", "Shows/Dark/01.mkv",
+      "Films/Thief.mkv", "Shows/Dark/02.mkv",
+    ]);
+    release!();
+    await waitFor(() => h.queue.snapshot().jobs[0]?.status === "completed");
+  } finally {
+    release?.();
+    await h.close();
+  }
+});
+
 test("activeItems holds a paused job, drops what ended, and names a reroot's library", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
   const queues: LibraryOps[] = [];

@@ -93,6 +93,7 @@ import {
   type ExistingLocalCopyDeps,
 } from "./local-copy-admission.js";
 import { subtitleSidecars } from "./library-sidecars.js";
+import { createRenameEntry } from "./library-rename-entry.js";
 import { artworks } from "./artwork-cache.js";
 import { FileSnapCache, preheatFileSnaps } from "./byte-cache.js";
 import { RemoteImageCache } from "./remote-image-cache.js";
@@ -2634,8 +2635,18 @@ const libraryBusyDeps: LibraryBusyDeps = {
 };
 const libraryPathBusy = createLibraryPathBusy(libraryBusyDeps);
 const libraryPathsBusy = createLibraryPathsBusy(libraryBusyDeps);
+const renameEntry = createRenameEntry({
+  store,
+  carveOutsOf,
+  healthOf,
+  fileExists,
+  libraryPathBusy,
+  pathReservations,
+  renameLibraryItem: (request) => renameRecovery.rename(request),
+  invalidateLibrary,
+});
 
-registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, pathReservations, prefsOf, progressOf, relativeKeyIn, renameLibraryItem: (request) => renameRecovery.rename(request), scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryPathsBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, pathReservations, prefsOf, progressOf, relativeKeyIn, renameLibraryItem: (request) => renameRecovery.rename(request), scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({
@@ -2933,6 +2944,7 @@ const libraryOps = new LibraryOps({
   pause: async (operation, item) => {
     const renameKeys = operation.op === "reroot" ? [operation.libraryId] : [libraryKey(item)];
     if (operation.op === "move" || operation.op === "copy") renameKeys.push(libraryKey(operation.target));
+    if (operation.op === "rename") renameKeys.push(libraryKey(posixJoin(posixDir(item), operation.names[item]!)));
     if (renameRecovery.conflicts(renameKeys)) return "library";
     // The same names by where they are on disk: a rename journaled through a nested library or a
     // root typed through a link holds this item under another key. Resolved only while something
@@ -2988,12 +3000,27 @@ const libraryOps = new LibraryOps({
     if (operation.op === "reroot") return rerootItem(operation, item, progress, journal);
     const resolved = await resolveLibraryPath(store.libraries(), item);
     if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
-    libraryOpsWriting = operation.op === "move" || operation.op === "copy" || operation.op === "delete";
+    libraryOpsWriting = operation.op === "move" || operation.op === "copy" || operation.op === "delete" || operation.op === "rename";
     try {
       if (operation.op === "move" || operation.op === "copy") {
         return {
           to: await transferLibraryItem(item, operation.target, operation.op === "copy", progress, operation.confirmTypeMismatch === true, journal, operation.units?.[item]),
         };
+      }
+      if (operation.op === "rename") {
+        const name = operation.names[item]!;
+        const destinationKey = libraryPath(resolved.library.id, posixJoin(posixDir(resolved.relative), name));
+        const destination = await resolveLibraryPath(store.libraries(), destinationKey);
+        if (!destination) throw new AppError("Invalid path.", "err.invalidPath");
+        const recorded = journal.recorded as { from?: unknown; to?: unknown } | null;
+        if (recorded?.from === item && recorded.to === destination.key
+          && !await fileExists(resolved.absolute) && await fileExists(destination.absolute)) {
+          return { to: destination.key };
+        }
+        await journal.record({ from: item, to: destination.key });
+        const actor = operation.ownerUserId ? store.users().find((user) => user.id === operation.ownerUserId) : undefined;
+        await renameEntry(resolved.key, name, actor, { queued: true });
+        return { to: destination.key };
       }
       if (operation.op === "delete") await deleteLibraryItem(item);
       else if (operation.op === "favorite") await setLibraryFavorite(item, operation.favorite, operation.ownerUserId);

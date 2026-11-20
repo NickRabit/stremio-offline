@@ -143,6 +143,28 @@ while inspecting the files. If a share was unavailable, restore it and restart
 the server to retry recovery. A NAS that cannot supply a stable identity may
 refuse a rename before any files move.
 
+### Renaming by pattern
+
+In the Library view, **Select items → Rename by pattern…** renames many titles
+at once. There is one pattern for films and one for series episodes, built from
+four fields only: `{title}`, `{year}`, `{season}` and `{episode}`. A number after
+a colon pads with zeros, so `{episode:2}` writes `07`. The defaults are
+`{title} ({year})` and `{title} - S{season:2}E{episode:2}`. A file keeps its
+extension.
+
+The values come from the identification alone. What is renamed is the title's
+own item: a film's folder, or its file when the film sits beside others, and
+every episode file of a series. Subtitles beside a video are renamed with it.
+
+The preview lists every old and new name. A row is left alone, with its reason,
+when the title is not identified or lacks a field the pattern uses, when the name
+cannot be used on disk, when the item is busy, when the name already exists, when
+two selected items would get the same name, or when the name belongs to another
+selected item (a swap or a chain; rename those one at a time). Nothing is ever
+overwritten. Only the rows that passed are queued, each is checked again right
+before it is renamed, and each goes through the same journaled rename as a single
+one, so an interruption is finished at the next start.
+
 ## Files moved outside the app
 
 The next maintenance walk, normally within six hours, recognizes a file renamed or

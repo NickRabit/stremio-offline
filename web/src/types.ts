@@ -834,7 +834,11 @@ export type LibraryOp =
   | { op: "match"; items: string[]; type: string; id: string }
   | { op: "skipLookup"; items: string[]; skipLookup: boolean }
   | { op: "mosaic"; items: string[]; mosaic: boolean }
-  | { op: "reroot"; items: string[]; libraryId: string; from: string; to: string };
+  | { op: "reroot"; items: string[]; libraryId: string; from: string; to: string }
+  | { op: "rename"; items: string[]; names: Record<string, string> };
+export type RenameField = "title" | "year" | "season" | "episode";
+export type RenameStatus = "rename" | "same" | "unidentified" | "missing" | "invalid" | "collision" | "duplicate" | "chain" | "busy" | "parts";
+export interface RenamePlanRow { key: string; from: string; to?: string; isFile: boolean; kind: "movie" | "episode" | "unknown"; status: RenameStatus; missing?: RenameField[]; sidecars: number }
 export interface LibraryOpsState {
   id: string; op: LibraryOp["op"];
   status: "running" | "paused" | "completed" | "failed" | "cancelled";
