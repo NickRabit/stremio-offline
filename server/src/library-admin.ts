@@ -72,6 +72,9 @@ export async function checkLibraryRoot(opts: {
   libraries: LibraryRecord[];
   root: unknown;
   create?: boolean;
+  /** The folder must not exist yet and is made by this call. A caller that checked a folder's
+   *  contents some time ago uses it, so a folder that appeared meanwhile is never adopted. */
+  fresh?: boolean;
   exceptId?: string;
 }): Promise<RootCheck> {
   const raw = String(opts.root ?? "").trim();
@@ -88,10 +91,15 @@ export async function checkLibraryRoot(opts: {
     throw error;
   }
   if (info && !info.isDirectory()) return refuse("The root has to be a folder.", "err.libraryRootNotFolder");
+  if (info && opts.fresh) return refuse("That folder already exists.", "err.libraryRootExists", 409);
   if (!info) {
-    if (!opts.create) return refuse("The folder does not exist.", "err.pathMissing");
-    // Inside the grant, checked above; a race with something else creating it is fine.
-    try { await mkdir(root, { recursive: true }); }
+    if (!opts.create && !opts.fresh) return refuse("The folder does not exist.", "err.pathMissing");
+    // Inside the grant, checked above; a race with something else creating it is fine -- unless
+    // the folder has to be new, and then whoever made it first decides.
+    try {
+      const made = await mkdir(root, { recursive: true });
+      if (opts.fresh && made === undefined) return refuse("That folder already exists.", "err.libraryRootExists", 409);
+    }
     catch (error) {
       // The interface says only that it failed. EACCES on a NAS share, EROFS on a read-only
       // mount and ENOSPC are three different evenings for whoever has to fix it, and the

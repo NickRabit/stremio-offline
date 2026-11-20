@@ -13,7 +13,8 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth } from "../library-probe.js";
 import type { LibrarySeenStore } from "../library-seen.js";
-import type { LibraryRecord, RootGrant } from "../libraries.js";
+import type { TitleUnit } from "../library-match.js";
+import { libraryPath, type LibraryRecord, type RootGrant } from "../libraries.js";
 import type { Store } from "../store.js";
 import type { UserRecord } from "../users.js";
 import { registerLibrariesRoutes, type LibrariesDeps } from "./libraries.js";
@@ -33,6 +34,7 @@ interface Harness {
   /** Every library id the first-seen index was asked to forget, in order. */
   seenForgotten: string[];
   fingerprintsForgotten: string[];
+  itemBusyChecks: string[];
   stored: () => LibraryRecord[];
   userGrants: () => RootGrant[];
   allGrants: () => RootGrant[];
@@ -74,6 +76,7 @@ const mount = async (
   const invalidated: string[] = [];
   const seenForgotten: string[] = [];
   const fingerprintsForgotten: string[] = [];
+  const itemBusyChecks: string[] = [];
   const queuePauses: Harness["queuePauses"] = [];
   const contentStops: Harness["contentStops"] = [];
   // A write can be held, so two requests can both read the state before either mutator runs.
@@ -95,6 +98,11 @@ const mount = async (
       mutate(state);
     },
   } as unknown as Store;
+  const splitSource = records[0];
+  const splitUnits: TitleUnit[] = splitSource ? [
+    { key: libraryPath(splitSource.id, "Downloads/Film.mkv"), relative: libraryPath(splitSource.id, "Downloads/Film.mkv"), kind: "movie", sampleFiles: [] },
+    { key: libraryPath(splitSource.id, "Shows/Show"), relative: libraryPath(splitSource.id, "Shows/Show"), kind: "series", sampleFiles: [] },
+  ] : [];
   const deps: LibrariesDeps = {
     store,
     needsSetup: () => false,
@@ -134,6 +142,12 @@ const mount = async (
     seen: { forget: async (libraryId: string) => { seenForgotten.push(libraryId); } } as unknown as LibrarySeenStore,
     fingerprints: { forget: async (libraryId: string) => { fingerprintsForgotten.push(libraryId); } },
     libraryOps: { enqueue: async (operation: unknown) => { enqueued.push(operation); return { id: "op-1" }; } } as unknown as LibraryOps,
+    libraryUnits: async () => splitUnits,
+    activeDownloadTargets: async () => splitUnits[0] ? [splitUnits[0].key] : [],
+    libraryItemsBusy: async (keys) => {
+      itemBusyChecks.push(...keys);
+      return new Set(keys.filter((key) => key === splitUnits[1]?.key));
+    },
   };
   const app = express();
   app.use(express.json());
@@ -155,6 +169,7 @@ const mount = async (
     stored: () => state.libraries,
     seenForgotten,
     fingerprintsForgotten,
+    itemBusyChecks,
     settings: () => state.settings,
     userGrants: () => state.grants,
     loseSession: (after: number) => { sessionReads = after; },
@@ -237,6 +252,48 @@ test("GET /api/libraries says whether this account may save a download to each l
   const user = await (await api(harness.base, "/api/libraries", { user: BOB })).json() as Array<{ id: string; writable: boolean }>;
   assert.deepEqual(user.map((item) => [item.id, item.writable]), [["beta", false], ["alpha", true], ["delta", true]]);
   assert.deepEqual(harness.viewed.filter((item) => item.id === "delta").map((item) => item.canDownload), [true, true]);
+});
+
+test("GET /api/libraries/:id/split-plan returns qualified items with download and operation busy state", async (t) => {
+  const harness = await mount([library("lib_aaaaaaaa", 0)]);
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/libraries/lib_aaaaaaaa/split-plan");
+  assert.equal(response.status, 200);
+  const plan = await response.json() as {
+    library: { id: string };
+    items: Array<{ key: string; relative: string; busy?: string }>;
+  };
+  assert.equal(plan.library.id, "lib_aaaaaaaa");
+  assert.ok(plan.items.every((item) => item.key.startsWith("lib_aaaaaaaa/")));
+  assert.deepEqual(plan.items.map(({ relative, busy }) => ({ relative, busy })), [
+    { relative: "Downloads/Film.mkv", busy: "download" },
+    { relative: "Shows/Show", busy: "operation" },
+  ]);
+  assert.deepEqual(harness.itemBusyChecks.sort(), ["lib_aaaaaaaa/Downloads/Film.mkv", "lib_aaaaaaaa/Shows/Show"]);
+});
+
+test("GET /api/libraries/:id/split-plan refuses an unknown library", async (t) => {
+  const harness = await mount([library("lib_aaaaaaaa", 0)]);
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/libraries/lib_bbbbbbbb/split-plan");
+  assert.equal(response.status, 404);
+  assert.deepEqual(await failure(response), {
+    error: "The library was not found.",
+    messageKey: "err.libraryNotFound",
+  });
+});
+
+test("GET /api/libraries/:id/split-plan is administrator-only", async (t) => {
+  const harness = await mount([library("lib_aaaaaaaa", 0)]);
+  t.after(harness.close);
+  const ordinaryResponse = await api(harness.base, "/api/libraries/lib_aaaaaaaa/split-plan", { user: BOB });
+  assert.equal(ordinaryResponse.status, 403);
+  assert.equal((await failure(ordinaryResponse)).messageKey, "err.notAllowed");
+
+  harness.loseSession(0);
+  const lostResponse = await api(harness.base, "/api/libraries/lib_aaaaaaaa/split-plan");
+  assert.equal(lostResponse.status, 403);
+  assert.equal((await failure(lostResponse)).messageKey, "err.notAllowed");
 });
 
 test("PATCH /api/libraries/:id sets visibleTo and collapses duplicates", async (t) => {
@@ -439,6 +496,61 @@ test("POST /api/libraries persists the automatic metadata switch and hands the n
   const second = harness.stored().at(-1)!;
   assert.equal(second.autoScanMetadata, true, "a request that omits the switch means on");
   assert.deepEqual(harness.invalidated, [created.id, second.id]);
+});
+
+test("POST /api/libraries with fresh refuses a folder that already exists and makes a missing one", async (t) => {
+  const { root, films } = await grantedRoot("fresh");
+  const harness = await mount([library("alpha", 0)], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const existing = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: films, create: true, fresh: true } });
+  assert.equal(existing.status, 409);
+  assert.equal(((await existing.json()) as { messageKey?: string }).messageKey, "err.libraryRootExists");
+  assert.equal(harness.stored().length, 1, "nothing is created over a folder that appeared meanwhile");
+
+  const fresh = path.join(root, "New films");
+  const made = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "New films", type: "movie", root: fresh, create: true, fresh: true } });
+  assert.equal(made.status, 201);
+  assert.equal((await stat(fresh)).isDirectory(), true);
+});
+
+test("POST /api/libraries copies another library's current grants in the same write", async (t) => {
+  const { root, films, shows } = await grantedRoot("grant");
+  const source = { ...library("alpha", 0), visibleTo: [BOB, ADA] };
+  const harness = await mount([source], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  // The source's list as the write finds it, a dormant administrator entry included: the caller
+  // names the library, never the accounts, so it cannot hand back a grant removed meanwhile.
+  const granted = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: films, grantsFrom: "alpha" } });
+  assert.equal(granted.status, 201);
+  assert.deepEqual(harness.stored().at(-1)!.visibleTo, [BOB, ADA]);
+
+  const missing = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Shows", type: "series", root: shows, grantsFrom: "lib_gone" } });
+  assert.equal(missing.status, 404);
+  assert.equal(((await missing.json()) as { messageKey?: string }).messageKey, "err.libraryNotFound");
+  assert.equal(harness.stored().length, 2, "an unknown source creates nothing");
+});
+
+test("POST /api/libraries with within refuses a root that is not directly inside that library's current root", async (t) => {
+  const { root } = await grantedRoot("within");
+  const moved = path.join(root, "moved");
+  await mkdir(moved);
+  // The source library's root changed to `moved` after the caller read it as `root`.
+  const source = { ...library("alpha", 0), root: moved };
+  const harness = await mount([source], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const stale = path.join(root, "Films new");
+  const refused = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films new", type: "movie", root: stale, create: true, fresh: true, within: "alpha" } });
+  assert.equal(refused.status, 409);
+  assert.equal(((await refused.json()) as { messageKey?: string }).messageKey, "err.libraryRootChanged");
+  await assert.rejects(stat(stale), "no folder is made under the old root");
+  assert.equal(harness.stored().length, 1);
+
+  const inside = path.join(moved, "Films");
+  const made = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: inside, create: true, fresh: true, within: "alpha" } });
+  assert.equal(made.status, 201);
 });
 
 test("POST /api/libraries hands a re-added folder's remembered id to the scanner", async (t) => {

@@ -1,7 +1,7 @@
 import type express from "express";
 import path from "node:path";
 import { constants } from "node:fs";
-import { access, mkdir, realpath, rm } from "node:fs/promises";
+import { access, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { mayDownloadToLibrary } from "../downloads.js";
 import { AppError } from "../errors.js";
@@ -10,12 +10,13 @@ import { activeDeparted, automaticMetadataEnabled, carveOuts, DEPARTED_MAX, depa
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag, libraryRootTaken, withLibraryRootLock } from "../library-admin.js";
 import { grantingRoot, insideGrant } from "../library-grants.js";
 import { listVideos, type WalkBudget } from "../library.js";
-import { knownTitleOf, titleUnits } from "../library-match.js";
+import { knownTitleOf, titleUnits, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth, LibraryProbe } from "../library-probe.js";
 import type { LibrarySeenStore } from "../library-seen.js";
 import type { LibraryFingerprints } from "../library-fingerprints.js";
+import { buildSplitPlan } from "../library-split.js";
 import { log } from "../logger.js";
 import { assertStillAdmin } from "../roles.js";
 import type { State } from "../store.js";
@@ -41,15 +42,21 @@ export interface LibrariesDeps extends RouteContext {
   seen: LibrarySeenStore;
   fingerprints: Pick<LibraryFingerprints, "forget">;
   libraryOps: LibraryOps;
+  libraryUnits(): Promise<TitleUnit[]>;
+  /** Library-qualified keys of files active downloads are writing (statuses checking, downloading, paused). */
+  activeDownloadTargets(): Promise<string[]>;
+  /** Which of these items another library operation, reservation or rename holds; the queue is
+   *  resolved once for all of them. */
+  libraryItemsBusy(keys: string[]): Promise<Set<string>>;
 }
 
 const runUnlocked = <T,>(work: () => Promise<T>): Promise<T> => work();
 
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
-  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps, stopContentAccess } = deps;
+  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps, libraryUnits, activeDownloadTargets, libraryItemsBusy, stopContentAccess } = deps;
 
   /** The same check the module makes, raised as the failure the interface renders. */
-  async function requireLibraryRoot(value: unknown, opts: { create?: boolean; exceptId?: string } = {}): Promise<string> {
+  async function requireLibraryRoot(value: unknown, opts: { create?: boolean; fresh?: boolean; exceptId?: string } = {}): Promise<string> {
     const checked = await checkLibraryRoot({ grants: libraryGrants(), libraries: store.libraries(), root: value, ...opts });
     if (!checked.ok) throw new AppError(checked.message, checked.messageKey, checked.status);
     return checked.root;
@@ -90,7 +97,27 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (req.body?.autoScanMetadata !== undefined && typeof req.body.autoScanMetadata !== "boolean") {
       throw new AppError("The automatic metadata switch has to be true or false.", "err.invalidRequest", 400);
     }
-    const root = await requireLibraryRoot(req.body?.root, { create: req.body?.create === true });
+    // The accounts of another library, copied in the same write that creates this one: read
+    // from the state the write lands on, so a grant removed from the source meanwhile is not
+    // handed back, and the source's dormant entries travel with it like any other.
+    const grantsFrom = req.body?.grantsFrom === undefined ? undefined : String(req.body.grantsFrom).trim();
+    if (grantsFrom !== undefined && !store.libraries().some((item) => item.id === grantsFrom)) {
+      throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+    }
+    // The library the new root has to sit directly inside, as that library's root is now: a
+    // flow that read the root a while ago must not create folders under a root that was changed
+    // meanwhile and move the new root's titles back into the old place.
+    const within = req.body?.within === undefined ? undefined : String(req.body.within).trim();
+    const directlyInside = (libraries: LibraryRecord[]) => {
+      const parent = libraries.find((item) => item.id === within);
+      if (!parent) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+      const wanted = path.resolve(String(req.body?.root ?? "").trim());
+      if (!sameFile(path.dirname(wanted), path.resolve(parent.root))) {
+        throw new AppError("The library's folder has changed. Load the split again.", "err.libraryRootChanged", 409);
+      }
+    };
+    if (within !== undefined) directlyInside(store.libraries());
+    const root = await requireLibraryRoot(req.body?.root, { create: req.body?.create === true, fresh: req.body?.fresh === true });
     // A fresh answer for the root as it is now: a deleted library's cached verdict must not
     // decide whether the new one is writable.
     libraryProbe.invalidate(root);
@@ -127,6 +154,16 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
         resumedId = departedIdIn(state.departed ?? [], forms);
         if (resumedId && !(state.libraries ?? []).some((item) => item.id === resumedId)) library.id = resumedId;
         else resumedId = undefined;
+        if (within !== undefined) directlyInside(state.libraries ?? []);
+        if (grantsFrom !== undefined) {
+          const source = (state.libraries ?? []).find((item) => item.id === grantsFrom);
+          if (!source) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+          const copied = [...new Set(source.visibleTo ?? [])];
+          if (copied.length) {
+            library.visibleTo = copied;
+            state.users = bumpPermissions(state.users ?? [], copied);
+          }
+        }
         state.libraries = [...(state.libraries ?? []), library];
         if (resumedId) state.departed = (state.departed ?? []).filter((entry) => entry.id !== resumedId);
       });
@@ -264,6 +301,28 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
 
   // The item routes come after every literal `/api/libraries/...` route: Express matches in
   // registration order, so a `:id` route above them would swallow `/libraries/grants`.
+  app.get("/api/libraries/:id/split-plan", asyncRoute(async (req, res) => {
+    assertStillAdmin(store.users(), currentUser(req));
+    const target = store.libraries().find((library) => library.id === req.params.id);
+    if (!target) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+    await refreshLibraryHealth();
+    const [units, downloadTargets] = await Promise.all([libraryUnits(), activeDownloadTargets()]);
+    const owned = units.filter((unit) => parseLibraryPath(unit.key)?.libraryId === target.id);
+    // Every file of a title, not only its key: a second version beside it can be busy on its own.
+    const operationBusy = await libraryItemsBusy([...new Set(owned.flatMap((unit) => [unit.key, ...unit.sampleFiles]))]);
+    const topNames = await readdir(target.root).catch(() => [] as string[]);
+    res.json(buildSplitPlan({
+      library: target,
+      libraries: store.libraries(),
+      healthOf,
+      units,
+      records: metaStore.qualifiedMeta(),
+      downloadTargets,
+      operationBusy,
+      topNames,
+    }));
+  }));
+
   app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
     // The actor as the request resolved it, captured before anything is awaited. Reading it
     // again inside the mutator would answer `undefined` in exactly the cases worth catching --

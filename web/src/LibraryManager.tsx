@@ -1,11 +1,13 @@
 import { useEffect, useState, useRef } from "react";
 import { useDialogFocus } from "./dialog-focus";
-import { ArrowDown, ArrowUp, Check, ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Split, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { desktopBridge } from "./desktop-bridge";
 import { t, useI18n } from "./i18n";
+import { LibrarySplitDialog } from "./LibrarySplitDialog";
+import { canSplitLibrary, offerCandidates, readDismissedIds, writeDismissedIds } from "./library-split";
 import { bytes, SettingControl, SettingsSectionHead } from "./settings-ui";
-import type { GrantBrowse, LibraryEstimate, LibraryGrant, LibraryType, LibraryView } from "./types";
+import type { GrantBrowse, LibraryEstimate, LibraryGrant, LibraryType, LibraryView, SplitPlan } from "./types";
 
 export const libraryTypeLabel = (type: LibraryType) =>
   t(type === "movie" ? "library.libraryTypeMovie" : type === "series" ? "library.libraryTypeSeries" : "library.libraryTypeMixed");
@@ -21,6 +23,9 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
   const [libraries, setLibraries] = useState<LibraryView[]>([]);
   const [picker, setPicker] = useState<{ reroot?: LibraryView } | null>(null);
   const [editing, setEditing] = useState<LibraryView | null>(null);
+  const [splitting, setSplitting] = useState<LibraryView | null>(null);
+  const [dismissed, setDismissed] = useState<string[]>(readDismissedIds);
+  const [offer, setOffer] = useState<{ library: LibraryView; plan: SplitPlan } | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
@@ -29,6 +34,29 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
     return rows;
   };
   useEffect(() => { void load().catch(onError); }, []);
+  useEffect(() => {
+    if (restricted) { setOffer(null); return; }
+    const candidates = offerCandidates(libraries).filter((library) => !dismissed.includes(library.id));
+    let stale = false;
+    void (async () => {
+      // One after another, stopping at the first that holds both kinds: plans are not free to
+      // compute, and usually the first candidate is the answer.
+      for (const candidate of candidates) {
+        const plan = await api.librarySplitPlan(candidate.id).catch(() => null);
+        if (stale) return;
+        if (plan && plan.counts?.movies > 0 && plan.counts.series > 0) { setOffer({ library: candidate, plan }); return; }
+      }
+      if (!stale) setOffer(null);
+    })();
+    return () => { stale = true; };
+  }, [libraries, dismissed, restricted]);
+  const dismissOffer = (id: string) => {
+    setDismissed((current) => {
+      const next = current.includes(id) ? current : [...current, id];
+      writeDismissedIds(next);
+      return next;
+    });
+  };
 
   const patch = async (library: LibraryView, body: Parameters<typeof api.updateLibrary>[1], done = t("library.updated")) => {
     setBusy(true);
@@ -75,6 +103,18 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
         <button className="primary" onClick={() => setPicker({})}><Plus/> {t("library.addLibrary")}</button>
         <button onClick={() => void load().catch(onError)} disabled={busy}><RefreshCw/> {t("common.refresh")}</button>
       </div>}
+    {offer && <aside className="library-split-offer">
+      <h3>{t("split.offerTitle")}</h3>
+      <p>{t("split.offerText", {
+        name: offer.library.name,
+        movies: t("split.movieCount", { count: offer.plan.counts.movies }),
+        series: t("split.seriesCount", { count: offer.plan.counts.series }),
+      })}</p>
+      <div className="library-split-offer-actions">
+        <button type="button" className="primary" onClick={() => setSplitting(offer.library)}>{t("split.action")}</button>
+        <button type="button" onClick={() => dismissOffer(offer.library.id)}>{t("split.dismiss")}</button>
+      </div>
+    </aside>}
     {libraries.map((library, index) => <article className={`library-admin-row${library.unreachable ? " unreachable" : ""}`} key={library.id}>
       <div className="library-admin-head">
         <div className="library-admin-title">
@@ -100,7 +140,12 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
       </div>
       <small className="library-admin-counts">{t("library.libraryCounts", { titles: t("library.titleCount", { count: library.titles }), files: t("library.fileCount", { count: library.files }), size: bytes(library.bytes) })}</small>
       {!restricted && <footer className="library-admin-footer">
-        <button onClick={() => setEditing(library)} disabled={busy}><SlidersHorizontal/> {t("library.editLibrary")}</button>
+        {canSplitLibrary(library)
+          ? <div className="library-admin-buttons">
+            <button onClick={() => setEditing(library)} disabled={busy}><SlidersHorizontal/> {t("library.editLibrary")}</button>
+            <button onClick={() => setSplitting(library)} disabled={busy}><Split/> {t("split.action")}</button>
+          </div>
+          : <button onClick={() => setEditing(library)} disabled={busy}><SlidersHorizontal/> {t("library.editLibrary")}</button>}
       </footer>}
     </article>)}
     {!libraries.length && <p className="identify-hint">{t("library.emptyText")}</p>}
@@ -112,6 +157,8 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
     {picker && <RootPicker reroot={picker.reroot} onClose={() => setPicker(null)} onError={onError} onLibrariesChanged={onChanged}
       onDone={async (message) => { setPicker(null); const rows = await load(); const updated = rows.find((row) => row.id === picker.reroot?.id); if (updated) setEditing(updated); onChanged?.(); onNotify(message); }}/>
     }
+    {splitting && <LibrarySplitDialog library={splitting} onClose={() => setSplitting(null)}
+      onApplied={() => { void load().catch(onError); onChanged?.(); }}/>}
   </div>;
 }
 

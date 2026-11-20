@@ -45,6 +45,9 @@ export const DENIED_GETS: Rule[] = [
   // types and counts, and the interface renders nothing else.
   { method: "GET", pattern: /^\/libraries\/browse$/ },
   { method: "GET", pattern: /^\/libraries\/grants$/ },
+  // The split plan carries the absolute root and every name directly under it; the split
+  // itself creates libraries, which restricted mode refuses anyway.
+  { method: "GET", pattern: /^\/libraries\/[^/]+\/split-plan$/ },
   // Admin media-server reads name remote addresses, server and account ids, and the
   // connection inventory; member metadata stays readable under the plain sign-in gate.
   { method: "GET", pattern: /^\/media-servers$/ },

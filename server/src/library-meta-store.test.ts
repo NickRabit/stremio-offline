@@ -123,6 +123,59 @@ test("a move into another library writes both files and pins the inherited title
   });
 });
 
+test("a loose film moved out of a collection keeps no identity the library never gave it", async () => {
+  await withStore(async (store, dataDir) => {
+    // "Whisper Man" is bound; the library reads "Harry Potter.mp4" beside it as a title of its own
+    // with no match. Moved as that title, it must not land with the folder's film on it.
+    await seed(dataDir, libA, { "Whisper Man": { ...record("tt-whisper"), name: "The Whisper Man" } });
+    await seed(dataDir, libB, {});
+    await store.load();
+    await store.relocate(`${libA}/Whisper Man/Harry Potter.mp4`, `${libB}/Harry Potter.mp4`, true, "replace", `${libA}/Whisper Man/Harry Potter.mp4`);
+    await store.flush();
+    assert.equal(knownTitleOf("Harry Potter.mp4", store.meta(libB)), undefined, "no binding in the destination");
+
+    // A film named like the folder is that folder's film, and keeps it on the way out.
+    await store.relocate(`${libA}/Whisper Man/The Whisper Man (2025).mkv`, `${libB}/The Whisper Man (2025).mkv`, true, "replace", `${libA}/Whisper Man/The Whisper Man (2025).mkv`);
+    await store.flush();
+    assert.equal(store.meta(libB)["The Whisper Man (2025).mkv"]?.id, "tt-whisper");
+  });
+});
+
+test("moving two unidentified versions leaves both without the collection's match", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, libA, { Arrival: record("tt-arrival") });
+    await seed(dataDir, libB, {});
+    await store.load();
+    const unit = `${libA}/Arrival/Heat (1995) 1080p.mkv`;
+    for (const name of ["Heat (1995).mkv", "Heat (1995) 1080p.mkv"]) {
+      await store.relocate(`${libA}/Arrival/${name}`, `${libB}/${name}`, true, "replace", unit);
+    }
+    await store.flush();
+    assert.equal(knownTitleOf("Heat (1995).mkv", store.meta(libB)), undefined);
+    assert.equal(knownTitleOf("Heat (1995) 1080p.mkv", store.meta(libB)), undefined);
+  });
+});
+
+test("both versions of a film beside another film arrive with the film's own match", async () => {
+  await withStore(async (store, dataDir) => {
+    // A collection folder bound to one film holds two versions of another; the match the
+    // administrator made sits on the first version only, and the second reads it from there.
+    await seed(dataDir, libA, {
+      "Whisper Man": { ...record("tt-whisper"), name: "The Whisper Man" },
+      "Whisper Man/Heat (1995).mkv": { ...record("tt-heat"), source: "user", locked: true },
+    });
+    await seed(dataDir, libB, {});
+    await store.load();
+    const unit = `${libA}/Whisper Man/Heat (1995).mkv`;
+    // The order the split queues them in: the other version first, then the key.
+    await store.relocate(`${libA}/Whisper Man/Heat (1995) 1080p.mkv`, `${libB}/Heat (1995) 1080p.mkv`, true, "replace", unit);
+    await store.relocate(unit, `${libB}/Heat (1995).mkv`, true, "replace", unit);
+    await store.flush();
+    assert.equal(store.meta(libB)["Heat (1995) 1080p.mkv"]?.id, "tt-heat");
+    assert.equal(store.meta(libB)["Heat (1995).mkv"]?.id, "tt-heat");
+  });
+});
+
 test("a failed target commit keeps the source match and suggestion through restart", async () => {
   await withStore(async (store, dataDir) => {
     const match = record("tt1");

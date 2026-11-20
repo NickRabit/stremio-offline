@@ -622,7 +622,8 @@ const ADMIN_ONLY = new Set([
   "GET /diagnostics", "GET /stats", "GET /stats/activity", "GET /stats/streams",
   "GET /settings/export", "POST /settings/import",
   // Libraries and their curation.
-  "POST /libraries", "PATCH /libraries/:id", "DELETE /libraries/:id", "POST /libraries/:id/reroot",
+  "POST /libraries", "PATCH /libraries/:id", "DELETE /libraries/:id", "GET /libraries/:id/split-plan",
+  "POST /libraries/:id/reroot",
   "GET /libraries/browse", "POST /libraries/preview",
   "GET /libraries/grants", "POST /libraries/grants", "DELETE /libraries/grants",
   "GET /library/search", "GET /library/suggestions", "DELETE /library/suggestion",

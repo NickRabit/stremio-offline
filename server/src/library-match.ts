@@ -680,21 +680,16 @@ export function knownEntryForUnit(
 ): { key: string; record: LibraryMetaRecord } | undefined {
   const unitKey = typeof unit === "string" ? unit : unit?.key;
   if (!unitKey) return undefined;
-  const path = file && file !== unitKey ? file : unitKey;
-  if (path !== unitKey) {
-    const own = records[path];
-    if (own?.id) return { key: path, record: own };
+  if (file && file !== unitKey) {
+    const own = records[file];
+    if (own?.id) return { key: file, record: own };
     if (own && isUnmatched(own)) return undefined;
-    if (!isVideo(posixBase(path))) return knownTitleEntry(path, records);
-    return knownTitleEntry(unitKey, records);
+    if (!isVideo(posixBase(file))) return knownTitleEntry(file, records);
   }
-  if (isVideo(posixBase(path))) {
-    if (records[path]?.id) return { key: path, record: records[path]! };
-    const inherited = knownTitleEntry(path, records);
-    if (!inherited || normalizeTitle(parseMediaPath(posixBase(path)).title) !== normalizeTitle(parseMediaPath(posixBase(inherited.key)).title)) return undefined;
-    return inherited;
-  }
-  return knownTitleEntry(path, records);
+  const bound = knownTitleEntry(unitKey, records);
+  if (bound && bound.key !== unitKey && isVideo(posixBase(unitKey))
+    && normalizeTitle(parseMediaPath(posixBase(unitKey)).title) !== normalizeTitle(parseMediaPath(posixBase(bound.key)).title)) return undefined;
+  return bound;
 }
 
 export function knownTitleForUnit(
@@ -1091,11 +1086,14 @@ export function pinInherited(
   /** Undefined when the item leaves this library: no folder of it can cover the new place,
    *  even one that happens to share the destination's path. */
   nextRelative: string | undefined,
+  /** The key of the title the item belongs to when that title is keyed by a video (a loose
+   *  film in a collection): the identity is then read as `knownEntryForUnit` reads it. */
+  unitKey?: string,
 ): { meta: Record<string, LibraryMetaRecord>; suggestions: Record<string, LibrarySuggestion> } {
   const stillCovers = (key: string | undefined) => key !== undefined && (key === relative || (nextRelative !== undefined && isPathWithin(nextRelative, key)));
 
   const nextMeta = { ...meta };
-  const bound = knownTitleEntry(relative, meta);
+  const bound = unitKey ? knownEntryForUnit(unitKey, meta, relative) : knownTitleEntry(relative, meta);
   if (bound && !stillCovers(bound.key)) {
     // Whatever the item itself kept out of matching or the mosaic travels with it.
     const own = meta[relative];
@@ -1153,7 +1151,7 @@ export function isExtraName(filename: string): boolean {
  *  physical segment is dropped, because the halves belong to one identity, and the
  *  installment is written the canonical way the matcher compares titles, so "Saw 3",
  *  "Saw III" and "Saw III CD1" are one film while "Saw" and "Saw IV" are their own. */
-function comparableTitle(filename: string): string {
+export function comparableTitle(filename: string): string {
   // "Obsession (2)" is a second encode of one film, so the parenthesised copy number goes.
   const title = parseMediaPath(filename).title.replace(/\(\s*\d{1,3}\s*\)\s*$/, "");
   const normalized = normalizeTitle(title);

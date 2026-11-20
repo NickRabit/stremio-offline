@@ -151,7 +151,7 @@ import { STREAM_SORTS } from "./stream-sort.js";
 import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 import { createMetaCache } from "./meta-cache.js";
 import { PathReservations, queuedItemPaths, reservationPause } from "./path-reservations.js";
-import { createLibraryPathBusy, libraryWriting } from "./library-busy.js";
+import { createLibraryPathBusy, createLibraryPathsBusy, libraryWriting, type LibraryBusyDeps } from "./library-busy.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -2620,7 +2620,7 @@ async function titleArtworkUrls(key: string): Promise<{ poster?: string; wide?: 
   return { ...(poster ? { poster } : {}), ...(wide ? { wide } : {}) };
 }
 
-const libraryPathBusy = createLibraryPathBusy({
+const libraryBusyDeps: LibraryBusyDeps = {
   libraries: () => store.libraries(),
   caseInsensitive: (library) => healthOf(library).caseInsensitive,
   queuedItems: () => libraryOps.activeItems(),
@@ -2631,7 +2631,9 @@ const libraryPathBusy = createLibraryPathBusy({
     busyKeys: () => renameRecovery.busyKeys(),
     conflicts: (keys) => renameRecovery.conflicts(keys),
   },
-});
+};
+const libraryPathBusy = createLibraryPathBusy(libraryBusyDeps);
+const libraryPathsBusy = createLibraryPathsBusy(libraryBusyDeps);
 
 registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, pathReservations, prefsOf, progressOf, relativeKeyIn, renameLibraryItem: (request) => renameRecovery.rename(request), scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
@@ -2990,7 +2992,7 @@ const libraryOps = new LibraryOps({
     try {
       if (operation.op === "move" || operation.op === "copy") {
         return {
-          to: await transferLibraryItem(item, operation.target, operation.op === "copy", progress, operation.confirmTypeMismatch === true, journal),
+          to: await transferLibraryItem(item, operation.target, operation.op === "copy", progress, operation.confirmTypeMismatch === true, journal, operation.units?.[item]),
         };
       }
       if (operation.op === "delete") await deleteLibraryItem(item);
@@ -3035,7 +3037,32 @@ artworks.protectFromEviction(file => {
 await artworks.maintain();
 reportProgress();
 
-registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId), progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps });
+registerLibrariesRoutes(app, {
+  ...routeContext,
+  grantRows,
+  healthOf,
+  invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId),
+  invalidateLibrary,
+  libraryGrants,
+  libraryStats,
+  libraryView,
+  pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId),
+  progressOf,
+  refreshLibraryHealth,
+  libraryProbe,
+  metaStore,
+  seen,
+  fingerprints,
+  libraryOps,
+  libraryUnits: () => libraryUnits(),
+  activeDownloadTargets: async () => {
+    const active = queue.list().filter((job) => job.target
+      && (job.status === "checking" || job.status === "downloading" || job.status === "paused"));
+    return (await Promise.all(active.map((job) => resolveLibraryPath(store.libraries(), job.target))))
+      .flatMap((target) => target ? [libraryPath(target.library.id, target.relative)] : []);
+  },
+  libraryItemsBusy: (keys) => libraryPathsBusy(keys),
+});
 
 const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, nestedHidden, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LibraryManager, LibraryManagerDialog } from "./LibraryManager";
-import type { GrantBrowse, LibraryGrant, LibraryView } from "./types";
-import { setLocale } from "./i18n";
+import type { GrantBrowse, LibraryGrant, LibraryView, SplitPlan } from "./types";
+import { t, setLocale } from "./i18n";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -25,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  localStorage.removeItem("library-split-dismissed");
   vi.unstubAllGlobals();
 });
 
@@ -520,4 +521,124 @@ it("draws a local row as one Edit action in the shared footer", async () => {
 
   await openEditor();
   expect(host.querySelector(".library-edit-card")).not.toBeNull();
+});
+
+const mixed = (over: Partial<LibraryView> = {}) => library({
+  id: "lib_mix", name: "Downloads", type: "mixed", root: "/downloads",
+  defaultMovie: false, defaultSeries: false, ...over,
+});
+
+const splitPlan = (over: Partial<SplitPlan> = {}): SplitPlan => ({
+  library: { id: "lib_mix", name: "Downloads", root: "/downloads", type: "mixed" },
+  counts: { movies: 4, series: 3, unknown: 0 },
+  children: [],
+  folders: [],
+  items: [],
+  taken: [],
+  ...over,
+});
+
+const footerButtons = (name: string) => {
+  const row = [...host.querySelectorAll(".library-admin-row")].find((article) =>
+    article.querySelector(".library-admin-title strong")?.textContent === name);
+  return [...(row?.querySelectorAll(".library-admin-footer button") ?? [])].map((button) => button.textContent?.trim());
+};
+
+const renderManager = async (rows: LibraryView[], plan: SplitPlan | null = splitPlan(), restricted = false) => {
+  act(() => root.unmount());
+  root = createRoot(host);
+  fetchMock.mockImplementation(async (url: string) => {
+    if (String(url).includes("/split-plan")) return json(plan ?? {});
+    return json(rows);
+  });
+  fetchMock.mockClear();
+  await act(async () => { root.render(<LibraryManager restricted={restricted} onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+};
+
+it("shows Split on a mixed writable library and hides it otherwise", async () => {
+  await renderManager([
+    mixed({ id: "lib_ok", name: "Mix" }),
+    library({ id: "lib_movie", name: "Films" }),
+    mixed({ id: "lib_off", name: "Off", enabled: false }),
+    mixed({ id: "lib_ro", name: "RO", readOnly: true }),
+  ]);
+  expect(footerButtons("Mix")).toEqual(["Edit library", t("split.action")]);
+  expect(footerButtons("Films")).toEqual(["Edit library"]);
+  expect(footerButtons("Off")).toEqual(["Edit library"]);
+  expect(footerButtons("RO")).toEqual(["Edit library"]);
+
+  await renderManager([mixed()], splitPlan(), true);
+  expect(host.querySelector(".library-admin-footer")).toBeNull();
+  expect(host.textContent).not.toContain(t("split.action"));
+});
+
+it("shows the split offer when the plan has films and series, and hides it otherwise", async () => {
+  await renderManager([mixed()], splitPlan({ counts: { movies: 4, series: 3, unknown: 0 } }));
+  expect(host.textContent).toContain(t("split.offerTitle"));
+  expect(host.querySelector(".library-split-offer")?.textContent).toContain("Downloads");
+
+  await renderManager([mixed()], splitPlan({ counts: { movies: 4, series: 0, unknown: 0 } }));
+  expect(host.textContent).not.toContain(t("split.offerTitle"));
+
+  await renderManager([
+    mixed({ id: "lib_mix", name: "Downloads", root: "/downloads" }),
+    library({ id: "lib_in", name: "Films", root: "/downloads/Films" }),
+  ]);
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/split-plan"))).toBe(false);
+  expect(host.textContent).not.toContain(t("split.offerTitle"));
+});
+
+it("remembers dismissing the split offer in localStorage and after a re-render", async () => {
+  await renderManager([mixed()]);
+  expect(host.textContent).toContain(t("split.offerTitle"));
+  await clickIn(host, t("split.dismiss"));
+  expect(host.textContent).not.toContain(t("split.offerTitle"));
+  expect(JSON.parse(localStorage.getItem("library-split-dismissed")!)).toEqual(["lib_mix"]);
+
+  await renderManager([mixed()]);
+  expect(host.textContent).not.toContain(t("split.offerTitle"));
+  expect(JSON.parse(localStorage.getItem("library-split-dismissed")!)).toEqual(["lib_mix"]);
+});
+
+it("still renders when localStorage throws on getItem and setItem", async () => {
+  const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
+  const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("denied"); });
+  try {
+    await renderManager([mixed()]);
+    expect(host.querySelector(".library-manager")).toBeTruthy();
+    expect(host.textContent).toContain("Downloads");
+  } finally {
+    getItem.mockRestore();
+    setItem.mockRestore();
+  }
+});
+
+it("moves on to the next mixed library when the first holds one kind or was dismissed", async () => {
+  act(() => root.unmount());
+  root = createRoot(host);
+  const rows = [mixed({ id: "lib_first", name: "Archive", root: "/archive" }), mixed({ id: "lib_second", name: "Downloads", root: "/downloads" })];
+  fetchMock.mockImplementation(async (url: string) => {
+    if (String(url).includes("lib_first/split-plan")) return json(splitPlan({ counts: { movies: 5, series: 0, unknown: 0 } }));
+    if (String(url).includes("lib_second/split-plan")) return json(splitPlan({ counts: { movies: 2, series: 2, unknown: 0 } }));
+    return json(rows);
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+  expect(host.querySelector(".library-split-offer")?.textContent).toContain("Downloads");
+
+  localStorage.setItem("library-split-dismissed", JSON.stringify(["lib_first"]));
+  act(() => root.unmount());
+  root = createRoot(host);
+  fetchMock.mockImplementation(async (url: string) => {
+    if (String(url).includes("/split-plan")) return json(splitPlan({ counts: { movies: 2, series: 2, unknown: 0 } }));
+    return json(rows);
+  });
+  fetchMock.mockClear();
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+  expect(host.querySelector(".library-split-offer")?.textContent).toContain("Downloads");
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes("lib_first/split-plan"))).toBe(false);
+  localStorage.removeItem("library-split-dismissed");
 });

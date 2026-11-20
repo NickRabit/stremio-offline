@@ -9,7 +9,8 @@ import { ART_VARIANTS, artVariantKey } from "./artwork.js";
 import { carryMovePairs, type FingerprintPair } from "./library-fingerprints.js";
 import type { FoundFile } from "./library.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
-import type { LibraryMetaRecord } from "./library-match.js";
+import { titleUnits, type LibraryMetaRecord, type TitleUnit } from "./library-match.js";
+import { buildSplitPlan } from "./library-split.js";
 import { LibrarySeenStore } from "./library-seen.js";
 import { parseLibraryPath, type LibraryRecord } from "./libraries.js";
 import type { UserData } from "./users.js";
@@ -34,9 +35,10 @@ const harness = (options: {
   updateEveryData?: LibraryActionDeps["updateEveryData"];
   progressOf?: LibraryActionDeps["progressOf"];
   carveOuts?: ReadonlySet<string>;
+  units?: TitleUnit[] | (() => TitleUnit[]);
 } = {}) => {
   const calls = {
-    relocate: [] as Array<{ from: string; to: string; pin: boolean }>,
+    relocate: [] as Array<{ from: string; to: string; pin: boolean; unit?: string }>,
     moved: [] as string[],
     invalidated: 0,
     cleared: [] as string[],
@@ -56,7 +58,7 @@ const harness = (options: {
     metaStore: options.metaStore ?? {
       qualifiedMeta: () => ({}),
       update: async () => undefined,
-      relocate: async (from: string, to: string, pin = false) => { calls.relocate.push({ from, to, pin }); },
+      relocate: async (from: string, to: string, pin = false, _policy?: string, unit?: string) => { calls.relocate.push({ from, to, pin, ...(unit ? { unit } : {}) }); },
       copy: async () => undefined,
       holds,
       flushLibrary: async () => undefined,
@@ -69,7 +71,7 @@ const harness = (options: {
       calls.libraryFilesReads += 1;
       return (options.files ?? []) as FoundFile[];
     },
-    libraryUnits: async () => [],
+    libraryUnits: async () => (typeof options.units === "function" ? options.units() : options.units) ?? [],
     carveOutsOf: () => options.carveOuts ?? new Set<string>(),
     healthOf: (entry) => ({ unreachable: false, readOnly: false, realRoot: entry.root, caseInsensitive: false }),
     libraryOfKey,
@@ -391,6 +393,87 @@ test("transferLibraryItem rejects journal sidecar names that leave their folders
   });
 });
 
+test("transferLibraryItem marks a video that is a title of its own, and only that", async () => {
+  const loose = `${LIBRARY_ID}/Whisper Man/Harry Potter.mp4`;
+  const units: TitleUnit[] = [
+    { key: loose, relative: loose, kind: "movie", sampleFiles: [loose] },
+    { key: `${LIBRARY_ID}/Heat`, relative: `${LIBRARY_ID}/Heat`, kind: "movie", sampleFiles: [`${LIBRARY_ID}/Heat/movie.mkv`] },
+  ];
+  await withRoot(["Whisper Man/Harry Potter.mp4", "Heat/movie.mkv", "Films/.keep"], async (_root, actions, calls) => {
+    await actions.transferLibraryItem(loose, `${LIBRARY_ID}/Films`);
+    await actions.transferLibraryItem(`${LIBRARY_ID}/Heat/movie.mkv`, `${LIBRARY_ID}/Films`);
+    assert.deepEqual(calls.relocate.map(({ from, unit }) => ({ from, unit })), [
+      { from: loose, unit: loose },
+      // A file of a folder title keeps the folder's identity, as the library shows it.
+      { from: `${LIBRARY_ID}/Heat/movie.mkv`, unit: undefined },
+    ]);
+  }, { units });
+});
+
+test("a transfer resumed from its journal after a crash keeps the loose film's own title", async () => {
+  // The video landed in Films, then the server stopped before the metadata half ran.
+  await withRoot(["Films/Harry Potter.mp4", "Whisper Man/.keep"], async (root, actions, calls) => {
+    const identity = await identityAt(root, "Films/Harry Potter.mp4");
+    const from = `${LIBRARY_ID}/Whisper Man/Harry Potter.mp4`;
+    const { journal } = recordingJournal(verifiedStep(identity, identity, {
+      phase: "published", copy: false, from, to: `${LIBRARY_ID}/Films/Harry Potter.mp4`, carried: [], unit: from,
+    }));
+    await actions.transferLibraryItem(from, `${LIBRARY_ID}/Films`, false, undefined, false, journal);
+    assert.deepEqual(calls.relocate.map(({ from: source, unit }) => ({ from: source, unit })), [{ from, unit: from }]);
+  });
+});
+
+test("a journal record whose title lies in another folder is refused", async () => {
+  await withRoot(["Films/Harry Potter.mp4", "Whisper Man/.keep"], async (root, actions) => {
+    const identity = await identityAt(root, "Films/Harry Potter.mp4");
+    const from = `${LIBRARY_ID}/Whisper Man/Harry Potter.mp4`;
+    const { journal } = recordingJournal(verifiedStep(identity, identity, {
+      phase: "published", copy: false, from, to: `${LIBRARY_ID}/Films/Harry Potter.mp4`, carried: [], unit: `${LIBRARY_ID}/Other/Harry Potter.mp4`,
+    }));
+    await assert.rejects(actions.transferLibraryItem(from, `${LIBRARY_ID}/Films`, false, undefined, false, journal), { messageKey: "err.libraryRecoveryConflict" });
+  });
+});
+
+test("a planned title survives the folder changing shape as other films leave", async () => {
+  const arrival = `${LIBRARY_ID}/Mix/Arrival (2016).mkv`;
+  const heat = `${LIBRARY_ID}/Mix/Heat (1995).mkv`;
+  const heatHd = `${LIBRARY_ID}/Mix/Heat (1995) 1080p.mkv`;
+  // Two films side by side are two titles keyed by their files; once Arrival has gone, the two
+  // Heat files are the folder's only film and read as one title keyed by the folder.
+  const before: TitleUnit[] = [
+    { key: arrival, relative: arrival, kind: "movie", sampleFiles: [arrival] },
+    { key: heat, relative: heat, kind: "movie", sampleFiles: [heat, heatHd] },
+  ];
+  const after: TitleUnit[] = [{ key: `${LIBRARY_ID}/Mix`, relative: `${LIBRARY_ID}/Mix`, kind: "movie", sampleFiles: [heat, heatHd] }];
+  let units = before;
+  await withRoot(["Mix/Arrival (2016).mkv", "Mix/Heat (1995).mkv", "Mix/Heat (1995) 1080p.mkv", "Films/.keep"], async (_root, actions, calls) => {
+    await actions.transferLibraryItem(arrival, `${LIBRARY_ID}/Films`, false, undefined, false, undefined, arrival);
+    units = after;
+    await actions.transferLibraryItem(heatHd, `${LIBRARY_ID}/Films`, false, undefined, false, undefined, heat);
+    await actions.transferLibraryItem(heat, `${LIBRARY_ID}/Films`, false, undefined, false, undefined, heat);
+    assert.deepEqual(calls.relocate.map(({ from, unit }) => ({ from, unit })), [
+      { from: arrival, unit: arrival },
+      { from: heatHd, unit: heat },
+      { from: heat, unit: heat },
+    ], "each file keeps the title the plan saw, not the folder it became");
+  }, { units: () => units });
+
+  // Read again without the plan, the second Heat file would have been the folder's.
+  units = after;
+  await withRoot(["Mix/Heat (1995) 1080p.mkv", "Films/.keep"], async (_root, actions, calls) => {
+    await actions.transferLibraryItem(heatHd, `${LIBRARY_ID}/Films`);
+    assert.equal(calls.relocate[0]?.unit, undefined);
+  }, { units: () => units });
+});
+
+test("a planned title in another folder is ignored", async () => {
+  const film = `${LIBRARY_ID}/Mix/Heat (1995).mkv`;
+  await withRoot(["Mix/Heat (1995).mkv", "Films/.keep"], async (_root, actions, calls) => {
+    await actions.transferLibraryItem(film, `${LIBRARY_ID}/Films`, false, undefined, false, undefined, `${LIBRARY_ID}/Elsewhere/Heat (1995).mkv`);
+    assert.equal(calls.relocate[0]?.unit, undefined);
+  });
+});
+
 test("a replay rejects sidecar names that are not subtitles of the two videos", async () => {
   const from = `${LIBRARY_ID}/Old/movie.mkv`;
   const to = `${LIBRARY_ID}/New/movie.mkv`;
@@ -509,6 +592,17 @@ test("a replayed finishTransfer leaves the destination's carried rows unpinned",
   assert.deepEqual(fresh.calls.relocate, [{ from: step.from, to: step.to, pin: true }]);
 });
 
+test("finishTransfer reads a loose film's identity by its own title, not the folder's", async () => {
+  const step: TransferStep = verifiedStep("a".repeat(64), null, {
+    phase: "moving", copy: false,
+    from: `${LIBRARY_ID}/Whisper Man/Harry Potter.mp4`, to: `${LIBRARY_ID}/Films/Harry Potter.mp4`, carried: [],
+    unit: `${LIBRARY_ID}/Whisper Man/Harry Potter.mp4`,
+  });
+  const run = harness();
+  await run.actions.finishTransfer(step);
+  assert.deepEqual(run.calls.relocate, [{ from: step.from, to: step.to, pin: true, unit: step.unit }]);
+});
+
 const withCarry = async (
   records: Record<string, LibraryMetaRecord>,
   files: string[],
@@ -553,6 +647,42 @@ const withCarry = async (
     await rm(dataDir, { recursive: true, force: true });
   }
 };
+
+test("a split retry still identifies a version left behind by a name collision", async () => {
+  const primary = "Shelf/Heat (1995) 1080p.mkv";
+  const alternate = "Shelf/Heat (1995).mkv";
+  const sourceFiles = [primary, alternate, "Shelf/Arrival.mkv"];
+  const walk = (paths: string[]) => titleUnits(paths.map(relative => ({
+    relative: `${LIBRARY_ID}/${relative}`, size: 1, modified: "",
+  })));
+  const planned = `${LIBRARY_ID}/${primary}`;
+  const record: LibraryMetaRecord = { type: "movie", id: "tt-heat", name: "Heat", source: "user", locked: true };
+  const target = `${LIBRARY_ID}/Films`;
+  await withCarry({ [primary]: record }, [...sourceFiles, "Films/Heat (1995).mkv"], async (root, actions, _calls, metadata) => {
+    await assert.rejects(actions.transferLibraryItem(`${LIBRARY_ID}/${alternate}`, target, false, undefined, true, undefined, planned), { messageKey: "err.nameTaken" });
+    await actions.transferLibraryItem(planned, target, false, undefined, true, undefined, planned);
+
+    const remaining = [];
+    for (const file of sourceFiles) if (await exists(path.join(root, file))) remaining.push(file);
+    assert.deepEqual(remaining, [alternate, "Shelf/Arrival.mkv"]);
+    const retry = buildSplitPlan({ library, libraries: [library], healthOf: () => ({}), units: walk(remaining),
+      records: metadata.qualifiedMeta(), downloadTargets: [], operationBusy: new Set(), topNames: ["Shelf", "Films"] });
+    assert.deepEqual(metadata.qualifiedMeta()[`${LIBRARY_ID}/${alternate}`], record);
+    assert.equal(retry.items.find(item => item.relative === alternate)?.basis, "identified");
+    assert.equal(retry.items.find(item => item.relative === alternate)?.label, "Heat");
+    assert.equal(retry.items.find(item => item.relative === "Shelf/Arrival.mkv")?.basis, "none");
+
+    // Moving the other title changes the walk to a folder unit; retry still targets the colliding file.
+    await actions.transferLibraryItem(`${LIBRARY_ID}/Shelf/Arrival.mkv`, target);
+    const last = buildSplitPlan({ library, libraries: [library], healthOf: () => ({}), units: walk([alternate]),
+      records: metadata.qualifiedMeta(), downloadTargets: [], operationBusy: new Set(), topNames: ["Shelf", "Films"] });
+    assert.deepEqual(last.items.map(item => [item.relative, item.label, item.basis]), [[alternate, "Heat", "identified"]]);
+    await rm(path.join(root, "Films/Heat (1995).mkv"));
+    await actions.transferLibraryItem(last.items[0]!.key, target, false, undefined, true, undefined, last.items[0]!.key);
+    assert.deepEqual(metadata.qualifiedMeta()[`${target}/Heat (1995).mkv`], record);
+    assert.deepEqual(metadata.qualifiedMeta()[`${target}/Heat (1995) 1080p.mkv`], record);
+  }, sourceFiles, { units: () => walk(sourceFiles) });
+});
 
 test("carryHandMove carries a file's match, favourite, progress, artwork and first-seen date", async () => {
   const from = `${LIBRARY_ID}/Old/movie.mkv`;

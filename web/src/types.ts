@@ -770,6 +770,23 @@ export interface LibraryView {
    *  library still points at its old folder. Administrators only. */
   rerootStranded?: string;
 }
+export type SplitKind = "movie" | "series" | "unknown";
+export type SplitBasis = "identified" | "guessed" | "none";
+/** `files` are the title's other files beside `key` (a second version, an extra); they move with it. */
+export interface SplitPlanItem { key: string; relative: string; label: string; kind: SplitKind; basis: SplitBasis; busy?: "download" | "operation"; files?: string[];
+  /** The title is keyed by its video: the move job is told the title for `key` and every file. */
+  fileTitle?: true }
+export interface SplitPlanChild { id: string; name: string; type: LibraryType; relative: string; enabled: boolean; unreachable: boolean; readOnly: boolean }
+export interface SplitPlanFolder { name: string; movies: number; series: number; unknown: number }
+export interface SplitPlan {
+  library: { id: string; name: string; root: string; type: LibraryType };
+  counts: { movies: number; series: number; unknown: number };
+  children: SplitPlanChild[];
+  folders: SplitPlanFolder[];
+  items: SplitPlanItem[];
+  /** Every name directly under the root, so a new folder never lands on one of them. */
+  taken: string[];
+}
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
   | ({ kind: "file"; favorite?: boolean } & BrowseFile)
@@ -811,7 +828,7 @@ export interface ScanState {
   recheck?: boolean;
 }
 export type LibraryOp =
-  | { op: "move" | "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean }
+  | { op: "move" | "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean; units?: Record<string, string> }
   | { op: "delete" | "unmatch" | "artwork" | "forget"; items: string[] }
   | { op: "favorite"; items: string[]; favorite: boolean }
   | { op: "match"; items: string[]; type: string; id: string }
