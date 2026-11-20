@@ -680,21 +680,16 @@ export function knownEntryForUnit(
 ): { key: string; record: LibraryMetaRecord } | undefined {
   const unitKey = typeof unit === "string" ? unit : unit?.key;
   if (!unitKey) return undefined;
-  const path = file && file !== unitKey ? file : unitKey;
-  if (path !== unitKey) {
-    const own = records[path];
-    if (own?.id) return { key: path, record: own };
+  if (file && file !== unitKey) {
+    const own = records[file];
+    if (own?.id) return { key: file, record: own };
     if (own && isUnmatched(own)) return undefined;
-    if (!isVideo(posixBase(path))) return knownTitleEntry(path, records);
-    return knownTitleEntry(unitKey, records);
+    if (!isVideo(posixBase(file))) return knownTitleEntry(file, records);
   }
-  if (isVideo(posixBase(path))) {
-    if (records[path]?.id) return { key: path, record: records[path]! };
-    const inherited = knownTitleEntry(path, records);
-    if (!inherited || normalizeTitle(parseMediaPath(posixBase(path)).title) !== normalizeTitle(parseMediaPath(posixBase(inherited.key)).title)) return undefined;
-    return inherited;
-  }
-  return knownTitleEntry(path, records);
+  const bound = knownTitleEntry(unitKey, records);
+  if (bound && bound.key !== unitKey && isVideo(posixBase(unitKey))
+    && normalizeTitle(parseMediaPath(posixBase(unitKey)).title) !== normalizeTitle(parseMediaPath(posixBase(bound.key)).title)) return undefined;
+  return bound;
 }
 
 export function knownTitleForUnit(

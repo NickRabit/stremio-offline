@@ -5,7 +5,7 @@ import { X } from "lucide-react";
 import { api, describeError } from "./api";
 import { serverText, t, useI18n } from "./i18n";
 import {
-  chunkKeys, defaultDestinations, plannedUnits, eligibleChildren, groupCounts, joinLibraryRoot, movableKeys, preselectTarget, sortedItems, summaryLines,
+  defaultDestinations, eligibleChildren, groupCounts, joinLibraryRoot, movableItems, splitMoveRequests, preselectTarget, sortedItems, summaryLines,
   targetErrors, targetName, type FolderNameError, type SplitDestination, type SplitTarget,
 } from "./library-split";
 import type { LibraryView, SplitPlan, SplitPlanItem } from "./types";
@@ -189,13 +189,9 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
       }
       const jobs: Record<"movie" | "series", string[]> = { movie: [], series: [] };
       for (const kind of KINDS) {
-        const keys = movableKeys(plan, destinations, kind);
-        for (const chunk of chunkKeys(keys)) {
-          const units = plannedUnits(plan.items, chunk);
-          const queued = await api.startLibraryOp({
-            op: "move", items: chunk, target: ids[kind], confirmTypeMismatch: true,
-            ...(Object.keys(units).length ? { units } : {}),
-          });
+        const titles = movableItems(plan, destinations, kind);
+        for (const request of splitMoveRequests(titles, ids[kind])) {
+          const queued = await api.startLibraryOp(request);
           markApplied();
           jobs[kind].push(queued.id);
         }

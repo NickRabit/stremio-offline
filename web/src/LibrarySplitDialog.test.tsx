@@ -250,6 +250,34 @@ it("chunks 1201 movable items of one kind into three move requests", async () =>
   expect(ops.map((call) => (call.body as { items: string[] }).items.length)).toEqual([500, 500, 201]);
 }, 20_000);
 
+it("keeps move requests within the UTF-8 body limit, including the planned title keys", async () => {
+  const items = Array.from({ length: 500 }, (_, index) => item({
+    key: `lib_mix/${"Ž".repeat(96)}-"${index}".mkv`, label: `Film ${index}`, kind: "movie", fileTitle: true,
+  }));
+  const bodies: string[] = [];
+  await open(planOf({ children: [seriesChild], items }), parent(), (url, init) => {
+    if (url === "/api/libraries" && init?.method === "POST") return json(createdLibrary("lib_created", "Films"), 201);
+    if (init?.method === "PATCH") return json(parent());
+    if (url === "/api/library/ops" && init?.method === "POST") {
+      bodies.push(String(init.body));
+      return json({ id: String(bodies.length) });
+    }
+    if (url === "/api/library/ops") return json({ jobs: bodies.map((_, i) => job({ id: String(i + 1), status: "completed" })) });
+  });
+  await click(t("split.next"));
+  await click(t("split.next"));
+  await click(t("split.start"));
+  await flushUntil(() => host.textContent?.includes(t("split.done")) === true);
+  const sent: string[] = [];
+  for (const body of bodies) {
+    expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(256 * 1024);
+    const operation = JSON.parse(body) as { items: string[]; units: Record<string, string> };
+    expect(operation.units).toEqual(Object.fromEntries(operation.items.map(key => [key, key])));
+    sent.push(...operation.items);
+  }
+  expect(sent).toEqual(items.map(item => item.key));
+});
+
 it("stops after a failing create, with no PATCH or ops request", async () => {
   await open(planOf({
     children: [seriesChild],

@@ -1,7 +1,8 @@
 import { t } from "./i18n";
-import type { LibraryView, SplitPlan, SplitPlanChild, SplitPlanItem } from "./types";
+import type { LibraryOp, LibraryView, SplitPlan, SplitPlanChild, SplitPlanItem } from "./types";
 
-export const SPLIT_MOVE_CHUNK = 500;
+const SPLIT_MOVE_CHUNK = 500;
+const MAX_BODY_BYTES = 256 * 1024; // Express JSON body limit.
 export const SPLIT_DISMISSED_KEY = "library-split-dismissed";
 
 export type SplitTarget =
@@ -124,17 +125,6 @@ export function groupCounts(plan: SplitPlan):
   return { identified, guessed, undecided, busy };
 }
 
-export function movableKeys(
-  plan: SplitPlan,
-  destinations: Record<string, SplitDestination>,
-  kind: "movie" | "series",
-): string[] {
-  // The other versions go first: each reads the title's identity from `key` as it leaves and
-  // takes it along. Moved after `key`, they would find its binding already gone from the parent.
-  return movableItems(plan, destinations, kind).flatMap((item) => [...(item.files ?? []), item.key]);
-}
-
-/** The titles that move to `kind`'s target; `movableKeys` spells out every file they hold. */
 export function movableItems(
   plan: SplitPlan,
   destinations: Record<string, SplitDestination>,
@@ -143,21 +133,34 @@ export function movableItems(
   return plan.items.filter((item) => !item.busy && destinations[item.key] === kind);
 }
 
-/** For titles keyed by a video, the title of every file the job moves, as the plan saw it. */
-export function plannedUnits(items: SplitPlanItem[], keys: string[]): Record<string, string> {
-  const wanted = new Set(keys);
-  const units: Record<string, string> = {};
-  for (const item of items) {
-    if (!item.fileTitle) continue;
-    for (const key of [item.key, ...(item.files ?? [])]) if (wanted.has(key)) units[key] = item.key;
+export function* splitMoveRequests(titles: SplitPlanItem[], target: string): Generator<LibraryOp> {
+  const encoder = new TextEncoder();
+  const jsonBytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length;
+  const base = { op: "move" as const, target, confirmTypeMismatch: true };
+  let items: string[] = [];
+  let units: Record<string, string> = {};
+  // Reserve the optional units object and one comma per entry, even for the first entry.
+  const emptyBytes = jsonBytes({ ...base, items, units });
+  let bytes = emptyBytes;
+  const request = () => ({ ...base, items, ...(Object.keys(units).length ? { units } : {}) });
+  for (const title of titles) {
+    const unitBytes = title.fileTitle ? jsonBytes(title.key) : 0;
+    // Move the key last so the other versions can still read its binding.
+    for (const key of [...(title.files ?? []), title.key]) {
+      const keyBytes = jsonBytes(key);
+      const entryBytes = keyBytes + 1 + (title.fileTitle ? keyBytes + unitBytes + 2 : 0);
+      if (items.length && (items.length >= SPLIT_MOVE_CHUNK || bytes + entryBytes > MAX_BODY_BYTES)) {
+        yield request();
+        items = [];
+        units = {};
+        bytes = emptyBytes;
+      }
+      items.push(key);
+      if (title.fileTitle) units[key] = title.key;
+      bytes += entryBytes;
+    }
   }
-  return units;
-}
-
-export function chunkKeys(keys: string[], size = SPLIT_MOVE_CHUNK): string[][] {
-  const chunks: string[][] = [];
-  for (let i = 0; i < keys.length; i += size) chunks.push(keys.slice(i, i + size));
-  return chunks;
+  if (items.length) yield request();
 }
 
 export function leftCount(

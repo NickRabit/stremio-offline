@@ -141,6 +141,21 @@ test("a loose film moved out of a collection keeps no identity the library never
   });
 });
 
+test("moving two unidentified versions leaves both without the collection's match", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, libA, { Arrival: record("tt-arrival") });
+    await seed(dataDir, libB, {});
+    await store.load();
+    const unit = `${libA}/Arrival/Heat (1995) 1080p.mkv`;
+    for (const name of ["Heat (1995).mkv", "Heat (1995) 1080p.mkv"]) {
+      await store.relocate(`${libA}/Arrival/${name}`, `${libB}/${name}`, true, "replace", unit);
+    }
+    await store.flush();
+    assert.equal(knownTitleOf("Heat (1995).mkv", store.meta(libB)), undefined);
+    assert.equal(knownTitleOf("Heat (1995) 1080p.mkv", store.meta(libB)), undefined);
+  });
+});
+
 test("both versions of a film beside another film arrive with the film's own match", async () => {
   await withStore(async (store, dataDir) => {
     // A collection folder bound to one film holds two versions of another; the match the
