@@ -1,4 +1,5 @@
 import type { UIEvent } from "react";
+import { toCssPx } from "./ui-scale";
 
 /**
  * Folds a listing header away once the list has been deliberately pushed down, and brings it
@@ -40,7 +41,7 @@ export function createCompactOnScroll(blocked: () => boolean = () => false) {
       : revealOnPull && travel < -Math.max(120, element.clientHeight * 0.18) ? false
       : compact;
     const header = element.closest(".detail-panel")?.querySelector(".hero");
-    const headerHeight = header?.getBoundingClientRect().height ?? 200;
+    const headerHeight = header ? toCssPx(header.getBoundingClientRect().height) : 200;
     const canHide = element.scrollHeight - element.clientHeight > headerHeight + 32;
     if (held) {
       window.clearTimeout(idle);

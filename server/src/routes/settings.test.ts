@@ -465,13 +465,14 @@ test("the next-episode and segment choices survive a settings backup round trip"
   await api(source.base, "/api/settings", {
     method: "PATCH",
     user: "ada",
-    body: { upNextAt: "sec120", skipSegmentsAuto: true },
+    body: { upNextAt: "sec120", skipSegmentsAuto: true, hideSpoilers: true },
   });
   const backup = await (await api(source.base, "/api/settings/export", { user: "ada" })).json() as {
-    settings: { upNextAt: string; skipSegmentsAuto: boolean };
+    settings: { upNextAt: string; skipSegmentsAuto: boolean; hideSpoilers: boolean };
   };
   assert.equal(backup.settings.upNextAt, "sec120");
   assert.equal(backup.settings.skipSegmentsAuto, true);
+  assert.equal(backup.settings.hideSpoilers, true);
 
   const target = await mount();
   t.after(target.close);
@@ -484,6 +485,48 @@ test("the next-episode and segment choices survive a settings backup round trip"
   assert.equal(restored.status, 200);
   assert.equal(target.state.userData?.[ADA]?.prefs.upNextAt, "sec120");
   assert.equal(target.state.userData?.[ADA]?.prefs.skipSegmentsAuto, true);
+  assert.equal(target.state.userData?.[ADA]?.prefs.hideSpoilers, true);
+});
+
+test("GET /api/settings defaults hideSpoilers to false and a patch stays with the caller", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const before = await (await api(harness.base, "/api/settings", { user: "carol" })).json() as { hideSpoilers: boolean };
+  assert.equal(before.hideSpoilers, false);
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: { hideSpoilers: true },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.hideSpoilers, true);
+  assert.equal(harness.state.userData?.[BOB]?.prefs.hideSpoilers, false);
+  const body = await response.json() as { hideSpoilers: boolean };
+  assert.equal(body.hideSpoilers, true);
+  const bob = await (await api(harness.base, "/api/settings", { user: "bob" })).json() as { hideSpoilers: boolean };
+  assert.equal(bob.hideSpoilers, false);
+});
+
+test("PATCH /api/settings stores a truthy hideSpoilers value as a boolean", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: { hideSpoilers: "yes" },
+  });
+
+  assert.equal(response.status, 200);
+  const stored = harness.state.userData?.[CAROL]?.prefs.hideSpoilers;
+  assert.equal(typeof stored, "boolean");
+  assert.equal(stored, true);
+  const body = await response.json() as { hideSpoilers: unknown };
+  assert.equal(typeof body.hideSpoilers, "boolean");
+  assert.equal(body.hideSpoilers, true);
 });
 
 test("PATCH /api/settings sends an instance key to the instance and a personal key to the caller", async (t) => {

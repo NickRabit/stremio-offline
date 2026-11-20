@@ -10,6 +10,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { toCssPx } from "./ui-scale";
 
 /** The least reach ahead of the scroll panel. A tall panel reaches one panel height ahead, so the
  *  reach follows the space the grid has rather than a fixed count; a short one, as on a phone,
@@ -27,8 +28,8 @@ export function scrollingAncestor(element: Element | null): Element | null {
 }
 
 export function artworkAhead(root: Element | null): string {
-  const vertical = Math.max(ARTWORK_AHEAD_MIN_PX, root ? root.clientHeight : window.innerHeight);
-  const horizontal = Math.max(ARTWORK_AHEAD_MIN_PX / 2, Math.round((root ? root.clientWidth : window.innerWidth) / 2));
+  const vertical = Math.max(ARTWORK_AHEAD_MIN_PX, root ? root.clientHeight : toCssPx(window.innerHeight));
+  const horizontal = Math.max(ARTWORK_AHEAD_MIN_PX / 2, Math.round((root ? root.clientWidth : toCssPx(window.innerWidth)) / 2));
   return `${vertical}px ${horizontal}px`;
 }
 

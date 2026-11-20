@@ -5,6 +5,7 @@ import { api } from "./api";
 import { Avatar } from "./Avatar";
 import { t } from "./i18n";
 import type { ProfileEntry, Session } from "./types";
+import { toCssPx } from "./ui-scale";
 
 export function AccountMenu({ session, onSwitchTo, onChangeAvatar, onSettings, onSignOut }: {
   session: Session;
@@ -25,7 +26,10 @@ export function AccountMenu({ session, onSwitchTo, onChangeAvatar, onSettings, o
     const place = () => {
       const box = trigger.current?.getBoundingClientRect();
       if (!box) return;
-      setPosition({ top: box.bottom + 8, right: Math.max(8, window.innerWidth - box.right) });
+      setPosition({
+        top: toCssPx(box.bottom + 8),
+        right: toCssPx(Math.max(8, window.innerWidth - box.right)),
+      });
     };
     place();
     window.addEventListener("resize", place);

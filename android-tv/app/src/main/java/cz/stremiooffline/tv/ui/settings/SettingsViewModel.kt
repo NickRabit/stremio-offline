@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.settings
 
+import cz.stremiooffline.tv.ui.detail.SpoilerSetting
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -30,6 +31,7 @@ data class SettingsState(
   val startView: String? = null,
   val upNextAt: String? = null,
   val skipSegmentsAuto: Boolean = false,
+  val hideSpoilers: Boolean = false,
   val serverVersion: String? = null,
   /** The last write that failed; the screen shows it and the row already holds the old value. */
   val error: ApiFailure? = null,
@@ -129,6 +131,7 @@ class SettingsViewModel(
         startView = settings?.startView,
         upNextAt = settings?.upNextAt,
         skipSegmentsAuto = settings?.skipSegmentsAuto ?: false,
+        hideSpoilers = (settings?.hideSpoilers ?: false).also { if (settings != null) SpoilerSetting.lastKnown = it },
         serverVersion = version,
       )
     }
@@ -382,6 +385,21 @@ class SettingsViewModel(
         state = state.copy(skipSegmentsAuto = answer.skipSegmentsAuto)
       } catch (error: ApiError) {
         state = state.copy(skipSegmentsAuto = before, error = error.failure)
+      }
+    }
+  }
+
+  fun toggleHideSpoilers() {
+    val before = state.hideSpoilers
+    val next = !before
+    state = state.copy(hideSpoilers = next, error = null)
+    viewModelScope.launch {
+      try {
+        val answer = api.updateSettingFlag("hideSpoilers", next)
+        state = state.copy(hideSpoilers = answer.hideSpoilers)
+        SpoilerSetting.lastKnown = answer.hideSpoilers
+      } catch (error: ApiError) {
+        state = state.copy(hideSpoilers = before, error = error.failure)
       }
     }
   }

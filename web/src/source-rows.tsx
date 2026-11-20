@@ -1,6 +1,7 @@
 import { Check, HardDrive } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef } from "react";
 import { t, useI18n } from "./i18n";
+import { toCssPx } from "./ui-scale";
 import { label } from "./languages";
 import { audioFactsText } from "./release-audio";
 import { sourceRowKey } from "./library-detail-sources";
@@ -140,7 +141,7 @@ export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf,
     if (!list || shownKey === null) return;
     const row = [...list.children].find((node) => (node as HTMLElement).dataset.rowKey === shownKey) as HTMLElement | undefined;
     if (!row) return;
-    const top = row.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+    const top = toCssPx(row.getBoundingClientRect().top - list.getBoundingClientRect().top) + list.scrollTop;
     if (top < list.scrollTop || top + row.offsetHeight > list.scrollTop + list.clientHeight) {
       // Marked while it lands, so a listing that folds its header on scroll leaves it alone.
       list.dataset.autoScroll = "1";

@@ -38,7 +38,7 @@ metadata store, or scheduler for each platform.
 | Proposed | Trakt and Simkl | Send what was watched, read the watchlist and history, so people coming from Stremio or Nuvio bring theirs along. See [Trakt and Simkl](#trakt-and-simkl). |
 | Proposed | Notifications | A new episode, a finished or failed download and a full disk reach the household through ntfy, Telegram or browser push. Extends the queue's completion notice. See [Notifications](#notifications). |
 | Proposed | Player extras on the web | Picture in picture, playback speed, dialogue boost and loudness levelling, and a bitrate cap for viewers outside the home network. See [Player extras](#player-extras). |
-| Proposed | Player and interface polish | Progressive seeking on Android TV, an estimated finish time, spoiler-safe next-episode previews, and adjustable web/desktop interface scale. See [Player and interface polish](#player-and-interface-polish). |
+| Implemented | Player and interface polish | The finish time in the player on the web, desktop and Android TV; seeking on the TV that grows while a direction is held (taps stay 10 s); an account setting on the TV that blurs the stills of unwatched episodes; and a per-device interface size of 100 to 150 % on the web and desktop. See [Player and interface polish](#player-and-interface-polish). |
 | Proposed | Collections and shared lists | Film series from TMDB and hand-made lists an account can share with others in the household. See [Collections and lists](#collections-and-lists). |
 | Proposed | Library metadata in NFO files | Read and write `.nfo` files beside the media, so a library survives a reinstall and agrees with Jellyfin or Emby on the same NAS. See [NFO files](#nfo-files). |
 | Proposed | More ratings | Rotten Tomatoes, Metacritic and Letterboxd beside IMDb and TMDB, through MDBList with a key in Settings → Services. |
@@ -534,22 +534,24 @@ the account may not see.
 
 ### Player and interface polish
 
-Ideas from Stremio's [Android TV update](https://blog.stremio.com/stremio-tech-update-79-stremio-android-tv-android-mobile-updated/)
-and [web/desktop update](https://blog.stremio.com/stremio-tech-update-85-stremio-desktop-and-stremio-web-update/).
-These are independent usability improvements, not a new delivery stage:
+Shipped, after ideas from Stremio's Android TV and web/desktop updates:
 
-- **Progressive seeking on Android TV:** increase the seek step while a remote
-  direction is held, so a long jump takes fewer presses without making a short
-  correction imprecise. Keep the existing seek recovery behavior.
-- **Estimated finish time:** show when the current film or episode will end,
-  based on its remaining duration; update it after seeks and pauses, and account
-  for playback speed if that control is added.
-- **Spoiler-safe Up next:** hide or blur the next episode's thumbnail until that
-  episode is watched. Use the current account's watched state, including when
-  the next episode comes from a different source.
-- **Adjustable interface scale on web and desktop:** let an account enlarge the
-  interface for viewing from a distance. First verify the need on the target
-  screens, then check dialogs, navigation and player controls at each scale.
+- **Progressive seeking on Android TV:** a held Left/Right (or the media keys)
+  takes 10, 30, 60 and then 120-second steps. The hold is measured from the key
+  going down, so separate taps stay ten seconds each. One debounced seek per
+  burst, with the existing seek recovery.
+- **Finish time:** "Ends at 21:50" while the controls are up, from the shown
+  position and the live clock; it follows seeks and moves on while paused.
+  There is no playback-speed control yet; if one is added, divide the
+  remaining time by the speed.
+- **Spoiler-free episodes:** *Blur unwatched episode images* in the TV
+  settings, stored with the account. Episodes neither finished nor started show
+  their still tiny, dimmed and (Android 12+) blurred. The web shows no episode
+  stills, so it has no switch. The Up next card shows no image on any client.
+- **Interface size on the web and desktop:** *Settings → Appearance → Interface
+  size*, 100 to 150 %, per device. A window smaller than 1024x640 layout pixels
+  at the chosen size gets as much as fits and says so. See
+  [UI conventions](ui-conventions.md) for the coordinate rule it imposes.
 
 ### Collections and lists
 

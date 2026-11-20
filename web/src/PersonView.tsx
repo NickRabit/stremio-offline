@@ -5,6 +5,7 @@ import { ShapeToggle } from "./app-chrome";
 import { t, useI18n } from "./i18n";
 import { SearchTile } from "./SearchEverywhere";
 import { Heading, hideBroken } from "./settings-ui";
+import { uiScale } from "./ui-scale";
 import type { PersonFilmography, PersonTitle, TileShape } from "./types";
 
 const PAGE = 40;
@@ -88,7 +89,7 @@ export function PersonView({ person, language, shape, initialScroll, fromTitle, 
     const apply = () => {
       const node = pageRef.current;
       if (node) node.scrollTop = initialScroll;
-      window.scrollTo(0, initialScroll);
+      window.scrollTo(0, initialScroll * uiScale());
     };
     apply();
     const handle = requestAnimationFrame(apply);

@@ -207,6 +207,7 @@
   <string name="player_skip_outro">Passer le générique</string>
   <string name="player_up_next">SUIVANT</string>
   <string name="player_up_next_countdown">Démarre dans %1$s s</string>
+  <string name="player_ends_at">Se termine à %1$s</string>
   <string name="player_play_now">Jouez maintenant</string>
   <string name="player_next_episode">Épisode suivant</string>
   <string name="diag_title">Diagnostic</string>
@@ -262,6 +263,7 @@
   <string name="tv_off">Désactivé</string>
   <string name="tv_chapters_button">Chapitres</string>
   <string name="tv_skip_segments_auto">Ignorer automatiquement l’introduction et le récapitulatif</string>
+  <string name="tv_hide_spoilers">Flouter les images des épisodes non vus</string>
   <string name="tv_back_to_source">Revenir à la source précédente</string>
   <string name="library_mosaic_alt">Mosaïque d\'affiches de %1$s films</string>
   <string name="library_show_in_library">Afficher dans la bibliothèque</string>

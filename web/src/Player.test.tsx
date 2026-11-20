@@ -1212,6 +1212,59 @@ describe("Player chapters, segments and next episode", () => {
     expect(video.currentTime).toBe(1800);
   });
 
+  it("shows when the film ends and moves the finish time with the clock while paused", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date(2026, 10, 19, 21, 0));
+    try {
+      const value = props();
+      await act(async () => {
+        root.render(<ChildModeProvider child={false} catalogue><Player {...value}/></ChildModeProvider>);
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+      const video = host.querySelector<HTMLVideoElement>("video")!;
+      await act(async () => {
+        video.currentTime = 600;
+        video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+      });
+      expect(host.querySelector(".player-ends-at")?.textContent).toBe("Ends at 21:50");
+
+      await act(async () => { vi.advanceTimersByTime(60_000); });
+      expect(host.querySelector(".player-ends-at")?.textContent).toBe("Ends at 21:51");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the finish time steady while playback moves within a minute", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date(2026, 10, 19, 21, 0));
+    try {
+      const value = props();
+      await act(async () => {
+        root.render(<ChildModeProvider child={false} catalogue><Player {...value}/></ChildModeProvider>);
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+      const video = host.querySelector<HTMLVideoElement>("video")!;
+      await act(async () => {
+        video.currentTime = 600;
+        video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+      });
+      expect(host.querySelector(".player-ends-at")?.textContent).toBe("Ends at 21:50");
+
+      // 50 s later the film is 50 s further on: the end has not moved.
+      vi.setSystemTime(new Date(2026, 10, 19, 21, 0, 50));
+      await act(async () => {
+        video.currentTime = 650;
+        video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+      });
+      expect(host.querySelector(".player-ends-at")?.textContent).toBe("Ends at 21:50");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("hides chapter UI when the session has fewer than two chapters", async () => {
     sessionShape = { chapters: [{ start: 0, end: 3600, title: "Only" }] };
     await render();

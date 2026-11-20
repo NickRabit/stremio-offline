@@ -207,6 +207,7 @@
   <string name="player_skip_outro">Salta titoli di coda</string>
   <string name="player_up_next">AVANTI AVANTI</string>
   <string name="player_up_next_countdown">Inizia tra %1$s secondi</string>
+  <string name="player_ends_at">Finisce alle %1$s</string>
   <string name="player_play_now">Gioca ora</string>
   <string name="player_next_episode">Prossimo episodio</string>
   <string name="diag_title">Diagnostica</string>
@@ -262,6 +263,7 @@
   <string name="tv_off">Disattivo</string>
   <string name="tv_chapters_button">Capitoli</string>
   <string name="tv_skip_segments_auto">Salta automaticamente introduzione e riepilogo</string>
+  <string name="tv_hide_spoilers">Sfoca le immagini degli episodi non visti</string>
   <string name="tv_back_to_source">Torna alla sorgente precedente</string>
   <string name="library_mosaic_alt">Mosaico di poster di %1$s film</string>
   <string name="library_show_in_library">Mostra in biblioteca</string>

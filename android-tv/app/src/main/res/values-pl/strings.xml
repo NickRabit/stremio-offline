@@ -211,6 +211,7 @@
   <string name="player_skip_outro">Pomiń napisy końcowe</string>
   <string name="player_up_next">DALEJ</string>
   <string name="player_up_next_countdown">Rozpoczyna się za %1$s s</string>
+  <string name="player_ends_at">Koniec o %1$s</string>
   <string name="player_play_now">Zagraj teraz</string>
   <string name="player_next_episode">Następny odcinek</string>
   <string name="diag_title">Diagnostyka</string>
@@ -266,6 +267,7 @@
   <string name="tv_off">Wyłączone</string>
   <string name="tv_chapters_button">Rozdziały</string>
   <string name="tv_skip_segments_auto">Automatycznie pomijaj intro i streszczenie</string>
+  <string name="tv_hide_spoilers">Rozmyj miniatury nieobejrzanych odcinków</string>
   <string name="tv_back_to_source">Wróć do poprzedniego źródła</string>
   <string name="library_mosaic_alt">Mozaika plakatowa z %1$s filmów</string>
   <string name="library_show_in_library">Pokaż w bibliotece</string>

@@ -7,6 +7,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
@@ -18,6 +19,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.ui.FakeTvApi
 import org.junit.Assert.assertEquals
@@ -97,5 +99,37 @@ class SettingsPlaybackSettingsTest {
     assertEquals(choice.left.value, switchValue.left.value, 0.5f)
     // No empty note line pushes the label above the value it belongs to.
     assertEquals((switchLabel.top.value + switchLabel.bottom.value) / 2, (switchValue.top.value + switchValue.bottom.value) / 2, 1.5f)
+  }
+
+  @Test
+  fun `the hide spoilers row follows skip and OK writes the flag`() {
+    val api = FakeTvApi()
+    mount(api)
+    compose.onNodeWithTag(TagSettingsRowSkipSegments).requestFocus()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(TagSettingsRowHideSpoilers).assertIsFocused()
+    compose.onNodeWithTag(TagSettingsRowHideSpoilers).assertTextContains("Blur unwatched episode images", substring = true)
+    compose.onNodeWithTag(TagSettingsRowHideSpoilers).assertTextContains("Off", substring = true)
+
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf("hideSpoilers" to true), api.settingFlagPatches)
+    compose.onNodeWithTag(TagSettingsRowHideSpoilers).assertTextContains("On", substring = true)
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagSettingsRowSkipSegments).assertIsFocused()
+  }
+
+  @Test
+  fun `a failed hide spoilers save rolls the row back`() {
+    val api = FakeTvApi()
+    api.settingsFailure = ApiFailure.Forbidden
+    mount(api)
+    compose.onNodeWithTag(TagSettingsRowHideSpoilers).requestFocus()
+    compose.onNodeWithTag(TagSettingsRowHideSpoilers).assertTextContains("Off", substring = true)
+
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf("hideSpoilers" to true), api.settingFlagPatches)
+    compose.onNodeWithTag(TagSettingsRowHideSpoilers).assertTextContains("Off", substring = true)
   }
 }

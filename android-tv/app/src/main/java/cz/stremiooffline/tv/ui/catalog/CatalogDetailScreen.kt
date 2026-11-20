@@ -84,6 +84,7 @@ import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.detail.SavedPlaybackProgress
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.SeriesRows
+import cz.stremiooffline.tv.ui.detail.rememberHideSpoilers
 import cz.stremiooffline.tv.ui.detail.TitleExtraFacts
 import cz.stremiooffline.tv.ui.detail.TitleExtrasRows
 import cz.stremiooffline.tv.ui.detail.TitleExtrasState
@@ -1585,6 +1586,7 @@ fun CatalogDetailScreen(
           cardCompleted = if (!args.backend.catalogue) {
             { video -> ownEpisodeCompleted(ui.episodeProgress, video.id) }
           } else null,
+          hideSpoilers = rememberHideSpoilers(api, args.meta.id),
         )
       }
       if (access.extras) {

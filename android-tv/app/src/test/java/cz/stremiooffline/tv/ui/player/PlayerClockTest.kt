@@ -17,6 +17,8 @@ import androidx.compose.ui.test.onRoot
 import androidx.test.core.app.ApplicationProvider
 import java.util.TimeZone
 import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -80,8 +82,61 @@ class PlayerClockTest {
   }
 
   @Test
+  fun `the OSD shows the finish time under the clock`() {
+    mount(initiallyShown = true)
+    compose.onNodeWithTag(TAG_OSD_ENDS_AT).assertTextEquals("Ends at 21:22")
+
+    val clock = compose.onNodeWithTag(TAG_OSD_CLOCK).fetchSemanticsNode().boundsInRoot
+    val endsAt = compose.onNodeWithTag(TAG_OSD_ENDS_AT).fetchSemanticsNode().boundsInRoot
+    val root = compose.onRoot().fetchSemanticsNode().size
+    assert(endsAt.top >= clock.bottom) { "ends at y=${endsAt.top}, clock ends at y=${clock.bottom}" }
+    assert(endsAt.left > root.width / 2f) { "ends at x=${endsAt.left} of ${root.width}" }
+  }
+
+  @Test
+  fun `the finish time holds still while playback moves within a minute`() {
+    var wall = evening
+    val position = androidx.compose.runtime.mutableDoubleStateOf(100.0)
+    compose.setContent {
+      CompositionLocalProvider(LocalWallClock provides { wall }) {
+        PlayerEndsAt(position = position.doubleValue, duration = 1_000.0)
+      }
+    }
+    compose.onNodeWithTag(TAG_OSD_ENDS_AT).assertTextEquals("Ends at 21:22")
+    // 50 s later the film is 50 s further on: the end has not moved.
+    wall = evening + 50_000
+    position.doubleValue = 150.0
+    compose.onNodeWithTag(TAG_OSD_ENDS_AT).assertTextEquals("Ends at 21:22")
+  }
+
+  @Test
   fun `no clock while the controls are hidden`() {
     mount(initiallyShown = false)
     compose.onNodeWithTag(TAG_OSD_CLOCK).assertDoesNotExist()
+    compose.onNodeWithTag(TAG_OSD_ENDS_AT).assertDoesNotExist()
+  }
+
+  @Test
+  fun `the finish time adds the remaining duration`() {
+    assertEquals(11_000L, endsAt(1_000L, 10.0, 20.0))
+  }
+
+  @Test
+  fun `the finish time is absent at or past the end`() {
+    assertNull(endsAt(1_000L, 20.0, 20.0))
+    assertNull(endsAt(1_000L, 21.0, 20.0))
+    assertNull(endsAt(1_000L, Double.NaN, 20.0))
+  }
+
+  @Test
+  fun `the finish time is absent for an unknown duration`() {
+    assertNull(endsAt(1_000L, 10.0, 0.0))
+    assertNull(endsAt(1_000L, 10.0, Double.NaN))
+    assertNull(endsAt(1_000L, 10.0, Double.POSITIVE_INFINITY))
+  }
+
+  @Test
+  fun `the finish time clamps a negative position to the start`() {
+    assertEquals(21_000L, endsAt(1_000L, -5.0, 20.0))
   }
 }

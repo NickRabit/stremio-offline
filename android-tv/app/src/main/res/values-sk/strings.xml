@@ -211,6 +211,7 @@
   <string name="player_skip_outro">Preskočiť titulky</string>
   <string name="player_up_next">ĎALEJ HORE</string>
   <string name="player_up_next_countdown">Začína o %1$s s</string>
+  <string name="player_ends_at">Skončí o %1$s</string>
   <string name="player_play_now">Hrajte teraz</string>
   <string name="player_next_episode">Ďalšia epizóda</string>
   <string name="diag_title">Diagnostika</string>
@@ -266,6 +267,7 @@
   <string name="tv_off">Vypnuté</string>
   <string name="tv_chapters_button">Kapitoly</string>
   <string name="tv_skip_segments_auto">Automaticky preskakovať úvod a rekapituláciu</string>
+  <string name="tv_hide_spoilers">Rozmazať náhľady nepozretých dielov</string>
   <string name="tv_back_to_source">Späť na predchádzajúci zdroj</string>
   <string name="library_mosaic_alt">Plagátová mozaika z %1$s filmov</string>
   <string name="library_show_in_library">Zobraziť v knižnici</string>

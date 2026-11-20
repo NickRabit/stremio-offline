@@ -1,3 +1,5 @@
+import { toCssPx } from "./ui-scale";
+
 export type ScrollSnapshot = {
   windowY: number;
   elements: Array<{ node: Element; top: number }>;
@@ -24,5 +26,5 @@ export function restoreScroll(snapshot: ScrollSnapshot): void {
 }
 
 export function snapshotScrollTop(snapshot: ScrollSnapshot): number {
-  return snapshot.elements[0]?.top ?? snapshot.windowY;
+  return snapshot.elements[0]?.top ?? toCssPx(snapshot.windowY);
 }

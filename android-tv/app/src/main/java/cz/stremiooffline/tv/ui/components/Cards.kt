@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.components
 
+import android.os.Build
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
@@ -46,6 +48,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -58,10 +61,22 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import coil3.PlatformContext
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
+import coil3.size.Precision
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
+
+/**
+ * A hidden still loads at a tiny exact size, so Android before 12, which has no blur, still shows
+ * nothing readable. The exact precision keeps Coil from answering with a sharp copy of the same
+ * still that its memory cache kept from a card shown before spoilers were hidden.
+ */
+internal fun spoilerStillRequest(context: PlatformContext, data: Any): ImageRequest =
+  ImageRequest.Builder(context).data(data).size(24, 14).precision(Precision.EXACT).build()
 
 /** The icon a card without artwork shows in place of its picture. */
 const val TagCardPlaceholder = "card_placeholder"
@@ -292,6 +307,8 @@ internal fun libraryRootArtPhases(composedMosaic: String?, posters: List<String>
 
 fun libraryRootCountTag(cardTag: String): String = "library_count_$cardTag"
 
+val SpoilerHiddenKey = SemanticsPropertyKey<Boolean>("SpoilerHidden")
+
 /** A 190x107 wide card for one file of a title, with its episode label and watch state. */
 @Composable
 fun WideCard(
@@ -306,6 +323,8 @@ fun WideCard(
   fallbackImageUrl: String? = null,
   /** The episode the detail stands for: outlined even while focus is elsewhere. */
   selected: Boolean = false,
+  /** The still is loaded tiny and dimmed: this episode has not been watched. */
+  spoilerHidden: Boolean = false,
 ) {
   var focused by remember { mutableStateOf(false) }
   val candidates = remember(imageUrl, fallbackImageUrl) { listOfNotNull(imageUrl, fallbackImageUrl).distinct() }
@@ -335,17 +354,27 @@ fun WideCard(
         Modifier
           .fillMaxSize()
           .clip(shape)
-          .background(Brush.verticalGradient(listOf(Tokens.Panel2, Tokens.Bg))),
+          .background(Brush.verticalGradient(listOf(Tokens.Panel2, Tokens.Bg)))
+          .then(if (spoilerHidden) Modifier.semantics { this[SpoilerHiddenKey] = true } else Modifier),
       ) {
         if (art != null) {
           AsyncImage(
-            model = art,
+            model = if (spoilerHidden) {
+              spoilerStillRequest(LocalPlatformContext.current, art)
+            } else {
+              art
+            },
             contentDescription = null,
             imageLoader = sessionImageLoader(),
             contentScale = ContentScale.Crop,
             onError = { artIndex += 1 },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().then(
+              if (spoilerHidden && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Modifier.blur(10.dp) else Modifier,
+            ),
           )
+        }
+        if (spoilerHidden) {
+          Box(Modifier.fillMaxSize().background(Tokens.Bg.copy(alpha = 0.35f)))
         }
         // Without a still an icon holds the place; the label is already under the card.
         if (art == null) {

@@ -207,6 +207,7 @@
   <string name="player_skip_outro">Abspann überspringen</string>
   <string name="player_up_next">NÄCHSTES</string>
   <string name="player_up_next_countdown">Beginnt in %1$ss</string>
+  <string name="player_ends_at">Endet um %1$s</string>
   <string name="player_play_now">Jetzt spielen</string>
   <string name="player_next_episode">Nächste Folge</string>
   <string name="diag_title">Diagnose</string>
@@ -262,6 +263,7 @@
   <string name="tv_off">Aus</string>
   <string name="tv_chapters_button">Kapitel</string>
   <string name="tv_skip_segments_auto">Intro und Rückblick automatisch überspringen</string>
+  <string name="tv_hide_spoilers">Vorschaubilder ungesehener Folgen verwischen</string>
   <string name="tv_back_to_source">Zurück zur vorherigen Quelle</string>
   <string name="library_mosaic_alt">Postermosaik aus %1$s Filmen</string>
   <string name="library_show_in_library">In der Bibliothek anzeigen</string>

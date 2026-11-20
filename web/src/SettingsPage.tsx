@@ -17,6 +17,7 @@ import { SourceSortOptions } from "./source-rows";
 import { UserManager } from "./UserManager";
 import { resolveStreamSort } from "./streams";
 import { DOWNLOAD_SPEED_LIMITS } from "../../server/src/byte-rate";
+import { UI_SCALES, useUiScale, writeUiScale, type UiScale } from "./ui-scale";
 
 export function TmdbSettings({ configured, onSave, onError, restricted = false }: { configured: boolean; onSave: (patch: SettingsPatch) => Promise<void>; onError: (error: unknown) => void; restricted?: boolean }) {
   const [apiKey, setApiKey] = useState("");
@@ -181,6 +182,8 @@ function DownloadWindowSettings({ settings, restricted, onSave }: { settings: Ap
 
 export function SettingsPage({ build, restricted = false, settings, search, onSearch, languages, libraries = [], session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError, sourceProfiles, onSourceProfilesChanged }: { onSourceProfilesChanged?: () => void; build: BuildInfo | null; restricted?: boolean; settings: AppSettings; search: SearchState | null; onSearch: (state: SearchState) => void; languages: Array<{ code: string; name: string }>; libraries?: LibraryView[]; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void; sourceProfiles: SourceProfile[] | null }) {
   const { t, locale, setLocale } = useI18n();
+  const { chosen: chosenUiScale, effective: effectiveUiScaleValue } = useUiScale();
+  const uiScalePercent = new Intl.NumberFormat(localeTag(), { style: "percent" });
   // An ordinary user decides only what is personal, and the panels the instance owns are
   // not rendered for one at all -- a disabled control still says what the instance runs.
   // `restricted` is a separate axis: it is the demo mode, and it takes the controls away
@@ -363,7 +366,21 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
             <option value="catalog">{t("nav.catalog")}</option><option value="home">{t("nav.home")}</option><option value="library">{t("nav.library")}</option>
           </select>
         </SettingControl>
-        <SettingControl title={t("settings.tileSize")} text={t("settings.tileSizeHint")}><select aria-label={t("settings.tileSize")} disabled={restricted} value={settings.tileSize} onChange={(event) => void onSave({ tileSize: event.target.value as AppSettings["tileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.catalogShape")} text={t("settings.catalogShapeHint")}><select aria-label={t("settings.catalogShape")} disabled={restricted} value={settings.catalogTileShape} onChange={(event) => void onSave({ catalogTileShape: event.target.value as AppSettings["catalogTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.libraryShape")} text={t("settings.libraryShapeHint")}><select aria-label={t("settings.libraryShape")} disabled={restricted} value={settings.libraryTileShape} onChange={(event) => void onSave({ libraryTileShape: event.target.value as AppSettings["libraryTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl></section>
+        <SettingControl title={t("settings.tileSize")} text={t("settings.tileSizeHint")}><select aria-label={t("settings.tileSize")} disabled={restricted} value={settings.tileSize} onChange={(event) => void onSave({ tileSize: event.target.value as AppSettings["tileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl>
+        <SettingControl title={t("settings.uiScale")} text={t("settings.uiScaleHint")}>
+          <div className="ui-scale-setting">
+            <select aria-label={t("settings.uiScale")} value={chosenUiScale} onChange={(event) => writeUiScale(Number(event.target.value) as UiScale, event.currentTarget)}>
+              {UI_SCALES.map((scale) => {
+                const percent = uiScalePercent.format(scale);
+                return <option key={scale} value={scale}>{scale === 1 ? t("settings.uiScaleStandard", { percent }) : percent}</option>;
+              })}
+            </select>
+            {effectiveUiScaleValue < chosenUiScale && <small className="setting-note" role="status">
+              {t("settings.uiScaleLimited", { percent: uiScalePercent.format(effectiveUiScaleValue) })}
+            </small>}
+          </div>
+        </SettingControl>
+        <SettingControl title={t("settings.catalogShape")} text={t("settings.catalogShapeHint")}><select aria-label={t("settings.catalogShape")} disabled={restricted} value={settings.catalogTileShape} onChange={(event) => void onSave({ catalogTileShape: event.target.value as AppSettings["catalogTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.libraryShape")} text={t("settings.libraryShapeHint")}><select aria-label={t("settings.libraryShape")} disabled={restricted} value={settings.libraryTileShape} onChange={(event) => void onSave({ libraryTileShape: event.target.value as AppSettings["libraryTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl></section>
       <SearchSettings state={search} onState={onSearch} onNotify={onNotify} onError={onError}/>
       </>}
       {tab === "account" && <>

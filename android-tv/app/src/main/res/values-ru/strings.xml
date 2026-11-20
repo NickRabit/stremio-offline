@@ -211,6 +211,7 @@
   <string name="player_skip_outro">Пропустить титры</string>
   <string name="player_up_next">СЛЕДУЮЩИЙ</string>
   <string name="player_up_next_countdown">Начнется через %1$s с.</string>
+  <string name="player_ends_at">Закончится в %1$s</string>
   <string name="player_play_now">Играть сейчас</string>
   <string name="player_next_episode">Следующий выпуск</string>
   <string name="diag_title">Диагностика</string>
@@ -266,6 +267,7 @@
   <string name="tv_off">Выключено</string>
   <string name="tv_chapters_button">Главы</string>
   <string name="tv_skip_segments_auto">Автоматически пропускать вступление и краткий обзор</string>
+  <string name="tv_hide_spoilers">Размывать кадры непросмотренных серий</string>
   <string name="tv_back_to_source">Вернуться к предыдущему источнику</string>
   <string name="library_mosaic_alt">Постерная мозаика из %1$s фильмов</string>
   <string name="library_show_in_library">Показать в библиотеке</string>
