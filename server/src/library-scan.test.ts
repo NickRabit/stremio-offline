@@ -262,6 +262,77 @@ test("the scan pauses while busy and resumes when clear", async () => {
   } finally { await h.close(); }
 });
 
+test("a run held back by a library operation lists the titles again once it may work", async () => {
+  // A move renames the title while the run waits: the queue it listed before the pause names a
+  // folder that is gone, and only a fresh listing finds the title where the move put it.
+  let units = [movie("lib_aaaaaaaa/Before")];
+  const h = await harness({
+    units: async () => units,
+    pathExists: async (key) => units.some((unit) => unit.key === key),
+  });
+  try {
+    h.setBusy("operation");
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "paused");
+    units = [movie("lib_aaaaaaaa/After")];
+    h.setBusy(undefined);
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.store.meta["lib_aaaaaaaa/After"]?.id, "tt1", "the title is matched where the move put it");
+    assert.equal(h.store.meta["lib_aaaaaaaa/Before"], undefined);
+    assert.equal(h.scan.snapshot().matched, 1);
+    assert.equal(h.scan.snapshot().total, 1, "the moved title replaces the one that left, it does not add to it");
+    assert.deepEqual(h.backdrops, ["lib_aaaaaaaa/After"], "the wide variant is asked for the title where it is now");
+  } finally { await h.close(); }
+});
+
+test("a run that pauses after a pass keeps the titles it already did and adds only new ones", async () => {
+  let units = [movie("lib_aaaaaaaa/Alpha"), movie("lib_aaaaaaaa/Beta")];
+  let h!: Awaited<ReturnType<typeof harness>>;
+  let held = false;
+  h = await harness({
+    units: async () => units,
+    pathExists: async (key) => units.some((unit) => unit.key === key),
+    search: async (query) => [hit(query, `tt-${query}`)],
+    // An operation takes its hold while the first title's metadata is fetched.
+    metadata: async (_addons, type, id) => {
+      if (!held) { held = true; h.setBusy("operation"); }
+      return { ...hit(id.slice(3), id), type };
+    },
+  });
+  try {
+    await h.scan.start({ force: true });
+    await waitFor(() => h.scan.snapshot().status === "paused");
+    units = [...units, movie("lib_aaaaaaaa/Gamma")];
+    h.setBusy(undefined);
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual([...h.searches].sort(), ["Alpha", "Beta", "Gamma"], "a title the run did is not asked again");
+    assert.ok(h.store.meta["lib_aaaaaaaa/Gamma"], "a title that appeared during the pause is part of the run");
+    assert.equal(h.scan.snapshot().total, 3);
+    assert.equal(h.scan.snapshot().matched, 3);
+  } finally { await h.close(); }
+});
+
+test("artwork of a match found while a library operation started is saved once the operation ends", async () => {
+  let h!: Awaited<ReturnType<typeof harness>>;
+  h = await harness({
+    // The operation takes its hold while the catalogue answers.
+    metadata: async (_addons, _type, id) => { h.setBusy("operation"); return hit("Foo", id); },
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "paused");
+    assert.deepEqual(h.posters, [], "nothing is written while the operation works");
+    assert.equal(h.store.meta.Foo?.id, "tt1");
+    h.setBusy(undefined);
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.deleted, ["Foo"]);
+    assert.deepEqual(h.posters, ["Foo"], "the poster of the match is saved after the pause");
+    assert.equal(h.scan.snapshot().matched, 1);
+    const accepted = h.scan.snapshot().diagnostics?.filter((entry) => entry.decision === "accepted") ?? [];
+    assert.equal(accepted.length, 1, "the match is recorded once");
+  } finally { await h.close(); }
+});
+
 test("a second run of an already-matched library has nothing to do", async () => {
   const h = await harness();
   try {

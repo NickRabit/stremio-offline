@@ -49,6 +49,9 @@ export interface ScanState {
   libraryIds?: string[];
   /** Set when the run rechecks existing automatic bindings instead of looking for new ones. */
   recheck?: boolean;
+  /** Set when the run ignores the memory of earlier fruitless searches. Kept so a listing
+   *  taken again after a pause queues what the first one would have. */
+  force?: boolean;
   /** What the run decided, split the way the review list reads it. */
   accepted?: number;
   proposed?: number;
@@ -183,6 +186,11 @@ function votesOf(item: MetaItem): number {
   return typeof item.voteCount === "number" && Number.isFinite(item.voteCount) ? item.voteCount : 0;
 }
 
+/** What a run covers, as `start` was asked. */
+interface RunScope {
+  force?: boolean; scope?: string; libraryId?: string; automatic?: boolean; libraryIds: string[]; recheck?: boolean;
+}
+
 export class LibraryScan {
   private state: ScanState = idle();
   private units = new Map<string, TitleUnit>();
@@ -192,6 +200,8 @@ export class LibraryScan {
   private readonly refreshing = new Set<string>();
   /** Keys whose turn re-reads an automatic binding and may propose a correction. */
   private readonly rechecking = new Set<string>();
+  /** Matches already written whose artwork waits for a library operation to finish. */
+  private readonly artworkDue = new Map<string, { poster?: string; background?: string; candidate?: LibraryCandidate; kind: TitleKind }>();
   private readonly stateFile: string;
   private readonly gapMs: number;
   private readonly wakeMs: number;
@@ -293,48 +303,16 @@ export class LibraryScan {
     this.units = new Map(units.map((unit) => [unit.key, unit]));
     this.refreshing.clear();
     this.rechecking.clear();
+    this.artworkDue.clear();
     this.cancelled = false;
-    const browsed = this.opts.browsed?.() ?? new Set<string>();
-    const records = this.opts.libraryMeta();
-    const suggestions = this.opts.librarySuggestions();
-    const automaticIds = new Set(libraryIds);
-    const inRun = (unit: TitleUnit) => {
-      if (automatic && !automaticIds.has(parseLibraryPath(unit.key)?.libraryId ?? "")) return false;
-      if (libraryId && !isPathWithin(unit.key, libraryId)) return false;
-      if (!scope) return true;
-      return isPathWithin(unit.key, scope) || isPathWithin(scope, unit.key);
-    };
-    const wanted = units.filter(inRun);
-    // Asking for one item is a deliberate act, so it ignores the searched-in-vain memory.
-    const again = force || Boolean(scope);
-    const queued = wanted.filter((unit) => {
-      if (lookupSkipped(unit.key, records)) return false;
-      if (recheck) return recheckable(records[unit.key]);
-      if (scanSkipReason(records[unit.key]) || knownTitleForUnit(unit, records)?.id) return false;
-      // A row the current rules have not seen is reconsidered once, so a rule change
-      // does not need a full rescan on every startup.
-      return again || !scannedRecently(suggestions[unit.key]) || needsReevaluation(suggestions[unit.key]);
-    });
-    const refreshing = this.metaTtlMs > 0 && !scope && !recheck
-      ? wanted.filter((unit) => {
-        // The binding has to sit on the item itself: an inherited one belongs to the
-        // folder above, which is refreshed on its own turn when it holds videos.
-        const record = records[unit.key];
-        const owner = parseLibraryPath(unit.key)?.libraryId;
-        return Boolean(record?.id && owner && browsed.has(owner) && needsRefresh(record, this.metaTtlMs));
-      })
-      : [];
-    const pending = queued.map((unit) => unit.key);
-    // A refresh for a title that is also queued for a first match would ask twice.
-    for (const unit of refreshing) {
-      if (pending.includes(unit.key)) continue;
-      this.refreshing.add(unit.key);
-      pending.push(unit.key);
-    }
+    const run: RunScope = { force, scope, libraryId, automatic, libraryIds, recheck };
+    const { wanted, queued, refreshing } = this.listRun(units, run);
+    const pending = this.claim(queued, refreshing, recheck);
     // Only fill wide art for titles this run will actually search or refresh. A rule upgrade
     // must not queue artwork across an entire library just because it walks the tree.
     this.eagerWide = pending.slice();
-    if (recheck) for (const unit of queued) this.rechecking.add(unit.key);
+    // Asking for one item is a deliberate act, so it ignores the searched-in-vain memory.
+    const again = force || Boolean(scope);
     // A recheck keeps the binding and the suggestion it already has: what it adds is a
     // correction beside them, never a proposal that replaced them before anybody looked.
     if (again && !recheck) await this.opts.updateMeta((_meta, current) => { for (const unit of wanted) delete current[unit.key]; });
@@ -353,11 +331,93 @@ export class LibraryScan {
       ...(libraryId ? { libraryId } : {}),
       ...(automatic ? { automatic: true, libraryIds: [...libraryIds] } : {}),
       ...(recheck ? { recheck: true } : {}),
+      ...(force ? { force: true } : {}),
     };
     await this.save();
-    log("INFO", "Library scan started", { total: pending.length, titles: units.length, force, refresh: refreshing.length, ...(scope ? { path: scope } : {}), ...(libraryId ? { libraryId } : {}), ...(automatic ? { automatic: true, libraries: libraryIds } : {}), ...(recheck ? { recheck: true } : {}) });
+    log("INFO", "Library scan started", { total: pending.length, titles: units.length, force, refresh: this.refreshing.size, ...(scope ? { path: scope } : {}), ...(libraryId ? { libraryId } : {}), ...(automatic ? { automatic: true, libraries: libraryIds } : {}), ...(recheck ? { recheck: true } : {}) });
     this.schedulePump();
     return this.snapshot();
+  }
+
+  /** Which titles a run covers, which of them it searches and which it refreshes. */
+  private listRun(units: TitleUnit[], run: RunScope) {
+    const browsed = this.opts.browsed?.() ?? new Set<string>();
+    const records = this.opts.libraryMeta();
+    const suggestions = this.opts.librarySuggestions();
+    const automaticIds = new Set(run.libraryIds);
+    const inRun = (unit: TitleUnit) => {
+      if (run.automatic && !automaticIds.has(parseLibraryPath(unit.key)?.libraryId ?? "")) return false;
+      if (run.libraryId && !isPathWithin(unit.key, run.libraryId)) return false;
+      if (!run.scope) return true;
+      return isPathWithin(unit.key, run.scope) || isPathWithin(run.scope, unit.key);
+    };
+    const wanted = units.filter(inRun);
+    const again = run.force || Boolean(run.scope);
+    const queued = wanted.filter((unit) => {
+      if (lookupSkipped(unit.key, records)) return false;
+      if (run.recheck) return recheckable(records[unit.key]);
+      if (scanSkipReason(records[unit.key]) || knownTitleForUnit(unit, records)?.id) return false;
+      // A row the current rules have not seen is reconsidered once, so a rule change
+      // does not need a full rescan on every startup.
+      return again || !scannedRecently(suggestions[unit.key]) || needsReevaluation(suggestions[unit.key]);
+    });
+    const refreshing = this.metaTtlMs > 0 && !run.scope && !run.recheck
+      ? wanted.filter((unit) => {
+        // The binding has to sit on the item itself: an inherited one belongs to the
+        // folder above, which is refreshed on its own turn when it holds videos.
+        const record = records[unit.key];
+        const owner = parseLibraryPath(unit.key)?.libraryId;
+        return Boolean(record?.id && owner && browsed.has(owner) && needsRefresh(record, this.metaTtlMs));
+      })
+      : [];
+    return { wanted, queued, refreshing };
+  }
+
+  /** The keys of a listing in the order the run takes them, marking the refreshes and the
+   *  rechecks among them. */
+  private claim(queued: TitleUnit[], refreshing: TitleUnit[], recheck: boolean | undefined): string[] {
+    const pending = queued.map((unit) => unit.key);
+    const listed = new Set(pending);
+    // A refresh for a title that is also queued for a first match would ask twice.
+    for (const unit of refreshing) {
+      if (listed.has(unit.key)) continue;
+      this.refreshing.add(unit.key);
+      listed.add(unit.key);
+      pending.push(unit.key);
+    }
+    if (recheck) for (const unit of queued) this.rechecking.add(unit.key);
+    return pending;
+  }
+
+  /** A pause usually means something wrote to a library -- a move, a rename, a download that
+   *  landed -- so the titles listed before it may have left or arrived under other names.
+   *  The walk is taken again: titles that are gone leave the queue, and titles that were not
+   *  there before join it when the run would have queued them. A title already listed is not
+   *  queued again, so nothing the run did is asked twice. */
+  private async relist() {
+    const before = this.units;
+    const units = await this.opts.units();
+    this.units = new Map(units.map((unit) => [unit.key, unit]));
+    const run: RunScope = {
+      force: this.state.force, scope: this.state.scope, libraryId: this.state.libraryId,
+      automatic: this.state.automatic, libraryIds: this.state.libraryIds ?? [], recheck: this.state.recheck,
+    };
+    const { queued, refreshing } = this.listRun(units, run);
+    const arrived = (unit: TitleUnit) => !before.has(unit.key);
+    const added = this.claim(queued.filter(arrived), refreshing.filter(arrived), run.recheck);
+    // A match whose artwork is still owed stays at the front: it is bound now, so no listing
+    // queues it again, and the turn that saves the artwork is the one that counts it.
+    const stays = (key: string) => this.units.has(key) || this.artworkDue.has(key);
+    const kept = this.state.remaining.filter(stays);
+    const gone = this.state.remaining.filter((key) => !stays(key));
+    for (const key of gone) { this.refreshing.delete(key); this.rechecking.delete(key); }
+    const searched = (key: string) => !this.refreshing.has(key);
+    this.state.total += added.filter(searched).length - gone.filter(searched).length;
+    this.state.remaining = [...kept, ...added];
+    this.state.current = this.state.remaining[0];
+    // Wide variants not asked for yet follow the titles: none for a folder that is gone.
+    this.eagerWide = [...this.eagerWide.filter(stays), ...added];
+    if (added.length || gone.length) log("INFO", "Library scan relisted after a pause", { added: added.length, gone: gone.length });
   }
 
   async stop() {
@@ -392,6 +452,9 @@ export class LibraryScan {
           continue;
         }
         if (this.state.status === "paused") {
+          await this.relist();
+          // The walk takes a while: whatever started meanwhile pauses the run again first.
+          if (this.opts.busy()) continue;
           this.state.status = "running";
           delete this.state.pauseReason;
           await this.save();
@@ -427,6 +490,13 @@ export class LibraryScan {
   private async processUnit(key: string) {
     let addonCall = false;
     try {
+      if (this.artworkDue.has(key)) {
+        // The match is written already; only its pictures were held back.
+        if (!await this.pathExists(key)) this.artworkDue.delete(key);
+        else if (!await this.saveArtwork(key)) { delete this.state.current; return; }
+        await this.finishUnit("matched");
+        return;
+      }
       // The library may have been switched off while this run was queued, or while the
       // server was down. Its item is dropped without a catalogue call; the run moves on.
       if (this.state.automatic && !this.opts.automaticLibraryEnabled(parseLibraryPath(key)?.libraryId ?? "")) {
@@ -505,21 +575,17 @@ export class LibraryScan {
           await this.finishUnit("skipped");
           return;
         }
-        if (!this.opts.busy()) {
-          await this.opts.deleteGeneratedArt(key);
-          this.opts.savePoster(key, record.poster, record.background);
-          // Alternate artwork is one request about the title just bound, never about a
-          // candidate that was merely searched for.
-          const gallery = identified.accept.candidate
-            ? await this.opts.candidates.galleryOf(identified.accept.candidate, unit.kind, this.language())
-            : [];
-          if (gallery.length) this.opts.saveGallery?.(key, gallery);
-        }
         log("DEBUG", "Library title matched", {
           key, type: item.type, id: item.id, source: "scan",
           ...(identified.accept.evidence ? { evidence: identified.accept.evidence } : {}),
         });
         this.note("accepted", key, { kind: unit.kind, ...identified.diagnostic, candidateId: item.id });
+        this.artworkDue.set(key, {
+          poster: record.poster, background: record.background, candidate: identified.accept.candidate, kind: unit.kind,
+        });
+        // An operation that started while the catalogue answered may be moving this very title:
+        // the pictures wait for it, and the item stays queued until they are saved.
+        if (!await this.saveArtwork(key)) { delete this.state.current; return; }
         await this.finishUnit("matched");
         return;
       }
@@ -535,6 +601,21 @@ export class LibraryScan {
     } finally {
       if (addonCall && this.gapMs) await sleep(this.gapMs);
     }
+  }
+
+  /** Saves the pictures of a match, or answers false while a library operation runs. */
+  private async saveArtwork(key: string): Promise<boolean> {
+    const due = this.artworkDue.get(key);
+    if (!due) return true;
+    if (this.opts.busy()) return false;
+    this.artworkDue.delete(key);
+    await this.opts.deleteGeneratedArt(key);
+    this.opts.savePoster(key, due.poster, due.background);
+    // Alternate artwork is one request about the title just bound, never about a
+    // candidate that was merely searched for.
+    const gallery = due.candidate ? await this.opts.candidates.galleryOf(due.candidate, due.kind, this.language()) : [];
+    if (gallery.length) this.opts.saveGallery?.(key, gallery);
+    return true;
   }
 
   private finishUnit(kind: "matched" | "skipped" | "failed") {
