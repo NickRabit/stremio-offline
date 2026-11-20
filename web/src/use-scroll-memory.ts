@@ -6,6 +6,13 @@ export type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
 /** What a list is looking at, in terms the layout cannot invalidate: the item on top and
  *  how far it sits into the view. A rotation rewrites every pixel offset; this survives. */
 type ViewAnchor = PlaybackAnchor & { offset: number };
+export function firstVisibleAnchor(kind: PlaybackAnchor["kind"], scroller: HTMLElement | null) {
+  const top = scroller?.getBoundingClientRect().top ?? 0;
+  const first = Array.from((scroller ?? document).querySelectorAll<HTMLElement>(kind === "catalog" ? "[data-catalog-key]" : "[data-path]"))
+    .find((element) => element.getClientRects().length > 0 && element.getBoundingClientRect().bottom > top + 1);
+  const key = kind === "catalog" ? first?.dataset.catalogKey : first?.dataset.path;
+  return first && key ? { kind, key, offset: first.getBoundingClientRect().top - top } : null;
+}
 type PlaybackReturn = {
   view: View;
   windowY: number;
@@ -57,6 +64,9 @@ export function useScrollMemory(options: ScrollMemoryOptions): ScrollMemory {
   const scrollerOf = (kind?: PlaybackAnchor["kind"]) =>
     kind === "catalog" ? gridRef.current : kind === "library" ? browseScrollRef.current : null;
   const capturePlaybackReturn = (anchor?: PlaybackAnchor): PlaybackReturn => {
+    // A switch of source or file inside an open player is not a new place to return to: the
+    // list under the player may already be laid out for another orientation and clamped.
+    if (playerOpenRef.current && playbackReturn.current) return playbackReturn.current;
     const element = anchor && findPlaybackAnchor(anchor);
     const scroller = scrollerOf(anchor?.kind);
     const viewportTop = scroller?.getBoundingClientRect().top ?? 0;
@@ -79,11 +89,7 @@ export function useScrollMemory(options: ScrollMemoryOptions): ScrollMemory {
     const kind = anchorKind();
     if (!kind) return;
     const scroller = anchorScroller();
-    const top = scroller?.getBoundingClientRect().top ?? 0;
-    const first = Array.from(document.querySelectorAll<HTMLElement>(kind === "catalog" ? "[data-catalog-key]" : "[data-path]"))
-      .find((element) => element.getClientRects().length > 0 && element.getBoundingClientRect().bottom > top + 1);
-    const key = kind === "catalog" ? first?.dataset.catalogKey : first?.dataset.path;
-    viewAnchor.current = first && key ? { kind, key, offset: first.getBoundingClientRect().top - top } : null;
+    viewAnchor.current = firstVisibleAnchor(kind, scroller);
   };
   const scheduleViewAnchor = () => {
     if (anchorFrame.current) return;
