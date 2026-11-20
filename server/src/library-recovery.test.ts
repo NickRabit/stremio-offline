@@ -97,3 +97,28 @@ test("a replaced file is not mistaken for the original on a volume that renumber
     }
   });
 });
+
+test("a same-size file written back with the old date is told apart by its contents", async () => {
+  await withFilm(async (root, folder) => {
+    const volume = renumberingVolume(VIRTIOFS);
+    try {
+      const film = path.join(folder, "heat.mkv");
+      // A date in the past: APFS then pulls the birth time back to it, as a copy that keeps
+      // dates does, so birth time, mtime and size all match after the replacement.
+      const when = new Date("2020-01-01T00:00:00Z");
+      await writeFile(film, "AAAA");
+      await utimes(film, when, when);
+      const sourceIdentity = await captureTransferIdentity(folder);
+      const target = path.join(root, "Old", "Heat (1995)");
+      await rename(folder, target);
+      const moved = path.join(target, "heat.mkv");
+      await writeFile(moved, "BBBB");
+      await utimes(moved, when, when);
+      volume.renumber();
+      await assert.rejects(reconcileTransfer({ phase: "published", sourceIdentity, publishedIdentity: sourceIdentity },
+        folder, target, root, root), { messageKey: "err.libraryRecoveryConflict" });
+    } finally {
+      volume.restore();
+    }
+  });
+});

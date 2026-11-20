@@ -1,7 +1,7 @@
 import type { BigIntStats } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { lstat, readdir, stat, statfs } from "node:fs/promises";
+import { lstat, open, readdir, stat, statfs } from "node:fs/promises";
 import { AppError } from "./errors.js";
 
 export const recoveryConflict = () => new AppError(
@@ -17,7 +17,27 @@ const validIdentity = (value: unknown): value is string =>
 // (Docker Desktop's bind mounts are virtiofs; sshfs, rclone and mergerfs are FUSE).
 const UNSTABLE_INODE_FILESYSTEMS = new Set([0x6a656a63, 0x65735546]);
 
-const identityFs = { lstat, readdir, statfs, platform: process.platform as string };
+const identityFs = { lstat, readdir, statfs, open, platform: process.platform as string };
+
+// Without the inode number, a different file of the same size whose dates were copied over
+// (APFS pulls the birth time back to an earlier mtime) would look like the original. A digest
+// of its two ends tells contents apart without reading whole films.
+const SAMPLE_BYTES = 64 * 1024;
+
+async function contentSample(file: string, size: bigint): Promise<string> {
+  const handle = await identityFs.open(file, "r");
+  try {
+    const length = Number(size);
+    const head = Buffer.alloc(Math.min(SAMPLE_BYTES, length));
+    await handle.read(head, 0, head.length, 0);
+    const tailLength = Math.min(SAMPLE_BYTES, Math.max(0, length - head.length));
+    const tail = Buffer.alloc(tailLength);
+    if (tailLength) await handle.read(tail, 0, tailLength, length - tailLength);
+    return createHash("sha256").update(head).update(tail).digest("hex");
+  } finally {
+    await handle.close();
+  }
+}
 
 /** Swaps the filesystem calls the identity is built from, so a test can renumber inodes. */
 export function setIdentityFsForTests(fs: Partial<typeof identityFs>): () => void {
@@ -46,6 +66,9 @@ async function objectIdentity(target: string, rootInfo: BigIntStats): Promise<st
     }
     hash.update(JSON.stringify([relative, info.isDirectory(), String(info.dev), keepsInode ? String(info.ino) : "",
       String(info.birthtimeNs), String(info.mtimeNs), String(info.size)]));
+    // Only where the inode is left out, so identities on volumes that keep it are byte-identical
+    // to the ones older builds journaled.
+    if (!keepsInode && info.isFile()) hash.update(await contentSample(path.join(target, relative), info.size));
     if (info.isDirectory()) {
       const directory = path.join(target, relative);
       for (const name of (await identityFs.readdir(directory)).sort()) {

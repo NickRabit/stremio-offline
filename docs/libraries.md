@@ -126,7 +126,9 @@ Some volumes hand out new inode numbers for an object that has not changed:
 Docker Desktop's bind mounts (virtiofs) and FUSE mounts such as sshfs or rclone.
 On Linux, the server leaves the inode number out of the identity on those
 volumes and relies on the birth time instead, which a replaced file or folder
-does not keep. Other volumes, including the NAS's own disks and macOS, keep the
+does not keep, plus a digest of the first and last 64 KiB of each file, so a
+different file of the same size written back with the old dates is still told
+apart. Other volumes, including the NAS's own disks and macOS, keep the
 inode number in the identity. An operation interrupted on such a volume before
 this change cannot be verified and stays pending.
 
