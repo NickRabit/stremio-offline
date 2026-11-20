@@ -122,6 +122,16 @@ video contents. A copy also records the completed staging object's identity befo
 publishing it. On restart, the server checks the source and destination against
 the saved operation before it updates matches, favourites, progress or artwork.
 
+Some volumes hand out new inode numbers for an object that has not changed:
+Docker Desktop's bind mounts (virtiofs) and FUSE mounts such as sshfs or rclone.
+On Linux, the server leaves the inode number out of the identity on those
+volumes and relies on the birth time instead, which a replaced file or folder
+does not keep, plus a digest of the first and last 64 KiB of each file, so a
+different file of the same size written back with the old dates is still told
+apart. Other volumes, including the NAS's own disks and macOS, keep the
+inode number in the identity. An operation interrupted on such a volume before
+this change cannot be verified and stays pending.
+
 If recovery reports a conflict, the batch stops at that item. This can happen
 when a file was replaced, the NAS cannot supply a stable identity, or an older
 server wrote the interrupted operation. Check both locations and the operation

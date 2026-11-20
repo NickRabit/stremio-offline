@@ -1,7 +1,7 @@
 import type { BigIntStats } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { lstat, readdir, stat } from "node:fs/promises";
+import { lstat, open, readdir, stat, statfs } from "node:fs/promises";
 import { AppError } from "./errors.js";
 
 export const recoveryConflict = () => new AppError(
@@ -12,18 +12,67 @@ export const recoveryConflict = () => new AppError(
 const validIdentity = (value: unknown): value is string =>
   typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 
+// statfs(2) magic numbers of Linux filesystems whose daemon hands out inode numbers
+// from its own table and may hand out a new one once the kernel forgets the old one
+// (Docker Desktop's bind mounts are virtiofs; sshfs, rclone and mergerfs are FUSE).
+const UNSTABLE_INODE_FILESYSTEMS = new Set([0x6a656a63, 0x65735546]);
+
+const identityFs = { lstat, readdir, statfs, open, platform: process.platform as string };
+
+// Without the inode number, a different file of the same size whose dates were copied over
+// (APFS pulls the birth time back to an earlier mtime) would look like the original. A digest
+// of its two ends tells contents apart without reading whole films.
+const SAMPLE_BYTES = 64 * 1024;
+
+async function contentSample(file: string, size: bigint): Promise<string> {
+  const handle = await identityFs.open(file, "r");
+  try {
+    const length = Number(size);
+    const head = Buffer.alloc(Math.min(SAMPLE_BYTES, length));
+    await handle.read(head, 0, head.length, 0);
+    const tailLength = Math.min(SAMPLE_BYTES, Math.max(0, length - head.length));
+    const tail = Buffer.alloc(tailLength);
+    if (tailLength) await handle.read(tail, 0, tailLength, length - tailLength);
+    return createHash("sha256").update(head).update(tail).digest("hex");
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Swaps the filesystem calls the identity is built from, so a test can renumber inodes. */
+export function setIdentityFsForTests(fs: Partial<typeof identityFs>): () => void {
+  const previous = { ...identityFs };
+  Object.assign(identityFs, fs);
+  return () => { Object.assign(identityFs, previous); };
+}
+
+async function stableInodes(target: string): Promise<boolean> {
+  if (identityFs.platform !== "linux") return true;
+  return !UNSTABLE_INODE_FILESYSTEMS.has(Number((await identityFs.statfs(target)).type));
+}
+
 // Relative names survive a rename. Replacing an episode inside a season leaves its
 // grandparent's timestamps intact, so a directory proof includes each descendant.
+// Where the volume renumbers inodes, the birth time is what tells a replacement apart.
 async function objectIdentity(target: string, rootInfo: BigIntStats): Promise<string> {
   const hash = createHash("sha256");
+  const stable = new Map<bigint, boolean>();
   async function visit(relative: string, info: BigIntStats): Promise<boolean> {
     if (info.dev <= 0n || info.ino <= 0n || info.birthtimeNs <= 0n || !(info.isDirectory() || info.isFile())) return false;
-    hash.update(JSON.stringify([relative, info.isDirectory(), String(info.dev), String(info.ino),
+    let keepsInode = stable.get(info.dev);
+    if (keepsInode === undefined) {
+      keepsInode = await stableInodes(path.join(target, relative));
+      stable.set(info.dev, keepsInode);
+    }
+    hash.update(JSON.stringify([relative, info.isDirectory(), String(info.dev), keepsInode ? String(info.ino) : "",
       String(info.birthtimeNs), String(info.mtimeNs), String(info.size)]));
+    // Only where the inode is left out, so identities on volumes that keep it are byte-identical
+    // to the ones older builds journaled.
+    if (!keepsInode && info.isFile()) hash.update(await contentSample(path.join(target, relative), info.size));
     if (info.isDirectory()) {
       const directory = path.join(target, relative);
-      for (const name of (await readdir(directory)).sort()) {
-        const child = await lstat(path.join(directory, name), { bigint: true });
+      for (const name of (await identityFs.readdir(directory)).sort()) {
+        const child = await identityFs.lstat(path.join(directory, name), { bigint: true });
         if (!await visit(path.join(relative, name), child)) return false;
       }
     }
@@ -35,11 +84,11 @@ async function objectIdentity(target: string, rootInfo: BigIntStats): Promise<st
 }
 
 export async function captureTransferIdentity(target: string): Promise<string> {
-  return objectIdentity(target, await lstat(target, { bigint: true }));
+  return objectIdentity(target, await identityFs.lstat(target, { bigint: true }));
 }
 
 async function probe(target: string): Promise<string | undefined> {
-  const info = await lstat(target, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+  const info = await identityFs.lstat(target, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw recoveryConflict();
   });
