@@ -63,6 +63,9 @@ export function useScrollMemory(options: ScrollMemoryOptions): ScrollMemory {
   const scrollerOf = (kind?: PlaybackAnchor["kind"]) =>
     kind === "catalog" ? gridRef.current : kind === "library" ? browseScrollRef.current : null;
   const capturePlaybackReturn = (anchor?: PlaybackAnchor): PlaybackReturn => {
+    // A switch of source or file inside an open player is not a new place to return to: the
+    // list under the player may already be laid out for another orientation and clamped.
+    if (playerOpenRef.current && playbackReturn.current) return playbackReturn.current;
     const element = anchor && findPlaybackAnchor(anchor);
     const scroller = scrollerOf(anchor?.kind);
     const viewportTop = scroller?.getBoundingClientRect().top ?? 0;
