@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isPathWithin } from "./library.js";
 import { knownTitleOf, type LibraryMetaRecord, type TitleUnit } from "./library-match.js";
-import { isInside, libraryPath, parseLibraryPath, posixBase, sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
+import { isInside, libraryPath, parseLibraryPath, posixBase, relativeWithin, sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
 
 export type SplitKind = "movie" | "series" | "unknown";
 export type SplitBasis = "identified" | "guessed" | "none";
@@ -64,18 +64,19 @@ export interface SplitPlanInput {
 
 function splitKind(
   unit: TitleUnit,
+  relative: string,
   libraryType: LibraryType,
   records: Record<string, LibraryMetaRecord>,
 ): Pick<SplitPlanItem, "label" | "kind" | "basis"> {
   const record = knownTitleOf(unit.key, records);
   if (record?.id && !record.unmatched && (record.type === "movie" || record.type === "series")) {
     return {
-      label: record.name ? (record.year ? `${record.name} (${record.year})` : record.name) : posixBase(unit.relative),
+      label: record.name ? (record.year ? `${record.name} (${record.year})` : record.name) : posixBase(relative),
       kind: record.type,
       basis: "identified",
     };
   }
-  const label = posixBase(unit.relative);
+  const label = posixBase(relative);
   if (libraryType === "mixed" && unit.kind === "series") return { label, kind: "series", basis: "guessed" };
   if (libraryType === "movie" || libraryType === "series") return { label, kind: libraryType, basis: "guessed" };
   return { label, kind: "unknown", basis: "none" };
@@ -92,13 +93,16 @@ export function buildSplitPlan(input: SplitPlanInput): SplitPlan {
   const owned = units.filter((unit) => parseLibraryPath(unit.key)?.libraryId === library.id);
 
   const items: SplitPlanItem[] = owned.map((unit) => {
+    // The unit cache walks library-qualified files, so `unit.relative` is the qualified key as
+    // well; the path below the root is taken from the key.
+    const relative = relativeWithin(library.id, unit.key);
     const busy: SplitPlanItem["busy"] = downloadTargets.some((target) => isPathWithin(target, unit.key))
       ? "download"
       : operationBusy.has(unit.key) ? "operation" : undefined;
     return {
-      key: libraryPath(library.id, unit.relative),
-      relative: unit.relative,
-      ...splitKind(unit, library.type, records),
+      key: libraryPath(library.id, relative),
+      relative,
+      ...splitKind(unit, relative, library.type, records),
       ...(busy ? { busy } : {}),
     };
   }).sort((left, right) =>

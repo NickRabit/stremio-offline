@@ -15,8 +15,10 @@ const parent: LibraryRecord = {
   writeArtwork: false,
 };
 
+/** Shaped like the server's unit cache: `titleUnits` runs over library-qualified files, so the
+ *  unit's `relative` is the qualified key too, not the path below the root. */
 const unit = (id: string, relative: string, kind: TitleUnit["kind"] = "movie"): TitleUnit =>
-  ({ key: libraryPath(id, relative), relative, kind, sampleFiles: [libraryPath(id, relative)] });
+  ({ key: libraryPath(id, relative), relative: libraryPath(id, relative), kind, sampleFiles: [libraryPath(id, relative)] });
 
 const input = (overrides: Partial<SplitPlanInput> = {}): SplitPlanInput => ({
   library: parent,

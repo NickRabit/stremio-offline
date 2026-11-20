@@ -100,8 +100,8 @@ const mount = async (
   } as unknown as Store;
   const splitSource = records[0];
   const splitUnits: TitleUnit[] = splitSource ? [
-    { key: libraryPath(splitSource.id, "Downloads/Film.mkv"), relative: "Downloads/Film.mkv", kind: "movie", sampleFiles: [] },
-    { key: libraryPath(splitSource.id, "Shows/Show"), relative: "Shows/Show", kind: "series", sampleFiles: [] },
+    { key: libraryPath(splitSource.id, "Downloads/Film.mkv"), relative: libraryPath(splitSource.id, "Downloads/Film.mkv"), kind: "movie", sampleFiles: [] },
+    { key: libraryPath(splitSource.id, "Shows/Show"), relative: libraryPath(splitSource.id, "Shows/Show"), kind: "series", sampleFiles: [] },
   ] : [];
   const deps: LibrariesDeps = {
     store,
