@@ -16,7 +16,8 @@ export function readUiScale(): UiScale {
 }
 
 export function effectiveUiScale(chosen: number, width: number, height: number): number {
-  return Math.floor(Math.max(1, Math.min(chosen, width / 1024, height / 640)) * 100) / 100;
+  // Floored to whole percent, with a nudge so 1.15 (114.999... after * 100) stays 115.
+  return Math.floor(Math.max(1, Math.min(chosen, width / 1024, height / 640)) * 100 + 1e-6) / 100;
 }
 
 let currentChosen = readUiScale();
@@ -46,7 +47,11 @@ export function applyUiScale(): void {
   }
 }
 
-export function writeUiScale(scale: UiScale): void {
+/** Stores this device's choice and applies it. Given an anchor (the control that made the
+ *  change), the page scrolls so the anchor stays where it was on screen instead of the
+ *  document growing or shrinking away from it. */
+export function writeUiScale(scale: UiScale, anchor?: Element | null): void {
+  const before = anchor?.getBoundingClientRect().top;
   try {
     localStorage.setItem(STORAGE_KEY, String(scale));
   } catch {
@@ -54,6 +59,11 @@ export function writeUiScale(scale: UiScale): void {
   }
   applyUiScale();
   notify();
+  if (anchor && before !== undefined) {
+    // Both values are viewport pixels, the same space window scrolling uses.
+    const shift = anchor.getBoundingClientRect().top - before;
+    if (shift) window.scrollBy(0, shift);
+  }
 }
 
 export function uiScale(): number {

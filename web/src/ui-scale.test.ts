@@ -13,6 +13,9 @@ afterEach(() => {
 describe("interface scale", () => {
   it("limits the chosen scale to the space available", () => {
     expect(effectiveUiScale(1.5, 1920, 1080)).toBe(1.5);
+    // 1.15 * 100 is 114.99999999999999 in floating point; the floor must not eat the choice.
+    expect(effectiveUiScale(1.15, 1920, 1080)).toBe(1.15);
+    expect(effectiveUiScale(1.3, 1920, 1080)).toBe(1.3);
     expect(effectiveUiScale(1.5, 1280, 720)).toBe(1.12);
     expect(effectiveUiScale(1.3, 390, 844)).toBe(1);
     expect(effectiveUiScale(1, 3840, 2160)).toBe(1);
@@ -41,5 +44,22 @@ describe("interface scale", () => {
     writeUiScale(1);
     expect(document.documentElement.style.zoom).toBe("");
     expect(document.documentElement.style.getPropertyValue("--ui-scale")).toBe("");
+  });
+
+  it("keeps the control that changed the scale where it was on screen", () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1920);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(1080);
+    const scrollBy = vi.spyOn(window, "scrollBy").mockImplementation(() => {});
+    const anchor = document.createElement("select");
+    // The row sat 400 px down the screen; at 150 % the document grows and pushes it to 2515.
+    vi.spyOn(anchor, "getBoundingClientRect")
+      .mockReturnValueOnce({ top: 400 } as DOMRect)
+      .mockReturnValueOnce({ top: 2515 } as DOMRect);
+    writeUiScale(1.5, anchor);
+    expect(scrollBy).toHaveBeenCalledWith(0, 2115);
+
+    scrollBy.mockClear();
+    writeUiScale(1);
+    expect(scrollBy).not.toHaveBeenCalled();
   });
 });

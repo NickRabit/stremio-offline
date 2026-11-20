@@ -369,7 +369,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
         <SettingControl title={t("settings.tileSize")} text={t("settings.tileSizeHint")}><select aria-label={t("settings.tileSize")} disabled={restricted} value={settings.tileSize} onChange={(event) => void onSave({ tileSize: event.target.value as AppSettings["tileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl>
         <SettingControl title={t("settings.uiScale")} text={t("settings.uiScaleHint")}>
           <div className="ui-scale-setting">
-            <select aria-label={t("settings.uiScale")} value={chosenUiScale} onChange={(event) => writeUiScale(Number(event.target.value) as UiScale)}>
+            <select aria-label={t("settings.uiScale")} value={chosenUiScale} onChange={(event) => writeUiScale(Number(event.target.value) as UiScale, event.currentTarget)}>
               {UI_SCALES.map((scale) => {
                 const percent = uiScalePercent.format(scale);
                 return <option key={scale} value={scale}>{scale === 1 ? t("settings.uiScaleStandard", { percent }) : percent}</option>;

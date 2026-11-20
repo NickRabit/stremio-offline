@@ -41,6 +41,8 @@ test.describe("interface scale", () => {
     await expect(scale).toHaveValue("1");
     await scale.selectOption("1.5");
     await expect.poll(() => page.evaluate(() => document.documentElement.style.zoom)).toBe("1.5");
+    // The row the viewer just changed stays on screen while the page grows around it.
+    await expect(scale).toBeInViewport();
     await expect.poll(() => page.evaluate(() => localStorage.getItem("ui-scale"))).toBe("1.5");
 
     await page.reload();
