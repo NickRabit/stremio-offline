@@ -837,7 +837,7 @@ export type LibraryOp =
   | { op: "reroot"; items: string[]; libraryId: string; from: string; to: string }
   | { op: "rename"; items: string[]; names: Record<string, string> };
 export type RenameField = "title" | "year" | "season" | "episode";
-export type RenameStatus = "rename" | "same" | "unidentified" | "missing" | "invalid" | "collision" | "duplicate" | "chain" | "busy";
+export type RenameStatus = "rename" | "same" | "unidentified" | "missing" | "invalid" | "collision" | "duplicate" | "chain" | "busy" | "parts";
 export interface RenamePlanRow { key: string; from: string; to?: string; isFile: boolean; kind: "movie" | "episode" | "unknown"; status: RenameStatus; missing?: RenameField[]; sidecars: number }
 export interface LibraryOpsState {
   id: string; op: LibraryOp["op"];

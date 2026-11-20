@@ -1174,6 +1174,72 @@ test("POST /api/library/rename-plan follows the identification, not the folder's
   ]);
 });
 
+const posixName = (key: string) => key.slice(key.lastIndexOf("/") + 1);
+
+test("POST /api/library/rename-plan reads each episode file as the library does", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Shows/Dark/Dark.S01E01.mkv");
+  await put(root, "Shows/Dark/Dark.S01E02.mkv");
+  await put(root, "Shows/Dark/Dark.S01E03.mkv");
+  const files = ["Dark.S01E01.mkv", "Dark.S01E02.mkv", "Dark.S01E03.mkv"].map((name) => `lib_00000001/Shows/Dark/${name}`);
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    units: [{ key: "lib_00000001/Shows/Dark", kind: "series" as const, relative: "Shows/Dark", sampleFiles: files }],
+    records: {
+      "lib_00000001/Shows/Dark": { type: "series", id: "tt3", name: "Dark" },
+      // One file bound to a film, one unmatched on its own.
+      [files[0]!]: { type: "movie", id: "tt7", name: "Other Film", year: "2001" },
+      [files[1]!]: { type: "movie", id: "", unmatched: true },
+    },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+  const response = await api(harness.base, "/api/library/rename-plan", {
+    method: "POST",
+    body: { items: ["Shows/Dark"], moviePattern: "{title} ({year})", episodePattern: "{title} - S{season:2}E{episode:2}" },
+  });
+  const rows = (await response.json() as { rows: Array<{ key: string; to?: string; kind: string; status: string }> }).rows;
+  assert.deepEqual(rows.map((row) => [posixName(row.key), row.to, row.kind, row.status]), [
+    ["Dark.S01E01.mkv", "Other Film (2001).mkv", "movie", "rename"],
+    ["Dark.S01E02.mkv", undefined, "unknown", "unidentified"],
+    ["Dark.S01E03.mkv", "Dark - S01E03.mkv", "episode", "rename"],
+  ]);
+});
+
+test("POST /api/library/rename-plan refuses a film whose parts lie beside its key", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Loose/Alien.cd1.mkv");
+  await put(root, "Loose/Alien.cd2.mkv");
+  const parts = ["lib_00000001/Loose/Alien.cd1.mkv", "lib_00000001/Loose/Alien.cd2.mkv"];
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    units: [{ key: parts[0]!, kind: "movie" as const, relative: parts[0]!, sampleFiles: parts }],
+    records: { [parts[0]!]: { type: "movie", id: "tt1", name: "Alien", year: "1979" } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+  const response = await api(harness.base, "/api/library/rename-plan", {
+    method: "POST",
+    body: { items: ["Loose/Alien.cd1.mkv"], moviePattern: "{title} ({year})", episodePattern: "{title}" },
+  });
+  const rows = (await response.json() as { rows: Array<{ status: string }> }).rows;
+  assert.deepEqual(rows.map((row) => row.status), ["parts"]);
+});
+
+test("POST /api/library/rename-plan answers a folder that left the disk with the usual key", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Kept/keep.txt");
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    units: [{ key: "lib_00000001/Gone/Heat.mkv", kind: "movie" as const, relative: "lib_00000001/Gone/Heat.mkv", sampleFiles: ["lib_00000001/Gone/Heat.mkv"] }],
+    records: { "lib_00000001/Gone/Heat.mkv": { type: "movie", id: "tt1", name: "Heat", year: "1995" } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+  const response = await api(harness.base, "/api/library/rename-plan", {
+    method: "POST",
+    body: { items: ["lib_00000001"], moviePattern: "{title} ({year})", episodePattern: "{title}" },
+  });
+  assert.equal(response.status, 409);
+  const body = await response.json() as { messageKey?: string; error?: string };
+  assert.equal(body.messageKey, "err.pathMissing");
+  assert.ok(!body.error?.includes(root), "no host path in the answer");
+});
+
 test("POST /api/library/rename-plan refuses an invalid pattern with its catalogue key", async (t) => {
   const harness = await mount([library("lib_00000001", "/media/films")]);
   t.after(harness.close);

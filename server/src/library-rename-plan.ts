@@ -4,7 +4,7 @@ import { renamedSidecar } from "./library-sidecars.js";
 import { assertUsableName } from "./naming.js";
 
 export type RenameField = "title" | "year" | "season" | "episode";
-export type RenameStatus = "rename" | "same" | "unidentified" | "missing" | "invalid" | "collision" | "duplicate" | "chain" | "busy";
+export type RenameStatus = "rename" | "same" | "unidentified" | "missing" | "invalid" | "collision" | "duplicate" | "chain" | "busy" | "parts";
 
 export interface RenamePlanRow {
   key: string;
@@ -37,6 +37,9 @@ export interface RenameCandidate {
   isFile: boolean;
   kind: "movie" | "episode" | "unknown";
   fields: RenameFields;
+  /** A film keyed by its file whose title holds other files beside it (CD parts, versions):
+   *  renaming the key alone would split the set, so the row is refused. */
+  parts?: true;
 }
 
 export interface RenamePlanInput {
@@ -124,6 +127,7 @@ export function planRenames(input: RenamePlanInput): RenamePlanRow[] {
       sidecars: names.length,
     };
     if (candidate.kind === "unknown") return row;
+    if (candidate.parts) return { ...row, status: "parts" };
 
     const rendered = renderPattern(candidate.kind === "movie" ? input.moviePattern : input.episodePattern, candidate.fields);
     if (rendered.missing.length) return { ...row, status: "missing", missing: rendered.missing };

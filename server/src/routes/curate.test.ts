@@ -278,6 +278,17 @@ test("POST /api/library/ops carries the planned title of each moved file, and on
   assert.equal(harness.calls.enqueued.length, 1, "a refused plan never reaches the queue");
 });
 
+test("POST /api/library/ops refuses a rename whose extension is spelled otherwise than the file's", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/library/ops", {
+    method: "POST", body: { op: "rename", items: ["lib_a/Heat.MKV"], names: { "lib_a/Heat.MKV": "Heat (1995).mkv" } },
+  });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.invalidLibraryOperation");
+  assert.deepEqual(harness.calls.enqueued, []);
+});
+
 test("POST /api/library/ops refuses a malformed body before the queue sees it", async (t) => {
   const harness = await mount();
   t.after(harness.close);

@@ -2457,4 +2457,5 @@ export const it: Catalog = {
   "rename.tooMany": "La selezione contiene più di {max} titoli. Selezionane meno e rinomina il resto dopo.",
   "err.renamePlanConflict": "I nuovi nomi si scontrano tra loro o con un elemento selezionato. Ricarica l'anteprima.",
   "err.renamePatternInvalid": "Lo schema contiene un campo sconosciuto o una parentesi aperta.",
+  "rename.parts": "questo film è diviso in più file; rinominalo a mano",
 };

@@ -2527,4 +2527,5 @@ export const cs: Catalog = {
   "rename.tooMany": "Výběr obsahuje víc než {max} titulů. Vyberte méně a zbytek přejmenujte v dalším kole.",
   "err.renamePlanConflict": "Nová jména se střetávají navzájem nebo s vybranou položkou. Načtěte náhled znovu.",
   "err.renamePatternInvalid": "Vzor obsahuje neznámé pole nebo neuzavřenou závorku.",
+  "rename.parts": "film je rozdělený do více souborů; přejmenujte ho ručně",
 };

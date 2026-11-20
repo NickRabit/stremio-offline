@@ -2457,4 +2457,5 @@ export const de: Catalog = {
   "rename.tooMany": "Die Auswahl enthält mehr als {max} Titel. Wählen Sie weniger und benennen Sie den Rest danach um.",
   "err.renamePlanConflict": "Die neuen Namen kollidieren untereinander oder mit einem ausgewählten Eintrag. Laden Sie die Vorschau neu.",
   "err.renamePatternInvalid": "Das Muster enthält ein unbekanntes Feld oder eine offene Klammer.",
+  "rename.parts": "dieser Film besteht aus mehreren Dateien; benennen Sie ihn von Hand um",
 };

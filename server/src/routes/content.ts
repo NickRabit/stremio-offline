@@ -367,26 +367,28 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       // The identification decides, not the folder's shape: a series kept as one flat folder is
       // still renamed episode by episode, and a film the walk read as a series stays one item.
       if (identity.type !== "series") {
-        candidates.push({ key: unit.key, folder: posixDir(unit.key), name, isFile: isVideo(name), kind: "movie", fields: candidateFields(identity) });
+        const isFile = isVideo(name);
+        // A film keyed by one of its files holds its other parts or versions beside it; renaming
+        // the key alone would split the set (and drop a CD marker), so that row is refused.
+        const parts = isFile && unit.sampleFiles.some((file) => file !== unit.key && !isPathWithin(file, unit.key));
+        candidates.push({ key: unit.key, folder: posixDir(unit.key), name, isFile, kind: "movie", fields: candidateFields(identity), ...(parts ? { parts: true as const } : {}) });
         continue;
       }
-      candidates.push(...unit.sampleFiles
-        .filter(selectedContains)
-        .map((file) => {
-          const parsed = parseLibraryPath(file);
-          const numbers = episodeNumberOf(relativeWithin(parsed?.libraryId ?? "", file), ownRecord(file), { loose: true });
-          return {
-            key: file,
-            folder: posixDir(file),
-            name: posixBase(file),
-            isFile: true,
-            kind: "episode" as const,
-            fields: {
-              ...candidateFields(identity),
-              ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}),
-            },
-          };
-        }));
+      for (const file of unit.sampleFiles.filter(selectedContains)) {
+        // Each file is read as the library reads it: one bound to another title, or unmatched on
+        // its own, is not named after the series.
+        const own = knownTitleForUnit(unit, records, file);
+        const base = { key: file, folder: posixDir(file), name: posixBase(file), isFile: true };
+        if (!own) { candidates.push({ ...base, kind: "unknown", fields: {} }); continue; }
+        if (own.type !== "series") { candidates.push({ ...base, kind: "movie", fields: candidateFields(own) }); continue; }
+        const parsed = parseLibraryPath(file);
+        const numbers = episodeNumberOf(relativeWithin(parsed?.libraryId ?? "", file), ownRecord(file), { loose: true });
+        candidates.push({
+          ...base,
+          kind: "episode",
+          fields: { ...candidateFields(own), ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}) },
+        });
+      }
     }
     if (candidates.length > 2000) throw new AppError("A rename preview may hold at most 2000 titles.", "err.tooManyItems");
 
@@ -396,9 +398,12 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       const parsed = parseLibraryPath(folder);
       const library = parsed ? libraryFor(libraries, parsed.libraryId) : undefined;
       if (!library) return [folder, []];
-      const names = parsed?.relative
-        ? await readdir(path.join(library.root, toFs(parsed.relative)))
-        : await readdir(library.root);
+      // The walk can still list a folder that left the disk a moment ago: refuse with the usual
+      // answer rather than a raw error naming the host path.
+      const names = await readdir(parsed?.relative ? path.join(library.root, toFs(parsed.relative)) : library.root).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT" || error.code === "ENOTDIR") throw new AppError("The file or folder does not exist.", "err.pathMissing", 409);
+        throw error;
+      });
       return [folder, names];
     })));
     const sidecarNames = new Map<string, string[]>(await Promise.all(candidates.map(async (candidate): Promise<[string, string[]]> => {

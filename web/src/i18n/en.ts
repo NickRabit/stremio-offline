@@ -2520,4 +2520,5 @@ export const en = {
   "rename.tooMany": "The selection holds more than {max} titles. Select fewer and run it again for the rest.",
   "err.renamePlanConflict": "The new names collide with each other or with a selected item. Load the preview again.",
   "err.renamePatternInvalid": "The pattern names an unknown field or leaves a brace open.",
+  "rename.parts": "this film is split into several files; rename it by hand",
 };

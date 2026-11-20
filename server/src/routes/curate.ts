@@ -185,7 +185,9 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
         const value = proposed[item];
         if (typeof value !== "string" || !value || value.includes("/") || value.includes("\\")) throw invalid();
         const extension = isVideo(posixBase(item)) ? path.extname(item) : "";
-        if (extension && path.extname(value).toLowerCase() !== extension.toLowerCase()) throw invalid();
+        // Spelled exactly as the source spells it: the rename keeps the source's extension, and a
+        // destination recorded in another case would not name the file on a case-sensitive volume.
+        if (extension && path.extname(value) !== extension) throw invalid();
         const typed = extension ? value.slice(0, -extension.length) : value;
         try {
           names[item] = `${assertUsableName(typed)}${extension ? value.slice(value.length - extension.length) : ""}`;

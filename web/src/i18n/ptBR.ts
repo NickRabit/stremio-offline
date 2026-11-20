@@ -2457,4 +2457,5 @@ export const ptBR: Catalog = {
   "rename.tooMany": "A seleção tem mais de {max} títulos. Selecione menos e renomeie o resto depois.",
   "err.renamePlanConflict": "Os nomes novos colidem entre si ou com um item selecionado. Carregue a prévia de novo.",
   "err.renamePatternInvalid": "O padrão tem um campo desconhecido ou uma chave aberta.",
+  "rename.parts": "este filme está dividido em vários arquivos; renomeie à mão",
 };

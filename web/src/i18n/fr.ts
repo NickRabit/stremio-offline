@@ -2457,4 +2457,5 @@ export const fr: Catalog = {
   "rename.tooMany": "La sélection compte plus de {max} titres. Sélectionnez-en moins et renommez le reste ensuite.",
   "err.renamePlanConflict": "Les nouveaux noms entrent en conflit entre eux ou avec un élément sélectionné. Rechargez l'aperçu.",
   "err.renamePatternInvalid": "Le modèle contient un champ inconnu ou une accolade non fermée.",
+  "rename.parts": "ce film est réparti en plusieurs fichiers ; renommez-le à la main",
 };
