@@ -137,7 +137,11 @@ const streamsFor = (id, provider = MANIFEST.id) => id === TRAVEL_VIDEO_ID ? [{
   extra: { url: "https://unknown-canary.test/secret" },
 }] : proxyMode === "browser" ? [{ name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video.webm` }]
   : proxyMode === "leadcap" ? [{ name: "E2E lead cap", url: `http://127.0.0.1:${port}/leadcap-video.mkv` }]
-  : proxyMode === "browser-long" ? [{ name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video-long.webm` }] : [
+  : proxyMode === "browser-long" ? [{ name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video-long.webm` }]
+  : proxyMode === "browser-pair" ? [
+    { name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video-long.webm` },
+    { name: "E2E WebM copy", url: `http://127.0.0.1:${port}/browser-video-long.webm?copy=1` },
+  ] : [
   { name: provider === SECONDARY_PROVIDER ? "E2E secondary 1080p" : "E2E 1080p", title: `Czech \u{1F1E8}\u{1F1FF} 2.4 GB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4${provider === SECONDARY_PROVIDER ? "?provider=secondary" : ""}` },
   { name: provider === SECONDARY_PROVIDER ? "E2E secondary 720p" : "E2E 720p", title: `English \u{1F1EC}\u{1F1E7} 900 MB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4${provider === SECONDARY_PROVIDER ? "?provider=secondary" : ""}` },
 ];

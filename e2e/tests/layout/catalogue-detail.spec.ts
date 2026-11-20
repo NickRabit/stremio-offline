@@ -319,3 +319,40 @@ test("detail carousels keep their first item under the strip's start", async ({ 
     Array(await strips.count()).fill(0),
   );
 });
+
+test("rotating in a title detail preserves the catalogue row and the next page can be retried", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile", "starts in phone portrait");
+  let pageAttempts = 0;
+  await page.route("**/api/catalog?**", async (route) => {
+    const skip = new URL(route.request().url()).searchParams.get("skip");
+    if (skip && ++pageAttempts === 1) {
+      await route.fulfill({ status: 400, json: { error: "Outbound request timed out" } });
+      return;
+    }
+    const start = Number(skip);
+    await route.fulfill({ json: Array.from({ length: start === 0 ? 80 : start === 80 ? 1 : 0 }, (_, i) => ({
+      type: "movie", id: `tt-rotate-${start + i}`, name: `Film ${start + i}`,
+    })) });
+  });
+  await page.route("**/api/meta/movie/tt-rotate-*", (route) => route.fulfill({
+    json: { id: "tt-rotate-35", type: "movie", name: "Film 35" },
+  }));
+  await openCatalogue(page, /Filmy/);
+  const grid = page.locator(".poster-grid");
+  const card = grid.locator('[data-catalog-key="movie:tt-rotate-35"]');
+  await card.evaluate((node) => node.scrollIntoView({ block: "center" }));
+  await card.click();
+  await info(page).click();
+  const back = page.locator("main.view-title-detail .browse-head .library-back");
+  await expect(back).toBeVisible();
+  await page.setViewportSize({ width: 844, height: 390 });
+  await back.click();
+  await page.locator(".mobile-detail-head").getByRole("button", { name: "Výsledky" }).click();
+  await expect(card).toBeInViewport();
+  await grid.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  await expect.poll(() => pageAttempts).toBe(1);
+  const more = grid.getByRole("button", { name: "Zkusit znovu" });
+  await expect(more).toBeVisible();
+  await more.click();
+  await expect(grid.locator('[data-catalog-key="movie:tt-rotate-80"]')).toBeVisible();
+});

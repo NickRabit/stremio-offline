@@ -3596,6 +3596,23 @@ test("a GPU failure, then a success, then another failure leaves the accelerator
   assert.equal(manager.vaapiDevice, "/dev/dri/renderD128");
 });
 
+test("invalid media input preserves the accelerator for the next title", async () => {
+  const manager = new PlaybackManager(tmp("test-invalid-hardware-input")) as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  manager.softwareEncoder = true;
+  manager.plan = () => ({ copyVideo: false, copyAudio: false });
+  const attempts: boolean[] = [];
+  manager.run = async (session: any, _offset: number, _directory: string, hardware: boolean) => {
+    attempts.push(hardware);
+    session.error = "Error opening input file <source> Error opening input files: Invalid data found when processing input";
+  };
+  for (const id of ["first", "second"]) {
+    await assert.rejects(manager.spawnAt(remuxSession(manager, { id, generation: 0 }), 0), /Invalid data/);
+  }
+  assert.deepEqual(attempts, [true, true]);
+  assert.equal(manager.vaapiFailures, 0);
+});
+
 test("two consecutive GPU failures still switch the accelerator off", async () => {
   const manager = new PlaybackManager(tmp("test-hardware-off")) as any;
   manager.vaapiDevice = "/dev/dri/renderD128";
