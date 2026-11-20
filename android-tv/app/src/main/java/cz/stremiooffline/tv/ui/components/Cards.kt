@@ -61,12 +61,22 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import coil3.PlatformContext
 import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
+import coil3.size.Precision
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.sessionImageLoader
 import cz.stremiooffline.tv.ui.theme.Tokens
+
+/**
+ * A hidden still loads at a tiny exact size, so Android before 12, which has no blur, still shows
+ * nothing readable. The exact precision keeps Coil from answering with a sharp copy of the same
+ * still that its memory cache kept from a card shown before spoilers were hidden.
+ */
+internal fun spoilerStillRequest(context: PlatformContext, data: Any): ImageRequest =
+  ImageRequest.Builder(context).data(data).size(24, 14).precision(Precision.EXACT).build()
 
 /** The icon a card without artwork shows in place of its picture. */
 const val TagCardPlaceholder = "card_placeholder"
@@ -350,7 +360,7 @@ fun WideCard(
         if (art != null) {
           AsyncImage(
             model = if (spoilerHidden) {
-              ImageRequest.Builder(LocalPlatformContext.current).data(art).size(24, 14).build()
+              spoilerStillRequest(LocalPlatformContext.current, art)
             } else {
               art
             },
