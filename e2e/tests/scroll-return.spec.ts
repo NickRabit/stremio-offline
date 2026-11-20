@@ -123,8 +123,16 @@ test.describe("a source switch", () => {
     await page.getByRole("button", { name: "Zdroje", exact: true }).click();
     const rows = page.locator("#player-sources .player-source-list button");
     await expect.poll(() => rows.count()).toBeGreaterThan(1);
-    await page.locator('#player-sources .player-source-list button[aria-pressed="false"]').first().click();
-    await expect(player).toBeVisible();
+    const next = rows.and(page.locator('button[aria-pressed="false"]')).first();
+    const key = await next.getAttribute("data-row-key");
+    expect(key).toBeTruthy();
+    await next.click();
+    await expect(page.locator("#player-sources")).toHaveCount(0);
+    await player.dispatchEvent("pointermove");
+    const toggle = player.getByRole("button", { name: "Zdroje", exact: true });
+    await toggle.click();
+    await expect(rows.and(page.locator('button[aria-pressed="true"]')).first()).toHaveAttribute("data-row-key", key!);
+    await toggle.click();
 
     await player.dispatchEvent("pointermove");
     await player.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
