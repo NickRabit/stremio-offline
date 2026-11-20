@@ -112,6 +112,8 @@ class SettingsScreenTest {
     press(Key.DirectionDown); focusRow(TagSettingsRowStartView)
     press(Key.DirectionDown); focusRow(TagSettingsRowUpNext)
     press(Key.DirectionDown); focusRow(TagSettingsRowSkipSegments)
+    press(Key.DirectionDown); focusRow(TagSettingsRowHideSpoilers)
+    press(Key.DirectionUp); focusRow(TagSettingsRowSkipSegments)
     press(Key.DirectionUp); focusRow(TagSettingsRowUpNext)
   }
 
@@ -124,12 +126,14 @@ class SettingsScreenTest {
 
     repeat(7) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
-    // The two playback rows, Home, then the switch, then Send diagnostics: the device facts
+    // The playback rows, Home, then the switch, then Send diagnostics: the device facts
     // between and under them are not focusable.
     press(Key.DirectionDown)
     focusRow(TagSettingsRowUpNext)
     press(Key.DirectionDown)
     focusRow(TagSettingsRowSkipSegments)
+    press(Key.DirectionDown)
+    focusRow(TagSettingsRowHideSpoilers)
     press(Key.DirectionDown)
     focusRow(TagSettingsRowHomeLayout)
     press(Key.DirectionDown)
@@ -147,7 +151,7 @@ class SettingsScreenTest {
     val rows = listOf(
       TagSettingsRowServer, TagSettingsRowAccount, TagSettingsRowAvatar, TagSettingsRowUiLanguage, TagSettingsRowAudio,
       TagSettingsRowSubtitle, TagSettingsRowStreamSort, TagSettingsRowStartView, TagSettingsRowUpNext,
-      TagSettingsRowSkipSegments, TagSettingsRowHomeLayout, TagSettingsRowPreferConversion,
+      TagSettingsRowSkipSegments, TagSettingsRowHideSpoilers, TagSettingsRowHomeLayout, TagSettingsRowPreferConversion,
       TagSettingsRowDiagnostics,
     )
     rows.forEachIndexed { index, tag ->
@@ -178,6 +182,8 @@ class SettingsScreenTest {
     press(Key.DirectionDown)
     focusRow(TagSettingsRowSkipSegments)
     press(Key.DirectionDown)
+    focusRow(TagSettingsRowHideSpoilers)
+    press(Key.DirectionDown)
     focusRow(TagSettingsRowHomeLayout)
     press(Key.DirectionDown)
     focusRow(TagSettingsRowPreferConversion)
@@ -187,6 +193,8 @@ class SettingsScreenTest {
 
     press(Key.DirectionUp)
     focusRow(TagSettingsRowHomeLayout)
+    press(Key.DirectionUp)
+    focusRow(TagSettingsRowHideSpoilers)
     press(Key.DirectionUp)
     focusRow(TagSettingsRowSkipSegments)
     press(Key.DirectionUp)
@@ -199,7 +207,7 @@ class SettingsScreenTest {
   fun `OK on the prefer conversion row flips it and stores it on the device`() {
     preferences().preferConversion = false
     mount(fake())
-    repeat(11) { press(Key.DirectionDown) }
+    repeat(12) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowPreferConversion)
     compose.onNodeWithTag(TagSettingsRowPreferConversion).assertTextContains("Off", substring = true)
 
@@ -213,7 +221,7 @@ class SettingsScreenTest {
   fun `toggling the prefer conversion row writes nothing to the server`() {
     val api = fake()
     mount(api)
-    repeat(11) { press(Key.DirectionDown) }
+    repeat(12) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowPreferConversion)
 
     press(Key.DirectionCenter)
@@ -414,7 +422,7 @@ class SettingsScreenTest {
     cz.stremiooffline.tv.diagnostics.AppLog.clear()
     cz.stremiooffline.tv.diagnostics.AppLog.record("WARN", "API GET /api/home", mapOf("status" to "403"))
     mount(api)
-    repeat(12) { press(Key.DirectionDown) }
+    repeat(13) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -433,7 +441,7 @@ class SettingsScreenTest {
     api.bundleFailure = ApiFailure.Forbidden
     api.bundleFailureMessage = "Client logs are turned off on this server."
     mount(api)
-    repeat(12) { press(Key.DirectionDown) }
+    repeat(13) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -448,7 +456,7 @@ class SettingsScreenTest {
     val api = fake()
     api.bundleFailure = ApiFailure.Unreachable
     mount(api)
-    repeat(12) { press(Key.DirectionDown) }
+    repeat(13) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)

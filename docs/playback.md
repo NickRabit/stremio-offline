@@ -201,6 +201,12 @@ Under the title the player names what actually plays: the resolution (`4K`,
 A conversion is described as converted (H.264, stereo AAC, no HDR), not as the
 source was.
 
+While the controls are up, the player says when the film or episode will end
+("Ends at 21:50", in the interface language's clock on the web and the desktop
+app, in the TV's own 12/24-hour format under the clock on Android TV). It counts
+from the position on screen, so it follows a seek straight away, and it moves on
+while playback is paused.
+
 A file with two or more chapters gets marks on the timeline, the current
 chapter's name above it, its name in the timeline preview, and a chapter list in
 the player settings (on the TV, the **Chapters** button) that jumps to a chapter.

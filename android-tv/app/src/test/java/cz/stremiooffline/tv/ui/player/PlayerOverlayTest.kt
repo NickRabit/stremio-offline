@@ -2,6 +2,7 @@
 
 package cz.stremiooffline.tv.ui.player
 
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -21,7 +22,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
@@ -47,11 +48,39 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-xhdpi")
 class PlayerOverlayTest {
 
-  @get:Rule val compose = createComposeRule()
+  @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
   private var pauses = 0
   private var exits = 0
   private val seeks = mutableListOf<Double>()
+
+  private fun keyDown(keyCode: Int, downTime: Long, eventTime: Long, repeat: Int) {
+    compose.runOnUiThread {
+      compose.activity.dispatchKeyEvent(
+        android.view.KeyEvent(downTime, eventTime, android.view.KeyEvent.ACTION_DOWN, keyCode, repeat),
+      )
+    }
+    compose.waitForIdle()
+  }
+
+  private fun keyUp(keyCode: Int, downTime: Long, eventTime: Long) {
+    compose.runOnUiThread {
+      compose.activity.dispatchKeyEvent(
+        android.view.KeyEvent(downTime, eventTime, android.view.KeyEvent.ACTION_UP, keyCode, 0),
+      )
+    }
+    compose.waitForIdle()
+  }
+
+  private fun holdKey(keyCode: Int) {
+    val downTime = 1_000L
+    keyDown(keyCode, downTime, downTime, repeat = 0)
+    repeat(15) { index ->
+      val eventTime = downTime + (index + 1) * 100L
+      keyDown(keyCode, downTime, eventTime, repeat = index + 1)
+    }
+    keyUp(keyCode, downTime, downTime + 1_600L)
+  }
 
   private fun mount(
     position: Double = 100.0,
@@ -162,15 +191,12 @@ class PlayerOverlayTest {
   fun `a held media key sums one seek while the controls are up`() {
     mountWithControlsUp()
 
-    compose.onRoot().performKeyInput { pressKey(Key.MediaFastForward) }
-    repeat(4) {
-      compose.onRoot().performKeyInput { advanceEventTime(300); pressKey(Key.MediaFastForward) }
-    }
+    holdKey(android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)
     assertTrue("nothing is sent while the key keeps coming", seeks.isEmpty())
 
     compose.mainClock.advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 100)
 
-    assertEquals(listOf(190.0), seeks)
+    assertEquals(listOf(380.0), seeks)
   }
 
   @Test
@@ -258,23 +284,34 @@ class PlayerOverlayTest {
     assertEquals(listOf(110.0), seeks)
   }
 
-  // Compose's test dispatcher refuses a second key-down without a key-up, so the hold is driven
-  // by presses closer together than the debounce, the way a real remote repeats a held key.
   @Test
   fun `holding right sums one seek instead of one per press`() {
-    mount(initiallyShown = false)
+    mount(position = 0.0, initiallyShown = false)
 
-    compose.onNodeWithTag("video").performKeyInput { pressKey(Key.DirectionRight) }
-    repeat(4) {
-      compose.onNodeWithTag("video").performKeyInput { advanceEventTime(300); pressKey(Key.DirectionRight) }
-    }
+    holdKey(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
     assertTrue("nothing is sent while the key keeps coming", seeks.isEmpty())
 
     compose.mainClock.advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 100)
 
-    assertEquals(listOf(190.0), seeks)
+    assertEquals(listOf(280.0), seeks)
     compose.onNodeWithTag(TAG_OVERLAY_BUBBLE).assertExists()
-    compose.onNodeWithText("+1:30").assertExists()
+    compose.onNodeWithText("+4:40").assertExists()
+  }
+
+  @Test
+  fun `five separate right taps seek fifty seconds`() {
+    mount(position = 0.0, initiallyShown = false)
+
+    repeat(5) { index ->
+      val downTime = 1_000L + index * 100L
+      keyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, downTime, downTime, repeat = 0)
+      keyUp(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, downTime, downTime + 1L)
+    }
+    assertTrue("nothing is sent while the taps keep coming", seeks.isEmpty())
+
+    compose.mainClock.advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 100)
+
+    assertEquals(listOf(50.0), seeks)
   }
 
   @Test

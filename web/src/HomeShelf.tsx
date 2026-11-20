@@ -5,6 +5,7 @@ import { showAllTarget, type ShowAllTarget } from "./home-cards";
 import { t, type Key } from "./i18n";
 import { childViewAllowed } from "./child-policy";
 import { useChildMode } from "./child-mode";
+import { toCssPx } from "./ui-scale";
 import type { HomeRowState } from "./home-state";
 import type { BuiltinHomeRowId, HomeRowId } from "../../server/src/home";
 import type { TileShape } from "./types";
@@ -68,7 +69,7 @@ export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, act
     if (!element) return;
     const card = element.firstElementChild as HTMLElement | null;
     const width = card?.getBoundingClientRect().width ?? 0;
-    if (width > 0) setShown(Math.ceil(element.clientWidth / width) + 2);
+    if (width > 0) setShown(Math.ceil(element.clientWidth / toCssPx(width)) + 2);
   }, [near, cards]);
   const move = () => { if (!moved) setMoved(true); };
   useEffect(() => {

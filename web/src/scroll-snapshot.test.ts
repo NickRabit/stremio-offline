@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureScroll, restoreScroll } from "./scroll-snapshot";
+import { captureScroll, restoreScroll, snapshotScrollTop } from "./scroll-snapshot";
+import { writeUiScale } from "./ui-scale";
 
 const scrollable = (top: number) => {
   const node = document.createElement("div");
@@ -16,6 +17,9 @@ describe("scroll snapshot", () => {
   afterEach(() => {
     document.body.replaceChildren();
     vi.unstubAllGlobals();
+    writeUiScale(1);
+    localStorage.removeItem("ui-scale");
+    document.documentElement.removeAttribute("style");
   });
 
   it("records and restores window and element scroll", () => {
@@ -65,5 +69,12 @@ describe("scroll snapshot", () => {
     expect(kept.scrollTop).toBe(30);
     expect(gone.isConnected).toBe(false);
     expect(gone.scrollTop).toBe(55);
+  });
+
+  it("returns a page snapshot in CSS pixels", () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1920);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(1080);
+    writeUiScale(1.5);
+    expect(snapshotScrollTop({ windowY: 300, elements: [] })).toBe(200);
   });
 });

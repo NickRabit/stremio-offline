@@ -48,6 +48,24 @@ page padding, the head of a full-screen dialog. The bottom edge already uses
 nothing there, and it must not be tested away on a desktop: check it on a real
 device in standalone mode.
 
+## Interface scale
+
+Root CSS `zoom` multiplies viewport units and any measured pixel value written
+back into CSS. Write viewport units as
+`calc(Nvh / var(--ui-scale, 1))` (likewise for `vw`, `dvh` and the other
+viewport units). Rects, client coordinates and window scroll are viewport
+pixels, while element offsets, element scroll values and CSS are CSS pixels;
+use `toCssPx()` when crossing that boundary, and multiply by `uiScale()` when
+moving in the other direction.
+
+Media queries see the window, not the space left after the zoom. The zoom only
+applies to a window of at least 1024x640, and it never shrinks the layout below
+that, so a width threshold up to 1024 px or a height threshold up to 640 px
+still answers correctly. A larger threshold does not: add the condition to
+`viewportConditions()` in `web/src/ui-scale.ts` and write the rules as
+`:where(:root[data-viewport~="name"]) .selector`, which keeps the specificity a
+media rule would have had.
+
 ## Form controls
 
 - **Select:** styled globally. The arrow is drawn by the stylesheet and set in

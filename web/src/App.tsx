@@ -86,6 +86,7 @@ import { lazyScreen, LazyScreenBoundary } from "./lazy-screen";
 import { ViewBoundary } from "./view-boundary";
 import { rememberedStartView, rememberStartView, resolveStartView } from "./start-view";
 import { layoutKey, rememberedLayout, rememberLayout } from "./layout-memory";
+import { toCssPx, useUiScale } from "./ui-scale";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
@@ -181,6 +182,7 @@ const orderedVideos = (videos: Video[]) => videos.map((video, index) => ({ video
   return season(a.video) - season(b.video) || (a.video.episode ?? a.index) - (b.video.episode ?? b.index) || a.index - b.index;
 }).map(({ video }) => video);
 export function App() {
+  useUiScale();
   const { t } = useI18n();
   const [view, setViewState] = useState<View>(() => rememberedStartView()); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
   const firstView = useRef<View>(view);
@@ -269,7 +271,7 @@ export function App() {
       : revealOnPull && travel < -Math.max(120, element.clientHeight * 0.18) ? false
       : compact;
     const header = element.closest(".detail-panel")?.querySelector(".hero");
-    const headerHeight = header?.getBoundingClientRect().height ?? 200;
+    const headerHeight = header ? toCssPx(header.getBoundingClientRect().height) : 200;
     // Keep the list scrollable after hiding its header, so reversing direction still restores it.
     const canHide = element.scrollHeight - element.clientHeight > headerHeight + 32;
     if (heldOpen.current) {
@@ -1158,7 +1160,7 @@ export function App() {
     onWheel: (event: ReactWheelEvent<HTMLElement>) => {
       const list = scroller();
       if (!list || ownScroller(event.target, event.currentTarget)) return;
-      list.scrollTop += event.deltaY;
+      list.scrollTop += toCssPx(event.deltaY);
     },
     onTouchStart: (event: ReactTouchEvent<HTMLElement>) => {
       // A control keeps its own touch. Nudging the list from under a button being pressed is
@@ -1174,10 +1176,11 @@ export function App() {
       const drag = chromeDrag.current;
       if (!list || !drag) return;
       const y = event.touches[0].clientY;
+      const delta = toCssPx(drag.from - y);
       // A drag has to travel before it counts as one, or a wobbling finger scrolls the list.
-      if (!drag.dragging && Math.abs(drag.from - y) < 8) return;
+      if (!drag.dragging && Math.abs(delta) < 8) return;
       drag.dragging = true;
-      list.scrollTop += drag.from - y;
+      list.scrollTop += delta;
       drag.from = y;
     },
     onTouchEnd: () => { chromeDrag.current = null; },
@@ -3200,7 +3203,7 @@ export function App() {
       const pane = saved.pane === "catalog" ? gridRef.current : null;
       const card = saved.anchor && pane?.querySelector<HTMLElement>(`[data-catalog-key="${CSS.escape(saved.anchor.key)}"]`);
       const wanted = pane && card && saved.anchor
-        ? pane.scrollTop + card.getBoundingClientRect().top - pane.getBoundingClientRect().top - saved.anchor.offset
+        ? pane.scrollTop + toCssPx(card.getBoundingClientRect().top - pane.getBoundingClientRect().top - saved.anchor.offset)
         : saved.paneY;
       if (pane) pane.scrollTop = wanted;
       window.scrollTo(0, saved.windowY);

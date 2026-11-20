@@ -33,6 +33,7 @@ import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage 
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes } from "./settings-ui";
 import { ArtworkProximity } from "./artwork-proximity";
+import { toCssPx } from "./ui-scale";
 import { catalogueRef, useCatalogueStills, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
 import { TitleExtraFacts, TitleExtrasRows, trailerFromExtras } from "./TitleExtras";
 import { useTitleExtras } from "./title-extras";
@@ -825,7 +826,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     const root = scrollRef.current;
     const target = detail ? null : loadMoreItemsRef.current;
     if (!root || !target || typeof IntersectionObserver === "undefined") return;
-    const margin = Math.min(400, root.clientHeight || window.innerHeight || 800);
+    const margin = Math.min(400, root.clientHeight || toCssPx(window.innerHeight) || 800);
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) autoLoadRef.current();
     }, { root, rootMargin: `0px 0px ${margin}px 0px` });
@@ -1915,7 +1916,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const onBrowseScroll = (event: Parameters<typeof fold.compactOnScroll>[0]) => {
     fold.compactOnScroll(event, compact, onCompactChange);
     const element = event.currentTarget;
-    if (element.scrollHeight - element.scrollTop - element.clientHeight <= Math.min(400, element.clientHeight || window.innerHeight || 800)) autoLoadRef.current();
+    if (element.scrollHeight - element.scrollTop - element.clientHeight <= Math.min(400, element.clientHeight || toCssPx(window.innerHeight) || 800)) autoLoadRef.current();
   };
 
   return <>

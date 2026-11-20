@@ -33,6 +33,8 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   sessionStorage.clear();
+  localStorage.clear();
+  document.documentElement.removeAttribute("style");
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     if (String(input).includes("/api/home/layout")) {
       return Promise.resolve(json({ rows: [], layout: { order: [], hidden: [], feeds: [] } }));
@@ -47,6 +49,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -215,6 +218,31 @@ describe("SettingsPage tabs", () => {
     expect(control.value).toBe("catalog");
     await act(async () => { control.value = "library"; control.dispatchEvent(new Event("change", { bubbles: true })); });
     expect(onSave).toHaveBeenCalledWith({ startView: "library" });
+  });
+
+  it("puts the device-local interface scale directly after tile size and reports a limited window", async () => {
+    const width = vi.spyOn(window, "innerWidth", "get").mockReturnValue(1920);
+    const height = vi.spyOn(window, "innerHeight", "get").mockReturnValue(1080);
+    const { onSave } = await render({}, true);
+    await selectTab("Home");
+    const titles = [...host.querySelectorAll<HTMLElement>(".setting-control strong")].map((element) => element.textContent);
+    expect(titles.indexOf(en["settings.uiScale"])).toBe(titles.indexOf(en["settings.tileSize"]) + 1);
+
+    const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.uiScale"]}"]`)!;
+    expect(select.disabled).toBe(false);
+    expect([...select.options].map((option) => option.textContent)).toEqual(["100% (standard)", "115%", "130%", "150%"]);
+    await act(async () => {
+      select.value = "1.5";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onSave).not.toHaveBeenCalled();
+    expect(localStorage.getItem("ui-scale")).toBe("1.5");
+    expect(document.documentElement.style.zoom).toBe("1.5");
+
+    width.mockReturnValue(1280);
+    height.mockReturnValue(720);
+    await act(async () => { window.dispatchEvent(new Event("resize")); });
+    expect(host.textContent).toContain(en["settings.uiScaleLimited"].replace("{percent}", "112%"));
   });
 
   it("is disabled for a restricted account", async () => {

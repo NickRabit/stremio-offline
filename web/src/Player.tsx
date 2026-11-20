@@ -19,8 +19,10 @@ import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import { CHANNELS, playingBadges } from "./player-badges";
 import { chapterAt, chapterLabel } from "./player-chapters";
+import { endsAt, formatEndsAt } from "./player-clock";
 import { activeSegment, fitSegments, introQueryOf, upNextPoint, type SegmentKind } from "./player-segments";
 import type { Capabilities, IntroSegments, PlaybackChapter, PlaybackMode, PlaybackSession, SourceProfile, Stream, Subtitle, Track, UpNextAt } from "./types";
+import { toCssPx } from "./ui-scale";
 
 /** The title's sources as the place that plays it holds them: the rows it leads with, every other
  *  group of the title, and the two actions over them. The host reads the groups through
@@ -434,6 +436,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [playbackFailed, setPlaybackFailed] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const segments = useMemo(() => fitSegments(rawSegments, duration), [rawSegments, duration]);
   const [scrub, setScrub] = useState<number | null>(null);
   const [buffering, setBuffering] = useState(false);
@@ -460,6 +463,19 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [fullscreenUnavailable, setFullscreenUnavailable] = useState(false);
   const [cursorHidden, setCursorHidden] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  useEffect(() => {
+    if (!open) return;
+    let timer: number | undefined;
+    const tick = () => {
+      const current = Date.now();
+      setNow(current);
+      timer = window.setTimeout(tick, 60_000 - current % 60_000);
+    };
+    tick();
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [open]);
   const controlsTimerRef = useRef<number | undefined>(undefined);
   const keyboardControlsRef = useRef(false);
   const automaticFullscreenRef = useRef(false);
@@ -468,7 +484,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     void loadHls().catch(() => undefined);
     const bottom = bottomRef.current;
     if (!bottom) return;
-    const measure = () => overlayRef.current?.style.setProperty("--player-bottom-height", `${bottom.getBoundingClientRect().height}px`);
+    const measure = () => overlayRef.current?.style.setProperty("--player-bottom-height", `${toCssPx(bottom.getBoundingClientRect().height)}px`);
     const observer = new ResizeObserver(measure);
     observer.observe(bottom);
     measure();
@@ -1417,8 +1433,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const overlay = overlayRef.current;
     if (!open || !mobileLandscape || !viewport || !overlay) return;
     const fit = () => {
-      overlay.style.setProperty("--player-viewport-height", `${viewport.height}px`);
-      overlay.style.setProperty("--player-viewport-top", `${viewport.offsetTop}px`);
+      overlay.style.setProperty("--player-viewport-height", `${toCssPx(viewport.height)}px`);
+      overlay.style.setProperty("--player-viewport-top", `${toCssPx(viewport.offsetTop)}px`);
     };
     fit();
     viewport.addEventListener("resize", fit);
@@ -1581,6 +1597,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const badges = playingBadges(session?.playing);
   const chapters = (session?.chapters?.length ?? 0) >= 2 ? session?.chapters : undefined;
   const chapterIndex = chapterAt(chapters, position);
+  // The minute tick only re-renders a paused player; while playing the position moves the clock along.
+  const endAt = endsAt(Math.max(now, Date.now()), position, duration);
   const segment = activeSegment(segments, position);
   const nextPoint = upNextPoint(upNextAt, duration, segments?.outro);
   const subtitleValue = session?.subtitleTrack !== null && session?.subtitleTrack !== undefined
@@ -1712,7 +1730,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       }}>{t(SKIP_KEY[segment.kind])}</button>}
     </div>
     <div ref={bottomRef} className="player-bottom">
-      {chapterIndex >= 0 && chapters && <div className="player-chapter" aria-live="off">{chapterLabel(chapters, chapterIndex)}</div>}
+      {(chapterIndex >= 0 && chapters || endAt !== null) && <div className="player-meta" aria-live="off">
+        {chapterIndex >= 0 && chapters && <div className="player-chapter">{chapterLabel(chapters, chapterIndex)}</div>}
+        {endAt !== null && <span className="player-ends-at">{t("player.endsAt", { time: formatEndsAt(endAt) })}</span>}
+      </div>}
       <div className="timeline">
         <span>{fmt(position)}</span>
         <TimelineBar sessionId={session?.id} chapters={chapters} segments={segments} value={Math.min(position, seekable)} max={seekable}

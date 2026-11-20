@@ -19,6 +19,7 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -361,6 +362,19 @@ class ApiClientTest {
     assertEquals("PATCH", request.method)
     assertEquals("""{"skipSegmentsAuto":true}""", request.body.readUtf8())
     assertTrue(answer.skipSegmentsAuto)
+  }
+
+  @Test
+  fun `settings decode hideSpoilers`() = runTest {
+    val api = client(start())
+    server.enqueue(MockResponse().setBody("""{"hideSpoilers":true}"""))
+    val answer = api.settings()
+
+    assertEquals("/api/settings", server.takeRequest().path)
+    assertTrue(answer.hideSpoilers)
+
+    server.enqueue(MockResponse().setBody("{}"))
+    assertFalse(api.settings().hideSpoilers)
   }
 
   @Test

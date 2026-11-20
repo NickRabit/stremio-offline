@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { SourceFilters, SourceRows } from "./source-rows";
 import { setLocale, t } from "./i18n";
 import type { SourceProfile, Stream } from "./types";
+import { writeUiScale } from "./ui-scale";
 
 const addonRow = (over: Partial<Stream> = {}): Stream => ({
   sourceId: "a1", kind: "remote", playable: true, name: "FullHD", addonKey: "cineshare", addonName: "Cineshare",
@@ -24,6 +25,10 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.restoreAllMocks();
+  writeUiScale(1);
+  localStorage.removeItem("ui-scale");
+  document.documentElement.removeAttribute("style");
 });
 
 /** The catalogue's own list: no badge of its own, no probe, the rows as the addon answered them. */
@@ -48,6 +53,24 @@ describe("SourceRows", () => {
     expect(list.scrollTop).toBe(17 * 40 - 30);
     expect(list.dataset.autoScroll).toBe("1");
     vi.restoreAllMocks();
+  });
+
+  it("converts a rect distance into CSS pixels before scrolling its own list", () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1920);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(1080);
+    writeUiScale(1.5);
+    const rows = Array.from({ length: 20 }, (_, index) => addonRow({ sourceId: `s${index}`, name: `Row ${index}` }));
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.tagName === "DIV" ? 100 : 40; });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(40);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const index = this.tagName === "BUTTON" ? [...this.parentElement!.children].indexOf(this) : 0;
+      const list = this.tagName === "BUTTON" ? this.parentElement! : this;
+      const top = this.tagName === "BUTTON" ? (index * 40 - list.scrollTop) * 1.5 : 0;
+      return { top, bottom: top + 60, left: 0, right: 0, width: 0, height: 60, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+    });
+    act(() => root.render(<SourceRows rows={rows} selected={rows[17]!} onSelect={() => {}}/>));
+    const list = host.querySelector<HTMLDivElement>(".stream-list")!;
+    expect(list.scrollTop).toBe(17 * 40 - 30);
   });
 
   it("labels an addon row exactly as the catalogue does: its transport, its own name, its addon caption", () => {

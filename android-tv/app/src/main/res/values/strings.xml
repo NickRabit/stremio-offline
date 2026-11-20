@@ -207,6 +207,7 @@
   <string name="player_skip_outro">Skip credits</string>
   <string name="player_up_next">UP NEXT</string>
   <string name="player_up_next_countdown">Starts in %1$ss</string>
+  <string name="player_ends_at">Ends at %1$s</string>
   <string name="player_play_now">Play now</string>
   <string name="player_next_episode">Next episode</string>
   <string name="diag_title">Diagnostics</string>
@@ -262,6 +263,7 @@
   <string name="tv_off">Off</string>
   <string name="tv_chapters_button">Chapters</string>
   <string name="tv_skip_segments_auto">Skip intro and recap automatically</string>
+  <string name="tv_hide_spoilers">Blur unwatched episode images</string>
   <string name="tv_back_to_source">Back to the previous source</string>
   <string name="library_mosaic_alt">Poster mosaic of %1$s films</string>
   <string name="library_show_in_library">Show in library</string>

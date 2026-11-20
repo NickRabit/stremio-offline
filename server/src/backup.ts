@@ -155,6 +155,7 @@ function parseSettings(value: unknown): Settings {
     showResumeRow: boolean("showResumeRow"),
     upNextAt: UP_NEXT_AT.includes(upNextAt as UpNextAt) ? upNextAt as UpNextAt : fallback.upNextAt,
     skipSegmentsAuto: boolean("skipSegmentsAuto"),
+    hideSpoilers: boolean("hideSpoilers"),
     libraryAutoScan: boolean("libraryAutoScan"),
     libraryScanPauseOnDownload: boolean("libraryScanPauseOnDownload"),
     secureMode: boolean("secureMode"),

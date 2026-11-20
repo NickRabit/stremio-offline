@@ -70,6 +70,7 @@ import cz.stremiooffline.tv.data.SessionStore
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.detail.SpoilerSetting
 import cz.stremiooffline.tv.ui.profiles.LocalProfileServer
 import cz.stremiooffline.tv.ui.shell.Section
 import cz.stremiooffline.tv.ui.shell.Shell
@@ -274,14 +275,18 @@ class SessionViewModel(
     viewModelScope.launch {
       if (address != null) ApiClient(address, CookieStore(address.origin, store)).logout()
       store.clearSession()
+      SpoilerSetting.lastKnown = false
       state = SessionState.SignedOut(address?.display ?: DEFAULT_ADDRESS, null)
     }
   }
 
   private suspend fun settingsOf(api: ApiClient): String? =
     try {
-      api.settings().startView
+      // The account's spoiler choice is known before the first detail opens, so its stills do
+      // not show sharp until that screen's own settings call answers.
+      api.settings().also { SpoilerSetting.lastKnown = it.hideSpoilers }.startView
     } catch (_: ApiError) {
+      SpoilerSetting.lastKnown = false
       null
     }
 

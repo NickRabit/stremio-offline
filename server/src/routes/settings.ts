@@ -228,7 +228,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const {
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
-      upNextAt, skipSegmentsAuto,
+      upNextAt, skipSegmentsAuto, hideSpoilers,
       tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
       homeLayout, downloadSourceProfile, followSourceProfile, defaultRulesProfileId,
       ...instance
@@ -238,7 +238,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       prefs: {
         uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
         mergeByName, streamSort, trackProgress, showResumeRow, tileSize,
-        upNextAt, skipSegmentsAuto,
+        upNextAt, skipSegmentsAuto, hideSpoilers,
         catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape,
         followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
         ...(homeLayout ? { homeLayout } : {}),
@@ -538,6 +538,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.showResumeRow !== undefined) prefs.showResumeRow = Boolean(req.body.showResumeRow);
       if (req.body.upNextAt !== undefined) prefs.upNextAt = req.body.upNextAt as UpNextAt;
       if (req.body.skipSegmentsAuto !== undefined) prefs.skipSegmentsAuto = Boolean(req.body.skipSegmentsAuto);
+      if (req.body.hideSpoilers !== undefined) prefs.hideSpoilers = Boolean(req.body.hideSpoilers);
       if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
       if (req.body.libraryScanPauseOnDownload !== undefined) state.settings.libraryScanPauseOnDownload = Boolean(req.body.libraryScanPauseOnDownload);
       // Detail has to be recorded before it can be read: a line the server never wrote is not
