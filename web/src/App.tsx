@@ -3203,7 +3203,7 @@ export function App() {
       const pane = saved.pane === "catalog" ? gridRef.current : null;
       const card = saved.anchor && pane?.querySelector<HTMLElement>(`[data-catalog-key="${CSS.escape(saved.anchor.key)}"]`);
       const wanted = pane && card && saved.anchor
-        ? pane.scrollTop + card.getBoundingClientRect().top - pane.getBoundingClientRect().top - saved.anchor.offset
+        ? pane.scrollTop + toCssPx(card.getBoundingClientRect().top - pane.getBoundingClientRect().top - saved.anchor.offset)
         : saved.paneY;
       if (pane) pane.scrollTop = wanted;
       window.scrollTo(0, saved.windowY);
