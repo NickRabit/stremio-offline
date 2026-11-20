@@ -129,9 +129,16 @@ export function movableKeys(
   destinations: Record<string, SplitDestination>,
   kind: "movie" | "series",
 ): string[] {
-  return plan.items
-    .filter((item) => !item.busy && destinations[item.key] === kind)
-    .map((item) => item.key);
+  return movableItems(plan, destinations, kind).flatMap((item) => [item.key, ...(item.files ?? [])]);
+}
+
+/** The titles that move to `kind`'s target; `movableKeys` spells out every file they hold. */
+export function movableItems(
+  plan: SplitPlan,
+  destinations: Record<string, SplitDestination>,
+  kind: "movie" | "series",
+): SplitPlanItem[] {
+  return plan.items.filter((item) => !item.busy && destinations[item.key] === kind);
 }
 
 export function chunkKeys(keys: string[], size = SPLIT_MOVE_CHUNK): string[][] {
@@ -170,11 +177,11 @@ export function summaryLines(
   describe(series);
   let moving = false;
   for (const kind of ["movie", "series"] as const) {
-    const keys = movableKeys(plan, destinations, kind);
-    if (!keys.length) continue;
+    const titles = movableItems(plan, destinations, kind);
+    if (!titles.length) continue;
     moving = true;
     lines.push(t("split.summaryMove", {
-      items: t("split.itemCount", { count: keys.length }),
+      items: t("split.itemCount", { count: titles.length }),
       name: targetName(kind === "movie" ? movie : series),
     }));
   }

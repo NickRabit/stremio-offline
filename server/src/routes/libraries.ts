@@ -97,14 +97,12 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (req.body?.autoScanMetadata !== undefined && typeof req.body.autoScanMetadata !== "boolean") {
       throw new AppError("The automatic metadata switch has to be true or false.", "err.invalidRequest", 400);
     }
-    if (req.body?.visibleTo !== undefined && !Array.isArray(req.body.visibleTo)) throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
-    // Granted in the same write that creates the library, so a library made by a flow that stops
-    // half-way is never left visible to administrators only when the caller asked for more.
-    const requestedVisibleTo = req.body?.visibleTo === undefined ? [] : [...new Set((req.body.visibleTo as unknown[]).map(String))];
-    for (const id of requestedVisibleTo) {
-      const user = findUserById(store.users(), id);
-      if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
-      if (user.role === "admin") throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
+    // The accounts of another library, copied in the same write that creates this one: read
+    // from the state the write lands on, so a grant removed from the source meanwhile is not
+    // handed back, and the source's dormant entries travel with it like any other.
+    const grantsFrom = req.body?.grantsFrom === undefined ? undefined : String(req.body.grantsFrom).trim();
+    if (grantsFrom !== undefined && !store.libraries().some((item) => item.id === grantsFrom)) {
+      throw new AppError("The library was not found.", "err.libraryNotFound", 404);
     }
     const root = await requireLibraryRoot(req.body?.root, { create: req.body?.create === true, fresh: req.body?.fresh === true });
     // A fresh answer for the root as it is now: a deleted library's cached verdict must not
@@ -143,16 +141,14 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
         resumedId = departedIdIn(state.departed ?? [], forms);
         if (resumedId && !(state.libraries ?? []).some((item) => item.id === resumedId)) library.id = resumedId;
         else resumedId = undefined;
-        if (requestedVisibleTo.length) {
-          // Asked again over the accounts this write finds: one may have been removed or promoted
-          // while the folder was being checked.
-          for (const id of requestedVisibleTo) {
-            const user = findUserById(state.users ?? [], id);
-            if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
-            if (user.role === "admin") throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
+        if (grantsFrom !== undefined) {
+          const source = (state.libraries ?? []).find((item) => item.id === grantsFrom);
+          if (!source) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+          const copied = [...new Set(source.visibleTo ?? [])];
+          if (copied.length) {
+            library.visibleTo = copied;
+            state.users = bumpPermissions(state.users ?? [], copied);
           }
-          library.visibleTo = requestedVisibleTo;
-          state.users = bumpPermissions(state.users ?? [], requestedVisibleTo);
         }
         state.libraries = [...(state.libraries ?? []), library];
         if (resumedId) state.departed = (state.departed ?? []).filter((entry) => entry.id !== resumedId);
@@ -298,7 +294,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     await refreshLibraryHealth();
     const [units, downloadTargets] = await Promise.all([libraryUnits(), activeDownloadTargets()]);
     const owned = units.filter((unit) => parseLibraryPath(unit.key)?.libraryId === target.id);
-    const operationBusy = await libraryItemsBusy(owned.map((unit) => unit.key));
+    // Every file of a title, not only its key: a second version beside it can be busy on its own.
+    const operationBusy = await libraryItemsBusy([...new Set(owned.flatMap((unit) => [unit.key, ...unit.sampleFiles]))]);
     const topNames = await readdir(target.root).catch(() => [] as string[]);
     res.json(buildSplitPlan({
       library: target,

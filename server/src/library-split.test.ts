@@ -174,3 +174,22 @@ test("taken lists every name under the root once, folders without videos include
   const plan = buildSplitPlan(input({ topNames: ["notes.txt", "Empty", "Films", "Empty"] }));
   assert.deepEqual(plan.taken, ["Empty", "Films", "notes.txt"]);
 });
+
+test("a title keyed by its first file carries its other versions and is busy through them", () => {
+  const first = libraryPath(parent.id, "Films/Heat (1995).mkv");
+  const second = libraryPath(parent.id, "Films/Heat (1995) 1080p.mkv");
+  const heat: TitleUnit = { key: first, relative: first, kind: "movie", sampleFiles: [first, second] };
+  const folder: TitleUnit = {
+    key: libraryPath(parent.id, "Arrival"), relative: libraryPath(parent.id, "Arrival"), kind: "movie",
+    sampleFiles: [libraryPath(parent.id, "Arrival/a.mkv"), libraryPath(parent.id, "Arrival/b.mkv")],
+  };
+  const free = buildSplitPlan(input({ units: [heat, folder] }));
+  const byKey = Object.fromEntries(free.items.map((item) => [item.key, item]));
+  assert.deepEqual(byKey[first]?.files, [second]);
+  assert.equal(byKey[libraryPath(parent.id, "Arrival")]?.files, undefined, "files inside a folder title move with the folder");
+
+  const busy = buildSplitPlan(input({ units: [heat], operationBusy: new Set([second]) }));
+  assert.equal(busy.items[0]?.busy, "operation");
+  const downloading = buildSplitPlan(input({ units: [heat], downloadTargets: [second] }));
+  assert.equal(downloading.items[0]?.busy, "download");
+});

@@ -17,6 +17,9 @@ export interface SplitPlanItem {
   basis: SplitBasis;
   /** Present only when the item must not be moved now. */
   busy?: "download" | "operation";
+  /** The title's other files lying beside `key` rather than inside it -- a second version or an
+   *  extra of a film that shares a folder with other films. Library-qualified; moved with `key`. */
+  files?: string[];
 }
 
 export interface SplitPlanChild {
@@ -103,14 +106,22 @@ export function buildSplitPlan(input: SplitPlanInput): SplitPlan {
     // The unit cache walks library-qualified files, so `unit.relative` is the qualified key as
     // well; the path below the root is taken from the key.
     const relative = relativeWithin(library.id, unit.key);
-    const busy: SplitPlanItem["busy"] = downloadTargets.some((target) => isPathWithin(target, unit.key))
+    const key = libraryPath(library.id, relative);
+    // A unit keyed by its first file names the others only in `sampleFiles`; moving the key
+    // alone would leave them behind in the parent.
+    const files = unit.sampleFiles
+      .filter((file) => parseLibraryPath(file)?.libraryId === library.id && !isPathWithin(file, unit.key))
+      .map((file) => libraryPath(library.id, relativeWithin(library.id, file)));
+    const paths = [unit.key, ...files];
+    const busy: SplitPlanItem["busy"] = downloadTargets.some((target) => paths.some((path) => isPathWithin(target, path)))
       ? "download"
-      : operationBusy.has(unit.key) ? "operation" : undefined;
+      : paths.some((path) => operationBusy.has(path)) ? "operation" : undefined;
     return {
-      key: libraryPath(library.id, relative),
+      key,
       relative,
       ...splitKind(unit, relative, library.type, records),
       ...(busy ? { busy } : {}),
+      ...(files.length ? { files } : {}),
     };
   }).sort((left, right) =>
     left.label.localeCompare(right.label, undefined, { sensitivity: "base" }) || left.relative.localeCompare(right.relative));

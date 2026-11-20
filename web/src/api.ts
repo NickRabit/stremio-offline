@@ -476,7 +476,7 @@ export const api = {
   /** The configured libraries. `root` is withheld in restricted mode. */
   libraries: () => request<LibraryView[]>("/api/libraries"),
   librarySplitPlan: (id: string) => request<SplitPlan>(`/api/libraries/${encodeURIComponent(id)}/split-plan`),
-  createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; fresh?: boolean; visibleTo?: string[]; writeArtwork?: boolean; autoScanMetadata?: boolean }) =>
+  createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; fresh?: boolean; grantsFrom?: string; writeArtwork?: boolean; autoScanMetadata?: boolean }) =>
     request<LibraryView>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
   updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; autoScanMetadata?: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; showInFavorites?: boolean; showInSearch?: boolean; defaultMovie?: boolean; defaultSeries?: boolean; visibleTo?: string[]; root?: string; create?: boolean }) =>
     request<LibraryView>(`/api/libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),

@@ -211,7 +211,7 @@ it("creates a new films folder fresh with its grants in one request, then defaul
 
   expect(mutating()).toEqual([
     { url: "/api/libraries", method: "POST", body: {
-      name: "Films", type: "movie", root: "/downloads/Films", create: true, fresh: true, visibleTo: ["usr_1"],
+      name: "Films", type: "movie", root: "/downloads/Films", create: true, fresh: true, grantsFrom: "lib_mix",
       autoScanMetadata: true, writeArtwork: true,
     } },
     { url: "/api/libraries/lib_created", method: "PATCH", body: { defaultMovie: true } },
@@ -373,4 +373,54 @@ it("offers a retry and does not claim done when a move job was cancelled part-wa
   expect(host.textContent).toContain(t("split.retryHint"));
   expect([...host.querySelectorAll("button")].some((button) => button.textContent === t("common.retry"))).toBe(true);
   expect(host.textContent).not.toContain(t("split.done"));
+});
+
+it("does not let a retry start the old plan while the new one loads or after it failed", async () => {
+  let planCalls = 0;
+  let finishReload: (response: Response) => void = () => undefined;
+  await open(planOf({
+    children: [seriesChild],
+    items: [item({ key: "mov", label: "Movie", kind: "movie" })],
+  }), parent(), (url, init) => {
+    if (String(url).includes("/split-plan")) {
+      planCalls += 1;
+      if (planCalls > 1) return new Promise<Response>((resolve) => { finishReload = resolve; }) as unknown as Response;
+      return undefined;
+    }
+    if (url === "/api/libraries" && init?.method === "POST") return json({ error: "disk full" }, 400);
+    return undefined;
+  });
+  await click(t("split.next"));
+  await click(t("split.next"));
+  await click(t("split.start"));
+  await flushUntil(() => host.textContent?.includes(t("split.retryHint")) ?? false);
+  await click(t("common.retry"));
+  const primary = () => host.querySelector<HTMLButtonElement>(".dialog-foot button.primary");
+  expect(primary()?.disabled).toBe(true);
+  expect(primary()?.textContent).toBe(t("split.next"));
+
+  await act(async () => { finishReload(json({ error: "server away" }, 500)); await Promise.resolve(); });
+  await flushUntil(() => host.textContent?.includes("server away") ?? false);
+  expect(primary()?.disabled).toBe(true);
+  expect(mutating().filter((call) => call.url === "/api/libraries")).toHaveLength(1);
+});
+
+it("moves every file of a title with versions beside it, counting it once", async () => {
+  const plan = planOf({
+    children: [seriesChild],
+    items: [item({ key: "lib_mix/Heat.mkv", label: "Heat", relative: "Heat.mkv", kind: "movie", files: ["lib_mix/Heat 1080p.mkv"] })],
+  });
+  await open(plan, parent(), (url, init) => {
+    if (url === "/api/libraries" && init?.method === "POST") return json(createdLibrary("lib_created", "Films"), 201);
+    if (String(url).startsWith("/api/libraries/") && init?.method === "PATCH") return json(parent());
+    if (url === "/api/library/ops" && init?.method === "POST") return json({ id: "job_heat" });
+    if (url === "/api/library/ops") return json({ jobs: [job({ id: "job_heat", status: "completed", total: 2, done: 2 })] });
+    return undefined;
+  });
+  await click(t("split.next"));
+  await click(t("split.next"));
+  expect(host.textContent).toContain(t("split.summaryMove", { items: t("split.itemCount", { count: 1 }), name: "Films" }));
+  await click(t("split.start"));
+  await flushUntil(() => mutating().some((call) => call.url === "/api/library/ops"));
+  expect(mutating().find((call) => call.url === "/api/library/ops")?.body.items).toEqual(["lib_mix/Heat.mkv", "lib_mix/Heat 1080p.mkv"]);
 });

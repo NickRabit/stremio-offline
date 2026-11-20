@@ -127,6 +127,10 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
 
   const retry = () => {
     stopPolling();
+    // The old plan describes a state some of the work already changed: it must not be startable
+    // again while the new one loads, nor after loading it failed.
+    setPlan(null);
+    setStep(1);
     setPhase("form");
     setLines([]);
     setShowRetry(false);
@@ -163,7 +167,9 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
         upsert(`create-${kind}`, t("split.progressCreating", { name }));
         const made = await api.createLibrary({
           name, type: kind, root, create: true, fresh: true,
-          ...(copyAccess && showCopy && library.visibleTo?.length ? { visibleTo: library.visibleTo } : {}),
+          // The source library's id, not the accounts this page saw: the server copies the grants
+          // as they are when it writes, so one removed meanwhile is not given back.
+          ...(copyAccess && showCopy ? { grantsFrom: library.id } : {}),
           autoScanMetadata: library.autoScanMetadata, writeArtwork: library.writeArtwork,
         });
         markApplied();
@@ -208,7 +214,7 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
       upsert("done", t("split.done"));
       return;
     }
-    const labels = new Map(currentPlan.items.map((item) => [item.key, item.label]));
+    const labels = new Map(currentPlan.items.flatMap((item) => [item.key, ...(item.files ?? [])].map((key) => [key, item.label] as const)));
     let finished = false;
     const tick = async () => {
       if (closed.current || finished) return;

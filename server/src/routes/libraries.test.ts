@@ -514,19 +514,22 @@ test("POST /api/libraries with fresh refuses a folder that already exists and ma
   assert.equal((await stat(fresh)).isDirectory(), true);
 });
 
-test("POST /api/libraries grants the requested accounts in the same write", async (t) => {
+test("POST /api/libraries copies another library's current grants in the same write", async (t) => {
   const { root, films, shows } = await grantedRoot("grant");
-  const harness = await mount([library("alpha", 0)], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  const source = { ...library("alpha", 0), visibleTo: [BOB, ADA] };
+  const harness = await mount([source], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
   t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
 
-  const granted = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: films, visibleTo: [BOB, BOB] } });
+  // The source's list as the write finds it, a dormant administrator entry included: the caller
+  // names the library, never the accounts, so it cannot hand back a grant removed meanwhile.
+  const granted = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: films, grantsFrom: "alpha" } });
   assert.equal(granted.status, 201);
-  assert.deepEqual(harness.stored().at(-1)!.visibleTo, [BOB]);
+  assert.deepEqual(harness.stored().at(-1)!.visibleTo, [BOB, ADA]);
 
-  const refused = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Shows", type: "series", root: shows, visibleTo: [ADA] } });
-  assert.equal(refused.status, 400);
-  assert.equal(((await refused.json()) as { messageKey?: string }).messageKey, "err.adminAlwaysSees");
-  assert.equal(harness.stored().length, 2, "a refused grant creates nothing");
+  const missing = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Shows", type: "series", root: shows, grantsFrom: "lib_gone" } });
+  assert.equal(missing.status, 404);
+  assert.equal(((await missing.json()) as { messageKey?: string }).messageKey, "err.libraryNotFound");
+  assert.equal(harness.stored().length, 2, "an unknown source creates nothing");
 });
 
 test("POST /api/libraries hands a re-added folder's remembered id to the scanner", async (t) => {

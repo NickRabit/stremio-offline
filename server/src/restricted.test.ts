@@ -54,6 +54,7 @@ test("secret GETs match DENIED_GETS and ordinary GETs do not", () => {
   assert.equal(isDeniedGet("POST", "/settings/export"), false);
   assert.equal(isDeniedGet("GET", "/libraries/browse"), true, "the picker names directories on the host");
   assert.equal(isDeniedGet("GET", "/libraries/grants"), true);
+  assert.equal(isDeniedGet("GET", "/libraries/lib_00000001/split-plan"), true, "the split plan names the root and what lies under it");
   assert.equal(isDeniedGet("GET", "/libraries"), false, "the list stays readable, minus the roots");
   assert.equal(isDeniedGet("GET", "/media-servers"), true, "the admin inventory names remote addresses and account ids");
   assert.equal(isDeniedGet("GET", "/media-servers/export"), true, "the remote export names server addresses too");
