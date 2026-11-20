@@ -144,9 +144,9 @@ const mount = async (
     libraryOps: { enqueue: async (operation: unknown) => { enqueued.push(operation); return { id: "op-1" }; } } as unknown as LibraryOps,
     libraryUnits: async () => splitUnits,
     activeDownloadTargets: async () => splitUnits[0] ? [splitUnits[0].key] : [],
-    libraryItemBusy: async (key) => {
-      itemBusyChecks.push(key);
-      return key === splitUnits[1]?.key;
+    libraryItemsBusy: async (keys) => {
+      itemBusyChecks.push(...keys);
+      return new Set(keys.filter((key) => key === splitUnits[1]?.key));
     },
   };
   const app = express();
@@ -496,6 +496,37 @@ test("POST /api/libraries persists the automatic metadata switch and hands the n
   const second = harness.stored().at(-1)!;
   assert.equal(second.autoScanMetadata, true, "a request that omits the switch means on");
   assert.deepEqual(harness.invalidated, [created.id, second.id]);
+});
+
+test("POST /api/libraries with fresh refuses a folder that already exists and makes a missing one", async (t) => {
+  const { root, films } = await grantedRoot("fresh");
+  const harness = await mount([library("alpha", 0)], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const existing = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: films, create: true, fresh: true } });
+  assert.equal(existing.status, 409);
+  assert.equal(((await existing.json()) as { messageKey?: string }).messageKey, "err.libraryRootExists");
+  assert.equal(harness.stored().length, 1, "nothing is created over a folder that appeared meanwhile");
+
+  const fresh = path.join(root, "New films");
+  const made = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "New films", type: "movie", root: fresh, create: true, fresh: true } });
+  assert.equal(made.status, 201);
+  assert.equal((await stat(fresh)).isDirectory(), true);
+});
+
+test("POST /api/libraries grants the requested accounts in the same write", async (t) => {
+  const { root, films, shows } = await grantedRoot("grant");
+  const harness = await mount([library("alpha", 0)], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const granted = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: films, visibleTo: [BOB, BOB] } });
+  assert.equal(granted.status, 201);
+  assert.deepEqual(harness.stored().at(-1)!.visibleTo, [BOB]);
+
+  const refused = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Shows", type: "series", root: shows, visibleTo: [ADA] } });
+  assert.equal(refused.status, 400);
+  assert.equal(((await refused.json()) as { messageKey?: string }).messageKey, "err.adminAlwaysSees");
+  assert.equal(harness.stored().length, 2, "a refused grant creates nothing");
 });
 
 test("POST /api/libraries hands a re-added folder's remembered id to the scanner", async (t) => {

@@ -2436,4 +2436,5 @@ export const sk: Catalog = {
   "split.backgroundNote": "Presuny pokračujú na serveri aj po zatvorení okna; uvidíte ich v páse operácií v knižnici.",
   "split.retryHint": "Na dokončenie spustite rozdelenie znova: nadväzuje na už vytvorené knižnice a hotové presuny.",
   "split.dismiss": "Teraz nie",
+  "err.libraryRootExists": "Tento priečinok už existuje. Načítajte rozdelenie znova a zvoľte iný názov.",
 };

@@ -1,7 +1,7 @@
 import type express from "express";
 import path from "node:path";
 import { constants } from "node:fs";
-import { access, mkdir, realpath, rm } from "node:fs/promises";
+import { access, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { mayDownloadToLibrary } from "../downloads.js";
 import { AppError } from "../errors.js";
@@ -45,17 +45,18 @@ export interface LibrariesDeps extends RouteContext {
   libraryUnits(): Promise<TitleUnit[]>;
   /** Library-qualified keys of files active downloads are writing (statuses checking, downloading, paused). */
   activeDownloadTargets(): Promise<string[]>;
-  /** Whether another library operation or reservation holds this item. */
-  libraryItemBusy(key: string): Promise<boolean>;
+  /** Which of these items another library operation, reservation or rename holds; the queue is
+   *  resolved once for all of them. */
+  libraryItemsBusy(keys: string[]): Promise<Set<string>>;
 }
 
 const runUnlocked = <T,>(work: () => Promise<T>): Promise<T> => work();
 
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
-  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps, libraryUnits, activeDownloadTargets, libraryItemBusy, stopContentAccess } = deps;
+  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps, libraryUnits, activeDownloadTargets, libraryItemsBusy, stopContentAccess } = deps;
 
   /** The same check the module makes, raised as the failure the interface renders. */
-  async function requireLibraryRoot(value: unknown, opts: { create?: boolean; exceptId?: string } = {}): Promise<string> {
+  async function requireLibraryRoot(value: unknown, opts: { create?: boolean; fresh?: boolean; exceptId?: string } = {}): Promise<string> {
     const checked = await checkLibraryRoot({ grants: libraryGrants(), libraries: store.libraries(), root: value, ...opts });
     if (!checked.ok) throw new AppError(checked.message, checked.messageKey, checked.status);
     return checked.root;
@@ -96,7 +97,16 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (req.body?.autoScanMetadata !== undefined && typeof req.body.autoScanMetadata !== "boolean") {
       throw new AppError("The automatic metadata switch has to be true or false.", "err.invalidRequest", 400);
     }
-    const root = await requireLibraryRoot(req.body?.root, { create: req.body?.create === true });
+    if (req.body?.visibleTo !== undefined && !Array.isArray(req.body.visibleTo)) throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
+    // Granted in the same write that creates the library, so a library made by a flow that stops
+    // half-way is never left visible to administrators only when the caller asked for more.
+    const requestedVisibleTo = req.body?.visibleTo === undefined ? [] : [...new Set((req.body.visibleTo as unknown[]).map(String))];
+    for (const id of requestedVisibleTo) {
+      const user = findUserById(store.users(), id);
+      if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
+      if (user.role === "admin") throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
+    }
+    const root = await requireLibraryRoot(req.body?.root, { create: req.body?.create === true, fresh: req.body?.fresh === true });
     // A fresh answer for the root as it is now: a deleted library's cached verdict must not
     // decide whether the new one is writable.
     libraryProbe.invalidate(root);
@@ -133,6 +143,17 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
         resumedId = departedIdIn(state.departed ?? [], forms);
         if (resumedId && !(state.libraries ?? []).some((item) => item.id === resumedId)) library.id = resumedId;
         else resumedId = undefined;
+        if (requestedVisibleTo.length) {
+          // Asked again over the accounts this write finds: one may have been removed or promoted
+          // while the folder was being checked.
+          for (const id of requestedVisibleTo) {
+            const user = findUserById(state.users ?? [], id);
+            if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
+            if (user.role === "admin") throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
+          }
+          library.visibleTo = requestedVisibleTo;
+          state.users = bumpPermissions(state.users ?? [], requestedVisibleTo);
+        }
         state.libraries = [...(state.libraries ?? []), library];
         if (resumedId) state.departed = (state.departed ?? []).filter((entry) => entry.id !== resumedId);
       });
@@ -277,8 +298,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     await refreshLibraryHealth();
     const [units, downloadTargets] = await Promise.all([libraryUnits(), activeDownloadTargets()]);
     const owned = units.filter((unit) => parseLibraryPath(unit.key)?.libraryId === target.id);
-    const operationBusy = new Set((await Promise.all(owned.map(async (unit) =>
-      [unit.key, await libraryItemBusy(unit.key)] as const))).filter(([, busy]) => busy).map(([key]) => key));
+    const operationBusy = await libraryItemsBusy(owned.map((unit) => unit.key));
+    const topNames = await readdir(target.root).catch(() => [] as string[]);
     res.json(buildSplitPlan({
       library: target,
       libraries: store.libraries(),
@@ -287,6 +308,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       records: metaStore.qualifiedMeta(),
       downloadTargets,
       operationBusy,
+      topNames,
     }));
   }));
 

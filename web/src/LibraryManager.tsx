@@ -5,7 +5,7 @@ import { api, describeError } from "./api";
 import { desktopBridge } from "./desktop-bridge";
 import { t, useI18n } from "./i18n";
 import { LibrarySplitDialog } from "./LibrarySplitDialog";
-import { canSplitLibrary, offerCandidate, readDismissedIds, writeDismissedIds } from "./library-split";
+import { canSplitLibrary, offerCandidates, readDismissedIds, writeDismissedIds } from "./library-split";
 import { bytes, SettingControl, SettingsSectionHead } from "./settings-ui";
 import type { GrantBrowse, LibraryEstimate, LibraryGrant, LibraryType, LibraryView, SplitPlan } from "./types";
 
@@ -36,16 +36,18 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
   useEffect(() => { void load().catch(onError); }, []);
   useEffect(() => {
     if (restricted) { setOffer(null); return; }
-    const candidate = offerCandidate(libraries);
-    if (!candidate || dismissed.includes(candidate.id)) { setOffer(null); return; }
+    const candidates = offerCandidates(libraries).filter((library) => !dismissed.includes(library.id));
     let stale = false;
-    void api.librarySplitPlan(candidate.id)
-      .then((plan) => {
+    void (async () => {
+      // One after another, stopping at the first that holds both kinds: plans are not free to
+      // compute, and usually the first candidate is the answer.
+      for (const candidate of candidates) {
+        const plan = await api.librarySplitPlan(candidate.id).catch(() => null);
         if (stale) return;
-        if (plan?.counts?.movies > 0 && plan.counts.series > 0) setOffer({ library: candidate, plan });
-        else setOffer(null);
-      })
-      .catch(() => { if (!stale) setOffer(null); });
+        if (plan && plan.counts?.movies > 0 && plan.counts.series > 0) { setOffer({ library: candidate, plan }); return; }
+      }
+      if (!stale) setOffer(null);
+    })();
     return () => { stale = true; };
   }, [libraries, dismissed, restricted]);
   const dismissOffer = (id: string) => {

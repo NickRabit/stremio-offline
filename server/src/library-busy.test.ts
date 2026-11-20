@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
-import { createLibraryPathBusy, libraryWriting, type LibraryBusyDeps } from "./library-busy.js";
+import { createLibraryPathBusy, createLibraryPathsBusy, libraryWriting, type LibraryBusyDeps } from "./library-busy.js";
 import type { LibraryRecord } from "./libraries.js";
 
 const library = (id: string, root: string): LibraryRecord =>
@@ -15,23 +15,26 @@ const workspace = async (t: TestContext) => {
   return root;
 };
 
-const busyWith = (libraries: LibraryRecord[], state: Partial<{
+type BusyState = Partial<{
   queued: string[]; roots: string[]; held: string[]; journaled: string[]; unreadable: boolean; folds: boolean;
   conflicts: (keys: readonly string[]) => boolean;
-}>) => {
-  const deps: LibraryBusyDeps = {
-    libraries: () => libraries,
-    caseInsensitive: () => state.folds ?? false,
-    queuedItems: () => state.queued ?? [],
-    rerootRoots: () => state.roots ?? [],
-    heldKeys: () => state.held ?? [],
-    renames: {
-      hasUnreadableRecord: () => state.unreadable ?? false,
-      busyKeys: () => state.journaled ?? [],
-      conflicts: state.conflicts ?? ((keys) => keys.some((key) => (state.journaled ?? []).includes(key))),
-    },
-  };
-  return createLibraryPathBusy(deps);
+}>;
+
+const depsFor = (libraries: LibraryRecord[], state: BusyState): LibraryBusyDeps => ({
+  libraries: () => libraries,
+  caseInsensitive: () => state.folds ?? false,
+  queuedItems: () => state.queued ?? [],
+  rerootRoots: () => state.roots ?? [],
+  heldKeys: () => state.held ?? [],
+  renames: {
+    hasUnreadableRecord: () => state.unreadable ?? false,
+    busyKeys: () => state.journaled ?? [],
+    conflicts: state.conflicts ?? ((keys) => keys.some((key) => (state.journaled ?? []).includes(key))),
+  },
+});
+
+const busyWith = (libraries: LibraryRecord[], state: BusyState) => {
+  return createLibraryPathBusy(depsFor(libraries, state));
 };
 
 test("nothing active answers free without touching the disk", async () => {
@@ -122,4 +125,23 @@ test("a direct request holding a path counts as a library write, as the queue's 
   assert.equal(libraryWriting(false, []), false);
   assert.equal(libraryWriting(true, []), true);
   assert.equal(libraryWriting(false, ["lib_00000001/Films/Heat.mkv"]), true);
+});
+
+test("many keys are judged against one resolution of the queue", async (t) => {
+  const root = await workspace(t);
+  await mkdir(path.join(root, "Films"), { recursive: true });
+  const libraries = [library("lib_00000001", root)];
+  let reads = 0;
+  const deps = depsFor(libraries, { queued: ["lib_00000001/Films/Heat", "lib_00000001/Films/Thief"] });
+  const queuedItems = deps.queuedItems;
+  deps.queuedItems = () => { reads += 1; return queuedItems(); };
+  const busy = await createLibraryPathsBusy(deps)(["lib_00000001/Films/Heat", "lib_00000001/Films/Ronin", "lib_00000001/Films", "lib_00000001/Films/Thief/Thief.mkv"]);
+  assert.deepEqual([...busy].sort(), ["lib_00000001/Films", "lib_00000001/Films/Heat", "lib_00000001/Films/Thief/Thief.mkv"]);
+  assert.equal(reads, 1);
+});
+
+test("an unreadable rename record makes every asked key busy, and an idle queue none", async () => {
+  const libraries = [library("lib_00000001", "/does/not/exist")];
+  assert.deepEqual([...await createLibraryPathsBusy(depsFor(libraries, { unreadable: true }))(["lib_00000001/A", "lib_00000001/B"])], ["lib_00000001/A", "lib_00000001/B"]);
+  assert.equal((await createLibraryPathsBusy(depsFor(libraries, {}))(["lib_00000001/A"])).size, 0);
 });

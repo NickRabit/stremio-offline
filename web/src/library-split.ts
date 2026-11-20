@@ -24,8 +24,11 @@ export function hasNestedLibrary(library: LibraryView, libraries: LibraryView[])
   return libraries.some((other) => other.id !== library.id && !!other.root && posixRoot(other.root).startsWith(prefix));
 }
 
-export function offerCandidate(libraries: LibraryView[]): LibraryView | undefined {
-  return libraries.find((library) => canSplitLibrary(library) && !!library.root && !hasNestedLibrary(library, libraries));
+/** Every library the offer may name, in display order. The caller walks them, skipping the
+ *  dismissed ones and those whose plan does not hold both kinds, so one library that does not
+ *  qualify never hides another that does. */
+export function offerCandidates(libraries: LibraryView[]): LibraryView[] {
+  return libraries.filter((library) => canSplitLibrary(library) && !!library.root && !hasNestedLibrary(library, libraries));
 }
 
 export function joinLibraryRoot(parentRoot: string, folderName: string): string {
@@ -60,6 +63,7 @@ export function folderNameError(name: string, plan: SplitPlan): FolderNameError 
   // A title sitting at the top under that name is a folder too: a library created there would adopt it.
   if (plan.folders.some((folder) => folder.name.toLowerCase() === lower)) return "nameTaken";
   if (plan.items.some((item) => firstSegment(item.relative).toLowerCase() === lower)) return "nameTaken";
+  if ((plan.taken ?? []).some((taken) => taken.toLowerCase() === lower)) return "nameTaken";
   if (plan.children.some((child) => firstSegment(child.relative).toLowerCase() === lower)) return "nameTaken";
   return undefined;
 }

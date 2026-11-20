@@ -2422,4 +2422,5 @@ export const de: Catalog = {
   "split.backgroundNote": "Verschiebungen laufen auf dem Server weiter, auch wenn Sie das Fenster schließen; die Vorgangsleiste in der Mediathek zeigt sie.",
   "split.retryHint": "Öffnen Sie die Aufteilung erneut, um sie abzuschließen: Sie übernimmt angelegte Mediatheken und erledigte Verschiebungen.",
   "split.dismiss": "Nicht jetzt",
+  "err.libraryRootExists": "Dieser Ordner existiert bereits. Laden Sie die Aufteilung neu und wählen Sie einen anderen Namen.",
 };

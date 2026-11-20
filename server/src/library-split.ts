@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isPathWithin } from "./library.js";
-import { knownTitleOf, type LibraryMetaRecord, type TitleUnit } from "./library-match.js";
+import { knownTitleForUnit, type LibraryMetaRecord, type TitleUnit } from "./library-match.js";
 import { isInside, libraryPath, parseLibraryPath, posixBase, relativeWithin, sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
 
 export type SplitKind = "movie" | "series" | "unknown";
@@ -44,6 +44,9 @@ export interface SplitPlan {
   children: SplitPlanChild[];
   folders: SplitPlanFolder[];
   items: SplitPlanItem[];
+  /** Every name directly under the root, folders without videos and plain files included: a new
+   *  folder must not take one of them. */
+  taken: string[];
 }
 
 export interface SplitPlanInput {
@@ -60,6 +63,8 @@ export interface SplitPlanInput {
   downloadTargets: string[];
   /** Unit keys another library operation or reservation holds (see Busy rules). */
   operationBusy: ReadonlySet<string>;
+  /** The names directly under the parent root, as the route read them. */
+  topNames: string[];
 }
 
 function splitKind(
@@ -68,7 +73,9 @@ function splitKind(
   libraryType: LibraryType,
   records: Record<string, LibraryMetaRecord>,
 ): Pick<SplitPlanItem, "label" | "kind" | "basis"> {
-  const record = knownTitleOf(unit.key, records);
+  // The same answer the library view gives: a loose film in a collection folder does not
+  // inherit the folder's binding, so it is not filed under another film's name.
+  const record = knownTitleForUnit(unit, records);
   if (record?.id && !record.unmatched && (record.type === "movie" || record.type === "series")) {
     return {
       label: record.name ? (record.year ? `${record.name} (${record.year})` : record.name) : posixBase(relative),
@@ -89,7 +96,7 @@ const folderCount = (folder: SplitPlanFolder, kind: SplitKind) => {
 };
 
 export function buildSplitPlan(input: SplitPlanInput): SplitPlan {
-  const { library, libraries, healthOf, units, records, downloadTargets, operationBusy } = input;
+  const { library, libraries, healthOf, units, records, downloadTargets, operationBusy, topNames } = input;
   const owned = units.filter((unit) => parseLibraryPath(unit.key)?.libraryId === library.id);
 
   const items: SplitPlanItem[] = owned.map((unit) => {
@@ -148,5 +155,6 @@ export function buildSplitPlan(input: SplitPlanInput): SplitPlan {
     folders: [...folderMap.values()].sort((left, right) =>
       left.name.localeCompare(right.name, undefined, { sensitivity: "base" })),
     items,
+    taken: [...new Set(topNames)].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })),
   };
 }

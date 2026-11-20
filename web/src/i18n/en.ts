@@ -2485,4 +2485,5 @@ export const en = {
   "split.backgroundNote": "Moves continue on the server if you close this window; the operation strip in the Library view shows them.",
   "split.retryHint": "Open the split again to finish: it picks up the libraries and moves already done.",
   "split.dismiss": "Not now",
+  "err.libraryRootExists": "That folder already exists. Load the split again and choose another name.",
 };

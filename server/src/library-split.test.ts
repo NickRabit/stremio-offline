@@ -28,6 +28,7 @@ const input = (overrides: Partial<SplitPlanInput> = {}): SplitPlanInput => ({
   records: {},
   downloadTargets: [],
   operationBusy: new Set(),
+  topNames: [],
   ...overrides,
 });
 
@@ -154,4 +155,22 @@ test("download busy wins over operation busy, and containment is per unit", () =
     { relative: "Films/Operating", busy: "operation" },
   ]);
   assert.deepEqual(plan.counts, { movies: 0, series: 1, unknown: 2 });
+});
+
+test("a loose film in a collection folder does not take the folder's binding", () => {
+  const records: Record<string, LibraryMetaRecord> = {
+    [libraryPath(parent.id, "Whisper Man")]: { type: "movie", id: "tt-whisper", name: "The Whisper Man", year: "2025" },
+  };
+  const plan = buildSplitPlan(input({
+    records,
+    units: [unit(parent.id, "Whisper Man/Harry Potter.mp4"), unit(parent.id, "Whisper Man/The Whisper Man (2025).mkv")],
+  }));
+  const byLabel = Object.fromEntries(plan.items.map((item) => [item.relative, { kind: item.kind, basis: item.basis, label: item.label }]));
+  assert.deepEqual(byLabel["Whisper Man/Harry Potter.mp4"], { kind: "unknown", basis: "none", label: "Harry Potter.mp4" });
+  assert.deepEqual(byLabel["Whisper Man/The Whisper Man (2025).mkv"], { kind: "movie", basis: "identified", label: "The Whisper Man (2025)" });
+});
+
+test("taken lists every name under the root once, folders without videos included", () => {
+  const plan = buildSplitPlan(input({ topNames: ["notes.txt", "Empty", "Films", "Empty"] }));
+  assert.deepEqual(plan.taken, ["Empty", "Films", "notes.txt"]);
 });

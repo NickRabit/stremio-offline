@@ -781,6 +781,8 @@ export interface SplitPlan {
   children: SplitPlanChild[];
   folders: SplitPlanFolder[];
   items: SplitPlanItem[];
+  /** Every name directly under the root, so a new folder never lands on one of them. */
+  taken: string[];
 }
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)

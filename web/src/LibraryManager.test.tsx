@@ -534,6 +534,7 @@ const splitPlan = (over: Partial<SplitPlan> = {}): SplitPlan => ({
   children: [],
   folders: [],
   items: [],
+  taken: [],
   ...over,
 });
 
@@ -612,4 +613,32 @@ it("still renders when localStorage throws on getItem and setItem", async () => 
     getItem.mockRestore();
     setItem.mockRestore();
   }
+});
+
+it("moves on to the next mixed library when the first holds one kind or was dismissed", async () => {
+  act(() => root.unmount());
+  root = createRoot(host);
+  const rows = [mixed({ id: "lib_first", name: "Archive", root: "/archive" }), mixed({ id: "lib_second", name: "Downloads", root: "/downloads" })];
+  fetchMock.mockImplementation(async (url: string) => {
+    if (String(url).includes("lib_first/split-plan")) return json(splitPlan({ counts: { movies: 5, series: 0, unknown: 0 } }));
+    if (String(url).includes("lib_second/split-plan")) return json(splitPlan({ counts: { movies: 2, series: 2, unknown: 0 } }));
+    return json(rows);
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+  expect(host.querySelector(".library-split-offer")?.textContent).toContain("Downloads");
+
+  localStorage.setItem("library-split-dismissed", JSON.stringify(["lib_first"]));
+  act(() => root.unmount());
+  root = createRoot(host);
+  fetchMock.mockImplementation(async (url: string) => {
+    if (String(url).includes("/split-plan")) return json(splitPlan({ counts: { movies: 2, series: 2, unknown: 0 } }));
+    return json(rows);
+  });
+  fetchMock.mockClear();
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+  expect(host.querySelector(".library-split-offer")?.textContent).toContain("Downloads");
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes("lib_first/split-plan"))).toBe(false);
+  localStorage.removeItem("library-split-dismissed");
 });

@@ -48,6 +48,7 @@ const planOf = (over: Partial<SplitPlan> = {}): SplitPlan => ({
   children: [],
   folders: [],
   items: [],
+  taken: [],
   ...over,
 });
 
@@ -180,7 +181,7 @@ it("defaults step 2 destinations, tags guessed and unidentified, leaves busy wit
   expect(rowOf("Inception")?.querySelector("select")?.value).toBe("movie");
 });
 
-it("applies a new films folder and an existing series child in the specified request order", async () => {
+it("creates a new films folder fresh with its grants in one request, then defaults, then moves", async () => {
   const library = parent({ visibleTo: ["usr_1"] });
   const plan = planOf({
     children: [seriesChild],
@@ -210,12 +211,11 @@ it("applies a new films folder and an existing series child in the specified req
 
   expect(mutating()).toEqual([
     { url: "/api/libraries", method: "POST", body: {
-      name: "Films", type: "movie", root: "/downloads/Films", create: true,
+      name: "Films", type: "movie", root: "/downloads/Films", create: true, fresh: true, visibleTo: ["usr_1"],
       autoScanMetadata: true, writeArtwork: true,
     } },
     { url: "/api/libraries/lib_created", method: "PATCH", body: { defaultMovie: true } },
     { url: "/api/libraries/lib_series", method: "PATCH", body: { defaultSeries: true } },
-    { url: "/api/libraries/lib_created", method: "PATCH", body: { visibleTo: ["usr_1"] } },
     { url: "/api/library/ops", method: "POST", body: {
       op: "move", items: ["mov"], target: "lib_created", confirmTypeMismatch: true,
     } },
@@ -347,4 +347,30 @@ it("refreshes the list behind it when a library is created after the dialog was 
   await act(async () => { finishCreate(json(createdLibrary("lib_late", "Films"), 201)); await Promise.resolve(); });
   await flush(3);
   expect(onApplied).toHaveBeenCalledTimes(1);
+});
+
+it("refuses a new folder name that any entry under the root already has", () => {
+  expect(folderNameError("empty", planOf({ taken: ["Empty"] }))).toBe("nameTaken");
+});
+
+it("offers a retry and does not claim done when a move job was cancelled part-way", async () => {
+  const plan = planOf({
+    children: [seriesChild],
+    items: Array.from({ length: 10 }, (_, index) => item({ key: `m${index}`, label: `Movie ${index}`, kind: "movie" })),
+  });
+  await open(plan, parent(), (url, init) => {
+    if (url === "/api/libraries" && init?.method === "POST") return json(createdLibrary("lib_created", "Films"), 201);
+    if (String(url).startsWith("/api/libraries/") && init?.method === "PATCH") return json(parent());
+    if (url === "/api/library/ops" && init?.method === "POST") return json({ id: "job_cancel" });
+    if (url === "/api/library/ops") return json({ jobs: [job({ id: "job_cancel", status: "cancelled", total: 10, done: 2 })] });
+    return undefined;
+  });
+  await click(t("split.next"));
+  await click(t("split.next"));
+  await click(t("split.start"));
+  await flushUntil(() => host.textContent?.includes(t("split.retryHint")) ?? false);
+  expect(host.textContent).toContain(t("split.progressMoved", { name: "Films", done: 2, total: 10 }));
+  expect(host.textContent).toContain(t("split.retryHint"));
+  expect([...host.querySelectorAll("button")].some((button) => button.textContent === t("common.retry"))).toBe(true);
+  expect(host.textContent).not.toContain(t("split.done"));
 });

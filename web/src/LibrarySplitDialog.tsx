@@ -149,38 +149,32 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
     setLines([]);
     setShowRetry(false);
     setMoving(false);
-    const created: string[] = [];
     const ids: Record<"movie" | "series", string> = { movie: "", series: "" };
     try {
       for (const kind of KINDS) {
         const target = kind === "movie" ? movie : series;
         if (target.mode === "child") { ids[kind] = target.id; continue; }
-        // Always a new folder: a library laid over a folder that already holds titles would take
-        // them without the records a move carries, so existing titles always arrive by moving.
+        // Always a folder this request makes (`fresh`): a library laid over a folder that holds
+        // titles -- one that appeared since the plan was read included -- would take them without
+        // the records a move carries. The grants travel in the same request, so a run that stops
+        // after this library leaves it shared the way it was asked for.
         const name = targetName(target);
         const root = joinLibraryRoot(parentRoot, name);
         upsert(`create-${kind}`, t("split.progressCreating", { name }));
         const made = await api.createLibrary({
-          name, type: kind, root, create: true,
+          name, type: kind, root, create: true, fresh: true,
+          ...(copyAccess && showCopy && library.visibleTo?.length ? { visibleTo: library.visibleTo } : {}),
           autoScanMetadata: library.autoScanMetadata, writeArtwork: library.writeArtwork,
         });
         markApplied();
         if (closed.current) return;
         ids[kind] = made.id;
-        created.push(made.id);
         upsert(`create-${kind}`, t("split.progressCreated", { name }));
       }
-      const copy = copyAccess && showCopy;
-      if (setDefaults || (copy && created.length)) {
-        if (setDefaults) {
-          await api.updateLibrary(ids.movie, { defaultMovie: true });
-          await api.updateLibrary(ids.series, { defaultSeries: true });
-          markApplied();
-        }
-        if (copy) {
-          for (const id of created) await api.updateLibrary(id, { visibleTo: library.visibleTo });
-          markApplied();
-        }
+      if (setDefaults) {
+        await api.updateLibrary(ids.movie, { defaultMovie: true });
+        await api.updateLibrary(ids.series, { defaultSeries: true });
+        markApplied();
         if (closed.current) return;
         upsert("settings", t("split.progressSettings"));
       }
@@ -222,6 +216,9 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
       if (closed.current || finished) return;
       const byId = new Map(current.map((job) => [job.id, job]));
       let allTerminal = true;
+      // A cancelled job, or one that ended before reaching every item, records nothing for the
+      // items it never took up: they are still waiting in the parent and need a retry, not "done".
+      let incomplete = false;
       const failed: Line[] = [];
       for (const kind of KINDS) {
         if (!jobs[kind].length) continue;
@@ -233,6 +230,7 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
             running = true;
           }
           if (!job) continue;
+          if (TERMINAL.has(job.status) && (job.status === "cancelled" || job.done + job.failed < job.total)) incomplete = true;
           done += job.done;
           total += job.total;
           for (const result of job.results) {
@@ -259,9 +257,9 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
           const seen = new Set(currentLines.map((line) => line.id));
           return [...currentLines, ...failed.filter((line) => !seen.has(line.id))];
         });
-        setShowRetry(true);
       }
-      upsert("done", t("split.done"));
+      if (failed.length || incomplete) setShowRetry(true);
+      if (!incomplete) upsert("done", t("split.done"));
     };
     setMoving(true);
     await tick();

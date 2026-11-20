@@ -2422,4 +2422,5 @@ export const it: Catalog = {
   "split.backgroundNote": "Gli spostamenti continuano sul server anche se chiudi la finestra; la barra delle operazioni della libreria li mostra.",
   "split.retryHint": "Riapri la divisione per completarla: riprende le librerie e gli spostamenti già fatti.",
   "split.dismiss": "Non ora",
+  "err.libraryRootExists": "Quella cartella esiste già. Ricarica la divisione e scegli un altro nome.",
 };

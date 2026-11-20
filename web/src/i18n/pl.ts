@@ -2439,4 +2439,5 @@ export const pl: Catalog = {
   "split.backgroundNote": "Przenoszenie trwa na serwerze także po zamknięciu okna; pasek operacji w bibliotece je pokazuje.",
   "split.retryHint": "Otwórz podział ponownie, aby dokończyć: uwzględni już utworzone biblioteki i wykonane przeniesienia.",
   "split.dismiss": "Nie teraz",
+  "err.libraryRootExists": "Ten folder już istnieje. Wczytaj podział ponownie i wybierz inną nazwę.",
 };
