@@ -363,4 +363,23 @@ describe("library browsing", () => {
     expect(browseUrls).toHaveLength(libraryRequests);
     expect(favoritesUrls[0]!.pathname).toBe("/api/library/favorites");
   });
+
+  it("shows rename by pattern in selection mode and posts a plan", async () => {
+    await openLibrary();
+    await until(() => host.querySelector(".browse-item") !== null, "library items");
+    const selectMode = host.querySelector<HTMLButtonElement>('button[title="Select items"]');
+    expect(selectMode).toBeTruthy();
+    await act(async () => { selectMode!.click(); });
+    await until(() => host.querySelector(".library-bulk-bar") !== null, "bulk toolbar");
+    const rename = [...host.querySelectorAll(".library-bulk-bar button")]
+      .find((button) => button.textContent?.includes("Rename by pattern"));
+    expect(rename, "rename by pattern in the bulk toolbar").toBeTruthy();
+    await until(() => host.querySelector(".browse-select") !== null, "selection checkbox");
+    await act(async () => { host.querySelector<HTMLButtonElement>(".browse-select")!.click(); });
+    expect((rename as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => { (rename as HTMLButtonElement).click(); });
+    await until(() => vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/api/library/rename-plan")),
+      "rename-plan request");
+    expect(host.querySelector(".rename-card")).toBeTruthy();
+  });
 });

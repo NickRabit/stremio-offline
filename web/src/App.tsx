@@ -1,7 +1,7 @@
 import { FormEvent, ReactNode, Suspense, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { genreLabel } from "./genres";
 import { useCrumbsAtEnd } from "./crumbs";
-import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, PenLine, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, ChildRefusedError, describeError, saveToDevice } from "./api";
 import { childViewAllowed, setChildSession } from "./child-policy";
@@ -15,6 +15,7 @@ import { bytes, Heading, hideBroken } from "./settings-ui";
 import { Player } from "./Player";
 import { TrailerPlayer } from "./TrailerPlayer";
 import { IdentifyDialog } from "./IdentifyDialog";
+import { RenamePatternDialog } from "./RenamePatternDialog";
 import { AddonManager } from "./AddonManager";
 import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { LocalLibraryDetail, type AlternativePlay } from "./LocalLibraryDetail";
@@ -427,6 +428,7 @@ export function App() {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [libraryOps, setLibraryOps] = useState<LibraryOpsState[]>([]);
   const [bulkIdentifyPaths, setBulkIdentifyPaths] = useState<string[] | null>(null);
+  const [renamePaths, setRenamePaths] = useState<string[] | null>(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   // Identification opened from the suggestion list sits above it rather than replacing it:
   // the list keeps its rows, its scroll position and its filter while the dialog is open.
@@ -527,6 +529,19 @@ export function App() {
       const queued = await api.startLibraryOp(operation);
       leaveSelection();
       await trackQueuedOp(queued.id);
+    } catch (error) { fail(error); }
+  };
+  const startRenameOps = async (operations: LibraryOp[]) => {
+    try {
+      let left = false;
+      for (const operation of operations) {
+        const queued = await api.startLibraryOp(operation);
+        if (!left) {
+          leaveSelection();
+          left = true;
+        }
+        await trackQueuedOp(queued.id);
+      }
     } catch (error) { fail(error); }
   };
   const openBulkDestination = (copy: boolean) => {
@@ -4037,6 +4052,7 @@ export function App() {
           <strong>{t("library.selectedCount", { count: selectedPaths.size })}</strong>
           <button disabled={!selectedPaths.size} onClick={() => openBulkDestination(false)}><FolderInput/> {t("library.move")}</button>
           <button disabled={!selectedPaths.size} onClick={() => openBulkDestination(true)}><Copy/> {t("library.copy")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => setRenamePaths([...selectedPaths])}><PenLine/> {t("library.renamePattern")}</button>
           <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "favorite", items: [...selectedPaths], favorite: true })}><Star/> {t("favorite.add")}</button>
           <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "favorite", items: [...selectedPaths], favorite: false })}><Star/> {t("favorite.remove")}</button>
           <button disabled={!selectedPaths.size} onClick={() => setBulkIdentifyPaths([...selectedPaths])}><Sparkles/> {t("library.identify")}</button>
@@ -4321,6 +4337,8 @@ export function App() {
       onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}
     {bulkIdentifyPaths?.length && <IdentifyDialog path={bulkIdentifyPaths[0]!} paths={bulkIdentifyPaths}
       onClose={() => setBulkIdentifyPaths(null)} onApplied={(id) => { setBulkIdentifyPaths(null); leaveSelection(); if (id) void trackQueuedOp(id); }}/>}
+    {renamePaths?.length ? <RenamePatternDialog paths={renamePaths} onClose={() => setRenamePaths(null)}
+      onStart={(operations) => { void startRenameOps(operations); }}/> : null}
     {suggestionsOpen && <SuggestionsDialog
       {...(currentLibraryId ? { libraryId: currentLibraryId } : {})}
       identifyPath={identifyFrom}
