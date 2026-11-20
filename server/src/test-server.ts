@@ -20,6 +20,7 @@ export interface SpawnedServer {
  *  for a free port and handing it over is a race: test files run in parallel, and a stub in
  *  another file could take the port first and answer our requests with 200. */
 export async function spawnServer(env: Record<string, string>, timeout = 30_000): Promise<SpawnedServer> {
+  const spawnedAt = Date.now();
   const child = spawn(process.execPath, ["--import", "tsx", path.join(serverDir, "src", "index.ts")], {
     cwd: serverDir,
     stdio: ["ignore", "pipe", "pipe"],
@@ -44,8 +45,12 @@ export async function spawnServer(env: Record<string, string>, timeout = 30_000)
 
   const port = await new Promise<number>((resolve, reject) => {
     let stdout = "";
-    const timer = setTimeout(() => finish(new Error(`Timed out waiting for the server to listen\n${log}`)), timeout);
-    const onExit = (code: number | null) => finish(new Error(`the server exited with ${code}\n${log}`));
+    // The server logs to stdout (`LOG_STDOUT`), so the step a stalled boot reached is only
+    // there; stderr alone left a 30-second Windows boot with nothing to read.
+    const report = (what: string) => new Error(
+      `${what} after ${Date.now() - spawnedAt} ms\n--- stdout ---\n${stdout.slice(-8_000)}\n--- stderr ---\n${log.slice(-8_000)}`);
+    const timer = setTimeout(() => finish(report("Timed out waiting for the server to listen")), timeout);
+    const onExit = (code: number | null) => finish(report(`The server exited with ${code}`));
     const onData = (chunk: Buffer) => {
       stdout += String(chunk);
       const match = LISTENING.exec(stdout);
