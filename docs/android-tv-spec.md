@@ -128,7 +128,7 @@ the control that opened it. There are no centred dialogs on TV.
 **Player.** The web's controls, sized for the sofa: the eyebrow names the
 playback path (`Direct play · MKV · no server conversion`, `Remux`, `Audio
 converted`), the title below it, and the time of day in the top-right corner
-(in the TV's own 12/24-hour format); at the bottom the timeline and a row of round
+(in the TV's own 12/24-hour format) with the finish time under it; at the bottom the timeline and a row of round
 buttons: back 10, play/pause in the accent, forward 10, audio and subtitles
 (labelled with the current choice), next episode, diagnostics. With the
 controls hidden, OK pauses and shows them, and left or right seek with a bubble
@@ -298,7 +298,9 @@ leaves the last confirmed one in place.
 - Everything works with the five-way pad and Back.
 - In playback with no controls shown: OK pauses and shows controls; left and
   right seek 10 seconds, debounced so a held key does not restart a
-  conversion ten times. Media keys work regardless.
+  conversion ten times. Held longer, the step grows (30 s after one second,
+  60 s after three, 120 s after six), measured from the key going down, so
+  quick separate taps stay 10 seconds each. Media keys work regardless.
 - Back closes a side panel, then the controls, then the player, and never traps.
 - Home, backgrounding and standby pause, save progress and release the session.
   No background playback in v1.
