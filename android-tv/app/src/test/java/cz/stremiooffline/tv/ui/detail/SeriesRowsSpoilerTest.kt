@@ -97,11 +97,12 @@ class SeriesRowsSpoilerTest {
   }
 
   @Test
-  fun `a catalogue row hides only the episodes after the one to continue`() {
-    mount(hideSpoilers = true, resumeEpisode = episodes[2])
+  fun `a catalogue row shows only the episode being continued`() {
+    mount(hideSpoilers = true, resumeEpisode = episodes[2], cardProgress = { if (it.id == "e3") 0.2f else null })
 
-    assertEquals(false, spoilerHidden(episodes[0]))
-    assertEquals(false, spoilerHidden(episodes[1]))
+    assertEquals(true, spoilerHidden(episodes[0]))
+    assertEquals(true, spoilerHidden(episodes[1]))
+    assertEquals(false, spoilerHidden(episodes[2]))
     assertEquals(true, spoilerHidden(episodes[3]))
   }
 

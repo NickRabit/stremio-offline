@@ -148,7 +148,9 @@ internal fun SeriesRows(
         imageUrl = imageUrl(video.thumbnail),
         progress = progress,
         completed = completed,
-        spoilerHidden = hideSpoilers && !completed && (progress == null || progress <= 0f),
+        // Only the episode's own mark or progress reveals it: the finished mark guessed from
+        // the resume position says nothing about episodes a viewer may have skipped.
+        spoilerHidden = hideSpoilers && cardCompleted?.invoke(video) != true && (progress == null || progress <= 0f),
         cardTag = cardTag(video),
         selected = index == focusIndex,
         onClick = { onSelect(video) },
