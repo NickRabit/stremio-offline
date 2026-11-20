@@ -1234,6 +1234,7 @@ img.broken{visibility:hidden}
 .library-admin-controls select{padding:8px 10px;font-size:11px}
 .library-admin-footer{display:grid;gap:5px;padding-top:2px}
 .library-admin-footer>button,.library-admin-footer>.library-admin-buttons{justify-self:stretch}
+.library-admin-footer>.library-admin-buttons button{padding:10px 15px;font-size:inherit}
 .library-admin-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .library-admin-buttons button{padding:7px 11px;font-size:11px}
 .library-admin-buttons .library-admin-scan{grid-column:1/-1;border-color:#ff5b3855;color:var(--accent2);background:#ff5b3810}
