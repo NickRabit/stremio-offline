@@ -13,7 +13,8 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth } from "../library-probe.js";
 import type { LibrarySeenStore } from "../library-seen.js";
-import type { LibraryRecord, RootGrant } from "../libraries.js";
+import type { TitleUnit } from "../library-match.js";
+import { libraryPath, type LibraryRecord, type RootGrant } from "../libraries.js";
 import type { Store } from "../store.js";
 import type { UserRecord } from "../users.js";
 import { registerLibrariesRoutes, type LibrariesDeps } from "./libraries.js";
@@ -33,6 +34,7 @@ interface Harness {
   /** Every library id the first-seen index was asked to forget, in order. */
   seenForgotten: string[];
   fingerprintsForgotten: string[];
+  itemBusyChecks: string[];
   stored: () => LibraryRecord[];
   userGrants: () => RootGrant[];
   allGrants: () => RootGrant[];
@@ -74,6 +76,7 @@ const mount = async (
   const invalidated: string[] = [];
   const seenForgotten: string[] = [];
   const fingerprintsForgotten: string[] = [];
+  const itemBusyChecks: string[] = [];
   const queuePauses: Harness["queuePauses"] = [];
   const contentStops: Harness["contentStops"] = [];
   // A write can be held, so two requests can both read the state before either mutator runs.
@@ -95,6 +98,11 @@ const mount = async (
       mutate(state);
     },
   } as unknown as Store;
+  const splitSource = records[0];
+  const splitUnits: TitleUnit[] = splitSource ? [
+    { key: libraryPath(splitSource.id, "Downloads/Film.mkv"), relative: "Downloads/Film.mkv", kind: "movie", sampleFiles: [] },
+    { key: libraryPath(splitSource.id, "Shows/Show"), relative: "Shows/Show", kind: "series", sampleFiles: [] },
+  ] : [];
   const deps: LibrariesDeps = {
     store,
     needsSetup: () => false,
@@ -134,6 +142,12 @@ const mount = async (
     seen: { forget: async (libraryId: string) => { seenForgotten.push(libraryId); } } as unknown as LibrarySeenStore,
     fingerprints: { forget: async (libraryId: string) => { fingerprintsForgotten.push(libraryId); } },
     libraryOps: { enqueue: async (operation: unknown) => { enqueued.push(operation); return { id: "op-1" }; } } as unknown as LibraryOps,
+    libraryUnits: async () => splitUnits,
+    activeDownloadTargets: async () => splitUnits[0] ? [splitUnits[0].key] : [],
+    libraryItemBusy: async (key) => {
+      itemBusyChecks.push(key);
+      return key === splitUnits[1]?.key;
+    },
   };
   const app = express();
   app.use(express.json());
@@ -155,6 +169,7 @@ const mount = async (
     stored: () => state.libraries,
     seenForgotten,
     fingerprintsForgotten,
+    itemBusyChecks,
     settings: () => state.settings,
     userGrants: () => state.grants,
     loseSession: (after: number) => { sessionReads = after; },
@@ -237,6 +252,48 @@ test("GET /api/libraries says whether this account may save a download to each l
   const user = await (await api(harness.base, "/api/libraries", { user: BOB })).json() as Array<{ id: string; writable: boolean }>;
   assert.deepEqual(user.map((item) => [item.id, item.writable]), [["beta", false], ["alpha", true], ["delta", true]]);
   assert.deepEqual(harness.viewed.filter((item) => item.id === "delta").map((item) => item.canDownload), [true, true]);
+});
+
+test("GET /api/libraries/:id/split-plan returns qualified items with download and operation busy state", async (t) => {
+  const harness = await mount([library("lib_aaaaaaaa", 0)]);
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/libraries/lib_aaaaaaaa/split-plan");
+  assert.equal(response.status, 200);
+  const plan = await response.json() as {
+    library: { id: string };
+    items: Array<{ key: string; relative: string; busy?: string }>;
+  };
+  assert.equal(plan.library.id, "lib_aaaaaaaa");
+  assert.ok(plan.items.every((item) => item.key.startsWith("lib_aaaaaaaa/")));
+  assert.deepEqual(plan.items.map(({ relative, busy }) => ({ relative, busy })), [
+    { relative: "Downloads/Film.mkv", busy: "download" },
+    { relative: "Shows/Show", busy: "operation" },
+  ]);
+  assert.deepEqual(harness.itemBusyChecks.sort(), ["lib_aaaaaaaa/Downloads/Film.mkv", "lib_aaaaaaaa/Shows/Show"]);
+});
+
+test("GET /api/libraries/:id/split-plan refuses an unknown library", async (t) => {
+  const harness = await mount([library("lib_aaaaaaaa", 0)]);
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/libraries/lib_bbbbbbbb/split-plan");
+  assert.equal(response.status, 404);
+  assert.deepEqual(await failure(response), {
+    error: "The library was not found.",
+    messageKey: "err.libraryNotFound",
+  });
+});
+
+test("GET /api/libraries/:id/split-plan is administrator-only", async (t) => {
+  const harness = await mount([library("lib_aaaaaaaa", 0)]);
+  t.after(harness.close);
+  const ordinaryResponse = await api(harness.base, "/api/libraries/lib_aaaaaaaa/split-plan", { user: BOB });
+  assert.equal(ordinaryResponse.status, 403);
+  assert.equal((await failure(ordinaryResponse)).messageKey, "err.notAllowed");
+
+  harness.loseSession(0);
+  const lostResponse = await api(harness.base, "/api/libraries/lib_aaaaaaaa/split-plan");
+  assert.equal(lostResponse.status, 403);
+  assert.equal((await failure(lostResponse)).messageKey, "err.notAllowed");
 });
 
 test("PATCH /api/libraries/:id sets visibleTo and collapses duplicates", async (t) => {

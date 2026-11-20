@@ -3035,7 +3035,32 @@ artworks.protectFromEviction(file => {
 await artworks.maintain();
 reportProgress();
 
-registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId), progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps });
+registerLibrariesRoutes(app, {
+  ...routeContext,
+  grantRows,
+  healthOf,
+  invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId),
+  invalidateLibrary,
+  libraryGrants,
+  libraryStats,
+  libraryView,
+  pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId),
+  progressOf,
+  refreshLibraryHealth,
+  libraryProbe,
+  metaStore,
+  seen,
+  fingerprints,
+  libraryOps,
+  libraryUnits: () => libraryUnits(),
+  activeDownloadTargets: async () => {
+    const active = queue.list().filter((job) => job.target
+      && (job.status === "checking" || job.status === "downloading" || job.status === "paused"));
+    return (await Promise.all(active.map((job) => resolveLibraryPath(store.libraries(), job.target))))
+      .flatMap((target) => target ? [libraryPath(target.library.id, target.relative)] : []);
+  },
+  libraryItemBusy: async (key) => Boolean(await libraryPathBusy([key])),
+});
 
 const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, nestedHidden, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 

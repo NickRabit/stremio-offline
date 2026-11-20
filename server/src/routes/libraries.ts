@@ -10,12 +10,13 @@ import { activeDeparted, automaticMetadataEnabled, carveOuts, DEPARTED_MAX, depa
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag, libraryRootTaken, withLibraryRootLock } from "../library-admin.js";
 import { grantingRoot, insideGrant } from "../library-grants.js";
 import { listVideos, type WalkBudget } from "../library.js";
-import { knownTitleOf, titleUnits } from "../library-match.js";
+import { knownTitleOf, titleUnits, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth, LibraryProbe } from "../library-probe.js";
 import type { LibrarySeenStore } from "../library-seen.js";
 import type { LibraryFingerprints } from "../library-fingerprints.js";
+import { buildSplitPlan } from "../library-split.js";
 import { log } from "../logger.js";
 import { assertStillAdmin } from "../roles.js";
 import type { State } from "../store.js";
@@ -41,12 +42,17 @@ export interface LibrariesDeps extends RouteContext {
   seen: LibrarySeenStore;
   fingerprints: Pick<LibraryFingerprints, "forget">;
   libraryOps: LibraryOps;
+  libraryUnits(): Promise<TitleUnit[]>;
+  /** Library-qualified keys of files active downloads are writing (statuses checking, downloading, paused). */
+  activeDownloadTargets(): Promise<string[]>;
+  /** Whether another library operation or reservation holds this item. */
+  libraryItemBusy(key: string): Promise<boolean>;
 }
 
 const runUnlocked = <T,>(work: () => Promise<T>): Promise<T> => work();
 
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
-  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps, stopContentAccess } = deps;
+  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, fingerprints, libraryOps, libraryUnits, activeDownloadTargets, libraryItemBusy, stopContentAccess } = deps;
 
   /** The same check the module makes, raised as the failure the interface renders. */
   async function requireLibraryRoot(value: unknown, opts: { create?: boolean; exceptId?: string } = {}): Promise<string> {
@@ -264,6 +270,26 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
 
   // The item routes come after every literal `/api/libraries/...` route: Express matches in
   // registration order, so a `:id` route above them would swallow `/libraries/grants`.
+  app.get("/api/libraries/:id/split-plan", asyncRoute(async (req, res) => {
+    assertStillAdmin(store.users(), currentUser(req));
+    const target = store.libraries().find((library) => library.id === req.params.id);
+    if (!target) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+    await refreshLibraryHealth();
+    const [units, downloadTargets] = await Promise.all([libraryUnits(), activeDownloadTargets()]);
+    const owned = units.filter((unit) => parseLibraryPath(unit.key)?.libraryId === target.id);
+    const operationBusy = new Set((await Promise.all(owned.map(async (unit) =>
+      [unit.key, await libraryItemBusy(unit.key)] as const))).filter(([, busy]) => busy).map(([key]) => key));
+    res.json(buildSplitPlan({
+      library: target,
+      libraries: store.libraries(),
+      healthOf,
+      units,
+      records: metaStore.qualifiedMeta(),
+      downloadTargets,
+      operationBusy,
+    }));
+  }));
+
   app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
     // The actor as the request resolved it, captured before anything is awaited. Reading it
     // again inside the mutator would answer `undefined` in exactly the cases worth catching --
