@@ -66,7 +66,12 @@ test("the filesystem magic only counts on Linux", async () => {
   await assert.rejects(renamedAfterRenumbering(VIRTIOFS, "darwin"), { messageKey: "err.libraryRecoveryConflict" });
 });
 
-test("a replaced file is not mistaken for the original on a volume that renumbers inodes", async () => {
+// The rule applies on Linux only. On NTFS a name deleted and created again within seconds gets
+// its old creation time back ("tunnelling"), so the host this test runs on cannot stand in for
+// a Linux volume there.
+test("a replaced file is not mistaken for the original on a volume that renumbers inodes", {
+  skip: process.platform === "win32" && "NTFS restores a reused name's creation time (tunnelling)",
+}, async () => {
   await withFilm(async (root, folder) => {
     const volume = renumberingVolume(VIRTIOFS);
     try {
