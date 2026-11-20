@@ -80,7 +80,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { AppError, classifyError, explainedError, messageKeyOf } from "./errors.js";
 import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
-import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, placed, realAncestor, realTarget, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type PlacedPath, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
+import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, realTarget, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -150,7 +150,8 @@ import { SearchError } from "./search-contracts.js";
 import { STREAM_SORTS } from "./stream-sort.js";
 import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 import { createMetaCache } from "./meta-cache.js";
-import { heldOverlap, PathReservations, queuedItemPaths, reservationPause } from "./path-reservations.js";
+import { PathReservations, queuedItemPaths, reservationPause } from "./path-reservations.js";
+import { createLibraryPathBusy, libraryWriting } from "./library-busy.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -484,6 +485,9 @@ const providerStats = new ProviderStats(path.join(DATA_DIR, "provider-stats.json
 if (database) providerStats.attachDatabase(database);
 useProviderStats(providerStats);
 let libraryOpsWriting = false;
+/** Library paths requests are changing on disk right now, outside the queue. */
+const pathReservations = new PathReservations();
+const libraryWritingNow = () => libraryWriting(libraryOpsWriting, pathReservations.keys());
 /** How fast each running playback is transferring right now. */
 const throughput = new Throughput();
 
@@ -1451,7 +1455,7 @@ const sweepDeps: SweepDeps = {
   directoryOf: (libraryId) => artworks.dirOf(libraryId),
   protected: libraryId => libraryOps.holdsArtwork(libraryId),
   remove: (file) => removeArtwork(file),
-  busy: () => libraryOpsWriting || renameRecovery.hasUnresolved() || libraryOps.activeItems().length > 0,
+  busy: () => libraryWritingNow() || renameRecovery.hasUnresolved() || libraryOps.activeItems().length > 0,
   epoch: () => libraryEpoch,
   now: () => Date.now(),
   signal: new AbortController().signal,
@@ -2616,48 +2620,18 @@ async function titleArtworkUrls(key: string): Promise<{ poster?: string; wide?: 
   return { ...(poster ? { poster } : {}), ...(wide ? { wide } : {}) };
 }
 
-/** The active job's item that covers one of `keys`, or `undefined`. Containment counts both
- *  ways: a job on a folder blocks the file inside it, and a job on a file blocks the folder
- *  that holds it. A `reroot` job names its library instead of an item, and that library's root
- *  is the parent of every key in it, so one comparison covers that case too.
- *
- *  The whole request is asked at once because resolving a key walks the filesystem for its
- *  real ancestor: a 500-item operation checked against a 500-item job one key at a time
- *  would be a quarter of a million of those walks before anything is queued. */
-const pathReservations = new PathReservations();
-const libraryPathBusy = async (keys: string[], options: { ignoreReservations?: boolean } = {}): Promise<string | undefined> => {
-  // A rename finishes inside its request and never enters the queue; it holds its names here.
-  if (renameRecovery.hasUnreadableRecord()) return "rename";
-  // The rename itself asks with its own names already held, so it only wants the queue and
-  // the rename journal.
-  const items = [...libraryOps.activeItems(), ...(options.ignoreReservations ? [] : pathReservations.keys()), ...renameRecovery.busyKeys()];
-  // A re-root's two roots are absolute folders, not keys: the one it writes into may sit inside
-  // another library, and a request there would act under the move.
-  const roots = libraryOps.activeRoots();
-  if (!items.length && !roots.length) return undefined;
-  const libraries = store.libraries();
-  const active = (await Promise.all(items.map(async (item) => {
-    const resolved = await resolveLibraryPath(libraries, item);
-    return { item, resolved: resolved && await placed(resolved) };
-  }))).filter((entry): entry is { item: string; resolved: PlacedPath } => entry.resolved !== undefined);
-  const rootPlaces = await Promise.all(roots.map((root) => realTarget(root)));
-  for (const key of keys) {
-    const found = await resolveLibraryPath(libraries, key);
-    if (!found) continue;
-    if (renameRecovery.conflicts([found.key])) return found.key;
-    const wanted = await placed(found);
-    // Compared where they are on disk, links resolved: the same file through a nested library or
-    // a root typed through a symlink is one place. On a volume that folds case, `archive` is the
-    // folder `Archive`: compared as the volume reads them, or a rename of a destination folder
-    // spelled in another case would pass.
-    const covering = active.find(({ resolved }) => heldOverlap(resolved, wanted,
-      healthOf(resolved.library).caseInsensitive || healthOf(wanted.library).caseInsensitive));
-    if (covering) return covering.item;
-    const root = rootPlaces.findIndex((place) => heldOverlap({ place }, wanted, healthOf(wanted.library).caseInsensitive));
-    if (root >= 0) return roots[root];
-  }
-  return undefined;
-};
+const libraryPathBusy = createLibraryPathBusy({
+  libraries: () => store.libraries(),
+  caseInsensitive: (library) => healthOf(library).caseInsensitive,
+  queuedItems: () => libraryOps.activeItems(),
+  rerootRoots: () => libraryOps.activeRoots(),
+  heldKeys: () => pathReservations.keys(),
+  renames: {
+    hasUnreadableRecord: () => renameRecovery.hasUnreadableRecord(),
+    busyKeys: () => renameRecovery.busyKeys(),
+    conflicts: (keys) => renameRecovery.conflicts(keys),
+  },
+});
 
 registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, pathReservations, prefsOf, progressOf, relativeKeyIn, renameLibraryItem: (request) => renameRecovery.rename(request), scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
@@ -2724,7 +2698,7 @@ const libraryScan = new LibraryScan({
   },
   deleteGeneratedArt: (key) => clearGeneratedArt(key),
   busy: () => {
-    if (libraryOpsWriting || renameRecovery.hasUnresolved()) return "operation";
+    if (libraryWritingNow() || renameRecovery.hasUnresolved()) return "operation";
     if (playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS)) return "playback";
     if (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "downloading")) return "download";
     const searchHosts = new Set(searchableCatalogs(store.addons()).map(({ addon }) => hostOf(addon.manifestUrl)));
@@ -2752,7 +2726,7 @@ const libraryAutoScan = new LibraryAutoScan({
   status: () => libraryScan.snapshot(),
   // Scoped to what changed: an automatic run never widens to a library nobody touched.
   start: (libraryIds: string[]) => libraryScan.start({ automatic: true, libraryIds }),
-  busy: () => playbackBusy() || libraryOpsWriting || renameRecovery.hasUnresolved()
+  busy: () => playbackBusy() || libraryWritingNow() || renameRecovery.hasUnresolved()
     || (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "checking" || job.status === "downloading")),
   watch: (onChange) => {
     const watches = walkableLibraries().map((library) => watchLibrary(library.root, () => { invalidateLibrary(); onChange(); }));
