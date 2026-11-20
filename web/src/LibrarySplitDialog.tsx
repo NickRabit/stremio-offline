@@ -39,12 +39,12 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
   const applied = useRef(false);
   const notified = useRef(false);
   const closed = useRef(false);
-  const intervalRef = useRef<number | null>(null);
+  const pollTimer = useRef<number | null>(null);
 
   const stopPolling = () => {
-    if (intervalRef.current != null) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+    if (pollTimer.current != null) {
+      clearTimeout(pollTimer.current);
+      pollTimer.current = null;
     }
   };
 
@@ -172,7 +172,7 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
           name, type: kind, root, create: true, fresh: true, within: library.id,
           // The source library's id, not the accounts this page saw: the server copies the grants
           // as they are when it writes, so one removed meanwhile is not given back.
-          ...(copyAccess && showCopy ? { grantsFrom: library.id } : {}),
+          ...(copyAccess ? { grantsFrom: library.id } : {}),
           autoScanMetadata: library.autoScanMetadata, writeArtwork: library.writeArtwork,
         });
         markApplied();
@@ -182,6 +182,7 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
       }
       if (setDefaults) {
         await api.updateLibrary(ids.movie, { defaultMovie: true });
+        markApplied();
         await api.updateLibrary(ids.series, { defaultSeries: true });
         markApplied();
         if (closed.current) return;
@@ -232,11 +233,16 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
         let done = 0, total = 0, running = false;
         for (const id of jobs[kind]) {
           const job = byId.get(id);
-          if (!job || !TERMINAL.has(job.status)) {
+          if (!job) throw new Error(t("err.libraryOperationMissing"));
+          if (!TERMINAL.has(job.status)) {
             allTerminal = false;
             running = true;
           }
-          if (!job) continue;
+          if (job.status === "failed" && job.error) {
+            failed.push({ id: `job-${id}`, text: t("split.progressStepFailed", {
+              reason: serverText(job.errorKey, job.error, job.errorVars),
+            }) });
+          }
           if (TERMINAL.has(job.status) && (job.status === "cancelled" || job.done + job.failed < job.total)) incomplete = true;
           done += job.done;
           total += job.total;
@@ -266,13 +272,21 @@ export function LibrarySplitDialog({ library, onClose, onApplied }: {
         });
       }
       if (failed.length || incomplete) setShowRetry(true);
-      if (!incomplete) upsert("done", t("split.done"));
+      else upsert("done", t("split.done"));
     };
     setMoving(true);
-    await tick();
-    if (!closed.current && !finished) {
-      intervalRef.current = window.setInterval(() => { void tick(); }, 1500);
-    }
+    const poll = async () => {
+      try {
+        await tick();
+        if (!closed.current && !finished) pollTimer.current = window.setTimeout(() => void poll(), 1500);
+      } catch (error) {
+        if (closed.current) return;
+        setMoving(false);
+        upsert("failed", t("split.progressStepFailed", { reason: describeError(error) }));
+        setShowRetry(true);
+      }
+    };
+    await poll();
   };
 
   const title = t("split.title", { name: library.name });

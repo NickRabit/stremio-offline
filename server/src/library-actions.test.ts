@@ -9,7 +9,8 @@ import { ART_VARIANTS, artVariantKey } from "./artwork.js";
 import { carryMovePairs, type FingerprintPair } from "./library-fingerprints.js";
 import type { FoundFile } from "./library.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
-import type { LibraryMetaRecord, TitleUnit } from "./library-match.js";
+import { titleUnits, type LibraryMetaRecord, type TitleUnit } from "./library-match.js";
+import { buildSplitPlan } from "./library-split.js";
 import { LibrarySeenStore } from "./library-seen.js";
 import { parseLibraryPath, type LibraryRecord } from "./libraries.js";
 import type { UserData } from "./users.js";
@@ -646,6 +647,42 @@ const withCarry = async (
     await rm(dataDir, { recursive: true, force: true });
   }
 };
+
+test("a split retry still identifies a version left behind by a name collision", async () => {
+  const primary = "Shelf/Heat (1995) 1080p.mkv";
+  const alternate = "Shelf/Heat (1995).mkv";
+  const sourceFiles = [primary, alternate, "Shelf/Arrival.mkv"];
+  const walk = (paths: string[]) => titleUnits(paths.map(relative => ({
+    relative: `${LIBRARY_ID}/${relative}`, size: 1, modified: "",
+  })));
+  const planned = `${LIBRARY_ID}/${primary}`;
+  const record: LibraryMetaRecord = { type: "movie", id: "tt-heat", name: "Heat", source: "user", locked: true };
+  const target = `${LIBRARY_ID}/Films`;
+  await withCarry({ [primary]: record }, [...sourceFiles, "Films/Heat (1995).mkv"], async (root, actions, _calls, metadata) => {
+    await assert.rejects(actions.transferLibraryItem(`${LIBRARY_ID}/${alternate}`, target, false, undefined, true, undefined, planned), { messageKey: "err.nameTaken" });
+    await actions.transferLibraryItem(planned, target, false, undefined, true, undefined, planned);
+
+    const remaining = [];
+    for (const file of sourceFiles) if (await exists(path.join(root, file))) remaining.push(file);
+    assert.deepEqual(remaining, [alternate, "Shelf/Arrival.mkv"]);
+    const retry = buildSplitPlan({ library, libraries: [library], healthOf: () => ({}), units: walk(remaining),
+      records: metadata.qualifiedMeta(), downloadTargets: [], operationBusy: new Set(), topNames: ["Shelf", "Films"] });
+    assert.deepEqual(metadata.qualifiedMeta()[`${LIBRARY_ID}/${alternate}`], record);
+    assert.equal(retry.items.find(item => item.relative === alternate)?.basis, "identified");
+    assert.equal(retry.items.find(item => item.relative === alternate)?.label, "Heat");
+    assert.equal(retry.items.find(item => item.relative === "Shelf/Arrival.mkv")?.basis, "none");
+
+    // Moving the other title changes the walk to a folder unit; retry still targets the colliding file.
+    await actions.transferLibraryItem(`${LIBRARY_ID}/Shelf/Arrival.mkv`, target);
+    const last = buildSplitPlan({ library, libraries: [library], healthOf: () => ({}), units: walk([alternate]),
+      records: metadata.qualifiedMeta(), downloadTargets: [], operationBusy: new Set(), topNames: ["Shelf", "Films"] });
+    assert.deepEqual(last.items.map(item => [item.relative, item.label, item.basis]), [[alternate, "Heat", "identified"]]);
+    await rm(path.join(root, "Films/Heat (1995).mkv"));
+    await actions.transferLibraryItem(last.items[0]!.key, target, false, undefined, true, undefined, last.items[0]!.key);
+    assert.deepEqual(metadata.qualifiedMeta()[`${target}/Heat (1995).mkv`], record);
+    assert.deepEqual(metadata.qualifiedMeta()[`${target}/Heat (1995) 1080p.mkv`], record);
+  }, sourceFiles, { units: () => walk(sourceFiles) });
+});
 
 test("carryHandMove carries a file's match, favourite, progress, artwork and first-seen date", async () => {
   const from = `${LIBRARY_ID}/Old/movie.mkv`;

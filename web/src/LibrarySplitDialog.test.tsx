@@ -320,24 +320,44 @@ it("watches a job through running to a failed item, then stops polling", async (
   });
   await click(t("split.next"));
   await click(t("split.next"));
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   await click(t("split.start"));
   await flushUntil(() => host.textContent?.includes(t("split.progressMoving", { name: "Films", done: 0, total: 1 })) ?? false);
   expect(host.textContent).toContain(t("split.progressMoving", { name: "Films", done: 0, total: 1 }));
   await act(() => { vi.advanceTimersByTime(1500); });
-  await flushUntil(() => host.textContent?.includes(t("split.done")) ?? false);
+  await flushUntil(() => host.textContent?.includes(t("split.retryHint")) ?? false);
   expect(host.textContent).toContain(t("split.progressMoved", { name: "Films", done: 1, total: 1 }));
   expect(host.textContent).toContain(t("split.progressFailedItem", {
     item: "Alien", reason: t("err.restricted"),
   }));
   expect(host.textContent).toContain(t("split.retryHint"));
-  expect(host.textContent).toContain(t("split.done"));
+  expect(host.textContent).not.toContain(t("split.done"));
   const opsGets = () => fetchMock.mock.calls.filter(([url, init]) =>
     String(url) === "/api/library/ops" && (init as RequestInit | undefined)?.method !== "POST");
   const afterDone = opsGets().length;
   await act(() => { vi.advanceTimersByTime(5000); });
   await flush(4);
   expect(opsGets().length).toBe(afterDone);
+});
+
+it("reports a polling failure after queueing and leaves the move on the server", async () => {
+  let polls = 0;
+  await open(planOf({ children: [seriesChild], items: [item({ key: "m1", label: "Alien", kind: "movie" })] }), parent(), (url, init) => {
+    if (url === "/api/libraries" && init?.method === "POST") return json(createdLibrary("lib_created", "Films"), 201);
+    if (init?.method === "PATCH") return json(parent());
+    if (url === "/api/library/ops" && init?.method === "POST") return json({ id: "job1" });
+    if (url === "/api/library/ops") return ++polls === 1 ? json({ jobs: [job()] }) : json({ error: "offline" }, 503);
+  });
+  await click(t("split.next"));
+  await click(t("split.next"));
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await click(t("split.start"));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+  expect(host.textContent).toContain(t("split.progressStepFailed", { reason: "offline" }));
+  expect(host.textContent).toContain(t("split.retryHint"));
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+  expect(polls).toBe(2);
+  expect(mutating().filter(call => call.url === "/api/library/ops")).toHaveLength(1);
 });
 
 it("joins a library root with the folder name using the parent's separator", () => {

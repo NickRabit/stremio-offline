@@ -1151,7 +1151,7 @@ export function isExtraName(filename: string): boolean {
  *  physical segment is dropped, because the halves belong to one identity, and the
  *  installment is written the canonical way the matcher compares titles, so "Saw 3",
  *  "Saw III" and "Saw III CD1" are one film while "Saw" and "Saw IV" are their own. */
-function comparableTitle(filename: string): string {
+export function comparableTitle(filename: string): string {
   // "Obsession (2)" is a second encode of one film, so the parenthesised copy number goes.
   const title = parseMediaPath(filename).title.replace(/\(\s*\d{1,3}\s*\)\s*$/, "");
   const normalized = normalizeTitle(title);

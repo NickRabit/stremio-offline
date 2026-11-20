@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isPathWithin, isVideo } from "./library.js";
 import { knownTitleForUnit, type LibraryMetaRecord, type TitleUnit } from "./library-match.js";
-import { isInside, libraryPath, parseLibraryPath, posixBase, relativeWithin, sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
+import { isInside, libraryPath, parseLibraryPath, posixBase, posixDir, relativeWithin, sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
 
 export type SplitKind = "movie" | "series" | "unknown";
 export type SplitBasis = "identified" | "guessed" | "none";
@@ -96,6 +96,19 @@ function splitKind(
   return { label, kind: "unknown", basis: "none" };
 }
 
+/** When the other films have left a collection, the scanner groups the last film by
+ *  folder. Keep individually bound versions as files so a retry still moves those files. */
+function splitUnit(unit: TitleUnit, records: Record<string, LibraryMetaRecord>): TitleUnit {
+  if (unit.kind !== "movie" || isVideo(posixBase(unit.key))) return unit;
+  const [first] = unit.sampleFiles;
+  const bound = first && records[first];
+  if (!bound || !bound.id || !unit.sampleFiles.every(file => posixDir(file) === unit.key
+    && records[file]?.id === bound.id && records[file]?.type === bound.type)) return unit;
+  const folder = knownTitleForUnit(unit, records);
+  if (folder?.id === bound.id && folder.type === bound.type) return unit;
+  return { ...unit, key: first, relative: first };
+}
+
 const folderCount = (folder: SplitPlanFolder, kind: SplitKind) => {
   if (kind === "movie") folder.movies += 1;
   else if (kind === "series") folder.series += 1;
@@ -106,7 +119,8 @@ export function buildSplitPlan(input: SplitPlanInput): SplitPlan {
   const { library, libraries, healthOf, units, records, downloadTargets, operationBusy, topNames } = input;
   const owned = units.filter((unit) => parseLibraryPath(unit.key)?.libraryId === library.id);
 
-  const items: SplitPlanItem[] = owned.map((unit) => {
+  const items: SplitPlanItem[] = owned.map((original) => {
+    const unit = splitUnit(original, records);
     // The unit cache walks library-qualified files, so `unit.relative` is the qualified key as
     // well; the path below the root is taken from the key.
     const relative = relativeWithin(library.id, unit.key);

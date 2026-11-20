@@ -2,9 +2,10 @@ import { lstat, rm, rmdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { ART_VARIANTS, artVariantKey } from "./artwork.js";
 import type { ArtworkCache, ArtworkCarry } from "./artwork-cache.js";
+import { statUnlessMissing } from "./folder-access.js";
 import { AppError } from "./errors.js";
 import { foldersBetween, holdsLibraryRoot, isPathWithin, isVideo, moveDestination, orphanedCatalogKeys, remapPath, withinLibraryRoot, type FoundFile } from "./library.js";
-import { dropKeyed, isAutomaticRecord, knownEntryForUnit, knownTitleEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { comparableTitle, dropKeyed, isAutomaticRecord, knownEntryForUnit, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import type { LibraryMetaStore } from "./library-meta-store.js";
 import type { LibraryHealth } from "./library-probe.js";
 import { libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, resolveLibraryPath, toPosix, type LibraryRecord } from "./libraries.js";
@@ -495,6 +496,33 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     return finishTransfer(step, undefined, true);
   };
 
+  /** A collision or a cancelled earlier batch can leave an alternate behind. Save its
+   *  inherited match before the file carrying that match can leave the source, even on a crash. */
+  const preserveRemainingVersions = async (key: string, absolute: string, libraryId: string) => {
+    const group = unitFor(key, await libraryUnits());
+    if (!group || group.sampleFiles.length < 2) return;
+    const title = comparableTitle(posixBase(key));
+    const siblings = group.sampleFiles.filter(file => file !== key && posixDir(file) === posixDir(key)
+      && comparableTitle(posixBase(file)) === title);
+    const remaining: string[] = [];
+    for (const file of siblings) {
+      if ((await statUnlessMissing(path.join(path.dirname(absolute), posixBase(file))))?.isFile()) remaining.push(file);
+    }
+    if (!remaining.length) return;
+    const primary = libraryOfKey(key).relative;
+    await metaStore.update(libraryId, ({ meta }) => {
+      for (const sibling of remaining) {
+        const relative = libraryOfKey(sibling).relative;
+        const bound = knownEntryForUnit(primary, meta, relative);
+        if (bound?.key !== primary) continue;
+        const own = meta[relative];
+        meta[relative] = { ...structuredClone(bound.record),
+          ...(own?.skipLookup ? { skipLookup: true } : {}), ...(own?.skipMosaic ? { skipMosaic: true } : {}) };
+      }
+    });
+    await metaStore.flushLibrary(libraryId);
+  };
+
   const transferLibraryItem = async (relative: string, folder: string, copy = false, progress?: TransferProgress, confirmTypeMismatch = false, journal?: OpsJournal, plannedUnit?: string) => {
     const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
     const recorded = asTransferStep(journal?.recorded);
@@ -591,6 +619,9 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
       ...(unitKey ? { unit: unitKey } : {}),
     };
     if (recorded && recorded.sourceIdentity !== sourceIdentity) throw recoveryConflict();
+    if (!copy && planned === resolved.key && cover?.key === resolved.key) {
+      await preserveRemainingVersions(resolved.key, resolved.absolute, resolved.library.id);
+    }
     const transferred = await runTransfer(step, resolved.absolute, target.absolute, !copy, progress, journal);
     await carrySidecars(sidecarPairs, path.dirname(resolved.absolute), path.dirname(target.absolute), copy);
     await recordPublished(step, journal);
