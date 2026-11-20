@@ -33,7 +33,7 @@ metadata store, or scheduler for each platform.
 | Implemented | Family home and kids mode | A child account: a flag on an ordinary account, enforced by a second server allow-list, with a small app on the web, the desktop apps and Android TV, Home fixed to three rows, no downloads or settings, addons only with *Catalogue browsing*, and the way out through another profile's PIN or password (0.7.108). No age filter and no locking of the device into the profile. [Child accounts](users.md#child-accounts), [specification](kids-mode-spec.md). |
 | Implemented | Search by cast and crew | A person in the title detail opens what that person made: the TMDB filmography in two sections, local copies first, on the web, desktop and Android TV (0.7.105). Without a TMDB id the name search stays and says so. Since 0.7.107 the person is shown as the Search page, Back returns to the title, and a search shows matching people in a People row. Still open: owned marks for Jellyfin and Emby. [Specification](person-filmography-spec.md). |
 | Implemented | Guided library split | **Settings → Libraries → Split…** turns a mixed library into a film library and a series library: it reuses nested libraries, leaves unidentified and busy titles alone unless chosen, can make the new libraries the download defaults, and moves through the operations queue. [Libraries](libraries.md#guided-split). |
-| Then | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
+| Implemented | Library bulk rename | **Select items → Rename by pattern…**: a film pattern and an episode pattern from `{title}`, `{year}`, `{season}`, `{episode}`, a preview with the reason for every row left alone, never an overwrite, and each item through the journaled single rename. Swaps and chains are refused for now. [Libraries](libraries.md#renaming-by-pattern). |
 | Implemented | Android TV sign-in by code | The TV shows a short code and a QR link to it; an account already signed in on a phone or computer inspects and confirms it. No password typed with the remote. Server discovery remains deferred. |
 | Proposed | Trakt and Simkl | Send what was watched, read the watchlist and history, so people coming from Stremio or Nuvio bring theirs along. See [Trakt and Simkl](#trakt-and-simkl). |
 | Proposed | Notifications | A new episode, a finished or failed download and a full disk reach the household through ntfy, Telegram or browser push. Extends the queue's completion notice. See [Notifications](#notifications). |
@@ -326,8 +326,8 @@ unique hand moves across all libraries and carries the path-based records to the
 new location; ambiguous cases stay untouched. The guided split of a mixed
 library has shipped as well ([Libraries](libraries.md#guided-split)).
 
-- Bulk rename by pattern. Deliberately out of the first multi-library release;
-  the operations queue is shaped to take it without a migration.
+- Bulk rename by pattern has shipped ([Libraries](libraries.md#renaming-by-pattern)).
+  Still open: renaming a swap or a chain in one batch through owned staging names.
 
 ### Queue controls
 
