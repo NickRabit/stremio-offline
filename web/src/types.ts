@@ -770,6 +770,18 @@ export interface LibraryView {
    *  library still points at its old folder. Administrators only. */
   rerootStranded?: string;
 }
+export type SplitKind = "movie" | "series" | "unknown";
+export type SplitBasis = "identified" | "guessed" | "none";
+export interface SplitPlanItem { key: string; relative: string; label: string; kind: SplitKind; basis: SplitBasis; busy?: "download" | "operation" }
+export interface SplitPlanChild { id: string; name: string; type: LibraryType; relative: string; enabled: boolean; unreachable: boolean; readOnly: boolean }
+export interface SplitPlanFolder { name: string; movies: number; series: number; unknown: number }
+export interface SplitPlan {
+  library: { id: string; name: string; root: string; type: LibraryType };
+  counts: { movies: number; series: number; unknown: number };
+  children: SplitPlanChild[];
+  folders: SplitPlanFolder[];
+  items: SplitPlanItem[];
+}
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
   | ({ kind: "file"; favorite?: boolean } & BrowseFile)

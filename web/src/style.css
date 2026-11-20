@@ -1215,7 +1215,7 @@ img.broken{visibility:hidden}
 
 .library-manager{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(440px,100%),1fr));align-items:stretch}
 .library-manager-section{grid-column:1/-1}
-.library-manager .library-manager-actions,.library-manager .identify-hint{grid-column:1/-1}
+.library-manager .library-manager-actions,.library-manager .identify-hint,.library-manager .library-split-offer{grid-column:1/-1}
 .library-manager-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px}
 .library-manager-actions .primary{min-width:170px}
 .library-admin-row{display:grid;grid-template-rows:auto auto 1fr auto;gap:14px;min-width:0;padding:18px;border:1px solid var(--line);border-radius:12px;background:#10151d}
@@ -1233,7 +1233,7 @@ img.broken{visibility:hidden}
 .library-admin-controls label.library-check .switch,.library-scan-now .switch{flex:0 0 auto}
 .library-admin-controls select{padding:8px 10px;font-size:11px}
 .library-admin-footer{display:grid;gap:5px;padding-top:2px}
-.library-admin-footer>button{justify-self:stretch}
+.library-admin-footer>button,.library-admin-footer>.library-admin-buttons{justify-self:stretch}
 .library-admin-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .library-admin-buttons button{padding:7px 11px;font-size:11px}
 .library-admin-buttons .library-admin-scan{grid-column:1/-1;border-color:#ff5b3855;color:var(--accent2);background:#ff5b3810}
@@ -1266,6 +1266,27 @@ img.broken{visibility:hidden}
 .library-edit-section .library-admin-scan{justify-content:center;padding:9px 11px;border-color:#ff5b3855;color:var(--accent2);background:#ff5b3810}
 
 .library-edit-footer{display:flex;justify-content:flex-end;gap:8px}
+.library-split-card{width:min(680px,100%);max-height:100%}
+.library-split-card>.identify-head{align-items:flex-start}
+.library-split-head{display:grid;gap:4px;min-width:0}
+.library-split-head .identify-hint{margin:0}
+.library-split-offer{display:grid;gap:10px;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:#10151d}
+.library-split-offer h3{margin:0;font-size:15px}
+.library-split-offer>p{margin:0;color:var(--muted);font-size:13px;line-height:1.45}
+.library-split-offer-actions{display:flex;flex-wrap:wrap;gap:8px}
+.library-split-block{display:grid;gap:8px;margin:0;padding:12px;border:1px solid var(--line);border-radius:10px;background:#0d111788;min-width:0}
+.library-split-block legend{padding:0;font-size:13px;font-weight:700}
+.library-split-option{display:flex;align-items:flex-start;gap:8px;font-size:13px}
+.library-split-folder{display:grid;gap:4px;margin-left:24px;font-size:11px;color:var(--muted)}
+.library-split-checks{display:grid;gap:8px}
+.library-split-chips{display:flex;flex-wrap:wrap;gap:6px}
+.library-split-table{width:100%;border-collapse:collapse;font-size:13px}
+.library-split-table th,.library-split-table td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
+.library-split-table th{color:var(--muted);font-size:11px;font-weight:700}
+.library-split-table td:last-child{width:42%;min-width:8rem}
+.library-split-item{display:flex;flex-wrap:wrap;align-items:center;gap:6px;overflow-wrap:anywhere}
+.library-split-summary{margin:0;padding-left:1.15em;display:grid;gap:8px;font-size:13px;line-height:1.45}
+.library-split-progress{margin:0;padding:0;list-style:none;display:grid;gap:8px;font-size:13px;line-height:1.45}
 .library-picker-section{display:grid;gap:10px;padding-top:14px;border-top:1px solid var(--line)}
 .library-picker-details{padding-top:0;border-top:0}
 .library-picker-section-head h3{margin:0;font-size:13px}
@@ -1331,7 +1352,7 @@ img.broken{visibility:hidden}
 .library-picker-outcome{gap:10px}
 .library-picker-footer .primary{justify-self:end;min-width:180px}
 .library-picker-footer .primary:disabled{border-color:var(--line);background:#252c37;color:var(--muted);box-shadow:none}
-@media(max-width:700px){.library-picker-fields,.library-manager-section .library-manager{grid-template-columns:1fr}.library-admin-row{padding:14px}.library-admin-head{display:grid}.library-admin-flags{justify-content:flex-start;max-width:none}.library-admin-controls{grid-template-columns:1fr}.library-admin-controls label.library-check:last-child{grid-column:auto}.library-admin-buttons button{width:100%}.library-picker-card,.library-edit-card{width:100%;border-radius:16px 16px 0 0}.library-picker-manual{grid-template-columns:1fr}.library-picker-manual button{width:100%}.library-edit-folder{grid-template-columns:1fr}.library-edit-folder button{justify-self:start}.library-edit-footer{display:grid}.library-edit-footer button{width:100%}}
+@media(max-width:700px){.library-picker-fields,.library-manager-section .library-manager{grid-template-columns:1fr}.library-admin-row{padding:14px}.library-admin-head{display:grid}.library-admin-flags{justify-content:flex-start;max-width:none}.library-admin-controls{grid-template-columns:1fr}.library-admin-controls label.library-check:last-child{grid-column:auto}.library-admin-buttons button{width:100%}.library-picker-card,.library-edit-card,.library-split-card{width:100%;border-radius:16px 16px 0 0}.library-picker-manual{grid-template-columns:1fr}.library-picker-manual button{width:100%}.library-edit-folder{grid-template-columns:1fr}.library-edit-folder button{justify-self:start}.library-edit-footer{display:grid}.library-edit-footer button{width:100%}}
 
 /* Safari in a tab lays this fixed overlay out against the large viewport, so its own chrome
    pushed the video past the bottom edge. --player-viewport-* track the visual viewport. */
