@@ -141,8 +141,7 @@ internal fun SeriesRows(
       } else {
         null
       }
-      val completed = cardCompleted?.invoke(video) ?: (resumeIndex >= 0 && index < resumeIndex) ||
-        watchedBefore(video, resumeEpisode)
+      val completed = cardCompleted?.invoke(video) ?: (resumeIndex >= 0 && index < resumeIndex)
       WideCard(
         label = video.numbered ?: video.label,
         caption = video.title ?: video.name,
@@ -211,15 +210,3 @@ private fun SeasonTab(text: String, current: Boolean, onClick: () -> Unit, modif
     }
   }
 }
-
-/**
- * An episode of an earlier regular season than the one the viewer is continuing reads as watched,
- * so a season tab before it neither blurs its stills nor drops their finished marks. Specials have
- * no place in that order and are left to the resume row of their own season.
- */
-internal fun watchedBefore(video: VideoDto, resume: VideoDto?): Boolean {
-  val season = video.season ?: return false
-  val resumeSeason = resume?.season ?: return false
-  return season > 0 && resumeSeason > 0 && season < resumeSeason
-}
-

@@ -106,18 +106,27 @@ class SeriesRowsSpoilerTest {
   }
 
   @Test
-  fun `a season before the one to continue reads as watched`() {
+  fun `a season before the one to continue stays hidden without its own progress`() {
     val next = VideoDto(id = "s2e1", title = "Next", season = 2, episode = 1)
-    val special = VideoDto(id = "s0e1", title = "Special", season = 0, episode = 1)
-    mount(hideSpoilers = true, videos = episodes + next + special, season = 1, resumeEpisode = next)
+    mount(hideSpoilers = true, videos = episodes + next, season = 1, resumeEpisode = next)
 
-    episodes.forEach { assertEquals(false, spoilerHidden(it)) }
+    episodes.forEach { assertEquals(true, spoilerHidden(it)) }
   }
 
   @Test
-  fun `specials are not ordered before the season being continued`() {
-    assertEquals(false, watchedBefore(VideoDto(id = "s0", season = 0, episode = 1), VideoDto(id = "x", season = 2, episode = 1)))
-    assertEquals(true, watchedBefore(VideoDto(id = "a", season = 1, episode = 9), VideoDto(id = "x", season = 2, episode = 1)))
-    assertEquals(false, watchedBefore(VideoDto(id = "b", season = 3, episode = 1), VideoDto(id = "x", season = 2, episode = 1)))
+  fun `an earlier season episode with its own progress stays sharp`() {
+    val next = VideoDto(id = "s2e1", title = "Next", season = 2, episode = 1)
+    mount(
+      hideSpoilers = true,
+      videos = episodes + next,
+      season = 1,
+      resumeEpisode = next,
+      cardCompleted = { it.id == "e1" },
+      cardProgress = { if (it.id == "e2") 0.3f else null },
+    )
+
+    assertEquals(false, spoilerHidden(episodes[0]))
+    assertEquals(false, spoilerHidden(episodes[1]))
+    assertEquals(true, spoilerHidden(episodes[2]))
   }
 }
