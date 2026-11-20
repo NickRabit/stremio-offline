@@ -143,6 +143,17 @@ export function movableItems(
   return plan.items.filter((item) => !item.busy && destinations[item.key] === kind);
 }
 
+/** For titles keyed by a video, the title of every file the job moves, as the plan saw it. */
+export function plannedUnits(items: SplitPlanItem[], keys: string[]): Record<string, string> {
+  const wanted = new Set(keys);
+  const units: Record<string, string> = {};
+  for (const item of items) {
+    if (!item.fileTitle) continue;
+    for (const key of [item.key, ...(item.files ?? [])]) if (wanted.has(key)) units[key] = item.key;
+  }
+  return units;
+}
+
 export function chunkKeys(keys: string[], size = SPLIT_MOVE_CHUNK): string[][] {
   const chunks: string[][] = [];
   for (let i = 0; i < keys.length; i += size) chunks.push(keys.slice(i, i + size));

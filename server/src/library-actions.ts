@@ -57,7 +57,7 @@ export interface LibraryActions {
   finishTransfer(step: TransferStep, sourceLeft?: string, replay?: boolean): Promise<string>;
   carryHandMove(fromKey: string, toKey: string, folder: boolean, files?: string[]): Promise<void>;
   resumeTransfer(step: TransferStep, journal?: OpsJournal): Promise<string | undefined>;
-  transferLibraryItem(relative: string, folder: string, copy?: boolean, progress?: TransferProgress, confirmTypeMismatch?: boolean, journal?: OpsJournal): Promise<string>;
+  transferLibraryItem(relative: string, folder: string, copy?: boolean, progress?: TransferProgress, confirmTypeMismatch?: boolean, journal?: OpsJournal, plannedUnit?: string): Promise<string>;
   rerootItem(operation: Extract<LibraryOp, { op: "reroot" }>, item: string, progress: (bytes: number, total?: number) => void, journal: OpsJournal): Promise<{ to: string }>;
 }
 
@@ -495,7 +495,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     return finishTransfer(step, undefined, true);
   };
 
-  const transferLibraryItem = async (relative: string, folder: string, copy = false, progress?: TransferProgress, confirmTypeMismatch = false, journal?: OpsJournal) => {
+  const transferLibraryItem = async (relative: string, folder: string, copy = false, progress?: TransferProgress, confirmTypeMismatch = false, journal?: OpsJournal, plannedUnit?: string) => {
     const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
     const recorded = asTransferStep(journal?.recorded);
     if (!resolved || !resolved.relative) {
@@ -559,10 +559,15 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     // picture is the title's and has to travel with it.
     // A title keyed by a video of its own does not inherit the folder's binding in the library
     // view; the move must not give it one either, nor carry the folder's picture to it.
-    const ownTitle = info.isFile()
-      ? (await libraryUnits()).find((unit) => unit.key === resolved.key || unit.sampleFiles.includes(resolved.key))
-      : undefined;
-    const unitKey = ownTitle && isVideo(posixBase(ownTitle.key)) ? ownTitle.key : undefined;
+    // A title the caller planned the job with wins over reading it again now: a film beside
+    // others becomes "the folder's only title" once the others have left, and that reading
+    // would hand it the folder's binding. The planned key must name a video beside this one.
+    const planned = plannedUnit && info.isFile() && isVideo(posixBase(plannedUnit)) && posixDir(plannedUnit) === posixDir(resolved.key)
+      && parseLibraryPath(plannedUnit)?.libraryId === resolved.library.id ? plannedUnit : undefined;
+    const ownTitle = planned || !info.isFile()
+      ? undefined
+      : (await libraryUnits()).find((unit) => unit.key === resolved.key || unit.sampleFiles.includes(resolved.key));
+    const unitKey = planned ?? (ownTitle && isVideo(posixBase(ownTitle.key)) ? ownTitle.key : undefined);
     const cover = unitKey
       ? knownEntryForUnit(unitKey, metaStore.qualifiedMeta(), resolved.key)
       : knownTitleEntry(resolved.key, metaStore.qualifiedMeta());

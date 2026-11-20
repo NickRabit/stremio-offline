@@ -2992,7 +2992,7 @@ const libraryOps = new LibraryOps({
     try {
       if (operation.op === "move" || operation.op === "copy") {
         return {
-          to: await transferLibraryItem(item, operation.target, operation.op === "copy", progress, operation.confirmTypeMismatch === true, journal),
+          to: await transferLibraryItem(item, operation.target, operation.op === "copy", progress, operation.confirmTypeMismatch === true, journal, operation.units?.[item]),
         };
       }
       if (operation.op === "delete") await deleteLibraryItem(item);

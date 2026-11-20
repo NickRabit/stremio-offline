@@ -773,7 +773,9 @@ export interface LibraryView {
 export type SplitKind = "movie" | "series" | "unknown";
 export type SplitBasis = "identified" | "guessed" | "none";
 /** `files` are the title's other files beside `key` (a second version, an extra); they move with it. */
-export interface SplitPlanItem { key: string; relative: string; label: string; kind: SplitKind; basis: SplitBasis; busy?: "download" | "operation"; files?: string[] }
+export interface SplitPlanItem { key: string; relative: string; label: string; kind: SplitKind; basis: SplitBasis; busy?: "download" | "operation"; files?: string[];
+  /** The title is keyed by its video: the move job is told the title for `key` and every file. */
+  fileTitle?: true }
 export interface SplitPlanChild { id: string; name: string; type: LibraryType; relative: string; enabled: boolean; unreachable: boolean; readOnly: boolean }
 export interface SplitPlanFolder { name: string; movies: number; series: number; unknown: number }
 export interface SplitPlan {
@@ -826,7 +828,7 @@ export interface ScanState {
   recheck?: boolean;
 }
 export type LibraryOp =
-  | { op: "move" | "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean }
+  | { op: "move" | "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean; units?: Record<string, string> }
   | { op: "delete" | "unmatch" | "artwork" | "forget"; items: string[] }
   | { op: "favorite"; items: string[]; favorite: boolean }
   | { op: "match"; items: string[]; type: string; id: string }

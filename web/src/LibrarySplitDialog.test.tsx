@@ -408,7 +408,7 @@ it("does not let a retry start the old plan while the new one loads or after it 
 it("moves every file of a title with versions beside it, counting it once", async () => {
   const plan = planOf({
     children: [seriesChild],
-    items: [item({ key: "lib_mix/Heat.mkv", label: "Heat", relative: "Heat.mkv", kind: "movie", files: ["lib_mix/Heat 1080p.mkv"] })],
+    items: [item({ key: "lib_mix/Heat.mkv", label: "Heat", relative: "Heat.mkv", kind: "movie", files: ["lib_mix/Heat 1080p.mkv"], fileTitle: true })],
   });
   await open(plan, parent(), (url, init) => {
     if (url === "/api/libraries" && init?.method === "POST") return json(createdLibrary("lib_created", "Films"), 201);
@@ -422,7 +422,10 @@ it("moves every file of a title with versions beside it, counting it once", asyn
   expect(host.textContent).toContain(t("split.summaryMove", { items: t("split.itemCount", { count: 1 }), name: "Films" }));
   await click(t("split.start"));
   await flushUntil(() => mutating().some((call) => call.url === "/api/library/ops"));
-  expect(mutating().find((call) => call.url === "/api/library/ops")?.body.items).toEqual(["lib_mix/Heat 1080p.mkv", "lib_mix/Heat.mkv"]);
+  const move = mutating().find((call) => call.url === "/api/library/ops")?.body;
+  expect(move.items).toEqual(["lib_mix/Heat 1080p.mkv", "lib_mix/Heat.mkv"]);
+  // Both files carry the title the plan saw, so the folder changing shape mid-job cannot rename it.
+  expect(move.units).toEqual({ "lib_mix/Heat 1080p.mkv": "lib_mix/Heat.mkv", "lib_mix/Heat.mkv": "lib_mix/Heat.mkv" });
 });
 
 it("builds new roots from the plan's root, not the list's older copy", async () => {

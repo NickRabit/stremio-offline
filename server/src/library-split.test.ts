@@ -186,7 +186,9 @@ test("a title keyed by its first file carries its other versions and is busy thr
   const free = buildSplitPlan(input({ units: [heat, folder] }));
   const byKey = Object.fromEntries(free.items.map((item) => [item.key, item]));
   assert.deepEqual(byKey[first]?.files, [second]);
+  assert.equal(byKey[first]?.fileTitle, true, "the move job is told the title of a film keyed by its file");
   assert.equal(byKey[libraryPath(parent.id, "Arrival")]?.files, undefined, "files inside a folder title move with the folder");
+  assert.equal(byKey[libraryPath(parent.id, "Arrival")]?.fileTitle, undefined);
 
   const busy = buildSplitPlan(input({ units: [heat], operationBusy: new Set([second]) }));
   assert.equal(busy.items[0]?.busy, "operation");

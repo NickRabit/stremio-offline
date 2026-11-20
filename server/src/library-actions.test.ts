@@ -34,7 +34,7 @@ const harness = (options: {
   updateEveryData?: LibraryActionDeps["updateEveryData"];
   progressOf?: LibraryActionDeps["progressOf"];
   carveOuts?: ReadonlySet<string>;
-  units?: TitleUnit[];
+  units?: TitleUnit[] | (() => TitleUnit[]);
 } = {}) => {
   const calls = {
     relocate: [] as Array<{ from: string; to: string; pin: boolean; unit?: string }>,
@@ -70,7 +70,7 @@ const harness = (options: {
       calls.libraryFilesReads += 1;
       return (options.files ?? []) as FoundFile[];
     },
-    libraryUnits: async () => options.units ?? [],
+    libraryUnits: async () => (typeof options.units === "function" ? options.units() : options.units) ?? [],
     carveOutsOf: () => options.carveOuts ?? new Set<string>(),
     healthOf: (entry) => ({ unreachable: false, readOnly: false, realRoot: entry.root, caseInsensitive: false }),
     libraryOfKey,
@@ -430,6 +430,46 @@ test("a journal record whose title lies in another folder is refused", async () 
       phase: "published", copy: false, from, to: `${LIBRARY_ID}/Films/Harry Potter.mp4`, carried: [], unit: `${LIBRARY_ID}/Other/Harry Potter.mp4`,
     }));
     await assert.rejects(actions.transferLibraryItem(from, `${LIBRARY_ID}/Films`, false, undefined, false, journal), { messageKey: "err.libraryRecoveryConflict" });
+  });
+});
+
+test("a planned title survives the folder changing shape as other films leave", async () => {
+  const arrival = `${LIBRARY_ID}/Mix/Arrival (2016).mkv`;
+  const heat = `${LIBRARY_ID}/Mix/Heat (1995).mkv`;
+  const heatHd = `${LIBRARY_ID}/Mix/Heat (1995) 1080p.mkv`;
+  // Two films side by side are two titles keyed by their files; once Arrival has gone, the two
+  // Heat files are the folder's only film and read as one title keyed by the folder.
+  const before: TitleUnit[] = [
+    { key: arrival, relative: arrival, kind: "movie", sampleFiles: [arrival] },
+    { key: heat, relative: heat, kind: "movie", sampleFiles: [heat, heatHd] },
+  ];
+  const after: TitleUnit[] = [{ key: `${LIBRARY_ID}/Mix`, relative: `${LIBRARY_ID}/Mix`, kind: "movie", sampleFiles: [heat, heatHd] }];
+  let units = before;
+  await withRoot(["Mix/Arrival (2016).mkv", "Mix/Heat (1995).mkv", "Mix/Heat (1995) 1080p.mkv", "Films/.keep"], async (_root, actions, calls) => {
+    await actions.transferLibraryItem(arrival, `${LIBRARY_ID}/Films`, false, undefined, false, undefined, arrival);
+    units = after;
+    await actions.transferLibraryItem(heatHd, `${LIBRARY_ID}/Films`, false, undefined, false, undefined, heat);
+    await actions.transferLibraryItem(heat, `${LIBRARY_ID}/Films`, false, undefined, false, undefined, heat);
+    assert.deepEqual(calls.relocate.map(({ from, unit }) => ({ from, unit })), [
+      { from: arrival, unit: arrival },
+      { from: heatHd, unit: heat },
+      { from: heat, unit: heat },
+    ], "each file keeps the title the plan saw, not the folder it became");
+  }, { units: () => units });
+
+  // Read again without the plan, the second Heat file would have been the folder's.
+  units = after;
+  await withRoot(["Mix/Heat (1995) 1080p.mkv", "Films/.keep"], async (_root, actions, calls) => {
+    await actions.transferLibraryItem(heatHd, `${LIBRARY_ID}/Films`);
+    assert.equal(calls.relocate[0]?.unit, undefined);
+  }, { units: () => units });
+});
+
+test("a planned title in another folder is ignored", async () => {
+  const film = `${LIBRARY_ID}/Mix/Heat (1995).mkv`;
+  await withRoot(["Mix/Heat (1995).mkv", "Films/.keep"], async (_root, actions, calls) => {
+    await actions.transferLibraryItem(film, `${LIBRARY_ID}/Films`, false, undefined, false, undefined, `${LIBRARY_ID}/Elsewhere/Heat (1995).mkv`);
+    assert.equal(calls.relocate[0]?.unit, undefined);
   });
 });
 

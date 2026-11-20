@@ -258,6 +258,26 @@ test("POST /api/library/ops enqueues what parseLibraryOp read from the body", as
   ]);
 });
 
+test("POST /api/library/ops carries the planned title of each moved file, and only beside it", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const items = ["lib_a/Mix/Heat 1080p.mkv", "lib_a/Mix/Heat.mkv"];
+  const planned = await api(harness.base, "/api/library/ops", {
+    method: "POST",
+    body: { op: "move", items, target: "lib_b", units: { "lib_a/Mix/Heat 1080p.mkv": "lib_a/Mix/Heat.mkv", "lib_a/Mix/Heat.mkv": "lib_a/Mix/Heat.mkv" } },
+  });
+  assert.equal(planned.status, 202);
+  assert.deepEqual((harness.calls.enqueued[0] as { units?: unknown }).units, { "lib_a/Mix/Heat 1080p.mkv": "lib_a/Mix/Heat.mkv", "lib_a/Mix/Heat.mkv": "lib_a/Mix/Heat.mkv" });
+
+  for (const units of [{ "lib_a/Other.mkv": "lib_a/Other.mkv" }, { "lib_a/Mix/Heat.mkv": "lib_a/Elsewhere/Heat.mkv" }, ["lib_a/Mix/Heat.mkv"]]) {
+    const refused = await api(harness.base, "/api/library/ops", { method: "POST", body: { op: "move", items, target: "lib_b", units } });
+    assert.equal(refused.status, 400);
+    assert.equal((await refused.json() as { messageKey?: string }).messageKey, "err.invalidLibraryOperation");
+  }
+  assert.equal(harness.calls.enqueued.length, 1, "a refused plan never reaches the queue");
+});
+
 test("POST /api/library/ops refuses a malformed body before the queue sees it", async (t) => {
   const harness = await mount();
   t.after(harness.close);

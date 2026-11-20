@@ -15,8 +15,8 @@ import { preserveDamaged, readStateFile } from "./state-file.js";
 export interface LibraryOpActor { ownerUserId?: string }
 
 export type LibraryOp = LibraryOpActor & (
-  | { op: "move"; items: string[]; target: string; confirmTypeMismatch?: boolean }
-  | { op: "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean }
+  | { op: "move"; items: string[]; target: string; confirmTypeMismatch?: boolean; units?: Record<string, string> }
+  | { op: "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean; units?: Record<string, string> }
   | { op: "reroot"; items: string[]; libraryId: string; from: string; to: string }
   | { op: "delete"; items: string[] }
   | { op: "favorite"; items: string[]; favorite: boolean }

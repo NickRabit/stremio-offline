@@ -5,7 +5,7 @@ import { AppError } from "../errors.js";
 import { statUnlessMissing } from "../folder-access.js";
 import { assertStillAdmin } from "../roles.js";
 import { normalizeLanguage } from "../language.js";
-import { libraryFor, libraryVisible, parseLibraryPath, posixBase, resolveLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryFor, libraryVisible, parseLibraryPath, posixBase, posixDir, resolveLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryCandidateSource } from "../library-candidates.js";
 import { episodeNumberOf, knownEntryForUnit, knownTitleOf, lookupSkipped, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, suggestionForUnit, unitFor, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
@@ -176,7 +176,19 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     if (op === "move" || op === "copy") {
       const target = String(body.target ?? "").trim();
       if (!target) throw new AppError("A destination folder is required.", "err.targetMissing");
-      return { op, items, target, ...(body.confirmTypeMismatch === true ? { confirmTypeMismatch: true } : {}) };
+      // The title each item belonged to when the caller planned the job, for titles keyed by a
+      // file: the folder's contents change as earlier items leave, and the title read again at
+      // that point can name another film. Only items of this job, each beside its title.
+      let units: Record<string, string> | undefined;
+      if (body.units !== undefined) {
+        if (!body.units || typeof body.units !== "object" || Array.isArray(body.units)) throw new AppError("Invalid library operation.", "err.invalidLibraryOperation");
+        units = {};
+        for (const [item, unit] of Object.entries(body.units as Record<string, unknown>)) {
+          if (!items.includes(item) || typeof unit !== "string" || posixDir(unit) !== posixDir(item)) throw new AppError("Invalid library operation.", "err.invalidLibraryOperation");
+          units[item] = unit;
+        }
+      }
+      return { op, items, target, ...(body.confirmTypeMismatch === true ? { confirmTypeMismatch: true } : {}), ...(units && Object.keys(units).length ? { units } : {}) };
     }
     if (op === "delete" || op === "unmatch" || op === "artwork" || op === "forget") return { op, items };
     if (op === "favorite") return { op, items, favorite: Boolean(body.favorite) };

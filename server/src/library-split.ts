@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isPathWithin } from "./library.js";
+import { isPathWithin, isVideo } from "./library.js";
 import { knownTitleForUnit, type LibraryMetaRecord, type TitleUnit } from "./library-match.js";
 import { isInside, libraryPath, parseLibraryPath, posixBase, relativeWithin, sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
 
@@ -20,6 +20,10 @@ export interface SplitPlanItem {
   /** The title's other files lying beside `key` rather than inside it -- a second version or an
    *  extra of a film that shares a folder with other films. Library-qualified; moved with `key`. */
   files?: string[];
+  /** The title is keyed by a video (a film beside others in a folder): the move job is told so
+   *  for `key` and every one of `files`, since reading the title again mid-job can name the
+   *  folder's film once the other films have left. */
+  fileTitle?: true;
 }
 
 export interface SplitPlanChild {
@@ -122,6 +126,7 @@ export function buildSplitPlan(input: SplitPlanInput): SplitPlan {
       ...splitKind(unit, relative, library.type, records),
       ...(busy ? { busy } : {}),
       ...(files.length ? { files } : {}),
+      ...(isVideo(posixBase(relative)) ? { fileTitle: true as const } : {}),
     };
   }).sort((left, right) =>
     left.label.localeCompare(right.label, undefined, { sensitivity: "base" }) || left.relative.localeCompare(right.relative));
