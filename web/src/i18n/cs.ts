@@ -2528,4 +2528,5 @@ export const cs: Catalog = {
   "err.renamePlanConflict": "Nová jména se střetávají navzájem nebo s vybranou položkou. Načtěte náhled znovu.",
   "err.renamePatternInvalid": "Vzor obsahuje neznámé pole nebo neuzavřenou závorku.",
   "rename.parts": "film je rozdělený do více souborů; přejmenujte ho ručně",
+  "rename.partlyQueued": "Přejmenovává se {queued} z {total} položek; zbytek se nepodařilo zařadit: {reason}",
 };

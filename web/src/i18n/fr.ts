@@ -2458,4 +2458,5 @@ export const fr: Catalog = {
   "err.renamePlanConflict": "Les nouveaux noms entrent en conflit entre eux ou avec un élément sélectionné. Rechargez l'aperçu.",
   "err.renamePatternInvalid": "Le modèle contient un champ inconnu ou une accolade non fermée.",
   "rename.parts": "ce film est réparti en plusieurs fichiers ; renommez-le à la main",
+  "rename.partlyQueued": "{queued} éléments sur {total} sont en cours de renommage ; le reste n'a pas été mis en file : {reason}",
 };

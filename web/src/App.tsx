@@ -532,17 +532,21 @@ export function App() {
     } catch (error) { fail(error); }
   };
   const startRenameOps = async (operations: LibraryOp[]) => {
+    // Every batch is queued before any is tracked: a failed status read must not keep the rest
+    // out of the queue. A refusal part-way says how much is already being renamed.
+    const ids: string[] = [];
+    let queuedItems = 0;
+    const total = operations.reduce((sum, operation) => sum + operation.items.length, 0);
     try {
-      let left = false;
       for (const operation of operations) {
-        const queued = await api.startLibraryOp(operation);
-        if (!left) {
-          leaveSelection();
-          left = true;
-        }
-        await trackQueuedOp(queued.id);
+        ids.push((await api.startLibraryOp(operation)).id);
+        queuedItems += operation.items.length;
+        if (ids.length === 1) leaveSelection();
       }
-    } catch (error) { fail(error); }
+    } catch (error) {
+      fail(ids.length ? new Error(t("rename.partlyQueued", { queued: queuedItems, total, reason: describeError(error) })) : error);
+    }
+    for (const id of ids) await trackQueuedOp(id).catch(fail);
   };
   const openBulkDestination = (copy: boolean) => {
     const paths = [...selectedPaths];

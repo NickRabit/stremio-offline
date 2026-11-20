@@ -382,4 +382,33 @@ describe("library browsing", () => {
       "rename-plan request");
     expect(host.querySelector(".rename-card")).toBeTruthy();
   });
+
+  it("says how much is being renamed when a later batch cannot be queued", async () => {
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    let opPosts = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://test").pathname;
+      if (path === "/api/library/rename-plan") {
+        return json({ rows: Array.from({ length: 501 }, (_, index) => ({
+          key: `lib_1/F${index}.mkv`, from: `F${index}.mkv`, to: `G${index}.mkv`, isFile: true, kind: "movie", status: "rename", sidecars: 0,
+        })) });
+      }
+      if (path === "/api/library/ops" && init?.method === "POST") {
+        opPosts += 1;
+        return opPosts === 1 ? json({ id: "job_1" }, 202) : json({ error: "queue full" }, 500);
+      }
+      return base(input, init);
+    });
+    await openLibrary();
+    await until(() => host.querySelector(".browse-item") !== null, "library items");
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[title="Select items"]')!.click(); });
+    await until(() => host.querySelector(".browse-select") !== null, "selection checkbox");
+    await act(async () => { host.querySelector<HTMLButtonElement>(".browse-select")!.click(); });
+    const rename = [...host.querySelectorAll<HTMLButtonElement>(".library-bulk-bar button")].find((button) => button.textContent?.includes("Rename by pattern"))!;
+    await act(async () => { rename.click(); });
+    await until(() => [...host.querySelectorAll<HTMLButtonElement>(".rename-card .dialog-foot button.primary")].some((button) => !button.disabled), "apply enabled");
+    await act(async () => { host.querySelector<HTMLButtonElement>(".rename-card .dialog-foot button.primary")!.click(); });
+    await until(() => opPosts === 2 && (host.textContent ?? "").includes("500 of 501 items are being renamed"), "partial queue notice");
+    expect(host.textContent).toContain("queue full");
+  });
 });

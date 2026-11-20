@@ -2521,4 +2521,5 @@ export const en = {
   "err.renamePlanConflict": "The new names collide with each other or with a selected item. Load the preview again.",
   "err.renamePatternInvalid": "The pattern names an unknown field or leaves a brace open.",
   "rename.parts": "this film is split into several files; rename it by hand",
+  "rename.partlyQueued": "{queued} of {total} items are being renamed; the rest were not queued: {reason}",
 };

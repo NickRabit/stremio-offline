@@ -2475,4 +2475,5 @@ export const pl: Catalog = {
   "err.renamePlanConflict": "Nowe nazwy kolidują ze sobą lub z wybraną pozycją. Wczytaj podgląd ponownie.",
   "err.renamePatternInvalid": "Wzór zawiera nieznane pole albo niezamknięty nawias.",
   "rename.parts": "ten film składa się z kilku plików; zmień nazwę ręcznie",
+  "rename.partlyQueued": "Zmienia się nazwa {queued} z {total} pozycji; reszty nie dodano do kolejki: {reason}",
 };

@@ -2458,4 +2458,5 @@ export const ptBR: Catalog = {
   "err.renamePlanConflict": "Os nomes novos colidem entre si ou com um item selecionado. Carregue a prévia de novo.",
   "err.renamePatternInvalid": "O padrão tem um campo desconhecido ou uma chave aberta.",
   "rename.parts": "este filme está dividido em vários arquivos; renomeie à mão",
+  "rename.partlyQueued": "{queued} de {total} itens estão sendo renomeados; o restante não entrou na fila: {reason}",
 };

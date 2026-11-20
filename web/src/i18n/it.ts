@@ -2458,4 +2458,5 @@ export const it: Catalog = {
   "err.renamePlanConflict": "I nuovi nomi si scontrano tra loro o con un elemento selezionato. Ricarica l'anteprima.",
   "err.renamePatternInvalid": "Lo schema contiene un campo sconosciuto o una parentesi aperta.",
   "rename.parts": "questo film è diviso in più file; rinominalo a mano",
+  "rename.partlyQueued": "Si stanno rinominando {queued} elementi su {total}; il resto non è stato accodato: {reason}",
 };

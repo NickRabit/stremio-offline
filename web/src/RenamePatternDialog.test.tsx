@@ -145,6 +145,30 @@ describe("RenamePatternDialog", () => {
     expect(host.textContent).not.toContain("stale.mkv");
   });
 
+  it("keeps Apply off while a new preview is pending, even if the old one answers meanwhile", async () => {
+    vi.useFakeTimers();
+    let releaseOpen!: (value: Response) => void;
+    const openGate = new Promise<Response>((resolve) => { releaseOpen = resolve; });
+    let calls = 0;
+    const { onStart } = await open({
+      fetchImpl: (url) => {
+        if (!url.includes("/api/library/rename-plan")) return undefined;
+        calls += 1;
+        if (calls === 1) return openGate;
+        return new Promise<Response>(() => undefined);
+      },
+    });
+    const movie = host.querySelector<HTMLInputElement>('input[aria-label="Films"]')!;
+    await fill(movie, "{title} [{year}]");
+    // The answer for the old pattern lands inside the 400 ms wait.
+    await act(async () => { releaseOpen(json({ rows: [row({ key: "old", from: "old.mkv", status: "rename", to: "Old (2000).mkv" })] })); });
+    await flush();
+    const apply = [...host.querySelectorAll<HTMLButtonElement>(".dialog-foot button")].find((button) => button.className.includes("primary"))!;
+    expect(apply.disabled).toBe(true);
+    await act(async () => { apply.click(); });
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
   it("renders every status, folder and sidecar tags, chips and sort order", async () => {
     await open({
       rows: [
