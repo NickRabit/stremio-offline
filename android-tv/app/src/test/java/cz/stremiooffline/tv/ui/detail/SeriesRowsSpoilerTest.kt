@@ -33,6 +33,8 @@ class SeriesRowsSpoilerTest {
 
   private fun mount(
     hideSpoilers: Boolean,
+    videos: List<VideoDto> = episodes,
+    season: Int = 1,
     resumeEpisode: VideoDto? = null,
     cardProgress: ((VideoDto) -> Float?)? = null,
     cardCompleted: ((VideoDto) -> Boolean)? = null,
@@ -40,8 +42,8 @@ class SeriesRowsSpoilerTest {
     compose.setContent {
       Column {
         SeriesRows(
-          videos = episodes,
-          season = 1,
+          videos = videos,
+          season = season,
           onSeason = {},
           resumeEpisode = resumeEpisode,
           focusVideo = resumeEpisode,
@@ -101,5 +103,21 @@ class SeriesRowsSpoilerTest {
     assertEquals(false, spoilerHidden(episodes[0]))
     assertEquals(false, spoilerHidden(episodes[1]))
     assertEquals(true, spoilerHidden(episodes[3]))
+  }
+
+  @Test
+  fun `a season before the one to continue reads as watched`() {
+    val next = VideoDto(id = "s2e1", title = "Next", season = 2, episode = 1)
+    val special = VideoDto(id = "s0e1", title = "Special", season = 0, episode = 1)
+    mount(hideSpoilers = true, videos = episodes + next + special, season = 1, resumeEpisode = next)
+
+    episodes.forEach { assertEquals(false, spoilerHidden(it)) }
+  }
+
+  @Test
+  fun `specials are not ordered before the season being continued`() {
+    assertEquals(false, watchedBefore(VideoDto(id = "s0", season = 0, episode = 1), VideoDto(id = "x", season = 2, episode = 1)))
+    assertEquals(true, watchedBefore(VideoDto(id = "a", season = 1, episode = 9), VideoDto(id = "x", season = 2, episode = 1)))
+    assertEquals(false, watchedBefore(VideoDto(id = "b", season = 3, episode = 1), VideoDto(id = "x", season = 2, episode = 1)))
   }
 }

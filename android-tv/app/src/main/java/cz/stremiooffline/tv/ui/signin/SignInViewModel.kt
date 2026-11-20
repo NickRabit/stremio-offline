@@ -23,6 +23,7 @@ import cz.stremiooffline.tv.data.PairingStartOutcome
 import cz.stremiooffline.tv.data.ServerAddress
 import cz.stremiooffline.tv.data.SessionStore
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.ui.detail.SpoilerSetting
 import cz.stremiooffline.tv.ui.shell.Section
 import cz.stremiooffline.tv.ui.shell.startSection
 import kotlinx.coroutines.Job
@@ -400,6 +401,7 @@ class SignInViewModel(
     if (expectedGeneration != null && !isCurrent(expectedGeneration)) return false
     // The settings call proves the staged cookie works with the same client before adoption.
     val settings = runCatching { loadSettings?.invoke() ?: api.settings() }.getOrNull()
+    SpoilerSetting.lastKnown = settings?.hideSpoilers ?: false
     if (expectedGeneration != null && !isCurrent(expectedGeneration)) return false
     if (!beforeCommit()) {
       if (expectedGeneration != null) pairingFailed(PairingErrorInfo(PairingFailure.Generic), expectedGeneration)

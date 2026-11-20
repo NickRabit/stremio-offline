@@ -1160,7 +1160,7 @@ export function App() {
     onWheel: (event: ReactWheelEvent<HTMLElement>) => {
       const list = scroller();
       if (!list || ownScroller(event.target, event.currentTarget)) return;
-      list.scrollTop += event.deltaY;
+      list.scrollTop += toCssPx(event.deltaY);
     },
     onTouchStart: (event: ReactTouchEvent<HTMLElement>) => {
       // A control keeps its own touch. Nudging the list from under a button being pressed is
