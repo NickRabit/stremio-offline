@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/p
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
+import { mapBounded } from "./map-bounded.js";
 import { MediaServerError } from "./media-server-types.js";
 
 /**
@@ -67,6 +68,10 @@ export interface RemoteImageBody {
 
 interface Entry { file: string; ext: string; size: number; at: number }
 
+export interface RemoteImageCacheOptions {
+  stat?: typeof stat;
+}
+
 interface Waiter {
   stream: ReadableStream<Uint8Array>;
   controller?: ReadableStreamDefaultController<Uint8Array>;
@@ -120,17 +125,20 @@ export class RemoteImageCache {
   private closed = false;
   private readonly cap: number;
   private readonly memoryCap: number;
+  private readonly statFile: typeof stat;
 
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "remote-images"),
     cap?: number,
     memoryCap?: number,
+    options: RemoteImageCacheOptions = {},
   ) {
     // A cap of `0` is the default, not an unlimited or empty cache; a passed memory cap of `0`
     // is the one value that turns that layer off.
     this.cap = cap !== undefined && cap > 0 ? cap : megabytes(process.env.REMOTE_IMAGE_CACHE_MB, 512);
     this.memoryCap = memoryCap === 0 ? 0
       : memoryCap !== undefined && memoryCap > 0 ? memoryCap : memoryMegabytes(process.env.REMOTE_IMAGE_MEMORY_MB, 128);
+    this.statFile = options.stat ?? stat;
   }
 
   /** Builds the index from the files that are actually there; there is no index file. A
@@ -140,10 +148,13 @@ export class RemoteImageCache {
     const names = await readdir(this.dir).catch(() => []);
     for (const name of names) if (name.endsWith(".tmp")) await rm(path.join(this.dir, name), { force: true });
     this.index.clear();
-    for (const name of names) {
-      if (!KEY_FILE.test(name)) continue;
+    const candidates = names.filter((name) => KEY_FILE.test(name));
+    const inspected = await mapBounded(candidates, 8, async (name) => {
       const file = path.join(this.dir, name);
-      const info = await stat(file).catch(() => undefined);
+      const info = await this.statFile(file).catch(() => undefined);
+      return { name, file, info };
+    });
+    for (const { name, file, info } of inspected) {
       if (!info?.isFile()) continue;
       this.index.set(name.slice(0, KEY_LENGTH), { file, ext: name.slice(KEY_LENGTH + 1), size: info.size, at: info.mtimeMs });
     }
@@ -160,7 +171,7 @@ export class RemoteImageCache {
     for (const [key, entry] of ordered) {
       if (this.closed) return;
       if (this.memory.has(key)) continue;
-      const info = await stat(entry.file).catch(() => undefined);
+      const info = await this.statFile(entry.file).catch(() => undefined);
       if (!info?.isFile()) continue;
       if (info.size > this.memoryCap) continue;
       if (info.size > this.memoryCap - this.memoryBytes) break;

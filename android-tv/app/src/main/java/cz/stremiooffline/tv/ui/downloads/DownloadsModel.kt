@@ -13,6 +13,8 @@ fun isActive(job: DownloadDto): Boolean = job.status in ActiveStatuses
 fun activeJobs(jobs: List<DownloadDto>): List<DownloadDto> =
   jobs.filter(::isActive).sortedWith(compareBy<DownloadDto> { it.order }.thenBy { it.id })
 
+fun hasActiveDownloads(jobs: List<DownloadDto>): Boolean = activeJobs(jobs).isNotEmpty()
+
 private val ActiveStatuses = setOf("downloading", "checking", "waiting")
 
 data class QueueCounts(val queued: Int, val paused: Int, val failed: Int)

@@ -823,7 +823,7 @@ export interface ScanState {
   pauseReason?: "playback" | "download" | "breaker" | "operation";
   startedAt?: string; finishedAt?: string; updatedAt?: string;
   total: number; done: number; matched: number; skipped: number; failed: number;
-  current?: string; remaining: string[]; error?: string;
+  current?: string; remainingCount?: number; error?: string;
   /** Set when the run rechecks existing automatic bindings instead of looking for new ones. */
   recheck?: boolean;
 }

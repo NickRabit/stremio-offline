@@ -5,6 +5,7 @@ import path from "node:path";
 import { renameWithRetry, syncDirectory } from "./fs-retry.js";
 import { parseLibraryPath } from "./libraries.js";
 import { log } from "./logger.js";
+import { mapBounded } from "./map-bounded.js";
 import type { AppDatabase, Statement } from "./storage/app-database.js";
 import { moveToMigrationBackup } from "./storage/hourly-counts.js";
 import { TrackedMap } from "./storage/tracked-map.js";
@@ -38,6 +39,11 @@ export interface ArtworkSaveTimers {
   clear(handle: unknown): void;
 }
 
+export interface ArtworkCacheOptions {
+  saveTimers?: ArtworkSaveTimers;
+  lstat?: typeof lstat;
+}
+
 const megabytes = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
   return (Number.isFinite(parsed) && parsed > 0 ? parsed : fallback) * 1024 * 1024;
@@ -64,15 +70,20 @@ export class ArtworkCache {
   private indexText?: string;
   private recencyDirty = false;
   private recencyRevision = 0;
+  private readonly saveTimers: ArtworkSaveTimers;
+  private readonly lstatFile: typeof lstat;
 
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "artwork"),
     private cap = megabytes(process.env.ARTWORK_CACHE_MB, 256),
-    private readonly saveTimers: ArtworkSaveTimers = {
+    options: ArtworkCacheOptions = {},
+  ) {
+    this.saveTimers = options.saveTimers ?? {
       set: (run, ms) => setTimeout(run, ms).unref(),
       clear: (handle) => clearTimeout(handle as NodeJS.Timeout),
-    },
-  ) {}
+    };
+    this.lstatFile = options.lstat ?? lstat;
+  }
 
   private get indexFile() { return path.join(this.dir, "index.json"); }
 
@@ -194,10 +205,14 @@ export class ArtworkCache {
     this.entries.clear();
     for (const library of await readdir(this.dir, { withFileTypes: true }).catch(() => [])) {
       if (!library.isDirectory()) continue;
-      for (const file of await readdir(path.join(this.dir, library.name), { withFileTypes: true }).catch(() => [])) {
-        if (!file.isFile() || !/^[0-9a-f]{40}\.jpg$/.test(file.name)) continue;
+      const candidates = (await readdir(path.join(this.dir, library.name), { withFileTypes: true }).catch(() => []))
+        .filter((file) => file.isFile() && /^[0-9a-f]{40}\.jpg$/.test(file.name));
+      const inspected = await mapBounded(candidates, 8, async (file) => ({
+        file,
+        info: await this.lstatFile(path.join(this.dir, library.name, file.name)).catch(() => undefined),
+      }));
+      for (const { file, info } of inspected) {
         const name = path.join(library.name, file.name);
-        const info = await lstat(path.join(this.dir, name)).catch(() => undefined);
         if (!info?.isFile()) continue;
         const prior = stored[name]?.at;
         const at = typeof prior === "number" && Number.isFinite(prior) && prior > 0 ? prior : info.mtimeMs;
@@ -238,15 +253,18 @@ export class ArtworkCache {
         continue;
       }
       let whole = true;
-      for (const file of entries) {
-        if (!file.isFile() || !/^[0-9a-f]{40}\.jpg$/.test(file.name)) continue;
+      const candidates = entries.filter((file) => file.isFile() && /^[0-9a-f]{40}\.jpg$/.test(file.name));
+      const inspected = await mapBounded(candidates, 8, async (file) => {
         const name = path.join(library.name, file.name);
         try {
-          const info = await lstat(path.join(this.dir, name));
-          if (info.isFile()) files.set(name, { size: info.size, mtimeMs: info.mtimeMs });
+          return { name, info: await this.lstatFile(path.join(this.dir, name)) };
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") whole = false;
+          return { name, info: undefined };
         }
+      });
+      for (const { name, info } of inspected) {
+        if (info?.isFile()) files.set(name, { size: info.size, mtimeMs: info.mtimeMs });
       }
       if (whole) complete.add(library.name);
     }
@@ -391,7 +409,7 @@ export class ArtworkCache {
     if (source === target) return { carried: true };
     const conflict = { carried: false, reason: "conflict" } as const;
     try {
-      const original = await lstat(source, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+      const original = await this.lstatFile(source, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return undefined;
         throw error;
       });
@@ -403,7 +421,7 @@ export class ArtworkCache {
       await copyFile(source, target, constants.COPYFILE_EXCL).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "EEXIST") throw error;
       });
-      const published = await lstat(target, { bigint: true });
+      const published = await this.lstatFile(target, { bigint: true });
       if (!published.isFile()) return conflict;
       const handle = await open(target, process.platform === "win32" ? "r+" : "r");
       try {
@@ -413,8 +431,8 @@ export class ArtworkCache {
       await syncDirectory(dir);
       const unchanged = (a: typeof original, b: typeof original) =>
         a.dev === b.dev && a.ino === b.ino && a.ctimeNs === b.ctimeNs && a.size === b.size;
-      if (!unchanged(published, await lstat(target, { bigint: true })) ||
-          !unchanged(original, await lstat(source, { bigint: true }))) return conflict;
+      if (!unchanged(published, await this.lstatFile(target, { bigint: true })) ||
+          !unchanged(original, await this.lstatFile(source, { bigint: true }))) return conflict;
       if (move) {
         await rm(source);
         await this.moved(source, target);

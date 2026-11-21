@@ -13,7 +13,7 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { parseMediaPath } from "../library-parse.js";
 import type { LibraryHealth } from "../library-probe.js";
-import type { LibraryScan } from "../library-scan.js";
+import { scanView, type LibraryScan } from "../library-scan.js";
 import { isPathWithin, isVideo } from "../library.js";
 import { mediaResources, ResourceError, type ResourceOwner } from "../media-resources.js";
 import { nextVideoFile } from "../next-file.js";
@@ -41,12 +41,13 @@ export interface CurateDeps extends RouteContext {
   candidates: LibraryCandidateSource;
   nestedHidden(library: LibraryRecord, relative: string, viewer: Viewer | undefined): boolean;
   invalidateLibrary(): void;
+  invalidateLibraryMeta(): void;
   libraryAutoScan: LibraryAutoScan;
   libraryOps: LibraryOps;
   libraryPathBusy(keys: string[]): Promise<string | undefined>;
   libraryScan: LibraryScan;
   libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
-  libraryUnits(): Promise<TitleUnit[]>;
+  libraryUnits(read?: { stale?: boolean }): Promise<TitleUnit[]>;
   matchLibraryItem(body: { path?: unknown; key?: unknown; id?: unknown; type?: unknown; scope?: unknown; season?: unknown; episode?: unknown; skipLookup?: unknown; skipMosaic?: unknown }, language?: string): Promise<{ key: string; type?: string; id?: string | null; skipLookup?: boolean; skipMosaic?: boolean }>;
   metaStore: LibraryMetaStore;
   ownRecord(relative: string, records: Record<string, LibraryMetaRecord>): LibraryMetaRecord | undefined;
@@ -60,7 +61,7 @@ export interface CurateDeps extends RouteContext {
 }
 
 export function registerCurateRoutes(app: express.Application, deps: CurateDeps): { suggestionRows(libraryId?: string): Promise<CurateSuggestionRow[]> } {
-  const { candidates, store, currentUser, nestedHidden, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage, refreshLibraryHealth, requireAccess, scheduleMetaBackfill, wirePath } = deps;
+  const { candidates, store, currentUser, nestedHidden, invalidateLibrary, invalidateLibraryMeta, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage, refreshLibraryHealth, requireAccess, scheduleMetaBackfill, wirePath } = deps;
   const suggestionView = (suggestion: NonNullable<ReturnType<typeof suggestionFor>>) => ({
     ...suggestion,
     ...(suggestion.poster ? { poster: proxyImage(suggestion.poster) } : {}),
@@ -75,7 +76,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     if (!(await statUnlessMissing(resolved.absolute))) throw new AppError("Invalid path.", "err.invalidPath");
     // The unit the clicked row belongs to, and the title that unit is read as: a folder named
     // for a film keeps the folder title, a loose film in a collection keeps its own name.
-    const unit = unitFor(resolved.key, await libraryUnits());
+    const unit = unitFor(resolved.key, await libraryUnits({ stale: true }));
     const unitKey = unit?.key ?? resolved.key;
     const records = metaStore.qualifiedMeta();
     const suggestions = metaStore.qualifiedSuggestions();
@@ -266,7 +267,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const records = metaStore.qualifiedMeta();
     const suggestions = metaStore.qualifiedSuggestions();
     const libraries = store.libraries();
-    const units = await libraryUnits();
+    const units = await libraryUnits({ stale: true });
     return pendingSuggestionKeys(records, suggestions)
       .flatMap((key) => {
         const target = parseLibraryPath(key);
@@ -306,10 +307,10 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
       // as a person's decision, so a later rule change does not undo it.
       file.suggestions[target.relative] = scanMiss(previous?.type === "series" ? "series" : "movie", undefined, true);
     });
-    invalidateLibrary();
+    invalidateLibraryMeta();
     res.status(204).end();
   }));
-  app.get("/api/library/scan", (_req, res) => res.json(libraryScan.snapshot()));
+  app.get("/api/library/scan", (_req, res) => res.json(scanView(libraryScan.snapshot())));
   app.post("/api/library/scan", asyncRoute(async (req, res) => {
     const requested = String(req.body?.path ?? "").trim();
     const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
@@ -332,7 +333,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const state = await libraryScan.start({ force: req.body?.force === true, path: resolved?.key ?? "", libraryId: library?.id, recheckScanBindings });
     // A manual run covers the same ground, so the automatic one starts from here too.
     void libraryAutoScan.remember();
-    res.json(state);
+    res.json(scanView(state));
   }));
   app.post("/api/library/scan/stop", asyncRoute(async (_req, res) => { await libraryScan.stop(); res.status(204).end(); }));
   app.get(["/api/library/next/:sourceId", "/api/library/previous/:sourceId"], asyncRoute(async (req, res) => {

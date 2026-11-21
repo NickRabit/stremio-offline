@@ -127,6 +127,7 @@ interface HomeApi {
 /** The account's download queue, read for the Home summary. */
 interface DownloadsApi {
   suspend fun downloads(): DownloadsResponseDto
+  suspend fun activeDownloads(): DownloadsResponseDto
 
   suspend fun prepareBulk(body: BulkPrepareRequest): BulkPrepareResponse
 }

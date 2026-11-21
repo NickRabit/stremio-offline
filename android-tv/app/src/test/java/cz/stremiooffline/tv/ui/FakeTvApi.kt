@@ -291,6 +291,7 @@ open class FakeTvApi : TvApi {
   var homeLayoutPatchMessage: String? = null
   var downloadsValue: DownloadsResponseDto = DownloadsResponseDto()
   var downloadsRequests = 0
+  var activeDownloadsRequests = 0
 
   var remoteLibrariesValue: List<RemoteLibraryDto>? = emptyList()
   var remoteLibrariesFailure: ApiFailure? = null
@@ -774,6 +775,11 @@ open class FakeTvApi : TvApi {
 
   override suspend fun downloads(): DownloadsResponseDto {
     downloadsRequests += 1
+    return downloadsValue
+  }
+
+  override suspend fun activeDownloads(): DownloadsResponseDto {
+    activeDownloadsRequests += 1
     return downloadsValue
   }
 

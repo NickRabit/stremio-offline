@@ -39,6 +39,7 @@ interface IndexedEntry {
 }
 
 const CHUNK_SIZE = 5_000;
+const yieldToEventLoop = () => new Promise<void>((resolve) => nextImmediate(resolve));
 
 export class LocalSearchIndex {
   private readonly deps: LocalSearchIndexDeps;
@@ -123,7 +124,7 @@ export class LocalSearchIndex {
         if (score !== undefined) matches.push({ entry: item.entry, score, ...(item.parentKey === undefined ? {} : { parentKey: item.parentKey }) });
       }
       if (end < indexed.length) {
-        await new Promise<void>((resolve) => nextImmediate(resolve));
+        await yieldToEventLoop();
       }
     }
     if (signal?.aborted) throw new SourceFailure("cancelled");
@@ -191,14 +192,14 @@ export class LocalSearchIndex {
     try {
       const entries = await this.deps.entries();
       if (this.closed) return;
-      if (invalidations === this.invalidations) {
-        this.indexed = this.prepare(entries);
-        this.generation += 1;
-        this.ready = true;
-        this.stale = false;
-        this.failed = false;
-        published = true;
-      }
+      const prepared = await this.prepare(entries);
+      if (!prepared || this.closed) return;
+      this.indexed = prepared;
+      this.generation += 1;
+      this.ready = true;
+      this.stale = invalidations !== this.invalidations;
+      this.failed = false;
+      published = true;
     } catch {
       if (!this.closed) this.failed = true;
     } finally {
@@ -215,9 +216,14 @@ export class LocalSearchIndex {
     }
   }
 
-  private prepare(entries: LibraryEntry[]): IndexedEntry[] {
+  private async prepare(entries: LibraryEntry[]): Promise<IndexedEntry[] | undefined> {
     const prepared: IndexedEntry[] = [];
-    for (const entry of entries) {
+    for (let index = 0; index < entries.length; index += 1) {
+      if (index > 0 && index % CHUNK_SIZE === 0) {
+        await yieldToEventLoop();
+        if (this.closed) return undefined;
+      }
+      const entry = entries[index]!;
       const parsed = parseLibraryPath(entry.key);
       if (!parsed) continue;
       prepared.push({

@@ -11,11 +11,11 @@ export interface Maintenance {
 }
 
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60_000;
-const DEFAULT_FIRST_DELAY_MS = 5_000;
+const DEFAULT_FIRST_DELAY_MS = 10 * 60_000;
 const DEFAULT_GRACE_MS = 2_000;
 
-/** A pass that runs itself: the caches and the thumbnail sweep are maintained shortly after
- *  start and then on an interval, without a request having to drive them. */
+/** A pass that runs itself: the caches and the thumbnail sweep are maintained after startup
+ *  and then on an interval, without a request having to drive them. */
 export function createMaintenance(options: {
   tasks: MaintenanceTask[];
   intervalMs?: number;

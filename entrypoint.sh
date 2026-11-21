@@ -8,12 +8,11 @@ PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 
 if [ "$(id -u)" = "0" ]; then
-  # App state is small; that we can always chown.
-  chown -R "$PUID:$PGID" /data 2>/dev/null || true
+  find /data \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$PUID:$PGID" {} + 2>/dev/null || true
 
   if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
     echo "FIX_PERMISSIONS=1: changing owner of /downloads to $PUID:$PGID (slow on a large library)"
-    chown -R "$PUID:$PGID" /downloads 2>/dev/null || true
+    find /downloads \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown -h "$PUID:$PGID" {} + 2>/dev/null || true
   fi
 
   CHECK_GROUPS="$PGID"

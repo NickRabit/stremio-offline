@@ -18,7 +18,7 @@ import type { SourceAdmissionSnapshotV1 } from "../source-admission.js";
 import { defaultTemplateParameters, RULE_PRESETS, SOURCE_PROFILE_IDS, type SourceProfileTemplate } from "../source-profiles.js";
 import type { Store, StoredSourceProfile, UserPrefs } from "../store.js";
 import type { AddonDownloadSettings, DownloadTargetSettings, StreamItem } from "../types.js";
-import type { DownloadDrainView, DownloadWindowState } from "../api-types.js";
+import type { DownloadDrainView, DownloadStatus, DownloadWindowState } from "../api-types.js";
 import type { UserRecord } from "../users.js";
 import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
 
@@ -91,7 +91,7 @@ const mount = async (
   addons: unknown[] = [streamAddon("stream-addon")],
   options: {
     viewer?: UserRecord;
-    jobs?: Array<{ id: string; ownerUserId?: string; target?: string }>;
+    jobs?: Array<{ id: string; ownerUserId?: string; target?: string; status?: DownloadStatus }>;
     libraries?: unknown[];
     connections?: unknown[];
     remoteLibraries?: unknown[];
@@ -356,6 +356,25 @@ test("GET /api/downloads returns the snapshot with every job passed through jobV
   assert.equal(body.halt, null);
   assert.deepEqual(body.jobs.map((job) => job.viewed), [true, true]);
   assert.deepEqual(harness.viewed.map((job) => job.id), ["job-1", "job-2"]);
+});
+
+test("GET /api/downloads can omit finished jobs without changing the unfiltered answer", async (t) => {
+  const jobs: NonNullable<Parameters<typeof mount>[1]>["jobs"] = [
+    { id: "queued", ownerUserId: BOB, status: "queued" },
+    { id: "paused", ownerUserId: BOB, status: "paused" },
+    { id: "downloading", ownerUserId: BOB, status: "downloading" },
+    { id: "completed", ownerUserId: BOB, status: "completed" },
+    { id: "failed", ownerUserId: BOB, status: "failed" },
+    { id: "someone-else", ownerUserId: ADA, status: "queued" },
+  ];
+  const harness = await mount(undefined, { viewer: ordinary, jobs });
+  t.after(harness.close);
+
+  const all = await (await api(harness.base, "/api/downloads")).json() as { jobs: Array<{ id: string }> };
+  assert.deepEqual(all.jobs.map((job) => job.id), ["queued", "paused", "downloading", "completed", "failed"]);
+
+  const active = await (await api(harness.base, "/api/downloads?active=1")).json() as { jobs: Array<{ id: string }> };
+  assert.deepEqual(active.jobs.map((job) => job.id), ["queued", "paused", "downloading"]);
 });
 
 test("GET /api/downloads carries the window state for administrators and ordinary users", async (t) => {

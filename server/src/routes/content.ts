@@ -31,7 +31,7 @@ import { subtitleSidecars } from "../library-sidecars.js";
 
 /** Browsing a library and the file operations under it. */
 export interface ContentDeps extends RouteContext {
-  attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string, options?: { prewarm?: boolean }): Promise<{ item: T; backfill: boolean }>;
+  attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string, options?: { prewarm?: boolean; units?: TitleUnit[] }): Promise<{ item: T; backfill: boolean }>;
   carveOutsOf(library: LibraryRecord): Set<string>;
   nestedHidden(library: LibraryRecord, relative: string, viewer: Viewer | undefined): boolean;
   dataOf(req: express.Request): UserData;
@@ -191,7 +191,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const units = seriesTyped ? [] : await libraryUnits({ stale: true });
     // A file bound to a title keeps its position under the title's key; the walk answers which
     // title that is. Read once, so a page of file rows does not ask per row.
-    const progressUnits = await libraryUnits();
+    const progressUnits = await libraryUnits({ stale: true });
     const progressRecords = metaStore.qualifiedMeta();
     const progress = progressOf(data);
     const markers = markersOf(data);
@@ -208,7 +208,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       // about to replace, so the row says "ask again" for as long as the write is in flight.
       const moving = artworkBusy(key);
       if (item.kind === "folder") {
-        const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage, { prewarm });
+        const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage, { prewarm, units: progressUnits });
         // A collection stands for several films: it shows their posters rather than a folder
         // frame of its own, and no frame is scheduled for it.
         const fan = await folderFan(key, library, units);
@@ -244,7 +244,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         titleKey ?? fileKey,
       )?.[1];
       const covered = !watched && !titleKey && markerCovers(markers[localSeriesId(key, progressUnits)], item);
-      const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage, { prewarm });
+      const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage, { prewarm, units: progressUnits });
       return {
         ...withMeta,
         path,
@@ -507,7 +507,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // inside it keeps the folder rule below.
     const fan = resolved.relative === ""
       ? await rootFan(resolved.library, viewer)
-      : await folderFan(resolved.key, resolved.library, await libraryUnits());
+      : await folderFan(resolved.key, resolved.library, await libraryUnits({ stale: true }));
     if (fan.files.length < 2 || !fan.stamp) return void res.status(404).end();
     const versioned = typeof req.query.v === "string" && req.query.v === fan.stamp;
     const etag = `"${fan.stamp}"`;

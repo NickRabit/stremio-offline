@@ -40,9 +40,11 @@ interface Calls {
   cancelled: string[];
   enqueued: LibraryOp[];
   invalidated: number;
+  metaInvalidated: number;
   matched: Array<{ body: Record<string, unknown>; language: string | undefined }>;
   remembered: number;
   unitWalks: number;
+  unitReads: Array<{ stale?: boolean } | undefined>;
 }
 
 interface Harness {
@@ -100,12 +102,12 @@ const mount = async (options: {
       return Boolean(nested && withinLibraryRoot(new Set([nested]), relative, options.caseInsensitive));
     }));
   const activeItems = options.activeItems ?? (() => []);
-  const calls: Calls = { cancelled: [], enqueued: [], invalidated: 0, matched: [], remembered: 0, unitWalks: 0 };
+  const calls: Calls = { cancelled: [], enqueued: [], invalidated: 0, metaInvalidated: 0, matched: [], remembered: 0, unitWalks: 0, unitReads: [] };
   const pendingOps = new Set(["job_1", "job_2"]);
   const dataDir = await makeRoot("stremio-curate-");
   const scan = new LibraryScan({
     dataDir,
-    units: async () => { calls.unitWalks += 1; return []; },
+    units: async () => { calls.unitWalks += 1; return options.units ?? []; },
     candidates: { searchLibraryCandidates: async () => [], resolveSelected: async (candidate) => candidate.item, galleryOf: async () => [] },
     metadata: async () => null,
     addons: () => [],
@@ -146,6 +148,7 @@ const mount = async (options: {
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
     invalidateLibrary: () => { calls.invalidated += 1; },
+    invalidateLibraryMeta: () => { calls.metaInvalidated += 1; },
     libraryAutoScan: { remember: async () => { calls.remembered += 1; } } as unknown as LibraryAutoScan,
     libraryOps: {
       cancel: async (id: string) => { calls.cancelled.push(id); return pendingOps.delete(id); },
@@ -172,7 +175,10 @@ const mount = async (options: {
       }
       return resolved.absolute;
     },
-    libraryUnits: async () => options.units ?? [],
+    libraryUnits: async (read) => {
+      calls.unitReads.push(read);
+      return options.units ?? [];
+    },
     matchLibraryItem: async (body, language) => {
       calls.matched.push({ body: body as Record<string, unknown>, language });
       return { key: "Films/Heat.mkv", type: "movie", id: "tt1" };
@@ -452,6 +458,25 @@ test("POST /api/library/scan answers the run already under way instead of starti
   assert.equal((await (await api(harness.base, "/api/library/scan")).json() as { status: string }).status, "idle");
 });
 
+test("scan answers name the remaining count without copying the queue", async (t) => {
+  const units: TitleUnit[] = [
+    { key: "lib_00000001/Films/Heat", kind: "movie", relative: "Films/Heat", sampleFiles: ["Films/Heat/Heat.mkv"] },
+    { key: "lib_00000001/Films/Ronin", kind: "movie", relative: "Films/Ronin", sampleFiles: ["Films/Ronin/Ronin.mkv"] },
+  ];
+  const harness = await mount({ units });
+  t.after(harness.close);
+
+  const started = await api(harness.base, "/api/library/scan", { method: "POST", body: {} });
+  const startedBody = await started.json() as { remaining?: unknown; remainingCount?: number };
+  assert.equal("remaining" in startedBody, false);
+  assert.equal(startedBody.remainingCount, units.length);
+
+  const polled = await api(harness.base, "/api/library/scan");
+  const polledBody = await polled.json() as { remaining?: unknown; remainingCount?: number };
+  assert.equal("remaining" in polledBody, false);
+  assert.equal(polledBody.remainingCount, units.length);
+});
+
 test("GET next and previous step through one folder from the one registration", async (t) => {
   // One registration lists both addresses, so neither can drift from the other.
   const source = readFileSync(fileURLToPath(new URL("./curate.ts", import.meta.url)), "utf8");
@@ -511,6 +536,25 @@ test("POST /api/library/match refuses a confirmation for an item the library no 
   // An unmatch carries no id, so a path that is already gone can still be released.
   const released = await api(harness.base, "/api/library/match", { method: "POST", body: { path: "Films/Heat.mkv", type: "movie", id: "" } });
   assert.equal(released.status, 200);
+});
+
+test("read-only curate views take the held walk while match checks the current tree", async (t) => {
+  const root = await makeRoot("stremio-curate-held-walk-");
+  await put(root, "Films/Heat.mkv");
+  const key = "lib_00000001/Films/Heat.mkv";
+  const harness = await mount({
+    libraries: [library("lib_00000001", root)],
+    units: [{ key, kind: "movie", relative: "Films/Heat.mkv", sampleFiles: ["Films/Heat.mkv"] }],
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  assert.equal((await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Films/Heat.mkv")}`)).status, 200);
+  assert.equal((await api(harness.base, "/api/library/suggestions")).status, 200);
+  assert.equal((await api(harness.base, "/api/library/match", {
+    method: "POST", body: { path: "Films/Heat.mkv", type: "movie", id: "tt0113277" },
+  })).status, 200);
+
+  assert.deepEqual(harness.calls.unitReads, [{ stale: true }, { stale: true }, undefined]);
 });
 
 test("GET /api/library/identity describes the clicked file and proxies its suggested poster", async (t) => {
@@ -968,7 +1012,8 @@ test("dismissing a suggestion records a decision the rules will not undo", async
   assert.equal(response.status, 204);
   assert.equal(updated?.suggestions["Films/Heat"]?.dismissed, true);
   assert.equal(updated?.suggestions["Films/Heat"]?.id, "", "the binding is cleared, keeping only the memory");
-  assert.equal(harness.calls.invalidated, 1);
+  assert.equal(harness.calls.invalidated, 0);
+  assert.equal(harness.calls.metaInvalidated, 1);
 });
 
 test("GET /api/library/suggestions answers exactly the array the extracted builder returns", async (t) => {

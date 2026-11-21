@@ -50,6 +50,48 @@ test("a key maps to the directory of its library, folder prefix and all", async 
   });
 });
 
+test("loading the artwork index keeps at most eight lstats in flight", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "artwork-cache-bounded-"));
+  const dir = path.join(dataDir, "artwork");
+  const libraryDir = path.join(dir, "lib_aaaaaaaa");
+  await mkdir(libraryDir, { recursive: true });
+  await Promise.all(Array.from({ length: 50 }, (_, index) =>
+    writeFile(path.join(libraryDir, hash(`key-${index}`)), Buffer.alloc(1))));
+
+  let active = 0;
+  let peak = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let full!: () => void;
+  const eightInFlight = new Promise<void>((resolve) => { full = resolve; });
+  const trackingLstat = (async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    if (active === 8) full();
+    await gate;
+    active -= 1;
+    return { isFile: () => true, size: 1, mtimeMs: 1 } as Awaited<ReturnType<typeof lstat>>;
+  }) as typeof lstat;
+  const cache = new ArtworkCache(dir, 1024 * 1024, { lstat: trackingLstat });
+  let loading: Promise<void> | undefined;
+  try {
+    loading = cache.load();
+    await eightInFlight;
+    // One more turn: a ninth lstat started without a free slot would show up here.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(active, 8);
+    release();
+    await loading;
+    assert.equal(peak, 8);
+    assert.equal(cache.size, 50);
+  } finally {
+    release();
+    await loading;
+    await cache.flush();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("the ceiling keeps everything above the headroom floor and drops the oldest", async () => {
   await withCache(10 * 1024, async (cache, dir) => {
     await put(cache, "lib_aaaaaaaa/One.mkv", 4096);
@@ -431,7 +473,7 @@ test("serving a gallery picture does not schedule an index write and shutdown pe
     set: (run, ms) => { const timer = { run, ms }; scheduled.push(timer); return timer; },
     clear: (handle) => { const at = scheduled.indexOf(handle as { run: () => void; ms: number }); if (at >= 0) scheduled.splice(at, 1); },
   };
-  const cache = new ArtworkCache(dir, 1024 * 1024, timers);
+  const cache = new ArtworkCache(dir, 1024 * 1024, { saveTimers: timers });
   try {
     const file = await put(cache, "lib_aaaaaaaa/One.mkv", 64);
     assert.deepEqual(scheduled.map((timer) => timer.ms), [2000], "a new thumbnail stays on the prompt schedule");
@@ -478,7 +520,7 @@ test("a failed index write arms a bounded retry", async () => {
     set: (run, ms) => { const timer = { run, ms }; scheduled.push(timer); return timer; },
     clear: (handle) => { const at = scheduled.indexOf(handle as { run: () => void; ms: number }); if (at >= 0) scheduled.splice(at, 1); },
   };
-  const cache = new ArtworkCache(dir, 1024 * 1024, timers);
+  const cache = new ArtworkCache(dir, 1024 * 1024, { saveTimers: timers });
   try {
     await mkdir(path.join(dir, "index.json.tmp"), { recursive: true });
     await put(cache, "lib_aaaaaaaa/One.mkv", 64);
