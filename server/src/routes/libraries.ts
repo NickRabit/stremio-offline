@@ -460,14 +460,18 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       await pauseIncompatibleLibraryJobs(after.id);
     }
     await sweepLibraryLoss(before, after);
-    invalidateLibrary();
+    // The walk depends on where a library is, what it holds and whether it is walked at all;
+    // a grant, a name or a display switch is read off the record at use. Dropping the walk for
+    // those made every other page wait for a fresh pass over the whole NAS.
+    const walkChanged = before.root !== after.root || before.type !== after.type || before.enabled !== after.enabled;
+    if (walkChanged) invalidateLibrary();
     // Only a real change to either switch drops the fingerprint: re-enabling a library whose
     // files never moved must still be walked, and a rename must not buy a run of its own.
     if (automaticMetadataEnabled(before) !== automaticMetadataEnabled(after) || before.enabled !== after.enabled) {
       invalidateAutoScan(after.id);
     }
     await refreshLibraryHealth();
-    const stats = await libraryStats();
+    const stats = await libraryStats({ stale: true });
     log("INFO", "Library updated", { library: after.id, root: after.root, type: after.type, enabled: after.enabled });
     // As with the create above: only an administrator reaches this route.
     res.json(libraryView(after, health, stats.get(after.id) ?? { titles: 0, files: 0, bytes: 0 }, true, true));

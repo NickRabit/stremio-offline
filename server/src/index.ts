@@ -1345,13 +1345,21 @@ async function lookupMeta(
 // Walking the tree is expensive, so it is held in memory for a while. The queue invalidates it once a download finishes.
 // Units and entries are derived from the one walk, so a cold listing reads the disk once.
 type WalkRead = { stale?: boolean };
+const SLOW_WALK_MS = 5_000;
 const videoCache = new WalkCache<FoundFile[]>(async () => {
   const files: FoundFile[] = [];
+  const started = performance.now();
+  const perLibrary: Record<string, number> = {};
   for (const library of walkableLibraries()) {
+    const libraryStarted = performance.now();
     for (const file of await listVideos(library.root, "", 0, carveOutsOf(library))) {
       files.push({ ...file, relative: libraryPath(library.id, file.relative) });
     }
+    perLibrary[library.id] = Math.round(performance.now() - libraryStarted);
   }
+  const ms = Math.round(performance.now() - started);
+  // Pages wait for this walk whenever it has expired, so a slow disk shows here first.
+  if (ms >= SLOW_WALK_MS) log("WARN", "The library walk was slow", { ms, files: files.length, libraries: perLibrary });
   return files;
 }, 30_000);
 const filesOf = (files: FoundFile[], library: LibraryRecord) =>
