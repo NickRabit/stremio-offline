@@ -1417,6 +1417,15 @@ const invalidateLibrary = () => {
   localSearchIndex?.markDirty();
 };
 
+/** A binding, a suggestion or a flag changed, not a file: only the entries that carry
+ *  metadata are rebuilt, and the walk of the NAS is kept. */
+const invalidateLibraryMeta = () => {
+  libraryEpoch += 1;
+  libraryCache.invalidate();
+  targetArtworkCache.clear();
+  localSearchIndex?.markDirty();
+};
+
 const rootReadable = async (root: string) => { try { await access(root, constants.R_OK); return true; } catch { return false; } };
 
 /** The sweep's collaborators. Several are wrapped in an arrow on purpose: `storeArt` and
@@ -1951,7 +1960,7 @@ const strandedReroot = (libraryId: string) => {
 
 app.get("/api/library", asyncRoute(async (req, res) => {
   const visible = new Set(visibleLibraries(store.libraries(), viewerOf(currentUser(req))).map((library) => library.id));
-  const entries = (await libraryEntries()).filter((entry) => visible.has(parseLibraryPath(entry.key)?.libraryId ?? ""));
+  const entries = (await libraryEntries({ stale: true })).filter((entry) => visible.has(parseLibraryPath(entry.key)?.libraryId ?? ""));
   const summaries = await Promise.all(entries.map(async (entry) => {
     const art = await locateArtwork(entry);
     if (!art) scheduleArtwork(entry);
@@ -2040,16 +2049,18 @@ const scheduleMetaBackfill = (type: string, id: string, language: string) => {
     const at = new Date().toISOString();
     // The binding is found by catalogue identity, so every library is walked; only the
     // ones holding a row for this title are written.
+    let bound = false;
     await metaStore.updateAll((file, _libraryId, episodes) => {
-      let bound = false;
+      let fileBound = false;
       for (const [key, record] of Object.entries(file.meta)) {
         if (record.type !== type || record.id !== id) continue;
         file.meta[key] = { ...record, ...fields, backfilledAt: at };
-        bound = true;
+        fileBound = true;
       }
-      if (bound) Object.assign(episodes, episodeRows);
+      if (fileBound) Object.assign(episodes, episodeRows);
+      bound ||= fileBound;
     });
-    invalidateLibrary();
+    if (bound) invalidateLibraryMeta();
   });
   return true;
 };
@@ -2089,7 +2100,7 @@ const besideMediaTarget = (key: string, shape: ArtShape) =>
 const wideBesideMedia = async (key: string) => {
   if (!artworkBesideMediaFor(key)) return false;
   if (!isFileKey(key)) return true;
-  const unit = unitFor(key, await libraryUnits());
+  const unit = unitFor(key, await libraryUnits({ stale: true }));
   const cover = knownEntryForUnit(unit, metaStore.qualifiedMeta(), key);
   return fileMayUseFolderArtwork(key, cover?.record.type, cover?.key);
 };
@@ -2155,12 +2166,12 @@ const writeCatalogPoster = async (key: string, url?: string, backdrop?: string) 
 const ownRecord = (relative: string, records: Record<string, LibraryMetaRecord>) =>
   (records[relative]?.id ? records[relative] : undefined);
 
-const attachBrowseMeta = async <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string, options: { prewarm?: boolean } = {}) => {
+const attachBrowseMeta = async <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string, options: { prewarm?: boolean; units?: TitleUnit[] } = {}) => {
   const records = metaStore.qualifiedMeta();
   const episodes = metaStore.episodes();
   const key = libraryKey(item.path);
   const label = item.kind === "folder" ? String(item.name ?? "") : String(item.label ?? "");
-  const units = await libraryUnits();
+  const units = options.units ?? await libraryUnits({ stale: true });
   const unit = unitFor(key, units);
   const suggestions = metaStore.qualifiedSuggestions();
   const mosaicFolder = item.kind === "folder" && !unit && folderMosaicUnits(units, key, records, suggestions).length > 1;
@@ -2374,7 +2385,7 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
   // A path bound to a title stars that title too, and unstarring either side clears both: the
   // catalogue star and the paths that stand for it are one favourite.
   const records = metaStore.qualifiedMeta();
-  const units = await libraryUnits();
+  const units = await libraryUnits({ stale: true });
   const title = titleOfPath(resolved.key, records, units);
   const identity = title ? `${title.type}:${title.id}` : undefined;
   await updateOneData(owner.id, (data) => {
@@ -2401,7 +2412,7 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
   });
 };
 
-const personal = registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, nestedHidden, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls: (key) => titleArtworkUrls(key), thumbUrl, updateData, updateDataLater, updateDataUnlessUnchanged, watchlistOf, wirePath, remotePersonal: mediaServerPersonal, authorityOf });
+const personal = registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, nestedHidden, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits: () => libraryUnits({ stale: true }), locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, titleArtworkUrls: (key) => titleArtworkUrls(key), thumbUrl, updateData, updateDataLater, updateDataUnlessUnchanged, watchlistOf, wirePath, remotePersonal: mediaServerPersonal, authorityOf });
 
 /** The followed series: the daily check reads the owner's addons in the owner's language,
  *  past the cache, so a new episode is seen the day it appears. */
@@ -2707,7 +2718,7 @@ const libraryScan = new LibraryScan({
   // The scan thinks in qualified keys; the store turns them into per-library writes.
   updateMeta: async (mutator) => {
     await metaStore.updateQualified(mutator);
-    invalidateLibrary();
+    invalidateLibraryMeta();
   },
   savePoster: (key, url, backdrop) => saveCatalogPoster(key, url, undefined, backdrop),
   saveGallery: (key, pictures) => saveCatalogGallery(key, pictures),
@@ -2867,7 +2878,7 @@ const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().
     if (target) await metaStore.update(target.libraryId, (file) => {
       file.meta = withSkipFlag(file.meta, target.relative, flag.name, flag.value);
     });
-    invalidateLibrary();
+    invalidateLibraryMeta();
     const what = flag.name === "skipLookup" ? "matching" : "the mosaic";
     log("INFO", flag.value ? `Library path excluded from ${what}` : `Library path included in ${what}`, { path: requested });
     return flag.name === "skipLookup"
@@ -2923,7 +2934,7 @@ const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().
     for (const key of [target.relative, request, unit]) if (key) delete file.suggestions[key];
     Object.assign(episodes, episodeRows);
   });
-  invalidateLibrary();
+  invalidateLibraryMeta();
   await clearGeneratedArt(bindKey);
   if (requestKey !== bindKey) await clearGeneratedArt(requestKey);
   if (id) {
@@ -3099,7 +3110,7 @@ registerLibrariesRoutes(app, {
   libraryItemsBusy: (keys) => libraryPathsBusy(keys),
 });
 
-const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, nestedHidden, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
+const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, nestedHidden, invalidateLibrary, invalidateLibraryMeta, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits: (read) => libraryUnits(read), matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 
 registerShuffleRoutes(app, {
   ...routeContext,
@@ -3154,7 +3165,7 @@ const freeSpace = async (target: string) => {
   catch { return { path: target }; }
 };
 registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
-registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache, publicAddonView });
+registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, invalidateLibraryMeta, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache, publicAddonView });
 const introSegments = new IntroSegmentsCache();
 registerIntroSegmentRoutes(app, { ...routeContext, introSegments });
 registerMediaServerRoutes(app, {

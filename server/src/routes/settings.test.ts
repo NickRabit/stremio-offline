@@ -50,6 +50,7 @@ interface Harness {
   pendingWrites(): number;
   /** How many writes the route made in total, so a test can prove they landed together. */
   writes(): number;
+  metaInvalidations(): number;
   queueChanges(): number;
   holdWrites(): void;
   releaseWrites(): void;
@@ -106,6 +107,7 @@ const mount = async (options: MountOptions = {}): Promise<Harness> => {
   let held: Array<() => void> = [];
   let holding = false;
   let writes = 0;
+  let metaInvalidations = 0;
   let queueChanges = 0;
   const exportedConnection = { id: `mconn_${"1".repeat(32)}`, provider: "jellyfin" as const, name: "Home", baseUrl: "http://media.example", allowLan: false, allowLoopback: false, serverId: "server-1", accountId: "account-1" };
   const exportedLibrary = { id: `rlib_${"2".repeat(32)}`, connectionId: exportedConnection.id, remoteId: "remote-1", name: "Films", type: "movie" as const, order: 0, showOnHome: true, showInContinueWatching: true };
@@ -162,6 +164,7 @@ const mount = async (options: MountOptions = {}): Promise<Harness> => {
     STREAM_SORTS,
     accountIdOf: (req) => (req ? userIdOf(req) : ADA),
     invalidateLibrary: () => undefined,
+    invalidateLibraryMeta: () => { metaInvalidations += 1; },
     mediaServers,
     metaCache: new Map(),
     metaStore: {
@@ -191,6 +194,7 @@ const mount = async (options: MountOptions = {}): Promise<Harness> => {
   harness.base = `http://127.0.0.1:${port}`;
   harness.pendingWrites = () => held.length;
   harness.writes = () => writes;
+  harness.metaInvalidations = () => metaInvalidations;
   harness.queueChanges = () => queueChanges;
   harness.holdWrites = () => { holding = true; };
   harness.releaseWrites = () => { const waiting = held; held = []; for (const run of waiting) run(); };
@@ -235,6 +239,16 @@ test("GET /api/settings answers the configured booleans and never the stored sec
   assert.equal("tmdbApiKey" in body, false);
   assert.equal(body.realDebridConfigured, true);
   assert.equal(body.tmdbConfigured, true);
+});
+
+test("a metadata language change rebuilds entries without dropping the file walk", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/settings", { method: "PATCH", user: "ada", body: { uiLanguage: "cs" } });
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.metaInvalidations(), 1);
 });
 
 test("GET /api/settings tells an ordinary account nothing about the instance it cannot act on", async (t) => {

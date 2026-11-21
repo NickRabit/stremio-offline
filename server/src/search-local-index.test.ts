@@ -128,7 +128,7 @@ test("markDirty marks the published generation stale until the debounced rebuild
   assert.equal(index.state().stale, false);
 });
 
-test("a build invalidated while it runs is discarded and rerun once", async () => {
+test("a build invalidated while it runs publishes stale and reruns once", async () => {
   const timers = new ManualTimers();
   const first = defer<LibraryEntry[]>();
   const second = defer<LibraryEntry[]>();
@@ -145,16 +145,16 @@ test("a build invalidated while it runs is discarded and rerun once", async () =
   index.markDirty();
   first.resolve([movie("lib_00000001/First", "First", "tt1")]);
   await flush();
-  assert.equal(index.state().generation, 0);
-  assert.equal(index.state().ready, false);
+  assert.equal(index.state().generation, 1);
+  assert.equal(index.state().ready, true);
   assert.equal(index.state().stale, true);
+  assert.equal(calls, 1);
 
   timers.tick(2_000);
-  await flush();
-  assert.equal(calls, 2);
+  await until(() => calls === 2);
   second.resolve([movie("lib_00000001/Second", "Second", "tt2")]);
-  await until(() => index.state().ready);
-  assert.equal(index.state().generation, 1);
+  await until(() => index.state().generation === 2);
+  assert.equal(index.state().stale, false);
   const found = await index.search("lib_00000001", "second", "all");
   assert.deepEqual(found.entries.map((item) => item.key), ["lib_00000001/Second"]);
 });
@@ -282,6 +282,26 @@ test("100,000 entries search under a second and yield between chunks", async () 
   assert.deepEqual(found.entries.map((item) => item.key), ["lib_00000001/Needle"]);
   assert.deepEqual(order, ["immediate"], "a queued immediate ran before the scan finished");
   assert.ok(elapsed < 1_000, `search took ${elapsed.toFixed(1)} ms`);
+});
+
+test("a large build keeps its results and yields while preparing", async () => {
+  const entries: LibraryEntry[] = [];
+  for (let index = 0; index < 19_999; index += 1) {
+    entries.push(entry(`lib_00000001/Show ${index}`, `Show ${index}`));
+  }
+  entries.push(entry("lib_00000001/Needle", "Needle"));
+  const index = new LocalSearchIndex({ entries: async () => entries });
+  let immediateRan = false;
+  let readyBeforeImmediate = false;
+  index.onReady(() => { readyBeforeImmediate = immediateRan; });
+
+  index.start();
+  setImmediate(() => { immediateRan = true; });
+  await until(() => index.state().ready, 20_000);
+
+  assert.equal(readyBeforeImmediate, true, "preparing a large build lets a queued immediate run first");
+  const found = await index.search("lib_00000001", "needle", "all");
+  assert.deepEqual(found.entries.map((item) => item.key), ["lib_00000001/Needle"]);
 });
 
 test("an aborted search throws the session's cancelled failure", async () => {

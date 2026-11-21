@@ -43,6 +43,7 @@ export interface SettingsDeps extends RouteContext {
   STREAM_SORTS: Set<string>;
   accountIdOf(req?: express.Request): string | undefined;
   invalidateLibrary(): void;
+  invalidateLibraryMeta(): void;
   /** The media-server configuration the backup carries. A settings export is an
    *  administrator's act like every other read of it. */
   mediaServers: MediaServerManager;
@@ -184,7 +185,7 @@ const restoreSourceProfiles = (
 };
 
 export function registerSettingsRoutes(app: express.Application, deps: SettingsDeps): void {
-  const { store, STREAM_SORTS, accountIdOf, currentUser, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, requireAccess, stopContentAccess, streamCache, publicAddonView } = deps;
+  const { store, STREAM_SORTS, accountIdOf, currentUser, invalidateLibraryMeta, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, requireAccess, stopContentAccess, streamCache, publicAddonView } = deps;
 
   /** The acting account as the media-server surface reads it: the captured id and secret with
    *  the route's own access gate re-run on every check. */
@@ -639,7 +640,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
           file.meta[key] = rest;
         }
       });
-      invalidateLibrary();
+      invalidateLibraryMeta();
     }
     queue.changed(); res.json(settingsView(req));
   }));

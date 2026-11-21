@@ -9,7 +9,7 @@ import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { starredPath } from "../favorite-identity.js";
 import { libraryPath, libraryVisible, parseLibraryPath, relativeWithin, resolveLibraryPath, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
-import type { GalleryEntry, LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
+import type { GalleryEntry, LibraryMetaRecord, LibrarySuggestion, TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isPathWithin, withinLibraryRoot, type LibraryEntry } from "../library.js";
 import type { Store, StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
@@ -45,6 +45,8 @@ interface Calls {
   scheduledFile: string[];
   rootPrewarm: boolean[];
   browseMetaPrewarm: boolean[];
+  browseMetaUnits: Array<TitleUnit[] | undefined>;
+  unitReads: Array<{ stale?: boolean } | undefined>;
 }
 
 interface Harness {
@@ -107,7 +109,7 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
  *  is real: the resolver, the browse walk and the name checks are module singletons. */
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], activeItems: () => string[] = () => [], state: LibraryState = {}): Promise<Harness> => {
   const pathReservations = new PathReservations();
-  const calls: Calls = { invalidated: 0, browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
+  const calls: Calls = { invalidated: 0, browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [], browseMetaUnits: [], unitReads: [] };
   const nestedRelative = (library: LibraryRecord, other: LibraryRecord): string | undefined => {
     const relative = path.relative(path.resolve(library.root), path.resolve(other.root));
     if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
@@ -142,7 +144,11 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
-    attachBrowseMeta: async (item, _language, options) => { calls.browseMetaPrewarm.push(options?.prewarm === true); return { item, backfill: false }; },
+    attachBrowseMeta: async (item, _language, options) => {
+      calls.browseMetaPrewarm.push(options?.prewarm === true);
+      calls.browseMetaUnits.push(options?.units);
+      return { item, backfill: false };
+    },
     carveOutsOf,
     nestedHidden,
     dataOf: () => ({ ...emptyUserData(), favorites: state.favorites ?? [], watchlist: state.watchlist ?? {} }),
@@ -188,7 +194,10 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
       const visible = visibleLibraries(libraries, viewer);
       return { path: "", items: visible.map((record) => ({ kind: "library", libraryId: record.id, name: record.name })), total: visible.length, pending: false };
     },
-    libraryUnits: async () => state.units ?? [],
+    libraryUnits: async (read) => {
+      calls.unitReads.push(read);
+      return state.units ?? [];
+    },
     locateArtwork: async (entry) => { calls.artworkAsked.push(entry.key); return undefined; },
     locateFileArtwork: async (key) => { calls.thumbAsked.push(key); return state.artwork?.(key); },
     locateFolderArtwork: async (key) => { calls.thumbAsked.push(key); return state.artwork?.(key); },
@@ -325,6 +334,41 @@ test("GET /api/library/browse lists what is inside one library", async (t) => {
   assert.equal(body.total, 1);
   assert.deepEqual(body.items.map((item) => [item.kind, item.path, item.label]), [["file", "Films/Heat.mkv", "Heat"]]);
   assert.equal(harness.calls.rootBrowses, 0, "one library is opened, not listed");
+});
+
+test("browse reads the held walk once and reuses those units for attachment", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  const units: TitleUnit[] = [{
+    key: "lib_00000001/Films/Heat.mkv",
+    kind: "movie",
+    relative: "Films/Heat.mkv",
+    sampleFiles: ["Films/Heat.mkv"],
+  }];
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { units });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  assert.equal((await api(harness.base, "/api/library/browse?path=Films")).status, 200);
+
+  assert.deepEqual(harness.calls.unitReads, [{ stale: true }, { stale: true }], "the folder view and row metadata share held units");
+  assert.deepEqual(harness.calls.browseMetaUnits, [units], "the route hands its units to attachBrowseMeta");
+});
+
+test("the mosaic view takes the held walk", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Collection/Heat.mkv");
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    units: [{
+      key: "lib_00000001/Collection/Heat.mkv",
+      kind: "movie",
+      relative: "Collection/Heat.mkv",
+      sampleFiles: ["Collection/Heat.mkv"],
+    }],
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  assert.equal((await api(harness.base, `/api/library/mosaic?key=${encodeURIComponent("lib_00000001/Collection")}`)).status, 404);
+  assert.deepEqual(harness.calls.unitReads, [{ stale: true }]);
 });
 
 test("a prewarm browse schedules no artwork and sweeps nothing", async (t) => {
