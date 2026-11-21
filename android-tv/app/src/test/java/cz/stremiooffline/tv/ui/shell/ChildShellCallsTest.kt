@@ -32,6 +32,7 @@ class ChildShellCallsTest {
     compose.waitForIdle()
 
     assertEquals(0, api.downloadsRequests)
+    assertEquals(0, api.activeDownloadsRequests)
     assertEquals(0, api.addonsCalls)
     assertEquals(0, api.catalogsCalls)
     assertEquals(0, api.watchlistCalls)

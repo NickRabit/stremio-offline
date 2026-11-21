@@ -460,12 +460,8 @@ export class LibraryOps {
     const active = this.jobs.filter((job) => job.status === "running" || job.status === "paused");
     // A job still waiting on its hook is kept past the cut, or the next start would never retry it.
     const ended = this.jobs.filter((job) => job.status !== "running" && job.status !== "paused");
-    const finished = ended.filter((job, index) =>
-      this.finishing.has(job.id) || job.step || job.notifyPending || index >= ended.length - 20
-    );
-    const jobs = [...active, ...finished].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-    this.jobs = jobs;
-    const state: StoredState = { version: 2, jobs };
+    const finished = ended.filter((job, index) => job.step || job.notifyPending || index >= ended.length - 20);
+    const state: StoredState = { version: 2, jobs: [...active, ...finished].sort((a, b) => a.startedAt.localeCompare(b.startedAt)) };
     const serialized = JSON.stringify(state, null, 2);
     if (serialized === this.stored) return Promise.resolve();
     this.saveTail = this.saveTail.catch(() => undefined).then(async () => {
