@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile }
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ImageProxy, imageId, narrowArtwork, type SaveTimers } from "./images.js";
+import { ImageProxy, imageId, narrowArtwork, RESIZE_SLOTS, resizeQueue, type SaveTimers } from "./images.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { configureSecureMode } from "./secure.js";
 import { flushLog, initLogger } from "./logger.js";
@@ -471,6 +471,137 @@ test("cancellation during an image downscale leaves no cache entry or temporary 
     if (previous === undefined) delete process.env.FFMPEG_PATH;
     else process.env.FFMPEG_PATH = previous;
   }
+});
+
+/** A PNG header of the given width; the default is wide enough to be re-encoded. */
+const widePngHeader = (width = 1_000) => {
+  const png = Buffer.alloc(24);
+  png.writeUInt32BE(0x89504e47, 0);
+  png.write("IHDR", 12, "latin1");
+  png.writeUInt32BE(width, 16);
+  return png;
+};
+
+/** A stand-in FFmpeg that records how many copies of itself run at once. It ignores SIGTERM,
+ *  as a busy process may. `hold` keeps it running until killed; otherwise it exits after a short
+ *  while with empty output, which the proxy reads as "keep the original". */
+async function countingFfmpeg(dir: string, hold: boolean) {
+  const running = path.join(dir, "running");
+  const peaks = path.join(dir, "peaks");
+  const started = path.join(dir, "started");
+  await mkdir(running, { recursive: true });
+  const fake = path.join(dir, "ffmpeg");
+  await writeFile(fake, `#!/usr/bin/env node
+const fs = require("node:fs"), path = require("node:path");
+const me = path.join(${JSON.stringify(running)}, String(process.pid));
+fs.writeFileSync(me, "");
+fs.appendFileSync(${JSON.stringify(started)}, "x");
+fs.appendFileSync(${JSON.stringify(peaks)}, fs.readdirSync(${JSON.stringify(running)}).length + "\\n");
+const done = () => { try { fs.rmSync(me); } catch {} process.exit(0); };
+process.on("SIGTERM", () => {});
+${hold ? "setInterval(() => {}, 1000);" : "setTimeout(done, 150);"}
+`);
+  await chmod(fake, 0o755);
+  return {
+    fake,
+    peak: async () => Math.max(0, ...(await readFile(peaks, "utf8").catch(() => "")).split("\n").filter(Boolean).map(Number)),
+    starts: async () => (await readFile(started, "utf8").catch(() => "")).length,
+    alive: async () => (await readdir(running)).filter((pid) => {
+      try { process.kill(Number(pid), 0); return true; } catch { return false; }
+    }),
+  };
+}
+
+async function until(condition: () => boolean | Promise<boolean>, what: string) {
+  for (let attempt = 0; !(await condition()); attempt += 1) {
+    if (attempt >= 500) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function withFfmpeg<T>(fake: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.env.FFMPEG_PATH;
+  process.env.FFMPEG_PATH = fake;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env.FFMPEG_PATH;
+    else process.env.FFMPEG_PATH = previous;
+  }
+}
+
+test("no more re-encodes run at once than there are resize slots", {
+  skip: process.platform === "win32" ? "the test uses a POSIX script for FFmpeg" : false,
+}, async () => {
+  const wide = widePngHeader();
+  const { proxy, dir } = await harness(async () => imageResponse(wide));
+  const ffmpeg = await countingFfmpeg(dir, false);
+  const count = RESIZE_SLOTS * 2 + 2;
+  const ids = Array.from({ length: count }, (_, index) => proxy.proxied(`https://cdn.example/wide-${index}.png`)!.split("/").pop()!);
+  const served = await withFfmpeg(ffmpeg.fake, () => Promise.all(ids.map((id) => proxy.fetch(id))));
+  assert.equal(served.filter(Boolean).length, count, "every picture is still served");
+  assert.equal(await ffmpeg.starts(), count);
+  assert.ok(await ffmpeg.peak() <= RESIZE_SLOTS, `at most ${RESIZE_SLOTS} at once, saw ${await ffmpeg.peak()}`);
+});
+
+test("a picture nobody waits for any more leaves the resize queue without starting FFmpeg", {
+  skip: process.platform === "win32" ? "the test uses a POSIX script for FFmpeg" : false,
+}, async () => {
+  const wide = widePngHeader();
+  const { proxy, dir } = await harness(async () => imageResponse(wide));
+  const ffmpeg = await countingFfmpeg(dir, true);
+  await withFfmpeg(ffmpeg.fake, async () => {
+    const holders = Array.from({ length: RESIZE_SLOTS }, (_, index) => {
+      const id = proxy.proxied(`https://cdn.example/held-${index}.png`)!.split("/").pop()!;
+      const controller = new AbortController();
+      return { controller, fetching: proxy.fetch(id, controller.signal) };
+    });
+    await until(async () => await ffmpeg.starts() >= RESIZE_SLOTS, "the held re-encodes to start");
+    const queuedId = proxy.proxied("https://cdn.example/queued.png")!.split("/").pop()!;
+    const queued = new AbortController();
+    const waiting = proxy.fetch(queuedId, queued.signal);
+    await until(() => resizeQueue().queued === 1, "the picture to queue for a slot");
+    queued.abort();
+    assert.equal(await waiting, undefined);
+    assert.equal(resizeQueue().queued, 0);
+    for (const holder of holders) holder.controller.abort();
+    await Promise.all(holders.map((holder) => holder.fetching));
+    await until(() => resizeQueue().running === 0, "the held re-encodes to be killed");
+    assert.deepEqual(await ffmpeg.alive(), [], "a slot is free only once its FFmpeg is gone, even one that ignores SIGTERM");
+    assert.equal(await ffmpeg.starts(), RESIZE_SLOTS, "the abandoned picture never reached FFmpeg");
+    const leftovers = (await readdir(dir)).filter((name) => name.startsWith(".resize-") || name.startsWith(`${queuedId}.`));
+    assert.deepEqual(leftovers, []);
+  });
+});
+
+test("a picture already at its size never waits for a resize slot", {
+  skip: process.platform === "win32" ? "the test uses a POSIX script for FFmpeg" : false,
+}, async () => {
+  const wide = widePngHeader();
+  const { proxy, dir } = await harness(async (url) => imageResponse(url.includes("small") ? widePngHeader(100) : wide));
+  const ffmpeg = await countingFfmpeg(dir, true);
+  await withFfmpeg(ffmpeg.fake, async () => {
+    const holders = Array.from({ length: RESIZE_SLOTS }, (_, index) => {
+      const id = proxy.proxied(`https://cdn.example/held-${index}.png`)!.split("/").pop()!;
+      const controller = new AbortController();
+      return { controller, fetching: proxy.fetch(id, controller.signal) };
+    });
+    await until(async () => await ffmpeg.starts() >= RESIZE_SLOTS, "the held re-encodes to start");
+    const smallId = proxy.proxied("https://cdn.example/small.png")!.split("/").pop()!;
+    assert.ok(await proxy.fetch(smallId), "a small picture is served while every slot is taken");
+    for (const holder of holders) holder.controller.abort();
+    await Promise.all(holders.map((holder) => holder.fetching));
+    await until(() => resizeQueue().running === 0, "the held re-encodes to be killed");
+  });
+});
+
+test("an FFmpeg that cannot start gives every slot back and keeps the originals", async () => {
+  const wide = widePngHeader();
+  const { proxy, dir } = await harness(async () => imageResponse(wide));
+  const ids = Array.from({ length: RESIZE_SLOTS + 2 }, (_, index) => proxy.proxied(`https://cdn.example/missing-${index}.png`)!.split("/").pop()!);
+  const served = await withFfmpeg(path.join(dir, "no-such-ffmpeg"), () => Promise.all(ids.map((id) => proxy.fetch(id))));
+  assert.equal(served.filter(Boolean).length, ids.length);
+  assert.deepEqual(resizeQueue(), { running: 0, queued: 0 });
 });
 
 test("an id nobody handed out is never fetched", async () => {
