@@ -28,6 +28,9 @@ interface Harness {
   viewed: Array<{ id: string; health: LibraryHealth; stats: { titles: number; files: number; bytes: number }; admin: boolean; canDownload: boolean }>;
   enqueued: unknown[];
   invalidated: string[];
+  walkInvalidations: () => number;
+  /** Whether each stats read accepted a held walk. */
+  statReads: boolean[];
   /** The library type visible when the queue was asked to pause incompatible jobs. */
   queuePauses: Array<{ libraryId: string; type: string }>;
   contentStops: Array<{ libraryId?: string; userId?: string }>;
@@ -74,6 +77,8 @@ const mount = async (
   const viewed: Harness["viewed"] = [];
   const enqueued: unknown[] = [];
   const invalidated: string[] = [];
+  let walkInvalidations = 0;
+  const statReads: boolean[] = [];
   const seenForgotten: string[] = [];
   const fingerprintsForgotten: string[] = [];
   const itemBusyChecks: string[] = [];
@@ -119,9 +124,9 @@ const mount = async (
     grantRows: async () => mergeGrants(env, state.grants).map((grant) => ({ ...grant, writable: true })),
     healthOf: (record) => ({ unreachable: record.id === "alpha", readOnly: record.id === "beta", realRoot: record.root, caseInsensitive: false }),
     invalidateAutoScan: (libraryId) => { invalidated.push(libraryId); },
-    invalidateLibrary: () => undefined,
+    invalidateLibrary: () => { walkInvalidations += 1; },
     libraryGrants: () => mergeGrants(env, state.grants),
-    libraryStats: async () => stats,
+    libraryStats: async (read) => { statReads.push(read?.stale === true); return stats; },
     libraryView: (record, health, totals, admin, canDownload) => {
       viewed.push({ id: record.id, health, stats: totals, admin, canDownload });
       return { id: record.id, name: record.name, unreachable: health.unreachable, readOnly: health.readOnly,
@@ -164,6 +169,8 @@ const mount = async (
     viewed,
     enqueued,
     invalidated,
+    walkInvalidations: () => walkInvalidations,
+    statReads,
     queuePauses,
     contentStops,
     stored: () => state.libraries,
@@ -302,6 +309,23 @@ test("PATCH /api/libraries/:id sets visibleTo and collapses duplicates", async (
   const response = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { visibleTo: [BOB, BOB] } });
   assert.equal(response.status, 200);
   assert.deepEqual(harness.stored()[0]!.visibleTo, [BOB]);
+});
+
+test("a grant or a rename keeps the library walk and answers from the held counts", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+  assert.equal((await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { visibleTo: [BOB] } })).status, 200);
+  assert.equal((await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { name: "Renamed", showOnHome: false } })).status, 200);
+  assert.equal(harness.walkInvalidations(), 0, "nothing the walk reads has changed");
+  assert.deepEqual(harness.statReads, [true, true], "the answer does not wait for a fresh walk");
+});
+
+test("a change to what the walk reads drops it", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+  assert.equal((await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { type: "movie" } })).status, 200);
+  assert.equal((await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { enabled: false } })).status, 200);
+  assert.equal(harness.walkInvalidations(), 2);
 });
 
 test("a committed type change pauses incompatible jobs without revoking content access", async (t) => {
