@@ -80,9 +80,12 @@ test("loading the remote image index keeps at most eight stats in flight", async
     let peak = 0;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+    let full!: () => void;
+    const eightInFlight = new Promise<void>((resolve) => { full = resolve; });
     const trackingStat = (async () => {
       active += 1;
       peak = Math.max(peak, active);
+      if (active === 8) full();
       await gate;
       active -= 1;
       return { isFile: () => true, size: 1, mtimeMs: 1 } as Awaited<ReturnType<NonNullable<RemoteImageCacheOptions["stat"]>>>;
@@ -91,9 +94,9 @@ test("loading the remote image index keeps at most eight stats in flight", async
     let loading: Promise<void> | undefined;
     try {
       loading = cache.load();
-      for (let attempt = 0; attempt < 100 && active < 8; attempt += 1) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
+      await eightInFlight;
+      // One more turn: a ninth stat started without a free slot would show up here.
+      await new Promise<void>((resolve) => setImmediate(resolve));
       assert.equal(active, 8);
       release();
       await loading;
