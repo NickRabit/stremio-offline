@@ -18,14 +18,16 @@ const standing = (health: LibraryHealth) => ({ unreachable: health.unreachable, 
 
 const countProbeWrites = (t: { after: (fn: () => void) => void }, roots: string[]) => {
   const original = fs.promises.writeFile;
-  const aliases = new Map(roots.map((root) => [path.resolve(root), fs.realpathSync(root)]));
+  // Compared as the volume spells them: Windows hands out short (8.3) and long forms of one path.
+  const canonical = (dir: string) => { try { return fs.realpathSync.native(dir).toLowerCase(); } catch { return path.resolve(dir).toLowerCase(); } };
+  const aliases = new Map(roots.map((root) => [path.resolve(root).toLowerCase(), canonical(root)]));
   const counts = new Map([...aliases.values()].map((root) => [root, 0]));
   const patched = async (...args: Parameters<typeof original>) => {
     const [file] = args;
     const name = typeof file === "string" ? path.basename(file) : "";
-    const root = typeof file === "string" ? path.dirname(path.resolve(file)) : "";
-    if (counts.has(root) && name.startsWith(".stremio-offline-") && name.endsWith("-Probe.tmp")) {
-      counts.set(root, counts.get(root)! + 1);
+    if (typeof file === "string" && name.startsWith(".stremio-offline-") && name.endsWith("-Probe.tmp")) {
+      const root = canonical(path.dirname(path.resolve(file)));
+      if (counts.has(root)) counts.set(root, counts.get(root)! + 1);
     }
     return Reflect.apply(original, undefined, args);
   };
@@ -36,7 +38,7 @@ const countProbeWrites = (t: { after: (fn: () => void) => void }, roots: string[
     mutable.writeFile = original;
     syncBuiltinESMExports();
   });
-  return (root: string) => counts.get(aliases.get(path.resolve(root)) ?? path.resolve(root)) ?? 0;
+  return (root: string) => counts.get(aliases.get(path.resolve(root).toLowerCase()) ?? canonical(root)) ?? 0;
 };
 
 test("a writable directory is reachable and writable", async (t) => {
