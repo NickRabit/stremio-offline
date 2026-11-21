@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
-import { ffmpegPath, mediaStopping, runMedia } from "./media-tools.js";
+import { ffmpegPath, killMediaChild, mediaStopping, runMedia } from "./media-tools.js";
 import { guardedBody } from "./outbound.js";
 import { cancelResponseBody, readLimitedBody, ResponseTooLargeError } from "./response-body.js";
 import { safeFetch } from "./security.js";
@@ -34,6 +35,8 @@ const FFMPEG_TIMEOUT_MS = 15_000;
  *  from playback and the event loop. Half of them, so the server stays responsive. */
 export const RESIZE_SLOTS = Math.max(1, Math.min(4, Math.floor(os.availableParallelism() / 2)));
 const resizeGate = new SlotGate(RESIZE_SLOTS);
+/** How many re-encodes hold a slot and how many wait, for tests that synchronise on the queue. */
+export const resizeQueue = () => ({ running: resizeGate.running, queued: resizeGate.queued });
 const SAVE_MS = 2000;
 const FAILURE_WARN_MS = 6 * 60 * 60_000;
 const FAILURE_WARN_IDS = 2000;
@@ -619,14 +622,27 @@ export class ImageProxy {
 
   private async reencode(data: Buffer, target: number, signal?: AbortSignal): Promise<Buffer> {
     signal?.throwIfAborted();
+    if (mediaStopping()) throw new Error("The server is shutting down.");
     const temp = path.join(this.dir, `.resize-${randomUUID()}`);
     try {
       await writeFile(temp, data, { mode: 0o600, signal });
-      const { stdout } = await runMedia(ffmpegPath(), [
+      const pending = runMedia(ffmpegPath(), [
         "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1", "-filter_threads", "1", "-i", temp,
         "-vf", `scale='min(${target},iw)':-2`, "-threads", "1", "-q:v", "5", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
       ], { encoding: "buffer", timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: MAX_BYTES * 2, signal });
-      return stdout.length && stdout.length < data.length ? stdout : data;
+      try {
+        const { stdout } = await pending;
+        return stdout.length && stdout.length < data.length ? stdout : data;
+      } catch (error) {
+        // An abort rejects at once and sends only SIGTERM; the slot is not free until the process is gone.
+        const child = pending.child;
+        if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+          const exited = once(child, "exit");
+          killMediaChild(child);
+          await exited;
+        }
+        throw error;
+      }
     } finally {
       await rm(temp, { force: true });
     }
@@ -776,7 +792,7 @@ export class ImageProxy {
       // A visitor who left is no failure. Anything else is a hidden picture on someone's screen,
       // so it is a warning, once per picture per window: a dead address is asked for again on
       // every page, and a log line per request would only wear the disk.
-      const warn = !signal.aborted && this.warnable(id);
+      const warn = !signal.aborted && !mediaStopping() && this.warnable(id);
       log(warn ? "WARN" : "DEBUG", "The image was not cached", { id, host: hostOf(entry.url), reason });
       return undefined;
     };
