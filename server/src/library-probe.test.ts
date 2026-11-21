@@ -244,3 +244,20 @@ test("a failed volume probe is retried on the next reachability refresh", {
   assert.equal((await probe.cached(dir)).readOnly, false);
   assert.equal(writes(dir), 2);
 });
+
+test("invalidating one root does not make another root's refresh write its probe", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-probe-other-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let clock = 0;
+  const probe = createLibraryProbe({ now: () => clock });
+  await probe.cached(root);
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+  await settle();
+  const before = (await stat(root)).mtimeMs;
+  clock += 31_000;
+  const refreshing = probe.cached(root);
+  probe.invalidate(path.join(tmpdir(), "stremio-probe-elsewhere"));
+  await refreshing;
+  await settle();
+  assert.equal((await stat(root)).mtimeMs, before, "the held volume facts were reused");
+});

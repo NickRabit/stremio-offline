@@ -84,21 +84,24 @@ export function createLibraryProbe(opts: {
 } = {}): LibraryProbe {
   const timeoutMs = opts.timeoutMs ?? 2_000;
   const ttlMs = opts.ttlMs ?? 30_000;
-  const volumeTtlMs = opts.volumeTtlMs ?? 6 * 60 * 60_000;
+  const volumeTtlMs = opts.volumeTtlMs ?? 60 * 60_000;
   const now = opts.now ?? Date.now;
   const cache = new Map<string, { at: number; value: LibraryHealth }>();
   const volumeCache = new Map<string, { at: number; value: Pick<LibraryHealth, "readOnly" | "caseInsensitive"> }>();
   const realRoots = new Map<string, string>();
   const previouslyUnreachable = new Set<string>();
-  const inflight = new Map<string, { generation: number; promise: Promise<LibraryHealth> }>();
-  let generation = 0;
+  const inflight = new Map<string, { generation: string; promise: Promise<LibraryHealth> }>();
+  // Per root, so invalidating one library does not discard the probes of the others.
+  let everyRoot = 0;
+  const rootGenerations = new Map<string, number>();
+  const generationOf = (absolute: string) => `${everyRoot}:${rootGenerations.get(absolute) ?? 0}`;
 
   const probe = async (root: string): Promise<LibraryHealth> => {
     const absolute = path.resolve(root);
-    const generationAtStart = generation;
+    const generationAtStart = generationOf(absolute);
     const info = await within(stat(absolute), timeoutMs);
     if (!info?.isDirectory()) {
-      if (generationAtStart === generation) previouslyUnreachable.add(absolute);
+      if (generationAtStart === generationOf(absolute)) previouslyUnreachable.add(absolute);
       // Nothing is known but the spelling: `realpath` would hang on the same mount that made
       // this stat fail, and there is no volume to ask about the fold.
       // Unreachable is unanswered too, and an unanswered fold folds -- the same rule the
@@ -109,7 +112,7 @@ export function createLibraryProbe(opts: {
     // Bounded like every other call: a half-dead mount hangs on a resolve as readily as on a stat.
     const real = await within(realpath(absolute), timeoutMs) ?? absolute;
     const held = volumeCache.get(real);
-    const cacheIsCurrent = generationAtStart === generation;
+    const cacheIsCurrent = generationAtStart === generationOf(absolute);
     const recovered = cacheIsCurrent && previouslyUnreachable.delete(absolute);
     let volume = cacheIsCurrent && !recovered && held && now() - held.at < volumeTtlMs
       ? held.value
@@ -119,10 +122,10 @@ export function createLibraryProbe(opts: {
       const probed = await within(probeVolume(real), timeoutMs);
       if (probed) {
         volume = { readOnly: false, caseInsensitive: probed.caseInsensitive };
-        if (generationAtStart === generation) volumeCache.set(real, { at: now(), value: volume });
+        if (generationAtStart === generationOf(absolute)) volumeCache.set(real, { at: now(), value: volume });
       }
     }
-    if (generationAtStart === generation) realRoots.set(absolute, real);
+    if (generationAtStart === generationOf(absolute)) realRoots.set(absolute, real);
     return {
       unreachable: false,
       readOnly: volume?.readOnly ?? true,
@@ -138,13 +141,13 @@ export function createLibraryProbe(opts: {
     const absolute = path.resolve(root);
     const hit = cache.get(absolute);
     if (hit && now() - hit.at < ttlMs) return hit.value;
-    const generationAtStart = generation;
+    const generationAtStart = generationOf(absolute);
     let running = inflight.get(absolute);
     if (running?.generation !== generationAtStart) running = undefined;
     if (!running) {
       const promise = probe(absolute)
         .then((value) => {
-          if (generationAtStart === generation) cache.set(absolute, { at: now(), value });
+          if (generationAtStart === generationOf(absolute)) cache.set(absolute, { at: now(), value });
           return value;
         })
         .finally(() => {
@@ -164,8 +167,8 @@ export function createLibraryProbe(opts: {
     probe,
     cached,
     invalidate: (root) => {
-      generation += 1;
       if (root === undefined) {
+        everyRoot += 1;
         cache.clear();
         volumeCache.clear();
         realRoots.clear();
@@ -174,6 +177,7 @@ export function createLibraryProbe(opts: {
         return;
       }
       const absolute = path.resolve(root);
+      rootGenerations.set(absolute, (rootGenerations.get(absolute) ?? 0) + 1);
       cache.delete(absolute);
       const real = realRoots.get(absolute);
       if (real) volumeCache.delete(real);
