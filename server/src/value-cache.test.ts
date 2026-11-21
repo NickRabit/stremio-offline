@@ -26,6 +26,39 @@ test("a value is reused until its bounded freshness expires", async () => {
   assert.equal(loads, 2, "a stale value is discovered again");
 });
 
+test("an expired value is reloaded even when pruning is not due", async () => {
+  let now = 0;
+  let loads = 0;
+  const cache = new FreshValueCache<string>(30_000, { now: () => now });
+  const load = async () => `value-${++loads}`;
+
+  assert.equal(await cache.get("target", load), "value-1");
+  now = 29_999;
+  assert.equal(await cache.get("target", load), "value-1");
+  now = 30_000;
+  assert.equal(await cache.get("target", load), "value-2");
+  assert.equal(loads, 2);
+});
+
+test("many misses within one prune window scan the cache once", async () => {
+  class CountingMap<K, V> extends Map<K, V> {
+    iterations = 0;
+
+    override [Symbol.iterator](): MapIterator<[K, V]> {
+      this.iterations += 1;
+      return super[Symbol.iterator]();
+    }
+  }
+
+  const cache = new FreshValueCache<number>(60_000, { maxEntries: 2_000, now: () => 0 });
+  const entries = new CountingMap<string, number>();
+  (cache as unknown as { entries: Map<string, number> }).entries = entries;
+
+  await Promise.all(Array.from({ length: 1_000 }, (_, index) => cache.get(`key-${index}`, async () => index)));
+
+  assert.equal(entries.iterations, 1);
+});
+
 test("concurrent misses share their lookup, including one that finds nothing", async () => {
   const gate = deferred<string | undefined>();
   let loads = 0;

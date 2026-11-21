@@ -69,6 +69,23 @@ class HomeApiTest {
     assertEquals(true, jobs[0].libraryGone)
   }
 
+  @Test
+  fun `active downloads asks for the filtered queue and reads the same response`() = runTest {
+    server.enqueue(
+      MockResponse().setBody(
+        """{"jobs":[{"id":"j1","title":"It","status":"downloading","order":0,"mine":true}],"halt":null}""",
+      ),
+    )
+
+    val jobs = client(start()).activeDownloads().jobs
+
+    assertEquals("/api/downloads?active=1", server.takeRequest().path)
+    assertEquals(1, jobs.size)
+    assertEquals("j1", jobs[0].id)
+    assertEquals("downloading", jobs[0].status)
+    assertEquals(true, jobs[0].mine)
+  }
+
   private fun start(): ServerAddress {
     server.start()
     return ServerAddress.parse(server.url("/").toString())!!

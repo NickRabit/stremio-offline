@@ -64,6 +64,13 @@ export interface ScanState {
   diagnostics?: ScanDiagnostic[];
 }
 
+export type ScanView = Omit<ScanState, "remaining"> & { remainingCount: number };
+
+export function scanView(state: ScanState): ScanView {
+  const { remaining, ...view } = state;
+  return { ...view, remainingCount: remaining.length };
+}
+
 /** One structured line of what the scan did with one identity unit. */
 export interface ScanDiagnostic {
   unit: string;

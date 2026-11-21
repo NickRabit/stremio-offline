@@ -823,6 +823,10 @@ class ApiClient(
     request(Request.Builder().url(address.resolve("/api/downloads")).get().build())
       .decode<DownloadsResponseDto>() ?: throw ApiError(ApiFailure.Generic)
 
+  override suspend fun activeDownloads(): DownloadsResponseDto =
+    request(Request.Builder().url(address.resolve("/api/downloads?active=1")).get().build())
+      .decode<DownloadsResponseDto>() ?: throw ApiError(ApiFailure.Generic)
+
   /** Best effort: a line that could not be filed must never break the screen that sent it. */
   override suspend fun clientLog(level: String, message: String, context: Map<String, String>?) {
     val payload = json.encodeToString(ClientLogRequestDto.serializer(), ClientLogRequestDto("tv", level, message, context))

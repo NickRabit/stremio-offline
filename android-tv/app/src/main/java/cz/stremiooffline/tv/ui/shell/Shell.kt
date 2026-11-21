@@ -94,7 +94,7 @@ import cz.stremiooffline.tv.ui.detail.remoteExtrasIdentity
 import cz.stremiooffline.tv.ui.detail.remoteMetadataNeedsItem
 import cz.stremiooffline.tv.ui.detail.resolveRemoteMetadata
 import cz.stremiooffline.tv.ui.downloads.DownloadsScreen
-import cz.stremiooffline.tv.ui.downloads.activeJobs
+import cz.stremiooffline.tv.ui.downloads.hasActiveDownloads
 import cz.stremiooffline.tv.ui.favorites.FavoritesRoute
 import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.HomeScreen
@@ -503,7 +503,7 @@ fun Shell(
     if (player != null || child) return@LaunchedEffect
     while (true) {
       try {
-        downloading = activeJobs(api.downloads().jobs).isNotEmpty()
+        downloading = hasActiveDownloads(api.activeDownloads().jobs)
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (_: ApiError) {

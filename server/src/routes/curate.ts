@@ -13,7 +13,7 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { parseMediaPath } from "../library-parse.js";
 import type { LibraryHealth } from "../library-probe.js";
-import type { LibraryScan } from "../library-scan.js";
+import { scanView, type LibraryScan } from "../library-scan.js";
 import { isPathWithin, isVideo } from "../library.js";
 import { mediaResources, ResourceError, type ResourceOwner } from "../media-resources.js";
 import { nextVideoFile } from "../next-file.js";
@@ -310,7 +310,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     invalidateLibraryMeta();
     res.status(204).end();
   }));
-  app.get("/api/library/scan", (_req, res) => res.json(libraryScan.snapshot()));
+  app.get("/api/library/scan", (_req, res) => res.json(scanView(libraryScan.snapshot())));
   app.post("/api/library/scan", asyncRoute(async (req, res) => {
     const requested = String(req.body?.path ?? "").trim();
     const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
@@ -333,7 +333,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const state = await libraryScan.start({ force: req.body?.force === true, path: resolved?.key ?? "", libraryId: library?.id, recheckScanBindings });
     // A manual run covers the same ground, so the automatic one starts from here too.
     void libraryAutoScan.remember();
-    res.json(state);
+    res.json(scanView(state));
   }));
   app.post("/api/library/scan/stop", asyncRoute(async (_req, res) => { await libraryScan.stop(); res.status(204).end(); }));
   app.get(["/api/library/next/:sourceId", "/api/library/previous/:sourceId"], asyncRoute(async (req, res) => {

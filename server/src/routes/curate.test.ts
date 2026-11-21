@@ -107,7 +107,7 @@ const mount = async (options: {
   const dataDir = await makeRoot("stremio-curate-");
   const scan = new LibraryScan({
     dataDir,
-    units: async () => { calls.unitWalks += 1; return []; },
+    units: async () => { calls.unitWalks += 1; return options.units ?? []; },
     candidates: { searchLibraryCandidates: async () => [], resolveSelected: async (candidate) => candidate.item, galleryOf: async () => [] },
     metadata: async () => null,
     addons: () => [],
@@ -456,6 +456,25 @@ test("POST /api/library/scan answers the run already under way instead of starti
   const stopped = await api(harness.base, "/api/library/scan/stop", { method: "POST" });
   assert.equal(stopped.status, 204);
   assert.equal((await (await api(harness.base, "/api/library/scan")).json() as { status: string }).status, "idle");
+});
+
+test("scan answers name the remaining count without copying the queue", async (t) => {
+  const units: TitleUnit[] = [
+    { key: "lib_00000001/Films/Heat", kind: "movie", relative: "Films/Heat", sampleFiles: ["Films/Heat/Heat.mkv"] },
+    { key: "lib_00000001/Films/Ronin", kind: "movie", relative: "Films/Ronin", sampleFiles: ["Films/Ronin/Ronin.mkv"] },
+  ];
+  const harness = await mount({ units });
+  t.after(harness.close);
+
+  const started = await api(harness.base, "/api/library/scan", { method: "POST", body: {} });
+  const startedBody = await started.json() as { remaining?: unknown; remainingCount?: number };
+  assert.equal("remaining" in startedBody, false);
+  assert.equal(startedBody.remainingCount, units.length);
+
+  const polled = await api(harness.base, "/api/library/scan");
+  const polledBody = await polled.json() as { remaining?: unknown; remainingCount?: number };
+  assert.equal("remaining" in polledBody, false);
+  assert.equal(polledBody.remainingCount, units.length);
 });
 
 test("GET next and previous step through one folder from the one registration", async (t) => {

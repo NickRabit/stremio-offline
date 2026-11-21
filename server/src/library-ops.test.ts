@@ -155,6 +155,26 @@ test("persistence never trims unfinished jobs", async () => {
   } finally { await cleanup(h.dataDir, queues); }
 });
 
+test("finished jobs are trimmed in memory exactly as they are on disk", async () => {
+  const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
+  try {
+    const ids: string[] = [];
+    for (let index = 0; index < 30; index += 1) {
+      ids.push((await h.queue.enqueue({ op: "delete", items: [`item-${index}`] })).id);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    await waitFor(() => h.queue.snapshot().jobs.find((job) => job.id === ids.at(-1))?.status === "completed");
+    await h.queue.settled();
+
+    const stored = JSON.parse(await readFile(path.join(h.dataDir, "library-ops.json"), "utf8")) as { jobs: Array<{ id: string }> };
+    const snapshot = h.queue.snapshot().jobs;
+    assert.equal(snapshot.length, 20);
+    assert.deepEqual(snapshot.map((job) => job.id), stored.jobs.map((job) => job.id));
+    assert.deepEqual(snapshot.map((job) => job.id), ids.slice(-20));
+  } finally { await cleanup(h.dataDir, queues); }
+});
+
 test("a corrupt state file is copied aside and new work still runs", async () => {
   const h = await harness();
   const queues: LibraryOps[] = [h.queue];

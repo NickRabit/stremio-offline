@@ -54,6 +54,19 @@ class DownloadsModelTest {
   }
 
   @Test
+  fun `a full old server answer still detects active downloads`() {
+    val jobs = listOf(
+      job(id = "queued", status = "queued"),
+      job(id = "paused", status = "paused"),
+      job(id = "downloading", status = "downloading"),
+      job(id = "completed", status = "completed"),
+      job(id = "failed", status = "failed"),
+    )
+
+    assertTrue(hasActiveDownloads(jobs))
+  }
+
+  @Test
   fun `queue counts only queued paused and failed jobs`() {
     val counts = queueCounts(
       listOf(

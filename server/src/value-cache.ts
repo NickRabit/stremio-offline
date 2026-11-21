@@ -23,6 +23,7 @@ export class FreshValueCache<T> {
   private maxEntries: number;
   private lookupTimeoutMs: number;
   private timeoutResult: () => T;
+  private nextPruneAt = 0;
 
   constructor(private readonly ttlMs: number, options: CacheOptions<T> = {}) {
     this.now = options.now ?? Date.now;
@@ -32,11 +33,13 @@ export class FreshValueCache<T> {
   }
 
   get(key: string, load: () => Promise<T>): Promise<T> {
-    this.prune();
+    const now = this.now();
+    this.prune(now);
     const held = this.entries.get(key);
     if (held) {
       if ("promise" in held) return held.promise;
-      return Promise.resolve(held.value);
+      if (held.expiresAt > now) return Promise.resolve(held.value);
+      this.entries.delete(key);
     }
 
     const loaded = Promise.resolve().then(load);
@@ -74,8 +77,9 @@ export class FreshValueCache<T> {
     this.entries.clear();
   }
 
-  private prune(): void {
-    const now = this.now();
+  private prune(now: number): void {
+    if (now < this.nextPruneAt) return;
+    this.nextPruneAt = now + Math.min(this.ttlMs, 1_000);
     for (const [key, held] of this.entries) {
       if (!("promise" in held) && held.expiresAt <= now) this.entries.delete(key);
     }
