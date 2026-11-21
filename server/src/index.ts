@@ -514,7 +514,12 @@ const installDefaultAddons = async () => {
   ];
   const loaded = await Promise.allSettled(defaults.filter((item) => !store.addons().some((addon) => addon.manifestUrl === item.url)).map((item) => loadAddon(item.url, item.role)));
   await store.update((state) => {
-    for (const result of loaded) if (result.status === "fulfilled") state.addons.push(result.value);
+    // Runs after listen now: a restore or a manual install may have landed during the fetch.
+    if (state.defaultsInstalled) return;
+    for (const result of loaded) {
+      if (result.status !== "fulfilled" || state.addons.some((addon) => addon.manifestUrl === result.value.manifestUrl)) continue;
+      state.addons.push(result.value);
+    }
     state.defaultsInstalled = defaults.every((item) => state.addons.some((addon) => addon.manifestUrl === item.url));
   });
 };
@@ -3298,7 +3303,7 @@ try {
   // Scheduled without a wait: the first pass fills the caches after the server is already up.
   maintenance.start();
   log("INFO", "Stremio Offline is listening", { port: bound.port, address: bound.address });
-  void installDefaultAddons().catch((error) => {
+  void installDefaultAddons().then(() => warmHomeCatalogs(), (error) => {
     log("ERROR", "Default addons could not be installed", { reason: error instanceof Error ? error.message : String(error) });
   });
   // Readiness is announced first: the warm-up only fills the walks, and nothing waits on it.
