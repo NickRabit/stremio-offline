@@ -2100,7 +2100,7 @@ const besideMediaTarget = (key: string, shape: ArtShape) =>
 const wideBesideMedia = async (key: string) => {
   if (!artworkBesideMediaFor(key)) return false;
   if (!isFileKey(key)) return true;
-  const unit = unitFor(key, await libraryUnits({ stale: true }));
+  const unit = unitFor(key, await libraryUnits());
   const cover = knownEntryForUnit(unit, metaStore.qualifiedMeta(), key);
   return fileMayUseFolderArtwork(key, cover?.record.type, cover?.key);
 };
