@@ -16,7 +16,8 @@ export interface LibraryHealth {
 }
 
 export interface LibraryProbe {
-  /** What the disk says right now, bounded by the timeout. */
+  /** What the disk says right now for reachability; volume facts may be up to
+   *  `volumeTtlMs` old. */
   probe(root: string): Promise<LibraryHealth>;
   /** The same, unless an answer younger than the TTL is already in hand. `stale` takes an
    *  older answer at once and asks the disk again behind it: a view must not wait for a
@@ -55,10 +56,11 @@ export const sameVolumeEntry = (
   flipped: { ino: number | bigint; dev: number | bigint } | undefined,
 ): boolean => Boolean(own && flipped && own.ino === flipped.ino && own.dev === flipped.dev);
 
-/** One write answers both questions the health holds: probing by writing tells apart a
- *  read-only mount, a wrong PUID and an ACL, which the mode bits alone do not, and reading
- *  the file back under the flipped spelling tells whether this volume folds case.
- *  `undefined` is the read-only answer. */
+/** One write answers both volume questions: probing by writing tells apart a read-only
+ *  mount, a wrong PUID and an ACL, which the mode bits alone do not, and reading the file
+ *  back under the flipped spelling tells whether this volume folds case. A successful
+ *  answer is reused for `volumeTtlMs`; a failure is retried on the next reachability
+ *  refresh. `undefined` is the read-only answer. */
 async function probeVolume(root: string): Promise<{ caseInsensitive: boolean } | undefined> {
   const file = path.join(root, `.stremio-offline-${randomBytes(4).toString("hex")}-Probe.tmp`);
   const flipped = path.join(root, flipCase(path.basename(file)));
@@ -74,17 +76,29 @@ async function probeVolume(root: string): Promise<{ caseInsensitive: boolean } |
   }
 }
 
-export function createLibraryProbe(opts: { timeoutMs?: number; ttlMs?: number; now?: () => number } = {}): LibraryProbe {
+export function createLibraryProbe(opts: {
+  timeoutMs?: number;
+  ttlMs?: number;
+  volumeTtlMs?: number;
+  now?: () => number;
+} = {}): LibraryProbe {
   const timeoutMs = opts.timeoutMs ?? 2_000;
   const ttlMs = opts.ttlMs ?? 30_000;
+  const volumeTtlMs = opts.volumeTtlMs ?? 6 * 60 * 60_000;
   const now = opts.now ?? Date.now;
   const cache = new Map<string, { at: number; value: LibraryHealth }>();
-  const inflight = new Map<string, Promise<LibraryHealth>>();
+  const volumeCache = new Map<string, { at: number; value: Pick<LibraryHealth, "readOnly" | "caseInsensitive"> }>();
+  const realRoots = new Map<string, string>();
+  const previouslyUnreachable = new Set<string>();
+  const inflight = new Map<string, { generation: number; promise: Promise<LibraryHealth> }>();
+  let generation = 0;
 
   const probe = async (root: string): Promise<LibraryHealth> => {
     const absolute = path.resolve(root);
+    const generationAtStart = generation;
     const info = await within(stat(absolute), timeoutMs);
     if (!info?.isDirectory()) {
+      if (generationAtStart === generation) previouslyUnreachable.add(absolute);
       // Nothing is known but the spelling: `realpath` would hang on the same mount that made
       // this stat fail, and there is no volume to ask about the fold.
       // Unreachable is unanswered too, and an unanswered fold folds -- the same rule the
@@ -94,10 +108,24 @@ export function createLibraryProbe(opts: { timeoutMs?: number; ttlMs?: number; n
     }
     // Bounded like every other call: a half-dead mount hangs on a resolve as readily as on a stat.
     const real = await within(realpath(absolute), timeoutMs) ?? absolute;
-    const volume = await within(probeVolume(real), timeoutMs);
+    const held = volumeCache.get(real);
+    const cacheIsCurrent = generationAtStart === generation;
+    const recovered = cacheIsCurrent && previouslyUnreachable.delete(absolute);
+    let volume = cacheIsCurrent && !recovered && held && now() - held.at < volumeTtlMs
+      ? held.value
+      : undefined;
+    if (!volume) {
+      if (cacheIsCurrent) volumeCache.delete(real);
+      const probed = await within(probeVolume(real), timeoutMs);
+      if (probed) {
+        volume = { readOnly: false, caseInsensitive: probed.caseInsensitive };
+        if (generationAtStart === generation) volumeCache.set(real, { at: now(), value: volume });
+      }
+    }
+    if (generationAtStart === generation) realRoots.set(absolute, real);
     return {
       unreachable: false,
-      readOnly: volume === undefined,
+      readOnly: volume?.readOnly ?? true,
       realRoot: real,
       // A volume that could not be asked -- refused, failed or out of time -- is unknown, and
       // an unknown fold folds. Falling back to the platform here answered a question about the
@@ -110,26 +138,48 @@ export function createLibraryProbe(opts: { timeoutMs?: number; ttlMs?: number; n
     const absolute = path.resolve(root);
     const hit = cache.get(absolute);
     if (hit && now() - hit.at < ttlMs) return hit.value;
+    const generationAtStart = generation;
     let running = inflight.get(absolute);
+    if (running?.generation !== generationAtStart) running = undefined;
     if (!running) {
-      running = probe(absolute)
-        .then((value) => { cache.set(absolute, { at: now(), value }); return value; })
-        .finally(() => { inflight.delete(absolute); });
+      const promise = probe(absolute)
+        .then((value) => {
+          if (generationAtStart === generation) cache.set(absolute, { at: now(), value });
+          return value;
+        })
+        .finally(() => {
+          if (inflight.get(absolute)?.promise === promise) inflight.delete(absolute);
+        });
+      running = { generation: generationAtStart, promise };
       inflight.set(absolute, running);
     }
     if (hit && read.stale) {
-      running.catch(() => undefined);
+      running.promise.catch(() => undefined);
       return hit.value;
     }
-    return running;
+    return running.promise;
   };
 
   return {
     probe,
     cached,
     invalidate: (root) => {
-      if (root === undefined) cache.clear();
-      else cache.delete(path.resolve(root));
+      generation += 1;
+      if (root === undefined) {
+        cache.clear();
+        volumeCache.clear();
+        realRoots.clear();
+        previouslyUnreachable.clear();
+        inflight.clear();
+        return;
+      }
+      const absolute = path.resolve(root);
+      cache.delete(absolute);
+      const real = realRoots.get(absolute);
+      if (real) volumeCache.delete(real);
+      realRoots.delete(absolute);
+      previouslyUnreachable.delete(absolute);
+      inflight.delete(absolute);
     },
   };
 }

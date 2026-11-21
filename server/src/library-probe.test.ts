@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -13,6 +15,29 @@ const temp = async (t: { after: (fn: () => Promise<void>) => void }) => {
 
 /** The two facts the callers of the health have always read, apart from the root and the fold. */
 const standing = (health: LibraryHealth) => ({ unreachable: health.unreachable, readOnly: health.readOnly });
+
+const countProbeWrites = (t: { after: (fn: () => void) => void }, roots: string[]) => {
+  const original = fs.promises.writeFile;
+  const aliases = new Map(roots.map((root) => [path.resolve(root), fs.realpathSync(root)]));
+  const counts = new Map([...aliases.values()].map((root) => [root, 0]));
+  const patched = async (...args: Parameters<typeof original>) => {
+    const [file] = args;
+    const name = typeof file === "string" ? path.basename(file) : "";
+    const root = typeof file === "string" ? path.dirname(path.resolve(file)) : "";
+    if (counts.has(root) && name.startsWith(".stremio-offline-") && name.endsWith("-Probe.tmp")) {
+      counts.set(root, counts.get(root)! + 1);
+    }
+    return Reflect.apply(original, undefined, args);
+  };
+  const mutable = fs.promises as typeof fs.promises & { writeFile: typeof patched };
+  mutable.writeFile = patched;
+  syncBuiltinESMExports();
+  t.after(() => {
+    mutable.writeFile = original;
+    syncBuiltinESMExports();
+  });
+  return (root: string) => counts.get(aliases.get(path.resolve(root)) ?? path.resolve(root)) ?? 0;
+};
 
 test("a writable directory is reachable and writable", async (t) => {
   const dir = await temp(t);
@@ -124,4 +149,98 @@ test("an operation that failed on I/O drops the cached answer", async (t) => {
   await rm(dir, { recursive: true, force: true });
   probe.invalidate(dir);
   assert.deepEqual(standing(await probe.cached(dir)), { unreachable: true, readOnly: false });
+});
+
+test("reachability refreshes reuse successful volume facts", async (t) => {
+  const dir = await temp(t);
+  let clock = 1_000;
+  const writes = countProbeWrites(t, [dir]);
+  const probe = createLibraryProbe({ ttlMs: 30_000, now: () => clock });
+
+  const first = await probe.cached(dir);
+  assert.equal(writes(dir), 1);
+  clock += 31_000;
+  const second = await probe.cached(dir);
+
+  assert.equal(writes(dir), 1);
+  assert.equal(second.readOnly, first.readOnly);
+  assert.equal(second.caseInsensitive, first.caseInsensitive);
+});
+
+test("volume facts are probed again after their TTL", async (t) => {
+  const dir = await temp(t);
+  let clock = 1_000;
+  const writes = countProbeWrites(t, [dir]);
+  const probe = createLibraryProbe({ ttlMs: 30_000, volumeTtlMs: 60_000, now: () => clock });
+
+  await probe.cached(dir);
+  assert.equal(writes(dir), 1);
+  clock += 31_000;
+  await probe.cached(dir);
+  assert.equal(writes(dir), 1);
+  clock += 30_000;
+  await probe.cached(dir);
+  assert.equal(writes(dir), 2);
+});
+
+test("invalidation drops volume facts for one root or all roots", async (t) => {
+  const firstRoot = await temp(t);
+  const secondRoot = await temp(t);
+  let clock = 1_000;
+  const writes = countProbeWrites(t, [firstRoot, secondRoot]);
+  const probe = createLibraryProbe({ ttlMs: 30_000, now: () => clock });
+
+  await probe.cached(firstRoot);
+  await probe.cached(secondRoot);
+  probe.invalidate(firstRoot);
+  clock += 31_000;
+  await probe.cached(firstRoot);
+  await probe.cached(secondRoot);
+  assert.equal(writes(firstRoot), 2);
+  assert.equal(writes(secondRoot), 1);
+
+  probe.invalidate();
+  clock += 31_000;
+  await probe.cached(firstRoot);
+  await probe.cached(secondRoot);
+  assert.equal(writes(firstRoot), 3);
+  assert.equal(writes(secondRoot), 2);
+});
+
+test("a recovered root does not reuse volume facts from before it disappeared", async (t) => {
+  const dir = await temp(t);
+  let clock = 1_000;
+  const writes = countProbeWrites(t, [dir]);
+  const probe = createLibraryProbe({ ttlMs: 30_000, now: () => clock });
+
+  await probe.cached(dir);
+  await rm(dir, { recursive: true, force: true });
+  clock += 31_000;
+  assert.equal((await probe.cached(dir)).unreachable, true);
+  assert.equal(writes(dir), 1);
+
+  await mkdir(dir);
+  clock += 31_000;
+  assert.equal((await probe.cached(dir)).unreachable, false);
+  assert.equal(writes(dir), 2);
+});
+
+test("a failed volume probe is retried on the next reachability refresh", {
+  skip: process.platform === "win32"
+    ? "file modes are not enforced on NTFS"
+    : process.getuid?.() === 0 ? "root writes anywhere" : false,
+}, async (t) => {
+  const dir = await temp(t);
+  let clock = 1_000;
+  const writes = countProbeWrites(t, [dir]);
+  const probe = createLibraryProbe({ ttlMs: 30_000, now: () => clock });
+
+  await chmod(dir, 0o500);
+  assert.equal((await probe.cached(dir)).readOnly, true);
+  assert.equal(writes(dir), 1);
+
+  await chmod(dir, 0o700);
+  clock += 31_000;
+  assert.equal((await probe.cached(dir)).readOnly, false);
+  assert.equal(writes(dir), 2);
 });
