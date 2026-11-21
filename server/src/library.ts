@@ -328,9 +328,8 @@ export interface FoundFile { relative: string; size: number; modified: string }
  *  `Date.now()` deadline; either reaching zero ends the walk where it stands. */
 export interface WalkBudget { files: number; until: number }
 
-/** How many directory reads and stats one walk keeps in flight. A network mount answers each
- *  call with a round trip, and one call at a time made a large library take seconds to list. */
-const WALK_CONCURRENCY = 16;
+/** The pool has 16 threads; a walk leaves half of them free for requests. */
+const WALK_CONCURRENCY = 8;
 
 /** Runs at most `limit` calls at once. Only single filesystem calls take a slot, never a
  *  recursion, so a deep tree cannot fill every slot with parents waiting on children. */

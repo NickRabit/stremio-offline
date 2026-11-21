@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { initLogger } from "./logger.js";
-import { RemoteImageCache, remoteImageKey, type RemoteImageBody } from "./remote-image-cache.js";
+import { RemoteImageCache, remoteImageKey, type RemoteImageBody, type RemoteImageCacheOptions } from "./remote-image-cache.js";
 
 process.env.LOG_STDOUT = "0";
 await initLogger(await mkdtemp(path.join(os.tmpdir(), "stremio-remote-image-log-")));
@@ -71,6 +71,39 @@ test("the key is a hex digest of the parts and names no tag, token or address", 
   // request that names no size keeps the entry it always had.
   assert.notEqual(keyOf("tag-secret", "tile"), keyOf("tag-secret", "detail"));
   assert.notEqual(keyOf("tag-secret", "tile"), keyOf("tag-secret"));
+});
+
+test("loading the remote image index keeps at most eight stats in flight", async () => {
+  await withDir(async (dir) => {
+    await Promise.all(Array.from({ length: 50 }, (_, index) => plant(dir, index, 1, 1000 + index)));
+    let active = 0;
+    let peak = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const trackingStat = (async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await gate;
+      active -= 1;
+      return { isFile: () => true, size: 1, mtimeMs: 1 } as Awaited<ReturnType<NonNullable<RemoteImageCacheOptions["stat"]>>>;
+    }) as NonNullable<RemoteImageCacheOptions["stat"]>;
+    const cache = new RemoteImageCache(dir, 1024 * 1024, 0, { stat: trackingStat });
+    let loading: Promise<void> | undefined;
+    try {
+      loading = cache.load();
+      for (let attempt = 0; attempt < 100 && active < 8; attempt += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      assert.equal(active, 8);
+      release();
+      await loading;
+      assert.equal(peak, 8);
+      assert.equal((await stored(dir)).length, 50);
+    } finally {
+      release();
+      await loading;
+    }
+  });
 });
 
 test("close waits for a poster that has just finished, so the file is durable", async () => {

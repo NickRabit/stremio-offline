@@ -20,7 +20,7 @@ FROM ubuntu:24.04 AS runtime
 # Stamped by the build script and by CI so a running server can say which image it is.
 ARG BUILD_TIME=""
 ARG GIT_COMMIT=""
-ENV NODE_ENV=production PORT=8080 DATA_DIR=/data DOWNLOAD_DIR=/downloads \
+ENV NODE_ENV=production PORT=8080 DATA_DIR=/data DOWNLOAD_DIR=/downloads UV_THREADPOOL_SIZE=16 \
     BUILD_TIME=$BUILD_TIME GIT_COMMIT=$GIT_COMMIT
 WORKDIR /app
 # Intel QuickSync drivers exist only for amd64; the arm64 image is built without them.

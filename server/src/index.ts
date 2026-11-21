@@ -506,7 +506,8 @@ const statMeta = (job: { source?: TrafficMeta["source"]; url?: string; addonKey?
 
 const statEvent = (job: { at: string; bytes: number; url?: string; addonKey?: string; addonName?: string; title: string; kind?: string }): TrafficEvent =>
   ({ ...statMeta(job), at: job.at, bytes: job.bytes, items: 1 });
-if (!store.defaultsInstalled()) {
+const installDefaultAddons = async () => {
+  if (store.defaultsInstalled()) return;
   const defaults = [
     { url: "https://v3-cinemeta.strem.io/manifest.json", role: "catalog" as const },
     { url: "https://opensubtitles-v3.strem.io/manifest.json", role: "source" as const },
@@ -516,7 +517,7 @@ if (!store.defaultsInstalled()) {
     for (const result of loaded) if (result.status === "fulfilled") state.addons.push(result.value);
     state.defaultsInstalled = defaults.every((item) => state.addons.some((addon) => addon.manifestUrl === item.url));
   });
-}
+};
 // Source pick for lazy queue jobs: successful provider listings are held per
 // provider so another job can reuse them without reviving a failed request.
 const streamCache = new StreamListingCache();
@@ -3297,6 +3298,9 @@ try {
   // Scheduled without a wait: the first pass fills the caches after the server is already up.
   maintenance.start();
   log("INFO", "Stremio Offline is listening", { port: bound.port, address: bound.address });
+  void installDefaultAddons().catch((error) => {
+    log("ERROR", "Default addons could not be installed", { reason: error instanceof Error ? error.message : String(error) });
+  });
   // Readiness is announced first: the warm-up only fills the walks, and nothing waits on it.
   void warmLibraryCaches();
   warmHomeCatalogs();

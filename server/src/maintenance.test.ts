@@ -46,6 +46,23 @@ test("two overlapping passes share the one run", async () => {
   assert.equal(started, 1, "each task ran once");
 });
 
+test("start arms the first pass for ten minutes by default", async () => {
+  const armed: number[] = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((handler: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+    if (ms !== undefined) armed.push(ms);
+    return realSetTimeout(handler, ms, ...args);
+  }) as unknown as typeof setTimeout;
+  const maintenance = createMaintenance({ tasks: [] });
+  try {
+    maintenance.start();
+    assert.deepEqual(armed, [10 * 60_000]);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    await maintenance.stop();
+  }
+});
+
 test("start schedules passes on its own, never overlapping, and stop ends them", async () => {
   let passes = 0;
   let running = 0;
