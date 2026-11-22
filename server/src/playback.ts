@@ -474,6 +474,8 @@ export class PlaybackManager {
   /** An LGPL build, like the one the desktop app carries, has no libx264: hardware is all there is. */
   private softwareEncoder = true;
   private ffmpegVersion?: string;
+  private capabilitiesProbe?: Promise<void>;
+  private capabilityState: "pending" | "ready" | "failed" = "pending";
   private readonly pausedReleaseMs: number;
 
   constructor(
@@ -530,6 +532,28 @@ export class PlaybackManager {
     } else {
       await this.emptyRoot(this.root, true);
     }
+    setInterval(() => this.reap(), 30_000).unref();
+  }
+
+  probeCapabilities(): Promise<void> {
+    return this.capabilitiesProbe ??= this.probeCapabilitiesNow();
+  }
+
+  private async probeCapabilitiesNow() {
+    try {
+      await this.readCapabilities();
+      this.capabilityState = "ready";
+    } catch (error) {
+      this.capabilityState = "failed";
+      log("WARN", "FFmpeg capabilities could not be probed", {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+    // The packaged-app smoke waits for this line before it stops the backend.
+    log("INFO", "FFmpeg capabilities probed", { state: this.capabilityState, version: this.ffmpegVersion ?? null });
+  }
+
+  private async readCapabilities() {
     const stdout = await this.readFfmpegVersion();
     if (stdout !== undefined) {
       this.ffmpegVersion = stdout.split("\n")[0]?.replace(/^ffmpeg version\s*/i, "").split(" ")[0];
@@ -551,7 +575,10 @@ export class PlaybackManager {
     if (process.platform === "darwin" && process.env.VIDEOTOOLBOX !== "0" && !this.vaapiDevice) await this.checkVideotoolbox();
     // Media Foundation is Windows-only and never shares a machine with VAAPI.
     if (process.platform === "win32" && process.env.MEDIAFOUNDATION !== "0" && !this.vaapiDevice) await this.checkMediaFoundation();
-    setInterval(() => this.reap(), 30_000).unref();
+  }
+
+  private capabilitiesReady() {
+    return this.probeCapabilities();
   }
 
   /** Empties the root. The root itself is checked without following links, so nothing is ever
@@ -740,6 +767,7 @@ export class PlaybackManager {
     const id = crypto.randomUUID();
     const source = this.proxyPath(stream);
     // Through inspect(), so the source list and the player never disagree about what the file holds.
+    // Direct play needs nothing from the FFmpeg capability probe; a conversion waits for it in spawnAt.
     const info = await this.inspect(stream, signal);
     signal?.throwIfAborted();
     const audioTracks = info?.audioTracks ?? [];
@@ -1038,6 +1066,7 @@ export class PlaybackManager {
   /** Overview for diagnostics: what the server can do and what is running right now. */
   diagnostics() {
     return {
+      capabilities: this.capabilityState,
       ffmpeg: { version: this.ffmpegVersion, initialBurst: this.initialBurst, softwareEncoder: this.softwareEncoder },
       vaapi: { device: this.vaapiDevice, scaling: this.vaapiScaling, bitrate: this.vaapiBitrate, failures: this.vaapiFailures },
       nvenc: { available: this.nvenc, failures: this.nvencFailures },
@@ -1682,6 +1711,7 @@ export class PlaybackManager {
   }
 
   private async spawnAt(session: Session, offset: number): Promise<string> {
+    await this.capabilitiesReady();
     this.assertActive(session);
     session.generationSequence = Math.max(session.generationSequence ?? 0, session.generation) + 1;
     session.generation = session.generationSequence;

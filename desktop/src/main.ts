@@ -1745,12 +1745,21 @@ const runLocalBackendSmoke = async () => {
   try {
     const connection = await backend.start();
     process.stdout.write(`local-backend-smoke: ready ${connection.server.origin} api/status ${connection.status.version}\n`);
+    // The server probes FFmpeg only after it answers, so the smoke waits for that probe before it
+    // stops the backend: which FFmpeg and encoder it found is what the smoke checks.
+    const logFile = path.join(app.getPath("userData"), INSTANCE_DIRECTORY, "app.log");
+    for (let waited = 0; waited < 60_000; waited += 250) {
+      let text = "";
+      try { text = readFileSync(logFile, "utf8"); } catch { /* not written yet */ }
+      if (text.includes("FFmpeg capabilities probed")) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
     await backend.stop();
     process.stdout.write("local-backend-smoke: stopped\n");
     // A Windows GUI app does not hand its utility process's stdout on, so the server's own log is
     // what tells the smoke which FFmpeg and which encoder it found.
     try {
-      const log = readFileSync(path.join(app.getPath("userData"), INSTANCE_DIRECTORY, "app.log"), "utf8");
+      const log = readFileSync(logFile, "utf8");
       for (const line of log.split("\n")) if (line.trim()) process.stdout.write(`local-backend-log: ${line}\n`);
     } catch { /* no log is no worse than before */ }
     app.exit(0);
