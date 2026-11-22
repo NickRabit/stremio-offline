@@ -81,8 +81,8 @@ test("on Linux only folders are watched, and the NAS's own folders are left out"
     seen.length = 0;
     inspections = 0;
     await mkdir(path.join(dir, "Reacher", "Season 2"));
-    await until(settled);
-    assert.ok(inspections > 0, "a rename event still inspects whether the child is a folder");
+    // A new folder holds no video, so nothing is reported: wait for the inspection itself.
+    assert.ok(await until(() => { timers.fire(); return inspections > 0; }), "a rename event still inspects whether the child is a folder");
     seen.length = 0;
     await new Promise((resolve) => setTimeout(resolve, 200));
     await writeFile(path.join(dir, "Reacher", "Season 2", "Reacher.S02E01.mkv"), "x");
