@@ -91,6 +91,11 @@ interface Job {
   coverage: number;
 }
 
+export type SidecarReadState =
+  | { state: "ready"; text: string; complete: boolean; coverage: number }
+  | { state: "not-ready" }
+  | { state: "retired" };
+
 export class PlayerSidecars {
   private jobs = new Map<string, Job>();
   private released = new Set<string>();
@@ -202,17 +207,16 @@ export class PlayerSidecars {
 
   revision(id: string) { return this.jobs.get(id)?.revision; }
 
-  /** The cues are written with source timestamps, so they are shifted to the playing
-   *  generation here rather than extracted again for every position. */
-  async read(id: string, revision: string | undefined, offset: number, delay = 0, position: number | null = offset): Promise<{ text: string; complete: boolean; coverage: number } | undefined> {
+  async readState(id: string, revision: string | undefined, offset: number, delay = 0, position: number | null = offset): Promise<SidecarReadState> {
     const job = this.jobs.get(id);
-    if (!job || (revision !== undefined && job.revision !== revision)) return undefined;
+    if (!job) return { state: "not-ready" };
+    if (revision !== undefined && job.revision !== revision) return { state: "retired" };
     // Taken before the file is read. A reader that finishes while this read is in flight
     // rewrites the file, and a file caught mid-rewrite is empty: read afterwards, that
     // becomes an empty track the player is told is the whole of it and never asks for again.
     const complete = job.complete;
     let raw: string;
-    try { raw = await readFile(job.file, "utf8"); } catch { return undefined; }
+    try { raw = await readFile(job.file, "utf8"); } catch { return { state: "not-ready" }; }
     const text = complete ? raw : completeVttBlocks(raw);
     if (!complete) {
       job.coverage = vttCoverage(text);
@@ -220,7 +224,7 @@ export class PlayerSidecars {
       if (job.coverage < offset + SIDECAR_LEAD_S) {
         // The one line that says why a film is playing without subtitles.
         log("DEBUG", "Embedded subtitles are still behind the picture", { id, wanted: Math.round(offset + SIDECAR_LEAD_S), reached: Math.round(job.coverage) });
-        return undefined;
+        return { state: "not-ready" };
       }
     }
     if (!job.served) {
@@ -231,7 +235,14 @@ export class PlayerSidecars {
     // The delay is the viewer's own correction: a positive one holds the cues back.
     const shift = offset - delay;
     const shifted = shift !== 0 ? shiftVtt(text, shift) : text;
-    return { text: shifted, complete, coverage: complete ? Infinity : job.coverage };
+    return { state: "ready", text: shifted, complete, coverage: complete ? Infinity : job.coverage };
+  }
+
+  /** The cues are written with source timestamps, so they are shifted to the playing
+   *  generation here rather than extracted again for every position. */
+  async read(id: string, revision: string | undefined, offset: number, delay = 0, position: number | null = offset): Promise<{ text: string; complete: boolean; coverage: number } | undefined> {
+    const result = await this.readState(id, revision, offset, delay, position);
+    return result.state === "ready" ? result : undefined;
   }
 
   /** Lets go of the source without losing the cues, for a conversion that needs to open it. */

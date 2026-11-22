@@ -352,6 +352,23 @@ test("a sidecar seek is serialized through the playback manager and guarded like
   assert.equal(harness.sidecarSeeks.length, 1);
 });
 
+test("a retired sidecar revision answers 410 with the current URL", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.playback.sidecar = async () => ({
+    retired: true,
+    sidecarUrl: `/api/playback/${ID}/sidecar.vtt?revision=current&offset=0.000`,
+  });
+
+  const response = await api(harness.base, `/api/playback/${ID}/sidecar.vtt?revision=old&offset=0&position=10`, { user: "ada" });
+
+  assert.equal(response.status, 410);
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.deepEqual(await response.json(), {
+    sidecarUrl: `/api/playback/${ID}/sidecar.vtt?revision=current&offset=0.000`,
+  });
+});
+
 test("the ping keeps the source the session plays alive", async (t) => {
   const harness = await mount();
   t.after(harness.close);

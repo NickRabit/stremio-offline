@@ -1043,10 +1043,11 @@ open class FakeTvApi : TvApi {
 
   override suspend fun sidecar(url: String, position: Double, delay: Double): SidecarFetch? {
     sidecarRequests += Triple(url, position, delay)
-    return sidecarValue
+    return sidecarAnswers.removeFirstOrNull() ?: sidecarValue
   }
 
   var sidecarValue: SidecarFetch? = null
+  val sidecarAnswers = ArrayDeque<SidecarFetch?>()
   val sidecarRequests: MutableList<Triple<String, Double, Double>> = mutableListOf()
 
   val seekTimes: MutableList<Double> = mutableListOf()

@@ -377,6 +377,20 @@ test("a subtitle track change during a seek replaces the revision at the seek ta
   }));
 });
 
+test("a current reader with no cue yet stays on one revision through ten seconds of polls", async (t) => {
+  const { extractor, route, sidecars, ensure, seekRequests } = await fixture(t);
+  const revision = ensure(TRACK, 0);
+  await waitFor(() => extractor.runs.length === 1, "the connecting reader did not start");
+
+  const statuses: number[] = [];
+  for (let poll = 0; poll < 40; poll += 1) statuses.push((await route.sample(revision, poll / 4)).status);
+
+  assert.deepEqual(new Set(statuses), new Set([404]));
+  assert.equal(sidecars.revision(ID), revision);
+  assert.equal(extractor.runs.length, 1);
+  assert.deepEqual(seekRequests, []);
+});
+
 test("ordinary playback through the silent stretch relaunches the reader once when the next cue is already far ahead", async (t) => {
   const { extractor, route, sidecars, ensure, assertCorrect } = await fixture(t);
   const revision = ensure(TRACK, 0);

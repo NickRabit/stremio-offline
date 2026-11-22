@@ -2973,7 +2973,11 @@ test("an explicit sidecar seek reuses coverage and an older seek id leaves the n
     assert.notEqual(/revision=([^&]+)/.exec(moved.sidecarUrl ?? "")?.[1], first);
     while (starts.length < 2) await pause(5);
     assert.deepEqual(starts, [0, 900]);
-    assert.equal(await manager.sidecar(session.id, first, 0), undefined, "the replaced revision is retired");
+    assert.deepEqual(
+      await manager.sidecar(session.id, first, 0),
+      { retired: true, sidecarUrl: moved.sidecarUrl },
+      "the replaced revision points at the current one",
+    );
 
     await manager.track(session.id, { subtitle: 2, time: 900 });
     assert.deepEqual(starts, [0, 900], "a direct-mode track change keeps the reader at the player's position");
@@ -3007,6 +3011,15 @@ test("a direct play started from a resume point starts its subtitle reader there
     while (!starts.length) await pause(5);
     assert.equal(started.mode, "direct");
     assert.deepEqual(starts, [300]);
+    await manager.sidecars.stop(started.id);
+    starts.length = 0;
+    started = await manager.start(
+      { url: "https://cdn.example/resume.mp4" },
+      playCaps,
+      { startTime: Number.POSITIVE_INFINITY, subtitleLanguage: "en" },
+    );
+    while (!starts.length) await pause(5);
+    assert.deepEqual(starts, [3_598], "an infinite start is clamped to the probed duration");
   } finally {
     if (started) await manager.sidecars.stop(started.id);
   }

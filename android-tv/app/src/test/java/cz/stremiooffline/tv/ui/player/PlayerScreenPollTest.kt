@@ -75,7 +75,7 @@ class PlayerScreenPollTest {
   }
 
   @Test
-  fun `three missing sidecar responses ask for a fresh reader revision`() {
+  fun `missing current cues keep polling without asking for a fresh revision`() {
     val api = FakeTvApi().apply {
       startAnswer = PlaybackDescriptorDto(
         id = "p1", mode = "transcode", url = "/transcode.m3u8", playlist = true, offset = 0.0, duration = 3_000.0,
@@ -87,11 +87,35 @@ class PlayerScreenPollTest {
     }
     mount(api, PlayTarget(key = "series:tt1:1:1", title = "It", resume = false, sourceId = "src1"))
 
-    compose.waitUntil(5_000) { api.sidecarRequests.size >= 3 }
-    compose.waitUntil(5_000) { api.sidecarSeeks.isNotEmpty() }
+    compose.waitUntil(5_000) { api.sidecarRequests.size >= 6 }
 
-    assertEquals("p1", api.sidecarSeeks.first().first)
-    assertTrue(api.sidecarSeeks.first().third > 0)
+    assertTrue(api.sidecarSeeks.isEmpty())
+    assertTrue(api.sidecarRequests.all { it.first == "/api/playback/p1/sidecar.vtt?revision=retired&offset=0.000" })
+  }
+
+  @Test
+  fun `a 410 moves polling to the current sidecar without repositioning it`() {
+    val api = FakeTvApi().apply {
+      startAnswer = PlaybackDescriptorDto(
+        id = "p1", mode = "transcode", url = "/transcode.m3u8", playlist = true, offset = 0.0, duration = 3_000.0,
+        subtitleTracks = tracks("""{"index":0,"language":"en","codec":"subrip"}"""),
+        subtitleTrack = 0,
+        sidecarUrl = "/api/playback/p1/sidecar.vtt?revision=old&offset=0.000",
+      )
+      sidecarAnswers += SidecarFetch(
+        text = "",
+        complete = false,
+        coverage = Double.NEGATIVE_INFINITY,
+        replacementUrl = "/api/playback/p1/sidecar.vtt?revision=current&offset=0.000",
+      )
+      sidecarAnswers += SidecarFetch(text = "WEBVTT\n\n", complete = false, coverage = 1.0)
+    }
+    mount(api, PlayTarget(key = "series:tt1:1:1", title = "It", resume = false, sourceId = "src1"))
+
+    compose.waitUntil(5_000) { api.sidecarRequests.size >= 2 }
+
+    assertTrue(api.sidecarRequests[1].first.contains("revision=current"))
+    assertTrue(api.sidecarSeeks.isEmpty())
   }
 
   @Test

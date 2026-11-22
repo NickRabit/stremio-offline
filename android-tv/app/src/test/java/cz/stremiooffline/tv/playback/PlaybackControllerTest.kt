@@ -528,6 +528,60 @@ class PlaybackControllerTest {
   }
 
   @Test
+  fun `a seek back inside the old range still replaces a request that was already sent`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 0, sidecarUrl = "sidecar-old.vtt",
+      subtitleTracks = trackList("""[{"index":0,"language":"en","codec":"mov_text"}]"""),
+    )
+    val gate = CompletableDeferred<Unit>()
+    api.sidecarSeekGate = gate
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onSidecarCoverage(100.0, complete = false)
+
+    controller.seekTo(200.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    assertTrue(controller.state.value.sidecarPending)
+
+    controller.seekTo(50.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    assertEquals(listOf(200.0, 50.0), api.sidecarSeeks.map { it.second })
+
+    gate.complete(Unit)
+    runCurrent()
+    assertEquals(false, controller.state.value.sidecarPending)
+  }
+
+  @Test
+  fun `a same-url sidecar answer keeps the same revision`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 0, sidecarUrl = "sidecar-old.vtt",
+      subtitleTracks = trackList("""[{"index":0,"language":"en","codec":"mov_text"}]"""),
+    )
+    api.sidecarSeekAnswer = SidecarSeekDto(sidecarUrl = "sidecar-old.vtt", seekId = 1)
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onSidecarCoverage(100.0, complete = false)
+    val revision = controller.state.value.sidecarRevision
+
+    controller.seekTo(200.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+
+    assertEquals("sidecar-old.vtt", controller.state.value.sidecarUrl)
+    assertEquals(revision, controller.state.value.sidecarRevision)
+    assertEquals(false, controller.state.value.sidecarPending)
+  }
+
+  @Test
   fun `a direct sidecar seek does not drop an in-flight quality change`() = runTest {
     val api = FakeApi()
     api.descriptor = PlaybackDescriptorDto(

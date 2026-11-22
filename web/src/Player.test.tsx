@@ -98,6 +98,9 @@ let sidecarCoverage: number;
 let heldSidecarSeek: Promise<void> | null;
 let heldSidecarPoll: Promise<void> | null;
 let sidecarSeekFailures: number;
+let sidecarSeekUrl: string | undefined;
+let sidecarPollStatus: number;
+let sidecarReplacementUrl: string | undefined;
 let trackRequests: Array<Record<string, unknown>>;
 let heldTrack: Promise<void> | null;
 let pingRequests: string[];
@@ -156,6 +159,9 @@ beforeEach(() => {
   heldSidecarSeek = null;
   heldSidecarPoll = null;
   sidecarSeekFailures = 0;
+  sidecarSeekUrl = undefined;
+  sidecarPollStatus = 200;
+  sidecarReplacementUrl = undefined;
   trackRequests = [];
   heldTrack = null;
   pingRequests = [];
@@ -208,12 +214,19 @@ beforeEach(() => {
         return Promise.reject(new TypeError("Failed to fetch"));
       }
       return (heldSidecarSeek ?? Promise.resolve()).then(() => json({
-        sidecarUrl: `/api/playback/sess1/sidecar.vtt?revision=new-${body.seekId}&offset=0.000`,
+        sidecarUrl: sidecarSeekUrl ?? `/api/playback/sess1/sidecar.vtt?revision=new-${body.seekId}&offset=0.000`,
         seekId: body.seekId,
       }));
     }
     if (/^\/api\/playback\/[^/]+\/sidecar\.vtt$/.test(path)) {
       sidecarPolls.push(`${path}${url.search}`);
+      if (sidecarPollStatus !== 200) {
+        if (sidecarPollStatus === 410) {
+          sidecarPollStatus = 200;
+          return Promise.resolve(json({ sidecarUrl: sidecarReplacementUrl }, 410));
+        }
+        return Promise.resolve(new Response(null, { status: sidecarPollStatus }));
+      }
       const wait = url.searchParams.get("revision") === "old-held" ? heldSidecarPoll : null;
       return (wait ?? Promise.resolve()).then(() => new Response("WEBVTT\n\n", {
         headers: { "x-sidecar-complete": "0", "x-sidecar-coverage": String(sidecarCoverage) },
@@ -353,6 +366,41 @@ describe("Player sidecar seeks", () => {
     await seekByArrow(620);
 
     expect(sidecarSeekRequests).toEqual([]);
+    expect(host.querySelector("track")?.getAttribute("src")).toContain("revision=old");
+  });
+
+  it("keeps polling a current reader that has no cue yet without repositioning it", async () => {
+    sidecarPollStatus = 404;
+    sessionShape = sidecarSession();
+    await render();
+
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_200)); });
+    await settle();
+
+    expect(sidecarPolls.length).toBeGreaterThan(3);
+    expect(sidecarSeekRequests).toEqual([]);
+  });
+
+  it("adopts the current URL from a 410 without repositioning the reader", async () => {
+    sidecarPollStatus = 410;
+    sidecarReplacementUrl = "/api/playback/sess1/sidecar.vtt?revision=server-new&offset=0.000";
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => host.querySelector("track")?.getAttribute("src")?.includes("revision=server-new") ?? false);
+
+    expect(sidecarSeekRequests).toEqual([]);
+    expect(sidecarPolls.some((value) => value.includes("revision=old"))).toBe(true);
+  });
+
+  it("does not remount the track when a same-start answer returns the current URL", async () => {
+    sidecarSeekUrl = "/api/playback/sess1/sidecar.vtt?revision=old&offset=0.000";
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => host.querySelector("track") !== null);
+
+    await seekByArrow(989);
+
+    expect(sidecarSeekRequests).toHaveLength(1);
     expect(host.querySelector("track")?.getAttribute("src")).toContain("revision=old");
   });
 
@@ -502,7 +550,7 @@ describe("Player sidecar seeks", () => {
     await waitUntil(() => host.querySelector("track")?.getAttribute("src")?.includes("revision=new-1") ?? false);
   });
 
-  it("keeps a lost replacement hidden after the retries are exhausted", async () => {
+  it("keeps a lost replacement hidden while its retries continue", async () => {
     sidecarSeekFailures = 3;
     sessionShape = sidecarSession();
     await render();

@@ -706,6 +706,14 @@ class ApiClientTest {
   }
 
   @Test
+  fun `a retired sidecar response carries the current URL`() = runTest {
+    server.enqueue(MockResponse().setResponseCode(410).setBody("""{"sidecarUrl":"/sidecar.vtt?revision=current"}"""))
+    val fetch = client(start()).sidecar("/sidecar.vtt?revision=old", 12.5, 0.0)
+
+    assertEquals("/sidecar.vtt?revision=current", fetch!!.replacementUrl)
+  }
+
+  @Test
   fun `a sidecar seek sends its position and sequence before the next poll`() = runTest {
     server.enqueue(MockResponse().setBody("""{"sidecarUrl":"sidecar-new.vtt","seekId":7}"""))
     val answer = client(start()).seekSidecar("p1", 920.5, 7)

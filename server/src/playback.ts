@@ -1290,11 +1290,15 @@ export class PlaybackManager {
   async sidecar(id: string, revision: string | undefined, offset: number, delay = 0, position: number | null = offset) {
     const session = this.playing(id);
     if (!session || session.subtitleTrack === null) return undefined;
-    const cues = await this.sidecars.read(id, revision, offset, delay, position);
-    if (!cues) return undefined;
+    const result = await this.sidecars.readState(id, revision, offset, delay, position);
+    if (result.state === "not-ready") return undefined;
+    if (result.state === "retired") {
+      const sidecarUrl = this.sidecarUrl(session);
+      return sidecarUrl ? { retired: true as const, sidecarUrl } : undefined;
+    }
     session.claimed = true;
     session.lastAccess = Date.now();
-    return cues;
+    return result;
   }
 
   async repositionSidecar(id: string, position: number, seekId: number): Promise<{ sidecarUrl?: string; seekId: number }> {
@@ -1342,7 +1346,12 @@ export class PlaybackManager {
   private extractSidecar(session: Session, start = session.offset) {
     const index = session.subtitleTrack;
     if (index === null) return;
-    this.sidecars.ensure(session.id, path.join(this.root, session.id), index, Math.max(0, start), this.sidecarArgs(session, index));
+    const duration = session.info?.duration;
+    const limit = duration ? Math.max(0, duration - 2) : Number.POSITIVE_INFINITY;
+    const position = Number.isFinite(start)
+      ? Math.max(0, Math.min(start, limit))
+      : Number.isFinite(limit) ? limit : 0;
+    this.sidecars.ensure(session.id, path.join(this.root, session.id), index, position, this.sidecarArgs(session, index));
   }
 
   private sidecarArgs(session: Session, index: number) {

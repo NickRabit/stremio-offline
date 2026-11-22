@@ -6,6 +6,7 @@ const answer = (ok: boolean, headers: Record<string, string> = {}) => ({
 }) as unknown as Response;
 const reading = (coverage: number) => answer(true, { "x-sidecar-complete": "0", "x-sidecar-coverage": String(coverage) });
 const whole = answer(true, { "x-sidecar-complete": "1" });
+const moved = (url: string) => new Response(JSON.stringify({ sidecarUrl: url }), { status: 410 }) as Response;
 const noDelay = () => Promise.resolve();
 
 describe("watchSidecar", () => {
@@ -82,13 +83,14 @@ describe("watchSidecar", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it("asks for a fresh revision after three missing responses in a row", async () => {
+  it("keeps polling missing responses for ten seconds without asking for another revision", async () => {
     const controller = new AbortController();
     let calls = 0;
-    let unavailable = 0;
+    let revision = 0;
+    let waited = 0;
     const fetcher = vi.fn().mockImplementation(() => {
       calls += 1;
-      if (calls === 6) controller.abort();
+      if (calls === 41) controller.abort();
       return Promise.resolve(answer(false));
     });
     await watchSidecar(
@@ -97,11 +99,28 @@ describe("watchSidecar", () => {
       () => 0,
       () => {},
       fetcher,
-      noDelay,
-      () => { unavailable += 1; },
+      async (ms) => { waited += ms; },
+      () => { revision += 1; },
     );
-    expect(calls).toBe(6);
-    expect(unavailable).toBe(1);
+    expect(calls).toBe(41);
+    expect(waited).toBe(10_000);
+    expect(revision).toBe(0);
+  });
+
+  it("adopts the current URL from a 410 response", async () => {
+    const urls: string[] = [];
+    const fetcher = vi.fn().mockResolvedValueOnce(moved("/sidecar.vtt?revision=current"));
+    await watchSidecar(
+      "/sidecar.vtt?revision=old",
+      new AbortController().signal,
+      () => 0,
+      () => {},
+      fetcher,
+      noDelay,
+      (url) => { urls.push(url); },
+    );
+    expect(urls).toEqual(["/sidecar.vtt?revision=current"]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it("times out a single request without AbortSignal.any, which older Safari lacks", async () => {

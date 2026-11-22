@@ -445,6 +445,11 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     );
     guardOwned(String(req.params.id));
     if (!cues) return res.status(404).end();
+    if ("retired" in cues) {
+      return res.status(410)
+        .setHeader("cache-control", "private, no-store")
+        .json({ sidecarUrl: cues.sidecarUrl });
+    }
     // Until the reader has the whole track the player keeps asking, so it is told which it has.
     // How far the cues reach: the player re-reads before the picture catches up with them.
     res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store")
