@@ -884,7 +884,7 @@ export class ImageProxy {
       }
       return entry.ext ? entry : undefined;
     } catch (error) {
-      if (temp) await rm(temp, { force: true });
+      if (temp) await rm(temp, { force: true }).catch(() => undefined);
       return rejected(String(error).slice(0, 120));
     }
   }
