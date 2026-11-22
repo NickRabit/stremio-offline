@@ -2027,7 +2027,8 @@ const describeLibraryPath = async (key: string, read?: WalkRead) => {
       });
     }
     : undefined;
-  const item = await describePath(library.root, relative, carveOutsOf(library), videosInside);
+  const aggregate = walked ? async () => (await heldTreeOf(library))?.folder(relative) : undefined;
+  const item = await describePath(library.root, relative, carveOutsOf(library), videosInside, aggregate);
   if (item?.kind !== "file") return item;
   const records = metaStore.qualifiedMeta();
   const known = knownTitleEntry(key, records);

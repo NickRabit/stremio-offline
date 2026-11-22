@@ -566,7 +566,13 @@ function realRootOf(root: string): Promise<string> {
   return real;
 }
 
-export async function describePath(root: string, relative: string, exclude?: ReadonlySet<string>, videosInside?: () => Promise<FoundFile[]>): Promise<BrowseItem | undefined> {
+export async function describePath(
+  root: string,
+  relative: string,
+  exclude?: ReadonlySet<string>,
+  videosInside?: () => Promise<FoundFile[]>,
+  aggregate?: () => Promise<{ fileCount: number; size: number; modified: string } | undefined>,
+): Promise<BrowseItem | undefined> {
   if (exclude?.has(relative)) return undefined;
   const target = resolveInside(root, relative);
   if (!target) return undefined;
@@ -577,6 +583,11 @@ export async function describePath(root: string, relative: string, exclude?: Rea
   if (!info) return undefined;
   const name = posixBase(relative);
   if (info.isDirectory()) {
+    const held = aggregate ? await aggregate() : undefined;
+    if (held) return {
+      kind: "folder", path: relative, name,
+      fileCount: held.fileCount, size: held.size, modified: held.modified,
+    };
     const inside = videosInside ? await videosInside() : await listVideos(root, relative, 0, exclude);
     if (!inside.length) return undefined;
     return {
