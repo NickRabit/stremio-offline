@@ -616,6 +616,15 @@ interface OriginalProof {
   at: number;
 }
 
+interface OriginalPreparation {
+  proof: OriginalProof;
+  item: ProviderItem;
+  versions: ProviderVersion[];
+  freshAdmission: boolean;
+  /** The runtime the reads ran under: a result read under a runtime since dropped is not shared. */
+  runtime: CachedRuntime | undefined;
+}
+
 interface PlaybackAdmission {
   bitrate?: number;
   playSessionId?: string;
@@ -660,6 +669,18 @@ interface InflightRead {
   promise: Promise<unknown>;
   controller: AbortController;
   subscribers: number;
+}
+
+interface ProofSubscriber {
+  active: boolean;
+  check(): void;
+  reject(error: unknown): void;
+}
+
+interface InflightProofRead extends InflightRead {
+  runtime: CachedRuntime;
+  key: string;
+  participants: Set<ProofSubscriber>;
 }
 
 const newRuntime = (
@@ -2110,6 +2131,74 @@ export class MediaServerManager {
     });
   }
 
+  private prepareOriginalProof(
+    connection: MediaConnectionRecord,
+    session: LiveSession,
+    ref: RemoteContentRef,
+    library: RemoteLibraryRecord,
+    user: UserRecord,
+    admissionKind: "playback" | "download",
+    signal: AbortSignal,
+    check: () => void,
+  ): Promise<OriginalPreparation> {
+    const runtime = this.liveRuntime(connection);
+    const key = this.originalProofInflightKey(
+      user, library, connection, ref.itemId, ref.mediaSourceId, admissionKind, "proof",
+    );
+    return this.coalescedProof(runtime, key, signal, check, async (inner, checkpoint) => {
+      const item = await this.upstream(connection, inner, () =>
+        session.provider.detail(session.token, connection.accountId, ref.itemId, inner));
+      checkpoint();
+      if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+      const ancestors = await this.upstream(connection, inner, () =>
+        session.provider.ancestors(session.token, connection.accountId, item.id, inner));
+      checkpoint();
+      if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+      const versions = await this.upstream(connection, inner, () =>
+        session.provider.versions(session.token, connection.accountId, item.id, inner));
+      checkpoint();
+      const version = versions.find((candidate) => candidate.id === ref.mediaSourceId);
+      if (!version) throw notFound("That media-server source is no longer available.");
+      const isPlayback = admissionKind === "playback";
+      const live = isPlayback
+        ? this.livePlaybackAdmissionFor(user, library, connection, ref.itemId, ref.mediaSourceId)
+        : undefined;
+      const admission = live
+        ? this.playbackAdmissionValue(live)
+        : this.playbackAdmissionFromInfo(
+          session,
+          await this.upstream(connection, inner, () => session.provider.playbackInfo(session.token, connection.accountId, ref.itemId, {
+            mediaSourceId: ref.mediaSourceId,
+            ...(session.policy.bitrateLimit === undefined ? {} : { maxStreamingBitrate: session.policy.bitrateLimit }),
+            isPlayback,
+          }, inner)),
+          ref.mediaSourceId,
+          isPlayback,
+          isPlayback,
+        );
+      checkpoint();
+      return {
+        item,
+        versions,
+        freshAdmission: live === undefined,
+        runtime,
+        proof: {
+          actorId: user.id,
+          libraryId: library.id,
+          connectionId: connection.id,
+          generation: connection.generation,
+          secretRef: connection.secretRef,
+          itemId: ref.itemId,
+          mediaSourceId: ref.mediaSourceId,
+          admissionKind,
+          bitrate: admission.bitrate,
+          ...(admission.playSessionId === undefined ? {} : { playSessionId: admission.playSessionId }),
+          at: this.clock(),
+        },
+      };
+    });
+  }
+
   /** Opens one original file over the binary transport. The local grant and the live session are
    *  repeated on every open; the item detail, ancestor chain and named version are skipped when
    *  the same source was proved within the last playback-guard interval. The token is read only
@@ -2131,41 +2220,34 @@ export class MediaServerManager {
     let proof = this.originalProofFor(user, library, connection, ref.itemId, ref.mediaSourceId);
     if (proof?.admissionKind !== wantedKind) proof = undefined;
     if (!proof) {
-      const runtime = this.liveRuntime(connection);
-      const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
+      const prepared = await this.prepareOriginalProof(
+        connection, session, ref, library, user, wantedKind, request,
+        () => this.recheckRef(authority, request, ref),
+      );
       this.recheckRef(authority, request, ref);
-      if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
-      const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
-      if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
-      this.recheckRef(authority, request, ref);
-      const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
-      this.recheckRef(authority, request, ref);
-      const version = versions.find((candidate) => candidate.id === ref.mediaSourceId);
-      if (!version) throw notFound("That media-server source is no longer available.");
-      const isPlayback = options?.download !== true;
-      const live = isPlayback
-        ? this.livePlaybackAdmissionFor(user, library, connection, ref.itemId, ref.mediaSourceId)
-        : undefined;
-      const admission = live
-        ? this.playbackAdmissionValue(live)
-        : await this.admitPlaybackSource(
-          authority, request, library, connection, session, ref.itemId, ref.mediaSourceId, isPlayback, isPlayback,
-        );
-      if (item.type === "movie" || item.type === "episode") this.shareFreshOriginal(user, library, connection, runtime, item, versions);
-      proof = {
-        actorId: user.id,
-        libraryId: library.id,
-        connectionId: connection.id,
-        generation: connection.generation,
-        secretRef: connection.secretRef,
-        itemId: ref.itemId,
-        mediaSourceId: ref.mediaSourceId,
-        admissionKind: isPlayback ? "playback" : "download",
-        bitrate: admission.bitrate,
-        ...(admission.playSessionId === undefined ? {} : { playSessionId: admission.playSessionId }),
-        at: this.clock(),
-      };
-      this.putOriginalProof(proof);
+      if (prepared.item.type === "movie" || prepared.item.type === "episode") {
+        this.shareFreshOriginal(user, library, connection, prepared.runtime, prepared.item, prepared.versions);
+      }
+      // Read under a runtime that has since been dropped or replaced: this open may use the
+      // result, but no cache keeps it for the next one, which proves the source again.
+      const current = prepared.runtime !== undefined && this.liveRuntime(connection) === prepared.runtime;
+      if (current && wantedKind === "playback" && prepared.freshAdmission) {
+        this.putLivePlaybackAdmission({
+          actorId: user.id,
+          actorSecretStamp: remoteSecretStamp(user.secret),
+          libraryId: library.id,
+          connectionId: connection.id,
+          generation: connection.generation,
+          secretRef: connection.secretRef,
+          itemId: ref.itemId,
+          mediaSourceId: ref.mediaSourceId,
+          ...(prepared.proof.bitrate === undefined ? {} : { bitrate: prepared.proof.bitrate }),
+          ...(prepared.proof.playSessionId === undefined ? {} : { playSessionId: prepared.proof.playSessionId }),
+          at: this.clock(),
+        });
+      }
+      proof = prepared.proof;
+      if (current) this.putOriginalProof(proof);
     }
     if (options?.download !== true) this.assertStreamBitrate(session.policy, proof.bitrate);
     const slot = this.quota.reserve(connection.id, `${user.id}:${ref.itemId}:${ref.mediaSourceId}`, session.policy);
@@ -2376,6 +2458,32 @@ export class MediaServerManager {
         isPlayback,
       }, signal));
     this.recheckContent(authority, signal, library.id, connection);
+    const admission = this.playbackAdmissionFromInfo(session, info, mediaSourceId, isPlayback, enforceBitrate);
+    if (isPlayback) {
+      this.putLivePlaybackAdmission({
+        actorId: authority.actor.id,
+        actorSecretStamp: remoteSecretStamp(authority.actor.secret),
+        libraryId: library.id,
+        connectionId: connection.id,
+        generation: connection.generation,
+        secretRef: connection.secretRef,
+        itemId,
+        mediaSourceId,
+        ...(admission.bitrate === undefined ? {} : { bitrate: admission.bitrate }),
+        ...(admission.playSessionId === undefined ? {} : { playSessionId: admission.playSessionId }),
+        at: this.clock(),
+      });
+    }
+    return admission;
+  }
+
+  private playbackAdmissionFromInfo(
+    session: LiveSession,
+    info: ProviderPlaybackInfo,
+    mediaSourceId: string,
+    isPlayback: boolean,
+    enforceBitrate: boolean,
+  ): PlaybackAdmission {
     if (info.errorCode === "NotAllowed") {
       throw new MediaServerError("playback-not-allowed", "The media server does not allow playback of this item.");
     }
@@ -2405,21 +2513,6 @@ export class MediaServerManager {
       ...(source.bitrate === undefined ? {} : { bitrate: source.bitrate }),
       ...(!isPlayback || info.playSessionId === undefined ? {} : { playSessionId: info.playSessionId }),
     };
-    if (isPlayback) {
-      this.putLivePlaybackAdmission({
-        actorId: authority.actor.id,
-        actorSecretStamp: remoteSecretStamp(authority.actor.secret),
-        libraryId: library.id,
-        connectionId: connection.id,
-        generation: connection.generation,
-        secretRef: connection.secretRef,
-        itemId,
-        mediaSourceId,
-        ...(admission.bitrate === undefined ? {} : { bitrate: admission.bitrate }),
-        ...(admission.playSessionId === undefined ? {} : { playSessionId: admission.playSessionId }),
-        at: this.clock(),
-      });
-    }
     return admission;
   }
 
@@ -2507,6 +2600,24 @@ export class MediaServerManager {
    *  authorize another account, library, generation or source. */
   private originalProofKey(actorId: string, libraryId: string, connectionId: string, generation: number, secretRef: string | undefined, itemId: string, mediaSourceId: string): string {
     return [actorId, libraryId, connectionId, String(generation), secretRef ?? "", itemId, mediaSourceId].join("\u0000");
+  }
+
+  private originalProofInflightKey(
+    user: UserRecord,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    itemId: string,
+    mediaSourceId: string,
+    admissionKind: "playback" | "download",
+    operation: string,
+  ): string {
+    return [
+      "original-proof",
+      this.originalProofKey(user.id, library.id, connection.id, connection.generation, connection.secretRef, itemId, mediaSourceId),
+      remoteSecretStamp(user.secret),
+      admissionKind,
+      operation,
+    ].join("\u0000");
   }
 
   private originalProofFor(user: UserRecord, library: RemoteLibraryRecord, connection: MediaConnectionRecord, itemId: string, mediaSourceId: string): OriginalProof | undefined {
@@ -3509,6 +3620,93 @@ export class MediaServerManager {
     } catch (error) {
       if (error instanceof MediaServerError && error.code === "authentication-required") this.markReauthentication(connection);
       throw error;
+    }
+  }
+
+  private coalescedProof<T>(
+    runtime: CachedRuntime | undefined,
+    key: string,
+    signal: AbortSignal,
+    check: () => void,
+    work: (signal: AbortSignal, checkpoint: () => void) => Promise<T>,
+  ): Promise<T> {
+    this.checkLive(signal);
+    if (!runtime || !this.coalesceReads) return work(signal, check);
+    const existed = runtime.inflight.get(key);
+    if (existed) return this.joinProofInflight<T>(existed as InflightProofRead, signal, check);
+    const controller = new AbortController();
+    const combined = AbortSignal.any([this.lifetime.signal, controller.signal]);
+    const entry: InflightProofRead = {
+      promise: Promise.resolve(),
+      controller,
+      subscribers: 0,
+      runtime,
+      key,
+      participants: new Set(),
+    };
+    entry.promise = work(combined, () => this.runProofCheckpoints(entry)).finally(() => {
+      if (runtime.inflight.get(key) === entry) runtime.inflight.delete(key);
+    });
+    void entry.promise.catch(() => undefined);
+    runtime.inflight.set(key, entry);
+    return this.joinProofInflight<T>(entry, signal, check);
+  }
+
+  private joinProofInflight<T>(
+    entry: InflightProofRead,
+    signal: AbortSignal,
+    check: () => void,
+  ): Promise<T> {
+    this.checkLive(signal);
+    return new Promise<T>((resolve, reject) => {
+      let done = false;
+      const participant: ProofSubscriber = {
+        active: true,
+        check,
+        reject: (error) => finish(() => reject(error)),
+      };
+      const finish = (settle: () => void): void => {
+        if (done) return;
+        done = true;
+        participant.active = false;
+        signal.removeEventListener("abort", onAbort);
+        settle();
+      };
+      const onAbort = (): void => {
+        this.detachProofSubscriber(entry, participant);
+        finish(() => reject(this.closed ? closedError() : cancelled()));
+      };
+      entry.subscribers += 1;
+      entry.participants.add(participant);
+      signal.addEventListener("abort", onAbort, { once: true });
+      entry.promise.then(
+        (value) => finish(() => resolve(value as T)),
+        (error) => finish(() => reject(error)),
+      );
+    });
+  }
+
+  private runProofCheckpoints(entry: InflightProofRead): void {
+    for (const participant of [...entry.participants]) {
+      if (!participant.active) continue;
+      try {
+        participant.check();
+      } catch (error) {
+        this.detachProofSubscriber(entry, participant);
+        participant.reject(error);
+      }
+    }
+    if (entry.subscribers <= 0) throw cancelled();
+  }
+
+  private detachProofSubscriber(entry: InflightProofRead, participant: ProofSubscriber): void {
+    if (!participant.active) return;
+    participant.active = false;
+    entry.participants.delete(participant);
+    entry.subscribers -= 1;
+    if (entry.subscribers <= 0) {
+      if (entry.runtime.inflight.get(entry.key) === entry) entry.runtime.inflight.delete(entry.key);
+      entry.controller.abort();
     }
   }
 
