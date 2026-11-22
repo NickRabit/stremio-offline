@@ -1250,7 +1250,8 @@ class PlaybackController(
     const val PING_INTERVAL_MS = 30_000L
     const val SAVE_INTERVAL_MS = 10_000L
     const val REPORT_INTERVAL_MS = 10_000L
-    const val PAUSED_REPORT_TICKS = 3
+    /** Two 10 s ticks leave room for one lost paused report before the 60 s idle expiry. */
+    const val PAUSED_REPORT_TICKS = 2
     const val SEEK_DEBOUNCE_MS = 600L
     /** The server refuses a start with more than a hundred subtitle ids. */
     const val MAX_SUBTITLE_IDS = 100

@@ -1772,8 +1772,8 @@ class PlaybackControllerTest {
   }
 
   @Test
-  fun `a remote pause reports every thirty seconds for three minutes`() = runTest {
-    val api = FakeApi()
+  fun `a remote pause reports every twenty seconds for three minutes`() = runTest {
+    val api = FakeApi { testScheduler.currentTime }
     val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
     startRemote(controller)
     runCurrent()
@@ -1785,17 +1785,19 @@ class PlaybackControllerTest {
     advanceTimeBy(180_001)
     runCurrent()
 
-    val pausedProgress = api.playbackReports.filter {
-      it.third.event == "progress" && it.third.paused
-    }
-    assertTrue(pausedProgress.size <= 7)
+    val pausedProgress = api.playbackReports.indices
+      .filter { api.playbackReports[it].third.event == "progress" && api.playbackReports[it].third.paused }
+      .map { api.playbackReports[it] to api.playbackReportTimes[it] }
+    assertTrue(pausedProgress.size <= 10)
     assertTrue(pausedProgress.size > 1)
-    assertEquals(1, pausedProgress.mapNotNull { it.third.playId }.distinct().size)
-    assertEquals(api.playbackReports.first().third.playId, pausedProgress.first().third.playId)
+    assertEquals(1, pausedProgress.mapNotNull { it.first.third.playId }.distinct().size)
+    assertEquals(api.playbackReports.first().third.playId, pausedProgress.first().first.third.playId)
+    val gaps = pausedProgress.zipWithNext { (_, previousAt), (_, at) -> at - previousAt }
+    assertTrue(gaps.all { it in 15_000L..30_000L })
   }
 
   @Test
-  fun `a remote seek during a pause reports at once and waits thirty seconds for the next periodic report`() = runTest {
+  fun `a remote seek during a pause reports at once and waits between fifteen and thirty seconds for the next periodic report`() = runTest {
     val api = FakeApi { testScheduler.currentTime }
     val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
     startRemote(controller)
@@ -1813,10 +1815,10 @@ class PlaybackControllerTest {
     runCurrent()
     assertEquals(afterSeek, api.playbackReports.size)
 
-    advanceTimeBy(19_001)
+    advanceTimeBy(9_001)
     runCurrent()
     assertEquals(afterSeek + 1, api.playbackReports.size)
-    assertTrue(api.playbackReportTimes.last() - seekAt >= 30_000)
+    assertTrue(api.playbackReportTimes.last() - seekAt in 15_000L..30_000L)
     assertEquals("progress", api.playbackReports.last().third.event)
     assertTrue(api.playbackReports.last().third.paused)
     assertEquals(api.playbackReports.first().third.playId, api.playbackReports.last().third.playId)
@@ -1828,7 +1830,7 @@ class PlaybackControllerTest {
     val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
     startRemote(controller)
     runCurrent()
-    advanceTimeBy(20_001)
+    advanceTimeBy(10_001)
     runCurrent()
     assertEquals(1, api.playbackReports.size)
 
@@ -1860,7 +1862,7 @@ class PlaybackControllerTest {
     runCurrent()
     val afterPause = api.playbackReports.size
 
-    advanceTimeBy(20_001)
+    advanceTimeBy(10_001)
     runCurrent()
     assertEquals(afterPause, api.playbackReports.size)
 

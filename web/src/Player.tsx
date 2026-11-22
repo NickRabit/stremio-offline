@@ -233,7 +233,7 @@ const nativeVideoFullscreen = (video: HTMLVideoElement, overlay: HTMLElement | n
 const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f"]);
 const SHORT_END_RESTARTS = 3;
 const SHORT_END_PROGRESS_S = 60;
-const PAUSED_REPORT_TICKS = 3;
+const PAUSED_REPORT_MS = 15_000;
 
 /** Target transcode qualities; the values must match QUALITY_BITRATE on the server. */
 const QUALITIES = [1080, 720, 480];
@@ -392,7 +392,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const attachSeqRef = useRef(0);
   const sessionRef = useRef<string | null>(null);
   const remotePlayIdRef = useRef<string | null>(null);
-  const ticksSinceRemoteReport = useRef(0);
+  const lastRemoteReportAt = useRef(Date.now());
   const modeRef = useRef<PlaybackMode>("transcode");
   const offsetRef = useRef(0);
   const probeDurationRef = useRef(0);
@@ -1158,7 +1158,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
 
   // A media-server original is reported as a playback session: every ten seconds while playing,
-  // every thirty seconds while paused, immediately on a pause change or seek, and stopped on close.
+  // every twenty seconds while paused, immediately on a pause change or seek, and stopped on close.
   useEffect(() => {
     if (!open || !remoteItem) return;
     const playId = newRemotePlayId();
@@ -1173,12 +1173,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const report = (event: "start" | "progress" | "stop") => {
       void api.reportRemotePlayback(remoteItem.libraryId, remoteItem.itemId, body(event)).catch(() => undefined);
     };
-    ticksSinceRemoteReport.current = 0;
+    lastRemoteReportAt.current = Date.now();
     report("start");
     const timer = setInterval(() => {
-      ticksSinceRemoteReport.current += 1;
-      if (pausedRef.current && ticksSinceRemoteReport.current < PAUSED_REPORT_TICKS) return;
-      ticksSinceRemoteReport.current = 0;
+      if (pausedRef.current && Date.now() - lastRemoteReportAt.current < PAUSED_REPORT_MS) return;
+      lastRemoteReportAt.current = Date.now();
       report("progress");
     }, 10_000);
     const leaving = () => api.reportRemotePlaybackOnUnload(remoteItem.libraryId, remoteItem.itemId, body("stop"));
@@ -1200,7 +1199,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (!open || !remoteItem) return;
     const playId = remotePlayIdRef.current;
     if (!playId) return;
-    ticksSinceRemoteReport.current = 0;
+    lastRemoteReportAt.current = Date.now();
     void api.reportRemotePlayback(remoteItem.libraryId, remoteItem.itemId, {
       mediaSourceId: remoteItem.mediaSourceId,
       position: Math.round(reportRef.current.position),
@@ -1214,7 +1213,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (!open || !remoteItem) return;
     const playId = remotePlayIdRef.current;
     if (!playId) return;
-    ticksSinceRemoteReport.current = 0;
+    lastRemoteReportAt.current = Date.now();
     void api.reportRemotePlayback(remoteItem.libraryId, remoteItem.itemId, {
       mediaSourceId: remoteItem.mediaSourceId,
       position: Math.round(reportRef.current.position),

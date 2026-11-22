@@ -597,8 +597,9 @@ describe("Player progress reporting", () => {
     expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ mediaSourceId: "ms1", event: "stop", playId }));
   });
 
-  it("reports an unchanged three-minute pause every thirty seconds", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  it("reports an unchanged three-minute pause every twenty seconds", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
     try {
       await render({ stream: remoteVersion() });
       const start = playbackReports[0]!;
@@ -611,16 +612,20 @@ describe("Player progress reporting", () => {
       await act(async () => { vi.advanceTimersByTime(180_000); });
       await flush();
 
-      const pausedProgress = playbackReports.filter((entry) => entry.event === "progress" && entry.paused === true);
-      expect(pausedProgress.length).toBeLessThanOrEqual(7);
+      const pausedProgress = playbackReports.flatMap((entry, index) =>
+        entry.event === "progress" && entry.paused === true ? [{ entry, at: playbackReportTimes[index]! }] : []);
+      expect(pausedProgress.length).toBeLessThanOrEqual(10);
       expect(pausedProgress.length).toBeGreaterThan(1);
-      expect(new Set(pausedProgress.map((entry) => entry.playId))).toEqual(new Set([start.playId]));
+      expect(new Set(pausedProgress.map(({ entry }) => entry.playId))).toEqual(new Set([start.playId]));
+      const gaps = pausedProgress.slice(1).map(({ at }, index) => at - pausedProgress[index]!.at);
+      expect(gaps.every((gap) => gap >= 15_000)).toBe(true);
+      expect(gaps.every((gap) => gap <= 30_000)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("reports a seek during a pause at once and waits thirty seconds for the next periodic report", async () => {
+  it("reports a seek during a pause at once and waits between fifteen and thirty seconds for the next periodic report", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     vi.setSystemTime(0);
     try {
@@ -647,7 +652,8 @@ describe("Player progress reporting", () => {
       await act(async () => { vi.advanceTimersByTime(19_001); });
       await flush();
       expect(playbackReports).toHaveLength(afterSeek + 1);
-      expect(playbackReportTimes.at(-1)! - seekAt).toBeGreaterThanOrEqual(30_000);
+      expect(playbackReportTimes.at(-1)! - seekAt).toBeGreaterThanOrEqual(15_000);
+      expect(playbackReportTimes.at(-1)! - seekAt).toBeLessThanOrEqual(30_000);
       expect(playbackReports.at(-1)).toEqual(expect.objectContaining({
         event: "progress", paused: true, position: 321, playId: start.playId,
       }));
@@ -657,11 +663,12 @@ describe("Player progress reporting", () => {
   });
 
   it("reports a resume immediately and returns to the ten-second playing cadence", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
     try {
       await render({ stream: remoteVersion() });
       const start = playbackReports[0]!;
-      await act(async () => { vi.advanceTimersByTime(20_001); });
+      await act(async () => { vi.advanceTimersByTime(10_001); });
       await flush();
       expect(playbackReports).toHaveLength(1);
 
@@ -685,7 +692,8 @@ describe("Player progress reporting", () => {
   });
 
   it("keeps an unchanged pause quiet until close stops the same play id", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
     try {
       await render({ stream: remoteVersion() });
       const start = playbackReports[0]!;
@@ -695,12 +703,39 @@ describe("Player progress reporting", () => {
       await act(async () => { video.dispatchEvent(new Event("pause", { bubbles: true })); });
       await flush();
       const afterPause = playbackReports.length;
-      await act(async () => { vi.advanceTimersByTime(20_001); });
+      await act(async () => { vi.advanceTimersByTime(10_001); });
       await flush();
       expect(playbackReports).toHaveLength(afterPause);
 
       await rerender({ stream: remoteVersion(), open: false });
       expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ event: "stop", playId: start.playId }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a paused tick immediately after intensive throttling delays the interval", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
+    try {
+      await render({ stream: remoteVersion() });
+      const start = playbackReports[0]!;
+      const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+      await act(async () => { video.dispatchEvent(new Event("play", { bubbles: true })); });
+      await flush();
+      await act(async () => { video.dispatchEvent(new Event("pause", { bubbles: true })); });
+      await flush();
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      await flush();
+
+      vi.setSystemTime(50_000);
+      await act(async () => { vi.advanceTimersToNextTimer(); });
+      await flush();
+
+      expect(playbackReports.at(-1)).toEqual(expect.objectContaining({
+        event: "progress", paused: true, playId: start.playId,
+      }));
+      expect(playbackReportTimes.at(-1)).toBe(60_000);
     } finally {
       vi.useRealTimers();
     }
