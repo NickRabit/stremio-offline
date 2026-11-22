@@ -789,6 +789,24 @@ describe("Player stall advice", () => {
     await stallAt(12);
     expect(hint()).not.toBeNull();
   });
+  it("asks the server again when the session was described before its FFmpeg probe finished", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: false };
+    playbackStatusAnswer = { generation: 1, conversion: "running", acceleration: true };
+    await render();
+    await stallAt(12);
+    await flush();
+    expect(playbackStatusRequests.length).toBeGreaterThan(0);
+    expect(hint()).not.toBeNull();
+  });
+
+  it("still holds the advice back when the server has no acceleration", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: false };
+    playbackStatusAnswer = { generation: 1, conversion: "running", acceleration: false };
+    await render();
+    await stallAt(12);
+    await flush();
+    expect(hint()).toBeNull();
+  });
 });
 
 describe("Player refused direct stream", () => {

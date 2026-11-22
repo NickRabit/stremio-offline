@@ -1130,9 +1130,18 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       ...context(), stalls: stallsRef.current.length, quality: session?.quality ?? null,
       hardware: session?.hardware, acceleration: session?.acceleration,
     });
-    if (!session?.acceleration) return;
-    const target = lowerQuality(session?.quality ?? null);
-    if (target !== null) setQualityHint(target);
+    const offerLower = () => {
+      const target = lowerQuality(session?.quality ?? null);
+      if (target !== null) setQualityHint(target);
+    };
+    if (session?.acceleration) { offerLower(); return; }
+    // A session that began while the server was still probing FFmpeg was told "no acceleration";
+    // ask again before deciding the advice would hurt.
+    const id = sessionRef.current;
+    if (!id) return;
+    void api.playbackStatus(id).then((status) => {
+      if (status.acceleration && sessionRef.current === id && openRef.current) offerLower();
+    }).catch(() => undefined);
   };
 
   /** Steps small enough to land on the line, large enough to get there quickly. */
