@@ -1238,6 +1238,8 @@ test("a start canceled while the source is being inspected creates no session", 
 
 test("a start canceled while the conversion opens leaves no session, converter or sidecar", async () => {
   const manager = new PlaybackManager(tmp("test-cancel-start-open")) as any;
+  // The timing below is about the conversion, not the FFmpeg capability probe.
+  manager.probeCapabilities = async () => undefined;
   manager.inspect = async () => ({
     container: "matroska,webm", duration: 3600,
     video: { codec: "hevc" }, audio: { codec: "aac" },

@@ -549,6 +549,8 @@ export class PlaybackManager {
         reason: error instanceof Error ? error.message : String(error),
       });
     }
+    // The packaged-app smoke waits for this line before it stops the backend.
+    log("INFO", "FFmpeg capabilities probed", { state: this.capabilityState, version: this.ffmpegVersion ?? null });
   }
 
   private async readCapabilities() {
