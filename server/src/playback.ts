@@ -806,7 +806,7 @@ export class PlaybackManager {
       reason = direct.reason;
       if (direct.ok) {
         signal?.throwIfAborted();
-        if (subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+        if (subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session, options.startTime ?? 0);
         log("INFO", "Direct play from source", { id, reason: direct.reason, ...summary });
         return this.describe(session, source);
       }
@@ -878,7 +878,7 @@ export class PlaybackManager {
         // the new codec are still among those the client declared.
         if (session.mode === "direct" && native(session.capabilities) && changes.quality === undefined
           && (changes.audio !== undefined || changes.subtitle !== undefined) && this.directAllowed(session).ok) {
-          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session, changes.time ?? 0);
           else await this.sidecars.stop(id);
           log("INFO", "Direct play track switched", { id, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
           return this.describe(session, this.proxyPath(session.stream));
@@ -887,7 +887,9 @@ export class PlaybackManager {
         // for them would interrupt the picture and ask the source for another connection --
         // which is the one thing these hosts tend to refuse.
         if (changes.subtitle !== undefined && changes.audio === undefined && changes.quality === undefined) {
-          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) {
+            this.extractSidecar(session, session.mode === "direct" ? changes.time ?? 0 : session.offset);
+          }
           else await this.sidecars.stop(id);
           log("INFO", "Subtitle track switched", { id, subtitleTrack: session.subtitleTrack, offset: Math.round(session.offset) });
           return this.describe(session, this.currentUrl(session));
@@ -896,7 +898,7 @@ export class PlaybackManager {
         if (this.directAllowed(session).ok) {
           session.pendingKill = this.kill(session);
           session.mode = "direct"; session.offset = 0;
-          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session, changes.time ?? 0);
           else await this.sidecars.stop(id);
           log("INFO", "Back to direct play", { id });
           return this.describe(session, this.proxyPath(session.stream));
@@ -1337,10 +1339,10 @@ export class PlaybackManager {
     return codec !== undefined && (session.capabilities.subtitles?.includes(codec) ?? false);
   }
 
-  private extractSidecar(session: Session) {
+  private extractSidecar(session: Session, start = session.offset) {
     const index = session.subtitleTrack;
     if (index === null) return;
-    this.sidecars.ensure(session.id, path.join(this.root, session.id), index, session.offset, this.sidecarArgs(session, index));
+    this.sidecars.ensure(session.id, path.join(this.root, session.id), index, Math.max(0, start), this.sidecarArgs(session, index));
   }
 
   private sidecarArgs(session: Session, index: number) {

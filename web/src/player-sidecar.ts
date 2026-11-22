@@ -30,9 +30,11 @@ export async function watchSidecar(
   onState: (state: SidecarState) => void,
   fetcher: typeof fetch = (input, init) => fetch(input, init),
   delay: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  onUnavailable?: () => void,
 ): Promise<void> {
   let pass = -1;
   let attached = -Infinity;
+  let unavailable = 0;
   while (!signal.aborted) {
     const request = requestSignal(signal, SIDECAR_REQUEST_MS);
     const requestedAt = Math.max(0, playhead());
@@ -43,6 +45,7 @@ export async function watchSidecar(
     // The element fetches the track itself; this copy of the body is dead weight.
     if (response) void response.body?.cancel().catch(() => undefined);
     if (response?.ok) {
+      unavailable = 0;
       const complete = response.headers.get("x-sidecar-complete") === "1";
       const coverage = complete ? Infinity : Number(response.headers.get("x-sidecar-coverage") ?? "");
       const position = Math.max(0, playhead());
@@ -55,6 +58,9 @@ export async function watchSidecar(
         onState({ complete, pass, coverage });
       }
       if (complete) return;
+    } else {
+      unavailable += 1;
+      if (unavailable === 3) onUnavailable?.();
     }
     const needsCloseWatch = pass < 0 || attached < Math.max(0, playhead()) + SIDECAR_REFRESH_LEAD_S;
     await delay(needsCloseWatch ? SIDECAR_POLL_MS : SIDECAR_SETTLED_POLL_MS);

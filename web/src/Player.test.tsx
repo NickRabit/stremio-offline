@@ -97,7 +97,9 @@ let sidecarPolls: string[];
 let sidecarCoverage: number;
 let heldSidecarSeek: Promise<void> | null;
 let heldSidecarPoll: Promise<void> | null;
+let sidecarSeekFailures: number;
 let trackRequests: Array<Record<string, unknown>>;
+let heldTrack: Promise<void> | null;
 let pingRequests: string[];
 let pingBodies: unknown[];
 let pingStatus: number;
@@ -153,7 +155,9 @@ beforeEach(() => {
   sidecarCoverage = 700;
   heldSidecarSeek = null;
   heldSidecarPoll = null;
+  sidecarSeekFailures = 0;
   trackRequests = [];
+  heldTrack = null;
   pingRequests = [];
   pingBodies = [];
   pingStatus = 204;
@@ -199,6 +203,10 @@ beforeEach(() => {
     if (/^\/api\/playback\/[^/]+\/sidecar\/seek$/.test(path) && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as { position: number; seekId: number };
       sidecarSeekRequests.push({ path, ...body });
+      if (sidecarSeekFailures > 0) {
+        sidecarSeekFailures -= 1;
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
       return (heldSidecarSeek ?? Promise.resolve()).then(() => json({
         sidecarUrl: `/api/playback/sess1/sidecar.vtt?revision=new-${body.seekId}&offset=0.000`,
         seekId: body.seekId,
@@ -214,7 +222,7 @@ beforeEach(() => {
     if (/^\/api\/playback\/[^/]+\/track$/.test(path) && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       trackRequests.push(body);
-      return Promise.resolve(json({
+      return (heldTrack ?? Promise.resolve()).then(() => json({
         ...session(),
         subtitleTrack: body.subtitle,
         sidecarUrl: "/api/playback/sess1/sidecar.vtt?revision=track-new&offset=0.000",
@@ -293,13 +301,17 @@ const waitUntil = async (condition: () => boolean) => {
   for (let pass = 0; pass < 80 && !condition(); pass += 1) await flush();
   expect(condition()).toBe(true);
 };
-const seekByArrow = async (from: number) => {
+const pressArrow = async (from: number) => {
   const video = host.querySelector<HTMLVideoElement>("video")!;
   await act(async () => {
     video.currentTime = from;
     video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
   });
+};
+const seekByArrow = async (from: number) => {
+  await pressArrow(from);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 650)); });
   await settle();
 };
 const sidecarSession = (over: Record<string, unknown> = {}) => ({
@@ -390,6 +402,135 @@ describe("Player sidecar seeks", () => {
     await act(async () => { release(); });
     await settle();
     expect(host.querySelector("track")?.getAttribute("src")).toContain("revision=track-new");
+  });
+
+  it("applies every field of a subtitle track answer before adopting its sidecar", async () => {
+    sessionShape = sidecarSession({
+      subtitleTrack: 1,
+      subtitleTracks: [
+        { index: 0, language: "en", codec: "subrip" },
+        { index: 1, language: "cs", codec: "subrip" },
+      ],
+    });
+    await render();
+    await waitUntil(() => sidecarPolls.length > 0);
+    await openSettings();
+    const select = [...host.querySelectorAll<HTMLSelectElement>("select")]
+      .find((node) => [...node.options].some((option) => option.value === "embedded:0"))!;
+    await act(async () => {
+      select.value = "embedded:0";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await waitUntil(() => trackRequests.length === 1);
+    await settle();
+    const after = [...host.querySelectorAll<HTMLSelectElement>("select")]
+      .find((node) => [...node.options].some((option) => option.value === "embedded:0"))!;
+    expect(after.value).toBe("embedded:0");
+  });
+
+  it("turning embedded subtitles on makes the next local seek reposition their reader", async () => {
+    sessionShape = {
+      subtitleTrack: null,
+      subtitleTracks: [{ index: 0, language: "en", codec: "subrip" }],
+    };
+    await render();
+    await settle();
+    await openSettings();
+    const select = [...host.querySelectorAll<HTMLSelectElement>("select")]
+      .find((node) => [...node.options].some((option) => option.value === "embedded:0"))!;
+    await act(async () => {
+      select.value = "embedded:0";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await waitUntil(() => trackRequests.length === 1);
+    await waitUntil(() => sidecarPolls.length > 0);
+
+    await seekByArrow(989);
+
+    expect(sidecarSeekRequests).toHaveLength(1);
+  });
+
+  it("keeps a track answer while a later direct seek owns the sidecar revision", async () => {
+    let release!: () => void;
+    heldTrack = new Promise<void>((resolve) => { release = resolve; });
+    sessionShape = sidecarSession({
+      subtitleTrack: 1,
+      subtitleTracks: [
+        { index: 0, language: "en", codec: "subrip" },
+        { index: 1, language: "cs", codec: "subrip" },
+      ],
+    });
+    await render();
+    await waitUntil(() => sidecarPolls.length > 0);
+    await openSettings();
+    const select = [...host.querySelectorAll<HTMLSelectElement>("select")]
+      .find((node) => [...node.options].some((option) => option.value === "embedded:0"))!;
+    await act(async () => {
+      select.value = "embedded:0";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(trackRequests).toHaveLength(1);
+
+    await seekByArrow(989);
+    await waitUntil(() => host.querySelector("track")?.getAttribute("src")?.includes("revision=new-1") ?? false);
+    await act(async () => { release(); });
+    await settle();
+
+    const after = [...host.querySelectorAll<HTMLSelectElement>("select")]
+      .find((node) => [...node.options].some((option) => option.value === "embedded:0"))!;
+    expect(after.value).toBe("embedded:0");
+    expect(host.querySelector("track")?.getAttribute("src")).toContain("revision=new-1");
+  });
+
+  it("retries a failed sidecar seek with the same id instead of polling the retired revision", async () => {
+    sidecarSeekFailures = 1;
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => sidecarPolls.length > 0);
+    const before = sidecarPolls.length;
+
+    await seekByArrow(989);
+    expect(sidecarSeekRequests).toHaveLength(1);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_050)); });
+    await settle();
+
+    expect(sidecarSeekRequests).toEqual([
+      { path: "/api/playback/sess1/sidecar/seek", position: 999, seekId: 1 },
+      { path: "/api/playback/sess1/sidecar/seek", position: 999, seekId: 1 },
+    ]);
+    expect(sidecarPolls.slice(before).some((value) => value.includes("revision=old"))).toBe(false);
+    await waitUntil(() => host.querySelector("track")?.getAttribute("src")?.includes("revision=new-1") ?? false);
+  });
+
+  it("keeps a lost replacement hidden after the retries are exhausted", async () => {
+    sidecarSeekFailures = 3;
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => sidecarPolls.length > 0);
+    const before = sidecarPolls.length;
+
+    await seekByArrow(989);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 3_100)); });
+    await settle();
+
+    expect(sidecarSeekRequests).toHaveLength(3);
+    expect(new Set(sidecarSeekRequests.map(({ seekId }) => seekId)).size).toBe(1);
+    expect(sidecarPolls.slice(before).some((value) => value.includes("revision=old"))).toBe(false);
+    expect(host.querySelector("track")).toBeNull();
+  });
+
+  it("debounces rapid local seeks and sends only the last target", async () => {
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => sidecarPolls.length > 0);
+
+    await pressArrow(989);
+    await pressArrow(999);
+    await pressArrow(1_009);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 650)); });
+    await settle();
+
+    expect(sidecarSeekRequests.map(({ position }) => position)).toEqual([1_019]);
   });
 });
 

@@ -82,6 +82,28 @@ describe("watchSidecar", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("asks for a fresh revision after three missing responses in a row", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    let unavailable = 0;
+    const fetcher = vi.fn().mockImplementation(() => {
+      calls += 1;
+      if (calls === 6) controller.abort();
+      return Promise.resolve(answer(false));
+    });
+    await watchSidecar(
+      "/sidecar.vtt",
+      controller.signal,
+      () => 0,
+      () => {},
+      fetcher,
+      noDelay,
+      () => { unavailable += 1; },
+    );
+    expect(calls).toBe(6);
+    expect(unavailable).toBe(1);
+  });
+
   it("times out a single request without AbortSignal.any, which older Safari lacks", async () => {
     vi.useFakeTimers();
     try {

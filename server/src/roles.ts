@@ -249,6 +249,7 @@ export const CHILD_ALLOWED: Rule[] = rulesFor([
   ["POST", "/playback"],
   ["GET", "/playback/abc/status"],
   ["POST", "/playback/abc/ping"],
+  ["POST", "/playback/abc/sidecar/seek"],
   ["GET", "/playback/abc/preview"],
   ["GET", "/playback/abc/sidecar.vtt"],
   ["GET", "/playback/abc/1/master.m3u8"],

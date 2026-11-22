@@ -83,6 +83,7 @@ class PlaybackControllerTest {
     var seekAnswer: PlaybackDescriptorDto? = null
     var sidecarSeekAnswer: SidecarSeekDto? = null
     var sidecarSeekGate: CompletableDeferred<Unit>? = null
+    var sidecarSeekFailures = 0
     var seekGate: CompletableDeferred<Unit>? = null
     var trackFailure: Throwable? = null
     var seekDelayMs = 0L
@@ -133,6 +134,10 @@ class PlaybackControllerTest {
 
     override suspend fun seekSidecar(id: String, position: Double, seekId: Long): SidecarSeekDto {
       sidecarSeeks += Triple(id, position, seekId)
+      if (sidecarSeekFailures > 0) {
+        sidecarSeekFailures -= 1
+        throw IllegalStateException("sidecar answer lost")
+      }
       sidecarSeekGate?.await()
       return sidecarSeekAnswer ?: SidecarSeekDto(sidecarUrl = "sidecar-$seekId.vtt", seekId = seekId)
     }
@@ -520,6 +525,117 @@ class PlaybackControllerTest {
 
     assertEquals(1, api.tracks.size)
     assertEquals("sidecar-track.vtt", controller.state.value.sidecarUrl)
+  }
+
+  @Test
+  fun `a direct sidecar seek does not drop an in-flight quality change`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 0, sidecarUrl = "sidecar-old.vtt",
+      subtitleTracks = trackList("""[{"index":0,"language":"en","codec":"mov_text"}]"""),
+    )
+    api.trackAnswer = api.descriptor.copy(
+      mode = "transcode", url = "quality.m3u8", offset = 100.0, playlist = true,
+      quality = 720, sidecarUrl = "sidecar-quality.vtt",
+    )
+    api.trackDelayMs = 2_000
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onSidecarCoverage(100.0, complete = false)
+
+    controller.selectQuality(720)
+    runCurrent()
+    controller.seekTo(300.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    advanceTimeBy(3_000)
+    runCurrent()
+
+    assertEquals(1, api.tracks.size)
+    assertEquals("quality.m3u8", controller.state.value.url)
+  }
+
+  @Test
+  fun `a lost sidecar answer is retried with the same id and keeps polling held`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 0, sidecarUrl = "sidecar-old.vtt",
+      subtitleTracks = trackList("""[{"index":0,"language":"en","codec":"mov_text"}]"""),
+    )
+    api.sidecarSeekFailures = 2
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onSidecarCoverage(100.0, complete = false)
+
+    controller.seekTo(200.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    assertTrue(controller.state.value.sidecarPending)
+    advanceTimeBy(1_001)
+    runCurrent()
+    advanceTimeBy(2_001)
+    runCurrent()
+
+    assertEquals(listOf(1L, 1L, 1L), api.sidecarSeeks.map { it.third })
+    assertEquals(listOf(200.0, 200.0, 200.0), api.sidecarSeeks.map { it.second })
+    assertEquals("sidecar-1.vtt", controller.state.value.sidecarUrl)
+    assertEquals(false, controller.state.value.sidecarPending)
+  }
+
+  @Test
+  fun `a sidecar seek that stays unanswered leaves the old revision hidden`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 0, sidecarUrl = "sidecar-old.vtt",
+      subtitleTracks = trackList("""[{"index":0,"language":"en","codec":"mov_text"}]"""),
+    )
+    api.sidecarSeekFailures = 3
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onSidecarCoverage(100.0, complete = false)
+
+    controller.seekTo(200.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    advanceTimeBy(3_002)
+    runCurrent()
+
+    assertEquals(3, api.sidecarSeeks.size)
+    assertEquals(1, api.sidecarSeeks.map { it.third }.distinct().size)
+    assertEquals("sidecar-old.vtt", controller.state.value.sidecarUrl)
+    assertTrue(controller.state.value.sidecarPending)
+  }
+
+  @Test
+  fun `a failed track change clears the timeline target left by a direct seek`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 1, sidecarUrl = "sidecar-old.vtt",
+      subtitleTracks = trackList(
+        """[{"index":0,"language":"en","codec":"mov_text"},
+            {"index":1,"language":"cs","codec":"mov_text"}]""",
+      ),
+    )
+    api.trackFailure = IllegalStateException("track failed")
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerPosition(20.0)
+
+    controller.seekTo(50.0)
+    controller.onPlayerPosition(20.0)
+    controller.selectSubtitle(SubtitleChoice.Embedded(0))
+    runCurrent()
+
+    assertEquals(20.0, controller.shownPosition, 0.001)
+    assertEquals(20.0, controller.position, 0.001)
   }
 
   @Test

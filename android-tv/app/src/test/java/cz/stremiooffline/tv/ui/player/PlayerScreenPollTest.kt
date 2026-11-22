@@ -75,6 +75,26 @@ class PlayerScreenPollTest {
   }
 
   @Test
+  fun `three missing sidecar responses ask for a fresh reader revision`() {
+    val api = FakeTvApi().apply {
+      startAnswer = PlaybackDescriptorDto(
+        id = "p1", mode = "transcode", url = "/transcode.m3u8", playlist = true, offset = 0.0, duration = 3_000.0,
+        subtitleTracks = tracks("""{"index":0,"language":"en","codec":"subrip"}"""),
+        subtitleTrack = 0,
+        sidecarUrl = "/api/playback/p1/sidecar.vtt?revision=retired&offset=0.000",
+      )
+      sidecarValue = null
+    }
+    mount(api, PlayTarget(key = "series:tt1:1:1", title = "It", resume = false, sourceId = "src1"))
+
+    compose.waitUntil(5_000) { api.sidecarRequests.size >= 3 }
+    compose.waitUntil(5_000) { api.sidecarSeeks.isNotEmpty() }
+
+    assertEquals("p1", api.sidecarSeeks.first().first)
+    assertTrue(api.sidecarSeeks.first().third > 0)
+  }
+
+  @Test
   fun `an addon subtitle is read again when the app comes back with the new session`() {
     val api = FakeTvApi().apply {
       startAnswer = PlaybackDescriptorDto(id = "p1", url = "/stream.mp4", duration = 3_000.0)

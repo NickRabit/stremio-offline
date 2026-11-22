@@ -160,6 +160,7 @@ data class PlaybackState(
   val subtitle: SubtitleChoice = SubtitleChoice.Off,
   val sidecarUrl: String? = null,
   val sidecarRevision: Int = 0,
+  val sidecarPending: Boolean = false,
   val addonSubtitles: List<AddonSubtitleDto> = emptyList(),
   /** The id each addon subtitle must be fetched with, `map[id] ?: id`. */
   val subtitleIds: Map<String, String> = emptyMap(),
@@ -216,6 +217,7 @@ class PlaybackController(
   private var sidecarStart = Double.NEGATIVE_INFINITY
   private var sidecarCoverage = Double.NEGATIVE_INFINITY
   private var sidecarSeekSequence = 0L
+  private var sidecarResponseSequence = 0L
 
   private var key = ""
   private var title = ""
@@ -286,6 +288,7 @@ class PlaybackController(
   private var saveJob: Job? = null
   private var reportJob: Job? = null
   private var seekJob: Job? = null
+  private var sidecarRecoveryJob: Job? = null
   private var trackJob: Job? = null
   private var pendingSeek: Double? = null
   private var shownSeekTarget: Double? = null
@@ -739,16 +742,11 @@ class PlaybackController(
         shownSeekTarget = null
         if (!sidecarNeedsMove(target)) return@launch
         val id = sessionId ?: return@launch
-        val stamp = ++sequence
+        val stamp = ++sidecarResponseSequence
         val seekId = ++sidecarSeekSequence
-        val answer = runCatching { api.seekSidecar(id, target, seekId) }.getOrElse { error ->
-          if (error is CancellationException) throw error
-          if (mine == generation && stamp == sequence && token == shownSeekToken) {
-            AppLog.warn("Sidecar seek failed", mapOf("error" to (error.message ?: error.javaClass.simpleName)))
-          }
-          return@launch
-        }
-        if (stopped || mine != generation || stamp != sequence || token != shownSeekToken) return@launch
+        markSidecarPending()
+        val answer = sidecarAnswer(id, target, seekId, mine, stamp, token) ?: return@launch
+        if (stopped || mine != generation || stamp != sidecarResponseSequence || token != shownSeekToken) return@launch
         if (answer.seekId < seekId) return@launch
         applySidecar(id, target, answer.sidecarUrl)
       }
@@ -901,7 +899,10 @@ class PlaybackController(
     // change in that window must carry it, or the server restarts at the stale position.
     val change = request.withTime(pendingSeek ?: position)
     seekJob?.cancel()
+    sidecarRecoveryJob?.cancel()
+    sidecarResponseSequence += 1
     pendingSeek = null
+    shownSeekTarget = null
     val before = change.time
     trackJob?.cancel()
     trackJob = scope.launch {
@@ -914,7 +915,14 @@ class PlaybackController(
               "change" to request.wire,
               "error" to (error.message ?: error.javaClass.simpleName),
             ))
-            _state.update { it.copy(trackKept = it.trackKept + 1) }
+            _state.update {
+              val resume = it.sidecarPending
+              it.copy(
+                trackKept = it.trackKept + 1,
+                sidecarPending = false,
+                sidecarRevision = it.sidecarRevision + if (resume) 1 else 0,
+              )
+            }
           }
         }
         return@launch
@@ -1109,6 +1117,7 @@ class PlaybackController(
     saveJob?.cancel(); saveJob = null
     reportJob?.cancel(); reportJob = null
     seekJob?.cancel(); seekJob = null
+    sidecarRecoveryJob?.cancel(); sidecarRecoveryJob = null
     trackJob?.cancel(); trackJob = null
     pendingSeek = null
     shownSeekTarget = null
@@ -1220,7 +1229,8 @@ class PlaybackController(
         subtitleTracks = subtitleTracks,
         subtitle = shown,
         sidecarUrl = descriptor.sidecarUrl,
-        sidecarRevision = it.sidecarRevision + if (descriptor.sidecarUrl != previousSidecar) 1 else 0,
+        sidecarRevision = it.sidecarRevision + if (descriptor.sidecarUrl != previousSidecar || it.sidecarPending) 1 else 0,
+        sidecarPending = false,
         addonSubtitles = addons,
         subtitleIds = descriptor.subtitleIds.ifEmpty { it.subtitleIds },
         videoCodec = descriptor.video,
@@ -1240,6 +1250,53 @@ class PlaybackController(
     sidecarCoverage = if (complete) Double.POSITIVE_INFINITY else coverage
   }
 
+  fun onSidecarUnavailable() {
+    if (stopped || sessionId == null || _state.value.sidecarPending) return
+    val id = sessionId ?: return
+    val target = position
+    val mine = generation
+    val stamp = ++sidecarResponseSequence
+    val seekId = ++sidecarSeekSequence
+    markSidecarPending()
+    sidecarRecoveryJob?.cancel()
+    sidecarRecoveryJob = scope.launch {
+      val answer = sidecarAnswer(id, target, seekId, mine, stamp, null) ?: return@launch
+      if (stopped || mine != generation || stamp != sidecarResponseSequence || answer.seekId < seekId) return@launch
+      applySidecar(id, target, answer.sidecarUrl)
+    }
+  }
+
+  private fun markSidecarPending() {
+    if (_state.value.sidecarPending) return
+    _state.update { it.copy(sidecarPending = true, sidecarRevision = it.sidecarRevision + 1) }
+  }
+
+  private suspend fun sidecarAnswer(
+    id: String,
+    target: Double,
+    seekId: Long,
+    mine: Int,
+    stamp: Long,
+    token: Long?,
+  ): SidecarSeekDto? {
+    var last: Throwable? = null
+    repeat(SIDECAR_SEEK_RETRY_MS.size + 1) { attempt ->
+      if (stopped || mine != generation || stamp != sidecarResponseSequence || (token != null && token != shownSeekToken)) return null
+      try {
+        return api.seekSidecar(id, target, seekId)
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: Throwable) {
+        last = error
+      }
+      SIDECAR_SEEK_RETRY_MS.getOrNull(attempt)?.let { delay(it) }
+    }
+    if (mine == generation && stamp == sidecarResponseSequence) {
+      AppLog.warn("Sidecar seek failed", mapOf("error" to (last?.message ?: last?.javaClass?.simpleName ?: "")))
+    }
+    return null
+  }
+
   private fun sidecarNeedsMove(target: Double): Boolean {
     val snapshot = _state.value
     if (snapshot.sidecarUrl == null || snapshot.subtitle !is SubtitleChoice.Embedded) return false
@@ -1253,7 +1310,7 @@ class PlaybackController(
       sidecarStart = if (url == null) Double.NEGATIVE_INFINITY else target
       sidecarCoverage = Double.NEGATIVE_INFINITY
     }
-    _state.update { it.copy(sidecarUrl = url, sidecarRevision = it.sidecarRevision + 1) }
+    _state.update { it.copy(sidecarUrl = url, sidecarPending = false, sidecarRevision = it.sidecarRevision + 1) }
   }
 
   /** The addon fills only a gap the file left, by the viewer's own choice when the session carries
@@ -1314,6 +1371,7 @@ class PlaybackController(
     /** Two 10 s ticks leave room for one lost paused report before the 60 s idle expiry. */
     const val PAUSED_REPORT_TICKS = 2
     const val SEEK_DEBOUNCE_MS = 600L
+    private val SIDECAR_SEEK_RETRY_MS = longArrayOf(1_000L, 2_000L)
     /** The server refuses a start with more than a hundred subtitle ids. */
     const val MAX_SUBTITLE_IDS = 100
   }

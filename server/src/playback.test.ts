@@ -2974,8 +2974,41 @@ test("an explicit sidecar seek reuses coverage and an older seek id leaves the n
     while (starts.length < 2) await pause(5);
     assert.deepEqual(starts, [0, 900]);
     assert.equal(await manager.sidecar(session.id, first, 0), undefined, "the replaced revision is retired");
+
+    await manager.track(session.id, { subtitle: 2, time: 900 });
+    assert.deepEqual(starts, [0, 900], "a direct-mode track change keeps the reader at the player's position");
   } finally {
     await manager.sidecars.stop(session.id);
+  }
+});
+
+test("a direct play started from a resume point starts its subtitle reader there", async () => {
+  const manager = new PlaybackManager(tmp("test-direct-sidecar-start")) as any;
+  manager.inspect = async () => ({
+    container: "mov,mp4,m4a,3gp,3g2,mj2", duration: 3_600,
+    video: { codec: "h264" }, audio: { codec: "aac" },
+    audioTracks: [{ index: 0, codec: "aac" }],
+    subtitleTracks: [{ index: 2, codec: "subrip", language: "en" }],
+  });
+  const starts: number[] = [];
+  manager.sidecars.run = async (args: string[], file: string, _append: boolean, signal: AbortSignal) => {
+    const at = args.indexOf("-ss");
+    starts.push(at < 0 ? 0 : Number(args[at + 1]));
+    await writeFile(file, "WEBVTT\n\n00:05:10.000 --> 00:05:15.000\nresumed\n\n");
+    await whenAborted(signal);
+  };
+  let started: any;
+  try {
+    started = await manager.start(
+      { url: "https://cdn.example/resume.mp4" },
+      playCaps,
+      { startTime: 300, subtitleLanguage: "en" },
+    );
+    while (!starts.length) await pause(5);
+    assert.equal(started.mode, "direct");
+    assert.deepEqual(starts, [300]);
+  } finally {
+    if (started) await manager.sidecars.stop(started.id);
   }
 });
 const revisionOf = (url?: string) => /revision=([0-9a-f-]+)/.exec(url ?? "")?.[1];
