@@ -212,3 +212,17 @@ test("counts stay right across midnight and after the clock is set back", async 
     assert.equal(stats.summary(2, at).library.memory, 4, "the hour before holds the first and the one after the clock went back");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test("a bucket list replaced after the hour was remembered receives the next count", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "image-stats-swap-"));
+  try {
+    const now = Date.UTC(2026, 10, 22, 10, 15);
+    const stats = new ImageStats(path.join(dir, "image-stats.json"), () => now);
+    stats.record("home", "upstream");
+    const holder = stats as unknown as { buckets: Array<{ at: string }> };
+    // As a load does: a new list with new objects for the same hour.
+    holder.buckets = holder.buckets.map((bucket) => structuredClone(bucket));
+    stats.record("home", "upstream");
+    assert.equal(stats.summary(1, now).home.upstream, 2);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
