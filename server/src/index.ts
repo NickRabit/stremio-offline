@@ -86,8 +86,7 @@ import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { LibrarySeenStore } from "./library-seen.js";
 import { carryMovePairs, LibraryFingerprints } from "./library-fingerprints.js";
-import { localCopies } from "./local-sources.js";
-import { localCopyRecords } from "./local-copy-index.js";
+import { localCopies, localTitleIds } from "./local-sources.js";
 import {
   findAdequateExistingLocalCopy,
   sidecarLanguage,
@@ -1569,16 +1568,15 @@ registerCatalogRoutes(app, {
   localCopies: async (type, id, viewer) => {
     const visible = visibleLibraries(store.libraries(), viewer);
     const [files, units] = await Promise.all([libraryFiles({ stale: true }), libraryUnits({ stale: true })]);
-    const apiKey = store.settings().tmdbApiKey;
-    const lookup = await localCopyRecords(
-      metaStore.qualifiedMeta(), type, id, apiKey ? { apiKey, language: "en" } : undefined,
-      (key) => {
+    const records = Object.fromEntries(Object.entries(metaStore.qualifiedMeta())
+      .filter(([key]) => {
         const parsed = parseLibraryPath(key);
         const library = parsed ? libraryFor(visible, parsed.libraryId) : undefined;
         return Boolean(parsed && library && !nestedHidden(library, parsed.relative, viewer));
-      },
-    );
-    const copies = localCopies({ type, id, titleIds: lookup.titleIds, files, units, records: lookup.records, libraries: visible });
+      }));
+    const apiKey = store.settings().tmdbApiKey;
+    const titleIds = await localTitleIds(type, id, records, apiKey ? { apiKey, language: "en" } : undefined);
+    const copies = localCopies({ type, id, titleIds, files, units, records, libraries: visible });
     const names = new Map(visible.map((library) => [library.id, library.name]));
     return copies.map((copy) => ({
       key: copy.key, libraryId: copy.libraryId, libraryName: names.get(copy.libraryId) ?? "",
@@ -2066,7 +2064,8 @@ const scheduleMetaBackfill = (type: string, id: string, language: string) => {
   const tried = metaBackfillTried.get(key);
   if (!id || playbackBusy()) return false;
   if (tried != null && Date.now() - tried < BACKFILL_RETRY_MS) return false;
-  if (metaBackfill.has(key)) return false;
+  // Still queued: the row keeps saying a backfill is coming, so the page keeps asking.
+  if (metaBackfill.has(key)) return true;
   metaBackfill.run(key, async () => {
     if (playbackBusy()) return;
     const meta = await cachedMeta(type, id, language);
@@ -2089,7 +2088,7 @@ const scheduleMetaBackfill = (type: string, id: string, language: string) => {
       if (fileBound) Object.assign(episodes, episodeRows);
       bound ||= fileBound;
       return fileBound;
-    });
+    }, { reportsChange: true });
     if (bound) invalidateLibraryMeta();
   });
   return true;

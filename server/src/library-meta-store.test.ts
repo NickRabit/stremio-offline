@@ -296,14 +296,14 @@ test("updateAll trusts the mutator instead of serializing unchanged libraries", 
     await store.flush();
     serialized = 0;
 
-    await store.updateAll(() => false);
+    await store.updateAll(() => false, { reportsChange: true });
     assert.equal(serialized, 0, "an unchanged library is not serialized");
 
     serialized = 0;
     await store.updateAll((file) => {
       file.meta["Saved.mkv"] = record("tt2");
       return true;
-    });
+    }, { reportsChange: true });
     assert.equal(serialized, 0, "a signaled change is not serialized");
     await store.flush();
     assert.equal(store.meta(lib)["Saved.mkv"]?.id, "tt2");
