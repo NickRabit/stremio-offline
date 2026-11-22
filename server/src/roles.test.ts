@@ -142,6 +142,7 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/playback/abc/status"],
   ["POST", "/playback/abc/ping"],
   ["POST", "/playback/abc/seek"],
+  ["POST", "/playback/abc/sidecar/seek"],
   ["POST", "/playback/abc/escalate"],
   ["POST", "/playback/abc/track"],
   ["GET", "/playback/abc/preview"],
@@ -387,6 +388,7 @@ const CHILD_REFUSED: Array<[string, string]> = [
   ["POST", "/auth/pair/inspect"],
   ["POST", "/auth/pair/approve"],
   ["POST", "/auth/pair/deny"],
+  ["POST", "/playback/abc/sidecar/seek"],
 ];
 
 const invoke = (method: string, path: string, opts?: {

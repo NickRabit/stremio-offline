@@ -104,7 +104,7 @@ export const ALLOWED_MUTATIONS: Rule[] = [
   { method: "POST", pattern: /^\/client-log\/bundle$/ },
   { method: "POST", pattern: /^\/inspect$/ },
   { method: "POST", pattern: /^\/playback$/ },
-  { method: "POST", pattern: /^\/playback\/[^/]+\/(ping|seek|escalate|track)$/ },
+  { method: "POST", pattern: /^\/playback\/[^/]+\/(ping|seek|escalate|track|sidecar\/seek)$/ },
   { method: "DELETE", pattern: /^\/playback\/[^/]+$/ },
 ];
 

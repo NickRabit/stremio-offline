@@ -11,6 +11,7 @@ import cz.stremiooffline.tv.data.PlaybackFactsDto
 import cz.stremiooffline.tv.data.PlaybackStatusDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.SidecarSeekDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
 import cz.stremiooffline.tv.data.RemoteLibraryApi
@@ -61,6 +62,8 @@ interface PlaybackApi {
   ): PlaybackDescriptorDto
 
   suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto
+
+  suspend fun seekSidecar(id: String, position: Double, seekId: Long): SidecarSeekDto
 
   suspend fun trackPlayback(id: String, change: TrackChange): PlaybackDescriptorDto
 
@@ -156,6 +159,7 @@ data class PlaybackState(
   val subtitleTracks: List<DescriptorTrack> = emptyList(),
   val subtitle: SubtitleChoice = SubtitleChoice.Off,
   val sidecarUrl: String? = null,
+  val sidecarRevision: Int = 0,
   val addonSubtitles: List<AddonSubtitleDto> = emptyList(),
   /** The id each addon subtitle must be fetched with, `map[id] ?: id`. */
   val subtitleIds: Map<String, String> = emptyMap(),
@@ -209,6 +213,9 @@ class PlaybackController(
   private var audioTracks: List<DescriptorTrack> = emptyList()
   private var subtitleTracks: List<DescriptorTrack> = emptyList()
   private var subtitle: SubtitleChoice = SubtitleChoice.Off
+  private var sidecarStart = Double.NEGATIVE_INFINITY
+  private var sidecarCoverage = Double.NEGATIVE_INFINITY
+  private var sidecarSeekSequence = 0L
 
   private var key = ""
   private var title = ""
@@ -715,9 +722,35 @@ class PlaybackController(
     if (!playlist) {
       lastPosition = absolute
       hasPosition = true
+      shownSeekTarget = absolute
       _state.update { it.copy(target = absolute, revision = it.revision + 1) }
       saveNow()
       report(ReportEvent.Progress, reported, position, paused = !playing)
+      val token = ++shownSeekToken
+      pendingSeek = absolute
+      seekJob?.cancel()
+      val mine = generation
+      seekJob = scope.launch {
+        delay(SEEK_DEBOUNCE_MS)
+        if (stopped || mine != generation || token != shownSeekToken) return@launch
+        val target = pendingSeek ?: return@launch
+        pendingSeek = null
+        shownSeekTarget = null
+        if (!sidecarNeedsMove(target)) return@launch
+        val id = sessionId ?: return@launch
+        val stamp = ++sequence
+        val seekId = ++sidecarSeekSequence
+        val answer = runCatching { api.seekSidecar(id, target, seekId) }.getOrElse { error ->
+          if (error is CancellationException) throw error
+          if (mine == generation && stamp == sequence && token == shownSeekToken) {
+            AppLog.warn("Sidecar seek failed", mapOf("error" to (error.message ?: error.javaClass.simpleName)))
+          }
+          return@launch
+        }
+        if (stopped || mine != generation || stamp != sequence || token != shownSeekToken) return@launch
+        if (answer.seekId < seekId) return@launch
+        applySidecar(id, target, answer.sidecarUrl)
+      }
       return
     }
     val token = ++shownSeekToken
@@ -866,6 +899,8 @@ class PlaybackController(
     // A seek that has been asked for but not answered yet is the position the viewer wants; a track
     // change in that window must carry it, or the server restarts at the stale position.
     val change = request.withTime(pendingSeek ?: position)
+    seekJob?.cancel()
+    pendingSeek = null
     val before = change.time
     trackJob?.cancel()
     trackJob = scope.launch {
@@ -1156,6 +1191,11 @@ class PlaybackController(
     subtitle = shown
     val audioChoice = if (keepAudio) _state.value.audioTrackIndex else descriptor.audioTrack.coerceIn(0, maxOf(0, audioTracks.size - 1))
     val currentSourceId = sourceId
+    val previousSidecar = _state.value.sidecarUrl
+    if (descriptor.sidecarUrl != previousSidecar) {
+      sidecarStart = target
+      sidecarCoverage = Double.NEGATIVE_INFINITY
+    }
     _state.update {
       it.copy(
         loading = false,
@@ -1174,6 +1214,7 @@ class PlaybackController(
         subtitleTracks = subtitleTracks,
         subtitle = shown,
         sidecarUrl = descriptor.sidecarUrl,
+        sidecarRevision = it.sidecarRevision + if (descriptor.sidecarUrl != previousSidecar) 1 else 0,
         addonSubtitles = addons,
         subtitleIds = descriptor.subtitleIds.ifEmpty { it.subtitleIds },
         videoCodec = descriptor.video,
@@ -1187,6 +1228,26 @@ class PlaybackController(
         error = null,
       )
     }
+  }
+
+  fun onSidecarCoverage(coverage: Double, complete: Boolean) {
+    sidecarCoverage = if (complete) Double.POSITIVE_INFINITY else coverage
+  }
+
+  private fun sidecarNeedsMove(target: Double): Boolean {
+    val snapshot = _state.value
+    if (snapshot.sidecarUrl == null || snapshot.subtitle !is SubtitleChoice.Embedded) return false
+    return target < sidecarStart || target > sidecarCoverage
+  }
+
+  private fun applySidecar(id: String, target: Double, url: String?) {
+    if (stopped || id != sessionId) return
+    val previous = _state.value.sidecarUrl
+    if (url != previous) {
+      sidecarStart = if (url == null) Double.NEGATIVE_INFINITY else target
+      sidecarCoverage = Double.NEGATIVE_INFINITY
+    }
+    _state.update { it.copy(sidecarUrl = url, sidecarRevision = it.sidecarRevision + 1) }
   }
 
   /** The addon fills only a gap the file left, by the viewer's own choice when the session carries

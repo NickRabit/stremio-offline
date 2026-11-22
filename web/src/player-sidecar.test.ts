@@ -16,7 +16,7 @@ describe("watchSidecar", () => {
       .mockResolvedValueOnce(whole);
     const states: unknown[] = [];
     await watchSidecar("/sidecar.vtt", new AbortController().signal, () => 0, (state) => states.push(state), fetcher, noDelay);
-    expect(states).toEqual([{ complete: true, pass: 0 }]);
+    expect(states).toEqual([{ complete: true, pass: 0, coverage: Infinity }]);
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
@@ -29,7 +29,11 @@ describe("watchSidecar", () => {
     const states: unknown[] = [];
     await watchSidecar("/sidecar.vtt", new AbortController().signal, () => playhead, (state) => states.push(state), fetcher, noDelay);
     // The second answer arrives while the picture is still far behind the cues, so nothing is remounted for it.
-    expect(states).toEqual([{ complete: false, pass: 0 }, { complete: false, pass: 1 }, { complete: true, pass: 2 }]);
+    expect(states).toEqual([
+      { complete: false, pass: 0, coverage: 600 },
+      { complete: false, pass: 1, coverage: 1500 },
+      { complete: true, pass: 2, coverage: Infinity },
+    ]);
     expect(600 - SIDECAR_REFRESH_LEAD_S).toBeLessThan(playheads[2]);
   });
 
@@ -47,7 +51,11 @@ describe("watchSidecar", () => {
     const states: unknown[] = [];
     const waits: number[] = [];
     await watchSidecar("/sidecar.vtt?revision=test", new AbortController().signal, () => playhead, (state) => states.push(state), fetcher, async (ms) => { waits.push(ms); });
-    expect(states).toEqual([{ complete: false, pass: 0 }, { complete: false, pass: 1 }, { complete: true, pass: 2 }]);
+    expect(states).toEqual([
+      { complete: false, pass: 0, coverage: 10 },
+      { complete: false, pass: 1, coverage: 70 },
+      { complete: true, pass: 2, coverage: Infinity },
+    ]);
     expect(urls).toContain("/sidecar.vtt?revision=test&position=10.000");
     expect(waits).toEqual([SIDECAR_POLL_MS, SIDECAR_POLL_MS, SIDECAR_POLL_MS, SIDECAR_SETTLED_POLL_MS]);
   });
@@ -59,7 +67,10 @@ describe("watchSidecar", () => {
       .mockResolvedValueOnce(whole);
     const states: unknown[] = [];
     await watchSidecar("/sidecar.vtt", new AbortController().signal, () => 10_000, (state) => states.push(state), fetcher, noDelay);
-    expect(states).toEqual([{ complete: false, pass: 0 }, { complete: true, pass: 1 }]);
+    expect(states).toEqual([
+      { complete: false, pass: 0, coverage: 600 },
+      { complete: true, pass: 1, coverage: Infinity },
+    ]);
   });
 
   it("stops when the player closes or the session changes", async () => {

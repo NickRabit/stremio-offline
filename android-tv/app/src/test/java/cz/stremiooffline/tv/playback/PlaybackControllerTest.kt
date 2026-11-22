@@ -9,6 +9,7 @@ import cz.stremiooffline.tv.data.PlaybackFactsDto
 import cz.stremiooffline.tv.data.PlaybackStatusDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.SidecarSeekDto
 import cz.stremiooffline.tv.data.TrackChange
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
@@ -38,6 +39,7 @@ class PlaybackControllerTest {
   private open class FakeApi : PlaybackApi {
     val started = mutableListOf<Triple<String, ClientCapabilitiesDto, Double>>()
     val seeks = mutableListOf<Double>()
+    val sidecarSeeks = mutableListOf<Triple<String, Double, Long>>()
     val escalates = mutableListOf<Double>()
     val pings = mutableListOf<String>()
     val pingPaused = mutableListOf<Boolean?>()
@@ -57,6 +59,8 @@ class PlaybackControllerTest {
     var failStart = false
     var seekFailure: Throwable? = null
     var seekAnswer: PlaybackDescriptorDto? = null
+    var sidecarSeekAnswer: SidecarSeekDto? = null
+    var sidecarSeekGate: CompletableDeferred<Unit>? = null
     var seekGate: CompletableDeferred<Unit>? = null
     var trackFailure: Throwable? = null
     var seekDelayMs = 0L
@@ -103,6 +107,12 @@ class PlaybackControllerTest {
       seekGate?.await()
       seekFailure?.let { throw it }
       return seekAnswer ?: descriptor.copy(mode = "remux", url = "playlist-$time.m3u8", offset = time, playlist = true, copy = CopyDto(video = true, audio = true))
+    }
+
+    override suspend fun seekSidecar(id: String, position: Double, seekId: Long): SidecarSeekDto {
+      sidecarSeeks += Triple(id, position, seekId)
+      sidecarSeekGate?.await()
+      return sidecarSeekAnswer ?: SidecarSeekDto(sidecarUrl = "sidecar-$seekId.vtt", seekId = seekId)
     }
 
     override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto {
@@ -405,6 +415,84 @@ class PlaybackControllerTest {
     assertTrue(api.seeks.isEmpty())
     assertEquals(50.0, controller.position, 0.001)
     assertEquals(controller.position, controller.shownPosition, 0.001)
+  }
+
+  @Test
+  fun `a direct subtitle seek beyond coverage adopts the new sidecar before polling it`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 0, sidecarUrl = "sidecar-old.vtt",
+      subtitleTracks = trackList("""[{"index":0,"language":"en","codec":"mov_text"}]"""),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onSidecarCoverage(100.0, complete = false)
+    val revision = controller.state.value.sidecarRevision
+
+    controller.seekTo(200.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+
+    assertEquals(listOf(Triple("p1", 200.0, 1L)), api.sidecarSeeks)
+    assertEquals("sidecar-1.vtt", controller.state.value.sidecarUrl)
+    assertTrue(controller.state.value.sidecarRevision > revision)
+    assertTrue(api.seeks.isEmpty())
+  }
+
+  @Test
+  fun `a direct subtitle seek inside known coverage sends nothing`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 0, sidecarUrl = "sidecar.vtt",
+      subtitleTracks = trackList("""[{"index":0,"language":"en","codec":"mov_text"}]"""),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onSidecarCoverage(300.0, complete = false)
+
+    controller.seekTo(250.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+
+    assertTrue(api.sidecarSeeks.isEmpty())
+    assertEquals("sidecar.vtt", controller.state.value.sidecarUrl)
+  }
+
+  @Test
+  fun `a subtitle track change wins over a pending direct sidecar seek`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 1, sidecarUrl = "sidecar-old.vtt",
+      subtitleTracks = trackList(
+        """[{"index":0,"language":"en","codec":"mov_text"},
+            {"index":1,"language":"cs","codec":"mov_text"}]""",
+      ),
+    )
+    api.trackAnswer = api.descriptor.copy(subtitleTrack = 0, sidecarUrl = "sidecar-track.vtt")
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onSidecarCoverage(100.0, complete = false)
+    val gate = CompletableDeferred<Unit>()
+    api.sidecarSeekGate = gate
+
+    controller.seekTo(200.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    assertEquals(1, api.sidecarSeeks.size)
+
+    controller.selectSubtitle(SubtitleChoice.Embedded(0))
+    runCurrent()
+    gate.complete(Unit)
+    runCurrent()
+
+    assertEquals(1, api.tracks.size)
+    assertEquals("sidecar-track.vtt", controller.state.value.sidecarUrl)
   }
 
   @Test

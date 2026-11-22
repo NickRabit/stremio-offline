@@ -933,9 +933,10 @@ fun PlayerScreen(
 
   // The sidecar is polled the way the web watches it; a 404 only means "come back". It stops while
   // the app is in the background, where the session is gone, and resumes with the new one.
-  LaunchedEffect(resumed, sidecarActive, sidecar, delaySeconds) {
+  LaunchedEffect(resumed, sidecarActive, sidecar, state.sidecarRevision, delaySeconds) {
     if (!resumed || sidecar == null || embeddedChoice == null) return@LaunchedEffect
     var watcher = SidecarState()
+    val revision = state.sidecarRevision
     cues = emptyList()
     // The flag is read every pass too: while the app is stopped the composition is paused, so the
     // key alone would not cancel a loop that is already suspended in its poll delay.
@@ -943,6 +944,9 @@ fun PlayerScreen(
       val at = controller.position
       val fetch = runCatching { api.sidecar(sidecar, at, delaySeconds) }.getOrNull()
       if (fetch != null) {
+        val current = controller.state.value
+        if (current.sidecarRevision != revision || current.sidecarUrl != sidecar) return@LaunchedEffect
+        controller.onSidecarCoverage(fetch.coverage, fetch.complete)
         if (sidecarRefresh(watcher, fetch.coverage, fetch.complete, at)) {
           // The server rebases its cues to the conversion stream; the picture the overlay is
           // compared with is absolute, so the offset goes back on.

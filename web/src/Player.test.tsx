@@ -91,6 +91,12 @@ let playbackStatusRequests: string[];
 let playbackStatusAnswer: unknown;
 let seekRequests: Array<{ path: string; time: number }>;
 let seekGone: boolean;
+let sidecarSeekRequests: Array<{ path: string; position: number; seekId: number }>;
+let sidecarPolls: string[];
+let sidecarCoverage: number;
+let heldSidecarSeek: Promise<void> | null;
+let heldSidecarPoll: Promise<void> | null;
+let trackRequests: Array<Record<string, unknown>>;
 let pingRequests: string[];
 let pingBodies: unknown[];
 let pingStatus: number;
@@ -140,6 +146,12 @@ beforeEach(() => {
   playbackStatusAnswer = { generation: 1, conversion: "running" };
   seekRequests = [];
   seekGone = false;
+  sidecarSeekRequests = [];
+  sidecarPolls = [];
+  sidecarCoverage = 700;
+  heldSidecarSeek = null;
+  heldSidecarPoll = null;
+  trackRequests = [];
   pingRequests = [];
   pingBodies = [];
   pingStatus = 204;
@@ -181,6 +193,30 @@ beforeEach(() => {
       seekRequests.push({ path, time });
       if (seekGone) return Promise.resolve(json({ error: "gone", code: "RESOURCE_NOT_FOUND", messageKey: "err.playbackSessionGone" }, 404));
       return Promise.resolve(json({ ...session(), offset: time }));
+    }
+    if (/^\/api\/playback\/[^/]+\/sidecar\/seek$/.test(path) && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { position: number; seekId: number };
+      sidecarSeekRequests.push({ path, ...body });
+      return (heldSidecarSeek ?? Promise.resolve()).then(() => json({
+        sidecarUrl: `/api/playback/sess1/sidecar.vtt?revision=new-${body.seekId}&offset=0.000`,
+        seekId: body.seekId,
+      }));
+    }
+    if (/^\/api\/playback\/[^/]+\/sidecar\.vtt$/.test(path)) {
+      sidecarPolls.push(`${path}${url.search}`);
+      const wait = url.searchParams.get("revision") === "old-held" ? heldSidecarPoll : null;
+      return (wait ?? Promise.resolve()).then(() => new Response("WEBVTT\n\n", {
+        headers: { "x-sidecar-complete": "0", "x-sidecar-coverage": String(sidecarCoverage) },
+      }));
+    }
+    if (/^\/api\/playback\/[^/]+\/track$/.test(path) && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      trackRequests.push(body);
+      return Promise.resolve(json({
+        ...session(),
+        subtitleTrack: body.subtitle,
+        sidecarUrl: "/api/playback/sess1/sidecar.vtt?revision=track-new&offset=0.000",
+      }));
     }
     if (/^\/api\/progress\/[^/]+$/.test(path)) {
       const key = decodeURIComponent(path.slice("/api/progress/".length));
@@ -248,6 +284,111 @@ const rerender = async (over: Partial<Parameters<typeof Player>[0]>) => {
   await flush();
   return value;
 };
+
+const settle = async () => { for (let pass = 0; pass < 8; pass += 1) await flush(); };
+const waitUntil = async (condition: () => boolean) => {
+  for (let pass = 0; pass < 80 && !condition(); pass += 1) await flush();
+  expect(condition()).toBe(true);
+};
+const seekByArrow = async (from: number) => {
+  const video = host.querySelector<HTMLVideoElement>("video")!;
+  await act(async () => {
+    video.currentTime = from;
+    video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  });
+  await settle();
+};
+const sidecarSession = (over: Record<string, unknown> = {}) => ({
+  subtitleTrack: 0,
+  subtitleTracks: [{ index: 0, language: "en", codec: "subrip" }],
+  sidecarUrl: "/api/playback/sess1/sidecar.vtt?revision=old&offset=0.000",
+  ...over,
+});
+
+describe("Player sidecar seeks", () => {
+  it("holds the old track until the replacement URL has arrived", async () => {
+    let release!: () => void;
+    heldSidecarSeek = new Promise<void>((resolve) => { release = resolve; });
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => sidecarPolls.length > 0);
+    sidecarPolls = [];
+
+    await seekByArrow(989);
+    expect(sidecarSeekRequests).toEqual([
+      { path: "/api/playback/sess1/sidecar/seek", position: 999, seekId: 1 },
+    ]);
+    expect(sidecarPolls.some((value) => value.includes("revision=old"))).toBe(false);
+    expect(host.querySelector("track")).toBeNull();
+
+    await act(async () => { release(); });
+    await waitUntil(() => sidecarPolls.some((value) => value.includes("revision=new-1")));
+    expect(sidecarPolls[0]).toContain("revision=new-1");
+    await waitUntil(() => host.querySelector("track")?.getAttribute("src")?.includes("revision=new-1") ?? false);
+  });
+
+  it("keeps the watcher when the seek target is inside known coverage", async () => {
+    sidecarCoverage = 700;
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => host.querySelector("track") !== null);
+    sidecarSeekRequests = [];
+
+    await seekByArrow(620);
+
+    expect(sidecarSeekRequests).toEqual([]);
+    expect(host.querySelector("track")?.getAttribute("src")).toContain("revision=old");
+  });
+
+  it("cannot let a late response from the retired track replace the new one", async () => {
+    let release!: () => void;
+    heldSidecarPoll = new Promise<void>((resolve) => { release = resolve; });
+    sessionShape = sidecarSession({
+      sidecarUrl: "/api/playback/sess1/sidecar.vtt?revision=old-held&offset=0.000",
+    });
+    await render();
+    await waitUntil(() => sidecarPolls.length > 0);
+
+    await seekByArrow(989);
+    await waitUntil(() => host.querySelector("track")?.getAttribute("src")?.includes("revision=new-1") ?? false);
+    await act(async () => { release(); });
+    await settle();
+
+    expect(host.querySelector("track")?.getAttribute("src")).toContain("revision=new-1");
+    expect(host.querySelector("track")?.getAttribute("src")).not.toContain("revision=old-held");
+  });
+
+  it("lets a track change overtake a pending sidecar seek", async () => {
+    let release!: () => void;
+    heldSidecarSeek = new Promise<void>((resolve) => { release = resolve; });
+    sessionShape = sidecarSession({
+      subtitleTrack: 1,
+      subtitleTracks: [
+        { index: 0, language: "en", codec: "subrip" },
+        { index: 1, language: "cs", codec: "subrip" },
+      ],
+    });
+    await render();
+    await waitUntil(() => sidecarPolls.length > 0);
+
+    await seekByArrow(989);
+    expect(sidecarSeekRequests).toHaveLength(1);
+    await openSettings();
+    const select = [...host.querySelectorAll<HTMLSelectElement>("select")]
+      .find((node) => [...node.options].some((option) => option.value === "embedded:0"))!;
+    await act(async () => {
+      select.value = "embedded:0";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await waitUntil(() => trackRequests.length === 1);
+    await waitUntil(() => host.querySelector("track")?.getAttribute("src")?.includes("revision=track-new") ?? false);
+
+    await act(async () => { release(); });
+    await settle();
+    expect(host.querySelector("track")?.getAttribute("src")).toContain("revision=track-new");
+  });
+});
 
 describe("Player save actions", () => {
   it("draws neither save action for a child", async () => {

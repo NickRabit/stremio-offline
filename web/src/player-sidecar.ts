@@ -4,7 +4,7 @@ export const SIDECAR_REQUEST_MS = 15_000;
 /** How close the picture may get to the last cue before the track is read again. */
 export const SIDECAR_REFRESH_LEAD_S = 45;
 
-export interface SidecarState { complete: boolean; pass: number }
+export interface SidecarState { complete: boolean; pass: number; coverage: number }
 
 /** Safari gained AbortSignal.any only in 17.4, so a per-request timeout that also
  *  follows the caller's cancellation is wired by hand. */
@@ -52,7 +52,7 @@ export async function watchSidecar(
       if (pass < 0 || complete || newWindow) {
         pass += 1;
         attached = Number.isFinite(coverage) ? coverage : Infinity;
-        onState({ complete, pass });
+        onState({ complete, pass, coverage });
       }
       if (complete) return;
     }

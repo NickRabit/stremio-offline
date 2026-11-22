@@ -100,6 +100,15 @@ export class PlayerSidecars {
    *  and only a position it cannot serve -- another track, a jump back before its start, or
    *  one so far ahead that it would have to read the film to get there -- needs another. */
   ensure(id: string, directory: string, track: number, offset: number, args: (start: number) => Promise<string[]>) {
+    this.place(id, directory, track, offset, args);
+  }
+
+  /** Moves the reader for an explicit player seek and answers the revision that owns the result. */
+  reposition(id: string, directory: string, track: number, position: number, args: (start: number) => Promise<string[]>) {
+    return this.place(id, directory, track, position, args);
+  }
+
+  private place(id: string, directory: string, track: number, offset: number, args: (start: number) => Promise<string[]>) {
     this.released.delete(id);
     const current = this.jobs.get(id);
     // A reader started at this very position is the right one even before it has written a cue:
@@ -110,7 +119,7 @@ export class PlayerSidecars {
     const sameStart = current !== undefined && Math.abs(offset - current.start) < 1;
     if (current && current.track === track && (sameStart || (offset >= current.start && offset <= current.coverage))) {
       this.keepAhead(current, id, offset);
-      return;
+      return current.revision;
     }
     const previous = current;
     previous?.controller.abort();
@@ -127,6 +136,7 @@ export class PlayerSidecars {
       if (this.jobs.get(id) !== job) return;
       this.launch(id, job, start, false);
     })();
+    return revision;
   }
 
   private launch(id: string, job: Job, from: number, append: boolean, why: "new" | "catching up" | "again" = append ? "catching up" : "new") {

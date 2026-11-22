@@ -2918,6 +2918,58 @@ test("seeking re-reads the same subtitles instead of starting FFmpeg again", asy
   assert.notEqual(revisionOf(resumed.sidecarUrl), revisionOf(back.sidecarUrl));
   await manager.sidecars.stop(started.id);
 });
+
+test("an explicit sidecar seek reuses coverage and an older seek id leaves the newest reader alone", { timeout: 5_000 }, async () => {
+  const manager = new PlaybackManager(tmp("test-sidecar-reposition")) as any;
+  const session = remuxSession(manager, {
+    id: "sidecar-reposition",
+    mode: "direct",
+    subtitleTrack: 2,
+    info: {
+      container: "matroska,webm", duration: 3_600,
+      video: { codec: "h264" }, audio: { codec: "aac" },
+      audioTracks: [{ index: 0, codec: "aac" }],
+      subtitleTracks: [{ index: 2, codec: "subrip", language: "en" }],
+    },
+  });
+  const starts: number[] = [];
+  let written = 0;
+  manager.sidecars.run = async (args: string[], file: string, append: boolean, signal: AbortSignal) => {
+    const at = args.indexOf("-ss");
+    const from = at < 0 ? 0 : Number(args[at + 1]);
+    starts.push(from);
+    const stamp = (value: number) => `00:${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}.000`;
+    const end = from === 0 ? 120 : from + 5;
+    await writeFile(file, `${append ? "" : "WEBVTT\n\n"}${stamp(from)} --> ${stamp(end)}\ncue at ${from}\n\n`, append ? { flag: "a" } : {});
+    written += 1;
+    await whenAborted(signal);
+  };
+  try {
+    manager.extractSidecar(session);
+    const first = manager.sidecars.revision(session.id);
+    assert.ok(first);
+    while (written < 1) await pause(5);
+    while (!(await manager.sidecar(session.id, first, 0))) await pause(5);
+
+    const inside = await manager.repositionSidecar(session.id, 60, 1);
+    assert.equal(inside.seekId, 1);
+    assert.equal(/revision=([^&]+)/.exec(inside.sidecarUrl ?? "")?.[1], first);
+    assert.deepEqual(starts, [0], "a covered position does not launch another reader");
+
+    const stale = await manager.repositionSidecar(session.id, 900, 1);
+    assert.deepEqual(stale, inside, "an old request returns the newest address");
+    assert.deepEqual(starts, [0]);
+
+    const moved = await manager.repositionSidecar(session.id, 900, 2);
+    assert.equal(moved.seekId, 2);
+    assert.notEqual(/revision=([^&]+)/.exec(moved.sidecarUrl ?? "")?.[1], first);
+    while (starts.length < 2) await pause(5);
+    assert.deepEqual(starts, [0, 900]);
+    assert.equal(await manager.sidecar(session.id, first, 0), undefined, "the replaced revision is retired");
+  } finally {
+    await manager.sidecars.stop(session.id);
+  }
+});
 const revisionOf = (url?: string) => /revision=([0-9a-f-]+)/.exec(url ?? "")?.[1];
 
 test("stop terminates media and subtitle readers before revoking their source", async () => {

@@ -706,6 +706,19 @@ class ApiClientTest {
   }
 
   @Test
+  fun `a sidecar seek sends its position and sequence before the next poll`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"sidecarUrl":"sidecar-new.vtt","seekId":7}"""))
+    val answer = client(start()).seekSidecar("p1", 920.5, 7)
+    val request = server.takeRequest()
+
+    assertEquals("/api/playback/p1/sidecar/seek", request.path)
+    assertEquals("POST", request.method)
+    assertEquals("""{"position":920.5,"seekId":7}""", request.body.readUtf8())
+    assertEquals("sidecar-new.vtt", answer.sidecarUrl)
+    assertEquals(7, answer.seekId)
+  }
+
+  @Test
   fun `the next library file is asked by source id`() = runTest {
     server.enqueue(MockResponse().setBody("""{"path":"Films/It 2.mkv","title":"It 2.mkv"}"""))
     val next = client(start()).libraryNext("src1")

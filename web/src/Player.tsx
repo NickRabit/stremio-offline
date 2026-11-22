@@ -419,6 +419,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // The reader is still working through the film, so the track is attached again
   // whenever the picture is about to catch up with the cues it already has.
   const [sidecarPass, setSidecarPass] = useState(0);
+  const [sidecarEpoch, setSidecarEpoch] = useState(0);
+  const [sidecarHold, setSidecarHold] = useState(false);
+  const sidecarEpochRef = useRef(0);
+  const sidecarSeekIdRef = useRef(0);
+  const sidecarCoverageRef = useRef(-Infinity);
+  const sidecarStartRef = useRef(-Infinity);
+  const sidecarWatchRef = useRef<AbortController | null>(null);
+  const sidecarRequestRef = useRef<AbortController | null>(null);
   /** What the viewer dialled in: a positive delay holds the cues back against the picture. */
   const [subtitleDelay, setSubtitleDelay] = useState(0);
   const [session, setSession] = useState<PlaybackSession | null>(null);
@@ -749,10 +757,57 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     stream: stream?.kind,
   });
 
+  const beginSidecarMove = () => {
+    const epoch = ++sidecarEpochRef.current;
+    sidecarRequestRef.current?.abort();
+    sidecarRequestRef.current = null;
+    sidecarWatchRef.current?.abort();
+    sidecarWatchRef.current = null;
+    sidecarCoverageRef.current = -Infinity;
+    setSidecarHold(true);
+    setSidecarEpoch(epoch);
+    setSidecarReady(false);
+    setSidecarPass(0);
+    return epoch;
+  };
+
+  const finishSidecarMove = (epoch: number, url: string | undefined, target: number, id: string) => {
+    if (epoch !== sidecarEpochRef.current || sessionRef.current !== id) return false;
+    if (url !== currentSessionRef.current?.sidecarUrl) sidecarStartRef.current = url ? target : -Infinity;
+    sidecarCoverageRef.current = -Infinity;
+    setSession((current) => current?.id === id ? { ...current, sidecarUrl: url } : current);
+    setSidecarHold(false);
+    setSidecarEpoch(epoch);
+    return true;
+  };
+
+  const moveSidecar = async (target: number) => {
+    const current = currentSessionRef.current;
+    if (!current?.sidecarUrl || current.subtitleTrack === null) return;
+    if (target >= sidecarStartRef.current && target <= sidecarCoverageRef.current) return;
+    const epoch = beginSidecarMove();
+    const seekId = ++sidecarSeekIdRef.current;
+    const request = new AbortController();
+    sidecarRequestRef.current = request;
+    try {
+      const answer = await api.seekSidecar(current.id, target, seekId, request.signal);
+      if (request.signal.aborted || epoch !== sidecarEpochRef.current || sessionRef.current !== current.id) return;
+      if (answer.seekId >= seekId) finishSidecarMove(epoch, answer.sidecarUrl, target, current.id);
+    } catch {
+      if (!request.signal.aborted && epoch === sidecarEpochRef.current) {
+        setSidecarHold(false);
+        setSidecarEpoch(epoch);
+      }
+    } finally {
+      if (sidecarRequestRef.current === request) sidecarRequestRef.current = null;
+    }
+  };
+
   const applySession = (next: PlaybackSession, autoplay = true) => {
     // A fresh conversion deserves a fresh verdict, even after an earlier one was given up on.
     abandonedRef.current = false;
     if (next.sidecarUrl !== session?.sidecarUrl) { setSidecarReady(false); setSidecarPass(0); }
+    if (next.sidecarUrl !== currentSessionRef.current?.sidecarUrl) sidecarStartRef.current = next.offset;
     sessionRef.current = next.id; modeRef.current = next.mode; offsetRef.current = next.offset;
     audioPreferenceRef.current = next.audioTracks[next.audioTrack]?.language ?? audioPreferenceRef.current;
     if (next.subtitleTrack !== null) subtitlePreferenceRef.current = next.subtitleTracks[next.subtitleTrack]?.language ?? subtitlePreferenceRef.current;
@@ -770,7 +825,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; lostRecoveredRef.current = false; lostWhilePausedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
+    decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; lostRecoveredRef.current = false; lostWhilePausedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSidecarHold(false); sidecarCoverageRef.current = -Infinity; sidecarStartRef.current = -Infinity; setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there. A start-over
     // never reads the store and never writes to it -- the saved position simply stays.
@@ -833,6 +888,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }).finally(() => { if (!disposed) setBuffering(false); });
     return () => {
       disposed = true; detach();
+      sidecarRequestRef.current?.abort(); sidecarRequestRef.current = null;
       if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
       cancelEarlyStall();
       if (seekEpochRef.current === epoch) { seekEpochRef.current += 1; pendingSeekRef.current = null; seekingRef.current = false; seekInFlightRef.current = false; }
@@ -849,15 +905,21 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
 
   useEffect(() => {
     const url = session?.sidecarUrl;
-    if (!url) { setSidecarReady(false); setSidecarPass(0); return; }
+    if (!url || sidecarHold) { setSidecarReady(false); setSidecarPass(0); return; }
     const controller = new AbortController();
+    const epoch = sidecarEpochRef.current;
+    sidecarWatchRef.current = controller;
     setSidecarReady(false); setSidecarPass(0);
-    void watchSidecar(url, controller.signal, () => timeRef.current, ({ pass }) => {
-      if (controller.signal.aborted) return;
+    void watchSidecar(url, controller.signal, () => timeRef.current, ({ pass, coverage }) => {
+      if (controller.signal.aborted || epoch !== sidecarEpochRef.current) return;
+      sidecarCoverageRef.current = coverage;
       setSidecarReady(true); setSidecarPass(pass);
     });
-    return () => controller.abort();
-  }, [session?.sidecarUrl]);
+    return () => {
+      controller.abort();
+      if (sidecarWatchRef.current === controller) sidecarWatchRef.current = null;
+    };
+  }, [session?.sidecarUrl, sidecarEpoch, sidecarHold]);
 
   /** Inside the produced part we seek at once; otherwise the conversion restarts at the new position. */
   const seekTo = async (target: number, forceRestart = false, autoplayOverride?: boolean) => {
@@ -866,12 +928,20 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const bounded = Math.max(0, duration ? Math.min(target, duration - 1) : target);
     setScrub(null); showTime(bounded);
     // A forced restart may be an escalation away from direct play, so it must reach the server.
-    if (modeRef.current === "direct" && !forceRestart) { video.currentTime = bounded; return; }
+    if (modeRef.current === "direct" && !forceRestart) {
+      video.currentTime = bounded;
+      void moveSidecar(bounded);
+      return;
+    }
     const token = ++catchupRef.current;
     const relative = bounded - offsetRef.current;
     const end = video.seekable.length ? video.seekable.end(video.seekable.length - 1) : 0;
     const plan = forceRestart || seekInFlightRef.current ? "restart" : planSeek(relative, end);
-    if (plan === "native") { video.currentTime = relative; return; }
+    if (plan === "native") {
+      video.currentTime = relative;
+      void moveSidecar(bounded);
+      return;
+    }
     if (plan === "wait") {
       const epoch = seekEpochRef.current;
       showBufferSoon();
@@ -884,13 +954,19 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       );
       clearBuffering();
       if (token !== catchupRef.current || epoch !== seekEpochRef.current) return;
-      if (covered) { video.currentTime = relative; return; }
+      if (covered) {
+        video.currentTime = relative;
+        void moveSidecar(bounded);
+        return;
+      }
     }
 
     pendingSeekRef.current = bounded;
     if (seekInFlightRef.current) return;
     let id = sessionRef.current; if (!id) return;
     const epoch = seekEpochRef.current;
+    const sidecarEpoch = beginSidecarMove();
+    let sidecarFinished = false;
     const autoplay = autoplayOverride ?? !video.paused;
     // Keep the last frame. The previous HLS generation stays served for a few
     // seconds, so destroying it here only produced a black screen and bufferStalledError.
@@ -945,10 +1021,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         if (pendingSeekRef.current !== null) continue;
         if (next.seekRestored && session?.id === next.id && session.url === next.url) {
           setSession(next);
+          sidecarFinished = finishSidecarMove(sidecarEpoch, next.sidecarUrl, requested, id);
           showTime(next.offset + video.currentTime);
           hlsRef.current?.startLoad(video.currentTime);
           if (autoplay) void video.play().catch(() => undefined);
-        } else applySession(next, autoplay);
+        } else {
+          applySession(next, autoplay);
+          sidecarFinished = finishSidecarMove(sidecarEpoch, next.sidecarUrl, requested, id);
+        }
         if (next.seekRestored) {
           if (shortRestartRef.current) {
             abandon(t("player.sourceStoppedEarly"));
@@ -972,6 +1052,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }
     finally {
       if (started && started !== sessionRef.current) void api.stopPlayback(started).catch(() => undefined);
+      if (!sidecarFinished && sidecarEpoch === sidecarEpochRef.current) {
+        setSidecarHold(false);
+        setSidecarEpoch(sidecarEpoch);
+      }
       if (epoch === seekEpochRef.current) { pendingSeekRef.current = null; seekInFlightRef.current = false; seekingRef.current = false; setBuffering(false); }
     }
   };
@@ -1030,14 +1114,18 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const changeSubtitle = async (subtitle: number | null) => {
     const id = sessionRef.current; if (!id) return;
     setError("");
+    const epoch = beginSidecarMove();
     try {
       const next = await api.setTrack(id, { subtitle, time: timeRef.current });
       if (sessionRef.current !== next.id) return;
-      if (next.sidecarUrl !== session?.sidecarUrl) { setSidecarReady(false); setSidecarPass(0); }
       if (next.subtitleTrack !== null) subtitlePreferenceRef.current = next.subtitleTracks[next.subtitleTrack]?.language ?? subtitlePreferenceRef.current;
       onPreferences?.({ audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current });
-      setSession(next);
+      finishSidecarMove(epoch, next.sidecarUrl, timeRef.current, next.id);
     } catch (value) {
+      if (epoch === sidecarEpochRef.current) {
+        setSidecarHold(false);
+        setSidecarEpoch(epoch);
+      }
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Subtitle switch failed: ${message}`, { ...context(), phase: "track", changes: { subtitle } });
       setError(`${t("player.subtitleSwitchFailed")} ${describeError(value)}`.trim());
@@ -1049,6 +1137,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const id = sessionRef.current; if (!id) return;
     const at = timeRef.current;
     const video = videoRef.current;
+    const sidecarEpoch = beginSidecarMove();
     cancelEarlyStall();
     seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); setPlaybackFailed(false);
     video?.pause();
@@ -1058,6 +1147,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       const next = await api.setTrack(id, { ...changes, time: at })
         .catch((error) => { if (error instanceof ApiError) throw error; return api.setTrack(id, { ...changes, time: at }); });
       applySession(next);
+      finishSidecarMove(sidecarEpoch, next.sidecarUrl, at, next.id);
       // Going back to the original may end as direct playback from zero; we move the position ourselves.
       if (next.mode === "direct" && at > 0) {
         const moveDirect = () => { const current = videoRef.current; if (current) current.currentTime = at; showTime(at); };
@@ -1068,6 +1158,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     catch (value) {
       // The film changed while the switch was in flight. The new one has its own lock.
       if (sessionRef.current !== id) return;
+      if (sidecarEpoch === sidecarEpochRef.current) {
+        setSidecarHold(false);
+        setSidecarEpoch(sidecarEpoch);
+      }
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Track switch failed: ${message}`, { ...context(), phase: "track", changes });
       setError(describeError(value));
@@ -1716,7 +1810,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           });
         }}>
         {sidecarReady && session?.sidecarUrl
-          ? <track key={`${session.sidecarUrl}:${sidecarPass}:${subtitleDelay}`} kind="subtitles" src={`${session.sidecarUrl}&pass=${sidecarPass}${subtitleDelay ? `&delay=${subtitleDelay.toFixed(2)}` : ""}`} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
+          ? <track key={`${session.sidecarUrl}:${sidecarEpoch}:${sidecarPass}:${subtitleDelay}`} kind="subtitles" src={`${session.sidecarUrl}&pass=${sidecarPass}${subtitleDelay ? `&delay=${subtitleDelay.toFixed(2)}` : ""}`} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
           : addonSubtitle && <track key={`${addonSubtitle.subtitleId}:${offset}:${subtitleDelay}`} kind="subtitles" src={subtitleUrl(subtitleIds[addonSubtitle.subtitleId] ?? addonSubtitle.subtitleId, offset, subtitleDelay, addonSubtitle.lang || subtitleLanguage)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
       {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}

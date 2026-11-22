@@ -156,6 +156,12 @@ data class PlaybackDescriptorDto(
 )
 
 @Serializable
+data class SidecarSeekDto(
+  val sidecarUrl: String? = null,
+  val seekId: Long = 0,
+)
+
+@Serializable
 data class PlaybackStatusDto(
   val generation: Int,
   /** `direct`, `running`, `complete`, `short`, or `failed`. */

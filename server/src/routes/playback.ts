@@ -415,6 +415,17 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     guardOwned(id);
     res.json(playbackResponse(value));
   }));
+  app.post("/api/playback/:id/sidecar/seek", asyncRoute(async (req, res) => {
+    const id = String(req.params.id);
+    const position = Number(req.body.position);
+    const seekId = Number(req.body.seekId);
+    if (!Number.isFinite(position) || position < 0 || !Number.isSafeInteger(seekId) || seekId < 0) {
+      throw new ResourceError(400, "INVALID_SEEK");
+    }
+    const value = await playback.repositionSidecar(id, position, seekId);
+    guardOwned(id);
+    res.json(value);
+  }));
   app.delete("/api/playback/:id", asyncRoute(async (req, res) => {
     // Who closed a session is the difference between a viewer leaving and the server giving up.
     log("INFO", "Playback session closed by the player", { id: String(req.params.id), user: currentUser(req)?.username });

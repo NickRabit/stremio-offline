@@ -513,6 +513,12 @@ class ApiClient(
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  override suspend fun seekSidecar(id: String, position: Double, seekId: Long): SidecarSeekDto {
+    val payload = json.encodeToString(SidecarSeekRequest.serializer(), SidecarSeekRequest(position, seekId))
+    return request(Request.Builder().url(address.resolve("/api/playback/$id/sidecar/seek")).post(payload.toRequestBody(mediaType)).build(), playbackClient)
+      .decode<SidecarSeekDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
   override suspend fun playbackStatus(id: String): PlaybackStatusDto? =
     request(Request.Builder().url(address.resolve("/api/playback/$id/status")).get().build(), statusClient)
       .decode<PlaybackStatusDto>()
@@ -1180,6 +1186,9 @@ private data class DownloadRequest(
 
 @Serializable
 private data class TimeRequest(val time: Double)
+
+@Serializable
+private data class SidecarSeekRequest(val position: Double, val seekId: Long)
 
 @Serializable
 private data class PausedRequest(val paused: Boolean)

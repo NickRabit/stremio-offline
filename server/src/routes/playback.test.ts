@@ -50,6 +50,7 @@ interface Harness {
   pings: Array<{ id: string; paused: boolean | undefined }>;
   fetched: Array<{ id: string; generation: string; file: string }>;
   waitingFor: Array<{ id: string; absolute: number }>;
+  sidecarSeeks: Array<{ id: string; position: number; seekId: number }>;
   mediaSources: MediaServerSources;
   playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string; sourceId?: string }>;
   /** The manager the routes call; a test can replace one method to hold a preparation open. */
@@ -70,6 +71,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
   const pings: Array<{ id: string; paused: boolean | undefined }> = [];
   const fetched: Array<{ id: string; generation: string; file: string }> = [];
   const waitingFor: Array<{ id: string; absolute: number }> = [];
+  const sidecarSeeks: Array<{ id: string; position: number; seekId: number }> = [];
   let source = { url: "https://example.test/video.mp4" } as StreamItem;
   const sessions = { ada: ADA, bob: BOB };
   const userOf = (req: express.Request) => (req.header("x-user") === "bob" ? "bob" : "ada");
@@ -93,6 +95,10 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     ping: (id: string, paused: boolean | undefined) => { pings.push({ id, paused }); },
     fetched: (id: string, generation: string, file: string) => { fetched.push({ id, generation, file }); },
     waitingFor: (id: string, absolute: number) => { waitingFor.push({ id, absolute }); },
+    repositionSidecar: async (id: string, position: number, seekId: number) => {
+      sidecarSeeks.push({ id, position, seekId });
+      return { sidecarUrl: `/api/playback/${id}/sidecar.vtt?revision=r${seekId}&offset=0.000`, seekId };
+    },
     directory: () => "/tmp/session-generation",
     preview: async () => undefined,
     sidecar: async () => undefined,
@@ -178,6 +184,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
     pings,
     fetched,
     waitingFor,
+    sidecarSeeks,
     mediaSources,
     playbackOwners,
     playback,
@@ -318,6 +325,31 @@ test("the ping hands a finite waiting position to the playback manager", async (
   const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "ada", body: { waitingFor: 123.5 } });
   assert.equal(response.status, 204);
   assert.deepEqual(harness.waitingFor, [{ id: ID, absolute: 123.5 }]);
+});
+
+test("a sidecar seek is serialized through the playback manager and guarded like the session", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const owner = await api(harness.base, `/api/playback/${ID}/sidecar/seek`, {
+    method: "POST",
+    user: "ada",
+    body: { position: 920.5, seekId: 12 },
+  });
+  assert.equal(owner.status, 200);
+  assert.deepEqual(await owner.json(), {
+    sidecarUrl: `/api/playback/${ID}/sidecar.vtt?revision=r12&offset=0.000`,
+    seekId: 12,
+  });
+  assert.deepEqual(harness.sidecarSeeks, [{ id: ID, position: 920.5, seekId: 12 }]);
+
+  const other = await api(harness.base, `/api/playback/${ID}/sidecar/seek`, {
+    method: "POST",
+    user: "bob",
+    body: { position: 30, seekId: 13 },
+  });
+  assert.equal(other.status, 404);
+  assert.equal(harness.sidecarSeeks.length, 1);
 });
 
 test("the ping keeps the source the session plays alive", async (t) => {
