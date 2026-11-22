@@ -176,3 +176,25 @@ test("a failed provider write arms another periodic retry", async () => {
     assert.equal(reloaded.summary(1).detail, 1);
   });
 });
+
+test("a run of provider calls in one hour looks the hour up at most once, and counts survive midnight and a clock set back", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "provider-stats-hour-"));
+  try {
+    let now = Date.UTC(2026, 10, 22, 23, 30);
+    const stats = new ProviderStats(path.join(dir, "provider-stats.json"), () => now);
+    const holder = stats as unknown as { buckets: unknown[] };
+    let searches = 0;
+    const list = holder.buckets;
+    const find = list.find.bind(list);
+    Object.defineProperty(list, "find", { configurable: true, value: (...args: Parameters<typeof find>) => { searches += 1; return find(...args); } });
+    for (let index = 0; index < 100; index += 1) stats.record("items");
+    assert.ok(searches <= 1, `searched ${searches} times`);
+    now = Date.UTC(2026, 10, 23, 0, 10);
+    stats.record("items");
+    now = Date.UTC(2026, 10, 22, 23, 40);
+    stats.record("items");
+    const at = Date.UTC(2026, 10, 23, 0, 30);
+    assert.equal(stats.summary(1, at).items, 1);
+    assert.equal(stats.summary(2, at).items, 102);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

@@ -43,6 +43,7 @@ const isKind = (value: string): value is ProviderCallKind => (PROVIDER_CALL_KIND
  *  once a second while calls keep arriving. */
 export class ProviderStats {
   private buckets: Bucket[] = [];
+  private lastHour?: { list: Bucket[]; at: string; bucket: Bucket };
   private timer: unknown;
   private dirty = false;
   private chain: Promise<void> = Promise.resolve();
@@ -81,11 +82,15 @@ export class ProviderStats {
 
   record(kind: ProviderCallKind): void {
     const at = new Date(Math.floor(this.now() / HOUR) * HOUR).toISOString();
-    let bucket = this.buckets.find((item) => item.at === at);
+    // Most events land in the same hour as the one before: that bucket is remembered with the
+    // list it belongs to, so a list replaced by a load or a prune is searched again.
+    let bucket = this.lastHour?.list === this.buckets && this.lastHour.at === at ? this.lastHour.bucket : undefined;
+    bucket ??= this.buckets.find((item) => item.at === at);
     if (!bucket) {
       bucket = { at, ...emptySummary() };
       this.buckets.push(bucket);
     }
+    this.lastHour = { list: this.buckets, at, bucket };
     bucket[kind] += 1;
     if (this.hourly) this.pending.set(pairKey(at, kind), { hour: at, key: kind, count: bucket[kind] });
     this.markDirty();
