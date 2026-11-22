@@ -63,10 +63,10 @@ test("preheat fills the memory with the newest files that fit", async () => {
       await utimes(file, 1000 + index, 1000 + index);
     }
     const cache = new FileSnapCache(2500);
-    await preheatFileSnaps(cache, [
-      { file: files[0]!, at: 1000 },
-      { file: files[1]!, at: 2000 },
+    await preheatFileSnaps(cache, () => [
       { file: files[2]!, at: 3000 },
+      { file: files[1]!, at: 2000 },
+      { file: files[0]!, at: 1000 },
     ]);
     assert.equal(cache.byteSize, 2000, "the newest two fill the room");
     assert.equal(cache.has(files[2]!), true);
@@ -85,8 +85,22 @@ test("preheat of a cache that is already warm logs nothing and reads nothing", a
     const file = path.join(dir, "one.jpg");
     await writeFile(file, Buffer.alloc(10));
     const cache = new FileSnapCache(0);
-    await preheatFileSnaps(cache, [{ file, at: 1 }]);
+    let asked = 0;
+    await preheatFileSnaps(cache, () => { asked += 1; return [{ file, at: 1 }]; });
     assert.equal(cache.byteSize, 0);
+    assert.equal(asked, 0, "with the memory cache off, the list of thumbnails is never built");
+  });
+});
+
+test("preheat walks the files in the order it is handed, without sorting them again", async () => {
+  await withDir(async (dir) => {
+    const files = ["a.jpg", "b.jpg"].map((name) => path.join(dir, name));
+    for (const file of files) await writeFile(file, Buffer.alloc(1000));
+    const cache = new FileSnapCache(1500);
+    // Handed newest first; the "at" values say otherwise, and must not be re-sorted.
+    await preheatFileSnaps(cache, () => [{ file: files[0]!, at: 1 }, { file: files[1]!, at: 2 }]);
+    assert.equal(cache.has(files[0]!), true);
+    assert.equal(cache.has(files[1]!), false);
   });
 });
 

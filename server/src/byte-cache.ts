@@ -70,13 +70,15 @@ export class FileSnapCache {
 }
 
 /** Fills the memory with the hottest files that still fit, in the background. A file bigger
- *  than the whole cap is skipped, and the first one that does not fit ends the walk. */
+ *  than the whole cap is skipped, and the first one that does not fit ends the walk.
+ *  `newestFirst` hands the files already ordered newest first, and is only asked when the
+ *  memory cache is on: building and sorting every thumbnail path is wasted otherwise. */
 export async function preheatFileSnaps(
   cache: FileSnapCache,
-  files: Array<{ file: string; at: number }>,
+  newestFirst: () => Iterable<{ file: string; at: number }>,
 ): Promise<void> {
   if (cache.cap <= 0) return;
-  const ordered = [...files].sort((left, right) => right.at - left.at);
+  const ordered = newestFirst();
   const warmed: string[] = [];
   let count = 0;
   let bytes = 0;

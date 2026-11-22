@@ -285,7 +285,7 @@ await remoteImages.load();
 reportProgress();
 // Preheat is a background copy of what is already on disk: it never delays listen or /api/status.
 void images.preheat();
-void preheatFileSnaps(fileSnaps, artworks.hotFiles());
+void preheatFileSnaps(fileSnaps, () => artworks.hotFiles());
 void remoteImages.preheat();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string; sourceId?: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
