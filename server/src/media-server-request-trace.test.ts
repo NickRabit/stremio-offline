@@ -971,3 +971,37 @@ test("a transient stopped report is retried once and classified as a retry", asy
     diagnostic(t, "stopped-report-retry", startedAt, calls);
   });
 });
+
+test("a proof read under a runtime that was replaced meanwhile is not shared into the new one", async () => {
+  await withHarness(async (harness) => {
+    const ref = contentRef(harness);
+    const release = deferred();
+    harness.server.hold = { operation: "item", count: 1, wait: release.promise, entered: () => undefined };
+    dropRuntime(harness);
+    const manager = harness.manager as unknown as {
+      runtimes: Map<string, unknown>;
+      dropRuntime(id: string): void;
+      liveRuntime(connection: unknown): unknown;
+      liveSession(authority: unknown, connection: unknown, options: unknown, signal: AbortSignal): Promise<unknown>;
+      shareFreshOriginal(...args: unknown[]): unknown;
+    };
+    const shared: boolean[] = [];
+    const share = manager.shareFreshOriginal.bind(manager);
+    manager.shareFreshOriginal = (...args: unknown[]) => {
+      const [, , connection, runtime] = args;
+      shared.push(runtime !== undefined && manager.liveRuntime(connection) === runtime);
+      return share(...args);
+    };
+    const opening = harness.manager.openOriginal(harness.authority, ref, { method: "GET" });
+    await waitFor(() => harness.server.calls.some((call) => call.operation === "item"));
+    const before = manager.runtimes.get(harness.connectionId);
+    // A 401 elsewhere drops the runtime, and another request installs a new one.
+    manager.dropRuntime(harness.connectionId);
+    const connection = harness.store.mediaConnections().find((candidate) => candidate.id === harness.connectionId);
+    await manager.liveSession(harness.authority, connection, {}, new AbortController().signal);
+    assert.notEqual(manager.runtimes.get(harness.connectionId), before);
+    release.resolve();
+    await consume(await opening);
+    assert.deepEqual(shared, [false], "the result is offered with the runtime it was read under, which no longer matches");
+  });
+});

@@ -621,6 +621,8 @@ interface OriginalPreparation {
   item: ProviderItem;
   versions: ProviderVersion[];
   freshAdmission: boolean;
+  /** The runtime the reads ran under: a result read under a runtime since dropped is not shared. */
+  runtime: CachedRuntime | undefined;
 }
 
 interface PlaybackAdmission {
@@ -2179,6 +2181,7 @@ export class MediaServerManager {
         item,
         versions,
         freshAdmission: live === undefined,
+        runtime,
         proof: {
           actorId: user.id,
           libraryId: library.id,
@@ -2222,9 +2225,8 @@ export class MediaServerManager {
         () => this.recheckRef(authority, request, ref),
       );
       this.recheckRef(authority, request, ref);
-      const runtime = this.liveRuntime(connection);
       if (prepared.item.type === "movie" || prepared.item.type === "episode") {
-        this.shareFreshOriginal(user, library, connection, runtime, prepared.item, prepared.versions);
+        this.shareFreshOriginal(user, library, connection, prepared.runtime, prepared.item, prepared.versions);
       }
       if (wantedKind === "playback" && prepared.freshAdmission) {
         this.putLivePlaybackAdmission({
