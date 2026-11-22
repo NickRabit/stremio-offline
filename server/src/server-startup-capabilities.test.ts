@@ -35,15 +35,19 @@ test("/api/status answers while the FFmpeg capability probe is still running", {
   const fake = path.join(workDir, "ffmpeg");
   const count = path.join(workDir, "version-count");
   const complete = path.join(workDir, "version-complete");
+  // The probe answers when the test says so, not after a timer a busy runner could outlast.
+  const gate = path.join(workDir, "release-version");
   await writeFile(fake, `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args.includes("-version")) {
   fs.appendFileSync(${JSON.stringify(count)}, "version\\n");
-  setTimeout(() => {
+  const wait = () => {
+    if (!fs.existsSync(${JSON.stringify(gate)})) { setTimeout(wait, 20); return; }
     fs.writeFileSync(${JSON.stringify(complete)}, "done");
     process.stdout.write("ffmpeg version 7.1.1 Copyright (c) 2000-2025 the FFmpeg developers\\n--enable-libx264\\n");
-  }, 2000);
+  };
+  wait();
 } else {
   process.stderr.write("encoder probe failed\\n");
   process.exit(1);
@@ -71,6 +75,7 @@ if (args.includes("-version")) {
     assert.equal(existsSync(complete), false, "status answered before the capability probe settled");
     assert.equal((await readFile(count, "utf8")).trim().split("\n").length, 1);
   } finally {
+    await writeFile(gate, "");
     await until(() => existsSync(complete), "the capability probe did not finish");
     await server.stop();
   }

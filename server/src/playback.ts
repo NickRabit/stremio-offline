@@ -767,7 +767,8 @@ export class PlaybackManager {
     const id = crypto.randomUUID();
     const source = this.proxyPath(stream);
     // Through inspect(), so the source list and the player never disagree about what the file holds.
-    const [info] = await Promise.all([this.inspect(stream, signal), this.capabilitiesReady()]);
+    // Direct play needs nothing from the FFmpeg capability probe; a conversion waits for it in spawnAt.
+    const info = await this.inspect(stream, signal);
     signal?.throwIfAborted();
     const audioTracks = info?.audioTracks ?? [];
     const subtitleTracks = info?.subtitleTracks ?? [];

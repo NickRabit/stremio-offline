@@ -47,6 +47,8 @@ const workDir = async (t: TestContext, prefix: string) => {
 
 const writeFakeFfmpeg = async (directory: string, options: {
   versionDelay?: number;
+  /** The version probe answers only once this file exists: the test decides when, not a timer. */
+  versionGate?: string;
   versionOutput?: string;
   versionCount?: string;
   versionComplete?: string;
@@ -62,10 +64,16 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args.includes("-version")) {
   fs.appendFileSync(${JSON.stringify(count)}, "version\\n");
-  setTimeout(() => {
+  const answer = () => {
     fs.writeFileSync(${JSON.stringify(complete)}, "done");
     process.stdout.write(${JSON.stringify(version)});
-  }, ${options.versionDelay ?? 0});
+  };
+  const gate = ${JSON.stringify(options.versionGate ?? null)};
+  if (gate) {
+    // Gone with the test's folder: nobody will release it, so it stops waiting.
+    const wait = () => fs.existsSync(gate) ? answer() : !fs.existsSync(require("node:path").dirname(gate)) ? process.exit(1) : setTimeout(wait, 20);
+    wait();
+  } else setTimeout(answer, ${options.versionDelay ?? 0});
 } else {
   if (args.includes("h264_vaapi") && ${encoderExit} === 0) process.exit(0);
   process.stderr.write("encoder probe failed\\n");
@@ -158,29 +166,50 @@ test("a failed hardware probe leaves that accelerator off and completes", { skip
   assert.equal(manager.diagnostics().vaapi.device, undefined);
 });
 
-test("a direct start waits for the probe and reflects its acceleration result", { skip: process.platform === "win32" }, async (t) => {
+test("a direct start answers while the probe is still pending", { skip: process.platform === "win32" }, async (t) => {
   const directory = await workDir(t, "playback-capabilities-start-");
-  const { fake, count } = await writeFakeFfmpeg(directory, { versionDelay: 700, vaapi: true });
-  const device = path.join(directory, "renderD128");
-  await writeFile(device, "");
-  useEnv(t, { FFMPEG_PATH: fake, VAAPI_DEVICE: device, VIDEOTOOLBOX: "0" });
+  const gate = path.join(directory, "release-version");
+  t.after(() => writeFile(gate, "").catch(() => undefined));
+  const { fake, count } = await writeFakeFfmpeg(directory, { versionGate: gate });
+  useEnv(t, { FFMPEG_PATH: fake, VIDEOTOOLBOX: "0", VAAPI_DEVICE: undefined });
   const manager = new PlaybackManager(path.join(directory, "data")) as any;
   await manager.load();
   manager.inspect = async () => directInfo;
 
   const probing = manager.probeCapabilities();
   await until(() => existsSync(count), "the capability probe never started");
-  let settled = false;
-  const starting = manager.start(directStream, browserCapabilities).finally(() => { settled = true; });
-  await sleep(50);
-  assert.equal(settled, false, "start waits for the pending capability probe");
-  assert.equal(manager.diagnostics().capabilities, "pending");
-
-  const session = await starting;
-  await probing;
+  const session = await manager.start(directStream, browserCapabilities);
   assert.equal(session.mode, "direct");
-  assert.equal(session.acceleration, true);
+  assert.equal(manager.diagnostics().capabilities, "pending", "direct play did not wait for the probe");
+
+  await writeFile(gate, "");
+  await probing;
   assert.equal(manager.diagnostics().capabilities, "ready");
+});
+
+test("a start that has to convert waits for the probe before choosing an encoder", { skip: process.platform === "win32" }, async (t) => {
+  const directory = await workDir(t, "playback-capabilities-convert-");
+  const gate = path.join(directory, "release-version");
+  t.after(() => writeFile(gate, "").catch(() => undefined));
+  const { fake, count } = await writeFakeFfmpeg(directory, { versionGate: gate });
+  useEnv(t, { FFMPEG_PATH: fake, VIDEOTOOLBOX: "0", VAAPI_DEVICE: undefined });
+  const manager = new PlaybackManager(path.join(directory, "data")) as any;
+  await manager.load();
+  manager.inspect = async () => ({ ...directInfo, container: "matroska,webm", video: { codec: "hevc" } });
+  const accelerator = manager.accelerator.bind(manager);
+  let encoderChosen = false;
+  manager.accelerator = () => { encoderChosen = true; return accelerator(); };
+
+  const probing = manager.probeCapabilities();
+  await until(() => existsSync(count), "the capability probe never started");
+  const starting = manager.start({ url: "https://cdn.example/movie.mkv" }, browserCapabilities).catch(() => undefined);
+  await sleep(100);
+  assert.equal(encoderChosen, false, "no encoder is chosen while the probe is pending");
+
+  await writeFile(gate, "");
+  await probing;
+  await starting;
+  assert.equal(encoderChosen, true, "the conversion went on once the probe settled");
 });
 
 test("shutdown and manager stop complete while the probe is pending", { skip: process.platform === "win32" }, async (t) => {
