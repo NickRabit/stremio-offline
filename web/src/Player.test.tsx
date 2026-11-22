@@ -342,6 +342,18 @@ const sidecarSession = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("Player sidecar seeks", () => {
+  it("a resumed direct film repositions the reader on a seek back before where it started", async () => {
+    progressAnswers["movie:tt5000"] = { key: "movie:tt5000", position: 1800, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" };
+    sidecarCoverage = 2700;
+    sessionShape = sidecarSession();
+    await render({ progressKey: "movie:tt5000" });
+    expect(playbackPosts[0]!.time).toBe(1800);
+    await waitUntil(() => host.querySelector("track") !== null);
+    sidecarSeekRequests = [];
+    await seekByArrow(590);
+    expect(sidecarSeekRequests.map(({ position }) => position)).toEqual([600]);
+  });
+
   it("holds the old track until the replacement URL has arrived", async () => {
     let release!: () => void;
     heldSidecarSeek = new Promise<void>((resolve) => { release = resolve; });

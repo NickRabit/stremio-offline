@@ -30,7 +30,8 @@ export async function watchSidecar(
   onState: (state: SidecarState) => void,
   fetcher: typeof fetch = (input, init) => fetch(input, init),
   delay: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  onRevision?: (url: string) => void,
+  /** Answers false when the caller did not take the new revision, and the watcher polls on. */
+  onRevision?: (url: string) => boolean | void,
 ): Promise<void> {
   let pass = -1;
   let attached = -Infinity;
@@ -43,11 +44,14 @@ export async function watchSidecar(
     if (signal.aborted) return;
     if (response?.status === 410) {
       const current = await response.json().catch(() => undefined) as { sidecarUrl?: unknown } | undefined;
-      if (typeof current?.sidecarUrl === "string") onRevision?.(current.sidecarUrl);
-      return;
+      if (signal.aborted) return;
+      // Adopted: this watcher is done. Not adopted (a reposition is on its way) or an answer
+      // without a URL: keep polling as after a 404.
+      if (typeof current?.sidecarUrl === "string" && onRevision?.(current.sidecarUrl) !== false) return;
+    } else if (response) {
+      // The element fetches the track itself; this copy of the body is dead weight.
+      void response.body?.cancel().catch(() => undefined);
     }
-    // The element fetches the track itself; this copy of the body is dead weight.
-    if (response) void response.body?.cancel().catch(() => undefined);
     if (response?.ok) {
       const complete = response.headers.get("x-sidecar-complete") === "1";
       const coverage = complete ? Infinity : Number(response.headers.get("x-sidecar-coverage") ?? "");

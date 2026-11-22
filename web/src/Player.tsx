@@ -814,11 +814,16 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }
   };
 
-  const adoptSidecarRevision = (url: string) => {
+  /** Answers whether the 410's revision was taken; false keeps the old watcher polling. */
+  const adoptSidecarRevision = (url: string): boolean => {
     const current = currentSessionRef.current;
-    if (!current || url === current.sidecarUrl) return;
+    if (!current || url === current.sidecarUrl) return true;
+    // A reposition on its way answers with the newest revision itself; adopting an older one
+    // here would cancel it and leave the reader where the earlier seek put it.
+    if (sidecarRequestRef.current !== null || sidecarMoveTimerRef.current !== undefined) return false;
     const epoch = beginSidecarMove();
     finishSidecarMove(epoch, url, Math.max(0, timeRef.current), current.id);
+    return true;
   };
 
   const sendSidecarMove = async (epoch: number, target: number) => {
@@ -836,8 +841,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           if (request.signal.aborted || epoch !== sidecarMoveEpochRef.current || sessionRef.current !== current.id) return;
           if (answer.seekId >= seekId) finishSidecarMove(epoch, answer.sidecarUrl, target, current.id);
           return;
-        } catch {
+        } catch (error) {
           if (request.signal.aborted || epoch !== sidecarMoveEpochRef.current) return;
+          // A refusal (the session is gone, the request is bad) does not get better by asking again.
+          if (error instanceof ApiError && error.status >= 400 && error.status < 500) return;
+          if (sessionRef.current !== current.id) return;
           const waitMs = SIDECAR_SEEK_RETRY_MS[Math.min(attempt, SIDECAR_SEEK_RETRY_MS.length - 1)] ?? 15_000;
           attempt += 1;
           await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
@@ -868,11 +876,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }, SIDECAR_SEEK_DEBOUNCE_MS);
   };
 
-  const applySession = (next: PlaybackSession, autoplay = true) => {
+  /** `directStart` is the position the server was asked to start at: in direct play the
+   *  descriptor's offset is always 0, while the subtitle reader starts where playback does. */
+  const applySession = (next: PlaybackSession, autoplay = true, directStart?: number) => {
     // A fresh conversion deserves a fresh verdict, even after an earlier one was given up on.
     abandonedRef.current = false;
     if (next.sidecarUrl !== session?.sidecarUrl) { setSidecarReady(false); setSidecarPass(0); }
-    if (next.sidecarUrl !== currentSessionRef.current?.sidecarUrl) sidecarStartRef.current = next.offset;
+    if (next.sidecarUrl !== currentSessionRef.current?.sidecarUrl) {
+      sidecarStartRef.current = next.mode === "direct" && directStart !== undefined ? Math.max(0, directStart) : next.offset;
+    }
     sessionRef.current = next.id; modeRef.current = next.mode; offsetRef.current = next.offset;
     audioPreferenceRef.current = next.audioTracks[next.audioTrack]?.language ?? audioPreferenceRef.current;
     if (next.subtitleTrack !== null) subtitlePreferenceRef.current = next.subtitleTracks[next.subtitleTrack]?.language ?? subtitlePreferenceRef.current;
@@ -910,7 +922,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       if (!result) return;
       const { created, from } = result;
       if (disposed) { void api.stopPlayback(created.id).catch(() => undefined); return; }
-      applySession(created);
+      applySession(created, true, from);
       report("DEBUG", `Playback session started in ${created.mode} mode`, {
         ...context(), mode: created.mode, hardware: created.hardware, acceleration: created.acceleration,
         video: created.video, audio: created.audio, resumedFrom: Math.round(from), capabilities: capabilities(),
@@ -990,7 +1002,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       undefined,
       undefined,
       (current) => {
-        if (!controller.signal.aborted && epoch === sidecarEpochRef.current) adoptSidecarRevision(current);
+        if (controller.signal.aborted || epoch !== sidecarEpochRef.current) return true;
+        return adoptSidecarRevision(current);
       },
     );
     return () => {
@@ -1104,7 +1117,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           hlsRef.current?.startLoad(video.currentTime);
           if (autoplay) void video.play().catch(() => undefined);
         } else {
-          applySession(next, autoplay);
+          applySession(next, autoplay, requested);
           sidecarFinished = finishSidecarMove(sidecarEpoch, next.sidecarUrl, requested, id);
         }
         if (next.seekRestored) {
@@ -1228,7 +1241,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       // states drift apart; a second attempt returns what the session really holds.
       const next = await api.setTrack(id, { ...changes, time: at })
         .catch((error) => { if (error instanceof ApiError) throw error; return api.setTrack(id, { ...changes, time: at }); });
-      applySession(next);
+      applySession(next, true, at);
       finishSidecarMove(sidecarEpoch, next.sidecarUrl, at, next.id);
       // Going back to the original may end as direct playback from zero; we move the position ourselves.
       if (next.mode === "direct" && at > 0) {

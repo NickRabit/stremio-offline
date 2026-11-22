@@ -123,6 +123,28 @@ describe("watchSidecar", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps polling when the caller does not take a 410's revision, or the 410 carries no URL", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const fetcher = vi.fn().mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) return moved("/sidecar.vtt?revision=older");
+      if (calls === 2) return new Response("{}", { status: 410 }) as Response;
+      controller.abort();
+      return new Response(null, { status: 404 }) as Response;
+    });
+    await watchSidecar(
+      "/sidecar.vtt?revision=old",
+      controller.signal,
+      () => 0,
+      () => {},
+      fetcher,
+      noDelay,
+      () => false,
+    );
+    expect(calls).toBe(3);
+  });
+
   it("times out a single request without AbortSignal.any, which older Safari lacks", async () => {
     vi.useFakeTimers();
     try {
