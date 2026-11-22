@@ -175,10 +175,6 @@ export class PlayerSidecars {
     // A job that has not started is already on its way: it waits for the reader it replaced to
     // let go of the source. Starting it here would defeat that wait and could double the read.
     if (!job.started || this.released.has(id) || job.complete || Date.now() < job.waitUntil) return;
-    if (Number.isFinite(job.coverage) && offset > job.coverage + SIDECAR_AHEAD_S) {
-      this.ensure(id, job.directory, job.track, offset, job.args);
-      return;
-    }
     if (job.running && job.coverage >= offset + SIDECAR_AHEAD_S) { void this.pause(job); return; }
     if (!job.running && job.coverage < offset + SIDECAR_RESUME_LEAD_S) {
       const from = Number.isFinite(job.coverage) ? Math.max(job.start, job.coverage) : job.start;

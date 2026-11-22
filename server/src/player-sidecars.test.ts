@@ -45,43 +45,6 @@ test("a seek past everything the reader has written starts one at the new positi
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("a large jump replaces the reader while a small one catches up", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-jump-"));
-  const runs: Array<{ from: number; append: boolean }> = [];
-  let running = false;
-  const sidecars = new PlayerSidecars(async (args, file, append, signal) => {
-    const parsed = Number(args[args.indexOf("-ss") + 1] ?? 0);
-    const from = Number.isFinite(parsed) ? parsed : 0;
-    runs.push({ from, append });
-    running = true;
-    const reach = from === 0 ? 967 : from === 967 ? 1087 : 5407;
-    await writeFile(file, `${append ? "" : "WEBVTT\n\n"}${cue(reach - (from === 967 ? 120 : 7), reach, "line")}\n\n`, append ? { flag: "a" } : {});
-    await whenAborted(signal);
-    running = false;
-  });
-  try {
-    const args = async (start: number) => (start > 0 ? ["-ss", start.toFixed(3)] : []);
-    sidecars.ensure("session", directory, 2, 0, args);
-    const revision = sidecars.revision("session");
-    let cues;
-    while (!(cues = await sidecars.read("session", revision, 60))) await tick();
-    assert.equal(Math.round(cues.coverage), 967);
-    while (running) await tick();
-
-    await sidecars.read("session", revision, 60, 0, 1087);
-    while (runs.length < 2) await tick();
-    assert.deepEqual(runs[1], { from: 967, append: true }, "a small jump keeps the cues and catches up");
-    while (!(cues = await sidecars.read("session", revision, 60))) await tick();
-    assert.equal(Math.round(cues.coverage), 1087);
-    while (running) await tick();
-
-    await sidecars.read("session", revision, 60, 0, 5400);
-    while (runs.length < 3) await tick();
-    assert.notEqual(sidecars.revision("session"), revision);
-    assert.deepEqual(runs[2], { from: 5400, append: false }, "a large jump starts at the playhead without its old cues");
-  } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
-});
-
 test("a sidecar write error takes the extraction FFmpeg with it", {
   skip: process.platform === "win32" ? "needs a POSIX executable on PATH" : false,
 }, async () => {
