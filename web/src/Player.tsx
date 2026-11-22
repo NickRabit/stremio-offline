@@ -1176,7 +1176,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     lastRemoteReportAt.current = Date.now();
     report("start");
     const timer = setInterval(() => {
-      if (pausedRef.current && Date.now() - lastRemoteReportAt.current < PAUSED_REPORT_MS) return;
+      // A wall clock set back makes the gap negative: report rather than stay silent until it catches up.
+      const sinceLast = Date.now() - lastRemoteReportAt.current;
+      if (pausedRef.current && sinceLast >= 0 && sinceLast < PAUSED_REPORT_MS) return;
       lastRemoteReportAt.current = Date.now();
       report("progress");
     }, 10_000);
