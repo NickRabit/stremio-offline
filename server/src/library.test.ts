@@ -94,6 +94,20 @@ test("a folder absent from the current held tree falls back to its disk aggregat
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("a folder the held tree does not know is still listed from disk, on a fresh cache", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-held-unknown-"));
+  try {
+    await mkdir(path.join(root, "Copied in"), { recursive: true });
+    await writeFile(path.join(root, "Copied in", "film.mkv"), Buffer.alloc(5));
+    await mkdir(path.join(root, "Empty"), { recursive: true });
+    for (const sort of ["name", "size"] as const) {
+      clearBrowseCache();
+      const result = await browseDirectory(root, "", "", 0, 20, sort, false, "", undefined, undefined, false, heldTree([]));
+      assert.deepEqual(result.items.map((item) => ({ path: item.path, size: item.size })), [{ path: "Copied in", size: 5 }], sort);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("the season number is recognised in the different folder spellings", () => {
   assert.equal(parseSeason("01 serie"), 1);
   assert.equal(parseSeason("12 série"), 12);

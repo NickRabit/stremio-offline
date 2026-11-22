@@ -667,13 +667,13 @@ async function readMixed(root: string, relative: string, entries: Dirent[], need
       }
       if (needle && !entry.name.toLowerCase().includes(needle)) continue;
       if (cheap) {
-        if (held ? !held.folder(childRelative) : !await hasVideo(root, childRelative, exclude)) continue;
+        // A folder the walk does not know (new, deeper than it goes, spelled otherwise) is asked on disk.
+        if (!held?.folder(childRelative) && !await hasVideo(root, childRelative, exclude)) continue;
         folders.push({ path: childRelative, name: entry.name, fileCount: 0, size: 0, modified: "" });
         continue;
       }
-      if (held) {
-        const aggregate = held.folder(childRelative);
-        if (!aggregate) continue;
+      const aggregate = held?.folder(childRelative);
+      if (aggregate) {
         folders.push({ path: childRelative, name: entry.name, ...aggregate });
         continue;
       }
