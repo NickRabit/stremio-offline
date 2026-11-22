@@ -534,7 +534,9 @@ test("the Media Foundation probe follows the platform and MEDIAFOUNDATION", asyn
   const loadOn = async (platform: string, off: boolean) => {
     Object.defineProperty(process, "platform", { value: platform, configurable: true });
     if (off) process.env.MEDIAFOUNDATION = "0"; else delete process.env.MEDIAFOUNDATION;
-    try { await manager.load(); } finally { delete process.env.MEDIAFOUNDATION; }
+    manager.capabilitiesProbe = undefined;
+    manager.capabilityState = "pending";
+    try { await manager.probeCapabilities(); } finally { delete process.env.MEDIAFOUNDATION; }
   };
   try {
     await loadOn("linux", false);
@@ -621,7 +623,9 @@ test("the NVENC probe follows NVENC and stands down for VAAPI", { skip: process.
   const loadWith = async (off: boolean, vaapi: string | undefined) => {
     if (off) process.env.NVENC = "0"; else delete process.env.NVENC;
     manager.vaapiDevice = vaapi;
-    try { await manager.load(); } finally { delete process.env.NVENC; manager.vaapiDevice = undefined; }
+    manager.capabilitiesProbe = undefined;
+    manager.capabilityState = "pending";
+    try { await manager.probeCapabilities(); } finally { delete process.env.NVENC; manager.vaapiDevice = undefined; }
   };
   await loadWith(false, undefined);
   assert.equal(probes, 1);
@@ -637,7 +641,7 @@ test("a Mac never probes NVENC", { skip: process.platform !== "darwin" ? "only a
   manager.checkVideotoolbox = async () => undefined;
   let probes = 0;
   manager.checkNvenc = async () => { probes += 1; };
-  await manager.load();
+  await manager.probeCapabilities();
   assert.equal(probes, 0);
 });
 
@@ -1832,6 +1836,8 @@ test("a native direct session switches to another playable audio track without r
 });
 
 const remuxSession = (manager: any, overrides: Record<string, unknown> = {}) => {
+  manager.capabilitiesProbe = Promise.resolve();
+  manager.capabilityState = "ready";
   const session: Record<string, any> = {
     id: "escalated", stream: { url: "https://cdn.example/movie.mkv" },
     capabilities: { h264: true, aac: true },
