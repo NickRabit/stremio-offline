@@ -10,6 +10,7 @@ import { DeviceTransfers } from "../device-transfers.js";
 import { DownloadQueue, type DownloadSelection, type PendingAdmissionOutcome, type PendingAdmissionRequest } from "../downloads.js";
 import { ForbiddenError, roleMiddleware } from "../roles.js";
 import { RestrictedError, restrictedMiddleware } from "../restricted.js";
+import type { DownloadStatus } from "../api-types.js";
 import {
   RULE_PRESETS,
   SOURCE_PROFILE_IDS,
@@ -173,7 +174,14 @@ const mount = async (options: {
   registerSourceProfilesRoutes(app, deps);
   if (options.downloads) {
     const queue = {
-      snapshot: () => ({ jobs: [], halt: null }),
+      snapshot: (include?: (job: { ownerUserId?: string; status: DownloadStatus }) => boolean) => ({
+        jobs: ([] as Array<{ ownerUserId?: string; status: DownloadStatus }>).filter(include ?? (() => true)),
+        halt: null,
+        window: null,
+        speedLimitMbps: null,
+        drain: null,
+      }),
+      ownerOf: (job: { ownerUserId?: string }) => job.ownerUserId,
       list: () => [],
       addPending: async (
         _title: string,

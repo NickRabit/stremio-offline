@@ -3,7 +3,7 @@ import type express from "express";
 import { allowedAddons } from "../addons.js";
 import { bulkEpisodeIsReleased, episodeKey, episodesInBulkScope, episodesInTarget } from "../bulk-target.js";
 import type { DeviceTransfers } from "../device-transfers.js";
-import { NoLibraryForKindError, REMOTE_ITEM_VIDEO_PREFIX, isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, remoteDownloadStream, type DownloadQueue, type DownloadSelection, type DownloadStatus, type PendingAdmissionRequest } from "../downloads.js";
+import { NoLibraryForKindError, REMOTE_ITEM_VIDEO_PREFIX, isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, remoteDownloadStream, type DownloadJob, type DownloadQueue, type DownloadSelection, type DownloadStatus, type PendingAdmissionRequest } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
@@ -310,15 +310,15 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
 
   app.get("/api/downloads", asyncRoute(async (req, res) => {
     const viewer = viewerOf(currentUser(req));
-    const snapshot = queue.snapshot();
     const activeOnly = req.query.active === "1";
-    const jobs = snapshot.jobs.filter((job) =>
-      (viewer.role === "admin" || job.ownerUserId === viewer.id) &&
-      (!activeOnly || ACTIVE_DOWNLOAD_STATUSES.has(job.status))
-    );
+    const snapshot = queue.snapshot((job: DownloadJob) => {
+      const ownerUserId = queue.ownerOf(job);
+      return (viewer.role === "admin" || ownerUserId === viewer.id)
+        && (!activeOnly || ACTIVE_DOWNLOAD_STATUSES.has(job.status));
+    });
     res.json({
       ...snapshot,
-      jobs: await Promise.all(jobs.map((job) => jobView({ ...job, mine: job.ownerUserId === viewer.id }))),
+      jobs: await Promise.all(snapshot.jobs.map((job) => jobView({ ...job, mine: job.ownerUserId === viewer.id }))),
       deviceTransfers: deviceTransfers.list(viewer),
       drain: queue.drainFor({ id: viewer.id, admin: viewer.role === "admin" }),
     });
