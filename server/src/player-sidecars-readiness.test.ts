@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { appendFile, mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -25,9 +25,9 @@ const waitFor = async (condition: () => boolean, message: string) => {
     await wait(5);
   }
 };
-const stamp = (value: number) =>
+const cueStamp = (value: number) =>
   `${String(Math.floor(value / 3600)).padStart(2, "0")}:${String(Math.floor((value % 3600) / 60)).padStart(2, "0")}:${(value % 60).toFixed(3).padStart(6, "0")}`;
-const cue = (from: number, to: number, text: string) => `${stamp(from)} --> ${stamp(to)}\n${text}`;
+const cue = (from: number, to: number, text: string) => `${cueStamp(from)} --> ${cueStamp(to)}\n${text}`;
 const cues = (from: number, to: number, step: number, silenceFrom: number, silenceTo: number) => {
   const blocks: string[] = [];
   for (let at = from; at < to; at += step) {
@@ -421,4 +421,67 @@ test("the probe watcher reads the full track only when it seeks and attaches", {
     forwardCorrectCueMs: Number(forwardElapsed.toFixed(2)),
     backwardCorrectCueMs: Number(backwardElapsed.toFixed(2)),
   }));
+});
+
+const stamp = (value: number) => `00:${String(Math.floor(value / 60)).padStart(2, "0")}:${(value % 60).toFixed(3).padStart(6, "0")}`;
+const settleMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("a slow full read that started before a probe saw newer cues does not pull the coverage back", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "sidecar-stale-read-"));
+  let file = "";
+  let release: (() => void) | undefined;
+  let held = false;
+  const io: SidecarIO = {
+    ...defaultSidecarIO,
+    async readFull(target) {
+      const text = await defaultSidecarIO.readFull(target);
+      if (!held) { held = true; await new Promise<void>((resolve) => { release = resolve; }); }
+      return text;
+    },
+  };
+  const sidecars = new PlayerSidecars(async (_args, target, _append, signal) => {
+    file = target;
+    await writeFile(target, "WEBVTT\n\n");
+    await new Promise((resolve) => signal.addEventListener("abort", resolve));
+  }, () => {}, io);
+  try {
+    sidecars.ensure("s", dir, 1, 0, async () => []);
+    await settleMs(30);
+    await appendFile(file, `${cueStamp(0)} --> ${cueStamp(10)}\nx\n\n`);
+    const slow = sidecars.readState("s", undefined, 0, 0, null);
+    await settleMs(20);
+    await appendFile(file, `${cueStamp(10)} --> ${cueStamp(60)}\ny\n\n`);
+    const before = await sidecars.readiness("s", undefined, 40, null);
+    assert.equal(before.state, "ready");
+    release!();
+    await slow;
+    const after = await sidecars.readiness("s", undefined, 40, null);
+    assert.deepEqual(after, before, "the probe still sees the cues the file holds");
+  } finally {
+    await sidecars.stop("s");
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a probe of a file that was never created does not restart the reader, as the full read does not", async () => {
+  for (const mode of ["probe", "full"] as const) {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sidecar-missing-"));
+    let calls = 0;
+    const sidecars = new PlayerSidecars(async () => { throw new Error("no source"); });
+    const realNow = Date.now;
+    try {
+      sidecars.ensure("m", dir, 1, 0, async () => { calls += 1; if (calls === 1) throw new Error("resolve failed"); return []; });
+      await settleMs(30);
+      Date.now = () => realNow() + 10 * 60_000;
+      if (mode === "probe") await sidecars.readiness("m", undefined, 0, 0);
+      else await sidecars.readState("m", undefined, 0, 0, 0);
+      Date.now = realNow;
+      await settleMs(30);
+      assert.equal(calls, 1, `${mode}: no relaunch from a poll of a file that does not exist`);
+    } finally {
+      Date.now = realNow;
+      await sidecars.stop("m");
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
 });
