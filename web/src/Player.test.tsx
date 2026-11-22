@@ -204,10 +204,6 @@ beforeEach(() => {
       if (playbackStatusGate) return playbackStatusGate.then(() => json(playbackStatusAnswer));
       return Promise.resolve(json(playbackStatusAnswer));
     }
-    if (/^\/api\/playback\/[^/]+\/track$/.test(path) && init?.method === "POST") {
-      const quality = (JSON.parse(String(init.body)) as { quality?: number | null }).quality;
-      return Promise.resolve(json({ ...session(), ...(quality === undefined ? {} : { quality }) }));
-    }
     if (/^\/api\/playback\/[^/]+\/seek$/.test(path) && init?.method === "POST") {
       const time = Number((JSON.parse(String(init.body)) as { time?: number }).time);
       seekRequests.push({ path, time });
@@ -245,8 +241,11 @@ beforeEach(() => {
       trackRequests.push(body);
       return (heldTrack ?? Promise.resolve()).then(() => json({
         ...session(),
-        subtitleTrack: body.subtitle,
-        sidecarUrl: "/api/playback/sess1/sidecar.vtt?revision=track-new&offset=0.000",
+        ...(body.quality === undefined ? {} : { quality: body.quality }),
+        ...(body.subtitle === undefined ? {} : {
+          subtitleTrack: body.subtitle,
+          sidecarUrl: "/api/playback/sess1/sidecar.vtt?revision=track-new&offset=0.000",
+        }),
       }));
     }
     if (/^\/api\/progress\/[^/]+$/.test(path)) {
