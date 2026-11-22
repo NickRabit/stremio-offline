@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { DeviceTransfers } from "../device-transfers.js";
-import { DownloadQueue, type DownloadSelection } from "../downloads.js";
+import { DownloadQueue, type DownloadSelection, type PendingAdmissionOutcome, type PendingAdmissionRequest } from "../downloads.js";
 import { ForbiddenError, roleMiddleware } from "../roles.js";
 import { RestrictedError, restrictedMiddleware } from "../restricted.js";
 import {
@@ -194,7 +194,20 @@ const mount = async (options: {
         sourceAdmission?: unknown,
       ) => {
         pending.push({ ownerUserId, selection: source.selection, sourceAdmission });
-        return { outcome: "queued", job: { id: "job-1" } };
+        return { outcome: "queued", job: { id: "job-1" } } as PendingAdmissionOutcome;
+      },
+      admitPendingBatch: async (requests: PendingAdmissionRequest[], ownerUserId: string | undefined): Promise<PendingAdmissionOutcome[]> => {
+        const outcomes: PendingAdmissionOutcome[] = [];
+        for (const request of requests) {
+          outcomes.push(await queue.admitPending(
+            request.title,
+            request.source,
+            request.media,
+            ownerUserId,
+            request.sourceAdmissionInput,
+          ));
+        }
+        return outcomes;
       },
       activeEpisodeIn: () => false,
       pause: async () => undefined,
