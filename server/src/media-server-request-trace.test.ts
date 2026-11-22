@@ -107,6 +107,7 @@ class FakeServer {
   playbackInfoOf: Record<string, ProviderPlaybackInfo> = {};
   calls: TraceRecord[] = [];
   failures = new Map<Operation, number>();
+  errors = new Map<Operation, MediaServerError>();
   hold: Hold | undefined;
   body = fileBytes(8 * 1024);
   originalDelayMs = 2;
@@ -117,6 +118,8 @@ class FakeServer {
   reset(): void {
     this.calls = [];
     this.failures.clear();
+    this.errors.clear();
+    this.failed.clear();
     this.hold = undefined;
     this.originalCancels = 0;
   }
@@ -144,6 +147,12 @@ class FakeServer {
         record.failed = true;
         this.failed.add(operation);
         throw new MediaServerError("unavailable", "The fake provider is unavailable.");
+      }
+      const error = this.errors.get(operation);
+      if (error) {
+        record.failed = true;
+        this.failed.add(operation);
+        throw error;
       }
       const value = await work(record);
       this.failed.delete(operation);
@@ -271,7 +280,13 @@ interface Harness {
   close(): Promise<void>;
 }
 
-const mount = async (contentDownloading = true): Promise<Harness> => {
+interface MountOptions {
+  contentDownloading?: boolean;
+  clock?: () => number;
+  networkStartIntervalMs?: number;
+}
+
+const mount = async (options: MountOptions = {}): Promise<Harness> => {
   const dir = await mkdtemp(path.join(tmpdir(), "media-request-trace-"));
   const owner = user();
   await writeFile(path.join(dir, "state.json"), JSON.stringify({
@@ -288,12 +303,13 @@ const mount = async (contentDownloading = true): Promise<Harness> => {
   const store = new Store(dir, dir);
   await store.load();
   const server = new FakeServer();
-  server.policy = { ...server.policy, contentDownloading };
+  server.policy = { ...server.policy, contentDownloading: options.contentDownloading ?? true };
   const manager = new MediaServerManager(store, new MediaServerSecrets(path.join(dir, "vault"), keyFile), {
     providerFactory: () => providerFor(server),
     transportFactory: () => transportFor(server),
     index: new MediaServerIndex(),
-    networkStartIntervalMs: 0,
+    networkStartIntervalMs: options.networkStartIntervalMs ?? 0,
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
   });
   await manager.initialize();
   const authority: MediaServerAuthority = {
@@ -326,8 +342,8 @@ const mount = async (contentDownloading = true): Promise<Harness> => {
   };
 };
 
-const withHarness = async (run: (harness: Harness) => Promise<void>, contentDownloading = true): Promise<void> => {
-  const harness = await mount(contentDownloading);
+const withHarness = async (run: (harness: Harness) => Promise<void>, options: MountOptions = {}): Promise<void> => {
+  const harness = await mount(options);
   try {
     await run(harness);
   } finally {
@@ -401,6 +417,11 @@ const proofInflight = (harness: Harness): Map<string, { subscribers: number }> =
 const proofSubscribers = (harness: Harness, operation: string): number | undefined =>
   [...proofInflight(harness)]
     .find(([key]) => key.startsWith("original-proof\u0000") && key.endsWith(`\u0000${operation}`))?.[1].subscribers;
+
+const liveAdmissionAt = (harness: Harness): number | undefined =>
+  [...(harness.manager as unknown as {
+    livePlaybackAdmissions: Map<string, { at: number }>;
+  }).livePlaybackAdmissions.values()][0]?.at;
 
 const diagnostic = (
   t: { diagnostic(message: string): void },
@@ -536,6 +557,34 @@ test("playback direct open, seek, reporting and warm reuse have pinned request c
   });
 });
 
+test("a reused live admission keeps its original timestamp", async (t) => {
+  let now = 0;
+  await withHarness(async (harness) => {
+    const ref = contentRef(harness);
+    dropRuntime(harness);
+    await consume(await harness.manager.openOriginal(harness.authority, ref, { method: "GET" }));
+    const originalAt = liveAdmissionAt(harness);
+    assert.equal(originalAt, 0);
+
+    harness.server.reset();
+    now = 31_000;
+    const startedAt = performance.now();
+    await consume(await harness.manager.openOriginal(harness.authority, ref, { method: "GET" }));
+    const calls = [...harness.server.calls];
+    assert.deepEqual(counts(calls), {
+      identity: 1,
+      account: 1,
+      views: 1,
+      item: 1,
+      ancestors: 1,
+      versions: 1,
+      GET: 1,
+    });
+    assert.equal(liveAdmissionAt(harness), originalAt);
+    diagnostic(t, "live-admission-reused", startedAt, calls);
+  }, { clock: () => now });
+});
+
 test("a DownloadQueue remote copy is one sequential GET and resumes from its received offset", async (t) => {
   await withHarness(async (harness) => {
     const { queue, reference } = await remoteQueue(harness);
@@ -654,6 +703,22 @@ test("simultaneous consumers share session facts and the source proof reads", as
   });
 });
 
+test("the four shared proof reads keep the configured request spacing", async (t) => {
+  await withHarness(async (harness) => {
+    const ref = contentRef(harness);
+    dropRuntime(harness);
+    const startedAt = performance.now();
+    await consume(await harness.manager.openOriginal(harness.authority, ref, { method: "GET" }));
+    const proofCalls = harness.server.calls.filter((call) =>
+      ["item", "ancestors", "versions", "playback-info"].includes(call.operation));
+    assert.deepEqual(proofCalls.map((call) => call.operation), ["item", "ancestors", "versions", "playback-info"]);
+    const gaps = proofCalls.slice(1).map((call, index) => call.startedAt - proofCalls[index]!.startedAt);
+    t.diagnostic(`proof-pacing gaps=${gaps.map((gap) => gap.toFixed(2)).join(",")}`);
+    assert.deepEqual(gaps.map((gap) => gap >= 49), [true, true, true]);
+    diagnostic(t, "proof-paced", startedAt, harness.server.calls);
+  }, { networkStartIntervalMs: 50 });
+});
+
 test("one cancelled consumer never cancels the other's shared operation", async (t) => {
   await withHarness(async (harness) => {
     const ref = contentRef(harness);
@@ -768,7 +833,43 @@ test("one consumer's failed authority check does not refuse the other consumer",
   });
 });
 
-test("losing library access during an open is refused after the shared proof", async (t) => {
+test("a shared proof 401 marks reauthentication once", async (t) => {
+  await withHarness(async (harness) => {
+    const ref = contentRef(harness);
+    const release = deferred();
+    harness.server.hold = {
+      operation: "item",
+      count: 1,
+      wait: release.promise,
+      entered: () => undefined,
+    };
+    const internal = harness.manager as unknown as {
+      markReauthentication(record: unknown): void;
+    };
+    const mark = internal.markReauthentication.bind(harness.manager);
+    let marks = 0;
+    internal.markReauthentication = (record) => {
+      marks += 1;
+      mark(record);
+    };
+    dropRuntime(harness);
+    const startedAt = performance.now();
+    const opening = [
+      harness.manager.openOriginal(harness.authority, ref, { method: "GET" }),
+      harness.manager.openOriginal(harness.authority, ref, { method: "GET" }),
+    ];
+    await waitFor(() => proofSubscribers(harness, "proof") === 2);
+    harness.server.errors.set("item", new MediaServerError("authentication-required", "401", 401));
+    release.resolve();
+    await assert.rejects(opening[0]!, { code: "authentication-required" });
+    await assert.rejects(opening[1]!, { code: "authentication-required" });
+    assert.equal(marks, 1);
+    const calls = [...harness.server.calls];
+    diagnostic(t, "shared-proof-401", startedAt, calls);
+  });
+});
+
+test("losing library access during an open stops before the next shared read", async (t) => {
   await withHarness(async (harness) => {
     const ref = contentRef(harness);
     const release = deferred();
@@ -791,9 +892,6 @@ test("losing library access during an open is refused after the shared proof", a
       account: 1,
       views: 1,
       item: 1,
-      ancestors: 1,
-      versions: 1,
-      "playback-info": 1,
     });
     diagnostic(t, "library-access-lost", startedAt, calls);
   });
@@ -815,7 +913,7 @@ test("a download-disabled account reads only session facts cold and nothing warm
     const warmCalls = [...harness.server.calls];
     assert.deepEqual(counts(warmCalls), {});
     diagnostic(t, "download-disabled-warm", warmStarted, warmCalls);
-  }, false);
+  }, { contentDownloading: false });
 });
 
 test("a source replaced during an open is refused before the byte request", async (t) => {

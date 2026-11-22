@@ -620,6 +620,7 @@ interface OriginalPreparation {
   proof: OriginalProof;
   item: ProviderItem;
   versions: ProviderVersion[];
+  freshAdmission: boolean;
 }
 
 interface PlaybackAdmission {
@@ -666,6 +667,18 @@ interface InflightRead {
   promise: Promise<unknown>;
   controller: AbortController;
   subscribers: number;
+}
+
+interface ProofSubscriber {
+  active: boolean;
+  check(): void;
+  reject(error: unknown): void;
+}
+
+interface InflightProofRead extends InflightRead {
+  runtime: CachedRuntime;
+  key: string;
+  participants: Set<ProofSubscriber>;
 }
 
 const newRuntime = (
@@ -2124,20 +2137,24 @@ export class MediaServerManager {
     user: UserRecord,
     admissionKind: "playback" | "download",
     signal: AbortSignal,
+    check: () => void,
   ): Promise<OriginalPreparation> {
     const runtime = this.liveRuntime(connection);
     const key = this.originalProofInflightKey(
       user, library, connection, ref.itemId, ref.mediaSourceId, admissionKind, "proof",
     );
-    return this.coalescedUpstream(connection, runtime, key, signal, async (inner) => {
-      const item = await session.provider.detail(session.token, connection.accountId, ref.itemId, inner);
-      this.checkLive(inner);
+    return this.coalescedProof(runtime, key, signal, check, async (inner, checkpoint) => {
+      const item = await this.upstream(connection, inner, () =>
+        session.provider.detail(session.token, connection.accountId, ref.itemId, inner));
+      checkpoint();
       if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
-      const ancestors = await session.provider.ancestors(session.token, connection.accountId, item.id, inner);
-      this.checkLive(inner);
+      const ancestors = await this.upstream(connection, inner, () =>
+        session.provider.ancestors(session.token, connection.accountId, item.id, inner));
+      checkpoint();
       if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
-      const versions = await session.provider.versions(session.token, connection.accountId, item.id, inner);
-      this.checkLive(inner);
+      const versions = await this.upstream(connection, inner, () =>
+        session.provider.versions(session.token, connection.accountId, item.id, inner));
+      checkpoint();
       const version = versions.find((candidate) => candidate.id === ref.mediaSourceId);
       if (!version) throw notFound("That media-server source is no longer available.");
       const isPlayback = admissionKind === "playback";
@@ -2148,19 +2165,20 @@ export class MediaServerManager {
         ? this.playbackAdmissionValue(live)
         : this.playbackAdmissionFromInfo(
           session,
-          await session.provider.playbackInfo(session.token, connection.accountId, ref.itemId, {
+          await this.upstream(connection, inner, () => session.provider.playbackInfo(session.token, connection.accountId, ref.itemId, {
             mediaSourceId: ref.mediaSourceId,
             ...(session.policy.bitrateLimit === undefined ? {} : { maxStreamingBitrate: session.policy.bitrateLimit }),
             isPlayback,
-          }, inner),
+          }, inner)),
           ref.mediaSourceId,
           isPlayback,
           isPlayback,
         );
-      this.checkLive(inner);
+      checkpoint();
       return {
         item,
         versions,
+        freshAdmission: live === undefined,
         proof: {
           actorId: user.id,
           libraryId: library.id,
@@ -2199,13 +2217,16 @@ export class MediaServerManager {
     let proof = this.originalProofFor(user, library, connection, ref.itemId, ref.mediaSourceId);
     if (proof?.admissionKind !== wantedKind) proof = undefined;
     if (!proof) {
-      const prepared = await this.prepareOriginalProof(connection, session, ref, library, user, wantedKind, request);
+      const prepared = await this.prepareOriginalProof(
+        connection, session, ref, library, user, wantedKind, request,
+        () => this.recheckRef(authority, request, ref),
+      );
       this.recheckRef(authority, request, ref);
       const runtime = this.liveRuntime(connection);
       if (prepared.item.type === "movie" || prepared.item.type === "episode") {
         this.shareFreshOriginal(user, library, connection, runtime, prepared.item, prepared.versions);
       }
-      if (wantedKind === "playback") {
+      if (wantedKind === "playback" && prepared.freshAdmission) {
         this.putLivePlaybackAdmission({
           actorId: user.id,
           actorSecretStamp: remoteSecretStamp(user.secret),
@@ -3597,20 +3618,90 @@ export class MediaServerManager {
     }
   }
 
-  private async coalescedUpstream<T>(
-    connection: MediaConnectionRecord,
+  private coalescedProof<T>(
     runtime: CachedRuntime | undefined,
     key: string,
     signal: AbortSignal,
-    work: (signal: AbortSignal) => Promise<T>,
+    check: () => void,
+    work: (signal: AbortSignal, checkpoint: () => void) => Promise<T>,
   ): Promise<T> {
-    try {
-      return runtime
-        ? await this.coalesced(runtime, key, signal, work)
-        : await this.upstream(connection, signal, () => work(signal));
-    } catch (error) {
-      if (error instanceof MediaServerError && error.code === "authentication-required") this.markReauthentication(connection);
-      throw error;
+    this.checkLive(signal);
+    if (!runtime || !this.coalesceReads) return work(signal, check);
+    const existed = runtime.inflight.get(key);
+    if (existed) return this.joinProofInflight<T>(existed as InflightProofRead, signal, check);
+    const controller = new AbortController();
+    const combined = AbortSignal.any([this.lifetime.signal, controller.signal]);
+    const entry: InflightProofRead = {
+      promise: Promise.resolve(),
+      controller,
+      subscribers: 0,
+      runtime,
+      key,
+      participants: new Set(),
+    };
+    entry.promise = work(combined, () => this.runProofCheckpoints(entry)).finally(() => {
+      if (runtime.inflight.get(key) === entry) runtime.inflight.delete(key);
+    });
+    void entry.promise.catch(() => undefined);
+    runtime.inflight.set(key, entry);
+    return this.joinProofInflight<T>(entry, signal, check);
+  }
+
+  private joinProofInflight<T>(
+    entry: InflightProofRead,
+    signal: AbortSignal,
+    check: () => void,
+  ): Promise<T> {
+    this.checkLive(signal);
+    return new Promise<T>((resolve, reject) => {
+      let done = false;
+      const participant: ProofSubscriber = {
+        active: true,
+        check,
+        reject: (error) => finish(() => reject(error)),
+      };
+      const finish = (settle: () => void): void => {
+        if (done) return;
+        done = true;
+        participant.active = false;
+        signal.removeEventListener("abort", onAbort);
+        settle();
+      };
+      const onAbort = (): void => {
+        this.detachProofSubscriber(entry, participant);
+        finish(() => reject(this.closed ? closedError() : cancelled()));
+      };
+      entry.subscribers += 1;
+      entry.participants.add(participant);
+      signal.addEventListener("abort", onAbort, { once: true });
+      entry.promise.then(
+        (value) => finish(() => resolve(value as T)),
+        (error) => finish(() => reject(error)),
+      );
+    });
+  }
+
+  private runProofCheckpoints(entry: InflightProofRead): void {
+    for (const participant of [...entry.participants]) {
+      if (!participant.active) continue;
+      try {
+        participant.check();
+      } catch (error) {
+        this.detachProofSubscriber(entry, participant);
+        participant.reject(error);
+      }
+    }
+    if (entry.subscribers <= 0) throw cancelled();
+  }
+
+  private detachProofSubscriber(entry: InflightProofRead, participant: ProofSubscriber): void {
+    if (!participant.active) return;
+    participant.active = false;
+    entry.participants.delete(participant);
+    entry.subscribers -= 1;
+    if (entry.subscribers <= 0) {
+      if (entry.runtime.inflight.get(entry.key) === entry) entry.runtime.inflight.delete(entry.key);
+      entry.controller.abort();
     }
   }
 
