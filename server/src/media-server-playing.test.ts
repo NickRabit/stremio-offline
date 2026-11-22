@@ -331,6 +331,28 @@ test("an idle-swept session is resumed by progress", async () => {
   assert.deepEqual(fake.calls.map((call) => call.report.kind), ["playing", "stopped", "playing"]);
 });
 
+test("a pause reported every thirty seconds stays live while seventy-five seconds of silence expires", async () => {
+  const fake = fakeManager();
+  let now = 0;
+  const reporter = new MediaServerPlaybackReporter(fake.manager, () => authority(), { clock: () => now });
+  const actor = authority();
+
+  await reporter.report(actor, "rlib_1", "paused", report("start", { paused: true, playId: "paused-play" }));
+  await reporter.report(actor, "rlib_1", "silent", report("start", { paused: true, playId: "silent-play" }));
+  for (let seconds = 30; seconds <= 180; seconds += 30) {
+    now = seconds * 1_000;
+    await reporter.report(actor, "rlib_1", "paused", report("progress", { paused: true, playId: "paused-play" }));
+    await reporter.sweep();
+    if (seconds === 60) {
+      now = 75_000;
+      await reporter.sweep();
+    }
+  }
+
+  const stopped = fake.calls.filter((call) => call.report.kind === "stopped");
+  assert.deepEqual(stopped.map((call) => call.itemId), ["silent"]);
+});
+
 test("a stopped report retries one transient failure and not a terminal one", async () => {
   for (const [code, expected] of [["unavailable", 2], ["forbidden", 1]] as const) {
     const fake = fakeManager();
