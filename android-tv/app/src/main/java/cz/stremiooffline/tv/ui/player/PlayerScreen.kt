@@ -2,6 +2,7 @@
 
 package cz.stremiooffline.tv.ui.player
 
+import android.app.ActivityManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -51,6 +52,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -1336,10 +1338,21 @@ fun PlayerScreen(
   }
 }
 
-internal fun buildExoPlayer(context: Context, http: okhttp3.OkHttpClient): ExoPlayer =
-  ExoPlayer.Builder(context)
+internal fun playerBufferBytes(memoryClassMb: Int, lowRam: Boolean): Int =
+  when {
+    lowRam || memoryClassMb <= 192 -> 32 * 1024 * 1024
+    memoryClassMb <= 384 -> 64 * 1024 * 1024
+    else -> C.LENGTH_UNSET
+  }
+
+internal fun buildExoPlayer(context: Context, http: okhttp3.OkHttpClient): ExoPlayer {
+  val activityManager = context.getSystemService(ActivityManager::class.java)
+  val targetBufferBytes = playerBufferBytes(activityManager.memoryClass, activityManager.isLowRamDevice)
+  return ExoPlayer.Builder(context)
     .setMediaSourceFactory(DefaultMediaSourceFactory(OkHttpDataSource.Factory(http)))
+    .setLoadControl(DefaultLoadControl.Builder().setTargetBufferBytes(targetBufferBytes).build())
     .build()
+}
 
 /**
  * The media keys work whether or not the OSD is up; a null answer means the key is not ours. Back

@@ -57,6 +57,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Surface
@@ -229,6 +232,7 @@ fun Shell(
   onProfilesGone: () -> Unit = {},
   onAvatarChanged: (AvatarDto?) -> Unit = {},
 ) {
+  val lifecycle = LocalLifecycleOwner.current.lifecycle
   val shellState = rememberSaveable(start, saver = ShellStateSaver) { ShellState(start) }
   val childSections = remember(child, childCatalogue) { sectionsFor(child, childCatalogue).map { it.first }.toSet() }
   val current = shellState.selected.takeUnless { child && it !in childSections } ?: Section.Home
@@ -499,16 +503,18 @@ fun Shell(
   LaunchedEffect(Unit) {
     searchEverywhereEnabled = runCatching { api.searchEverywhereEnabled() }.getOrDefault(false)
   }
-  LaunchedEffect(player == null) {
+  LaunchedEffect(player == null, child, lifecycle) {
     if (player != null || child) return@LaunchedEffect
-    while (true) {
-      try {
-        downloading = hasActiveDownloads(api.activeDownloads().jobs)
-      } catch (cancelled: CancellationException) {
-        throw cancelled
-      } catch (_: ApiError) {
+    lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+      while (true) {
+        try {
+          downloading = hasActiveDownloads(api.activeDownloads().jobs)
+        } catch (cancelled: CancellationException) {
+          throw cancelled
+        } catch (_: ApiError) {
+        }
+        delay(15_000L)
       }
-      delay(15_000L)
     }
   }
   LaunchedEffect(child, current) {

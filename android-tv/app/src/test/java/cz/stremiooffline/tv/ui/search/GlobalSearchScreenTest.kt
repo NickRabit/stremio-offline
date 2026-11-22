@@ -2,7 +2,9 @@
 
 package cz.stremiooffline.tv.ui.search
 
+import android.os.Looper
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -22,7 +24,11 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import cz.stremiooffline.tv.data.GlobalSearchAliasDto
 import cz.stremiooffline.tv.data.GlobalSearchCanonicalDto
 import cz.stremiooffline.tv.data.GlobalSearchClusterDto
@@ -52,6 +58,7 @@ import cz.stremiooffline.tv.ui.catalog.recentRemoveTag
 import cz.stremiooffline.tv.ui.catalog.recentSearchTag
 import cz.stremiooffline.tv.ui.catalog.scopeAddonTag
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
+import java.time.Duration
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -61,12 +68,20 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.Shadows.shadowOf
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-xhdpi")
 class GlobalSearchScreenTest {
 
   @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+  private class Owner : LifecycleOwner {
+    val registry = LifecycleRegistry.createUnsafe(this)
+    override val lifecycle: Lifecycle get() = registry
+  }
+
+  private val lifecycleOwner = Owner().apply { registry.currentState = Lifecycle.State.RESUMED }
 
   private var catalogOpened: cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs? = null
   private var remoteOpened: RemoteDetailData? = null
@@ -126,20 +141,22 @@ class GlobalSearchScreenTest {
     catalogueAvailable: Boolean = true,
   ) {
     compose.setContent {
-      GlobalSearchScreen(
-        api = api,
-        onOpenCatalog = { catalogOpened = it },
-        onOpenRemote = { remoteOpened = it },
-        onOpenLibrary = { libraryOpened = it },
-        onOpenPerson = { personOpened = it },
-        imageUrl = { null },
-        overlayOpen = false,
-        preset = preset,
-        catalogueAvailable = catalogueAvailable,
-        onBack = onBack,
-        voiceAvailable = voiceAvailable,
-        voiceLauncher = voiceLauncher,
-      )
+      CompositionLocalProvider(LocalLifecycleOwner provides lifecycleOwner) {
+        GlobalSearchScreen(
+          api = api,
+          onOpenCatalog = { catalogOpened = it },
+          onOpenRemote = { remoteOpened = it },
+          onOpenLibrary = { libraryOpened = it },
+          onOpenPerson = { personOpened = it },
+          imageUrl = { null },
+          overlayOpen = false,
+          preset = preset,
+          catalogueAvailable = catalogueAvailable,
+          onBack = onBack,
+          voiceAvailable = voiceAvailable,
+          voiceLauncher = voiceLauncher,
+        )
+      }
     }
     compose.waitForIdle()
   }
@@ -165,6 +182,11 @@ class GlobalSearchScreenTest {
 
   private fun press(key: Key) {
     compose.onRoot().performKeyInput { pressKey(key) }
+    compose.waitForIdle()
+  }
+
+  private fun advance(milliseconds: Long) {
+    shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(milliseconds))
     compose.waitForIdle()
   }
 
@@ -383,6 +405,25 @@ class GlobalSearchScreenTest {
     search("matrix")
 
     assertEquals(listOf("matrix"), api.recordedSearches)
+  }
+
+  @Test
+  fun `a background search makes no polls`() {
+    val api = FakeTvApi()
+    start(api, emptyList())
+    mount(api)
+    search("matrix")
+    compose.waitUntil(5_000) { api.globalPollCalls.isNotEmpty() }
+    val pollsBeforeBackground = api.globalPollCalls.size
+    advance(1_000)
+    assertTrue(api.globalPollCalls.size > pollsBeforeBackground)
+
+    lifecycleOwner.registry.currentState = Lifecycle.State.CREATED
+    compose.waitForIdle()
+    val pollsBeforePause = api.globalPollCalls.size
+    advance(10_000)
+
+    assertEquals(pollsBeforePause, api.globalPollCalls.size)
   }
 
   @Test

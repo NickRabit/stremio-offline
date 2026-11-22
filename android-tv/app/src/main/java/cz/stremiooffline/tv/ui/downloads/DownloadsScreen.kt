@@ -47,6 +47,9 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import coil3.compose.AsyncImage
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.ApiError
@@ -66,6 +69,7 @@ const val TagDownloadsFooter = "downloads_footer"
 
 @Composable
 fun DownloadsScreen(api: TvApi, active: Boolean = true) {
+  val lifecycle = LocalLifecycleOwner.current.lifecycle
   var allJobs by remember { mutableStateOf<List<DownloadDto>>(emptyList()) }
   var loaded by remember { mutableStateOf(false) }
   var loadFailed by remember { mutableStateOf(false) }
@@ -73,19 +77,21 @@ fun DownloadsScreen(api: TvApi, active: Boolean = true) {
   var focusedJobId by remember { mutableStateOf<String?>(null) }
   val requesters = remember { mutableMapOf<String, FocusRequester>() }
 
-  LaunchedEffect(api, active) {
+  LaunchedEffect(api, active, lifecycle) {
     if (!active) return@LaunchedEffect
-    while (true) {
-      try {
-        allJobs = api.downloads().jobs
-        loaded = true
-        loadFailed = false
-      } catch (cancelled: CancellationException) {
-        throw cancelled
-      } catch (_: ApiError) {
-        if (!loaded) loadFailed = true
+    lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+      while (true) {
+        try {
+          allJobs = api.downloads().jobs
+          loaded = true
+          loadFailed = false
+        } catch (cancelled: CancellationException) {
+          throw cancelled
+        } catch (_: ApiError) {
+          if (!loaded) loadFailed = true
+        }
+        delay(DownloadsRefreshMs)
       }
-      delay(DownloadsRefreshMs)
     }
   }
 

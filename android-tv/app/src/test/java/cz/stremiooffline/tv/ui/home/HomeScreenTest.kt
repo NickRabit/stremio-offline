@@ -3,6 +3,8 @@
 package cz.stremiooffline.tv.ui.home
 
 import android.content.Context
+import android.graphics.drawable.ColorDrawable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.input.key.Key
@@ -22,6 +24,11 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ApplicationProvider
+import coil3.ImageLoader
+import coil3.asImage
+import coil3.intercept.Interceptor
+import coil3.request.ImageResult
+import coil3.request.SuccessResult
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.ApiError
@@ -35,6 +42,7 @@ import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.episodeCodeText
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.LocalSessionImageLoader
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CompletableDeferred
@@ -87,6 +95,23 @@ class HomeScreenTest {
     HomeCard.Discovery(key = key, type = "movie", id = id, name = name, title = name)
 
   private fun order(vararg ids: String) = ids.map { HomeOrderEntry(it) }
+
+  private class RecordingInterceptor(private val requested: MutableList<String>) : Interceptor {
+    override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
+      requested += chain.request.data.toString()
+      return SuccessResult(
+        ColorDrawable(android.graphics.Color.RED).asImage(),
+        chain.request,
+        isSampled = false,
+        dataSource = coil3.decode.DataSource.MEMORY,
+      )
+    }
+  }
+
+  private fun loader(requested: MutableList<String>): ImageLoader =
+    ImageLoader.Builder(context)
+      .components { add(RecordingInterceptor(requested)) }
+      .build()
 
   @Test
   fun `the first card of the first row takes focus and the backdrop shows its title`() {
@@ -742,6 +767,40 @@ class HomeScreenTest {
 
     compose.onNodeWithTag(homeCardTag("movie:tt5")).assertIsFocused()
     assertEquals(listOf(Triple("movie", "tt5", null)), api.metaRequests)
+  }
+
+  @Test
+  fun `moving across five cards quickly loads only the last backdrop`() {
+    val api = FakeTvApi()
+    val requested = mutableListOf<String>()
+    val cards = (1..5).map { index ->
+      discovery("movie:tt$index", "tt$index").copy(
+        poster = "/poster/$index.jpg",
+        wide = "/wide/$index.jpg",
+      )
+    }
+    serve(api, order("tonight"), mapOf("tonight" to row(*cards.toTypedArray())))
+    val imageLoader = loader(requested)
+    compose.mainClock.autoAdvance = false
+    compose.setContent {
+      CompositionLocalProvider(LocalSessionImageLoader provides imageLoader) {
+        HomeScreen(api = api, onAction = {}, onHint = {})
+      }
+    }
+    step(100)
+
+    compose.onNodeWithTag(homeCardTag("movie:tt1")).performKeyInput {
+      repeat(4) { pressKey(Key.DirectionRight) }
+    }
+    step(100)
+    assertEquals(listOf("http://server/wide/1.jpg"), requested.filter { "/wide/" in it })
+    compose.onNodeWithTag(TagBackdropTitle).assertTextEquals("movie:tt5")
+
+    step(HERO_META_DEBOUNCE_MS)
+    compose.waitUntil(5_000) {
+      requested.count { it == "http://server/wide/5.jpg" } == 1
+    }
+    assertEquals(listOf("http://server/wide/1.jpg", "http://server/wide/5.jpg"), requested.filter { "/wide/" in it })
   }
 
   @Test

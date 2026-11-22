@@ -1055,14 +1055,21 @@ class ApiClient(
 
   private fun encode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
-  private suspend fun call(request: Request, http: OkHttpClient = client): Response = withContext(Dispatchers.IO) {
+  private suspend fun call(request: Request, http: OkHttpClient = client): Response = suspendCancellableCoroutine { continuation ->
     val started = System.currentTimeMillis()
-    try {
-      http.newCall(request).execute()
-    } catch (error: IOException) {
-      AppLog.apiFailure(request.method, request.url.encodedPath, null, System.currentTimeMillis() - started)
-      throw ApiError(ApiFailure.Unreachable)
-    }
+    val call = http.newCall(request)
+    continuation.invokeOnCancellation { call.cancel() }
+    call.enqueue(object : okhttp3.Callback {
+      override fun onFailure(call: okhttp3.Call, e: IOException) {
+        if (!continuation.isActive) return
+        AppLog.apiFailure(request.method, request.url.encodedPath, null, System.currentTimeMillis() - started)
+        continuation.resumeWithException(ApiError(ApiFailure.Unreachable))
+      }
+
+      override fun onResponse(call: okhttp3.Call, response: Response) {
+        continuation.resume(response) { response.close() }
+      }
+    })
   }
 
   private suspend fun callCancellable(request: Request, logFailure: Boolean = true): Response = suspendCancellableCoroutine { continuation ->
