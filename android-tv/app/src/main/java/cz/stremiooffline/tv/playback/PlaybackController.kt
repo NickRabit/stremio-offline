@@ -11,6 +11,7 @@ import cz.stremiooffline.tv.data.PlaybackFactsDto
 import cz.stremiooffline.tv.data.PlaybackStatusDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.SidecarSeekDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
 import cz.stremiooffline.tv.data.RemoteLibraryApi
@@ -61,6 +62,8 @@ interface PlaybackApi {
   ): PlaybackDescriptorDto
 
   suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto
+
+  suspend fun seekSidecar(id: String, position: Double, seekId: Long): SidecarSeekDto
 
   suspend fun trackPlayback(id: String, change: TrackChange): PlaybackDescriptorDto
 
@@ -156,6 +159,8 @@ data class PlaybackState(
   val subtitleTracks: List<DescriptorTrack> = emptyList(),
   val subtitle: SubtitleChoice = SubtitleChoice.Off,
   val sidecarUrl: String? = null,
+  val sidecarRevision: Int = 0,
+  val sidecarPending: Boolean = false,
   val addonSubtitles: List<AddonSubtitleDto> = emptyList(),
   /** The id each addon subtitle must be fetched with, `map[id] ?: id`. */
   val subtitleIds: Map<String, String> = emptyMap(),
@@ -209,6 +214,11 @@ class PlaybackController(
   private var audioTracks: List<DescriptorTrack> = emptyList()
   private var subtitleTracks: List<DescriptorTrack> = emptyList()
   private var subtitle: SubtitleChoice = SubtitleChoice.Off
+  private var sidecarStart = Double.NEGATIVE_INFINITY
+  private var sidecarCoverage = Double.NEGATIVE_INFINITY
+  private var sidecarSeekSequence = 0L
+  private var sidecarResponseSequence = 0L
+  private var sidecarRequested = false
 
   private var key = ""
   private var title = ""
@@ -716,9 +726,38 @@ class PlaybackController(
     if (!playlist) {
       lastPosition = absolute
       hasPosition = true
+      shownSeekTarget = absolute
       _state.update { it.copy(target = absolute, revision = it.revision + 1) }
       saveNow()
       report(ReportEvent.Progress, reported, position, paused = !playing)
+      val token = ++shownSeekToken
+      pendingSeek = absolute
+      seekJob?.cancel()
+      val mine = generation
+      seekJob = scope.launch {
+        var applied = false
+        try {
+          delay(SEEK_DEBOUNCE_MS)
+          if (stopped || mine != generation || token != shownSeekToken) return@launch
+          val target = pendingSeek ?: return@launch
+          pendingSeek = null
+          shownSeekTarget = null
+          if (!sidecarRequested && !sidecarNeedsMove(target)) return@launch
+          val id = sessionId ?: return@launch
+          val stamp = ++sidecarResponseSequence
+          val seekId = ++sidecarSeekSequence
+          markSidecarPending()
+          val answer = sidecarAnswer(id, target, seekId, mine, stamp, token) ?: return@launch
+          if (stopped || mine != generation || stamp != sidecarResponseSequence || token != shownSeekToken) return@launch
+          if (answer.seekId < seekId) return@launch
+          applySidecar(id, target, answer.sidecarUrl)
+          applied = true
+        } finally {
+          if (!applied && _state.value.sidecarPending) {
+            _state.update { it.copy(sidecarPending = false) }
+          }
+        }
+      }
       return
     }
     val token = ++shownSeekToken
@@ -867,6 +906,10 @@ class PlaybackController(
     // A seek that has been asked for but not answered yet is the position the viewer wants; a track
     // change in that window must carry it, or the server restarts at the stale position.
     val change = request.withTime(pendingSeek ?: position)
+    seekJob?.cancel()
+    sidecarResponseSequence += 1
+    pendingSeek = null
+    shownSeekTarget = null
     val before = change.time
     trackJob?.cancel()
     trackJob = scope.launch {
@@ -879,7 +922,15 @@ class PlaybackController(
               "change" to request.wire,
               "error" to (error.message ?: error.javaClass.simpleName),
             ))
-            _state.update { it.copy(trackKept = it.trackKept + 1) }
+            sidecarRequested = false
+            _state.update {
+              val resume = it.sidecarPending
+              it.copy(
+                trackKept = it.trackKept + 1,
+                sidecarPending = false,
+                sidecarRevision = it.sidecarRevision + if (resume) 1 else 0,
+              )
+            }
           }
         }
         return@launch
@@ -1162,6 +1213,12 @@ class PlaybackController(
     subtitle = shown
     val audioChoice = if (keepAudio) _state.value.audioTrackIndex else descriptor.audioTrack.coerceIn(0, maxOf(0, audioTracks.size - 1))
     val currentSourceId = sourceId
+    val previousSidecar = _state.value.sidecarUrl
+    if (descriptor.sidecarUrl != previousSidecar) {
+      sidecarStart = target
+      sidecarCoverage = Double.NEGATIVE_INFINITY
+    }
+    sidecarRequested = false
     _state.update {
       it.copy(
         loading = false,
@@ -1180,6 +1237,8 @@ class PlaybackController(
         subtitleTracks = subtitleTracks,
         subtitle = shown,
         sidecarUrl = descriptor.sidecarUrl,
+        sidecarRevision = it.sidecarRevision + if (descriptor.sidecarUrl != previousSidecar) 1 else 0,
+        sidecarPending = false,
         addonSubtitles = addons,
         subtitleIds = descriptor.subtitleIds.ifEmpty { it.subtitleIds },
         videoCodec = descriptor.video,
@@ -1191,6 +1250,72 @@ class PlaybackController(
         revision = if (bumpRevision) it.revision + 1 else it.revision,
         trackRevision = it.trackRevision + 1,
         error = null,
+      )
+    }
+  }
+
+  fun onSidecarCoverage(coverage: Double, complete: Boolean) {
+    sidecarCoverage = if (complete) Double.POSITIVE_INFINITY else coverage
+  }
+
+  fun onSidecarRevision(url: String) {
+    if (stopped || sessionId == null || url == _state.value.sidecarUrl) return
+    val id = sessionId ?: return
+    if (_state.value.sidecarPending) {
+      seekJob?.cancel()
+      sidecarResponseSequence += 1
+    }
+    applySidecar(id, position, url)
+  }
+
+  private fun markSidecarPending() {
+    sidecarRequested = true
+    if (!_state.value.sidecarPending) _state.update { it.copy(sidecarPending = true) }
+  }
+
+  private suspend fun sidecarAnswer(
+    id: String,
+    target: Double,
+    seekId: Long,
+    mine: Int,
+    stamp: Long,
+    token: Long?,
+  ): SidecarSeekDto? {
+    var attempt = 0
+    while (true) {
+      if (stopped || mine != generation || stamp != sidecarResponseSequence || (token != null && token != shownSeekToken)) return null
+      try {
+        return api.seekSidecar(id, target, seekId)
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: Throwable) {
+        val wait = SIDECAR_SEEK_RETRY_MS[minOf(attempt, SIDECAR_SEEK_RETRY_MS.lastIndex)]
+        attempt += 1
+        delay(wait)
+      }
+    }
+  }
+
+  private fun sidecarNeedsMove(target: Double): Boolean {
+    val snapshot = _state.value
+    if (snapshot.sidecarUrl == null || snapshot.subtitle !is SubtitleChoice.Embedded) return false
+    return target < sidecarStart || target > sidecarCoverage
+  }
+
+  private fun applySidecar(id: String, target: Double, url: String?) {
+    if (stopped || id != sessionId) return
+    val previous = _state.value.sidecarUrl
+    val changed = url != previous
+    sidecarRequested = false
+    if (changed) {
+      sidecarStart = if (url == null) Double.NEGATIVE_INFINITY else target
+      sidecarCoverage = Double.NEGATIVE_INFINITY
+    }
+    _state.update {
+      it.copy(
+        sidecarUrl = url,
+        sidecarPending = false,
+        sidecarRevision = it.sidecarRevision + if (changed) 1 else 0,
       )
     }
   }
@@ -1253,6 +1378,7 @@ class PlaybackController(
     /** Two 10 s ticks leave room for one lost paused report before the 60 s idle expiry. */
     const val PAUSED_REPORT_TICKS = 2
     const val SEEK_DEBOUNCE_MS = 600L
+    private val SIDECAR_SEEK_RETRY_MS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, 15_000L)
     /** The server refuses a start with more than a hundred subtitle ids. */
     const val MAX_SUBTITLE_IDS = 100
   }

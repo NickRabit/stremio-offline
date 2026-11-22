@@ -137,6 +137,7 @@ test("ALLOWED_MUTATIONS covers the demo writes and omits configuration", () => {
   assert.equal(isAllowedMutation("POST", "/playback"), true);
   assert.equal(isAllowedMutation("POST", "/playback/abc/ping"), true);
   assert.equal(isAllowedMutation("POST", "/playback/abc/seek"), true);
+  assert.equal(isAllowedMutation("POST", "/playback/abc/sidecar/seek"), true);
   assert.equal(isAllowedMutation("POST", "/playback/abc/escalate"), true);
   assert.equal(isAllowedMutation("POST", "/playback/abc/track"), true);
   assert.equal(isAllowedMutation("DELETE", "/playback/abc"), true);

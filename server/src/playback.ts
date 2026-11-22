@@ -243,6 +243,8 @@ interface ConversionLedger {
 interface Session {
   id: string; stream: StreamItem; capabilities: ClientCapabilities; info?: MediaInfo;
   mode: PlaybackMode; generation: number; offset: number; hardware: boolean;
+  /** The newest client-side seek acknowledged for the sidecar reader. */
+  sidecarSeekId?: number;
   /** Failed attempts must not reuse output directories after a rollback. */
   generationSequence?: number;
   fallback?: { generation: number; directory: string };
@@ -811,7 +813,7 @@ export class PlaybackManager {
       reason = direct.reason;
       if (direct.ok) {
         signal?.throwIfAborted();
-        if (subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+        if (subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session, options.startTime ?? 0);
         log("INFO", "Direct play from source", { id, reason: direct.reason, ...summary });
         return this.describe(session, source);
       }
@@ -889,7 +891,7 @@ export class PlaybackManager {
         // the new codec are still among those the client declared.
         if (session.mode === "direct" && native(session.capabilities) && changes.quality === undefined
           && (changes.audio !== undefined || changes.subtitle !== undefined) && this.directAllowed(session).ok) {
-          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session, changes.time ?? 0);
           else await this.sidecars.stop(id);
           log("INFO", "Direct play track switched", { id, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
           return this.describe(session, this.proxyPath(session.stream));
@@ -898,7 +900,9 @@ export class PlaybackManager {
         // for them would interrupt the picture and ask the source for another connection --
         // which is the one thing these hosts tend to refuse.
         if (changes.subtitle !== undefined && changes.audio === undefined && changes.quality === undefined) {
-          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) {
+            this.extractSidecar(session, session.mode === "direct" ? changes.time ?? 0 : session.offset);
+          }
           else await this.sidecars.stop(id);
           log("INFO", "Subtitle track switched", { id, subtitleTrack: session.subtitleTrack, offset: Math.round(session.offset) });
           return this.describe(session, this.currentUrl(session));
@@ -907,7 +911,7 @@ export class PlaybackManager {
         if (this.directAllowed(session).ok) {
           session.pendingKill = this.kill(session);
           session.mode = "direct"; session.offset = 0;
-          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+          if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session, changes.time ?? 0);
           else await this.sidecars.stop(id);
           log("INFO", "Back to direct play", { id });
           return this.describe(session, this.proxyPath(session.stream));
@@ -1299,11 +1303,35 @@ export class PlaybackManager {
   async sidecar(id: string, revision: string | undefined, offset: number, delay = 0, position: number | null = offset) {
     const session = this.playing(id);
     if (!session || session.subtitleTrack === null) return undefined;
-    const cues = await this.sidecars.read(id, revision, offset, delay, position);
-    if (!cues) return undefined;
+    const result = await this.sidecars.readState(id, revision, offset, delay, position);
+    if (result.state === "not-ready") return undefined;
+    if (result.state === "retired") {
+      const sidecarUrl = this.sidecarUrl(session);
+      return sidecarUrl ? { retired: true as const, sidecarUrl } : undefined;
+    }
     session.claimed = true;
     session.lastAccess = Date.now();
-    return cues;
+    return result;
+  }
+
+  async repositionSidecar(id: string, position: number, seekId: number): Promise<{ sidecarUrl?: string; seekId: number }> {
+    const session = this.require(id);
+    return session.operations.run(async () => {
+      this.assertActive(session);
+      const newest = session.sidecarSeekId ?? -1;
+      if (seekId <= newest) return { sidecarUrl: this.sidecarUrl(session), seekId: newest };
+      session.sidecarSeekId = seekId;
+      const index = session.subtitleTrack;
+      if (index === null || this.clientRendersSubtitle(session)) return { sidecarUrl: undefined, seekId };
+      this.sidecars.reposition(
+        session.id,
+        path.join(this.root, session.id),
+        index,
+        Math.max(0, position),
+        this.sidecarArgs(session, index),
+      );
+      return { sidecarUrl: this.sidecarUrl(session), seekId };
+    });
   }
 
   /** What the player is playing right now: the generation being written, or the file itself. */
@@ -1328,12 +1356,21 @@ export class PlaybackManager {
     return codec !== undefined && (session.capabilities.subtitles?.includes(codec) ?? false);
   }
 
-  private extractSidecar(session: Session) {
+  private extractSidecar(session: Session, start = session.offset) {
     const index = session.subtitleTrack;
     if (index === null) return;
+    const duration = session.info?.duration;
+    const limit = duration ? Math.max(0, duration - 2) : Number.POSITIVE_INFINITY;
+    const position = Number.isFinite(start)
+      ? Math.max(0, Math.min(start, limit))
+      : Number.isFinite(limit) ? limit : 0;
+    this.sidecars.ensure(session.id, path.join(this.root, session.id), index, position, this.sidecarArgs(session, index));
+  }
+
+  private sidecarArgs(session: Session, index: number) {
     const source = this.localUrl(this.proxyPath(session.stream));
     const playlist = isPlaylistSource(session.stream, session.info);
-    this.sidecars.ensure(session.id, path.join(this.root, session.id), index, session.offset, async (start) => [
+    return async (start: number) => [
       "-hide_banner", "-loglevel", "error", "-nostdin",
       // The sidecar reads from the same remote host as the conversion and can lose the
       // connection the same way. Reconnecting keeps the cue timestamps coming without
@@ -1349,7 +1386,7 @@ export class PlaybackManager {
       "-copyts", "-start_at_zero",
       "-i", source,
       "-map", `0:s:${index}`, "-c:s", "webvtt",
-    ]);
+    ];
   }
 
   /** Embedded subtitles are switched on by themselves only when the preferred language really matches. */

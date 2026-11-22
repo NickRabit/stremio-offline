@@ -933,9 +933,10 @@ fun PlayerScreen(
 
   // The sidecar is polled the way the web watches it; a 404 only means "come back". It stops while
   // the app is in the background, where the session is gone, and resumes with the new one.
-  LaunchedEffect(resumed, sidecarActive, sidecar, delaySeconds) {
+  LaunchedEffect(resumed, sidecarActive, sidecar, state.sidecarRevision, delaySeconds) {
     if (!resumed || sidecar == null || embeddedChoice == null) return@LaunchedEffect
     var watcher = SidecarState()
+    val revision = state.sidecarRevision
     cues = emptyList()
     // The flag is read every pass too: while the app is stopped the composition is paused, so the
     // key alone would not cancel a loop that is already suspended in its poll delay.
@@ -943,16 +944,27 @@ fun PlayerScreen(
       val at = controller.position
       val fetch = runCatching { api.sidecar(sidecar, at, delaySeconds) }.getOrNull()
       if (fetch != null) {
-        if (sidecarRefresh(watcher, fetch.coverage, fetch.complete, at)) {
+        val current = controller.state.value
+        if (current.sidecarRevision != revision || current.sidecarUrl != sidecar) return@LaunchedEffect
+        if (fetch.replacementUrl != null) {
+          controller.onSidecarRevision(fetch.replacementUrl)
+          return@LaunchedEffect
+        }
+        controller.onSidecarCoverage(fetch.coverage, fetch.complete)
+        if (!current.sidecarPending && sidecarRefresh(watcher, fetch.coverage, fetch.complete, at)) {
           // The server rebases its cues to the conversion stream; the picture the overlay is
           // compared with is absolute, so the offset goes back on.
           cues = absoluteCues(parseVtt(fetch.text), state.offset)
           watcher = sidecarAdvanced(watcher, fetch.coverage, fetch.complete)
         }
-        if (fetch.complete) return@LaunchedEffect
+        if (fetch.complete && !current.sidecarPending) return@LaunchedEffect
       }
       delay(sidecarPollDelay(watcher, controller.position))
     }
+  }
+
+  LaunchedEffect(state.sidecarPending) {
+    if (state.sidecarPending) cues = emptyList()
   }
 
   // An addon subtitle is read once, and again whenever the delay moves it or a new session starts.

@@ -513,6 +513,12 @@ class ApiClient(
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  override suspend fun seekSidecar(id: String, position: Double, seekId: Long): SidecarSeekDto {
+    val payload = json.encodeToString(SidecarSeekRequest.serializer(), SidecarSeekRequest(position, seekId))
+    return request(Request.Builder().url(address.resolve("/api/playback/$id/sidecar/seek")).post(payload.toRequestBody(mediaType)).build(), playbackClient)
+      .decode<SidecarSeekDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
   override suspend fun playbackStatus(id: String): PlaybackStatusDto? =
     request(Request.Builder().url(address.resolve("/api/playback/$id/status")).get().build(), statusClient)
       .decode<PlaybackStatusDto>()
@@ -532,6 +538,12 @@ class ApiClient(
   override suspend fun sidecar(url: String, position: Double, delay: Double): SidecarFetch? {
     val poll = SubtitleUrls.sidecar(url, position, delay)
     return call(Request.Builder().url(address.resolve(poll)).get().build()).closing { response ->
+      if (response.code == 410) {
+        val replacement = runCatching {
+          json.decodeFromString(SidecarMoveDto.serializer(), readBody(response, log = false)).sidecarUrl
+        }.getOrNull()
+        return@closing SidecarFetch("", complete = false, coverage = Double.NEGATIVE_INFINITY, replacementUrl = replacement)
+      }
       if (!response.isSuccessful) return@closing null
       val complete = response.header("x-sidecar-complete") == "1"
       val coverage = response.header("x-sidecar-coverage")?.toDoubleOrNull() ?: Double.POSITIVE_INFINITY
@@ -1180,6 +1192,12 @@ private data class DownloadRequest(
 
 @Serializable
 private data class TimeRequest(val time: Double)
+
+@Serializable
+private data class SidecarSeekRequest(val position: Double, val seekId: Long)
+
+@Serializable
+private data class SidecarMoveDto(val sidecarUrl: String? = null)
 
 @Serializable
 private data class PausedRequest(val paused: Boolean)

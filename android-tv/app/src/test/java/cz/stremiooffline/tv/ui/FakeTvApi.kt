@@ -70,6 +70,7 @@ import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.ShuffleNextDto
 import cz.stremiooffline.tv.data.ShuffleStartDto
 import cz.stremiooffline.tv.data.SidecarFetch
+import cz.stremiooffline.tv.data.SidecarSeekDto
 import cz.stremiooffline.tv.data.SourceDto
 import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.StreamDto
@@ -1042,10 +1043,11 @@ open class FakeTvApi : TvApi {
 
   override suspend fun sidecar(url: String, position: Double, delay: Double): SidecarFetch? {
     sidecarRequests += Triple(url, position, delay)
-    return sidecarValue
+    return sidecarAnswers.removeFirstOrNull() ?: sidecarValue
   }
 
   var sidecarValue: SidecarFetch? = null
+  val sidecarAnswers = ArrayDeque<SidecarFetch?>()
   val sidecarRequests: MutableList<Triple<String, Double, Double>> = mutableListOf()
 
   val seekTimes: MutableList<Double> = mutableListOf()
@@ -1054,6 +1056,14 @@ open class FakeTvApi : TvApi {
   override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto {
     seekTimes += time
     return seekAnswer ?: PlaybackDescriptorDto(id = id, url = "stream.m3u8", playlist = true, offset = time)
+  }
+
+  val sidecarSeeks: MutableList<Triple<String, Double, Long>> = mutableListOf()
+  var sidecarSeekAnswer: SidecarSeekDto? = null
+
+  override suspend fun seekSidecar(id: String, position: Double, seekId: Long): SidecarSeekDto {
+    sidecarSeeks += Triple(id, position, seekId)
+    return sidecarSeekAnswer ?: SidecarSeekDto(sidecarUrl = "sidecar-$seekId.vtt", seekId = seekId)
   }
 
   val escalatedTimes: MutableList<Double> = mutableListOf()

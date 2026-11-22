@@ -98,7 +98,12 @@ sealed interface TrackChange {
 }
 
 /** One read of the progressively written sidecar: its WebVTT plus how far it reaches. */
-data class SidecarFetch(val text: String, val complete: Boolean, val coverage: Double)
+data class SidecarFetch(
+  val text: String,
+  val complete: Boolean,
+  val coverage: Double,
+  val replacementUrl: String? = null,
+)
 
 @Serializable
 data class CopyDto(val video: Boolean = true, val audio: Boolean = true)
@@ -153,6 +158,12 @@ data class PlaybackDescriptorDto(
   val playing: PlaybackFactsDto? = null,
   /** `POST /api/playback` maps each offered addon subtitle id to the id this session must use. */
   val subtitleIds: Map<String, String> = emptyMap(),
+)
+
+@Serializable
+data class SidecarSeekDto(
+  val sidecarUrl: String? = null,
+  val seekId: Long = 0,
 )
 
 @Serializable

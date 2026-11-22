@@ -59,6 +59,9 @@ class RemoteTitleProgressTest {
     override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto =
       PlaybackDescriptorDto(id = id, url = "direct.mp4")
 
+    override suspend fun seekSidecar(id: String, position: Double, seekId: Long) =
+      cz.stremiooffline.tv.data.SidecarSeekDto(seekId = seekId)
+
     override suspend fun trackPlayback(id: String, change: TrackChange): PlaybackDescriptorDto =
       PlaybackDescriptorDto(id = id, url = "direct.mp4")
 
