@@ -437,6 +437,13 @@ type PendingSource = {
   remoteItem?: RemoteItemSource;
 };
 
+export interface PendingAdmissionRequest {
+  title: string;
+  source: PendingSource;
+  media: MediaInfo | undefined;
+  sourceAdmissionInput?: unknown;
+}
+
 export interface QueueHooks {
   now?: () => number;
   downloadWindow?: () => DownloadWindow | undefined;
@@ -1815,6 +1822,92 @@ export class DownloadQueue {
     return result.outcome === "presentLocally" ? { outcome: "presentLocally" } : result;
   }
 
+  /** Admits several lazy jobs for one owner with one queue write. Outcomes come back in
+   *  request order and mean exactly what `admitPending` would have answered for each entry
+   *  admitted alone, one after another, in that order. */
+  async admitPendingBatch(
+    requests: PendingAdmissionRequest[],
+    ownerUserId: string | undefined,
+  ): Promise<PendingAdmissionOutcome[]> {
+    if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
+    const prepared = requests.map((request) => {
+      const sourceAdmission = request.sourceAdmissionInput === undefined
+        ? undefined
+        : parseDownloadSourceAdmissionSnapshotV1(request.sourceAdmissionInput);
+      const pinned = request.source.selection?.targetSettings?.libraryId;
+      if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
+      return { ...request, sourceAdmission };
+    });
+
+    const outcomes: Array<PendingAdmissionOutcome | undefined> = Array.from({ length: prepared.length });
+    const candidates: Array<(typeof prepared)[number] & { index: number }> = [];
+    for (const [index, request] of prepared.entries()) {
+      // `admitPending` answers "already queued" before it looks for a local copy; the check is
+      // made again under the lock, this one only spares the lookup.
+      // A job still being written may yet be reverted, so it does not answer here; the check
+      // under the lock sees only what landed. A repeat within this batch needs no lookup.
+      const settled = this.jobs.filter((job) => !this.admitting.has(job.id));
+      if (this.hasPendingSourceIn(settled, request.source, ownerUserId)
+        || candidates.some((earlier) => earlier.source.videoId === request.source.videoId && earlier.source.type === request.source.type)) {
+        candidates.push({ ...request, index });
+        continue;
+      }
+      if (request.sourceAdmission !== undefined && !request.source.videoId.startsWith(REMOTE_ITEM_VIDEO_PREFIX)) {
+        const localCopy = await this.existingLocalCopyForAdmission(
+          request.source,
+          request.media,
+          ownerUserId,
+          request.sourceAdmission,
+        );
+        if (localCopy.status === "present") {
+          outcomes[index] = { outcome: "presentLocally" };
+          continue;
+        }
+        if (localCopy.status === "unresolved") {
+          outcomes[index] = { outcome: "unresolved" };
+          continue;
+        }
+      }
+      candidates.push({ ...request, index });
+    }
+
+    return this.admit(async () => {
+      const accepted: Array<{ index: number; job: DownloadJob }> = [];
+      const acceptedJobs: DownloadJob[] = [];
+      for (const request of candidates) {
+        if (this.hasPendingSource(request.source, ownerUserId, acceptedJobs)) {
+          outcomes[request.index] = { outcome: "alreadyQueued" };
+          continue;
+        }
+        const job = this.newPendingJob(request.title, request.source, request.media, ownerUserId, request.sourceAdmission);
+        accepted.push({ index: request.index, job });
+        acceptedJobs.push(job);
+      }
+      if (!accepted.length) return outcomes as PendingAdmissionOutcome[];
+
+      const ids = accepted.map(({ job }) => job.id);
+      for (const id of ids) this.admitting.add(id);
+      try {
+        await this.persist({
+          apply: () => { for (const { job } of accepted) this.jobs.push(job); },
+          revert: () => {
+            for (const { job } of accepted) {
+              const at = this.jobs.indexOf(job);
+              if (at >= 0) this.jobs.splice(at, 1);
+            }
+          },
+        });
+      } finally {
+        for (const id of ids) this.admitting.delete(id);
+      }
+      for (const { index, job } of accepted) {
+        outcomes[index] = { outcome: "queued", job: this.publicJob(job) };
+      }
+      this.pump();
+      return outcomes as PendingAdmissionOutcome[];
+    });
+  }
+
   private async admitPendingInternal(
     title: string,
     source: PendingSource,
@@ -1831,48 +1924,79 @@ export class DownloadQueue {
     const pinned = source.selection?.targetSettings?.libraryId;
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     return this.admit(async () => {
-      if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) {
+      if (this.hasPendingSource(source, ownerUserId)) {
         return { outcome: "alreadyQueued" };
       }
       if (sourceAdmission !== undefined && !source.videoId.startsWith(REMOTE_ITEM_VIDEO_PREFIX)) {
-        let localCopy: ExistingLocalCopyLookupResult = { status: "absent" };
-        if (this.existingLocalCopy) {
-          try {
-            localCopy = await this.existingLocalCopy({
-              ownerUserId,
-              source,
-              media,
-              sourceAdmission,
-            });
-          } catch {
-            localCopy = { status: "unresolved", reason: "lookupFailed" };
-          }
-        }
+        const localCopy = await this.existingLocalCopyForAdmission(source, media, ownerUserId, sourceAdmission);
         if (localCopy.status === "present") {
           return { outcome: "presentLocally", copy: localCopy.copy };
         }
         if (localCopy.status === "unresolved") return { outcome: "unresolved" };
       }
-      const now = new Date().toISOString();
-      const job: DownloadJob = {
-        id: crypto.randomUUID(),
-        ownerUserId,
-        title,
-        media,
-        source: { ...source, tried: [] },
-        ...(follow ? { follow } : {}),
-        ...(sourceAdmission === undefined ? {} : { sourceAdmission }),
-        status: "queued",
-        target: "",
-        received: 0,
-        speed: 0,
-        createdAt: now,
-        updatedAt: now,
-      };
+      const job = this.newPendingJob(title, source, media, ownerUserId, sourceAdmission, follow);
       await this.admitJob(job);
       this.pump();
       return { outcome: "queued", job: this.publicJob(job) };
     });
+  }
+
+  private hasPendingSource(source: PendingSource, ownerUserId: string | undefined, extra: readonly DownloadJob[] = []) {
+    return this.hasPendingSourceIn(this.jobs, source, ownerUserId) || this.hasPendingSourceIn(extra, source, ownerUserId);
+  }
+
+  private hasPendingSourceIn(jobs: readonly DownloadJob[], source: PendingSource, ownerUserId: string | undefined) {
+    return jobs.some((job) =>
+      job.source?.videoId === source.videoId
+      && job.source?.type === source.type
+      && job.status !== "completed"
+      && job.status !== "failed"
+      && this.ownedBy(job, ownerUserId));
+  }
+
+  private async existingLocalCopyForAdmission(
+    source: PendingSource,
+    media: MediaInfo | undefined,
+    ownerUserId: string | undefined,
+    sourceAdmission: SourceAdmissionSnapshotV1,
+  ): Promise<ExistingLocalCopyLookupResult> {
+    if (!this.existingLocalCopy) return { status: "absent" };
+    try {
+      return await this.existingLocalCopy({
+        ownerUserId,
+        source,
+        media,
+        sourceAdmission,
+      });
+    } catch {
+      return { status: "unresolved", reason: "lookupFailed" };
+    }
+  }
+
+  private newPendingJob(
+    title: string,
+    source: PendingSource,
+    media: MediaInfo | undefined,
+    ownerUserId: string | undefined,
+    sourceAdmission: SourceAdmissionSnapshotV1 | undefined,
+    follow?: DownloadJob["follow"],
+  ): DownloadJob {
+    const now = new Date().toISOString();
+    return {
+      id: crypto.randomUUID(),
+      ownerUserId,
+      title,
+      media,
+      source: { ...source, tried: [] },
+      ...(follow ? { follow } : {}),
+      ...(sourceAdmission === undefined ? {} : { sourceAdmission }),
+      status: "queued",
+      target: "",
+      received: 0,
+      speed: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
   }
 
   /** The caller's own unfinished lazy job for a source, or nothing. A job from another account

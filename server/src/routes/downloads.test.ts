@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { DeviceTransfers } from "../device-transfers.js";
-import { ownerMayDownload, type DownloadQueue, type DownloadSelection } from "../downloads.js";
+import { ownerMayDownload, type DownloadQueue, type DownloadSelection, type PendingAdmissionOutcome, type PendingAdmissionRequest } from "../downloads.js";
 import { AppError, messageKeyOf } from "../errors.js";
 import type { LibraryRecord } from "../libraries.js";
 import { sealRemoteContent } from "../media-server-reference.js";
@@ -36,6 +36,7 @@ interface Harness {
   moves: Array<{ id: string; direction: number }>;
   viewed: Array<{ id?: string; media?: MediaInfo; target?: string }>;
   pending: Array<{ type?: string; videoId?: string; selection?: DownloadSelection; media?: MediaInfo; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1; remoteItem?: { libraryId: string; connectionId: string; itemId: string } }>;
+  pendingBatches: PendingAdmissionRequest[][];
   seriesBulkCalls: Array<{ ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }>;
   seriesIdentityCalls: Array<{ ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }>;
   drainViewers: Array<{ id?: string; admin: boolean }>;
@@ -146,6 +147,7 @@ const mount = async (
   const moves: Array<{ id: string; direction: number }> = [];
   const viewed: Array<{ id?: string; media?: MediaInfo; target?: string }> = [];
   const pending: Harness["pending"] = [];
+  const pendingBatches: Harness["pendingBatches"] = [];
   const seriesIdentityCalls: Harness["seriesIdentityCalls"] = [];
   const seriesBulkCalls: Harness["seriesBulkCalls"] = [];
   const drainViewers: Harness["drainViewers"] = [];
@@ -187,7 +189,21 @@ const mount = async (
       await options.onPending?.(pending.length);
       const outcome = options.pendingOutcomes?.[pending.length - 1]
         ?? (options.skipPending?.(pending.length) ? "alreadyQueued" : "queued");
-      return outcome === "queued" ? { outcome, job: { id: "job-1" } } : { outcome };
+      return (outcome === "queued" ? { outcome, job: { id: "job-1" } } : { outcome }) as PendingAdmissionOutcome;
+    },
+    admitPendingBatch: async (requests: PendingAdmissionRequest[], ownerUserId: string | undefined): Promise<PendingAdmissionOutcome[]> => {
+      pendingBatches.push(requests);
+      const outcomes: PendingAdmissionOutcome[] = [];
+      for (const request of requests) {
+        outcomes.push(await queue.admitPending(
+          request.title,
+          request.source,
+          request.media,
+          ownerUserId,
+          request.sourceAdmissionInput as SourceAdmissionSnapshotV1 | undefined,
+        ));
+      }
+      return outcomes;
     },
     activeEpisodeIn: (_ownerUserId: string | undefined, input: { type: string; videoId: string; libraryId: string; seriesFolder: string; season: number; episode: number }) =>
       options.activeEpisodeIn?.(input) ?? false,
@@ -295,6 +311,7 @@ const mount = async (
     moves,
     viewed,
     pending,
+    pendingBatches,
     seriesBulkCalls,
     seriesIdentityCalls,
     drainViewers,
@@ -1110,7 +1127,7 @@ test("a stored Provider priority variant admits HTTP-only ascending policy", asy
   );
 });
 
-test("profile bulk re-admits each job and drops providers revoked before it is queued", async (t) => {
+test("profile bulk materializes every job before the batched queue admission", async (t) => {
   const settings = (subfolder: string): AddonDownloadSettings => ({
     movie: { subfolder, layout: "structured" },
     series: { subfolder, layout: "flat" },
@@ -1142,11 +1159,11 @@ test("profile bulk re-admits each job and drops providers revoked before it is q
   assert.equal(response.status, 201, await response.text());
   assert.deepEqual(
     harness.pending.map((job) => job.sourceAdmission?.providerKeys),
-    [["addon:gamma", "addon:alpha"], ["addon:alpha"]],
+    [["addon:gamma", "addon:alpha"], ["addon:gamma", "addon:alpha"]],
   );
   assert.deepEqual(
     harness.pending.map((job) => job.selection?.addonKeys),
-    [["gamma", "alpha"], ["alpha"]],
+    [["gamma", "alpha"], ["gamma", "alpha"]],
   );
   assert.deepEqual(
     harness.pending.map((job) => job.selection?.targetSettings),
@@ -1157,7 +1174,7 @@ test("profile bulk re-admits each job and drops providers revoked before it is q
   );
 });
 
-test("profile bulk re-reads destination rights before each queue addition", async (t) => {
+test("profile bulk sends the collected jobs in one batch after destination checks", async (t) => {
   const shows = library("lib_shows", "series", { visibleTo: [BOB] });
   let harness!: Harness;
   harness = await mount([streamAddon("stream-addon", { allowedUsers: [BOB] })], {
@@ -1178,9 +1195,9 @@ test("profile bulk re-reads destination rights before each queue addition", asyn
       target: { libraryId: shows.id, subfolder: "S", layout: "flat" },
     },
   });
-  assert.equal(response.status, 403);
-  assert.equal(await keyOf(response), "err.downloadLibraryNotAllowed");
-  assert.equal(harness.pending.length, 1, "the job admitted before the revocation remains queued");
+  assert.equal(response.status, 201);
+  assert.equal(harness.pendingBatches.length, 1);
+  assert.equal(harness.pending.length, 2);
 });
 
 test("profile bulk rejects criteria and admission snapshots supplied by the body", async (t) => {
@@ -1570,6 +1587,38 @@ test("catalogue bulk commit skips an episode already in its target and reports o
     ],
   });
   assert.deepEqual(harness.pending.map((pending) => pending.videoId), ["ep-1"]);
+});
+
+test("catalogue bulk sends 24 episodes through one admission batch in request order", async (t) => {
+  const shows = library("lib_bulk_batch", "series", { visibleTo: [ADA] });
+  mkdirSync(path.join(shows.root, "Show", "01 serie"), { recursive: true });
+  writeFileSync(path.join(shows.root, "Show", "01 serie", "Show - S01E02.mkv"), "");
+  const harness = await mount([cataloguePrepareAddon(shows.id)], { libraries: [shows] });
+  t.after(harness.close);
+  const requestEpisodes = Array.from({ length: 24 }, (_, index) => index === 22
+    ? { season: 1, episode: 23 }
+    : { id: `ep-${index}`, season: 1, episode: index + 1 });
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+      episodes: requestEpisodes,
+    },
+  });
+  const text = await response.text();
+  assert.equal(response.status, 201, text);
+  const body = JSON.parse(text) as { added: number; skipped: number; results: Array<{ id: string; outcome: string }> };
+  assert.equal(body.added, 22);
+  assert.equal(body.skipped, 2);
+  assert.deepEqual(body.results[1], { id: "ep-1", outcome: "inTarget" });
+  assert.deepEqual(body.results[22], { id: "", outcome: "invalid" });
+  assert.equal(harness.pendingBatches.length, 1);
+  assert.deepEqual(
+    harness.pendingBatches[0]?.map((request) => request.source.videoId),
+    requestEpisodes.flatMap((episode, index) => "id" in episode && index !== 1 ? [episode.id] : []),
+  );
 });
 
 test("POST /api/downloads/bulk refuses an unusable explicit target and queues nothing", async (t) => {
@@ -1989,6 +2038,42 @@ test("remote bulk commit ignores client ids and carries the stored connection an
   assert.deepEqual(harness.seriesBulkCalls, []);
   assert.equal(harness.seriesIdentityCalls.length, 1);
   assert.ok(harness.pending.every((pending) => pending.media?.id === "tt-show"));
+});
+
+test("remote bulk sends 24 episodes through one admission batch in request order", async (t) => {
+  const { harness, shows } = await remoteBulkMount({
+    catalogueId: "tt-show",
+    episodes: [],
+  });
+  t.after(harness.close);
+  mkdirSync(path.join(shows.root, "Show", "01 serie"), { recursive: true });
+  writeFileSync(path.join(shows.root, "Show", "01 serie", "Show - S01E02.mkv"), "");
+  const requestEpisodes = Array.from({ length: 24 }, (_, index) => index === 22
+    ? { season: 1, episode: 23 }
+    : { remoteItemId: `remote-${index + 1}`, season: 1, episode: index + 1 });
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      type: "series",
+      selection: profileSelection(SOURCE_PROFILE_IDS.balanced),
+      origin: { kind: "remote", libraryId: remoteLibraryRecord.id, seriesItemId: "series-1" },
+      episodes: requestEpisodes,
+    },
+  });
+  const text = await response.text();
+  assert.equal(response.status, 201, text);
+  const body = JSON.parse(text) as { added: number; skipped: number; results: Array<{ id: string; outcome: string }> };
+  assert.equal(body.added, 22);
+  assert.equal(body.skipped, 2);
+  assert.deepEqual(body.results[1], { id: "tt-show:1:2", outcome: "inTarget" });
+  assert.deepEqual(body.results[22], { id: "", outcome: "invalid" });
+  assert.equal(harness.pendingBatches.length, 1);
+  assert.deepEqual(
+    harness.pendingBatches[0]?.map((request) => request.source.videoId),
+    requestEpisodes.flatMap((episode, index) => "remoteItemId" in episode && index !== 1 ? [`tt-show:1:${index + 1}`] : []),
+  );
 });
 
 test("remote bulk commit maps every admission outcome into ordered results", async (t) => {
