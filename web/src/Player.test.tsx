@@ -347,6 +347,15 @@ const sidecarSession = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("Player sidecar seeks", () => {
+  it("polls readiness with probe while the track keeps the full VTT URL", async () => {
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => sidecarPolls.length > 0 && host.querySelector("track") !== null);
+
+    expect(sidecarPolls.every((poll) => poll.includes("&probe=1"))).toBe(true);
+    expect(host.querySelector("track")?.getAttribute("src")).not.toContain("probe=1");
+  });
+
   it("a resumed direct film repositions the reader on a seek back before where it started", async () => {
     progressAnswers["movie:tt5000"] = { key: "movie:tt5000", position: 1800, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" };
     sidecarCoverage = 2700;
@@ -579,13 +588,15 @@ describe("Player sidecar seeks", () => {
     sessionShape = sidecarSession();
     await render();
     await waitUntil(() => host.querySelector("track") !== null);
+    const before = sidecarPolls.length;
 
     await seekByArrow(989);
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_100)); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5_200)); });
     await settle();
 
     expect(sidecarSeekRequests).toHaveLength(1);
     expect(host.querySelector("track")?.getAttribute("src")).toContain("revision=old");
+    expect(sidecarPolls.slice(before).some((poll) => poll.includes("&probe=1"))).toBe(true);
   });
 
   it("after a refused move, a seek inside what the reader already covers sends nothing", async () => {
@@ -610,12 +621,14 @@ describe("Player sidecar seeks", () => {
     sessionShape = sidecarSession();
     await render();
     await waitUntil(() => sidecarPolls.length > 0);
+    const before = sidecarPolls.length;
 
     await seekByArrow(989);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_050)); });
     await settle();
 
     expect(sidecarSeekRequests).toHaveLength(2);
+    expect(sidecarPolls.slice(before).some((poll) => poll.includes("&probe=1"))).toBe(true);
     await waitUntil(() => host.querySelector("track")?.getAttribute("src")?.includes("revision=new-1") ?? false);
   });
 

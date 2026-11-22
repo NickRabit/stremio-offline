@@ -21,11 +21,13 @@ export function completeVttBlocks(text: string) {
 }
 
 /** How far into the film the cues written so far reach. */
+export function vttBlockCoverage(block: string) {
+  const match = block.match(CUE);
+  return match ? cueSeconds(match[2]) : -Infinity;
+}
+
 export function vttCoverage(text: string) {
   let furthest = -Infinity;
-  for (const block of text.split(/\n\n+/)) {
-    const match = block.match(CUE);
-    if (match) furthest = Math.max(furthest, cueSeconds(match[2]));
-  }
+  for (const block of text.split(/\n\n+/)) furthest = Math.max(furthest, vttBlockCoverage(block));
   return furthest;
 }

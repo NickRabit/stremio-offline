@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SIDECAR_POLL_MS, SIDECAR_REFRESH_LEAD_S, SIDECAR_REQUEST_MS, SIDECAR_SETTLED_POLL_MS, watchSidecar } from "./player-sidecar";
 
 const answer = (ok: boolean, headers: Record<string, string> = {}) => ({
-  ok, body: null, headers: new Headers(ok ? headers : {}),
+  ok, status: ok ? 204 : 404, body: null, headers: new Headers(ok ? headers : {}),
 }) as unknown as Response;
 const reading = (coverage: number) => answer(true, { "x-sidecar-complete": "0", "x-sidecar-coverage": String(coverage) });
 const whole = answer(true, { "x-sidecar-complete": "1" });
@@ -57,7 +57,8 @@ describe("watchSidecar", () => {
       { complete: false, pass: 1, coverage: 70 },
       { complete: true, pass: 2, coverage: Infinity },
     ]);
-    expect(urls).toContain("/sidecar.vtt?revision=test&position=10.000");
+    expect(urls).toContain("/sidecar.vtt?revision=test&position=10.000&probe=1");
+    expect(urls.every((url) => url.includes("&probe=1") || url.includes("?probe=1"))).toBe(true);
     expect(waits).toEqual([SIDECAR_POLL_MS, SIDECAR_POLL_MS, SIDECAR_POLL_MS, SIDECAR_SETTLED_POLL_MS]);
   });
 

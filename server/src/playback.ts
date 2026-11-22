@@ -1314,6 +1314,20 @@ export class PlaybackManager {
     return result;
   }
 
+  async sidecarProbe(id: string, revision: string | undefined, offset: number, _delay = 0, position: number | null = offset) {
+    const session = this.playing(id);
+    if (!session || session.subtitleTrack === null) return undefined;
+    const result = await this.sidecars.readiness(id, revision, offset, position);
+    if (result.state === "not-ready") return undefined;
+    if (result.state === "retired") {
+      const sidecarUrl = this.sidecarUrl(session);
+      return sidecarUrl ? { retired: true as const, sidecarUrl } : undefined;
+    }
+    session.claimed = true;
+    session.lastAccess = Date.now();
+    return result;
+  }
+
   async repositionSidecar(id: string, position: number, seekId: number): Promise<{ sidecarUrl?: string; seekId: number }> {
     const session = this.require(id);
     return session.operations.run(async () => {
