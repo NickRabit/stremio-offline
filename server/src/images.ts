@@ -848,27 +848,30 @@ export class ImageProxy {
       log(warn ? "WARN" : "DEBUG", "The image was not cached", { id, host: hostOf(entry.url), reason });
       return undefined;
     };
+    let temp: string | undefined;
     try {
-      const prepared = await downloadGate.run(() => this.fetchAndShrink(entry, signal), signal);
-      if ("reason" in prepared) return rejected(prepared.reason);
-      const { storedExt } = prepared;
-      let data: Buffer | undefined = prepared.data;
-      const bytes = data.length;
-      signal.throwIfAborted();
-      const target = this.path(id, storedExt);
-      const temp = `${target}.${randomUUID()}.tmp`;
+      // The slot is held until the picture is on disk: a slow NAS write would otherwise let
+      // finished downloads pile their buffers (a whole original when nothing was re-encoded)
+      // up in memory past the gate's bound.
+      const written = await downloadGate.run(async () => {
+        const prepared = await this.fetchAndShrink(entry, signal);
+        if ("reason" in prepared) return prepared;
+        signal.throwIfAborted();
+        const target = this.path(id, prepared.storedExt);
+        temp = `${target}.${randomUUID()}.tmp`;
+        await writeFile(temp, prepared.data, { mode: 0o600, signal });
+        return { target, temp, storedExt: prepared.storedExt, bytes: prepared.data.length };
+      }, signal);
+      if ("reason" in written) return rejected(written.reason);
+      const { target, storedExt, bytes } = written;
       try {
-        await writeFile(temp, data, { mode: 0o600, signal });
-        // Outside the download gate now; an original nothing re-encoded is not held while
-        // the commit waits its turn.
-        data = undefined;
         await this.exclusively(async () => {
           signal.throwIfAborted();
           await this.evictOnce(bytes);
           signal.throwIfAborted();
           // Rename is the irreversible byte-publish boundary, and the commit lock keeps an
           // older flight from renaming after a newer retry has already published this id.
-          await this.renameFile(temp, target);
+          await this.renameFile(written.temp, target);
           signal.throwIfAborted();
           entry.ext = storedExt;
           entry.bytes = bytes;
@@ -877,10 +880,11 @@ export class ImageProxy {
           this.save();
         });
       } finally {
-        await rm(temp, { force: true });
+        await rm(written.temp, { force: true });
       }
       return entry.ext ? entry : undefined;
     } catch (error) {
+      if (temp) await rm(temp, { force: true });
       return rejected(String(error).slice(0, 120));
     }
   }
