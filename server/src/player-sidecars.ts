@@ -321,14 +321,15 @@ export class PlayerSidecars {
     let raw: string;
     try { raw = await this.io.readFull(job.file); } catch { return { state: "not-ready" }; }
     const text = complete ? raw : this.io.completeVttBlocks(raw);
+    const coverage = complete ? Infinity : this.io.vttCoverage(text);
     if (!complete) {
       // The file only grows within one generation, so a slow read that started before a probe
       // saw newer blocks must not pull the coverage back; a read of a rewritten file is stale.
-      if (generation === job.fileGeneration) job.coverage = Math.max(job.coverage, this.io.vttCoverage(text));
+      if (generation === job.fileGeneration) job.coverage = Math.max(job.coverage, coverage);
       if (position !== null) this.keepAhead(job, id, position);
-      if (job.coverage < offset + SIDECAR_LEAD_S) {
+      if (coverage < offset + SIDECAR_LEAD_S) {
         // The one line that says why a film is playing without subtitles.
-        log("DEBUG", "Embedded subtitles are still behind the picture", { id, wanted: Math.round(offset + SIDECAR_LEAD_S), reached: Math.round(job.coverage) });
+        log("DEBUG", "Embedded subtitles are still behind the picture", { id, wanted: Math.round(offset + SIDECAR_LEAD_S), reached: Math.round(coverage) });
         return { state: "not-ready" };
       }
     }
@@ -340,7 +341,7 @@ export class PlayerSidecars {
     // The delay is the viewer's own correction: a positive one holds the cues back.
     const shift = offset - delay;
     const shifted = shift !== 0 ? this.io.shiftVtt(text, shift) : text;
-    return { state: "ready", text: shifted, complete, coverage: complete ? Infinity : job.coverage };
+    return { state: "ready", text: shifted, complete, coverage };
   }
 
   /** The cues are written with source timestamps, so they are shifted to the playing

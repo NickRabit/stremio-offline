@@ -429,32 +429,40 @@ const settleMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms
 test("a slow full read that started before a probe saw newer cues does not pull the coverage back", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "sidecar-stale-read-"));
   let file = "";
-  let release: (() => void) | undefined;
-  let held = false;
+  let fileCreated!: () => void;
+  const created = new Promise<void>((resolve) => { fileCreated = resolve; });
+  let snapshotTaken!: () => void;
+  const captured = new Promise<void>((resolve) => { snapshotTaken = resolve; });
+  let release!: () => void;
+  const resume = new Promise<void>((resolve) => { release = resolve; });
   const io: SidecarIO = {
     ...defaultSidecarIO,
     async readFull(target) {
       const text = await defaultSidecarIO.readFull(target);
-      if (!held) { held = true; await new Promise<void>((resolve) => { release = resolve; }); }
+      snapshotTaken();
+      await resume;
       return text;
     },
   };
   const sidecars = new PlayerSidecars(async (_args, target, _append, signal) => {
     file = target;
     await writeFile(target, "WEBVTT\n\n");
+    fileCreated();
     await new Promise((resolve) => signal.addEventListener("abort", resolve));
   }, () => {}, io);
   try {
     sidecars.ensure("s", dir, 1, 0, async () => []);
-    await settleMs(30);
+    await created;
     await appendFile(file, `${cueStamp(0)} --> ${cueStamp(10)}\nx\n\n`);
     const slow = sidecars.readState("s", undefined, 0, 0, null);
-    await settleMs(20);
+    await captured;
     await appendFile(file, `${cueStamp(10)} --> ${cueStamp(60)}\ny\n\n`);
     const before = await sidecars.readiness("s", undefined, 40, null);
     assert.equal(before.state, "ready");
-    release!();
-    await slow;
+    release();
+    const result = await slow;
+    assert.equal(result.state, "ready");
+    assert.equal(result.coverage, 10);
     const after = await sidecars.readiness("s", undefined, 40, null);
     assert.deepEqual(after, before, "the probe still sees the cues the file holds");
   } finally {
