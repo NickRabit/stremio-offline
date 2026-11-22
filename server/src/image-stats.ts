@@ -82,6 +82,7 @@ export function logPoster(detail: {
 /** Hourly picture counts. One request is exactly one of memory, disk or upstream. */
 export class ImageStats {
   private buckets: Bucket[] = [];
+  private lastHour?: { list: Bucket[]; at: string; bucket: Bucket };
   private timer: unknown;
   private dirty = false;
   private chain: Promise<void> = Promise.resolve();
@@ -120,11 +121,15 @@ export class ImageStats {
 
   record(layer: ImageLayer, from: ImageFrom): void {
     const at = new Date(Math.floor(this.now() / HOUR) * HOUR).toISOString();
-    let bucket = this.buckets.find((item) => item.at === at);
+    // Most events land in the same hour as the one before: that bucket is remembered with the
+    // list it belongs to, so a list replaced by a load or a prune is searched again.
+    let bucket = this.lastHour?.list === this.buckets && this.lastHour.at === at ? this.lastHour.bucket : undefined;
+    bucket ??= this.buckets.find((item) => item.at === at);
     if (!bucket) {
       bucket = { at, ...emptySummary() };
       this.buckets.push(bucket);
     }
+    this.lastHour = { list: this.buckets, at, bucket };
     bucket[layer][from] += 1;
     if (this.hourly) {
       const key = `${layer}.${from}`;
