@@ -52,5 +52,6 @@ class GlobalSearchPollingTest {
     viewModel.setActive(false)
     runCurrent()
     assertTrue("${api.globalPollCalls.size} polls in two minutes", api.globalPollCalls.size <= 42)
+    assertTrue("${api.globalPollCalls.size} polls: the first 30 s after completion stay at one a second", api.globalPollCalls.size >= 30)
   }
 }

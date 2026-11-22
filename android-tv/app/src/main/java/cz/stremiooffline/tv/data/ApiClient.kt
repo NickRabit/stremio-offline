@@ -90,7 +90,10 @@ class ApiClient(
   private val profileJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   private val mediaType = "application/json; charset=utf-8".toMediaType()
 
+  // Coil and the player share this client; OkHttp's default of five calls per host made API
+  // calls queue behind posters and segments.
   private val client = baseClient.newBuilder()
+    .dispatcher(okhttp3.Dispatcher().apply { maxRequests = 64; maxRequestsPerHost = 16 })
     .connectTimeout(5, TimeUnit.SECONDS)
     .readTimeout(10, TimeUnit.SECONDS)
     .followRedirects(true)

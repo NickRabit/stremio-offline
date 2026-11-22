@@ -330,7 +330,8 @@ private fun HomeBody(
       Backdrop(
         row = focusedSlot,
         card = focusedCard,
-        imageCard = backdropCard,
+        // The card as the row holds it now: a reload can bring the same key with new art.
+        imageCard = focusedItems.firstOrNull { it.key == backdropCard.key } ?: backdropCard,
         meta = heroMeta,
         loading = heroLoading,
         imageUrl = imageUrl,

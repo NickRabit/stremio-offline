@@ -142,7 +142,7 @@ class GlobalSearchViewModel(
   private val catalogue: Boolean = true,
   /** People come from TMDB, which a child account never reaches. */
   private val people: Boolean = true,
-  private val now: () -> Long = System::nanoTime,
+  private val now: () -> Long = { System.nanoTime() / 1_000_000 },
 ) : ViewModel() {
 
   var state by mutableStateOf(GlobalSearchState(sources = if (catalogue) emptySet() else LibrarySources))
