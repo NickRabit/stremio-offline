@@ -1287,11 +1287,19 @@ export class DownloadQueue {
     this.trackRun();
   }
 
-  list(): PublicDownload[] { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
-  snapshot(): DownloadSnapshot {
+  private publicJobs(include?: (job: DownloadJob) => boolean): PublicDownload[] {
+    const jobs: PublicDownload[] = [];
+    for (const [index, job] of this.jobs.entries()) {
+      if (include && !include(job)) continue;
+      jobs.push({ ...this.publicJob(job), order: index });
+    }
+    return jobs;
+  }
+  list(): PublicDownload[] { return this.publicJobs(); }
+  snapshot(include?: (job: DownloadJob) => boolean): DownloadSnapshot {
     const bytesPerSecond = this.speedLimit?.() ?? 0;
     return {
-      jobs: this.list(),
+      jobs: this.publicJobs(include),
       halt: this.haltInfo(),
       window: this.windowState(),
       speedLimitMbps: bytesPerSecond > 0 ? bytesPerSecond / BYTES_PER_MBIT : null,
