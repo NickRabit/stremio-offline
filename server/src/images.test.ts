@@ -644,6 +644,43 @@ test("no more pictures are downloaded at once than there are download slots", as
   assert.deepEqual(downloadQueue(), { running: 0, queued: 0 });
 });
 
+test("a picture keeps its download slot until it is written, so slow writes hold back new downloads", async (t) => {
+  const fsPromises = (await import("node:fs")).promises;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const original = fsPromises.writeFile;
+  const heldWrites: Array<() => void> = [];
+  let holding = true;
+  const mutable = fsPromises as typeof fsPromises & { writeFile: typeof original };
+  mutable.writeFile = (async (...args: Parameters<typeof original>) => {
+    const [file] = args;
+    // Only a picture's own temporary file, `<id>.<ext>.<uuid>.tmp`, not the index or a resize input.
+    if (holding && typeof file === "string" && file.includes("stremio-images-") && /[A-Za-z0-9_-]{32}\.[a-z]+\.[0-9a-f-]{36}\.tmp$/.test(file)) {
+      await new Promise<void>((resolve) => heldWrites.push(resolve));
+    }
+    return Reflect.apply(original, undefined, args);
+  }) as typeof original;
+  syncBuiltinESMExports();
+  t.after(() => {
+    holding = false;
+    for (const release of heldWrites.splice(0)) release();
+    mutable.writeFile = original;
+    syncBuiltinESMExports();
+  });
+
+  const { proxy, calls } = await harness(async () => imageResponse());
+  const count = DOWNLOAD_SLOTS + 3;
+  // One host each: outbound requests also have a per-host limit, which is not under test.
+  const ids = Array.from({ length: count }, (_, index) => proxy.proxied(`https://slow-${index}.example/write.png`)!.split("/").pop()!);
+  const served = Promise.all(ids.map((id) => proxy.fetch(id)));
+  await until(() => heldWrites.length === DOWNLOAD_SLOTS, "every slot to reach its write");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(calls.length, DOWNLOAD_SLOTS, "no new download starts while the written pictures wait for the disk");
+  holding = false;
+  for (const release of heldWrites.splice(0)) release();
+  assert.equal((await served).filter(Boolean).length, count, "every picture is still served");
+  assert.deepEqual(downloadQueue(), { running: 0, queued: 0 });
+});
+
 test("an FFmpeg that cannot start gives every slot back and keeps the originals", async () => {
   const wide = widePngHeader();
   const { proxy, dir } = await harness(async () => imageResponse(wide));
