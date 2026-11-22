@@ -31,6 +31,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+private const val PollPartialMs = 250L
+private const val PollCompleteMs = 1_000L
+private const val PollCompleteSlowMs = 10_000L
+private const val PollCompleteSlowAfterMs = 30_000L
+
 enum class SourceClass(val wire: String) {
   Catalog("catalog"),
   Local("local"),
@@ -137,6 +142,7 @@ class GlobalSearchViewModel(
   private val catalogue: Boolean = true,
   /** People come from TMDB, which a child account never reaches. */
   private val people: Boolean = true,
+  private val now: () -> Long = { System.nanoTime() / 1_000_000 },
 ) : ViewModel() {
 
   var state by mutableStateOf(GlobalSearchState(sources = if (catalogue) emptySet() else LibrarySources))
@@ -154,6 +160,7 @@ class GlobalSearchViewModel(
   private var actionJob: Job? = null
   private var peopleJob: Job? = null
   private var peopleRequest: String? = null
+  private var completeSince: Long? = null
 
   fun submit(query: String) {
     val trimmed = query.trim()
@@ -310,6 +317,7 @@ class GlobalSearchViewModel(
     sessionId = null
     revision = 0
     restartDepth = 0
+    completeSince = null
     state = GlobalSearchState()
     searchableLoaded = false
     if (id != null) viewModelScope.launch { api.deleteGlobalSearch(id) }
@@ -352,6 +360,7 @@ class GlobalSearchViewModel(
     startJob?.cancel()
     pollJob?.cancel()
     actionJob?.cancel()
+    completeSince = null
     val requestSources = state.library?.let { setOf(it.source) }
       ?: state.sources.ifEmpty { if (catalogue) SourceClass.entries.toSet() else LibrarySources }
     val requestLibrary = state.library?.library
@@ -471,12 +480,29 @@ class GlobalSearchViewModel(
           applySnapshot(answer.snapshot, freshLayout = false)
           continue
         }
-        delay(if (state.snapshot?.state == "partial") 250 else 1_000)
+        delay(pollDelay())
       }
     }
   }
 
+  private fun pollDelay(): Long {
+    val snapshot = state.snapshot ?: return PollCompleteMs
+    if (snapshot.state == "partial") return PollPartialMs
+    val since = completeSince ?: return PollCompleteMs
+    return if (now() - since > PollCompleteSlowAfterMs) {
+      PollCompleteSlowMs
+    } else {
+      PollCompleteMs
+    }
+  }
+
   private fun applySnapshot(next: GlobalSearchSnapshotDto, freshLayout: Boolean) {
+    val previousState = state.snapshot?.state
+    if (next.state == "complete" && previousState != "complete") {
+      completeSince = now()
+    } else if (next.state != "complete") {
+      completeSince = null
+    }
     val oldOrder = state.order
     val oldClusters = state.snapshot?.clusters.orEmpty()
     val adoptServerOrder = freshLayout || !interacted

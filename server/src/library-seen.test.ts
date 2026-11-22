@@ -152,6 +152,33 @@ test("recent is newest first, ties go by path, and the limit bounds it", async (
   });
 });
 
+test("recent keeps the same top rows as the full locale sort on ISO timestamps", async () => {
+  await withStore(async (store) => {
+    const internals = store as unknown as {
+      state: { libraries: Record<string, { baselineAt: string; files: Record<string, { at: string; size: number; mtimeMs: number; baseline?: true }> }> };
+    };
+    const libraries = { lib_a: { baselineAt: "2026-01-01T00:00:00.000Z", files: {} }, lib_b: { baselineAt: "2026-01-01T00:00:00.000Z", files: {} } } as typeof internals.state.libraries;
+    for (let index = 0; index < 200; index += 1) {
+      const libraryId = index % 2 ? "lib_b" : "lib_a";
+      const at = new Date(Date.parse("2026-01-01T00:00:00.000Z") + (index % 7) * 1000).toISOString();
+      libraries[libraryId]!.files[`Film ${String(index).padStart(3, "0")}.mkv`] = { at, size: index, mtimeMs: index };
+    }
+    libraries.lib_a.files["Baseline.mkv"] = {
+      at: "2026-02-01T00:00:00.000Z", size: 0, mtimeMs: 0, baseline: true,
+    };
+    internals.state.libraries = libraries;
+
+    const oracle = Object.entries(libraries).flatMap(([libraryId, library]) =>
+      Object.entries(library.files)
+        .filter(([, file]) => !file.baseline)
+        .map(([relative, file]) => ({ libraryId, relative, at: file.at })))
+      .sort((left, right) =>
+        right.at.localeCompare(left.at) || left.relative.localeCompare(right.relative) || left.libraryId.localeCompare(right.libraryId))
+      .slice(0, 25);
+    assert.deepEqual(store.recent(["lib_a", "lib_b"], 25), oracle);
+  });
+});
+
 test("filesUnder matches whole path segments and keeps only videos", async () => {
   await withStore(async (store) => {
     store.observe("lib_a", [

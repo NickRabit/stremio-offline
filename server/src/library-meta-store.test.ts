@@ -282,6 +282,34 @@ test("a write driven by catalogue identity walks every library", async () => {
   });
 });
 
+test("updateAll trusts the mutator instead of serializing unchanged libraries", async () => {
+  await withStore(async (store, dataDir) => {
+    const lib = "lib_aaaaaaaa";
+    await seed(dataDir, lib, {});
+    await store.load();
+    let serialized = 0;
+    const row = Object.defineProperty(record("tt1"), "serializationProbe", {
+      enumerable: true,
+      get() { serialized += 1; return true; },
+    });
+    await store.update(lib, (file) => { file.meta["Probe.mkv"] = row; });
+    await store.flush();
+    serialized = 0;
+
+    await store.updateAll(() => false, { reportsChange: true });
+    assert.equal(serialized, 0, "an unchanged library is not serialized");
+
+    serialized = 0;
+    await store.updateAll((file) => {
+      file.meta["Saved.mkv"] = record("tt2");
+      return true;
+    }, { reportsChange: true });
+    assert.equal(serialized, 0, "a signaled change is not serialized");
+    await store.flush();
+    assert.equal(store.meta(lib)["Saved.mkv"]?.id, "tt2");
+  });
+});
+
 test("dropping the backfill stamp leaves the rest of the row alone", async () => {
   await withStore(async (store, dataDir) => {
     const filled = (id: string, name: string): LibraryMetaRecord => ({ ...record(id), name, year: "2001", description: `${name} described` });

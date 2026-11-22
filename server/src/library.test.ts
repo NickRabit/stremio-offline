@@ -1,11 +1,112 @@
 import assert from "node:assert/strict";
+import { createHook } from "node:async_hooks";
 import { chmod, mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, clearBrowseCache, describePath, foldersBetween, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, withinLibraryRoot, type BrowseResult } from "./library.js";
+import { browseDirectory, buildLibrary, clearBrowseCache, describePath, foldersBetween, hasVideo, heldTree, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, withinLibraryRoot, type BrowseResult } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
+
+test("heldTree aggregates every ancestor folder and indexes files by path", () => {
+  const tree = heldTree([
+    file("Film.mkv", 100, "2026-01-01T00:00:00.000Z"),
+    file("Show/Season/01.mkv", 200, "2026-02-01T00:00:00.000Z"),
+    file("Show/Season/02.mkv", 300, "2026-04-01T00:00:00.000Z"),
+    file("Show/Extra.mkv", 50, "2026-03-01T00:00:00.000Z"),
+  ]);
+
+  assert.deepEqual(tree.folder("Show"), {
+    fileCount: 3, size: 550, modified: "2026-04-01T00:00:00.000Z",
+  });
+  assert.deepEqual(tree.folder("Show/Season"), {
+    fileCount: 2, size: 500, modified: "2026-04-01T00:00:00.000Z",
+  });
+  assert.equal(tree.folder(""), undefined);
+  assert.equal(tree.folder("."), undefined);
+  assert.deepEqual(tree.file("Show/Season/02.mkv"), file("Show/Season/02.mkv", 300, "2026-04-01T00:00:00.000Z"));
+  assert.equal(tree.file("Show/Season/03.mkv"), undefined);
+});
+
+test("browse answers held aggregates for folders and files without walking their subtrees", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-held-browse-"));
+  try {
+    await mkdir(path.join(root, "Alpha"), { recursive: true });
+    await mkdir(path.join(root, "Beta", "Season"), { recursive: true });
+    await writeFile(path.join(root, "Alpha", "inside.mkv"), "a");
+    await writeFile(path.join(root, "Beta", "Season", "inside.mkv"), "bb");
+    await writeFile(path.join(root, "loose.mkv"), "ccc");
+    const held = heldTree([
+      file("Alpha/inside.mkv", 1_001, "2026-05-01T00:00:00.000Z"),
+      file("Beta/Season/inside.mkv", 2_002, "2026-06-01T00:00:00.000Z"),
+      file("loose.mkv", 3_003, "2026-07-01T00:00:00.000Z"),
+    ]);
+    const expected = new Map([
+      ["Alpha", { size: 1_001, fileCount: 1, modified: "2026-05-01T00:00:00.000Z" }],
+      ["Beta", { size: 2_002, fileCount: 1, modified: "2026-06-01T00:00:00.000Z" }],
+      ["loose.mkv", { size: 3_003, fileCount: 0, modified: "2026-07-01T00:00:00.000Z" }],
+    ]);
+
+    for (const sort of ["name", "size"] as const) {
+      clearBrowseCache();
+      let fileSystemRequests = 0;
+      const hook = createHook({ init: (_asyncId, type) => { if (type === "FSREQPROMISE") fileSystemRequests += 1; } });
+      hook.enable();
+      let result: BrowseResult;
+      try {
+        result = await browseDirectory(root, "", "", 0, 20, sort, false, "", undefined, undefined, false, held);
+      } finally {
+        hook.disable();
+      }
+      assert.equal(fileSystemRequests, 2, `${sort}: only the browsed folder itself is read`);
+      assert.equal(result.total, 3, sort);
+      for (const item of result.items) {
+        const wanted = expected.get(item.path);
+        assert.ok(wanted, `${sort}: ${item.path} is listed`);
+        assert.deepEqual({
+          size: item.size,
+          fileCount: item.kind === "folder" ? item.fileCount : 0,
+          modified: item.modified,
+        }, wanted, `${sort}: ${item.path}`);
+      }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a folder absent from the current held tree falls back to its disk aggregate", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-held-fallback-"));
+  try {
+    await mkdir(path.join(root, "Late"), { recursive: true });
+    await writeFile(path.join(root, "Late", "inside.mkv"), Buffer.alloc(7));
+    const before = heldTree([file("Late/inside.mkv", 999, "2026-08-01T00:00:00.000Z")]);
+    clearBrowseCache();
+    const cached = await browseDirectory(root, "", "", 0, 20, "name", false, "", undefined, undefined, false, before);
+    assert.equal(cached.items[0]?.size, 999);
+
+    const after = heldTree([]);
+    const result = await browseDirectory(root, "", "", 0, 20, "name", false, "", undefined, undefined, false, after);
+    assert.equal(result.total, 1);
+    assert.deepEqual(result.items.map((item) => ({
+      path: item.path,
+      fileCount: item.kind === "folder" ? item.fileCount : 0,
+      size: item.size,
+    })), [{ path: "Late", fileCount: 1, size: 7 }]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a folder the held tree does not know is still listed from disk, on a fresh cache", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-held-unknown-"));
+  try {
+    await mkdir(path.join(root, "Copied in"), { recursive: true });
+    await writeFile(path.join(root, "Copied in", "film.mkv"), Buffer.alloc(5));
+    await mkdir(path.join(root, "Empty"), { recursive: true });
+    for (const sort of ["name", "size"] as const) {
+      clearBrowseCache();
+      const result = await browseDirectory(root, "", "", 0, 20, sort, false, "", undefined, undefined, false, heldTree([]));
+      assert.deepEqual(result.items.map((item) => ({ path: item.path, size: item.size })), [{ path: "Copied in", size: 5 }], sort);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("the season number is recognised in the different folder spellings", () => {
   assert.equal(parseSeason("01 serie"), 1);

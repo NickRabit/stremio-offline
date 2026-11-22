@@ -245,6 +245,7 @@ private fun HomeBody(
   var focusedRowId by remember { mutableStateOf<String?>(null) }
   var focusedCardIndex by remember { mutableIntStateOf(0) }
   var focusedCardKey by remember { mutableStateOf<String?>(null) }
+  var settledCard by remember { mutableStateOf<HomeCard?>(null) }
   val cardMemory = remember { mutableStateMapOf<String, Int>() }
   // Keyed by the card's own key, not the index, so a reindexed row keeps the right targets.
   val requesters = remember { mutableMapOf<Pair<String, String>, FocusRequester>() }
@@ -256,6 +257,16 @@ private fun HomeBody(
   val focusedSlot = slots.getOrNull(focusedIndex)
   val focusedItems = (focusedSlot?.content as? RowContent.Cards)?.items.orEmpty()
   val focusedCard = focusedItems.getOrNull(focusedCardIndex.coerceIn(0, maxOf(0, focusedItems.lastIndex)))
+
+  LaunchedEffect(focusedCard?.key) {
+    val card = focusedCard ?: return@LaunchedEffect
+    if (settledCard == null) {
+      settledCard = card
+      return@LaunchedEffect
+    }
+    delay(HERO_META_DEBOUNCE_MS)
+    settledCard = card
+  }
 
   // The hero asks the catalogue about the card focus comes to rest on: the wait restarts on every
   // change, so a card crossed on the way to another one is never asked for.
@@ -314,8 +325,17 @@ private fun HomeBody(
   )
 
   Box(Modifier.fillMaxSize()) {
-    if (focusedCard != null) {
-      Backdrop(row = focusedSlot, card = focusedCard, meta = heroMeta, loading = heroLoading, imageUrl = imageUrl)
+    val backdropCard = settledCard
+    if (focusedCard != null && backdropCard != null) {
+      Backdrop(
+        row = focusedSlot,
+        card = focusedCard,
+        // The card as the row holds it now: a reload can bring the same key with new art.
+        imageCard = focusedItems.firstOrNull { it.key == backdropCard.key } ?: backdropCard,
+        meta = heroMeta,
+        loading = heroLoading,
+        imageUrl = imageUrl,
+      )
     }
 
     Box(
@@ -372,10 +392,17 @@ private fun HomeBody(
 }
 
 @Composable
-private fun Backdrop(row: HomeRowSlot?, card: HomeCard, meta: MetaDto?, loading: Boolean, imageUrl: (String?) -> String?) {
+private fun Backdrop(
+  row: HomeRowSlot?,
+  card: HomeCard,
+  imageCard: HomeCard,
+  meta: MetaDto?,
+  loading: Boolean,
+  imageUrl: (String?) -> String?,
+) {
   Box(Modifier.fillMaxWidth().height(BackdropHeight).clipToBounds()) {
     Crossfade(
-      targetState = imageUrl(card.wideImage),
+      targetState = imageUrl(imageCard.wideImage),
       animationSpec = tween(350),
       label = "homeBackdrop",
     ) { art ->

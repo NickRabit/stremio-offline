@@ -13,7 +13,7 @@ import { statUnlessMissing } from "../folder-access.js";
 import { assertStillAdmin } from "../roles.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, placed, posixBase, posixDir, posixJoin, relativeWithin, resolveLibraryPath, toFs, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
 import { composeMosaic, MOSAIC_CACHE_CONTROL, MOSAIC_IMMUTABLE_CACHE_CONTROL, MosaicCache, mosaicShape } from "../mosaic.js";
-import { browseDirectory, holdsLibraryRoot, isPathWithin, isVideo, listFolders, type LibraryEntry } from "../library.js";
+import { browseDirectory, holdsLibraryRoot, isPathWithin, isVideo, listFolders, type HeldTree, type LibraryEntry } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryHealth } from "../library-probe.js";
 import type { TransferProgress } from "../library-transfer.js";
@@ -42,6 +42,7 @@ export interface ContentDeps extends RouteContext {
   /** Where one gallery slot's picture sits, or nothing where the store cannot place it. */
   galleryArtwork(key: string, index: number): string | undefined;
   healthOf(library: LibraryRecord): LibraryHealth;
+  heldTreeOf(library: LibraryRecord): Promise<HeldTree | undefined>;
   invalidateLibrary(): void;
   libraryEntries(read?: { stale?: boolean }): Promise<LibraryEntry[]>;
   libraryKey(value: string): string;
@@ -82,7 +83,7 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryPathsBusy, libraryRootBrowse, libraryUnits, locateArtwork, pathReservations, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, renameLibraryItem, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, heldTreeOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryPathsBusy, libraryRootBrowse, libraryUnits, locateArtwork, pathReservations, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, prefsOf, progressOf, relativeKeyIn, renameLibraryItem, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
   const fileSnaps = deps.fileSnaps ?? new FileSnapCache();
   const mosaics = deps.mosaics ?? new MosaicCache(path.join(os.tmpdir(), `mosaics-${randomBytes(6).toString("hex")}`));
   const renameEntry = createRenameEntry({
@@ -199,7 +200,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const looseEpisodes = seriesTyped || unitFor(libraryPath(library.id, relative), units)?.kind === "series";
     const result = hidden ? { path: relative, items: [], total: 0 } : await browseDirectory(library.root, relative, String(req.query.query ?? ""),
       Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), onlyPaths,
-      carveOutsOf(library), looseEpisodes);
+      carveOutsOf(library), looseEpisodes, await heldTreeOf(library));
     // Missing thumbnails are produced in the background; the client asks for the page again shortly.
     const items = await Promise.all(result.items.map(async (item) => {
       const key = inLibrary(item.path);

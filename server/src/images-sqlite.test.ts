@@ -44,14 +44,14 @@ async function fixture(t: TestContext) {
   };
 }
 
-function proxyFor(dataDir: string, database: AppDatabase) {
+function proxyFor(dataDir: string, database: AppDatabase, now: () => number = Date.now) {
   return new ImageProxy(
     path.join(dataDir, "images"),
     MiB,
     0,
     async () => new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": IMAGE_TYPE } }),
     0,
-    Date.now,
+    now,
     0,
     renameWithRetry,
     undefined,
@@ -153,7 +153,8 @@ test("a touch writes exactly one changed row", async (t) => {
   const { dataDir, database } = await fixture(t);
   const batches: Statement[][] = [];
   const observed = observingBatch(database, batches);
-  const proxy = proxyFor(dataDir, observed);
+  let clock = 1_000_000;
+  const proxy = proxyFor(dataDir, observed, () => clock);
   await proxy.load();
   const initialMarker = await marker(database) as { importedAt: number; source: string; count: number };
   assert.equal(initialMarker.source, "index.json");
@@ -163,6 +164,7 @@ test("a touch writes exactly one changed row", async (t) => {
   await proxy.flush();
   batches.length = 0;
 
+  clock += 60 * 60_000;
   proxy.proxied(url);
   await proxy.flush();
 

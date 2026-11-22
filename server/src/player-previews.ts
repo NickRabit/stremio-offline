@@ -37,7 +37,8 @@ export class PlayerPreviews {
     try {
       const stdout = await this.grab([
         "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1", "-filter_threads", "1", "-ss", String(Math.floor(time / 5) * 5),
-        "-i", source, "-an", "-sn", "-frames:v", "1", "-vf", "scale=320:-2", "-threads", "1", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
+        "-skip_frame", "nokey", "-noaccurate_seek", "-i", source, "-an", "-sn", "-frames:v", "1", "-vf", "scale=320:-2",
+        "-threads", "1", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
       ], AbortSignal.any([signal, controller.signal]));
       if (signal.aborted || controller.signal.aborted || !stdout.length) return undefined;
       this.cache.set(key, stdout);

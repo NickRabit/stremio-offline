@@ -46,6 +46,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
@@ -114,6 +117,7 @@ fun GlobalSearchScreen(
   voiceAvailable: Boolean = voiceSearchAvailable(),
   voiceLauncher: VoiceLauncher? = null,
 ) {
+  val lifecycle = LocalLifecycleOwner.current.lifecycle
   val viewModel = viewModel<GlobalSearchViewModel>(
     factory = GlobalSearchViewModel.factory(api, catalogueAvailable, peopleAvailable),
   )
@@ -141,6 +145,9 @@ fun GlobalSearchScreen(
   var toolbarFocusIndex by remember { mutableIntStateOf(3) }
   var libraryClearToken by remember { mutableIntStateOf(0) }
   var stripFocused by remember { mutableStateOf(false) }
+  var lifecycleStarted by remember(lifecycle) {
+    mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+  }
 
   fun submit() {
     val query = draft.trim()
@@ -193,6 +200,13 @@ fun GlobalSearchScreen(
       viewModel.leave()
     }
   }
+  DisposableEffect(lifecycle) {
+    val observer = LifecycleEventObserver { _, _ ->
+      lifecycleStarted = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+    }
+    lifecycle.addObserver(observer)
+    onDispose { lifecycle.removeObserver(observer) }
+  }
   LaunchedEffect(viewModel, preset) {
     if (preset != null) {
       viewModel.applyPreset(preset)
@@ -207,8 +221,8 @@ fun GlobalSearchScreen(
     awaitFrame()
     runCatching { sourceFocuses[2].requestFocus() }
   }
-  LaunchedEffect(viewModel, overlayOpen) {
-    viewModel.setActive(!overlayOpen)
+  LaunchedEffect(viewModel, overlayOpen, lifecycleStarted) {
+    viewModel.setActive(!overlayOpen && lifecycleStarted)
     if (overlayOpen) {
       overlayWasOpen = true
     } else if (overlayWasOpen) {

@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { gunzipSync } from "node:zlib";
 import express from "express";
 import type { AirPlayAccess } from "../airplay-access.js";
 import type { SessionInfo } from "../auth.js";
@@ -226,6 +227,21 @@ const rawGet = (base: string, pathname: string, user: "ada" | "bob") =>
     request.end();
   });
 
+const rawGetBody = (base: string, pathname: string, user: "ada" | "bob", acceptEncoding?: string) =>
+  new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+    const url = new URL(base);
+    const request = http.request({
+      host: url.hostname, port: url.port, path: pathname, method: "GET",
+      headers: { "x-user": user, ...(acceptEncoding ? { "accept-encoding": acceptEncoding } : {}) },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () => resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks) }));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+
 test("both playback preparation routes map a bitrate refusal for both authorization checks", async (t) => {
   const harness = await mount();
   t.after(harness.close);
@@ -418,6 +434,33 @@ test("a segment request reaches the playback ledger", async (t) => {
   assert.deepEqual(harness.fetched, [{ id: ID, generation: "7", file: "seg-0-000002.m4s" }]);
 });
 
+test("a growing playlist is gzipped only when the request accepts it", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "routes-playback-playlist-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const playlist = `#EXTM3U\n#EXT-X-VERSION:7\n${Array.from(
+    { length: 128 },
+    (_, index) => `#EXTINF:4,\nsegment-${String(index).padStart(6, "0")}.m4s`,
+  ).join("\n")}\n`;
+  await writeFile(path.join(directory, "index-0.m3u8"), playlist);
+  const harness = await mount();
+  t.after(harness.close);
+  harness.playback.directory = () => directory;
+
+  for (const query of ["", `?airplay=${TOKEN}`]) {
+    const compressed = await rawGetBody(harness.base, `/api/playback/${ID}/gen/index-0.m3u8${query}`, "ada", "gzip");
+    assert.equal(compressed.status, 200);
+    assert.equal(compressed.headers["content-encoding"], "gzip");
+    assert.equal(compressed.headers.vary, "Accept-Encoding");
+    assert.equal(compressed.headers["cache-control"], "private, no-store");
+    assert.equal(gunzipSync(compressed.body).toString(), playlist);
+
+    const plain = await rawGetBody(harness.base, `/api/playback/${ID}/gen/index-0.m3u8${query}`, "ada");
+    assert.equal(plain.status, 200);
+    assert.equal(plain.headers["content-encoding"], undefined);
+    assert.equal(plain.body.toString(), playlist);
+  }
+});
+
 test("a session whose media resource was removed is refused and stopped, while a sibling continues", async (t) => {
   const harness = await mount();
   t.after(harness.close);
@@ -471,6 +514,27 @@ test("the remote media proxy forwards HEAD and range and binds the resource owne
 
   const denied = await api(harness.base, `/api/media/${resourceId}`, { user: "bob" });
   assert.equal(denied.status, 404, "the wrong session cannot read another owner's resource");
+});
+
+test("a ranged local media read returns the requested bytes", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "routes-playback-local-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const size = 3 * 1024 * 1024 + 17;
+  const file = Buffer.alloc(size);
+  for (let index = 0; index < size; index += 1) file[index] = (index * 31 + (index >> 8)) & 0xff;
+  const target = path.join(directory, "film.mp4");
+  await writeFile(target, file);
+  const harness = await mount();
+  t.after(harness.close);
+  const resourceId = registry.mediaStream({ url: `file://${target}` } as StreamItem, ADA).resourceId;
+  const start = 1_234_567;
+  const end = size - 1;
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: `bytes=${start}-${end}` } });
+
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get("content-range"), `bytes ${start}-${end}/${size}`);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), file.subarray(start, end + 1));
 });
 
 /** A media-server original that answers ranges the way Jellyfin does, counting every open. */

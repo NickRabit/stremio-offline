@@ -268,6 +268,11 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const suggestions = metaStore.qualifiedSuggestions();
     const libraries = store.libraries();
     const units = await libraryUnits({ stale: true });
+    const unitKeys = new Set(units.map((unit) => unit.key));
+    const covered = (key: string): boolean => {
+      for (let candidate = key; candidate; candidate = posixDir(candidate)) if (unitKeys.has(candidate)) return true;
+      return unitKeys.has("");
+    };
     return pendingSuggestionKeys(records, suggestions)
       .flatMap((key) => {
         const target = parseLibraryPath(key);
@@ -275,7 +280,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
         const library = libraryFor(libraries, target.libraryId);
         // A library that is away keeps its rows on disk; it just stops asking for them.
         if (!library || !library.enabled || library.unreachable) return [];
-        if (!units.some((unit) => isPathWithin(key, unit.key))) return [];
+        if (!covered(key)) return [];
         const suggestion = suggestions[key]!;
         return [{
           key: wirePath(key),

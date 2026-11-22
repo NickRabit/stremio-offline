@@ -68,6 +68,7 @@ const mount = async (root: string, hooks: {
     galleryOf: () => [],
     galleryArtwork: () => undefined,
     healthOf: (record: LibraryRecord) => ({ unreachable: false, readOnly: false, realRoot: record.root, caseInsensitive: false }),
+    heldTreeOf: async () => undefined,
     invalidateLibrary: () => hooks.invalidate?.(),
     libraryEntries: async () => [],
     libraryKey: (value: string) => value,

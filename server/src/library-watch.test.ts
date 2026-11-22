@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -48,10 +48,15 @@ test("on Linux only folders are watched, and the NAS's own folders are left out"
   const dir = await mkdtemp(path.join(tmpdir(), "stremio-watch-folders-"));
   await mkdir(path.join(dir, "Reacher", "@eaDir", "Reacher.S01E01.mkv"), { recursive: true });
   await mkdir(path.join(dir, "#recycle"), { recursive: true });
+  await writeFile(path.join(dir, "Reacher", "Existing.mkv"), "x");
   const seen: string[] = [];
+  let inspections = 0;
   const timers = fakeTimers();
   const settled = () => { timers.fire(); return seen.length > 0; };
-  const watch = watchLibrary(dir, (file) => seen.push(file), { debounceMs: 5, timer: timers.timer, clear: timers.clear, platform: "linux" });
+  const watch = watchLibrary(dir, (file) => seen.push(file), {
+    debounceMs: 5, timer: timers.timer, clear: timers.clear, platform: "linux",
+    inspect: (async (target) => { inspections += 1; return await stat(target); }) as typeof stat,
+  });
   try {
     assert.equal(watch.active, true);
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -65,10 +70,19 @@ test("on Linux only folders are watched, and the NAS's own folders are left out"
     assert.ok(await until(settled), "a film copied into a watched folder is noticed");
     assert.equal(seen.at(-1), path.join("Reacher", "Reacher.S01E02.mkv"));
 
+    // A download writing into an existing file only emits change events. They need no stat.
+    seen.length = 0;
+    inspections = 0;
+    await writeFile(path.join(dir, "Reacher", "Existing.mkv"), "updated");
+    assert.ok(await until(settled), "a changed file is noticed");
+    assert.equal(inspections, 0, "change events do not inspect the path");
+
     // A folder created after the start gets a watch of its own.
     seen.length = 0;
+    inspections = 0;
     await mkdir(path.join(dir, "Reacher", "Season 2"));
     await until(settled);
+    assert.ok(inspections > 0, "a rename event still inspects whether the child is a folder");
     seen.length = 0;
     await new Promise((resolve) => setTimeout(resolve, 200));
     await writeFile(path.join(dir, "Reacher", "Season 2", "Reacher.S02E01.mkv"), "x");

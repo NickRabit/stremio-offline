@@ -48,6 +48,7 @@ interface Harness {
   remoteLibraries: Array<Record<string, unknown>>;
   /** Keys `describeLibraryPath` must throw on, the way a library that is gone does. */
   broken: Set<string>;
+  describeCalls: Map<string, number>;
   /** The media-server stars the card projection hands out, and every page it was asked for. */
   remoteCards: RemoteHomeCard[];
   remoteCalls: Array<{ filter: string; skip: number; limit: number }>;
@@ -75,6 +76,7 @@ const mount = async (libraries: LibraryRecord[] = [], backing?: Store): Promise<
   const records: Record<string, LibraryMetaRecord> = {};
   const units: TitleUnit[] = [];
   const broken = new Set<string>();
+  const describeCalls = new Map<string, number>();
   const mediaConnections: Array<Record<string, unknown>> = [];
   const remoteLibraries: Array<Record<string, unknown>> = [];
   const remoteCards: RemoteHomeCard[] = [];
@@ -118,6 +120,7 @@ const mount = async (libraries: LibraryRecord[] = [], backing?: Store): Promise<
       return dataOfUser(id);
     },
     describeLibraryPath: async (key) => {
+      describeCalls.set(key, (describeCalls.get(key) ?? 0) + 1);
       if (broken.has(key)) throw new Error("the library is gone");
       const relative = parseLibraryPath(key)?.relative ?? key;
       const label = relative.slice(relative.lastIndexOf("/") + 1);
@@ -217,6 +220,7 @@ const mount = async (libraries: LibraryRecord[] = [], backing?: Store): Promise<
     records,
     units,
     broken,
+    describeCalls,
     mediaConnections,
     remoteLibraries,
     remoteCards,
@@ -1080,6 +1084,21 @@ test("a starred episode stands for its show in every title read", async (t) => {
   assert.equal(body.items.length, 1, "the episode and the show's star are one card");
   assert.deepEqual(body.items[0]!.title, { type: "series", id: "tt5" });
   assert.equal(body.items[0]!.catalogId, "tt5");
+});
+
+test("a starred library entry is described once for its card and its progress", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  const loose = "lib_00000001/Films/Loose.mkv";
+  harness.data(ALICE).favorites = [FILM_FILE, loose];
+  harness.data(ALICE).progress = {
+    [`file:${FILM_FILE}`]: { position: 30, duration: 600, title: "Heat", path: FILM_FILE, updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const response = await api(harness.base, "/api/favorites", { user: ALICE });
+  assert.equal(response.status, 200);
+  assert.equal(harness.describeCalls.get(FILM_FILE), 1);
+  assert.equal(harness.describeCalls.get(loose), 1);
 });
 
 test("a film starred in the library and in the catalogue is one card that names its title", async (t) => {

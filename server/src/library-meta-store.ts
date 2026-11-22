@@ -492,11 +492,15 @@ export class LibraryMetaStore {
 
   /** Every library at once, for a write driven by catalogue identity rather than by a
    *  path -- the metadata backfill. Files the mutator left untouched are not written. */
-  async updateAll(mutator: (file: LibraryMetaFile, libraryId: string, episodes: Record<string, LibraryEpisodeRecord>) => void) {
+  async updateAll(
+    mutator: (file: LibraryMetaFile, libraryId: string, episodes: Record<string, LibraryEpisodeRecord>) => boolean | void,
+    options: { reportsChange?: boolean } = {},
+  ) {
     for (const libraryId of [...this.files.keys()]) {
-      const before = JSON.stringify(this.files.get(libraryId));
-      mutator(this.file(libraryId), libraryId, this.episodeMap);
-      if (JSON.stringify(this.files.get(libraryId)) === before) continue;
+      // A mutator that says whether it changed a library spares serialising every library twice.
+      const before = options.reportsChange ? undefined : JSON.stringify(this.files.get(libraryId));
+      const changed = mutator(this.file(libraryId), libraryId, this.episodeMap);
+      if (options.reportsChange ? changed !== true : JSON.stringify(this.files.get(libraryId)) === before) continue;
       this.invalidate(libraryId);
       this.save(libraryId);
     }

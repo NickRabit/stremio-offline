@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -80,6 +80,45 @@ test("a fan is kept under its key and the oldest goes when the cap is passed", a
     assert.equal((await cache.read("another"))?.length, 2000);
     assert.equal(MosaicCache.stamp(["a", "b"]), MosaicCache.stamp(["a", "b"]));
     assert.notEqual(MosaicCache.stamp(["a", "b"]), MosaicCache.stamp(["b", "a"]), "the order of the pictures is part of the stamp");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("cached bytes are tracked without rescanning below the cap and stats are bounded", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-mosaic-accounting-"));
+  try {
+    for (let index = 0; index < 20; index += 1) await writeFile(path.join(dir, `old-${index}.jpg`), Buffer.alloc(50, index));
+    let scans = 0;
+    let stats = 0;
+    let active = 0;
+    let mostActive = 0;
+    const cache = new MosaicCache(dir, 3000, 0, {
+      readdir: (async (target: string) => {
+        scans += 1;
+        return await readdir(target);
+      }) as typeof readdir,
+      stat: (async (target: string) => {
+        stats += 1;
+        active += 1;
+        mostActive = Math.max(mostActive, active);
+        try { return await stat(target); }
+        finally { active -= 1; }
+      }) as typeof stat,
+    });
+
+    await cache.write("first", Buffer.alloc(1000, 1));
+    assert.equal(scans, 1, "the first write seeds the directory once");
+    assert.equal(mostActive <= 8, true, "the seed never stats more than eight files at once");
+    const firstScanStats = stats;
+    await cache.write("second", Buffer.alloc(500, 2));
+    assert.equal(scans, 1, "a write under the cap does not scan again");
+    assert.equal(stats, firstScanStats, "and it stats nothing");
+
+    await new Promise((done) => setTimeout(done, 10));
+    await cache.write("third", Buffer.alloc(1000, 3));
+    assert.equal(scans, 2, "passing the cap scans to evict");
+    assert.equal((await readdir(dir)).includes("old-0.jpg"), false, "the oldest file is evicted first");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -464,13 +464,17 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     title?: ReturnType<typeof titleProgressKey>;
     listed?: { season?: number | null; episode?: number | null };
   };
-  const resolveProgressKey = async (stored: string, req: express.Request): Promise<ResolvedProgressKey> => {
+  const resolveProgressKey = async (
+    stored: string,
+    req: express.Request,
+    described?: BrowseItem,
+  ): Promise<ResolvedProgressKey> => {
     if (!stored.startsWith("file:")) return { key: stored };
     const file = stored.slice(5);
     if (!pathVisible(file, viewerOf(currentUser(req)), store.libraries())) return { key: stored, file };
     // A key naming a library that is gone cannot be described; it stays its own file key, so the
     // row stored under it is still read, and removed, as it was before this change.
-    const item = await describeLibraryPath(file, { stale: true }).catch(() => undefined);
+    const item = described ?? await describeLibraryPath(file, { stale: true }).catch(() => undefined);
     const listed = item?.kind === "file" ? { season: item.season, episode: item.episode } : undefined;
     const title = titleProgressKey(file, metaStore.qualifiedMeta(), await libraryUnits(), listed);
     return title ? { key: title.key, file, title, listed } : { key: stored, file, listed };
@@ -976,7 +980,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const record = records[key];
     // A starred file draws the position of the title it is bound to, wherever that row sits.
     const all = progressOf(dataOf(req));
-    const resolved = await resolveProgressKey(`file:${key}`, req);
+    const resolved = await resolveProgressKey(`file:${key}`, req, item);
     const units = await libraryUnits();
     const rows = standingKeys(resolved, all, records, units)
       .filter((stored) => all[stored] !== undefined)
@@ -1088,7 +1092,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // The titles the local half draws, so a media-server record of one of them is not drawn a
     // second time. Only those: a star the local half leaves out, such as a catalogue star a
     // child without catalogue browsing cannot open, must not hide the media server's own.
-    const starredTitles = new Set<string>();
+    const starredTitles = options.drawnStars ?? new Set<string>();
     const entries = await favoritesEntries(req, { ...options, drawnStars: starredTitles });
     if (filter === "remote") {
       const remote = await remoteFavorites(req, skip, limit, options.onHome === true, starredTitles);

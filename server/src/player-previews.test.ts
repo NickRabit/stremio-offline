@@ -31,6 +31,23 @@ test("one preview at a time per film", async () => {
   assert.ok(await first);
 });
 
+test("a preview decodes only the keyframe at or before the five-second bucket", async () => {
+  let args: string[] = [];
+  const previews = new PlayerPreviews(async (grabArgs) => {
+    args = grabArgs;
+    return Buffer.from("jpg");
+  });
+
+  assert.ok(await previews.frame("s", "source", 123, new AbortController().signal));
+
+  const input = args.indexOf("-i");
+  assert.equal(Number(args[args.indexOf("-ss") + 1]), 120);
+  assert.ok(args.includes("-skip_frame"));
+  assert.equal(args[args.indexOf("-skip_frame") + 1], "nokey");
+  assert.ok(args.indexOf("-skip_frame") < input);
+  assert.ok(args.indexOf("-noaccurate_seek") < input);
+});
+
 test("previews are not made from a remote source", async () => {
   const manager = new PlaybackManager("/tmp/test-preview-remote") as any;
   let grabbed = 0;

@@ -59,7 +59,7 @@ import { apiRequestLimiter, authRequestLimiter, isMediaTransferRequest, pageRequ
 import { WalkCache } from "./walk-cache.js";
 import { FreshValueCache } from "./value-cache.js";
 import { killRunningMedia } from "./media-tools.js";
-import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, listVideos, listVideosChecked, pageFiles, summarize, buildLibrary, withinLibraryRoot, type FoundFile, type LibraryEntry } from "./library.js";
+import { browseDirectory, describePath, entryDirectory, heldTree, isPathWithin, isVideo, listVideos, listVideosChecked, pageFiles, summarize, buildLibrary, withinLibraryRoot, type FoundFile, type HeldTree, type LibraryEntry } from "./library.js";
 import { createArtworkSweep, type SweepDeps, type SweepLibrary } from "./artwork-sweep.js";
 import { createMaintenance } from "./maintenance.js";
 import { createShutdown, installSignalHandlers } from "./server-shutdown.js";
@@ -1614,6 +1614,26 @@ const libraryFiles = (read?: WalkRead) => videoCache.get(read);
 const libraryFilesIn = async (library: LibraryRecord) => filesOf(await libraryFiles(), library);
 const libraryUnits = (read?: WalkRead) => unitCache.get(read);
 const libraryEntries = (read?: WalkRead) => libraryCache.get(read);
+/** The held walk of one library as a browse index, rebuilt only when the walk is. */
+const heldTrees = new WeakMap<FoundFile[], Map<string, HeldTree>>();
+const heldTreeOf = async (library: LibraryRecord): Promise<HeldTree | undefined> => {
+  if (!walkableLibraries().some((candidate) => candidate.id === library.id)) return undefined;
+  const files = await libraryFiles({ stale: true });
+  let byLibrary = heldTrees.get(files);
+  if (!byLibrary) {
+    byLibrary = new Map();
+    heldTrees.set(files, byLibrary);
+  }
+  let tree = byLibrary.get(library.id);
+  if (!tree) {
+    tree = heldTree(filesOf(files, library).map((file) => ({
+      ...file,
+      relative: relativeKeyIn(library.id, file.relative)!,
+    })));
+    byLibrary.set(library.id, tree);
+  }
+  return tree;
+};
 
 if (searchEverywhereEnabled()) {
   const index = new LocalSearchIndex({ entries: () => libraryEntries({ stale: true }) });
@@ -2044,6 +2064,8 @@ const scheduleMetaBackfill = (type: string, id: string, language: string) => {
   const tried = metaBackfillTried.get(key);
   if (!id || playbackBusy()) return false;
   if (tried != null && Date.now() - tried < BACKFILL_RETRY_MS) return false;
+  // Still queued: the row keeps saying a backfill is coming, so the page keeps asking.
+  if (metaBackfill.has(key)) return true;
   metaBackfill.run(key, async () => {
     if (playbackBusy()) return;
     const meta = await cachedMeta(type, id, language);
@@ -2065,7 +2087,8 @@ const scheduleMetaBackfill = (type: string, id: string, language: string) => {
       }
       if (fileBound) Object.assign(episodes, episodeRows);
       bound ||= fileBound;
-    });
+      return fileBound;
+    }, { reportsChange: true });
     if (bound) invalidateLibraryMeta();
   });
   return true;
@@ -2671,7 +2694,7 @@ const renameEntry = createRenameEntry({
   invalidateLibrary,
 });
 
-registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryPathsBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, pathReservations, prefsOf, progressOf, relativeKeyIn, renameLibraryItem: (request) => renameRecovery.rename(request), scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, nestedHidden, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, heldTreeOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryPathsBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, markersOf, metaStore, pathReservations, prefsOf, progressOf, relativeKeyIn, renameLibraryItem: (request) => renameRecovery.rename(request), scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({

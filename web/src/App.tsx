@@ -117,6 +117,8 @@ export const queueDrainNotice = (
   });
 };
 
+export const sameJson = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
+
 const RemoteLibraryBrowser = lazyScreen(() => import("./RemoteLibraryBrowser").then((module) => module.RemoteLibraryBrowser));
 const StatsPanel = lazyScreen(() => import("./Stats").then((module) => module.StatsPanel));
 const SettingsPage = lazyScreen(() => import("./SettingsPage").then((module) => module.SettingsPage));
@@ -1385,11 +1387,15 @@ export function App() {
     if (drainNotice) notify(drainNotice);
     downloadsSeen.current = true;
     jobStatus.current = new Map(jobs.map((job) => [job.id, job.status]));
-    setDownloads(jobs);
-    setQueueHalt(Array.isArray(snapshot) ? null : snapshot.halt ?? null);
-    setQueueWindow(Array.isArray(snapshot) ? null : snapshot.window ?? null);
-    setSpeedLimitMbps(Array.isArray(snapshot) ? null : snapshot.speedLimitMbps ?? null);
-    setDeviceTransfers(Array.isArray(snapshot) ? [] : snapshot.deviceTransfers ?? []);
+    const halt = Array.isArray(snapshot) ? null : snapshot.halt ?? null;
+    const queueWindowNext = Array.isArray(snapshot) ? null : snapshot.window ?? null;
+    const speedLimit = Array.isArray(snapshot) ? null : snapshot.speedLimitMbps ?? null;
+    const transfers = Array.isArray(snapshot) ? [] : snapshot.deviceTransfers ?? [];
+    setDownloads((previous) => sameJson(previous, jobs) ? previous : jobs);
+    setQueueHalt((previous) => sameJson(previous, halt) ? previous : halt);
+    setQueueWindow((previous) => sameJson(previous, queueWindowNext) ? previous : queueWindowNext);
+    setSpeedLimitMbps((previous) => sameJson(previous, speedLimit) ? previous : speedLimit);
+    setDeviceTransfers((previous) => sameJson(previous, transfers) ? previous : transfers);
   };
   const loadDownloads = () => child ? Promise.resolve() : api.downloads().then(applyDownloads).catch(fail);
   /** Home's queue card action: the mutation, then the poll that carries its result, with the

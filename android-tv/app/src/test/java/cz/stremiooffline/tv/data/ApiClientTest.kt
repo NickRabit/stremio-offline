@@ -4,16 +4,25 @@ import cz.stremiooffline.tv.diagnostics.AppLog
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import okhttp3.OkHttpClient
+import okhttp3.Call
+import okhttp3.EventListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
@@ -41,6 +50,41 @@ class ApiClientTest {
   fun `status answers with the version`() = runTest {
     server.enqueue(MockResponse().setBody("""{"status":"ok","version":"0.5.36","restricted":false}"""))
     assertEquals("0.5.36", client(start()).status().version)
+  }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun `cancelling a request cancels the HTTP call before its response`() = runTest {
+    server.enqueue(
+      MockResponse()
+        .setBody("""{"status":"ok","version":"0.5.36","restricted":false}""")
+        .setHeadersDelay(5, TimeUnit.SECONDS),
+    )
+    val observed = AtomicReference<Call?>()
+    val failed = CountDownLatch(1)
+    val listener = object : EventListener() {
+      override fun callStart(call: Call) {
+        observed.set(call)
+      }
+
+      override fun callFailed(call: Call, ioe: java.io.IOException) {
+        failed.countDown()
+      }
+    }
+    val address = start()
+    val api = ApiClient(
+      address,
+      CookieStore(address.origin, Memory()),
+      OkHttpClient.Builder().eventListener(listener).build(),
+    )
+
+    val job = launch { runCatching { api.status() } }
+    runCurrent()
+    assertTrue(server.takeRequest(2, TimeUnit.SECONDS) != null)
+    withTimeout(1_000) { job.cancelAndJoin() }
+
+    assertTrue(observed.get()!!.isCanceled())
+    assertTrue(failed.await(1, TimeUnit.SECONDS))
   }
 
   @Test

@@ -273,17 +273,28 @@ export class LibrarySeenStore {
   /** The non-baseline entries of the named libraries, newest first, then by path. */
   recent(libraryIds: string[], limit: number): RecentSeen[] {
     const wanted = new Set(libraryIds);
+    const keep = Math.max(0, limit);
+    if (!keep) return [];
+    const newestFirst = (left: RecentSeen, right: RecentSeen): number => {
+      if (left.at !== right.at) return left.at > right.at ? -1 : 1;
+      const byPath = left.relative.localeCompare(right.relative);
+      return byPath || left.libraryId.localeCompare(right.libraryId);
+    };
     const entries: RecentSeen[] = [];
     for (const [libraryId, library] of Object.entries(this.state.libraries)) {
       if (!wanted.has(libraryId)) continue;
       for (const [relative, file] of Object.entries(library.files)) {
         if (file.baseline) continue;
-        entries.push({ libraryId, relative, at: file.at });
+        const entry = { libraryId, relative, at: file.at };
+        let at = entries.length;
+        while (at > 0 && newestFirst(entry, entries[at - 1]!) < 0) at -= 1;
+        if (at < keep) {
+          entries.splice(at, 0, entry);
+          if (entries.length > keep) entries.pop();
+        }
       }
     }
-    entries.sort((left, right) =>
-      right.at.localeCompare(left.at) || left.relative.localeCompare(right.relative) || left.libraryId.localeCompare(right.libraryId));
-    return entries.slice(0, Math.max(0, limit));
+    return entries;
   }
 
   /** Video files in one library at or below a whole path prefix. */

@@ -424,7 +424,10 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
   const favoritesRow = async (req: express.Request, viewer: Viewer, proofs: RowProof[]): Promise<HomeRow> => {
     // The one merged Favourites list is the one place the remote stars are read; this shelf mixes
     // the local first page with the remote cards itself, so it asks for the local half alone.
-    const page = await personal.favoritesPage(req, { filter: "all", limit: HOME_ROW_LIMIT, onHome: true, remote: false });
+    const starredTitles = new Set<string>();
+    const page = await personal.favoritesPage(req, {
+      filter: "all", limit: HOME_ROW_LIMIT, onHome: true, remote: false, drawnStars: starredTitles,
+    });
     // `remote: false` keeps the media-server stars out of this page, so every entry is one of
     // the two local kinds the shelf draws.
     const localItems = page.items.filter((item): item is FavoriteLibraryItem | FavoriteCatalogItem => item.kind !== "remote");
@@ -442,10 +445,9 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const authority = authorityOf(req);
     // The local half draws a starred title once; a media-server record of the same title is left
     // out, so the shelf never shows it twice.
-    const starredTitles = await personal.drawnStarKeys(req);
     const remote = await remotePersonal.cards(authority, {
       filter: "favorites", onHome: true, limit: HOME_ROW_LIMIT,
-      ...(starredTitles.length ? { excludeTitles: new Set(starredTitles) } : {}),
+      ...(starredTitles.size ? { excludeTitles: starredTitles } : {}),
     }).catch(() => undefined);
     if (remote) proofs.push({ authority, cards: remote });
     const remoteDeadline = Date.now() + homeLookupDeadlineMs;
@@ -594,10 +596,23 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
 
     const utcDate = new Date(now()).toISOString().slice(0, 10);
     const seed = `${viewer.id}:${utcDate}:${shuffleOf(req.query.shuffle)}`;
-    const hashSort = (keys: string[]): string[] => keys
-      .map((key) => ({ key, hash: seedHash(`${seed}:${key}`) }))
-      .sort((a, b) => a.hash - b.hash || a.key.localeCompare(b.key))
-      .map((entry) => entry.key);
+    const hashTop = (keys: string[], limit: number): string[] => {
+      const kept: Array<{ key: string; hash: number }> = [];
+      for (const key of keys) {
+        const entry = { key, hash: seedHash(`${seed}:${key}`) };
+        let at = kept.length;
+        while (at > 0) {
+          const previous = kept[at - 1]!;
+          if (previous.hash < entry.hash || (previous.hash === entry.hash && previous.key.localeCompare(entry.key) <= 0)) break;
+          at -= 1;
+        }
+        if (at < limit) {
+          kept.splice(at, 0, entry);
+          if (kept.length > limit) kept.pop();
+        }
+      }
+      return kept.map((entry) => entry.key);
+    };
 
     // Only when the unstarted pool is short of a full row: unfinished favourites top it up,
     // in the same per-day order and after the unstarted titles.
@@ -605,7 +620,10 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const topUp = eligible.length >= TONIGHT_CARDS ? [] : dataOf(req).favorites.filter((key) =>
       !known.has(key) && personal.pathVisible(key, viewer, libraries) && showsOnHome(key, libraries)
       && showsInFavorites(key, libraries) && libraryOnHome(key, libraries) && !finished(key));
-    const ordered = [...hashSort(eligible), ...hashSort(topUp)].slice(0, TONIGHT_CARDS + TONIGHT_SPARES);
+    const ordered = [
+      ...hashTop(eligible, TONIGHT_CARDS + TONIGHT_SPARES),
+      ...hashTop(topUp, TONIGHT_CARDS + TONIGHT_SPARES),
+    ].slice(0, TONIGHT_CARDS + TONIGHT_SPARES);
 
     const described = await Promise.all(ordered.map(async (key) => {
       const item = await describeLibraryPath(key);
