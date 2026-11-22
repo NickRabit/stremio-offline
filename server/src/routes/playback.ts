@@ -436,13 +436,25 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     const offset = Math.max(0, Number(req.query.offset) || 0);
     const requestedPosition = Number(req.query.position);
     const position = Number.isFinite(requestedPosition) ? Math.max(offset, requestedPosition) : null;
-    const cues = await playback.sidecar(
-      String(req.params.id),
-      typeof req.query.revision === "string" ? req.query.revision : undefined,
-      offset,
-      subtitleDelay(req.query.delay),
-      position,
-    );
+    const revision = typeof req.query.revision === "string" ? req.query.revision : undefined;
+    const delay = subtitleDelay(req.query.delay);
+    const probe = req.query.probe === "1";
+    if (probe) {
+      const ready = await playback.sidecarProbe(String(req.params.id), revision, offset, delay, position);
+      guardOwned(String(req.params.id));
+      if (!ready) return res.status(404).end();
+      if ("retired" in ready) {
+        return res.status(410)
+          .setHeader("cache-control", "private, no-store")
+          .json({ sidecarUrl: ready.sidecarUrl });
+      }
+      return res.status(204)
+        .setHeader("cache-control", "private, no-store")
+        .setHeader("x-sidecar-complete", ready.complete ? "1" : "0")
+        .setHeader("x-sidecar-coverage", Number.isFinite(ready.coverage) ? String(Math.round(ready.coverage)) : "")
+        .end();
+    }
+    const cues = await playback.sidecar(String(req.params.id), revision, offset, delay, position);
     guardOwned(String(req.params.id));
     if (!cues) return res.status(404).end();
     if ("retired" in cues) {

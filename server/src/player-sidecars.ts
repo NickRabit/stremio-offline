@@ -1,14 +1,43 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, open, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { Transform, Writable } from "node:stream";
 import { log } from "./logger.js";
 import { ffmpegPath, trackMedia } from "./media-tools.js";
-import { completeVttBlocks, shiftVtt, vttCoverage } from "./vtt.js";
+import { completeVttBlocks, shiftVtt, vttBlockCoverage, vttCoverage } from "./vtt.js";
 
 type Extract = (args: string[], file: string, append: boolean, signal: AbortSignal) => Promise<unknown>;
+
+export interface SidecarIO {
+  readFull(file: string): Promise<string>;
+  readFrom(file: string, offset: number): Promise<{ bytes: Buffer; size: number }>;
+  completeVttBlocks(text: string): string;
+  shiftVtt(text: string, offset: number): string;
+  vttCoverage(text: string): number;
+  vttBlockCoverage(block: string): number;
+}
+
+export const defaultSidecarIO: SidecarIO = {
+  readFull: (file) => readFile(file, "utf8"),
+  async readFrom(file, offset) {
+    const handle = await open(file, "r");
+    try {
+      const { size } = await handle.stat();
+      if (offset >= size) return { bytes: Buffer.alloc(0), size };
+      const buffer = Buffer.alloc(size - offset);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+      return { bytes: buffer.subarray(0, bytesRead), size };
+    } finally {
+      await handle.close();
+    }
+  },
+  completeVttBlocks,
+  shiftVtt,
+  vttCoverage,
+  vttBlockCoverage,
+};
 
 /** A resumed reader writes its own WEBVTT header, which belongs only at the top. The cut is made
  *  in bytes and only once the blank line after the header has arrived: the pipe splits wherever
@@ -87,8 +116,14 @@ interface Job {
   running: boolean; started: boolean; complete: boolean; served: boolean;
   /** Consecutive failed bursts, and when the next one may be started. */
   failures: number; waitUntil: number;
-  /** How far the cues written so far reach, refreshed whenever the player asks for them. */
+  /** How far the complete cues written so far reach. */
   coverage: number;
+  observedBytes: number;
+  pending: Buffer;
+  observation: Promise<void>;
+  /** Moves each time a burst rewrites the file from scratch, so a read of the previous file
+   *  cannot leave its coverage behind. */
+  fileGeneration: number;
 }
 
 export type SidecarReadState =
@@ -96,10 +131,19 @@ export type SidecarReadState =
   | { state: "not-ready" }
   | { state: "retired" };
 
+export type SidecarReadinessState =
+  | { state: "ready"; complete: boolean; coverage: number }
+  | { state: "not-ready" }
+  | { state: "retired" };
+
 export class PlayerSidecars {
   private jobs = new Map<string, Job>();
   private released = new Set<string>();
-  constructor(private run: Extract = extract, private failed: (id: string, error: unknown) => void = () => {}) {}
+  constructor(
+    private run: Extract = extract,
+    private failed: (id: string, error: unknown) => void = () => {},
+    private io: SidecarIO = defaultSidecarIO,
+  ) {}
 
   /** One reader per track: a seek usually lands inside what this one has already written,
    *  and only a position it cannot serve -- another track, a jump back before its start, or
@@ -134,6 +178,7 @@ export class PlayerSidecars {
       revision, track, start, file: path.join(directory, `sidecar-${revision}.vtt`),
       directory, args, controller: new AbortController(), done: Promise.resolve(),
       running: false, started: false, complete: false, served: false, coverage: -Infinity, failures: 0, waitUntil: 0,
+      observedBytes: 0, pending: Buffer.alloc(0), observation: Promise.resolve(), fileGeneration: 0,
     };
     this.jobs.set(id, job);
     void (async () => {
@@ -155,6 +200,13 @@ export class PlayerSidecars {
     if (job.running || signal.aborted || this.jobs.get(id) !== job || this.released.has(id)) return;
     job.running = true;
     job.started = true;
+    if (!append) {
+      // The burst rewrites the file from scratch: what was observed of the old one no longer holds.
+      job.fileGeneration += 1;
+      job.coverage = -Infinity;
+      job.observedBytes = 0;
+      job.pending = Buffer.alloc(0);
+    }
     log("INFO", "Reading embedded subtitles", { id, track: job.track, from: Math.round(from), why });
     const startedAt = Date.now();
     job.done = (async () => {
@@ -207,6 +259,56 @@ export class PlayerSidecars {
 
   revision(id: string) { return this.jobs.get(id)?.revision; }
 
+  /** Answers whether the file could be read; a missing or half-created one is not published yet. */
+  private observe(job: Job): Promise<boolean> {
+    const observing = job.observation.then(async () => {
+      const generation = job.fileGeneration;
+      try {
+        let appended = await this.io.readFrom(job.file, job.observedBytes);
+        if (generation !== job.fileGeneration) return true;
+        if (appended.size < job.observedBytes) {
+          job.observedBytes = 0;
+          job.pending = Buffer.alloc(0);
+          job.coverage = -Infinity;
+          appended = await this.io.readFrom(job.file, 0);
+        }
+        if (generation !== job.fileGeneration) return true;
+        if (!appended.bytes.length) return true;
+        job.observedBytes += appended.bytes.length;
+        const buffered = Buffer.concat([job.pending, appended.bytes]);
+        let consumed = 0;
+        for (;;) {
+          const at = buffered.indexOf("\n\n", consumed);
+          if (at < 0) break;
+          job.coverage = Math.max(job.coverage, this.io.vttBlockCoverage(buffered.subarray(consumed, at).toString("utf8")));
+          consumed = at + 2;
+        }
+        job.pending = Buffer.from(buffered.subarray(consumed));
+        return true;
+      } catch {
+        // A missing or half-created file is simply not published yet.
+        return false;
+      }
+    });
+    job.observation = observing.then(() => undefined, () => undefined);
+    return observing;
+  }
+
+  async readiness(id: string, revision: string | undefined, offset: number, position: number | null = offset): Promise<SidecarReadinessState> {
+    const job = this.jobs.get(id);
+    if (!job) return { state: "not-ready" };
+    if (revision !== undefined && job.revision !== revision) return { state: "retired" };
+    // As the full read: a file that could not be read moves nothing, and a complete one needs no reader.
+    const observed = job.complete ? false : await this.observe(job);
+    if (observed && !job.complete && position !== null) this.keepAhead(job, id, position);
+    if (job.complete) return { state: "ready", complete: true, coverage: Infinity };
+    if (job.coverage < offset + SIDECAR_LEAD_S) {
+      log("DEBUG", "Embedded subtitles are still behind the picture", { id, wanted: Math.round(offset + SIDECAR_LEAD_S), reached: Math.round(job.coverage) });
+      return { state: "not-ready" };
+    }
+    return { state: "ready", complete: false, coverage: job.coverage };
+  }
+
   async readState(id: string, revision: string | undefined, offset: number, delay = 0, position: number | null = offset): Promise<SidecarReadState> {
     const job = this.jobs.get(id);
     if (!job) return { state: "not-ready" };
@@ -215,11 +317,14 @@ export class PlayerSidecars {
     // rewrites the file, and a file caught mid-rewrite is empty: read afterwards, that
     // becomes an empty track the player is told is the whole of it and never asks for again.
     const complete = job.complete;
+    const generation = job.fileGeneration;
     let raw: string;
-    try { raw = await readFile(job.file, "utf8"); } catch { return { state: "not-ready" }; }
-    const text = complete ? raw : completeVttBlocks(raw);
+    try { raw = await this.io.readFull(job.file); } catch { return { state: "not-ready" }; }
+    const text = complete ? raw : this.io.completeVttBlocks(raw);
     if (!complete) {
-      job.coverage = vttCoverage(text);
+      // The file only grows within one generation, so a slow read that started before a probe
+      // saw newer blocks must not pull the coverage back; a read of a rewritten file is stale.
+      if (generation === job.fileGeneration) job.coverage = Math.max(job.coverage, this.io.vttCoverage(text));
       if (position !== null) this.keepAhead(job, id, position);
       if (job.coverage < offset + SIDECAR_LEAD_S) {
         // The one line that says why a film is playing without subtitles.
@@ -234,7 +339,7 @@ export class PlayerSidecars {
     }
     // The delay is the viewer's own correction: a positive one holds the cues back.
     const shift = offset - delay;
-    const shifted = shift !== 0 ? shiftVtt(text, shift) : text;
+    const shifted = shift !== 0 ? this.io.shiftVtt(text, shift) : text;
     return { state: "ready", text: shifted, complete, coverage: complete ? Infinity : job.coverage };
   }
 

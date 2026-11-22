@@ -38,7 +38,7 @@ export async function watchSidecar(
   while (!signal.aborted) {
     const request = requestSignal(signal, SIDECAR_REQUEST_MS);
     const requestedAt = Math.max(0, playhead());
-    const pollUrl = `${url}${url.includes("?") ? "&" : "?"}position=${requestedAt.toFixed(3)}`;
+    const pollUrl = `${url}${url.includes("?") ? "&" : "?"}position=${requestedAt.toFixed(3)}&probe=1`;
     const response = await fetcher(pollUrl, { signal: request.signal }).catch(() => undefined);
     request.settle();
     if (signal.aborted) return;
