@@ -90,6 +90,8 @@ let playbackReports: Array<Record<string, unknown>>;
 let playbackReportTimes: number[];
 let playbackStatusRequests: string[];
 let playbackStatusAnswer: unknown;
+/** While set, a playback status answer waits for it. */
+let playbackStatusGate: Promise<void> | undefined;
 let seekRequests: Array<{ path: string; time: number }>;
 let seekGone: boolean;
 let pingRequests: string[];
@@ -140,6 +142,7 @@ beforeEach(() => {
   playbackReportTimes = [];
   playbackStatusRequests = [];
   playbackStatusAnswer = { generation: 1, conversion: "running" };
+  playbackStatusGate = undefined;
   seekRequests = [];
   seekGone = false;
   pingRequests = [];
@@ -176,6 +179,7 @@ beforeEach(() => {
     }
     if (/^\/api\/playback\/[^/]+\/status$/.test(path)) {
       playbackStatusRequests.push(path.slice("/api/playback/".length, -"/status".length));
+      if (playbackStatusGate) return playbackStatusGate.then(() => json(playbackStatusAnswer));
       return Promise.resolve(json(playbackStatusAnswer));
     }
     if (/^\/api\/playback\/[^/]+\/seek$/.test(path) && init?.method === "POST") {
@@ -944,6 +948,25 @@ describe("Player stall advice", () => {
     await flush();
     expect(playbackStatusRequests.length).toBeGreaterThan(0);
     expect(hint()).not.toBeNull();
+  });
+
+  it("drops a pending advice when the viewer picks a quality by hand meanwhile", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: false };
+    playbackStatusAnswer = { generation: 1, conversion: "running", acceleration: true };
+    let release!: () => void;
+    playbackStatusGate = new Promise<void>((resolve) => { release = resolve; });
+    await render();
+    await stallAt(12);
+    expect(playbackStatusRequests.length).toBeGreaterThan(0);
+    await openSettings();
+    const quality = host.querySelector<HTMLSelectElement>('select[aria-label="Quality"]')!;
+    await act(async () => {
+      quality.value = "480";
+      quality.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => { release(); });
+    await flush();
+    expect(hint()).toBeNull();
   });
 
   it("still holds the advice back when the server has no acceleration", async () => {
