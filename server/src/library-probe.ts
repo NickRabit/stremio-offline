@@ -92,8 +92,8 @@ export function createLibraryProbe(opts: {
   // must not inherit the facts of the one it replaced.
   const volumeCache = new Map<string, {
     at: number;
-    dev: number;
-    ino: number;
+    dev: bigint;
+    ino: bigint;
     value: Pick<LibraryHealth, "readOnly" | "caseInsensitive">;
   }>();
   const realRoots = new Map<string, string>();
@@ -107,7 +107,8 @@ export function createLibraryProbe(opts: {
   const probe = async (root: string): Promise<LibraryHealth> => {
     const absolute = path.resolve(root);
     const generationAtStart = generationOf(absolute);
-    const info = await within(stat(absolute), timeoutMs);
+    // As bigints: Windows file ids pass 2^53, and a rounded id could match another directory.
+    const info = await within(stat(absolute, { bigint: true }), timeoutMs);
     if (!info?.isDirectory()) {
       if (generationAtStart === generationOf(absolute)) previouslyUnreachable.add(absolute);
       // Nothing is known but the spelling: `realpath` would hang on the same mount that made

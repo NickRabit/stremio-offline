@@ -59,7 +59,7 @@ import { apiRequestLimiter, authRequestLimiter, isMediaTransferRequest, pageRequ
 import { WalkCache } from "./walk-cache.js";
 import { FreshValueCache } from "./value-cache.js";
 import { killRunningMedia } from "./media-tools.js";
-import { browseDirectory, describePath, entryDirectory, heldTree, isPathWithin, isVideo, listVideosChecked, walkLibrary, pageFiles, summarize, buildLibrary, withinLibraryRoot, type FoundFile, type HeldTree, type LibraryEntry } from "./library.js";
+import { browseDirectory, describePath, entryDirectory, heldTree, isPathWithin, isVideo, listVideos, listVideosChecked, walkLibrary, pageFiles, summarize, buildLibrary, withinLibraryRoot, type FoundFile, type HeldTree, type LibraryEntry } from "./library.js";
 import { createArtworkSweep, type SweepDeps, type SweepLibrary } from "./artwork-sweep.js";
 import { createMaintenance } from "./maintenance.js";
 import { createShutdown, installSignalHandlers } from "./server-shutdown.js";
@@ -2013,10 +2013,19 @@ const describeLibraryPath = async (key: string, read?: WalkRead) => {
   // A library outside the walk -- switched off or away -- is described from the disk as before.
   const walked = read?.stale && relative !== "" && walkableLibraries().some((candidate) => candidate.id === library.id);
   const videosInside = walked
-    ? async () => (await libraryFiles(read)).flatMap((file) => {
-      const inside = relativeKeyIn(library.id, file.relative);
-      return inside !== undefined && inside !== relative && isPathWithin(inside, relative) ? [{ ...file, relative: inside }] : [];
-    })
+    ? async () => {
+      const files = await libraryFiles(read);
+      // A folder the walk's depth cap cut into (or never reached) is counted on disk.
+      const cut = (walkCuts.get(files) ?? []).some((folder) => {
+        const inside = relativeKeyIn(library.id, folder);
+        return inside !== undefined && (isPathWithin(inside, relative) || isPathWithin(relative, inside));
+      });
+      if (cut) return listVideos(library.root, relative, 0, carveOutsOf(library));
+      return files.flatMap((file) => {
+        const inside = relativeKeyIn(library.id, file.relative);
+        return inside !== undefined && inside !== relative && isPathWithin(inside, relative) ? [{ ...file, relative: inside }] : [];
+      });
+    }
     : undefined;
   const item = await describePath(library.root, relative, carveOutsOf(library), videosInside);
   if (item?.kind !== "file") return item;

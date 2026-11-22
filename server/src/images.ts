@@ -851,22 +851,27 @@ export class ImageProxy {
     try {
       const prepared = await downloadGate.run(() => this.fetchAndShrink(entry, signal), signal);
       if ("reason" in prepared) return rejected(prepared.reason);
-      const { data, storedExt } = prepared;
+      const { storedExt } = prepared;
+      let data: Buffer | undefined = prepared.data;
+      const bytes = data.length;
       signal.throwIfAborted();
       const target = this.path(id, storedExt);
       const temp = `${target}.${randomUUID()}.tmp`;
       try {
         await writeFile(temp, data, { mode: 0o600, signal });
+        // Outside the download gate now; an original nothing re-encoded is not held while
+        // the commit waits its turn.
+        data = undefined;
         await this.exclusively(async () => {
           signal.throwIfAborted();
-          await this.evictOnce(data.length);
+          await this.evictOnce(bytes);
           signal.throwIfAborted();
           // Rename is the irreversible byte-publish boundary, and the commit lock keeps an
           // older flight from renaming after a newer retry has already published this id.
           await this.renameFile(temp, target);
           signal.throwIfAborted();
           entry.ext = storedExt;
-          entry.bytes = data.length;
+          entry.bytes = bytes;
           entry.at = this.now();
           this.index.set(id, entry);
           this.save();
