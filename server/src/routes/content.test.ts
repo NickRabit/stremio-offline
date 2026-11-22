@@ -11,7 +11,7 @@ import { starredPath } from "../favorite-identity.js";
 import { libraryPath, libraryVisible, parseLibraryPath, relativeWithin, resolveLibraryPath, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { GalleryEntry, LibraryMetaRecord, LibrarySuggestion, TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
-import { isPathWithin, withinLibraryRoot, type LibraryEntry } from "../library.js";
+import { heldTree, isPathWithin, withinLibraryRoot, type HeldTree, type LibraryEntry } from "../library.js";
 import type { Store, StoredProgress, UserPrefs, WatchedMarker } from "../store.js";
 import { emptyUserData, type UserRecord } from "../users.js";
 import { PathReservations } from "../path-reservations.js";
@@ -46,6 +46,7 @@ interface Calls {
   rootPrewarm: boolean[];
   browseMetaPrewarm: boolean[];
   browseMetaUnits: Array<TitleUnit[] | undefined>;
+  heldTreeReads: number;
   unitReads: Array<{ stale?: boolean } | undefined>;
 }
 
@@ -74,6 +75,7 @@ interface LibraryState {
   gallery?: GalleryEntry[];
   galleryArtwork?: (key: string, index: number) => string | undefined;
   artStamp?: (file: string) => Promise<string>;
+  heldTree?: HeldTree;
   caseInsensitive?: boolean;
   relocateError?: Error;
   /** Holds the next transfer until the test lets it go; `reached` settles when it starts. */
@@ -109,7 +111,7 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
  *  is real: the resolver, the browse walk and the name checks are module singletons. */
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], activeItems: () => string[] = () => [], state: LibraryState = {}): Promise<Harness> => {
   const pathReservations = new PathReservations();
-  const calls: Calls = { invalidated: 0, browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [], browseMetaUnits: [], unitReads: [] };
+  const calls: Calls = { invalidated: 0, browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [], browseMetaUnits: [], heldTreeReads: 0, unitReads: [] };
   const nestedRelative = (library: LibraryRecord, other: LibraryRecord): string | undefined => {
     const relative = path.relative(path.resolve(library.root), path.resolve(other.root));
     if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
@@ -157,6 +159,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     galleryOf: () => state.gallery ?? [],
     galleryArtwork: (key, index) => state.galleryArtwork?.(key, index),
     healthOf: (record) => ({ unreachable: false, readOnly: false, realRoot: record.root, caseInsensitive: state.caseInsensitive ?? false }),
+    heldTreeOf: async () => { calls.heldTreeReads += 1; return state.heldTree; },
     invalidateLibrary: () => { calls.invalidated += 1; },
     libraryEntries: async (read?: { stale?: boolean }) => { calls.entriesAsked += 1; calls.entriesStale.push(read?.stale === true); return entries; },
     libraryKey: (value) => qualify(value),
@@ -334,6 +337,28 @@ test("GET /api/library/browse lists what is inside one library", async (t) => {
   assert.equal(body.total, 1);
   assert.deepEqual(body.items.map((item) => [item.kind, item.path, item.label]), [["file", "Films/Heat.mkv", "Heat"]]);
   assert.equal(harness.calls.rootBrowses, 0, "one library is opened, not listed");
+});
+
+test("GET /api/library/browse passes the held tree to the listing", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Alpha/inside.mkv");
+  await put(root, "loose.mkv");
+  const held = heldTree([
+    { relative: "Alpha/inside.mkv", size: 1_234, modified: "2026-09-01T00:00:00.000Z" },
+    { relative: "loose.mkv", size: 5_678, modified: "2026-10-01T00:00:00.000Z" },
+  ]);
+  const harness = await mount([library("lib_00000001", root)], [], () => [], { heldTree: held });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/browse?sort=size");
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ kind: string; path: string; size: number; modified: string; fileCount?: number }> };
+  assert.equal(harness.calls.heldTreeReads, 1);
+  assert.deepEqual(body.items.map(({ kind, path, size, modified, fileCount }) => ({ kind, path, size, modified, fileCount })), [
+    { kind: "folder", path: "Alpha", size: 1_234, modified: "2026-09-01T00:00:00.000Z", fileCount: 1 },
+    { kind: "file", path: "loose.mkv", size: 5_678, modified: "2026-10-01T00:00:00.000Z", fileCount: undefined },
+  ]);
 });
 
 test("browse reads the held walk once and reuses those units for attachment", async (t) => {

@@ -324,6 +324,31 @@ export function moveDestination(relative: string, folder: string): { path: strin
 
 export interface FoundFile { relative: string; size: number; modified: string }
 
+/** What the held walk knows about one library, indexed for browsing: every folder that holds a
+ *  video somewhere below it, with its aggregates, and every video by path. */
+export interface HeldTree {
+  folder(relative: string): { fileCount: number; size: number; modified: string } | undefined;
+  file(relative: string): FoundFile | undefined;
+}
+
+export function heldTree(files: FoundFile[]): HeldTree {
+  const folders = new Map<string, { fileCount: number; size: number; modified: string }>();
+  const byPath = new Map<string, FoundFile>();
+  for (const file of files) {
+    byPath.set(file.relative, file);
+    let folder = path.posix.dirname(file.relative);
+    while (folder && folder !== ".") {
+      const aggregate = folders.get(folder) ?? { fileCount: 0, size: 0, modified: "" };
+      aggregate.fileCount += 1;
+      aggregate.size += file.size;
+      if (file.modified > aggregate.modified) aggregate.modified = file.modified;
+      folders.set(folder, aggregate);
+      folder = path.posix.dirname(folder);
+    }
+  }
+  return { folder: (relative) => folders.get(relative), file: (relative) => byPath.get(relative) };
+}
+
 /** A ceiling for a caller that only needs an estimate. `files` counts down and `until` is a
  *  `Date.now()` deadline; either reaching zero ends the walk where it stands. */
 export interface WalkBudget { files: number; until: number }
@@ -626,7 +651,7 @@ function writeBrowseCache(key: string, entry: BrowseCacheEntry): void {
  *  name does not read, and leaves `size` and `modified` for the page that actually shows them.
  *  A filter looks through every folder beneath this one, as deep as `hasVideo` looks. */
 async function readMixed(root: string, relative: string, entries: Dirent[], needle: string,
-  exclude: ReadonlySet<string> | undefined, cheap: boolean, looseEpisodes: boolean, depth = 0): Promise<MixedItem[]> {
+  exclude: ReadonlySet<string> | undefined, cheap: boolean, looseEpisodes: boolean, held: HeldTree | undefined, depth = 0): Promise<MixedItem[]> {
   const folders: BrowseFolder[] = [];
   const files: LibraryFile[] = [];
   const deeper: MixedItem[] = [];
@@ -638,12 +663,18 @@ async function readMixed(root: string, relative: string, entries: Dirent[], need
     if (entry.isDirectory()) {
       if (needle && depth < 8) {
         const inner = await readdir(path.join(root, toFs(childRelative)), { withFileTypes: true }).catch(() => [] as Dirent[]);
-        deeper.push(...await readMixed(root, childRelative, inner, needle, exclude, cheap, looseEpisodes, depth + 1));
+        deeper.push(...await readMixed(root, childRelative, inner, needle, exclude, cheap, looseEpisodes, held, depth + 1));
       }
       if (needle && !entry.name.toLowerCase().includes(needle)) continue;
       if (cheap) {
-        if (!await hasVideo(root, childRelative, exclude)) continue;
+        if (held ? !held.folder(childRelative) : !await hasVideo(root, childRelative, exclude)) continue;
         folders.push({ path: childRelative, name: entry.name, fileCount: 0, size: 0, modified: "" });
+        continue;
+      }
+      if (held) {
+        const aggregate = held.folder(childRelative);
+        if (!aggregate) continue;
+        folders.push({ path: childRelative, name: entry.name, ...aggregate });
         continue;
       }
       const inside = await listVideos(root, childRelative, 0, exclude);
@@ -669,6 +700,15 @@ async function readMixed(root: string, relative: string, entries: Dirent[], need
       });
       continue;
     }
+    const found = held?.file(childRelative);
+    if (found) {
+      files.push({
+        path: childRelative, label,
+        season: numbers?.season ?? null, episode: numbers?.episode ?? null,
+        size: found.size, modified: found.modified,
+      });
+      continue;
+    }
     try {
       const info = await stat(path.join(root, toFs(childRelative)));
       files.push({
@@ -690,7 +730,7 @@ async function readMixed(root: string, relative: string, entries: Dirent[], need
  *  opening a folder is for, except under a filter, which finds a match anywhere beneath it. */
 export async function browseDirectory(root: string, relative: string, query = "", skip = 0, limit = 60,
   sort: LibrarySort = "name", descending = false, seed = "", onlyPaths?: ReadonlySet<string>,
-  exclude?: ReadonlySet<string>, looseEpisodes = false): Promise<BrowseResult> {
+  exclude?: ReadonlySet<string>, looseEpisodes = false, held?: HeldTree): Promise<BrowseResult> {
   const target = resolveInside(root, relative);
   if (!target) return { path: relative, items: [], total: 0 };
   let entries: Dirent[] | undefined;
@@ -702,7 +742,7 @@ export async function browseDirectory(root: string, relative: string, query = ""
   // rely on the cache instead. A name and a random order read only the label and the path, so
   // they can leave the walk to the page that is actually returned.
   const cheap = sort === "name" || sort === "random";
-  const key = `${browseCacheKey(root, relative, query, exclude)}\u0000${looseEpisodes ? "series" : ""}`;
+  const key = `${browseCacheKey(root, relative, query, exclude)}\u0000${looseEpisodes ? "series" : ""}\u0000${held ? "held" : "disk"}`;
   const signature = entries ? browseSignature(entries) : "";
   const cached = readBrowseCache(key, info?.mtimeMs, signature);
 
@@ -715,7 +755,7 @@ export async function browseDirectory(root: string, relative: string, query = ""
     if (!entries) {
       try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, items: [], total: 0 }; }
     }
-    mixed = await readMixed(root, relative, entries, query.trim().toLowerCase(), exclude, cheap, looseEpisodes);
+    mixed = await readMixed(root, relative, entries, query.trim().toLowerCase(), exclude, cheap, looseEpisodes, held);
     complete = !cheap;
     writeBrowseCache(key, { complete, mtimeMs: info?.mtimeMs, signature, builtAt: Date.now(), mixed });
   }
@@ -739,6 +779,11 @@ export async function browseDirectory(root: string, relative: string, query = ""
   for (const item of page) {
     if (item.folder) {
       if (complete) { items.push({ kind: "folder", ...item.folder }); continue; }
+      const aggregate = held?.folder(item.folder.path);
+      if (aggregate) {
+        items.push({ kind: "folder", ...item.folder, ...aggregate });
+        continue;
+      }
       const inside = await listVideos(root, item.folder.path, 0, exclude);
       items.push({
         kind: "folder", ...item.folder,
@@ -750,6 +795,11 @@ export async function browseDirectory(root: string, relative: string, query = ""
     }
     const file = item.file!;
     if (complete) { items.push({ kind: "file", ...file }); continue; }
+    const found = held?.file(file.path);
+    if (found) {
+      items.push({ kind: "file", ...file, size: found.size, modified: found.modified });
+      continue;
+    }
     const fileInfo = await stat(path.join(root, toFs(file.path))).catch(() => undefined);
     items.push({
       kind: "file", ...file,

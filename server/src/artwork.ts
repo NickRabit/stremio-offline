@@ -351,8 +351,9 @@ export async function saveFrame(videoPath: string, target: string, seconds = 300
   try {
     await run(ffmpegPath(), [
       "-hide_banner", "-loglevel", "error", "-nostdin",
+      "-threads", "2",
       "-ss", String(seconds), "-i", videoPath,
-      "-vf", "thumbnail=50,scale=480:-2", "-frames:v", "1", "-q:v", "4", "-y", temp,
+      "-vf", "thumbnail=50,scale=480:-2", "-frames:v", "1", "-q:v", "4", "-threads", "1", "-y", temp,
     ], { timeout: 60_000 });
     await renameWithRetry(temp, target);
     return true;
