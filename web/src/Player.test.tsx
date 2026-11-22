@@ -90,6 +90,8 @@ let playbackReports: Array<Record<string, unknown>>;
 let playbackReportTimes: number[];
 let playbackStatusRequests: string[];
 let playbackStatusAnswer: unknown;
+/** While set, a playback status answer waits for it. */
+let playbackStatusGate: Promise<void> | undefined;
 let seekRequests: Array<{ path: string; time: number }>;
 let seekGone: boolean;
 let sidecarSeekRequests: Array<{ path: string; position: number; seekId: number }>;
@@ -151,6 +153,7 @@ beforeEach(() => {
   playbackReportTimes = [];
   playbackStatusRequests = [];
   playbackStatusAnswer = { generation: 1, conversion: "running" };
+  playbackStatusGate = undefined;
   seekRequests = [];
   seekGone = false;
   sidecarSeekRequests = [];
@@ -198,7 +201,12 @@ beforeEach(() => {
     }
     if (/^\/api\/playback\/[^/]+\/status$/.test(path)) {
       playbackStatusRequests.push(path.slice("/api/playback/".length, -"/status".length));
+      if (playbackStatusGate) return playbackStatusGate.then(() => json(playbackStatusAnswer));
       return Promise.resolve(json(playbackStatusAnswer));
+    }
+    if (/^\/api\/playback\/[^/]+\/track$/.test(path) && init?.method === "POST") {
+      const quality = (JSON.parse(String(init.body)) as { quality?: number | null }).quality;
+      return Promise.resolve(json({ ...session(), ...(quality === undefined ? {} : { quality }) }));
     }
     if (/^\/api\/playback\/[^/]+\/seek$/.test(path) && init?.method === "POST") {
       const time = Number((JSON.parse(String(init.body)) as { time?: number }).time);
@@ -1265,6 +1273,45 @@ describe("Player stall advice", () => {
     await render();
     await stallAt(12);
     expect(hint()).not.toBeNull();
+  });
+  it("asks the server again when the session was described before its FFmpeg probe finished", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: false };
+    playbackStatusAnswer = { generation: 1, conversion: "running", acceleration: true };
+    await render();
+    await stallAt(12);
+    await flush();
+    expect(playbackStatusRequests.length).toBeGreaterThan(0);
+    expect(hint()).not.toBeNull();
+  });
+
+  it("drops a pending advice when the viewer picks a quality by hand meanwhile", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: false };
+    playbackStatusAnswer = { generation: 1, conversion: "running", acceleration: true };
+    let release!: () => void;
+    playbackStatusGate = new Promise<void>((resolve) => { release = resolve; });
+    await render();
+    await stallAt(12);
+    expect(playbackStatusRequests.length).toBeGreaterThan(0);
+    await openSettings();
+    const quality = host.querySelector<HTMLSelectElement>('select[aria-label="Quality"]')!;
+    await act(async () => {
+      quality.value = "480";
+      quality.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(host.querySelector(".player-error")).toBeNull();
+    await act(async () => { release(); });
+    await flush();
+    expect(hint()).toBeNull();
+  });
+
+  it("still holds the advice back when the server has no acceleration", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: false };
+    playbackStatusAnswer = { generation: 1, conversion: "running", acceleration: false };
+    await render();
+    await stallAt(12);
+    await flush();
+    expect(hint()).toBeNull();
   });
 });
 

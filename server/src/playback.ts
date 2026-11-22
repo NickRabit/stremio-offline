@@ -1,6 +1,5 @@
 import { AppError } from "./errors.js";
-import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn, type ChildProcess } from "node:child_process";
 import { access, chmod, lstat, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
@@ -12,7 +11,7 @@ import { internalUrl } from "./internal-url.js";
 import { log } from "./logger.js";
 import { ConversionMonitor, sourcePace } from "./conversion-pace.js";
 import { pickByLanguage } from "./language.js";
-import { ffmpegPath, killMediaChild, mediaChildSuspended, resumeMediaChild, suspendMediaChild, trackMedia } from "./media-tools.js";
+import { ffmpegPath, killMediaChild, mediaChildSuspended, mediaStopping, resumeMediaChild, runMedia, suspendMediaChild, trackMedia } from "./media-tools.js";
 import { playlistArgs, probe, type MediaInfo, type Track } from "./probe.js";
 import { safeFetch } from "./security.js";
 import type { StreamItem } from "./types.js";
@@ -146,6 +145,9 @@ export interface PlaybackStatus {
   conversion: "direct" | "running" | "complete" | "short" | "failed";
   /** Absolute film time the short conversion reached. */
   reached?: number;
+  /** Whether the server has hardware encoding, as the capability probe found it by now: a session
+   *  that began while the probe was still running was described without it. */
+  acceleration: boolean;
 }
 
 export function shortConversion(reached: number | undefined, expected: number | undefined): boolean {
@@ -542,6 +544,11 @@ export class PlaybackManager {
   }
 
   private async probeCapabilitiesNow() {
+    // A server already on its way out does not start FFmpeg to find out what it could have done.
+    if (mediaStopping()) {
+      this.capabilityState = "failed";
+      return;
+    }
     try {
       await this.readCapabilities();
       this.capabilityState = "ready";
@@ -610,7 +617,7 @@ export class PlaybackManager {
     let reason = "";
     for (const timeout of VERSION_TIMEOUTS_MS) {
       try {
-        return (await promisify(execFile)(ffmpegPath(), ["-version"], { timeout })).stdout;
+        return (await runMedia(ffmpegPath(), ["-version"], { timeout })).stdout;
       } catch (error) {
         reason = error instanceof Error ? error.message : String(error);
       }
@@ -843,13 +850,19 @@ export class PlaybackManager {
 
   status(id: string): PlaybackStatus {
     const session = this.require(id);
-    if (session.mode === "direct") return { generation: session.generation, conversion: "direct" };
+    const acceleration = this.hasAcceleration();
+    if (session.mode === "direct") return { generation: session.generation, conversion: "direct", acceleration };
     const ending = session.ending?.generation === session.generation ? session.ending : undefined;
-    if (!ending) return { generation: session.generation, conversion: "running" };
-    if (ending.failed) return { generation: session.generation, conversion: "failed", reached: ending.reached };
-    if (!ending.short) return { generation: session.generation, conversion: "complete" };
-    return { generation: session.generation, conversion: "short", reached: ending.reached };
+    if (!ending) return { generation: session.generation, conversion: "running", acceleration };
+    if (ending.failed) return { generation: session.generation, conversion: "failed", reached: ending.reached, acceleration };
+    if (!ending.short) return { generation: session.generation, conversion: "complete", acceleration };
+    return { generation: session.generation, conversion: "short", reached: ending.reached, acceleration };
   }
+
+  private hasAcceleration(): boolean {
+    return Boolean(this.vaapiDevice || this.nvenc || this.videotoolbox || this.mediafoundation);
+  }
+
 
   /** The browser refused what the server sent. Repeating it is pointless: the copy is dropped
    * and the session starts again as a real transcode. */
@@ -1275,7 +1288,7 @@ export class PlaybackManager {
     return {
       id: session.id, mode: session.mode, url, offset: session.offset,
       duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
-      hardware: session.hardware, acceleration: Boolean(this.vaapiDevice || this.nvenc || this.videotoolbox || this.mediafoundation),
+      hardware: session.hardware, acceleration: this.hasAcceleration(),
       audioTracks: (session.info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
@@ -1531,7 +1544,7 @@ export class PlaybackManager {
   }
 
   private async runVaapiProbe(device: string, filters: string, encoder: string[] = []) {
-    await promisify(execFile)(ffmpegPath(), [
+    await runMedia(ffmpegPath(), [
       "-hide_banner", "-loglevel", "error", "-nostdin",
       "-init_hw_device", `vaapi=va:${device}`, "-filter_hw_device", "va",
       "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
@@ -1564,13 +1577,13 @@ export class PlaybackManager {
 
   private async hasNvencEncoder() {
     try {
-      const { stdout } = await promisify(execFile)(ffmpegPath(), ["-hide_banner", "-encoders"], { timeout: 10_000 });
+      const { stdout } = await runMedia(ffmpegPath(), ["-hide_banner", "-encoders"], { timeout: 10_000 });
       return /\bh264_nvenc\b/.test(stdout);
     } catch { return false; }
   }
 
   private async runNvencProbe() {
-    await promisify(execFile)(ffmpegPath(), [
+    await runMedia(ffmpegPath(), [
       "-hide_banner", "-loglevel", "error", "-nostdin",
       "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
       "-vf", "format=nv12", "-c:v", "h264_nvenc", "-preset", "p4", "-f", "null", "-",
@@ -1616,7 +1629,7 @@ export class PlaybackManager {
   }
 
   private async runVideotoolboxProbe(encoder: string[]) {
-    await promisify(execFile)(ffmpegPath(), [
+    await runMedia(ffmpegPath(), [
       "-hide_banner", "-loglevel", "error", "-nostdin",
       "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
       "-vf", "format=nv12", "-c:v", "h264_videotoolbox", ...encoder, "-f", "null", "-",
@@ -1646,7 +1659,7 @@ export class PlaybackManager {
   }
 
   private async runMediaFoundationProbe(encoder: string[]) {
-    await promisify(execFile)(ffmpegPath(), [
+    await runMedia(ffmpegPath(), [
       "-hide_banner", "-loglevel", "error", "-nostdin",
       "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
       "-vf", "format=nv12", "-c:v", "h264_mf", ...encoder, "-f", "null", "-",

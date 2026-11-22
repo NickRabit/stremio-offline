@@ -212,9 +212,11 @@ test("a start that has to convert waits for the probe before choosing an encoder
   assert.equal(encoderChosen, true, "the conversion went on once the probe settled");
 });
 
-test("shutdown and manager stop complete while the probe is pending", { skip: process.platform === "win32" }, async (t) => {
+test("shutdown kills a probe that is stuck, and the manager stops", { skip: process.platform === "win32" }, async (t) => {
   const directory = await workDir(t, "playback-capabilities-shutdown-");
-  const { fake, count } = await writeFakeFfmpeg(directory, { versionDelay: 700 });
+  // Never released: only the shutdown's media cleanup can end this version probe.
+  const gate = path.join(directory, "never-released");
+  const { fake, count, complete } = await writeFakeFfmpeg(directory, { versionGate: gate });
   useEnv(t, { FFMPEG_PATH: fake, VAAPI_DEVICE: undefined });
   const manager = new PlaybackManager(path.join(directory, "data")) as any;
   await manager.load();
@@ -242,6 +244,7 @@ test("shutdown and manager stop complete while the probe is pending", { skip: pr
     sleep(5_000).then(() => { throw new Error("the capability probe did not finish after shutdown"); }),
   ]);
 
+  assert.equal(existsSync(complete), false, "the stuck probe was killed, not left to answer");
   assert.equal(manager.diagnostics().capabilities, "ready");
   await flushLog();
   assert.equal(await readLog({ level: "ERROR", search: "FFmpeg capabilities" }), "");

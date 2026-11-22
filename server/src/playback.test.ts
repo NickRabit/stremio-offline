@@ -2505,6 +2505,7 @@ test("a clean conversion that stopped during the film is reported as short", { s
     generation: session.generation,
     conversion: "short",
     reached: 60,
+    acceleration: false,
   });
   await flushLog();
   assert.match(await readLog({ level: "WARN", search: "The conversion stopped before the end of the film" }), /WARN/);
@@ -2526,6 +2527,7 @@ test("a failed conversion that stopped during the film is reported as failed", {
     generation: session.generation,
     conversion: "failed",
     reached: 60,
+    acceleration: false,
   });
 });
 
@@ -2678,6 +2680,7 @@ test("a new generation is running while the previous generation ended short", { 
   assert.deepEqual(manager.status(session.id), {
     generation: session.generation,
     conversion: "running",
+    acceleration: false,
   });
 });
 
