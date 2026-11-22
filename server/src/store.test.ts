@@ -40,6 +40,44 @@ test("an old addon state migrates to the default save rules", async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("the cold state copy stays byte-identical without cloning the whole state", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-cold-"));
+  try {
+    const store = new Store(directory);
+    const internals = store as unknown as { state: Record<string, unknown>; coldJson(): string };
+    internals.state.userData = {
+      usr_00000002: {
+        prefs: { uiLanguage: "cs" },
+        favorites: ["lib_00000001/Film.mkv"],
+        watchlist: { "movie:tt2": { type: "movie", id: "tt2", name: "Two", addedAt: "2026-01-02T00:00:00.000Z" } },
+        progress: { "movie:tt2": { position: 20, duration: 100, title: "Two", updatedAt: "2026-01-02T00:00:00.000Z" } },
+        watchedSeries: { "series:tt3": { name: "Three", season: 1, episode: 2, updatedAt: "2026-01-02T00:00:00.000Z" } },
+        remoteMedia: { "remote:a": { position: 10 } },
+      },
+      usr_00000001: {
+        prefs: { libraryTileShape: "wide" },
+        favorites: [],
+        watchlist: {},
+        progress: {},
+        watchedSeries: {},
+      },
+    };
+    internals.state.personalPending = [["usr_00000001", "progress", "movie:tt1", null]];
+
+    const oracleState = structuredClone(internals.state);
+    for (const data of Object.values(oracleState.userData as Record<string, Record<string, unknown>>)) {
+      for (const domain of ["progress", "watchedSeries", "watchlist", "remoteMedia", "favorites"]) delete data[domain];
+    }
+    delete oracleState.personalPending;
+    assert.equal(internals.coldJson(), JSON.stringify(oracleState, null, 2));
+
+    delete internals.state.userData;
+    const withoutUserData = structuredClone(internals.state);
+    delete withoutUserData.personalPending;
+    assert.equal(internals.coldJson(), JSON.stringify(withoutUserData, null, 2));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("a library record written before the automatic switch still reads as on after a reload", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
   try {

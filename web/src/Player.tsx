@@ -1231,11 +1231,16 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       // The row says which media-server version it was played from, so the detail can name it.
       ...(remoteItem ? { remote: { libraryId: remoteItem.libraryId, itemId: remoteItem.itemId, mediaSourceId: remoteItem.mediaSourceId } } : {}),
     });
+    let lastSent: { position: number; duration: number } | undefined;
     const send = (final = false) => {
       const body = payload();
       if (body) {
+        if (!final && lastSent && Math.abs(body.position - lastSent.position) < 1 && body.duration === lastSent.duration) return;
         const saved = final ? { ...body, final: true as const } : body;
-        void api.saveProgress(saved).then(() => { if (final) onProgressSavedRef.current?.(saved.key); }).catch(() => undefined);
+        void api.saveProgress(saved).then(() => {
+          lastSent = { position: body.position, duration: body.duration };
+          if (final) onProgressSavedRef.current?.(saved.key);
+        }).catch(() => undefined);
       }
     };
     const leaving = () => { const body = payload(); if (body) api.saveProgressOnUnload({ ...body, final: true }); };
@@ -1253,12 +1258,18 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       if (!duration || position < 5) return null;
       return { position: Math.round(position), duration: Math.round(duration), mediaSourceId: remoteItem.mediaSourceId };
     };
+    let lastSent: { position: number; duration: number } | undefined;
     // The final write names the version it wrote, so the detail behind the player can read its own
     // store again the moment the write landed -- never before it, and never on another version's.
     const send = (final = false) => {
       const body = payload();
-      if (body) void api.saveRemoteState(remoteItem.libraryId, remoteItem.itemId, final ? { ...body, final: true } : body)
-        .then(() => { if (final) onProgressSavedRef.current?.(remoteVersionKey(remoteItem)); })
+      if (!body) return;
+      if (!final && lastSent && Math.abs(body.position - lastSent.position) < 1 && body.duration === lastSent.duration) return;
+      void api.saveRemoteState(remoteItem.libraryId, remoteItem.itemId, final ? { ...body, final: true } : body)
+        .then(() => {
+          lastSent = { position: body.position, duration: body.duration };
+          if (final) onProgressSavedRef.current?.(remoteVersionKey(remoteItem));
+        })
         .catch(() => undefined);
     };
     const leaving = () => { const body = payload(); if (body) api.saveRemoteStateOnUnload(remoteItem.libraryId, remoteItem.itemId, { ...body, final: true }); };

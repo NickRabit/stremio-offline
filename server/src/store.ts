@@ -432,10 +432,12 @@ export class Store {
     return rows;
   }
   private coldJson(): string {
-    const state = structuredClone(this.state);
-    for (const data of Object.values(state.userData ?? {})) {
-      for (const domain of PERSONAL_DOMAINS) delete data[domain];
-    }
+    const userData = Object.fromEntries(Object.entries(this.state.userData ?? {}).map(([userId, data]) => {
+      const copy = { ...data };
+      for (const domain of PERSONAL_DOMAINS) delete copy[domain];
+      return [userId, copy];
+    }));
+    const state = this.state.userData === undefined ? { ...this.state } : { ...this.state, userData };
     delete (state as unknown as Record<string, unknown>)[PERSONAL_JOURNAL];
     return JSON.stringify(state, null, 2);
   }

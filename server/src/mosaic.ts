@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile 
 import os from "node:os";
 import path from "node:path";
 import { log } from "./logger.js";
+import { mapBounded } from "./map-bounded.js";
 import { ffmpegPath, runMedia } from "./media-tools.js";
 
 /**
@@ -152,11 +153,16 @@ export class MosaicCache {
   private readonly composing = new Map<string, Promise<Buffer>>();
   private active = 0;
   private readonly waiting: Array<() => void> = [];
+  private diskBytes = 0;
+  private diskFiles?: Map<string, number>;
+  private pendingWrites = new Map<string, number>();
+  private scanChanges?: Map<string, number | null>;
 
   constructor(
     private readonly dir = path.join(process.env.DATA_DIR ?? "/data", "mosaics"),
     private readonly cap = megabytes(process.env.MOSAIC_CACHE_MB, 128),
     private readonly memoryCap = megabytes(process.env.MOSAIC_MEMORY_MB, 32),
+    private readonly files: { readdir: typeof readdir; stat: typeof stat } = { readdir, stat },
   ) {}
 
   file(key: string): string {
@@ -219,7 +225,18 @@ export class MosaicCache {
       log("WARN", "A composed mosaic could not be stored", { reason: String(error).slice(0, 120) });
       return;
     }
+    this.trackWrite(file, bytes.length);
     await this.trim().catch(() => undefined);
+  }
+
+  private trackWrite(file: string, size: number): void {
+    if (!this.diskFiles) {
+      this.pendingWrites.set(file, size);
+      return;
+    }
+    this.diskBytes += size - (this.diskFiles.get(file) ?? 0);
+    this.diskFiles.set(file, size);
+    this.scanChanges?.set(file, size);
   }
 
   private remember(key: string, bytes: Buffer): void {
@@ -240,22 +257,47 @@ export class MosaicCache {
   /** One pass over the directory at a time: the oldest files go until the cap holds again. */
   private trim(): Promise<void> {
     if (this.maintenance) return this.maintenance;
+    if (this.diskFiles && this.diskBytes <= this.cap) return Promise.resolve();
     const pass = (async () => {
-      const names = (await readdir(this.dir).catch(() => [] as string[])).filter((name) => name.endsWith(".jpg"));
-      const files = await Promise.all(names.map(async (name) => {
+      const scanChanges = new Map<string, number | null>();
+      this.scanChanges = scanChanges;
+      const names = (await this.files.readdir(this.dir).catch(() => [] as string[])).filter((name) => name.endsWith(".jpg"));
+      const scanned = await mapBounded(names, 8, async (name) => {
         const file = path.join(this.dir, name);
-        const info = await stat(file).catch(() => undefined);
+        const info = await this.files.stat(file).catch(() => undefined);
         return info ? { file, size: info.size, at: info.mtimeMs } : undefined;
-      }));
-      const kept = files.filter((entry): entry is { file: string; size: number; at: number } => entry !== undefined);
-      let total = kept.reduce((sum, entry) => sum + entry.size, 0);
-      if (total <= this.cap) return;
-      for (const entry of kept.sort((left, right) => left.at - right.at)) {
-        if (total <= this.cap) break;
-        total -= entry.size;
-        await rm(entry.file, { force: true }).catch(() => undefined);
+      });
+      const kept = scanned.filter((entry): entry is { file: string; size: number; at: number } => entry !== undefined);
+      this.diskFiles = new Map(kept.map((entry) => [entry.file, entry.size]));
+      for (const [file, size] of scanChanges) {
+        if (size === null) this.diskFiles.delete(file);
+        else this.diskFiles.set(file, size);
       }
-    })().finally(() => { this.maintenance = undefined; });
+      for (const [file, size] of this.pendingWrites) {
+        this.diskFiles.set(file, size);
+      }
+      this.pendingWrites.clear();
+      this.diskBytes = [...this.diskFiles.values()].reduce((sum, size) => sum + size, 0);
+      if (this.diskBytes <= this.cap) {
+        this.scanChanges = undefined;
+        return;
+      }
+      for (const entry of kept.sort((left, right) => left.at - right.at)) {
+        if (this.diskBytes <= this.cap) break;
+        if (this.diskFiles.get(entry.file) !== entry.size) continue;
+        try {
+          await rm(entry.file, { force: true });
+        } catch {
+          continue;
+        }
+        this.diskFiles.delete(entry.file);
+        this.diskBytes -= entry.size;
+      }
+      this.scanChanges = undefined;
+    })().finally(() => {
+      this.scanChanges = undefined;
+      this.maintenance = undefined;
+    });
     this.maintenance = pass;
     return pass;
   }

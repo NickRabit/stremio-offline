@@ -20,11 +20,12 @@ export const skippedFolder = (name: string) => name.startsWith(".") || name.star
 export function watchLibrary(
   dir: string,
   onChange: (file: string) => void,
-  { debounceMs = 30_000, timer = setTimeout, clear = clearTimeout, platform = process.platform }: {
+  { debounceMs = 30_000, timer = setTimeout, clear = clearTimeout, platform = process.platform, inspect = stat }: {
     debounceMs?: number;
     timer?: typeof setTimeout;
     clear?: typeof clearTimeout;
     platform?: NodeJS.Platform;
+    inspect?: typeof stat;
   } = {},
 ): LibraryWatch {
   let pending: ReturnType<typeof setTimeout> | undefined;
@@ -45,7 +46,7 @@ export function watchLibrary(
   };
 
   try {
-    const tree = platform === "linux" ? watchFolders(dir, noticed) : watchRecursive(dir, noticed);
+    const tree = platform === "linux" ? watchFolders(dir, noticed, inspect) : watchRecursive(dir, noticed);
     return {
       active: true,
       close: () => {
@@ -76,7 +77,7 @@ function watchRecursive(dir: string, noticed: (name: string) => void) {
  *  as well as every folder -- with Synology's @eaDir beside each video that runs out of the
  *  system's watches on an ordinary library. A folder's watch already reports the files in it,
  *  so only folders are watched, and the system's own are left out. */
-function watchFolders(root: string, noticed: (name: string) => void) {
+function watchFolders(root: string, noticed: (name: string) => void, inspect: typeof stat) {
   const watchers = new Map<string, FSWatcher>();
   let closed = false;
 
@@ -89,14 +90,14 @@ function watchFolders(root: string, noticed: (name: string) => void) {
 
   const add = (folder: string) => {
     if (closed || watchers.has(folder)) return;
-    const watcher = watch(folder, { persistent: false }, (_event, filename) => {
+    const watcher = watch(folder, { persistent: false }, (event, filename) => {
       const name = typeof filename === "string" ? filename : "";
       const relative = path.relative(root, name ? path.join(folder, name) : folder);
       noticed(relative);
-      if (!name || skippedFolder(name)) return;
+      if (event !== "rename" || !name || skippedFolder(name)) return;
       // A folder that appeared needs its own watch, and one that went takes its watches with it.
       const child = path.join(folder, name);
-      void stat(child).then(
+      void inspect(child).then(
         (info) => { if (info.isDirectory()) void walk(child); },
         () => { for (const [watched, gone] of watchers) if (watched === child || watched.startsWith(`${child}${path.sep}`)) { gone.close(); watchers.delete(watched); } },
       );

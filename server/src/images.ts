@@ -44,6 +44,7 @@ const FAILURE_WARN_IDS = 2000;
  *  re-reads the same posters every few seconds, and rewriting an index of many megabytes each
  *  time kept a NAS busy while nobody was doing anything. */
 const TOUCH_SAVE_MS = 10 * 60_000;
+const TOUCH_INTERVAL_MS = 60 * 60_000;
 
 const EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp",
@@ -455,9 +456,12 @@ export class ImageProxy {
     const id = idFor(value, target);
     const known = this.index.get(id);
     if (known) {
-      known.at = this.now();
-      this.index.set(id, known);
-      this.save(TOUCH_SAVE_MS);
+      const now = this.now();
+      if (now - known.at >= TOUCH_INTERVAL_MS) {
+        known.at = now;
+        this.index.set(id, known);
+        this.save(TOUCH_SAVE_MS);
+      }
     } else {
       this.index.set(id, { url: value, at: this.now(), ...(target === DETAIL_WIDTH ? { width: target } : {}) });
       this.save();
@@ -654,9 +658,12 @@ export class ImageProxy {
     const entry = this.index.get(id);
     if (!entry) { log("DEBUG", "An unknown image id was requested", { id }); return undefined; }
     if (entry.ext) {
-      entry.at = this.now();
-      this.index.set(id, entry);
-      if (this.database) this.save(TOUCH_SAVE_MS);
+      const now = this.now();
+      if (now - entry.at >= TOUCH_INTERVAL_MS) {
+        entry.at = now;
+        this.index.set(id, entry);
+        if (this.database) this.save(TOUCH_SAVE_MS);
+      }
       return { file: this.path(id, entry.ext), type: TYPES[entry.ext]!, etag: `"${id}-${entry.bytes ?? 0}"` };
     }
     let flight = this.inflight.get(id);

@@ -84,6 +84,34 @@ test("the proxied link keeps the address to itself", async () => {
   assert.equal(proxy.proxied(REMOTE), link, "the same address always gets the same id");
 });
 
+test("an image hit updates its LRU stamp and index TTL only at hour granularity", async () => {
+  let clock = 1_000_000;
+  const { proxy } = await harness(jpeg, 1024 * 1024, 0, 90 * DAY, () => clock);
+  const link = proxy.proxied(REMOTE)!;
+  const id = link.split("/").pop()!;
+  await proxy.fetch(id);
+  await proxy.flush();
+  const internals = proxy as unknown as { dirty: boolean; index: Map<string, { at: number }> };
+  const firstAt = internals.index.get(id)!.at;
+
+  clock += 30 * 60_000;
+  assert.equal(proxy.proxied(REMOTE), link);
+  assert.ok((await proxy.fetch(id))?.file);
+  assert.equal(internals.index.get(id)!.at, firstAt, "half an hour is inside the touch interval");
+  assert.equal(internals.dirty, false, "an unchanged touch marks no row dirty");
+
+  clock += 30 * 60_000;
+  proxy.proxied(REMOTE);
+  assert.ok(internals.index.get(id)!.at > firstAt, "the emitted link is touched after an hour");
+  assert.equal(internals.dirty, true, "the hourly touch is saved");
+  await proxy.flush();
+
+  const emittedAt = internals.index.get(id)!.at;
+  clock += 60 * 60_000;
+  assert.ok((await proxy.fetch(id))?.file);
+  assert.ok(internals.index.get(id)!.at > emittedAt, "a cache hit is touched after an hour");
+});
+
 test("only remote addresses take the detour", async () => {
   const { proxy } = await harness();
   assert.equal(proxy.proxied("/api/library/thumb?path=film.mkv"), "/api/library/thumb?path=film.mkv");
@@ -839,19 +867,19 @@ test("with the byte TTL off, maintain keeps everything under the cap", async () 
   assert.equal((await cached(dir)).length, 1, "nothing ages out when the TTL is 0");
 });
 
-test("serving and emitting each refresh an image's age", async () => {
+test("serving and emitting each refresh an image's age at hour granularity", async () => {
   let clock = 1_000_000;
   const { proxy, dir } = await harness(jpeg, 1024 * 1024, 1000, 90 * DAY, () => clock);
   const link = proxy.proxied(REMOTE)!;
   const id = link.split("/").pop()!;
   await proxy.fetch(id);
 
-  clock += 1500;
+  clock += 60 * 60_000 + 1;
   assert.equal(proxy.proxied(REMOTE), link);
   await proxy.maintain();
   assert.equal((await cached(dir)).length, 1, "an emission keeps the bytes");
 
-  clock += 1500;
+  clock += 60 * 60_000 + 1;
   await proxy.fetch(id);
   await proxy.maintain();
   assert.equal((await cached(dir)).length, 1, "serving keeps the bytes");
@@ -1125,9 +1153,9 @@ test("a link that is only handed out again is not written to the index every few
     const fresh = proxy.proxied(PLAIN)!.split("/").pop()!;
     advance(2000);
     assert.ok(await diskShows((index) => Boolean(index[fresh])), "a new link is still written within seconds");
-    assert.equal((await stored())[id]!.at, clock, "and carries the last use of the old one with it");
+    assert.equal((await stored())[id]!.at, firstUse, "and carries the old one's last hourly touch with it");
 
-    clock += 1000;
+    clock += 60 * 60_000 + 1;
     proxy.proxied(REMOTE);
     advance(10 * 60_000);
     assert.ok(await diskShows((index) => index[id]?.at === clock), "a use nothing else carries is written later on its own");

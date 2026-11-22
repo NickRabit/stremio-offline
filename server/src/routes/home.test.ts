@@ -1556,6 +1556,39 @@ test("tonight draws the same cards for the same seed and other cards for a diffe
   assert.notDeepEqual(shuffled.rows.tonight!.items.map((item) => item.key), ordered);
 });
 
+test("tonight's bounded hash selection matches the full sort", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const keys: string[] = [];
+  for (let index = 0; index < 100; index += 1) {
+    const key = `lib_00000001/Films/${String(index).padStart(3, "0")}`;
+    keys.push(key);
+    harness.records[key] = { type: "movie", id: `tt${index}`, name: `Film ${index}` };
+  }
+  const hash = (value: string): number => {
+    let result = 0x811c9dc5;
+    for (let index = 0; index < value.length; index += 1) {
+      result ^= value.charCodeAt(index);
+      result = Math.imul(result, 0x01000193);
+    }
+    result ^= result >>> 16;
+    result = Math.imul(result, 0x7feb352d);
+    result ^= result >>> 15;
+    result = Math.imul(result, 0x846ca68b);
+    result ^= result >>> 16;
+    return result >>> 0;
+  };
+  const seed = `${ALICE}:2026-01-15:0`;
+  const oracle = keys
+    .map((key) => ({ key, hash: hash(`${seed}:${key}`) }))
+    .sort((left, right) => left.hash - right.hash || left.key.localeCompare(right.key))
+    .slice(0, 12)
+    .map((entry) => entry.key);
+
+  const body = await (await api(harness.base, "/api/home?rows=tonight", ALICE)).json() as { rows: Record<string, HomeRowView> };
+  assert.deepEqual(body.rows.tonight!.items.map((item) => item.key), oracle);
+});
+
 test("tonight skips a started title, a single episode and an unmatched row", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
   t.after(harness.close);

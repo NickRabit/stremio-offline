@@ -515,6 +515,70 @@ describe("Player track preferences across a switch", () => {
 });
 
 describe("Player progress reporting", () => {
+  it("does not send unchanged periodic progress, while close and pagehide still send", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await render({ stream: addonRow(), progressKey: "movie:tt5000" });
+      const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+      await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      await flush();
+      expect(progressPosts).toHaveLength(1);
+
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      await flush();
+      expect(progressPosts).toHaveLength(1);
+
+      await act(async () => { video.currentTime = 120.4; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      await flush();
+      expect(progressPosts).toHaveLength(1);
+
+      await act(async () => { video.currentTime = 121.4; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      await flush();
+      expect(progressPosts).toHaveLength(2);
+
+      await act(async () => { window.dispatchEvent(new Event("pagehide")); });
+      await flush();
+      expect(progressPosts).toHaveLength(3);
+      expect(progressPosts.at(-1)?.final).toBe(true);
+
+      await rerender({ stream: addonRow(), progressKey: "movie:tt5000", open: false });
+      expect(progressPosts).toHaveLength(4);
+      expect(progressPosts.at(-1)?.final).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("applies the same unchanged-position rule to remote-state writes", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await render({ stream: remoteVersion() });
+      const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+      await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      await flush();
+      expect(remotePosts).toHaveLength(1);
+
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      await flush();
+      expect(remotePosts).toHaveLength(1);
+
+      await act(async () => { video.currentTime = 121.2; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      await flush();
+      expect(remotePosts).toHaveLength(2);
+
+      await rerender({ stream: remoteVersion(), open: false });
+      expect(remotePosts).toHaveLength(3);
+      expect(remotePosts.at(-1)?.final).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports a remote original's start, pause and close to the media server", async () => {
     await render({ stream: remoteVersion() });
     expect(playbackReports).toEqual([expect.objectContaining({ mediaSourceId: "ms1", paused: true, event: "start" })]);

@@ -13,7 +13,7 @@ import { libraryVisible, relativeWithin, resolveLibraryPath, type LibraryRecord,
 import { isPathWithin, withinLibraryRoot } from "../library.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryCandidateSource } from "../library-candidates.js";
-import type { LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
+import { pendingSuggestionKeys, type LibraryMetaRecord, type LibrarySuggestion } from "../library-match.js";
 import type { TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
@@ -1036,4 +1036,25 @@ test("GET /api/library/suggestions answers exactly the array the extracted build
   const scoped = await (await api(harness.base, "/api/library/suggestions?libraryId=lib_00000001")).json() as { items: unknown[]; total: number };
   assert.deepEqual(scoped.items, await harness.curate.suggestionRows("lib_00000001"));
   assert.equal(scoped.total, 2);
+});
+
+test("suggestion admission keeps the old result with thousands of rows and units", async (t) => {
+  const count = 2000;
+  const suggestions: Record<string, LibrarySuggestion> = {};
+  const units: TitleUnit[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const relative = `Films/Collection ${String(index).padStart(4, "0")}/Film ${index}`;
+    const key = `lib_00000001/${relative}`;
+    suggestions[key] = { type: "movie", id: `tt${index}`, name: `Film ${index}`, score: (index * 37) % 101 };
+    units.push({ key, kind: "movie", relative, sampleFiles: [`${relative}/Film ${index}.mkv`] });
+  }
+  const harness = await mount({ units, suggestions });
+  t.after(harness.close);
+
+  const oracle = pendingSuggestionKeys({}, suggestions)
+    .filter((key) => units.some((unit) => isPathWithin(key, unit.key)))
+    .sort((left, right) => suggestions[right]!.score - suggestions[left]!.score)
+    .map((key) => relativeWithin("lib_00000001", key));
+  const rows = await harness.curate.suggestionRows();
+  assert.deepEqual(rows.map((row) => row.key), oracle);
 });
