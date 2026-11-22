@@ -389,12 +389,14 @@ test("a JSON restart recounts bytes after reconciling the files", async (t) => {
 });
 
 test("a SQLite restart recounts bytes while loading database rows", async (t) => {
-  const dataDir = await temporaryDirectory(t, "stremio-images-sqlite-recount-");
+  // The folder goes only after the database is closed: Windows refuses to delete an open file.
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "stremio-images-sqlite-recount-"));
   const imageDir = path.join(dataDir, "images");
   await mkdir(imageDir);
   let database: AppDatabase | undefined = await openAppDatabase({ dataDir });
   t.after(async () => {
     if (database) await database.close();
+    await rm(dataDir, { recursive: true, force: true });
   });
   const createProxy = (store: AppDatabase) =>
     new ImageProxy(imageDir, MiB, 0, async () => imageResponse(), 0, Date.now, 0, renameWithRetry, noopTimers, store);
