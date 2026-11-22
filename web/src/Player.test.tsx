@@ -87,6 +87,7 @@ let host: HTMLDivElement;
 let progressPosts: Array<Record<string, unknown>>;
 let remotePosts: Array<Record<string, unknown>>;
 let playbackReports: Array<Record<string, unknown>>;
+let playbackReportTimes: number[];
 let playbackStatusRequests: string[];
 let playbackStatusAnswer: unknown;
 let seekRequests: Array<{ path: string; time: number }>;
@@ -136,6 +137,7 @@ beforeEach(() => {
   progressPosts = [];
   remotePosts = [];
   playbackReports = [];
+  playbackReportTimes = [];
   playbackStatusRequests = [];
   playbackStatusAnswer = { generation: 1, conversion: "running" };
   seekRequests = [];
@@ -201,6 +203,7 @@ beforeEach(() => {
     }
     if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+\/playing$/.test(path) && init?.method === "POST") {
       playbackReports.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      playbackReportTimes.push(Date.now());
       return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (path === "/api/intro-segments") {
@@ -592,6 +595,150 @@ describe("Player progress reporting", () => {
     expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ mediaSourceId: "ms1", paused: true, event: "progress", playId }));
     await rerender({ stream: remoteVersion(), open: false });
     expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ mediaSourceId: "ms1", event: "stop", playId }));
+  });
+
+  it("reports an unchanged three-minute pause every twenty seconds", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
+    try {
+      await render({ stream: remoteVersion() });
+      const start = playbackReports[0]!;
+      const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+      await act(async () => { video.dispatchEvent(new Event("play", { bubbles: true })); });
+      await flush();
+      await act(async () => { video.dispatchEvent(new Event("pause", { bubbles: true })); });
+      await flush();
+
+      await act(async () => { vi.advanceTimersByTime(180_000); });
+      await flush();
+
+      const pausedProgress = playbackReports.flatMap((entry, index) =>
+        entry.event === "progress" && entry.paused === true ? [{ entry, at: playbackReportTimes[index]! }] : []);
+      expect(pausedProgress.length).toBeLessThanOrEqual(10);
+      expect(pausedProgress.length).toBeGreaterThan(1);
+      expect(new Set(pausedProgress.map(({ entry }) => entry.playId))).toEqual(new Set([start.playId]));
+      const gaps = pausedProgress.slice(1).map(({ at }, index) => at - pausedProgress[index]!.at);
+      expect(gaps.every((gap) => gap >= 15_000)).toBe(true);
+      expect(gaps.every((gap) => gap <= 30_000)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a seek during a pause at once and waits between fifteen and thirty seconds for the next periodic report", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
+    try {
+      await render({ stream: remoteVersion() });
+      const start = playbackReports[0]!;
+
+      const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+      await act(async () => {
+        video.currentTime = 321;
+        video.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+        video.dispatchEvent(new Event("seeked", { bubbles: true }));
+      });
+      await flush();
+      const afterSeek = playbackReports.length;
+      const seekAt = playbackReportTimes.at(-1)!;
+      expect(playbackReports.at(-1)).toEqual(expect.objectContaining({
+        event: "progress", paused: true, position: 321, playId: start.playId,
+      }));
+
+      await act(async () => { vi.advanceTimersByTime(11_001); });
+      await flush();
+      expect(playbackReports).toHaveLength(afterSeek);
+
+      await act(async () => { vi.advanceTimersByTime(19_001); });
+      await flush();
+      expect(playbackReports).toHaveLength(afterSeek + 1);
+      expect(playbackReportTimes.at(-1)! - seekAt).toBeGreaterThanOrEqual(15_000);
+      expect(playbackReportTimes.at(-1)! - seekAt).toBeLessThanOrEqual(30_000);
+      expect(playbackReports.at(-1)).toEqual(expect.objectContaining({
+        event: "progress", paused: true, position: 321, playId: start.playId,
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a resume immediately and returns to the ten-second playing cadence", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
+    try {
+      await render({ stream: remoteVersion() });
+      const start = playbackReports[0]!;
+      await act(async () => { vi.advanceTimersByTime(10_001); });
+      await flush();
+      expect(playbackReports).toHaveLength(1);
+
+      const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+      await act(async () => { video.dispatchEvent(new Event("play", { bubbles: true })); });
+      await flush();
+      expect(playbackReports.at(-1)).toEqual(expect.objectContaining({
+        event: "progress", paused: false, playId: start.playId,
+      }));
+      const afterResume = playbackReports.length;
+
+      await act(async () => { vi.advanceTimersByTime(30_001); });
+      await flush();
+      const playingProgress = playbackReports.slice(afterResume);
+      expect(playingProgress).toHaveLength(3);
+      expect(playingProgress.every((entry) => entry.event === "progress" && entry.paused === false)).toBe(true);
+      expect(new Set(playingProgress.map((entry) => entry.playId))).toEqual(new Set([start.playId]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an unchanged pause quiet until close stops the same play id", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
+    try {
+      await render({ stream: remoteVersion() });
+      const start = playbackReports[0]!;
+      const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+      await act(async () => { video.dispatchEvent(new Event("play", { bubbles: true })); });
+      await flush();
+      await act(async () => { video.dispatchEvent(new Event("pause", { bubbles: true })); });
+      await flush();
+      const afterPause = playbackReports.length;
+      await act(async () => { vi.advanceTimersByTime(10_001); });
+      await flush();
+      expect(playbackReports).toHaveLength(afterPause);
+
+      await rerender({ stream: remoteVersion(), open: false });
+      expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ event: "stop", playId: start.playId }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a paused tick immediately after intensive throttling delays the interval", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
+    try {
+      await render({ stream: remoteVersion() });
+      const start = playbackReports[0]!;
+      const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+      await act(async () => { video.dispatchEvent(new Event("play", { bubbles: true })); });
+      await flush();
+      await act(async () => { video.dispatchEvent(new Event("pause", { bubbles: true })); });
+      await flush();
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      await flush();
+
+      vi.setSystemTime(50_000);
+      await act(async () => { vi.advanceTimersToNextTimer(); });
+      await flush();
+
+      expect(playbackReports.at(-1)).toEqual(expect.objectContaining({
+        event: "progress", paused: true, playId: start.playId,
+      }));
+      expect(playbackReportTimes.at(-1)).toBe(60_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("gives a reopened remote play a new id and stops the old play with the old id", async () => {

@@ -9,6 +9,8 @@ import cz.stremiooffline.tv.data.PlaybackFactsDto
 import cz.stremiooffline.tv.data.PlaybackStatusDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.RemoteLibraryApi
+import cz.stremiooffline.tv.data.RemotePlaybackReport
 import cz.stremiooffline.tv.data.TrackChange
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
@@ -35,7 +37,25 @@ class PlaybackControllerTest {
     audioDecode = listOf("ac3"),
   )
 
-  private open class FakeApi : PlaybackApi {
+  private val remoteItem = RemoteItemContext(
+    libraryId = "rlibA",
+    itemId = "iA",
+    mediaSourceId = "ms1",
+    progressKey = "remote:rlibA:iA",
+  )
+
+  private fun startRemote(controller: PlaybackController) {
+    controller.start(
+      sourceId = "src",
+      key = remoteItem.progressKey,
+      title = "It",
+      path = null,
+      resume = false,
+      remoteItem = remoteItem,
+    )
+  }
+
+  private open class FakeApi(private val now: () -> Long = { 0L }) : PlaybackApi, RemoteLibraryApi {
     val started = mutableListOf<Triple<String, ClientCapabilitiesDto, Double>>()
     val seeks = mutableListOf<Double>()
     val escalates = mutableListOf<Double>()
@@ -48,6 +68,8 @@ class PlaybackControllerTest {
     /** Whether each save was the last report of its playback, in arrival order. */
     val savedFinals = mutableListOf<Boolean>()
     val statusCalls = mutableListOf<String>()
+    val playbackReports = mutableListOf<Triple<String, String, RemotePlaybackReport>>()
+    val playbackReportTimes = mutableListOf<Long>()
     var status: PlaybackStatusDto? = null
     /** Every mutating call in the order it arrived, so a stop's save-then-delete is visible. */
     val calls = mutableListOf<String>()
@@ -135,6 +157,11 @@ class PlaybackControllerTest {
     override suspend fun deletePlayback(id: String) {
       calls += "delete"
       deleted += id
+    }
+
+    override suspend fun reportRemotePlayback(libraryId: String, itemId: String, report: RemotePlaybackReport) {
+      playbackReports += Triple(libraryId, itemId, report)
+      playbackReportTimes += now()
     }
 
     override suspend fun progress(key: String): ProgressDto? = stored
@@ -1742,6 +1769,107 @@ class PlaybackControllerTest {
     runCurrent()
 
     assertTrue("nothing is sent when the server's own choice is already in use", api.tracks.isEmpty())
+  }
+
+  @Test
+  fun `a remote pause reports every twenty seconds for three minutes`() = runTest {
+    val api = FakeApi { testScheduler.currentTime }
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    startRemote(controller)
+    runCurrent()
+    controller.onPlaying()
+    runCurrent()
+    controller.onPaused()
+    runCurrent()
+
+    advanceTimeBy(180_001)
+    runCurrent()
+
+    val pausedProgress = api.playbackReports.indices
+      .filter { api.playbackReports[it].third.event == "progress" && api.playbackReports[it].third.paused }
+      .map { api.playbackReports[it] to api.playbackReportTimes[it] }
+    assertTrue(pausedProgress.size <= 10)
+    assertTrue(pausedProgress.size > 1)
+    assertEquals(1, pausedProgress.mapNotNull { it.first.third.playId }.distinct().size)
+    assertEquals(api.playbackReports.first().third.playId, pausedProgress.first().first.third.playId)
+    val gaps = pausedProgress.zipWithNext { (_, previousAt), (_, at) -> at - previousAt }
+    assertTrue(gaps.all { it in 15_000L..30_000L })
+  }
+
+  @Test
+  fun `a remote seek during a pause reports at once and waits between fifteen and thirty seconds for the next periodic report`() = runTest {
+    val api = FakeApi { testScheduler.currentTime }
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    startRemote(controller)
+    runCurrent()
+
+    controller.seekTo(321.0)
+    runCurrent()
+    val afterSeek = api.playbackReports.size
+    val seekAt = api.playbackReportTimes.last()
+    assertEquals("progress", api.playbackReports.last().third.event)
+    assertEquals(321L, api.playbackReports.last().third.position)
+    assertTrue(api.playbackReports.last().third.paused)
+
+    advanceTimeBy(11_001)
+    runCurrent()
+    assertEquals(afterSeek, api.playbackReports.size)
+
+    advanceTimeBy(9_001)
+    runCurrent()
+    assertEquals(afterSeek + 1, api.playbackReports.size)
+    assertTrue(api.playbackReportTimes.last() - seekAt in 15_000L..30_000L)
+    assertEquals("progress", api.playbackReports.last().third.event)
+    assertTrue(api.playbackReports.last().third.paused)
+    assertEquals(api.playbackReports.first().third.playId, api.playbackReports.last().third.playId)
+  }
+
+  @Test
+  fun `a remote resume reports at once and returns to the ten-second playing cadence`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    startRemote(controller)
+    runCurrent()
+    advanceTimeBy(10_001)
+    runCurrent()
+    assertEquals(1, api.playbackReports.size)
+
+    controller.onPlaying()
+    runCurrent()
+    assertEquals("progress", api.playbackReports.last().third.event)
+    assertEquals(false, api.playbackReports.last().third.paused)
+    assertEquals(api.playbackReports.first().third.playId, api.playbackReports.last().third.playId)
+    val afterResume = api.playbackReports.size
+
+    advanceTimeBy(30_001)
+    runCurrent()
+    val playingProgress = api.playbackReports.drop(afterResume)
+    assertEquals(3, playingProgress.size)
+    assertTrue(playingProgress.all { it.third.event == "progress" && !it.third.paused })
+    assertEquals(1, playingProgress.mapNotNull { it.third.playId }.distinct().size)
+    assertEquals(api.playbackReports.first().third.playId, playingProgress.first().third.playId)
+  }
+
+  @Test
+  fun `an unchanged remote pause stays quiet until close stops the same play id`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    startRemote(controller)
+    runCurrent()
+    controller.onPlaying()
+    runCurrent()
+    controller.onPaused()
+    runCurrent()
+    val afterPause = api.playbackReports.size
+
+    advanceTimeBy(10_001)
+    runCurrent()
+    assertEquals(afterPause, api.playbackReports.size)
+
+    controller.stop()
+    runCurrent()
+    assertEquals("stop", api.playbackReports.last().third.event)
+    assertEquals(api.playbackReports.first().third.playId, api.playbackReports.last().third.playId)
   }
 }
 
