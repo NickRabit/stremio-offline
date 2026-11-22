@@ -223,6 +223,7 @@ class PlaybackController(
   private var shuffle = false
   /** The identity a `start` was sent for in this session; null while no start report exists. */
   private var reported: ReportedPlay? = null
+  private var ticksSinceRemoteReport = 0
   /** Reports leave one at a time, in order: a progress that overtook a stop would reopen the
    *  media server's session until its idle timeout. */
   private val reportLock = Mutex()
@@ -1026,6 +1027,7 @@ class PlaybackController(
 
   private fun startLoops() {
     val id = sessionId ?: return
+    ticksSinceRemoteReport = 0
     pingJob = scope.launch {
       while (isActive) {
         delay(PING_INTERVAL_MS)
@@ -1056,6 +1058,8 @@ class PlaybackController(
     reportJob = scope.launch {
       while (isActive) {
         delay(REPORT_INTERVAL_MS)
+        ticksSinceRemoteReport += 1
+        if (!playing && ticksSinceRemoteReport < PAUSED_REPORT_TICKS) continue
         report(ReportEvent.Progress, reported, position, paused = !playing)
       }
     }
@@ -1065,6 +1069,7 @@ class PlaybackController(
   private fun currentGenerationFor(id: String): Int = if (sessionId == id) generation else -1
 
   private fun cancelLoops() {
+    ticksSinceRemoteReport = 0
     pingJob?.cancel(); pingJob = null
     saveJob?.cancel(); saveJob = null
     reportJob?.cancel(); reportJob = null
@@ -1082,6 +1087,7 @@ class PlaybackController(
   private fun report(event: ReportEvent, play: ReportedPlay?, position: Double, paused: Boolean) {
     val current = play ?: return
     if (VersionProgress.writer(current.context) == null) return
+    ticksSinceRemoteReport = 0
     scope.launch { sendReport(event, current, position, paused) }
   }
 
@@ -1244,6 +1250,7 @@ class PlaybackController(
     const val PING_INTERVAL_MS = 30_000L
     const val SAVE_INTERVAL_MS = 10_000L
     const val REPORT_INTERVAL_MS = 10_000L
+    const val PAUSED_REPORT_TICKS = 3
     const val SEEK_DEBOUNCE_MS = 600L
     /** The server refuses a start with more than a hundred subtitle ids. */
     const val MAX_SUBTITLE_IDS = 100
