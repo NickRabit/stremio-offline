@@ -18,7 +18,7 @@ import type { SourceAdmissionSnapshotV1 } from "../source-admission.js";
 import { defaultTemplateParameters, RULE_PRESETS, SOURCE_PROFILE_IDS, type SourceProfileTemplate } from "../source-profiles.js";
 import type { Store, StoredSourceProfile, UserPrefs } from "../store.js";
 import type { AddonDownloadSettings, DownloadTargetSettings, StreamItem } from "../types.js";
-import type { DownloadDrainView, DownloadStatus, DownloadWindowState } from "../api-types.js";
+import type { DownloadDrainView, DownloadSnapshot, DownloadStatus, DownloadWindowState } from "../api-types.js";
 import type { UserRecord } from "../users.js";
 import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
 
@@ -40,6 +40,7 @@ interface Harness {
   seriesBulkCalls: Array<{ ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }>;
   seriesIdentityCalls: Array<{ ownerUserId: string; libraryId: string; seriesItemId: string; signal?: AbortSignal }>;
   drainViewers: Array<{ id?: string; admin: boolean }>;
+  snapshotFilters: boolean[];
   setAddonAllowedUsers(key: string, allowedUsers: string[]): void;
   setLibraryVisibleTo(id: string, visibleTo: string[]): void;
   close(): Promise<void>;
@@ -62,6 +63,10 @@ const streamAddon = (key: string, options: {
 
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
+const ACTIVE_STATUSES: ReadonlySet<DownloadStatus> = new Set([
+  "downloading", "checking", "waiting", "queued", "paused",
+]);
+type RouteJob = { id: string; ownerUserId?: string; target?: string; status?: DownloadStatus };
 
 /** The folders an explicit target may name have to exist, so every library gets a real root. */
 const MEDIA = mkdtempSync(path.join(tmpdir(), "routes-downloads-"));
@@ -92,7 +97,10 @@ const mount = async (
   addons: unknown[] = [streamAddon("stream-addon")],
   options: {
     viewer?: UserRecord;
-    jobs?: Array<{ id: string; ownerUserId?: string; target?: string; status?: DownloadStatus }>;
+    jobs?: RouteJob[];
+    halt?: DownloadSnapshot["halt"];
+    speedLimitMbps?: DownloadSnapshot["speedLimitMbps"];
+    legacyOwnerId?: () => string | undefined;
     libraries?: unknown[];
     connections?: unknown[];
     remoteLibraries?: unknown[];
@@ -151,6 +159,7 @@ const mount = async (
   const seriesIdentityCalls: Harness["seriesIdentityCalls"] = [];
   const seriesBulkCalls: Harness["seriesBulkCalls"] = [];
   const drainViewers: Harness["drainViewers"] = [];
+  const snapshotFilters: boolean[] = [];
   const profiles = options.profiles ?? (["recommended", "providerPriority", "travel"] as const).map((template) => ({
     id: SOURCE_PROFILE_IDS[template],
     revision: 1,
@@ -166,7 +175,20 @@ const mount = async (
     actions.push(`${name}:${id}`);
   };
   const queue = {
-    snapshot: () => ({ jobs, halt: null, window: options.window ?? null }),
+    snapshot: (include?: (job: RouteJob) => boolean) => {
+      snapshotFilters.push(include !== undefined);
+      return {
+        jobs: include ? jobs.filter(include) : jobs,
+        halt: options.halt ?? null,
+        window: options.window ?? null,
+        speedLimitMbps: options.speedLimitMbps ?? null,
+        drain: null,
+      };
+    },
+    ownerOf: (candidate: { ownerUserId?: string }) => {
+      if (!candidate.ownerUserId) candidate.ownerUserId = options.legacyOwnerId?.();
+      return candidate.ownerUserId;
+    },
     drainFor: (viewer: { id?: string; admin: boolean }) => {
       drainViewers.push(viewer);
       return options.drainFor?.(viewer) ?? null;
@@ -315,6 +337,7 @@ const mount = async (
     seriesBulkCalls,
     seriesIdentityCalls,
     drainViewers,
+    snapshotFilters,
     setAddonAllowedUsers: (key, allowedUsers) => {
       const addon = addons.find((entry) => (entry as { key?: unknown }).key === key) as { allowedUsers?: string[] } | undefined;
       if (addon) addon.allowedUsers = allowedUsers;
@@ -336,6 +359,41 @@ const api = (base: string, pathname: string, init: { method?: string; body?: unk
     headers: init.body === undefined ? {} : { "content-type": "application/json" },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
+
+const legacyDownloadsResponse = (
+  harness: Harness,
+  viewer: UserRecord,
+  jobs: RouteJob[],
+  options: {
+    halt?: DownloadSnapshot["halt"];
+    window?: DownloadWindowState | null;
+    speedLimitMbps?: DownloadSnapshot["speedLimitMbps"];
+    legacyOwnerId?: () => string | undefined;
+    drainFor?: (viewer: { id?: string; admin: boolean }) => DownloadDrainView | null;
+  },
+  activeOnly: boolean,
+) => {
+  const resolved = jobs.map((job) => {
+    const ownerUserId = job.ownerUserId ?? options.legacyOwnerId?.();
+    return {
+      ...job,
+      ...(ownerUserId === undefined ? {} : { ownerUserId }),
+    };
+  });
+  return {
+    jobs: resolved
+      .filter((job) =>
+        (viewer.role === "admin" || job.ownerUserId === viewer.id)
+        && (!activeOnly || (job.status !== undefined && ACTIVE_STATUSES.has(job.status)))
+      )
+      .map((job) => ({ ...job, mine: job.ownerUserId === viewer.id, viewed: true })),
+    halt: options.halt ?? null,
+    window: options.window ?? null,
+    speedLimitMbps: options.speedLimitMbps ?? null,
+    deviceTransfers: harness.transfers.list(viewer),
+    drain: options.drainFor?.({ id: viewer.id, admin: viewer.role === "admin" }) ?? null,
+  };
+};
 
 const keyOf = async (response: Response) => ((await response.json()) as { messageKey?: string }).messageKey;
 
@@ -392,6 +450,76 @@ test("GET /api/downloads can omit finished jobs without changing the unfiltered 
 
   const active = await (await api(harness.base, "/api/downloads?active=1")).json() as { jobs: Array<{ id: string }> };
   assert.deepEqual(active.jobs.map((job) => job.id), ["queued", "paused", "downloading"]);
+});
+
+test("GET /api/downloads keeps the whole response identical when the queue filters first", async (t) => {
+  const halt: DownloadSnapshot["halt"] = {
+    reason: "storage",
+    at: "2026-11-22T10:00:00.000Z",
+    message: "No space left on the disk.",
+    messageKey: "err.noSpace",
+  };
+  const window: DownloadWindowState = { start: "01:00", end: "07:00", open: false, timeZone: "Europe/Prague" };
+  const drainFor = (viewer: { id?: string; admin: boolean }): DownloadDrainView => ({
+    id: `drain-${viewer.id}`,
+    at: "2026-11-22T09:00:00.000Z",
+    completed: viewer.admin ? 4 : 2,
+    failed: viewer.admin ? 3 : 1,
+    paused: viewer.admin ? 2 : 0,
+  });
+  const activeJobs: RouteJob[] = [
+    { id: "bob-queued", ownerUserId: BOB, status: "queued" },
+    { id: "legacy", status: "paused" },
+    { id: "bob-completed", ownerUserId: BOB, status: "completed" },
+    { id: "ada-downloading", ownerUserId: ADA, status: "downloading" },
+    { id: "ada-failed", ownerUserId: ADA, status: "failed" },
+  ];
+  const finishedJobs: RouteJob[] = [
+    { id: "bob-completed", ownerUserId: BOB, status: "completed" },
+    { id: "ada-failed", ownerUserId: ADA, status: "failed" },
+  ];
+  const scenarios = [
+    { jobs: activeJobs, paths: ["/api/downloads", "/api/downloads?active=1"] },
+    { jobs: finishedJobs, paths: ["/api/downloads?active=1"] },
+  ];
+
+  for (const viewer of [ordinary, admin]) {
+    for (const scenario of scenarios) {
+      const options: NonNullable<Parameters<typeof mount>[1]> = {
+        viewer, jobs: scenario.jobs, halt, window, speedLimitMbps: 12.5, legacyOwnerId: () => ADA, drainFor,
+      };
+      const harness = await mount(undefined, options);
+      t.after(harness.close);
+      attachTransfer(harness.transfers, `t-ada-${viewer.id}-${scenario.jobs.length}`, ADA, "ada");
+      attachTransfer(harness.transfers, `t-bob-${viewer.id}-${scenario.jobs.length}`, BOB, "bob");
+      for (const requestPath of scenario.paths) {
+        const response = await api(harness.base, requestPath);
+        assert.equal(response.status, 200);
+        const actual = await response.json();
+        assert.deepEqual(
+          actual,
+          legacyDownloadsResponse(harness, viewer, scenario.jobs, options, requestPath.includes("active=1")),
+        );
+      }
+      assert.deepEqual(harness.snapshotFilters, scenario.paths.map(() => true));
+    }
+  }
+});
+
+test("GET /api/downloads resolves a legacy job owner before applying visibility", async (t) => {
+  const jobs: RouteJob[] = [{ id: "legacy", status: "paused" }];
+  for (const viewer of [admin, ordinary]) {
+    const options = { viewer, jobs, legacyOwnerId: () => ADA };
+    const harness = await mount(undefined, options);
+    t.after(harness.close);
+    const response = await api(harness.base, "/api/downloads?active=1");
+    assert.equal(response.status, 200);
+    assert.deepEqual(
+      await response.json(),
+      legacyDownloadsResponse(harness, viewer, jobs, options, true),
+    );
+    assert.deepEqual(harness.snapshotFilters, [true]);
+  }
 });
 
 test("GET /api/downloads carries the window state for administrators and ordinary users", async (t) => {
