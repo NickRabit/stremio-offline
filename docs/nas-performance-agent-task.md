@@ -24,7 +24,7 @@ The remote reporting loop in `web/src/Player.tsx` and Android TV's `PlaybackCont
 
 Trace `openOriginal`, `openDownloadOriginal`, `revalidateDownloadOriginal` and `runtimeFacts` in `server/src/media-server-manager.ts`. The manager already caches session facts, shares some in-flight requests and reuses recent source checks. Explicit download revalidation contacts the provider.
 
-- Count requests by operation during first playback, a seek, and a segmented download including resume. Run cold and warm cases. Distinguish metadata and permission reads from HEAD, byte ranges, playback reports and retries. Use the provider test doubles or a controlled Jellyfin instance. Record counts, bytes transferred, time to first byte and completion time without credentials or signed URLs.
+- Count requests by operation during first playback, a seek, and a remote download: one sequential request, a pause, and a resume from the received offset (remote originals are never segmented). Run cold and warm cases. Distinguish metadata and permission reads from HEAD, byte ranges, playback reports and retries. Use the provider test doubles or a controlled Jellyfin instance. Record counts, bytes transferred, time to first byte and completion time without credentials or signed URLs.
 - If a trace shows the same upstream read repeated for the same account, connection generation, operation and source, remove the duplicate at the narrowest shared call site. Check the reason for explicit revalidation before changing its frequency.
 - Repeat the trace. Test simultaneous consumers, one consumer cancelling, loss of library access, disabled downloading and a source replaced mid-operation. If the trace only shows necessary requests, report the counts and close the investigation there.
 
