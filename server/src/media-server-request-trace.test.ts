@@ -112,6 +112,9 @@ class FakeServer {
   body = fileBytes(8 * 1024);
   originalDelayMs = 2;
   originalCancels = 0;
+  /** While set, a body stops at `at` bytes of the file until `wait` settles: a test that has to
+   *  act mid-transfer does not depend on timing. */
+  bodyStop: { at: number; wait: Promise<void> } | undefined;
   private active = new Map<Operation, number>();
   private failed = new Set<Operation>();
 
@@ -201,6 +204,8 @@ class FakeServer {
           if (server.originalDelayMs > 0) {
             await new Promise((resolve) => setTimeout(resolve, server.originalDelayMs));
           }
+          const held = server.bodyStop;
+          if (held && offset >= held.at) await held.wait;
           if (signal?.aborted) {
             controller.error(new Error("aborted"));
             return;
@@ -588,12 +593,19 @@ test("a reused live admission keeps its original timestamp", async (t) => {
 test("a DownloadQueue remote copy is one sequential GET and resumes from its received offset", async (t) => {
   await withHarness(async (harness) => {
     const { queue, reference } = await remoteQueue(harness);
+    // The body stops after 2 KiB until the test has paused, so the pause always lands mid-transfer.
+    let releaseBody!: () => void;
+    harness.server.bodyStop = { at: 2 * 1024, wait: new Promise<void>((resolve) => { releaseBody = resolve; }) };
     try {
       dropRuntime(harness);
       const coldStarted = performance.now();
       const coldId = await addRemote(queue, reference, harness.server.body.length, "");
       await waitFor(() => (queue.get(coldId)?.received ?? 0) >= 2 * 1024);
-      await queue.pause(coldId);
+      const pausing = queue.pause(coldId);
+      // The stalled pull is let go once the pause has aborted it; the resume then reads on freely.
+      harness.server.bodyStop = undefined;
+      releaseBody();
+      await pausing;
       assert.equal(queue.get(coldId)?.status, "paused");
       await queue.resume(coldId);
       await waitFor(() => queue.get(coldId)?.status === "completed");

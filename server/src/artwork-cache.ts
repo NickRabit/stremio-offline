@@ -58,6 +58,7 @@ function evictionFloor(cap: number): number {
 
 export class ArtworkCache {
   private entries = new TrackedMap<string, Entry>();
+  private storedBytes = 0;
   private database?: AppDatabase;
   private loaded = false;
   private timer?: unknown;
@@ -86,6 +87,27 @@ export class ArtworkCache {
   }
 
   private get indexFile() { return path.join(this.dir, "index.json"); }
+
+  private setEntry(name: string, entry: Entry): void {
+    const previous = this.entries.get(name);
+    this.entries.set(name, entry);
+    this.storedBytes += entry.bytes - (previous?.bytes ?? 0);
+  }
+
+  private deleteEntry(name: string): boolean {
+    const previous = this.entries.get(name);
+    if (!this.entries.delete(name)) return false;
+    this.storedBytes -= previous?.bytes ?? 0;
+    return true;
+  }
+
+  /** test seam */
+  recountStoredBytes(): number {
+    let total = 0;
+    for (const entry of this.entries.values()) total += entry.bytes;
+    this.storedBytes = total;
+    return total;
+  }
 
   attachDatabase(database: AppDatabase): void {
     if (this.loaded) throw new Error("The artwork database must be attached before load.");
@@ -202,7 +224,7 @@ export class ArtworkCache {
     this.indexText = raw;
     // The index is rebuilt from what is actually on disk: a stored size is not trusted,
     // and anything the sweep took, or that was never recorded, is measured afresh.
-    this.entries.clear();
+    for (const name of [...this.entries.keys()]) this.deleteEntry(name);
     for (const library of await readdir(this.dir, { withFileTypes: true }).catch(() => [])) {
       if (!library.isDirectory()) continue;
       const candidates = (await readdir(path.join(this.dir, library.name), { withFileTypes: true }).catch(() => []))
@@ -216,12 +238,13 @@ export class ArtworkCache {
         if (!info?.isFile()) continue;
         const prior = stored[name]?.at;
         const at = typeof prior === "number" && Number.isFinite(prior) && prior > 0 ? prior : info.mtimeMs;
-        this.entries.set(name, { bytes: info.size, at });
+        this.setEntry(name, { bytes: info.size, at });
       }
     }
     this.entries.forget(this.entries.snapshot());
     await this.writeIndex();
     await this.evict();
+    this.recountStoredBytes();
   }
 
   async flush() {
@@ -297,7 +320,7 @@ export class ArtworkCache {
       for (const [name, { size: bytes, mtimeMs }] of files) {
         const row = stored.get(name);
         const validAt = row && Number.isFinite(row.at) && row.at > 0;
-        this.entries.set(name, { bytes, at: validAt ? row.at : mtimeMs });
+        this.setEntry(name, { bytes, at: validAt ? row.at : mtimeMs });
         if (!validAt || row.bytes !== bytes) {
           statements.push({ sql: UPSERT, params: [name, bytes, validAt ? row.at : mtimeMs] });
         }
@@ -308,7 +331,7 @@ export class ArtworkCache {
           statements.push({ sql: DELETE, params: [key] });
         } else if (Number.isFinite(row.at) && row.at > 0) {
           // Not read this time: keep what the row knows rather than forget its recency.
-          this.entries.set(key, { bytes: row.bytes, at: row.at });
+          this.setEntry(key, { bytes: row.bytes, at: row.at });
         }
       }
     } else {
@@ -317,6 +340,7 @@ export class ArtworkCache {
         // thumbnails and move the index (and its recency) aside. The import waits for a start
         // that can read the folder.
         log("WARN", "The artwork folder could not be read, the index import waits for the next start", { dir: this.dir });
+        this.recountStoredBytes();
         return;
       }
       let stored: Record<string, { at?: unknown }> = {};
@@ -333,7 +357,7 @@ export class ArtworkCache {
         const at = typeof prior === "number" && Number.isFinite(prior) && prior > 0
           ? prior
           : mtimeMs;
-        this.entries.set(name, { bytes, at });
+        this.setEntry(name, { bytes, at });
         statements.push({ sql: UPSERT, params: [name, bytes, at] });
       }
       statements.push({
@@ -355,6 +379,7 @@ export class ArtworkCache {
       `artwork-index-${importedAt}.json`,
     );
     await this.evict();
+    this.recountStoredBytes();
   }
 
   /** Removals run one at a time: each candidate is a snapshot, and two passes must never
@@ -382,7 +407,7 @@ export class ArtworkCache {
     if (!name) return;
     const info = await stat(file).catch(() => undefined);
     if (!info?.isFile()) return;
-    this.entries.set(name, { bytes: info.size, at: Date.now() });
+    this.setEntry(name, { bytes: info.size, at: Date.now() });
     this.save();
     await this.evict();
   }
@@ -392,7 +417,7 @@ export class ArtworkCache {
    *  the wrong file. */
   async moved(from: string, to: string) {
     const name = this.storedName(from);
-    if (name) { this.entries.delete(name); this.save(); }
+    if (name) { this.deleteEntry(name); this.save(); }
     await this.written(to);
   }
 
@@ -447,7 +472,7 @@ export class ArtworkCache {
    *  ceiling, and the next eviction drops a live picture to make room for nothing. */
   async removed(file: string) {
     const name = this.storedName(file);
-    if (!name || !this.entries.delete(name)) return;
+    if (!name || !this.deleteEntry(name)) return;
     this.save();
   }
 
@@ -458,7 +483,7 @@ export class ArtworkCache {
     let dropped = 0;
     for (const name of [...this.entries.keys()]) {
       if (name !== prefix && !name.startsWith(`${prefix}${path.sep}`)) continue;
-      this.entries.delete(name);
+      this.deleteEntry(name);
       dropped += 1;
     }
     if (!dropped) return;
@@ -473,8 +498,8 @@ export class ArtworkCache {
     if (!name) return;
     const known = this.entries.get(name);
     const info = known ? undefined : await stat(file).catch(() => undefined);
-    if (known) this.entries.set(name, { bytes: known.bytes, at: Date.now() });
-    else if (info?.isFile()) this.entries.set(name, { bytes: info.size, at: Date.now() });
+    if (known) this.setEntry(name, { bytes: known.bytes, at: Date.now() });
+    else if (info?.isFile()) this.setEntry(name, { bytes: info.size, at: Date.now() });
     else return;
     this.recencyDirty = true;
     this.recencyRevision += 1;
@@ -488,7 +513,7 @@ export class ArtworkCache {
     if (!name) return;
     const known = this.entries.get(name);
     if (!known) return;
-    this.entries.set(name, { bytes: known.bytes, at: Date.now() });
+    this.setEntry(name, { bytes: known.bytes, at: Date.now() });
     this.recencyDirty = true;
     this.recencyRevision += 1;
   }
@@ -509,8 +534,7 @@ export class ArtworkCache {
 
   /** Oldest first, down to `evictionFloor(cap)` so this does not run on every write. */
   private async evictOnce() {
-    let total = 0;
-    for (const entry of this.entries.values()) total += entry.bytes;
+    let total = this.storedBytes;
     if (total <= this.cap) return;
     const stored = [...this.entries.entries()].sort((a, b) => a[1].at - b[1].at);
     const target = evictionFloor(this.cap);
@@ -525,7 +549,7 @@ export class ArtworkCache {
         await stat(file);
       } catch (error) {
         // The file is already gone, so the entry only has to stop counting.
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") { this.entries.delete(name); total -= current.bytes; removed += 1; }
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") { this.deleteEntry(name); total -= current.bytes; removed += 1; }
         continue;
       }
       if (this.evictionGuard?.(file)) continue;
@@ -535,7 +559,7 @@ export class ArtworkCache {
         log("WARN", "A cached thumbnail could not be removed", { reason: String(error).slice(0, 120) });
         continue;
       }
-      this.entries.delete(name);
+      this.deleteEntry(name);
       total -= current.bytes;
       removed += 1;
     }
