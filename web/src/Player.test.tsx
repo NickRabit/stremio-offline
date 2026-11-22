@@ -182,6 +182,10 @@ beforeEach(() => {
       if (playbackStatusGate) return playbackStatusGate.then(() => json(playbackStatusAnswer));
       return Promise.resolve(json(playbackStatusAnswer));
     }
+    if (/^\/api\/playback\/[^/]+\/track$/.test(path) && init?.method === "POST") {
+      const quality = (JSON.parse(String(init.body)) as { quality?: number | null }).quality;
+      return Promise.resolve(json({ ...session(), ...(quality === undefined ? {} : { quality }) }));
+    }
     if (/^\/api\/playback\/[^/]+\/seek$/.test(path) && init?.method === "POST") {
       const time = Number((JSON.parse(String(init.body)) as { time?: number }).time);
       seekRequests.push({ path, time });
@@ -964,6 +968,8 @@ describe("Player stall advice", () => {
       quality.value = "480";
       quality.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    await flush();
+    expect(host.querySelector(".player-error")).toBeNull();
     await act(async () => { release(); });
     await flush();
     expect(hint()).toBeNull();
