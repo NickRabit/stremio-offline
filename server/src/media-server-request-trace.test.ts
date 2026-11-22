@@ -1003,5 +1003,13 @@ test("a proof read under a runtime that was replaced meanwhile is not shared int
     release.resolve();
     await consume(await opening);
     assert.deepEqual(shared, [false], "the result is offered with the runtime it was read under, which no longer matches");
+
+    // Nor do the proof and live-admission caches keep it: the next open proves the source again.
+    harness.server.calls.length = 0;
+    await consume(await harness.manager.openOriginal(harness.authority, ref, { method: "GET" }));
+    const again = counts(harness.server.calls);
+    assert.equal(again.item, 1, "the item is read again under the new runtime");
+    assert.equal(again.versions, 1, "the version is read again under the new runtime");
+    assert.equal(again["playback-info"], 1, "playback is admitted again under the new runtime");
   });
 });

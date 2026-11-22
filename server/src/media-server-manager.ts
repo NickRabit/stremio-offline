@@ -2228,7 +2228,10 @@ export class MediaServerManager {
       if (prepared.item.type === "movie" || prepared.item.type === "episode") {
         this.shareFreshOriginal(user, library, connection, prepared.runtime, prepared.item, prepared.versions);
       }
-      if (wantedKind === "playback" && prepared.freshAdmission) {
+      // Read under a runtime that has since been dropped or replaced: this open may use the
+      // result, but no cache keeps it for the next one, which proves the source again.
+      const current = prepared.runtime !== undefined && this.liveRuntime(connection) === prepared.runtime;
+      if (current && wantedKind === "playback" && prepared.freshAdmission) {
         this.putLivePlaybackAdmission({
           actorId: user.id,
           actorSecretStamp: remoteSecretStamp(user.secret),
@@ -2244,7 +2247,7 @@ export class MediaServerManager {
         });
       }
       proof = prepared.proof;
-      this.putOriginalProof(proof);
+      if (current) this.putOriginalProof(proof);
     }
     if (options?.download !== true) this.assertStreamBitrate(session.policy, proof.bitrate);
     const slot = this.quota.reserve(connection.id, `${user.id}:${ref.itemId}:${ref.mediaSourceId}`, session.policy);
