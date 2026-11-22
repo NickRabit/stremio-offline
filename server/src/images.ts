@@ -192,6 +192,8 @@ export class ImageProxy {
   private chain: Promise<unknown> = Promise.resolve();
   private indexWrites: Promise<void> = Promise.resolve();
   private loaded = false;
+  private storedBytes = 0;
+  private oldestStoredAt = Infinity;
 
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "images"),
@@ -237,7 +239,7 @@ export class ImageProxy {
       const width = entry.width === DETAIL_WIDTH ? DETAIL_WIDTH : undefined;
       const sized = width ? { width } : {};
       const onDisk = entry.ext && files.has(`${id}.${entry.ext}`);
-      this.index.set(id, onDisk ? { url: entry.url, ext: entry.ext, bytes: entry.bytes, at, ...sized } : { url: entry.url, at, ...sized });
+      this.setEntry(id, onDisk ? { url: entry.url, ext: entry.ext, bytes: entry.bytes, at, ...sized } : { url: entry.url, at, ...sized });
       if (onDisk) files.delete(`${id}.${entry.ext}`);
     }
     this.index.forget(this.index.snapshot());
@@ -246,6 +248,7 @@ export class ImageProxy {
     // A lowered cap, or an index nobody has touched for a long time, is dealt with here
     // as well, so the first paint after a restart already sees the enforcement.
     if (await this.enforce()) await this.writeIndex();
+    this.recountStoredBytes();
   }
 
   private async loadDatabase(database: AppDatabase) {
@@ -257,7 +260,7 @@ export class ImageProxy {
       }>("SELECT id, url, width, ext, bytes, at FROM image_sources");
       for (const row of rows) {
         const entry = this.normalizeEntry(row.id, row, files, true);
-        if (entry) this.index.set(row.id, entry);
+        if (entry) this.setEntry(row.id, entry);
       }
       this.index.forget(this.index.snapshot());
       await this.moveIndexToBackup();
@@ -292,13 +295,14 @@ export class ImageProxy {
           params: ["domain.images", JSON.stringify({ importedAt, source: "index.json", count: entries.length })],
         });
         await database.batch(statements);
-        for (const [id, entry] of entries) this.index.set(id, entry);
+        for (const [id, entry] of entries) this.setEntry(id, entry);
         this.index.forget(this.index.snapshot());
         await this.moveIndexToBackup(importedAt);
       }
     }
     for (const orphan of files) await rm(path.join(this.dir, orphan), { force: true });
     if (await this.enforce()) await this.writeIndex();
+    this.recountStoredBytes();
   }
 
   private normalizeEntry(
@@ -383,7 +387,7 @@ export class ImageProxy {
     for (const [id, entry] of [...this.index.entries()]) {
       if (entry.ext || this.inflight.has(id)) continue;
       if (this.now() - entry.at <= this.indexTtlMs) continue;
-      this.index.delete(id);
+      this.deleteEntry(id);
       removed += 1;
     }
     if (removed) { log("INFO", "Unused image links dropped", { removed }); this.save(); }
@@ -454,6 +458,36 @@ export class ImageProxy {
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
   }
 
+  private setEntry(id: string, entry: Entry): void {
+    const previous = this.index.get(id);
+    if (previous?.ext) this.storedBytes -= previous.bytes ?? 0;
+    if (entry.ext) {
+      this.storedBytes += entry.bytes ?? 0;
+      this.oldestStoredAt = Math.min(this.oldestStoredAt, entry.at);
+    }
+    this.index.set(id, entry);
+  }
+
+  private deleteEntry(id: string): void {
+    const previous = this.index.get(id);
+    if (previous?.ext) this.storedBytes -= previous.bytes ?? 0;
+    this.index.delete(id);
+  }
+
+  /** test seam */
+  recountStoredBytes(): number {
+    let total = 0;
+    let oldest = Infinity;
+    for (const entry of this.index.values()) {
+      if (!entry.ext) continue;
+      total += entry.bytes ?? 0;
+      oldest = Math.min(oldest, entry.at);
+    }
+    this.storedBytes = total;
+    this.oldestStoredAt = oldest;
+    return total;
+  }
+
   /** Remote address in, opaque link out. Anything already local is left alone. A width other
    *  than the listing tile registers a separate entry, so a wider picture is its own file. */
   proxied(value?: string, width: number = TILE_WIDTH): string | undefined {
@@ -465,12 +499,11 @@ export class ImageProxy {
     if (known) {
       const now = this.now();
       if (now - known.at >= TOUCH_INTERVAL_MS) {
-        known.at = now;
-        this.index.set(id, known);
+        this.setEntry(id, { ...known, at: now });
         this.save(TOUCH_SAVE_MS);
       }
     } else {
-      this.index.set(id, { url: value, at: this.now(), ...(target === DETAIL_WIDTH ? { width: target } : {}) });
+      this.setEntry(id, { url: value, at: this.now(), ...(target === DETAIL_WIDTH ? { width: target } : {}) });
       this.save();
     }
     return `${PREFIX}${id}`;
@@ -667,8 +700,7 @@ export class ImageProxy {
     if (entry.ext) {
       const now = this.now();
       if (now - entry.at >= TOUCH_INTERVAL_MS) {
-        entry.at = now;
-        this.index.set(id, entry);
+        this.setEntry(id, { ...entry, at: now });
         if (this.database) this.save(TOUCH_SAVE_MS);
       }
       return { file: this.path(id, entry.ext), type: TYPES[entry.ext]!, etag: `"${id}-${entry.bytes ?? 0}"` };
@@ -849,6 +881,7 @@ export class ImageProxy {
       return undefined;
     };
     let temp: string | undefined;
+    let published: Entry | undefined;
     try {
       // The slot is held until the picture is on disk: a slow NAS write would otherwise let
       // finished downloads pile their buffers (a whole original when nothing was re-encoded)
@@ -873,16 +906,14 @@ export class ImageProxy {
           // older flight from renaming after a newer retry has already published this id.
           await this.renameFile(written.temp, target);
           signal.throwIfAborted();
-          entry.ext = storedExt;
-          entry.bytes = bytes;
-          entry.at = this.now();
-          this.index.set(id, entry);
+          published = { ...entry, ext: storedExt, bytes, at: this.now() };
+          this.setEntry(id, published);
           this.save();
         });
       } finally {
         await rm(written.temp, { force: true });
       }
-      return entry.ext ? entry : undefined;
+      return published;
     } catch (error) {
       if (temp) await rm(temp, { force: true }).catch(() => undefined);
       return rejected(String(error).slice(0, 120));
@@ -897,12 +928,18 @@ export class ImageProxy {
    *  `IMAGE_CACHE_TTL_DAYS` also drops the bytes of anything not served for that long,
    *  while the cache still sits under its cap. */
   private async evictOnce(additionalBytes = 0): Promise<boolean> {
-    let total = additionalBytes;
-    for (const entry of this.index.values()) total += entry.bytes ?? 0;
+    let total = this.storedBytes + additionalBytes;
     let changed = false;
-    const aged = this.ttlMs
-      ? [...this.index.entries()].filter(([id, entry]) => entry.ext && !this.inflight.has(id) && this.now() - entry.at > this.ttlMs)
-      : [];
+    const scanAged = this.ttlMs > 0 && this.now() - this.oldestStoredAt > this.ttlMs;
+    const stored: Array<[string, Entry]> = [];
+    const aged: Array<[string, Entry]> = [];
+    if (scanAged) {
+      for (const [id, entry] of this.index.entries()) {
+        if (!entry.ext) continue;
+        stored.push([id, entry]);
+        if (!this.inflight.has(id) && this.now() - entry.at > this.ttlMs) aged.push([id, entry]);
+      }
+    }
     let agedRemoved = 0;
     for (const [id, snapshot] of aged) {
       const bytes = await this.dropBytes(id, snapshot);
@@ -912,15 +949,22 @@ export class ImageProxy {
       changed = true;
     }
     if (agedRemoved) log("INFO", "Cached images dropped past their age", { removed: agedRemoved });
+    if (scanAged) {
+      this.oldestStoredAt = Infinity;
+      for (const [id] of stored) {
+        const current = this.index.get(id);
+        if (current?.ext) this.oldestStoredAt = Math.min(this.oldestStoredAt, current.at);
+      }
+    }
 
     // Sorting every id ever handed out is the cost of each new picture otherwise, and the cache
     // is under its cap nearly every time.
-    const stored = total > this.cap
-      ? [...this.index.entries()].filter(([id, entry]) => entry.ext && !this.inflight.has(id)).sort((a, b) => a[1].at - b[1].at)
+    const candidates = total > this.cap
+      ? (scanAged ? stored.filter(([id]) => !this.inflight.has(id)) : [...this.index.entries()].filter(([id, entry]) => entry.ext && !this.inflight.has(id))).sort((a, b) => a[1].at - b[1].at)
       : [];
     const target = evictionFloor(this.cap);
     let removed = 0;
-    for (const [id, snapshot] of stored) {
+    for (const [id, snapshot] of candidates) {
       if (total <= target) break;
       const bytes = await this.dropBytes(id, snapshot);
       if (bytes === undefined) continue;
@@ -945,9 +989,10 @@ export class ImageProxy {
       return undefined;
     }
     const bytes = current.bytes ?? 0;
-    current.ext = undefined;
-    current.bytes = undefined;
-    this.index.set(id, current);
+    const remaining = { ...current };
+    delete remaining.ext;
+    delete remaining.bytes;
+    this.setEntry(id, remaining);
     const remembered = this.memory.get(id);
     if (remembered) { this.memory.delete(id); this.memoryBytes -= remembered.length; }
     return bytes;
