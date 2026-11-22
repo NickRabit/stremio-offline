@@ -59,7 +59,7 @@ import { apiRequestLimiter, authRequestLimiter, isMediaTransferRequest, pageRequ
 import { WalkCache } from "./walk-cache.js";
 import { FreshValueCache } from "./value-cache.js";
 import { killRunningMedia } from "./media-tools.js";
-import { browseDirectory, describePath, entryDirectory, heldTree, isPathWithin, isVideo, listVideos, listVideosChecked, pageFiles, summarize, buildLibrary, withinLibraryRoot, type FoundFile, type HeldTree, type LibraryEntry } from "./library.js";
+import { browseDirectory, describePath, entryDirectory, heldTree, isPathWithin, isVideo, listVideos, listVideosChecked, walkLibrary, pageFiles, summarize, buildLibrary, withinLibraryRoot, type FoundFile, type HeldTree, type LibraryEntry } from "./library.js";
 import { createArtworkSweep, type SweepDeps, type SweepLibrary } from "./artwork-sweep.js";
 import { createMaintenance } from "./maintenance.js";
 import { createShutdown, installSignalHandlers } from "./server-shutdown.js";
@@ -1352,20 +1352,26 @@ async function lookupMeta(
 // Units and entries are derived from the one walk, so a cold listing reads the disk once.
 type WalkRead = { stale?: boolean };
 const SLOW_WALK_MS = 5_000;
+/** Per walk, the folders its depth cap left unread (as library paths), for `heldTreeOf`. */
+const walkCuts = new WeakMap<FoundFile[], string[]>();
 const videoCache = new WalkCache<FoundFile[]>(async () => {
   const files: FoundFile[] = [];
+  const cuts: string[] = [];
   const started = performance.now();
   const perLibrary: Record<string, number> = {};
   for (const library of walkableLibraries()) {
     const libraryStarted = performance.now();
-    for (const file of await listVideos(library.root, "", 0, carveOutsOf(library))) {
+    const walk = await walkLibrary(library.root, carveOutsOf(library));
+    for (const file of walk.files) {
       files.push({ ...file, relative: libraryPath(library.id, file.relative) });
     }
+    for (const folder of walk.cut) cuts.push(libraryPath(library.id, folder));
     perLibrary[library.id] = Math.round(performance.now() - libraryStarted);
   }
   const ms = Math.round(performance.now() - started);
   // Pages wait for this walk whenever it has expired, so a slow disk shows here first.
   if (ms >= SLOW_WALK_MS) log("WARN", "The library walk was slow", { ms, files: files.length, libraries: perLibrary });
+  walkCuts.set(files, cuts);
   return files;
 }, 30_000);
 const filesOf = (files: FoundFile[], library: LibraryRecord) =>
@@ -1629,7 +1635,7 @@ const heldTreeOf = async (library: LibraryRecord): Promise<HeldTree | undefined>
     tree = heldTree(filesOf(files, library).map((file) => ({
       ...file,
       relative: relativeKeyIn(library.id, file.relative)!,
-    })));
+    })), (walkCuts.get(files) ?? []).flatMap((folder) => relativeKeyIn(library.id, folder) ?? []));
     byLibrary.set(library.id, tree);
   }
   return tree;
@@ -2007,10 +2013,19 @@ const describeLibraryPath = async (key: string, read?: WalkRead) => {
   // A library outside the walk -- switched off or away -- is described from the disk as before.
   const walked = read?.stale && relative !== "" && walkableLibraries().some((candidate) => candidate.id === library.id);
   const videosInside = walked
-    ? async () => (await libraryFiles(read)).flatMap((file) => {
-      const inside = relativeKeyIn(library.id, file.relative);
-      return inside !== undefined && inside !== relative && isPathWithin(inside, relative) ? [{ ...file, relative: inside }] : [];
-    })
+    ? async () => {
+      const files = await libraryFiles(read);
+      // A folder the walk's depth cap cut into (or never reached) is counted on disk.
+      const cut = (walkCuts.get(files) ?? []).some((folder) => {
+        const inside = relativeKeyIn(library.id, folder);
+        return inside !== undefined && (isPathWithin(inside, relative) || isPathWithin(relative, inside));
+      });
+      if (cut) return listVideos(library.root, relative, 0, carveOutsOf(library));
+      return files.flatMap((file) => {
+        const inside = relativeKeyIn(library.id, file.relative);
+        return inside !== undefined && inside !== relative && isPathWithin(inside, relative) ? [{ ...file, relative: inside }] : [];
+      });
+    }
     : undefined;
   const item = await describePath(library.root, relative, carveOutsOf(library), videosInside);
   if (item?.kind !== "file") return item;

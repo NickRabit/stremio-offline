@@ -458,6 +458,10 @@ test("a growing playlist is gzipped only when the request accepts it", async (t)
     assert.equal(plain.status, 200);
     assert.equal(plain.headers["content-encoding"], undefined);
     assert.equal(plain.body.toString(), playlist);
+    const refused = await rawGetBody(harness.base, `/api/playback/${ID}/gen/index-0.m3u8${query}`, "ada", "gzip;q=0, identity");
+    assert.equal(refused.status, 200);
+    assert.equal(refused.headers["content-encoding"], undefined);
+    assert.equal(refused.body.toString(), playlist);
   }
 });
 

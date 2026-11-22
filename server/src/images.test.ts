@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile }
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ImageProxy, imageId, narrowArtwork, RESIZE_SLOTS, resizeQueue, type SaveTimers } from "./images.js";
+import { DOWNLOAD_SLOTS, downloadQueue, ImageProxy, imageId, narrowArtwork, RESIZE_SLOTS, resizeQueue, type SaveTimers } from "./images.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { configureSecureMode } from "./secure.js";
 import { flushLog, initLogger } from "./logger.js";
@@ -621,6 +621,27 @@ test("a picture already at its size never waits for a resize slot", {
     await Promise.all(holders.map((holder) => holder.fetching));
     await until(() => resizeQueue().running === 0, "the held re-encodes to be killed");
   });
+});
+
+test("no more pictures are downloaded at once than there are download slots", async () => {
+  const held: Array<() => void> = [];
+  const { proxy, calls } = await harness(async () => {
+    await new Promise<void>((resolve) => held.push(resolve));
+    return imageResponse();
+  });
+  const count = DOWNLOAD_SLOTS + 3;
+  // One host each: outbound requests also have a per-host limit, which is not under test.
+  const ids = Array.from({ length: count }, (_, index) => proxy.proxied(`https://cdn-${index}.example/many.png`)!.split("/").pop()!);
+  const served = Promise.all(ids.map((id) => proxy.fetch(id)));
+  await until(() => calls.length === DOWNLOAD_SLOTS && downloadQueue().queued === 3, "the slots to fill and the rest to queue");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(calls.length, DOWNLOAD_SLOTS, "the queued pictures are not fetched yet");
+  while (held.length || calls.length < count) {
+    held.shift()?.();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal((await served).filter(Boolean).length, count, "every picture is still served");
+  assert.deepEqual(downloadQueue(), { running: 0, queued: 0 });
 });
 
 test("an FFmpeg that cannot start gives every slot back and keeps the originals", async () => {

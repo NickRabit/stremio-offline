@@ -263,3 +263,21 @@ test("invalidating one root does not make another root's refresh write its probe
   await settle();
   assert.equal((await stat(root)).mtimeMs, before, "the held volume facts were reused");
 });
+
+test("a different directory swapped in at the same path does not inherit the volume facts", async (t) => {
+  const parent = await temp(t);
+  const dir = path.join(parent, "root");
+  await mkdir(dir);
+  let clock = 1_000;
+  const writes = countProbeWrites(t, [dir]);
+  const probe = createLibraryProbe({ ttlMs: 30_000, now: () => clock });
+
+  await probe.cached(dir);
+  assert.equal(writes(dir), 1);
+  // The old directory stays on disk, so the new one cannot reuse its inode.
+  fs.renameSync(dir, path.join(parent, "old"));
+  await mkdir(dir);
+  clock += 31_000;
+  await probe.cached(dir);
+  assert.equal(writes(dir), 2);
+});

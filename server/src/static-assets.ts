@@ -8,7 +8,8 @@ type Encoding = "br" | "gzip";
 const SUFFIX: Record<Encoding, string> = { br: ".br", gzip: ".gz" };
 
 /** The encodings the client accepts, its preferred first; brotli wins a tie. */
-function acceptedEncodings(header: string | undefined): Encoding[] {
+/** The encodings a request accepts, best first, honouring `q` weights (`q=0` refuses). */
+export function acceptedEncodings(header: string | undefined): Encoding[] {
   if (!header) return [];
   const values = new Map<string, number>();
   for (const part of header.split(",")) {

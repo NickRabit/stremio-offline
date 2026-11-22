@@ -87,7 +87,15 @@ export function createLibraryProbe(opts: {
   const volumeTtlMs = opts.volumeTtlMs ?? 60 * 60_000;
   const now = opts.now ?? Date.now;
   const cache = new Map<string, { at: number; value: LibraryHealth }>();
-  const volumeCache = new Map<string, { at: number; value: Pick<LibraryHealth, "readOnly" | "caseInsensitive"> }>();
+  // Keyed by the resolved path and checked against the directory's device and inode: a
+  // different directory or mount swapped in at the same path is a different volume, and
+  // must not inherit the facts of the one it replaced.
+  const volumeCache = new Map<string, {
+    at: number;
+    dev: bigint;
+    ino: bigint;
+    value: Pick<LibraryHealth, "readOnly" | "caseInsensitive">;
+  }>();
   const realRoots = new Map<string, string>();
   const previouslyUnreachable = new Set<string>();
   const inflight = new Map<string, { generation: string; promise: Promise<LibraryHealth> }>();
@@ -99,7 +107,8 @@ export function createLibraryProbe(opts: {
   const probe = async (root: string): Promise<LibraryHealth> => {
     const absolute = path.resolve(root);
     const generationAtStart = generationOf(absolute);
-    const info = await within(stat(absolute), timeoutMs);
+    // As bigints: Windows file ids pass 2^53, and a rounded id could match another directory.
+    const info = await within(stat(absolute, { bigint: true }), timeoutMs);
     if (!info?.isDirectory()) {
       if (generationAtStart === generationOf(absolute)) previouslyUnreachable.add(absolute);
       // Nothing is known but the spelling: `realpath` would hang on the same mount that made
@@ -114,7 +123,8 @@ export function createLibraryProbe(opts: {
     const held = volumeCache.get(real);
     const cacheIsCurrent = generationAtStart === generationOf(absolute);
     const recovered = cacheIsCurrent && previouslyUnreachable.delete(absolute);
-    let volume = cacheIsCurrent && !recovered && held && now() - held.at < volumeTtlMs
+    const sameDirectory = held?.dev === info.dev && held?.ino === info.ino;
+    let volume = cacheIsCurrent && !recovered && held && sameDirectory && now() - held.at < volumeTtlMs
       ? held.value
       : undefined;
     if (!volume) {
@@ -122,7 +132,7 @@ export function createLibraryProbe(opts: {
       const probed = await within(probeVolume(real), timeoutMs);
       if (probed) {
         volume = { readOnly: false, caseInsensitive: probed.caseInsensitive };
-        if (generationAtStart === generationOf(absolute)) volumeCache.set(real, { at: now(), value: volume });
+        if (generationAtStart === generationOf(absolute)) volumeCache.set(real, { at: now(), dev: info.dev, ino: info.ino, value: volume });
       }
     }
     if (generationAtStart === generationOf(absolute)) realRoots.set(absolute, real);
