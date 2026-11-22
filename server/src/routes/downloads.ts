@@ -3,7 +3,7 @@ import type express from "express";
 import { allowedAddons } from "../addons.js";
 import { bulkEpisodeIsReleased, episodeKey, episodesInBulkScope, episodesInTarget } from "../bulk-target.js";
 import type { DeviceTransfers } from "../device-transfers.js";
-import { NoLibraryForKindError, REMOTE_ITEM_VIDEO_PREFIX, isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, remoteDownloadStream, type DownloadQueue, type DownloadSelection, type DownloadStatus } from "../downloads.js";
+import { NoLibraryForKindError, REMOTE_ITEM_VIDEO_PREFIX, isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, remoteDownloadStream, type DownloadQueue, type DownloadSelection, type DownloadStatus, type PendingAdmissionRequest } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
@@ -613,7 +613,8 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
         seriesTitle: title,
       });
       const results: Array<{ id: string; outcome: BulkEpisodeOutcome }> = [];
-      let added = 0;
+      const requests: PendingAdmissionRequest[] = [];
+      const requestIndexes: number[] = [];
       for (const episode of episodes) {
         const season = bulkEpisodeNumber(episode.season);
         const number = bulkEpisodeNumber(episode.episode);
@@ -641,22 +642,27 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
           metaType: "series",
         };
         const jobTitle = `${title} · ${episodeTitle ?? `S${String(season).padStart(2, "0")}E${String(number).padStart(2, "0")}`}`;
-        const admitted = await queue.admitPending(
-          jobTitle,
-          {
+        requestIndexes.push(results.length);
+        requests.push({
+          title: jobTitle,
+          source: {
             type: "series",
             videoId,
             selection: remoteSelection(admission, targetSettings),
             remoteItem: { libraryId, connectionId: remote.connectionId, itemId: remoteItemId },
           },
           media,
-          owner?.id,
-          admission,
-        );
-        const outcome = admitted.outcome;
-        results.push({ id: videoId, outcome });
-        if (outcome === "queued") added += 1;
+          sourceAdmissionInput: admission,
+        });
+        results.push({ id: videoId, outcome: "queued" });
       }
+      if (requests.length) {
+        const admitted = await queue.admitPendingBatch(requests, owner?.id);
+        for (const [index, resultIndex] of requestIndexes.entries()) {
+          results[resultIndex] = { id: results[resultIndex]!.id, outcome: admitted[index]!.outcome };
+        }
+      }
+      const added = results.filter((result) => result.outcome === "queued").length;
       const skipped = results.length - added;
       log("INFO", "Bulk addition to the queue", { title, added, skipped, origin: "remote" });
       res.status(201).json({ added, skipped, results });
@@ -719,7 +725,8 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       })
       : new Set<string>();
     const results: Array<{ id: string; outcome: BulkEpisodeOutcome }> = [];
-    let added = 0;
+    const requests: PendingAdmissionRequest[] = [];
+    const requestIndexes: number[] = [];
     for (const episode of episodes) {
       const videoId = String(episode.id ?? "").trim();
       if (!videoId) {
@@ -748,16 +755,22 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
         };
         assertMayQueue(req, { libraryId: jobSelection.targetSettings.libraryId ?? defaultDownloadLibrary("series")?.id });
       }
-      const admitted = await queue.admitPending(
-        jobTitle,
-        { type, videoId, selection: jobSelection },
+      requestIndexes.push(results.length);
+      requests.push({
+        title: jobTitle,
+        source: { type, videoId, selection: jobSelection },
         media,
-        owner?.id,
-        jobAdmission,
-      );
-      results.push({ id: videoId, outcome: admitted.outcome });
-      if (admitted.outcome === "queued") added += 1;
+        sourceAdmissionInput: jobAdmission,
+      });
+      results.push({ id: videoId, outcome: "queued" });
     }
+    if (requests.length) {
+      const admitted = await queue.admitPendingBatch(requests, owner?.id);
+      for (const [index, resultIndex] of requestIndexes.entries()) {
+        results[resultIndex] = { id: results[resultIndex]!.id, outcome: admitted[index]!.outcome };
+      }
+    }
+    const added = results.filter((result) => result.outcome === "queued").length;
     const skipped = results.length - added;
     log("INFO", "Bulk addition to the queue", { title, added, skipped });
     res.status(201).json({ added, skipped, results });
