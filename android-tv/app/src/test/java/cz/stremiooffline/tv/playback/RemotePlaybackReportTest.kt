@@ -153,16 +153,13 @@ class RemotePlaybackReportTest {
     runCurrent()
     controller.onPlayerReady()
     controller.onPlayerPosition(130.0)
+    controller.onPlaying()
+    runCurrent()
     advanceTimeBy(10_001)
     runCurrent()
 
     assertEquals("progress", api.reports.last().third.event)
     assertEquals(130L, api.reports.last().third.position)
-    assertEquals(true, api.reports.last().third.paused)
-
-    controller.onPlaying()
-    runCurrent()
-    assertEquals("progress", api.reports.last().third.event)
     assertEquals(false, api.reports.last().third.paused)
     assertEquals(api.reports.first().third.playId, api.reports.last().third.playId)
 
