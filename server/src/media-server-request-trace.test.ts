@@ -588,6 +588,9 @@ test("a reused live admission keeps its original timestamp", async (t) => {
 test("a DownloadQueue remote copy is one sequential GET and resumes from its received offset", async (t) => {
   await withHarness(async (harness) => {
     const { queue, reference } = await remoteQueue(harness);
+    // Slow enough that the pause lands mid-transfer on a busy machine too: at the default pace
+    // the whole file arrives in ~16 ms and the resume had nothing left to range.
+    harness.server.originalDelayMs = 40;
     try {
       dropRuntime(harness);
       const coldStarted = performance.now();
