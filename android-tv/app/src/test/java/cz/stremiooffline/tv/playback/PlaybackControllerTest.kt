@@ -657,6 +657,7 @@ class PlaybackControllerTest {
     controller.start("src", "file:a", "A", "a", resume = false)
     runCurrent()
     controller.onSidecarCoverage(100.0, complete = false)
+    val revisionBefore = controller.state.value.sidecarRevision
 
     controller.seekTo(200.0)
     advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
@@ -667,6 +668,9 @@ class PlaybackControllerTest {
     assertEquals(1, api.sidecarSeeks.size)
     assertEquals("sidecar-old.vtt", controller.state.value.sidecarUrl)
     assertEquals(false, controller.state.value.sidecarPending)
+    // The cues were cleared while the move was pending: a new revision makes the screen read the
+    // same track again, even if its poll had already finished.
+    assertTrue(controller.state.value.sidecarRevision > revisionBefore)
   }
 
   @Test

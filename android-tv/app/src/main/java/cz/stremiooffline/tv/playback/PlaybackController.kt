@@ -753,8 +753,11 @@ class PlaybackController(
           applySidecar(id, target, answer.sidecarUrl)
           applied = true
         } finally {
+          // A move that ends without an answer (refused, cancelled) cleared the cues while it was
+          // pending; a new revision restarts the screen's poll so the same track is read again,
+          // also when that poll had already finished reading it.
           if (!applied && _state.value.sidecarPending) {
-            _state.update { it.copy(sidecarPending = false) }
+            _state.update { it.copy(sidecarPending = false, sidecarRevision = it.sidecarRevision + 1) }
           }
         }
       }

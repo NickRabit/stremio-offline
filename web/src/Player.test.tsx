@@ -588,6 +588,23 @@ describe("Player sidecar seeks", () => {
     expect(host.querySelector("track")?.getAttribute("src")).toContain("revision=old");
   });
 
+  it("after a refused move, a seek inside what the reader already covers sends nothing", async () => {
+    sidecarSeekStatuses = [404];
+    sidecarCoverage = 700;
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => host.querySelector("track") !== null);
+
+    await seekByArrow(989);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+    await settle();
+    await seekByArrow(100);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+    await settle();
+
+    expect(sidecarSeekRequests).toHaveLength(1);
+  });
+
   it("asks again after too many requests and takes the answer", async () => {
     sidecarSeekStatuses = [429];
     sessionShape = sidecarSession();

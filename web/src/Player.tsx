@@ -808,6 +808,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
 
   const resumeSidecar = () => {
     sidecarHoldingRef.current = false;
+    // The reader did not move, so what the watcher last read still covers the same stretch.
+    sidecarCoverageRef.current = sidecarLastStateRef.current?.coverage ?? -Infinity;
     if (sidecarLastStateRef.current) {
       setSidecarReady(true);
       setSidecarPass(sidecarLastStateRef.current.pass);
