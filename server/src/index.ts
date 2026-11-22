@@ -3341,6 +3341,7 @@ try {
   // Scheduled without a wait: the first pass fills the caches after the server is already up.
   maintenance.start();
   log("INFO", "Stremio Offline is listening", { port: bound.port, address: bound.address });
+  void playback.probeCapabilities();
   void installDefaultAddons().then(() => warmHomeCatalogs(), (error) => {
     log("ERROR", "Default addons could not be installed", { reason: error instanceof Error ? error.message : String(error) });
   });

@@ -508,6 +508,8 @@ export interface Diagnostics {
   version: string; builtAt?: string; commit?: string; node: string;
   uptimeSeconds: number; memoryMb: number; logLevel: string; logRetentionDays: number;
   playback: {
+    /** The FFmpeg capability probe runs after the server starts; until it settles the rest is defaults. */
+    capabilities?: "pending" | "ready" | "failed";
     ffmpeg: { version?: string; initialBurst: boolean; softwareEncoder?: boolean };
     vaapi: { device?: string; scaling: boolean; bitrate: boolean; failures: number };
     nvenc?: { available: boolean; failures: number };
