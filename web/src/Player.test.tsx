@@ -100,6 +100,8 @@ let sidecarCoverage: number;
 let heldSidecarSeek: Promise<void> | null;
 let heldSidecarPoll: Promise<void> | null;
 let sidecarSeekFailures: number;
+/** HTTP statuses the next sidecar/seek requests answer with, in order, before the normal answer. */
+let sidecarSeekStatuses: number[];
 let sidecarSeekUrl: string | undefined;
 let sidecarPollStatus: number;
 let sidecarReplacementUrl: string | undefined;
@@ -162,6 +164,7 @@ beforeEach(() => {
   heldSidecarSeek = null;
   heldSidecarPoll = null;
   sidecarSeekFailures = 0;
+  sidecarSeekStatuses = [];
   sidecarSeekUrl = undefined;
   sidecarPollStatus = 200;
   sidecarReplacementUrl = undefined;
@@ -213,6 +216,8 @@ beforeEach(() => {
     if (/^\/api\/playback\/[^/]+\/sidecar\/seek$/.test(path) && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as { position: number; seekId: number };
       sidecarSeekRequests.push({ path, ...body });
+      const status = sidecarSeekStatuses.shift();
+      if (status !== undefined) return Promise.resolve(json({ error: "refused", code: "REFUSED" }, status));
       if (sidecarSeekFailures > 0) {
         sidecarSeekFailures -= 1;
         return Promise.reject(new TypeError("Failed to fetch"));
@@ -566,6 +571,51 @@ describe("Player sidecar seeks", () => {
       { path: "/api/playback/sess1/sidecar/seek", position: 999, seekId: 1 },
     ]);
     expect(sidecarPolls.slice(before).some((value) => value.includes("revision=old"))).toBe(false);
+    await waitUntil(() => host.querySelector("track")?.getAttribute("src")?.includes("revision=new-1") ?? false);
+  });
+
+  it("shows the track again when the server refuses to move the reader, as a server without the route does", async () => {
+    sidecarSeekStatuses = [404];
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => host.querySelector("track") !== null);
+
+    await seekByArrow(989);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_100)); });
+    await settle();
+
+    expect(sidecarSeekRequests).toHaveLength(1);
+    expect(host.querySelector("track")?.getAttribute("src")).toContain("revision=old");
+  });
+
+  it("after a refused move, a seek inside what the reader already covers sends nothing", async () => {
+    sidecarSeekStatuses = [404];
+    sidecarCoverage = 700;
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => host.querySelector("track") !== null);
+
+    await seekByArrow(989);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+    await settle();
+    await seekByArrow(100);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+    await settle();
+
+    expect(sidecarSeekRequests).toHaveLength(1);
+  });
+
+  it("asks again after too many requests and takes the answer", async () => {
+    sidecarSeekStatuses = [429];
+    sessionShape = sidecarSession();
+    await render();
+    await waitUntil(() => sidecarPolls.length > 0);
+
+    await seekByArrow(989);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_050)); });
+    await settle();
+
+    expect(sidecarSeekRequests).toHaveLength(2);
     await waitUntil(() => host.querySelector("track")?.getAttribute("src")?.includes("revision=new-1") ?? false);
   });
 

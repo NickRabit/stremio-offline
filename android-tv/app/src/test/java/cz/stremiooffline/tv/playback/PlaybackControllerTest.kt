@@ -84,6 +84,8 @@ class PlaybackControllerTest {
     var sidecarSeekAnswer: SidecarSeekDto? = null
     var sidecarSeekGate: CompletableDeferred<Unit>? = null
     var sidecarSeekFailures = 0
+    /** Thrown by every sidecar seek while set, as a server that refuses or lacks the route does. */
+    var sidecarSeekRefusal: Throwable? = null
     var seekGate: CompletableDeferred<Unit>? = null
     var trackFailure: Throwable? = null
     var seekDelayMs = 0L
@@ -134,6 +136,7 @@ class PlaybackControllerTest {
 
     override suspend fun seekSidecar(id: String, position: Double, seekId: Long): SidecarSeekDto {
       sidecarSeeks += Triple(id, position, seekId)
+      sidecarSeekRefusal?.let { throw it }
       if (sidecarSeekFailures > 0) {
         sidecarSeekFailures -= 1
         throw IllegalStateException("sidecar answer lost")
@@ -636,6 +639,62 @@ class PlaybackControllerTest {
 
     assertEquals(listOf(1L, 1L, 1L), api.sidecarSeeks.map { it.third })
     assertEquals(listOf(200.0, 200.0, 200.0), api.sidecarSeeks.map { it.second })
+    assertEquals("sidecar-1.vtt", controller.state.value.sidecarUrl)
+    assertEquals(false, controller.state.value.sidecarPending)
+  }
+
+  @Test
+  fun `a server that refuses the sidecar seek lets the old track play on`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 0, sidecarUrl = "sidecar-old.vtt",
+      subtitleTracks = trackList("""[{"index":0,"language":"en","codec":"mov_text"}]"""),
+    )
+    // An older server without the route answers 404.
+    api.sidecarSeekRefusal = ApiError(ApiFailure.NotFound, status = 404)
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onSidecarCoverage(100.0, complete = false)
+    val revisionBefore = controller.state.value.sidecarRevision
+
+    controller.seekTo(200.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    advanceTimeBy(20_000)
+    runCurrent()
+
+    assertEquals(1, api.sidecarSeeks.size)
+    assertEquals("sidecar-old.vtt", controller.state.value.sidecarUrl)
+    assertEquals(false, controller.state.value.sidecarPending)
+    // The cues were cleared while the move was pending: a new revision makes the screen read the
+    // same track again, even if its poll had already finished.
+    assertTrue(controller.state.value.sidecarRevision > revisionBefore)
+  }
+
+  @Test
+  fun `too many requests on a sidecar seek is asked again`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      subtitleTrack = 0, sidecarUrl = "sidecar-old.vtt",
+      subtitleTracks = trackList("""[{"index":0,"language":"en","codec":"mov_text"}]"""),
+    )
+    api.sidecarSeekRefusal = ApiError(ApiFailure.Generic, status = 429)
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onSidecarCoverage(100.0, complete = false)
+
+    controller.seekTo(200.0)
+    advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 1)
+    runCurrent()
+    api.sidecarSeekRefusal = null
+    advanceTimeBy(1_001)
+    runCurrent()
+
+    assertEquals(2, api.sidecarSeeks.size)
     assertEquals("sidecar-1.vtt", controller.state.value.sidecarUrl)
     assertEquals(false, controller.state.value.sidecarPending)
   }

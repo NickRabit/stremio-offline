@@ -808,6 +808,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
 
   const resumeSidecar = () => {
     sidecarHoldingRef.current = false;
+    // The reader did not move, so what the watcher last read still covers the same stretch.
+    sidecarCoverageRef.current = sidecarLastStateRef.current?.coverage ?? -Infinity;
     if (sidecarLastStateRef.current) {
       setSidecarReady(true);
       setSidecarPass(sidecarLastStateRef.current.pass);
@@ -843,8 +845,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           return;
         } catch (error) {
           if (request.signal.aborted || epoch !== sidecarMoveEpochRef.current) return;
-          // A refusal (the session is gone, the request is bad) does not get better by asking again.
-          if (error instanceof ApiError && error.status >= 400 && error.status < 500) return;
+          // A refusal (the session is gone, the request is bad, a server without this route) does
+          // not get better by asking again: the track that was showing comes back as it was.
+          // Too many requests and a timeout are temporary and are asked again.
+          if (error instanceof ApiError && error.status >= 400 && error.status < 500
+            && error.status !== 408 && error.status !== 429) {
+            if (sessionRef.current === current.id) resumeSidecar();
+            return;
+          }
           if (sessionRef.current !== current.id) return;
           const waitMs = SIDECAR_SEEK_RETRY_MS[Math.min(attempt, SIDECAR_SEEK_RETRY_MS.length - 1)] ?? 15_000;
           attempt += 1;
