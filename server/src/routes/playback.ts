@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { promisify } from "node:util";
+import { gzip } from "node:zlib";
 import type { AirPlayAccess } from "../airplay-access.js";
 import { INTERNAL_TOKEN } from "../auth.js";
 import { AppError } from "../errors.js";
@@ -70,6 +72,10 @@ export interface PlaybackDeps extends RouteContext {
 }
 
 const openTransfers = new Map<string, number>();
+const MEDIA_READ_BUFFER = 1 << 20;
+const gzipAsync = promisify(gzip);
+/** `send` passes this stream option through, but Express's types omit it. */
+type BufferedSendFileOptions = NonNullable<Parameters<express.Response["sendFile"]>[1]> & { highWaterMark: number };
 /** How many bounded blocks one media-server read is served from before the rest of it is taken as
  *  one ordinary transfer: a probe's jump fits in them, a conversion reading the film does not. */
 const READ_AHEAD_BLOCKS = 2;
@@ -447,6 +453,15 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       if (!/^[A-Za-z0-9_-]{1,64}\.(m3u8|mp4|m4s|vtt)$/.test(uri)) throw new Error("Unsupported AirPlay playlist resource.");
       return airplayAccess.url(grant.playbackId, uri);
     }) : text;
+    const sendPlaylist = async (playlist: string) => {
+      const body = Buffer.from(playlist);
+      if (body.length > 1024 && /\bgzip\b/i.test(req.get("accept-encoding") ?? "")) {
+        res.setHeader("content-encoding", "gzip");
+        res.setHeader("vary", "Accept-Encoding");
+        return void res.send(await gzipAsync(body, { level: 1 }));
+      }
+      return void res.send(body);
+    };
     // With no slashes and no dots the name cannot escape the session directory.
     if (!/^[A-Za-z0-9_-]{1,64}\.(m3u8|mp4|m4s|vtt)$/.test(file)) return res.status(400).end();
     if (file === "master.m3u8") {
@@ -468,14 +483,14 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     }
     if (file.endsWith(".m3u8")) {
       res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store");
-      if (grant) {
-        const playlist = await readFile(path.join(directory, file), "utf8").catch(() => undefined);
-        guardOwned(sessionId);
-        return void (playlist === undefined ? res.status(404).end() : res.send(receiverPlaylist(playlist)));
-      }
+      const playlist = await readFile(path.join(directory, file), "utf8").catch(() => undefined);
+      if (grant) guardOwned(sessionId);
+      if (playlist === undefined) return void res.status(404).end();
+      return sendPlaylist(receiverPlaylist(playlist));
     }
     else { if (file.endsWith(".vtt")) res.type("text/vtt; charset=utf-8"); res.setHeader("cache-control", "private, no-store"); }
-    res.sendFile(file, { root: directory, dotfiles: "deny" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+    const options: BufferedSendFileOptions = { root: directory, dotfiles: "deny", highWaterMark: MEDIA_READ_BUFFER };
+    res.sendFile(file, options, (error) => { if (error && !res.headersSent) res.status(404).end(); });
   }));
 
   app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRoute(async (req, res) => {
@@ -635,7 +650,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       // path was resolved for a session before the resource the read follows existed.
       const target = await libraryTarget(relative, currentUser(req));
       countBytes(res, { source: "library", provider: "knihovna", title: path.basename(relative), kind: "other" }, ownerNow);
-      return void res.sendFile(path.basename(target), { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {
+      const options: BufferedSendFileOptions = { root: path.dirname(target), acceptRanges: true, dotfiles: "deny", highWaterMark: MEDIA_READ_BUFFER };
+      return void res.sendFile(path.basename(target), options, (error) => {
         if (error && !res.headersSent) res.status(404).end();
       });
     }
