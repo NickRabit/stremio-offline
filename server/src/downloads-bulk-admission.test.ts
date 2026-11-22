@@ -390,6 +390,12 @@ test("a successful batch wakes the scheduler once and starts jobs after its writ
   const admission = queue.admitPendingBatch(requests, owner);
   await writeEntered;
   assert.equal(queue.list().length, 3);
+  // Something else wakes the scheduler while the write is held: none of the batch may start.
+  pump();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const held = queue as unknown as { active: Map<string, AbortController> };
+  assert.equal(held.active.size, 0, "no job of the batch starts before its write landed");
+  assert.deepEqual(queue.list().map((job) => job.status), ["queued", "queued", "queued"]);
   assert.deepEqual(calls, []);
 
   releaseWrite();
@@ -403,4 +409,40 @@ test("a successful batch wakes the scheduler once and starts jobs after its writ
   const resolverDeadline = Date.now() + 5_000;
   while (calls.length < 3 && Date.now() < resolverDeadline) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.deepEqual(calls, requests.map((request) => request.source.videoId));
+});
+
+test("an episode whose other admission is still being written is not answered as already queued", async (t) => {
+  let blockNext = false;
+  let failHeld = false;
+  let releaseWrite!: () => void;
+  let enteredWrite!: () => void;
+  const writeEntered = new Promise<void>((resolve) => { enteredWrite = resolve; });
+  const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  const setup = await tempQueue({
+    ...closedWindow,
+    writeState: async (file, data) => {
+      if (blockNext) {
+        blockNext = false;
+        enteredWrite();
+        await writeGate;
+        if (failHeld) throw new Error("disk full");
+      }
+      await writeFile(file, data);
+    },
+  });
+  t.after(async () => {
+    await setup.queue.stop();
+    await rm(setup.directory, { recursive: true, force: true });
+  });
+  const { queue } = setup;
+  const requests = admissionRequests(1);
+  blockNext = true;
+  failHeld = true;
+  const first = queue.admitPendingBatch(requests, owner);
+  await writeEntered;
+  const second = queue.admitPendingBatch(requests, owner);
+  releaseWrite();
+  await assert.rejects(first, (error: unknown) => error instanceof AppError && error.messageKey === "err.queueNotSaved");
+  assert.deepEqual(outcomes(await second), ["queued"]);
+  assert.equal(queue.list().length, 1);
 });

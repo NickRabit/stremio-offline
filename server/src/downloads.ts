@@ -1844,8 +1844,12 @@ export class DownloadQueue {
     for (const [index, request] of prepared.entries()) {
       // `admitPending` answers "already queued" before it looks for a local copy; the check is
       // made again under the lock, this one only spares the lookup.
-      if (this.hasPendingSource(request.source, ownerUserId)) {
-        outcomes[index] = { outcome: "alreadyQueued" };
+      // A job still being written may yet be reverted, so it does not answer here; the check
+      // under the lock sees only what landed. A repeat within this batch needs no lookup.
+      const settled = this.jobs.filter((job) => !this.admitting.has(job.id));
+      if (this.hasPendingSourceIn(settled, request.source, ownerUserId)
+        || candidates.some((earlier) => earlier.source.videoId === request.source.videoId && earlier.source.type === request.source.type)) {
+        candidates.push({ ...request, index });
         continue;
       }
       if (request.sourceAdmission !== undefined && !request.source.videoId.startsWith(REMOTE_ITEM_VIDEO_PREFIX)) {
@@ -1938,13 +1942,16 @@ export class DownloadQueue {
   }
 
   private hasPendingSource(source: PendingSource, ownerUserId: string | undefined, extra: readonly DownloadJob[] = []) {
-    const matches = (job: DownloadJob) =>
+    return this.hasPendingSourceIn(this.jobs, source, ownerUserId) || this.hasPendingSourceIn(extra, source, ownerUserId);
+  }
+
+  private hasPendingSourceIn(jobs: readonly DownloadJob[], source: PendingSource, ownerUserId: string | undefined) {
+    return jobs.some((job) =>
       job.source?.videoId === source.videoId
       && job.source?.type === source.type
       && job.status !== "completed"
       && job.status !== "failed"
-      && this.ownedBy(job, ownerUserId);
-    return this.jobs.some(matches) || extra.some(matches);
+      && this.ownedBy(job, ownerUserId));
   }
 
   private async existingLocalCopyForAdmission(
