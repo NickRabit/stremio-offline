@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { gzip } from "node:zlib";
+import { acceptedEncodings } from "../static-assets.js";
 import type { AirPlayAccess } from "../airplay-access.js";
 import { INTERNAL_TOKEN } from "../auth.js";
 import { AppError } from "../errors.js";
@@ -455,10 +456,12 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     }) : text;
     const sendPlaylist = async (playlist: string) => {
       const body = Buffer.from(playlist);
-      if (body.length > 1024 && /\bgzip\b/i.test(req.get("accept-encoding") ?? "")) {
-        res.setHeader("content-encoding", "gzip");
+      if (body.length > 1024) {
         res.setHeader("vary", "Accept-Encoding");
-        return void res.send(await gzipAsync(body, { level: 1 }));
+        if (acceptedEncodings(req.get("accept-encoding")).includes("gzip")) {
+          res.setHeader("content-encoding", "gzip");
+          return void res.send(await gzipAsync(body, { level: 1 }));
+        }
       }
       return void res.send(body);
     };

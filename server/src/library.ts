@@ -331,8 +331,19 @@ export interface HeldTree {
   file(relative: string): FoundFile | undefined;
 }
 
-export function heldTree(files: FoundFile[]): HeldTree {
+export function heldTree(files: FoundFile[], cut: Iterable<string> = []): HeldTree {
   const folders = new Map<string, { fileCount: number; size: number; modified: string }>();
+  // The walk stops eight folders below the root, while a folder read from disk counts eight
+  // folders below itself. A folder with a cut-off branch beneath it has a partial aggregate,
+  // so it is not answered here and the browser counts it on disk as it always did.
+  const partial = new Set<string>();
+  for (const folder of cut) {
+    let parent = folder;
+    while (parent && parent !== "." && !partial.has(parent)) {
+      partial.add(parent);
+      parent = path.posix.dirname(parent);
+    }
+  }
   const byPath = new Map<string, FoundFile>();
   for (const file of files) {
     byPath.set(file.relative, file);
@@ -346,7 +357,10 @@ export function heldTree(files: FoundFile[]): HeldTree {
       folder = path.posix.dirname(folder);
     }
   }
-  return { folder: (relative) => folders.get(relative), file: (relative) => byPath.get(relative) };
+  return {
+    folder: (relative) => partial.has(relative) ? undefined : folders.get(relative),
+    file: (relative) => byPath.get(relative),
+  };
 }
 
 /** A ceiling for a caller that only needs an estimate. `files` counts down and `until` is a
@@ -412,9 +426,19 @@ export async function listVideosChecked(root: string, exclude?: ReadonlySet<stri
   return { files, complete: report.complete };
 }
 
+export interface LibraryWalk { files: FoundFile[]; cut: string[] }
+
+/** The same walk as `listVideos`, naming the folders the depth cap left unread, so an index
+ *  built from it can tell a complete folder from one with a branch cut off. */
+export async function walkLibrary(root: string, exclude?: ReadonlySet<string>): Promise<LibraryWalk> {
+  const report = { complete: true, cut: [] as string[] };
+  const files = await walkVideos(root, "", 0, exclude, limiter(WALK_CONCURRENCY), report);
+  return { files, cut: report.cut };
+}
+
 /** The unbounded walk, several calls in flight, answering in the order a sequential one would. */
-async function walkVideos(root: string, relative: string, depth: number, exclude: ReadonlySet<string> | undefined, slot: ReturnType<typeof limiter>, report?: { complete: boolean }): Promise<FoundFile[]> {
-  if (depth > 8) return [];
+async function walkVideos(root: string, relative: string, depth: number, exclude: ReadonlySet<string> | undefined, slot: ReturnType<typeof limiter>, report?: { complete: boolean; cut?: string[] }): Promise<FoundFile[]> {
+  if (depth > 8) { report?.cut?.push(relative); return []; }
   let entries;
   try { entries = await slot(() => readdir(path.join(root, toFs(relative)), { withFileTypes: true })); }
   catch { if (report) report.complete = false; return []; }

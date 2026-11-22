@@ -37,6 +37,13 @@ export const RESIZE_SLOTS = Math.max(1, Math.min(4, Math.floor(os.availableParal
 const resizeGate = new SlotGate(RESIZE_SLOTS);
 /** How many re-encodes hold a slot and how many wait, for tests that synchronise on the queue. */
 export const resizeQueue = () => ({ running: resizeGate.running, queued: resizeGate.queued });
+/** Pictures between the first byte fetched and the re-encoded copy. Each one holds its whole
+ *  original in memory (up to `MAX_BYTES`) while it waits for a resize slot, so their number is
+ *  bounded too: a catalogue that offers pictures faster than the NAS re-encodes them waits
+ *  before downloading instead of piling originals up in RAM. Enough to keep the slots busy. */
+export const DOWNLOAD_SLOTS = Math.max(8, RESIZE_SLOTS * 4);
+const downloadGate = new SlotGate(DOWNLOAD_SLOTS);
+export const downloadQueue = () => ({ running: downloadGate.running, queued: downloadGate.queued });
 const SAVE_MS = 2000;
 const FAILURE_WARN_MS = 6 * 60 * 60_000;
 const FAILURE_WARN_IDS = 2000;
@@ -794,6 +801,44 @@ export class ImageProxy {
     log("INFO", "Image cache preheat finished", { files, bytes });
   }
 
+  /** Downloads one picture and re-encodes it to its stored size. The original is dropped as
+   *  soon as this returns, so it is what `downloadGate` bounds. */
+  private async fetchAndShrink(entry: Entry, signal: AbortSignal): Promise<{ data: Buffer; storedExt: string } | { reason: string }> {
+    const result = await guardedBody<{ data: Buffer; ext: string } | { reason: string }>(
+      entry.url,
+      {},
+      async (response, signal) => {
+        if (!response.ok) {
+          cancelResponseBody(response);
+          return { reason: `HTTP ${response.status}` };
+        }
+        const type = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+        const ext = EXTENSIONS[type];
+        if (!ext) {
+          cancelResponseBody(response);
+          return { reason: `content-type ${type || "missing"}` };
+        }
+        let data: Buffer;
+        try {
+          data = await readLimitedBody(response, MAX_BYTES, signal);
+        } catch (error) {
+          if (error instanceof ResponseTooLargeError) return { reason: String(error) };
+          throw error;
+        }
+        return data.length ? { data, ext } : { reason: "0 bytes" };
+      },
+      { deadlineMs: FETCH_TIMEOUT_MS, signal },
+      this.fetcher,
+    );
+    if ("reason" in result) return result;
+    const fetched = result.data;
+    signal.throwIfAborted();
+    await mkdir(this.dir, { recursive: true });
+    const data = await this.downscale(fetched, result.ext, entry.width ?? TILE_WIDTH, signal);
+    // The same buffer back means nothing was re-encoded; mjpeg output is a jpeg.
+    return { data, storedExt: data === fetched ? result.ext : "jpg" };
+  }
+
   private async download(id: string, entry: Entry, signal: AbortSignal): Promise<Entry | undefined> {
     const rejected = (reason: string) => {
       // A visitor who left is no failure. Anything else is a hidden picture on someone's screen,
@@ -804,41 +849,10 @@ export class ImageProxy {
       return undefined;
     };
     try {
-      const result = await guardedBody<{ data: Buffer; ext: string } | { reason: string }>(
-        entry.url,
-        {},
-        async (response, signal) => {
-          if (!response.ok) {
-            cancelResponseBody(response);
-            return { reason: `HTTP ${response.status}` };
-          }
-          const type = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-          const ext = EXTENSIONS[type];
-          if (!ext) {
-            cancelResponseBody(response);
-            return { reason: `content-type ${type || "missing"}` };
-          }
-          let data: Buffer;
-          try {
-            data = await readLimitedBody(response, MAX_BYTES, signal);
-          } catch (error) {
-            if (error instanceof ResponseTooLargeError) return { reason: String(error) };
-            throw error;
-          }
-          return data.length ? { data, ext } : { reason: "0 bytes" };
-        },
-        { deadlineMs: FETCH_TIMEOUT_MS, signal },
-        this.fetcher,
-      );
-      if ("reason" in result) return rejected(result.reason);
-      const fetched = result.data;
-      const ext = result.ext;
+      const prepared = await downloadGate.run(() => this.fetchAndShrink(entry, signal), signal);
+      if ("reason" in prepared) return rejected(prepared.reason);
+      const { data, storedExt } = prepared;
       signal.throwIfAborted();
-      await mkdir(this.dir, { recursive: true });
-      const data = await this.downscale(fetched, ext, entry.width ?? TILE_WIDTH, signal);
-      signal.throwIfAborted();
-      // The same buffer back means nothing was re-encoded; mjpeg output is a jpeg.
-      const storedExt = data === fetched ? ext : "jpg";
       const target = this.path(id, storedExt);
       const temp = `${target}.${randomUUID()}.tmp`;
       try {

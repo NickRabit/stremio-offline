@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, clearBrowseCache, describePath, foldersBetween, hasVideo, heldTree, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, withinLibraryRoot, type BrowseResult } from "./library.js";
+import { browseDirectory, buildLibrary, clearBrowseCache, describePath, foldersBetween, hasVideo, heldTree, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, walkLibrary, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, withinLibraryRoot, type BrowseResult } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -69,6 +69,34 @@ test("browse answers held aggregates for folders and files without walking their
           modified: item.modified,
         }, wanted, `${sort}: ${item.path}`);
       }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a folder with a branch below the walk's depth cap is counted on disk, not from the held walk", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-held-deep-"));
+  try {
+    // Eight folders deep is the last the walk reads; the ninth is cut off.
+    const eighth = path.join(root, "Deep", "1", "2", "3", "4", "5", "6", "7");
+    await mkdir(path.join(eighth, "8"), { recursive: true });
+    await writeFile(path.join(eighth, "a.mkv"), "a");
+    await writeFile(path.join(eighth, "8", "b.mkv"), "bb");
+    await mkdir(path.join(root, "Shallow"), { recursive: true });
+    await writeFile(path.join(root, "Shallow", "c.mkv"), "ccc");
+
+    const walk = await walkLibrary(root);
+    assert.deepEqual(walk.files.map((found) => found.relative), ["Deep/1/2/3/4/5/6/7/a.mkv", "Shallow/c.mkv"]);
+    assert.deepEqual(walk.cut, ["Deep/1/2/3/4/5/6/7/8"]);
+    const held = heldTree(walk.files, walk.cut);
+    assert.equal(held.folder("Deep"), undefined);
+    assert.equal(held.folder("Shallow")?.fileCount, 1);
+
+    for (const sort of ["name", "size"] as const) {
+      clearBrowseCache();
+      const result = await browseDirectory(root, "", "", 0, 20, sort, false, "", undefined, undefined, false, held);
+      const deep = result.items.find((item) => item.path === "Deep");
+      assert.ok(deep?.kind === "folder", sort);
+      assert.deepEqual({ fileCount: deep.fileCount, size: deep.size }, { fileCount: 2, size: 3 }, sort);
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
