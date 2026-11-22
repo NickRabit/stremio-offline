@@ -937,6 +937,9 @@ fun PlayerScreen(
     if (!resumed || sidecar == null || embeddedChoice == null) return@LaunchedEffect
     var watcher = SidecarState()
     val revision = state.sidecarRevision
+    // A pending move clears the cues; if it ends without a new revision (refused, say), the
+    // same track is read again from scratch instead of waiting for a window it already passed.
+    var heldBefore = false
     cues = emptyList()
     // The flag is read every pass too: while the app is stopped the composition is paused, so the
     // key alone would not cancel a loop that is already suspended in its poll delay.
@@ -951,6 +954,12 @@ fun PlayerScreen(
           return@LaunchedEffect
         }
         controller.onSidecarCoverage(fetch.coverage, fetch.complete)
+        if (current.sidecarPending) {
+          heldBefore = true
+        } else if (heldBefore) {
+          heldBefore = false
+          watcher = SidecarState()
+        }
         if (!current.sidecarPending && sidecarRefresh(watcher, fetch.coverage, fetch.complete, at)) {
           // The server rebases its cues to the conversion stream; the picture the overlay is
           // compared with is absolute, so the offset goes back on.

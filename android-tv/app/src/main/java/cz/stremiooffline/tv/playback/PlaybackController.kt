@@ -1288,7 +1288,15 @@ class PlaybackController(
         return api.seekSidecar(id, target, seekId)
       } catch (cancelled: CancellationException) {
         throw cancelled
-      } catch (_: Throwable) {
+      } catch (error: Throwable) {
+        // A refusal (the session is gone, a server without this route) does not get better by
+        // asking again: the caller lets go of the pending state and the old track plays on.
+        // Too many requests and a timeout are temporary.
+        val status = (error as? ApiError)?.status
+        if (status != null && status in 400..499 && status != 408 && status != 429) {
+          sidecarRequested = false
+          return null
+        }
         val wait = SIDECAR_SEEK_RETRY_MS[minOf(attempt, SIDECAR_SEEK_RETRY_MS.lastIndex)]
         attempt += 1
         delay(wait)
