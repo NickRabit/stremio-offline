@@ -444,6 +444,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [buffering, setBuffering] = useState(false);
   const [error, setError] = useState("");
   const stallsRef = useRef<number[]>([]);
+  /** Moves whenever the stall count is reset (new title, quality change, hint dismissed), so a
+   *  status answer that arrives afterwards cannot raise advice for the old situation. */
+  const stallAdviceEpochRef = useRef(0);
   const bufferTimerRef = useRef<number | undefined>(undefined);
   /** A stall inside a conversion's first two segments, waiting to see whether playback resumes. */
   const earlyStallRef = useRef<number | undefined>(undefined);
@@ -771,7 +774,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     setError(""); setUserPaused(false); setPlaybackFailed(false); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
-    stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
+    stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setDownloadState("idle");
     decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; lostRecoveredRef.current = false; lostWhilePausedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there. A start-over
@@ -1079,7 +1082,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
 
   const changeQuality = (value: number | null) => {
-    stallsRef.current = []; setQualityHint(null);
+    stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null);
     void changeTrack({ quality: value });
   };
 
@@ -1132,9 +1135,22 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       ...context(), stalls: stallsRef.current.length, quality: session?.quality ?? null,
       hardware: session?.hardware, acceleration: session?.acceleration,
     });
-    if (!session?.acceleration) return;
-    const target = lowerQuality(session?.quality ?? null);
-    if (target !== null) setQualityHint(target);
+    const offerLower = () => {
+      const target = lowerQuality(session?.quality ?? null);
+      if (target !== null) setQualityHint(target);
+    };
+    if (session?.acceleration) { offerLower(); return; }
+    // A session that began while the server was still probing FFmpeg was told "no acceleration";
+    // ask again before deciding the advice would hurt.
+    const id = sessionRef.current;
+    if (!id) return;
+    const adviceEpoch = stallAdviceEpochRef.current;
+    void api.playbackStatus(id).then((status) => {
+      if (!status.acceleration || sessionRef.current !== id || !openRef.current) return;
+      // A quality chosen by hand (or the hint dismissed) while this was in flight wins.
+      if (stallAdviceEpochRef.current !== adviceEpoch) return;
+      offerLower();
+    }).catch(() => undefined);
   };
 
   /** Steps small enough to land on the line, large enough to get there quickly. */
@@ -1738,7 +1754,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       {qualityHint !== null && !error && <div className="player-hint">
         <span>{t("player.stalling")}</span>
         <button onClick={() => changeQuality(qualityHint)}>{t("player.lowerQualityTo", { height: qualityHint })}</button>
-        <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; setQualityHint(null); }}><X /></button>
+        <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); }}><X /></button>
       </div>}
       {upNext && <div className="player-up-next" role="status">
         <small>{t("player.upNext")}</small>

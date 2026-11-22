@@ -641,6 +641,8 @@ export interface PlaybackStatus {
    *  "complete": it reached the end; "short": it stopped well before the end;
    *  "failed": it exited with an error before the end. */
   conversion: "direct" | "running" | "complete" | "short" | "failed";
+  /** Hardware encoding as the server knows it now (a session started during its probe was told false). */
+  acceleration?: boolean;
   /** Absolute film time the short conversion reached. */
   reached?: number;
 }
