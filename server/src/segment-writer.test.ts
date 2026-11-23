@@ -62,3 +62,14 @@ test("a failed write is thrown to the transfer and nothing after it is reported"
   await assert.rejects(writer.push(chunk(1)), /disk full/);
   assert.equal(reported, 0);
 });
+
+test("a piece pushed just as the last write finishes goes out without waiting for the next push", async () => {
+  const writes: number[] = [];
+  const writer = new SegmentWriter(0, async (block) => { writes.push(block.length); }, () => {});
+  await writer.push(chunk(0, 10));
+  // The first write resolves in a microtask; push again in the gap before its bookkeeping ran.
+  await Promise.resolve();
+  await writer.push(chunk(1, 20));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(writes.reduce((sum, bytes) => sum + bytes, 0), 30, "both pieces are on disk without a settle");
+});

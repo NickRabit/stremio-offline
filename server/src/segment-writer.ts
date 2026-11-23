@@ -1,7 +1,8 @@
-/** At most this many bytes of a segment wait in memory for the disk. A network chunk is a few
+/** At most this many bytes of a segment wait in memory for the disk (with up to eight segments
+ *  of up to eight downloads, a slow disk holds at most about twice this per segment). A network chunk is a few
  *  dozen kilobytes; chunks that arrive while a write is still on its way go out together in the
  *  next one, so a slow NAS disk gets fewer, larger writes without holding the transfer back. */
-export const SEGMENT_WRITE_QUEUE_BYTES = 4 * 1024 * 1024;
+export const SEGMENT_WRITE_QUEUE_BYTES = 1024 * 1024;
 
 /** Writes a segment's bytes behind the transfer: one write at a time, everything that arrived
  *  meanwhile joined into the next one. `written` reports each block once it is on disk, which is
@@ -42,7 +43,12 @@ export class SegmentWriter {
   private start(): void {
     this.writing ??= this.drain()
       .catch((error: unknown) => { this.failed = true; this.error = error; })
-      .finally(() => { this.writing = undefined; });
+      .finally(() => {
+        this.writing = undefined;
+        // A piece pushed after the last block went out but before this ran found a write still
+        // "running" and started none: it goes out now rather than waiting for the next push.
+        if (this.queuedBytes && !this.failed) this.start();
+      });
   }
 
   private async drain(): Promise<void> {

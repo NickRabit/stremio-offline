@@ -3813,7 +3813,17 @@ export class DownloadQueue {
     // Only bytes on disk count as received: the segment resumes from there after a stop.
     // Whatever arrived is written before this returns, also after a stop or an error.
     let position = from;
-    const writer = new SegmentWriter(from, (block, at) => handle.write(block, 0, block.length, at), (bytes) => {
+    // A short write (a full disk, a network filesystem) is carried on until the whole block is
+    // there, so a counted byte is a written byte.
+    const writeAll = async (block: Buffer, at: number) => {
+      let done = 0;
+      while (done < block.length) {
+        const { bytesWritten } = await handle.write(block, done, block.length - done, at + done);
+        if (bytesWritten <= 0) throw new Error("The disk accepted no bytes.");
+        done += bytesWritten;
+      }
+    };
+    const writer = new SegmentWriter(from, writeAll, (bytes) => {
       segment.received += bytes;
       note(bytes);
     });

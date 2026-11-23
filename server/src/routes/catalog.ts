@@ -135,7 +135,8 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       if (!items) {
         items = await catalog(addon, type, id, search, skip, genre, true, disconnect.signal);
         if (disconnect.signal.aborted) return;
-        if (key) catalogPages.set(key, items);
+        // An empty page is often an addon whose own source is down: it is asked again next time.
+        if (key && items.length) catalogPages.set(key, items);
       }
       requireAccess(req, { addonKey: addon.key });
       res.json(items.map((item) => images.rewriteMeta(item)));

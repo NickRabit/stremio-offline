@@ -2593,9 +2593,11 @@ test("GET /api/catalog answers a page it already fetched from memory, but never 
   t.after(harness.close);
   const asked: string[] = [];
   let failNext = false;
+  let empty = false;
   await withStubbedAddons((raw) => {
     asked.push(new URL(raw).pathname);
     if (failNext) { failNext = false; return new Response("down", { status: 503 }); }
+    if (empty) return json({ metas: [] });
     return json({ metas: [{ id: "tt1", type: "movie", name: "Dune" }] });
   }, async () => {
     const page = async (query: string) => api(harness.base, `/api/catalog?addon=pages&type=movie&id=top${query}`);
@@ -2614,6 +2616,12 @@ test("GET /api/catalog answers a page it already fetched from memory, but never 
     assert.notEqual((await page("&skip=200")).status, 200);
     assert.equal((await page("&skip=200")).status, 200, "a failure is not remembered");
     assert.equal(asked.length, 6);
+
+    empty = true;
+    await page("&skip=300");
+    empty = false;
+    await page("&skip=300");
+    assert.equal(asked.length, 8, "an empty page is asked again");
   });
 });
 
