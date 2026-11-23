@@ -136,7 +136,7 @@ export async function ioDiagnostics(options: { proc?: string; cgroup?: string; p
 
 const RESOLUTION_MS = 20;
 /** The histogram counts its own sampling interval as delay; an idle server reads 0, not 20. */
-const toMs = (nanoseconds: number) => Math.max(0, Math.round(nanoseconds / 1e5 - RESOLUTION_MS * 10) / 10);
+export const toMs = (nanoseconds: number) => Math.max(0, Math.round(nanoseconds / 1e5 - RESOLUTION_MS * 10) / 10);
 
 /** How often the stall watch looks at the clock, and how seldom it may write to the log: a NAS
  *  that keeps stalling must not also keep writing the log. Stalls inside the quiet time are
@@ -151,30 +151,42 @@ export class EventLoopDelay {
   private since = new Date();
   private watch?: NodeJS.Timeout;
 
-  /** `logStallsOverMs` writes a WARN line, with its time, whenever the thread was held that
-   *  long: the lines around it in the log tell what the server was doing. Only the server's own
-   *  monitor sets it. */
-  constructor(options: { logStallsOverMs?: number; now?: () => number } = {}) {
+  /** `logStallsOverMs` writes a WARN line, with its time, whenever the thread was held about
+   *  that long: the lines around it in the log tell what the server was doing. At most one line
+   *  per quiet time; stalls inside it are summed up in one line as soon as it ends, with the time
+   *  of the longest. A paused container or a NAS that gave the process no CPU reads the same as
+   *  blocked JavaScript. Only the server's own monitor sets it. */
+  constructor(options: { logStallsOverMs?: number; quietMs?: number } = {}) {
     this.histogram.enable();
     const threshold = options.logStallsOverMs;
     if (!threshold) return;
-    const now = options.now ?? (() => performance.now());
-    let last = now();
+    const quietMs = options.quietMs ?? STALL_LOG_QUIET_MS;
+    let last = performance.now();
     let quietUntil = 0;
     let held = 0;
     let longest = 0;
+    let longestAt = "";
     this.watch = setInterval(() => {
-      const at = now();
+      const at = performance.now();
+      // A stall that began partway through a tick is measured up to one tick short, so the
+      // line stands for "about the threshold or more", never for a stall that was missed.
       const stalled = at - last - STALL_TICK_MS;
       last = at;
-      if (stalled < threshold) return;
-      held += 1;
-      longest = Math.max(longest, stalled);
-      if (at < quietUntil) return;
-      log("WARN", "The server was blocked", { ms: Math.round(longest), ...(held > 1 ? { times: held } : {}) });
-      quietUntil = at + STALL_LOG_QUIET_MS;
-      held = 0;
-      longest = 0;
+      if (stalled >= threshold - STALL_TICK_MS) {
+        if (at >= quietUntil && !held) {
+          log("WARN", "The server was blocked or not scheduled", { ms: Math.round(stalled) });
+          quietUntil = at + quietMs;
+          return;
+        }
+        held += 1;
+        if (stalled > longest) { longest = stalled; longestAt = new Date().toISOString(); }
+      }
+      if (held && at >= quietUntil) {
+        log("WARN", "The server was blocked or not scheduled again", { times: held, longestMs: Math.round(longest), longestAt });
+        quietUntil = at + quietMs;
+        held = 0;
+        longest = 0;
+      }
     }, STALL_TICK_MS);
     this.watch.unref();
   }
