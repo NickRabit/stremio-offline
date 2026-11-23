@@ -605,13 +605,20 @@ export class PlaybackManager {
     this.versionRetry = setTimeout(() => {
       this.versionRetry = undefined;
       if (mediaStopping()) return;
-      runMedia(ffmpegPath(), ["-version"], { timeout: this.versionTimeoutsMs.at(-1) }).then(({ stdout }) => {
+      runMedia(ffmpegPath(), ["-version"], { timeout: this.versionTimeoutsMs.at(-1) }).then(async ({ stdout }) => {
         if (mediaStopping()) return;
         this.applyFfmpegVersion(stdout);
         log("INFO", "FFmpeg version read on a later try", { version: this.ffmpegVersion ?? null, attempt: attempt + 1 });
-      }, () => {
+        // The encoder checks ran on the same slow start and may have timed out as well: a GPU
+        // that is there would otherwise stay unused until a restart.
+        const device = process.env.VAAPI_DEVICE;
+        if (device && !this.vaapiDevice) await this.checkVaapi(device);
+        if (process.platform !== "darwin" && process.env.NVENC !== "0" && !this.vaapiDevice && !this.nvenc) await this.checkNvenc();
+      }, (error: unknown) => {
+        // A missing binary does not appear later; only a slow or failing one is asked again.
+        if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return;
         if (!mediaStopping()) this.retryFfmpegVersion(attempt + 1);
-      });
+      }).catch(() => undefined);
     }, delay);
     this.versionRetry.unref();
   }

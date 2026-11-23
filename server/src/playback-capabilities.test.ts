@@ -217,7 +217,8 @@ test("a version probe that timed out at start is asked again later and turns the
   const gate = path.join(directory, "release-version");
   t.after(() => writeFile(gate, "").catch(() => undefined));
   // FFmpeg does not answer until the gate opens: a cold NAS that keeps the first exec waiting.
-  const { fake } = await writeFakeFfmpeg(directory, { versionGate: gate });
+  // A build without libx264, so the late answer visibly changes what was assumed meanwhile.
+  const { fake } = await writeFakeFfmpeg(directory, { versionGate: gate, versionOutput: "ffmpeg version 7.1.1 Copyright (c) 2000-2025\n--enable-gpl\n" });
   useEnv(t, { FFMPEG_PATH: fake, VIDEOTOOLBOX: "0", VAAPI_DEVICE: undefined });
   const manager = new PlaybackManager(path.join(directory, "data")) as any;
   manager.versionTimeoutsMs = [200, 200];
@@ -228,12 +229,13 @@ test("a version probe that timed out at start is asked again later and turns the
   assert.equal(manager.diagnostics().capabilities, "ready");
   assert.equal(manager.diagnostics().ffmpeg.version, undefined);
   assert.equal(manager.diagnostics().ffmpeg.initialBurst, false);
+  assert.equal(manager.diagnostics().ffmpeg.softwareEncoder, true, "assumed until FFmpeg says otherwise");
 
   await writeFile(gate, "");
   await until(() => manager.diagnostics().ffmpeg.version !== undefined, "the version was never asked again");
   assert.equal(manager.diagnostics().ffmpeg.version, "7.1.1");
   assert.equal(manager.diagnostics().ffmpeg.initialBurst, true);
-  assert.equal(manager.diagnostics().ffmpeg.softwareEncoder, true);
+  assert.equal(manager.diagnostics().ffmpeg.softwareEncoder, false);
   await flushLog();
   assert.match(await readLog({}), /no answer in 0\.2 s/);
   assert.match(await readLog({}), /FFmpeg version read on a later try/);
