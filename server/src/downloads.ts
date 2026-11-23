@@ -6,6 +6,7 @@ import { mkdir, open, rename, stat, statfs, unlink, writeFile, type FileHandle }
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { SegmentWriter } from "./segment-writer.js";
 import { addonAllowed } from "./addons.js";
 import { addonIdentity, isAddonIdentity } from "./addon-identity.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
@@ -3809,19 +3810,27 @@ export class DownloadQueue {
     const range = parseContentRange(response.headers.get("content-range"));
     if (range && range.start !== from) throw new IncompleteDownloadError(segment.received, size);
     const body = Readable.fromWeb(response.body as never);
+    // Only bytes on disk count as received: the segment resumes from there after a stop.
+    // Whatever arrived is written before this returns, also after a stop or an error.
     let position = from;
+    const writer = new SegmentWriter(from, (block, at) => handle.write(block, 0, block.length, at), (bytes) => {
+      segment.received += bytes;
+      note(bytes);
+    });
     try {
       for await (const chunk of body as AsyncIterable<Buffer>) {
         // A source that ignores the end of the range would otherwise write over the next segment.
         const room = segment.end + 1 - position;
         const piece = chunk.length > room ? chunk.subarray(0, room) : chunk;
         await this.rate.take(piece.length, controller.signal);
-        await handle.write(piece, 0, piece.length, position);
-        position += piece.length; segment.received += piece.length;
-        note(piece.length);
+        position += piece.length;
+        await writer.push(piece);
         if (position > segment.end) break;
       }
-    } finally { body.destroy(); }
+    } finally {
+      body.destroy();
+      await writer.settle();
+    }
     if (segment.received < size) throw new IncompleteDownloadError(segment.received, size);
   }
 

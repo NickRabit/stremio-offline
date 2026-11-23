@@ -1,6 +1,7 @@
 import type express from "express";
 import { readFile } from "node:fs/promises";
 import { allowedAddons, catalog, orderedForUser, orderFor, searchAll, searchableCatalogs, streamCandidates, streams, subtitleTarget, subtitles, type MetaProvider } from "../addons.js";
+import { CatalogPageCache } from "../catalog-page-cache.js";
 import { DetailGalleryCache } from "../detail-gallery.js";
 import { AppError } from "../errors.js";
 import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
@@ -39,6 +40,8 @@ import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "
 const subtitleLanguage = (value: unknown) => typeof value === "string" ? value.slice(0, 32) : undefined;
 
 export interface CatalogDeps extends RouteContext {
+  /** Catalogue pages answered from memory for a few minutes; a test hands in its own. */
+  catalogPages?: CatalogPageCache;
   tmdbProvider(language: string): MetaProvider | undefined;
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer, opts?: { artwork?: boolean; signal?: AbortSignal }): Promise<MetaItem | null>;
   prefsOf(req?: express.Request): UserPrefs;
@@ -77,6 +80,7 @@ const malformedPersonRequest = () =>
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
   const { store, currentUser, cachedMeta, prefsOf, libraryTarget, nestedHidden, ownerOf, trackMedia, libraryKey, localCopies, ownedTitles, localCopyFacts, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
   const imageProxy = deps.imageProxy ?? images;
+  const catalogPages = deps.catalogPages ?? new CatalogPageCache();
 
   /** The addons this caller may use, read once per request. A disabled addon is left out
    *  later by the helpers that honour `enabled`; visibility narrows an enabled addon only. */
@@ -120,8 +124,19 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       // request that never passes the listing. Answered as a miss, which is what it now is.
       const addon = usable(req).find((a) => a.key === req.query.addon && a.enabled);
       if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
-      const items = await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined, true, disconnect.signal);
-      if (disconnect.signal.aborted) return;
+      const type = String(req.query.type);
+      const id = String(req.query.id);
+      const search = req.query.search ? String(req.query.search) : undefined;
+      const skip = Number(req.query.skip) || 0;
+      const genre = req.query.genre ? String(req.query.genre) : undefined;
+      // Paging back through a listing asks the same pages again; a search is always asked anew.
+      const key = search ? undefined : catalogPages.key(addon, { type, id, skip, genre });
+      let items = key ? catalogPages.get(key) : undefined;
+      if (!items) {
+        items = await catalog(addon, type, id, search, skip, genre, true, disconnect.signal);
+        if (disconnect.signal.aborted) return;
+        if (key) catalogPages.set(key, items);
+      }
       requireAccess(req, { addonKey: addon.key });
       res.json(items.map((item) => images.rewriteMeta(item)));
     } catch (error) {
