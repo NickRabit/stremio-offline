@@ -2625,6 +2625,23 @@ test("GET /api/catalog answers a page it already fetched from memory, but never 
   });
 });
 
+test("GET /api/catalog does not keep a page it could not read through", async (t) => {
+  const records = [addon("pages", [{ type: "movie", id: "top" }])];
+  const harness = await mount(records);
+  t.after(harness.close);
+  let broken = true;
+  await withStubbedAddons(() => {
+    if (broken) { broken = false; return json({ metas: [null] }); }
+    return json({ metas: [{ id: "tt1", type: "movie", name: "Dune" }] });
+  }, async () => {
+    const first = await api(harness.base, "/api/catalog?addon=pages&type=movie&id=top");
+    assert.notEqual(first.status, 200, "a malformed answer fails");
+    const second = await api(harness.base, "/api/catalog?addon=pages&type=movie&id=top");
+    assert.equal(second.status, 200, "the next request asks the addon again and gets the good page");
+    assert.deepEqual((await second.json() as Array<{ id: string }>).map((item) => item.id), ["tt1"]);
+  });
+});
+
 test("GET /api/catalog still checks access when the page comes from memory", async (t) => {
   const records = [addon("private", [{ type: "movie", id: "top" }], { allowedUsers: [] })];
   // One cache for both, as in the server: the administrator's page is in memory when the user asks.

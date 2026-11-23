@@ -3823,10 +3823,13 @@ export class DownloadQueue {
         done += bytesWritten;
       }
     };
+    // A failed write (a full disk) ends the read at once with the disk's error: waiting for the
+    // next network chunk could end in the stall watchdog instead, and a stall is retried as a
+    // source problem rather than paused as a storage one.
     const writer = new SegmentWriter(from, writeAll, (bytes) => {
       segment.received += bytes;
       note(bytes);
-    });
+    }, undefined, (error) => body.destroy(error instanceof Error ? error : new Error(String(error))));
     try {
       for await (const chunk of body as AsyncIterable<Buffer>) {
         // A source that ignores the end of the range would otherwise write over the next segment.

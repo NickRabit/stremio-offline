@@ -73,3 +73,13 @@ test("a piece pushed just as the last write finishes goes out without waiting fo
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.deepEqual(writes.reduce((sum, bytes) => sum + bytes, 0), 30, "both pieces are on disk without a settle");
 });
+
+test("a failed write is told at once, without waiting for the next piece", async () => {
+  const told: unknown[] = [];
+  const writer = new SegmentWriter(0, async () => { throw new Error("disk full"); }, () => {}, undefined, (error) => told.push(error));
+  await writer.push(chunk(0));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(told.length, 1);
+  assert.match(String(told[0]), /disk full/);
+  await assert.rejects(writer.settle(), /disk full/);
+});

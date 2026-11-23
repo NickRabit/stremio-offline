@@ -19,6 +19,9 @@ export class SegmentWriter {
     private readonly write: (block: Buffer, position: number) => Promise<unknown>,
     private readonly written: (bytes: number) => void,
     private readonly limit = SEGMENT_WRITE_QUEUE_BYTES,
+    /** Told of a failed write at once, so a caller waiting on the network can stop reading and
+     *  report the disk's error instead of whatever the wait would end in. */
+    private readonly failedWith: (error: unknown) => void = () => {},
   ) {}
 
   /** Queues a piece; resolves at once unless enough is already waiting for the disk. */
@@ -42,7 +45,7 @@ export class SegmentWriter {
 
   private start(): void {
     this.writing ??= this.drain()
-      .catch((error: unknown) => { this.failed = true; this.error = error; })
+      .catch((error: unknown) => { this.failed = true; this.error = error; this.failedWith(error); })
       .finally(() => {
         this.writing = undefined;
         // A piece pushed after the last block went out but before this ran found a write still

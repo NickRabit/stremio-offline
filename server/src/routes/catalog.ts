@@ -131,15 +131,15 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       const genre = req.query.genre ? String(req.query.genre) : undefined;
       // Paging back through a listing asks the same pages again; a search is always asked anew.
       const key = search ? undefined : catalogPages.key(addon, { type, id, skip, genre });
-      let items = key ? catalogPages.get(key) : undefined;
-      if (!items) {
-        items = await catalog(addon, type, id, search, skip, genre, true, disconnect.signal);
-        if (disconnect.signal.aborted) return;
-        // An empty page is often an addon whose own source is down: it is asked again next time.
-        if (key && items.length) catalogPages.set(key, items);
-      }
+      const held = key ? catalogPages.get(key) : undefined;
+      const items = held ?? await catalog(addon, type, id, search, skip, genre, true, disconnect.signal);
+      if (disconnect.signal.aborted) return;
       requireAccess(req, { addonKey: addon.key });
-      res.json(items.map((item) => images.rewriteMeta(item)));
+      const answer = items.map((item) => images.rewriteMeta(item));
+      // Kept only once the page has been read through: a malformed answer fails here and is asked
+      // again next time. An empty page is often an addon whose own source is down, so it is too.
+      if (key && !held && items.length) catalogPages.set(key, items);
+      res.json(answer);
     } catch (error) {
       if (disconnect.signal.aborted) return;
       throw error;

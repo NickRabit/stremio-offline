@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { rm, stat, writeFile } from "node:fs/promises";
+import { open, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DownloadQueue } from "./downloads.js";
@@ -134,6 +135,52 @@ test("a segmented plan is persisted before the part file is allocated", async ()
     await queue.stop();
     await restarted?.stop();
     server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a full disk during a segmented download pauses for storage even while the source goes quiet", async () => {
+  const GiB = 1024 ** 3;
+  // The source sends a little of every segment and then nothing: a write error that waited for
+  // the next network chunk would only surface when the stall watchdog fires, and a stall is
+  // retried as a source problem instead of pausing the queue for the disk.
+  const { server, port } = await listen((req, res) => {
+    const match = /bytes=(\d+)-(\d*)/.exec(req.headers.range ?? "");
+    if (!match) { res.writeHead(200, { "content-length": String(SEGMENTED_TOTAL) }); res.end(); return; }
+    const from = Number(match[1]);
+    const to = match[2] ? Number(match[2]) : SEGMENTED_TOTAL - 1;
+    res.writeHead(206, { "content-length": String(to - from + 1), "content-range": `bytes ${from}-${to}/${SEGMENTED_TOTAL}` });
+    res.write(filled(from, Math.min(1024, to - from + 1)));
+    if (to === from) res.end();
+  });
+  const probe = await open(path.join(os.tmpdir(), `stremio-proto-${process.pid}`), "w");
+  const proto = Object.getPrototypeOf(probe) as { write: (...args: unknown[]) => Promise<unknown> };
+  await probe.close();
+  await rm(path.join(os.tmpdir(), `stremio-proto-${process.pid}`), { force: true });
+  const original = proto.write;
+  proto.write = function (this: unknown, ...args: unknown[]) {
+    // Only the positioned writes of a segment fail; anything else the queue writes goes through.
+    if (typeof args[3] === "number") return Promise.reject(Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }));
+    return original.apply(this, args);
+  };
+  const { directory, queue } = await tempQueue({
+    segments: () => 2,
+    stallInitialMs: 400,
+    stallTransferMs: 400,
+    // Room on the volume as far as the space check can tell: the disk refuses the write anyway.
+    freeSpace: async () => ({ freeBytes: 4 * GiB, totalBytes: 8 * GiB }),
+  });
+  try {
+    await queue.add("Full", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.haltInfo()?.reason === "storage" || queue.list()[0].status === "failed", 10_000);
+    const job = queue.list()[0];
+    assert.equal(queue.haltInfo()?.reason, "storage", `${job.status} ${job.error ?? ""} after ${job.retryCount} retries`);
+    assert.ok(job.received < SEGMENTED_TOTAL);
+    assert.equal(job.status, "paused");
+    assert.equal(job.pauseReason, "storage");
+  } finally {
+    proto.write = original;
+    await queue.stop(); server.closeAllConnections(); server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
