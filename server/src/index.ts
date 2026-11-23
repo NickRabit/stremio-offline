@@ -113,6 +113,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./routes/context.js";
 import { registerCurateRoutes } from "./routes/curate.js";
 import { registerDeviceRoutes } from "./routes/device.js";
 import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
+import { EventLoopDelay } from "./process-io.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
 import { calendarFeedHandler, registerFollowRoutes } from "./routes/follows.js";
 import { registerIntroSegmentRoutes } from "./routes/intro-segments.js";
@@ -3209,7 +3210,7 @@ const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }
 };
-registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
+registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR, eventLoop: new EventLoopDelay() });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, invalidateLibraryMeta, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache, publicAddonView });
 const introSegments = new IntroSegmentsCache();
 registerIntroSegmentRoutes(app, { ...routeContext, introSegments });

@@ -7,6 +7,7 @@ import type { LibraryScan } from "../library-scan.js";
 import { clearLog, currentLevel, log, parseLevel, readLog } from "../logger.js";
 import { safeSourceText } from "../media-resources.js";
 import { metadataOutbound, outbound } from "../outbound.js";
+import { EventLoopDelay, ioDiagnostics } from "../process-io.js";
 import { sourceTitle, type PlaybackManager } from "../playback.js";
 import type { ImageStats } from "../image-stats.js";
 import type { ProviderStats } from "../provider-stats.js";
@@ -30,6 +31,8 @@ export interface DiagnosticsDeps extends RouteContext {
   /** The bundles clients uploaded, one JSON file each under the data directory. */
   clientLogs: ClientLogStore;
   dataDir: string;
+  /** How late timers fire; one per server. Route tests leave it out and get their own. */
+  eventLoop?: EventLoopDelay;
 }
 
 /** The browser is the only place where playback failure is actually visible. Without this
@@ -77,6 +80,7 @@ const bundleLine = (raw: unknown): ClientLogLine | undefined => {
 
 export function registerDiagnosticsRoutes(app: express.Application, deps: DiagnosticsDeps): void {
   const { store, currentUser, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir } = deps;
+  const eventLoop = deps.eventLoop ?? new EventLoopDelay();
 
   app.get("/api/stats/activity", (req, res) => {
     res.setHeader("cache-control", "private, no-store");
@@ -198,8 +202,12 @@ export function registerDiagnosticsRoutes(app: express.Application, deps: Diagno
   }));
 
   /** Server state for troubleshooting. It does not belong in /api/status, which needs no sign-in. */
-  app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
+  app.get("/api/diagnostics", asyncRoute(async (req, res) => {
     const jobs = queue.list();
+    const loop = eventLoop.snapshot();
+    // `?reset=1` starts a new window for the delay figures, so a measurement is not mixed with
+    // the start-up; the disk counters only grow and are compared between two reads.
+    if (req.query.reset === "1") eventLoop.reset();
     const byStatus: Record<string, number> = {};
     for (const job of jobs) byStatus[job.status] = (byStatus[job.status] ?? 0) + 1;
     res.json({
@@ -207,6 +215,8 @@ export function registerDiagnosticsRoutes(app: express.Application, deps: Diagno
       node: process.version,
       uptimeSeconds: Math.round(process.uptime()),
       memoryMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+      eventLoop: loop,
+      io: await ioDiagnostics(),
       logLevel: currentLevel(),
       logRetentionDays: Math.max(0, Number(process.env.LOG_RETENTION_DAYS ?? 7) || 0),
       playback: playback.diagnostics(),

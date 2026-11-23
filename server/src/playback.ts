@@ -394,6 +394,11 @@ const RETIRED_MS = 15_000;
 // The version probe is retried once with more room: a loaded host can push the first exec past
 // the shorter limit, and losing the answer costs speed on every start and seek until a restart.
 const VERSION_TIMEOUTS_MS = [10_000, 30_000];
+/** After both tries failed, the version is asked again in the background: on a NAS that has just
+ *  pulled a new image, the first FFmpeg start can take well over 40 seconds, and without the answer
+ *  every start and seek waits on the read rate limit and a software transcode is never offered.
+ *  The last delay repeats until FFmpeg answers or the server stops. */
+const VERSION_RETRY_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000];
 
 /** Neither the log nor the user may see the source address -- it often carries an addon token. */
 const redact = (text: string) => text.replace(/https?:\/\/\S+/g, "<zdroj>");
@@ -478,6 +483,10 @@ export class PlaybackManager {
   /** An LGPL build, like the one the desktop app carries, has no libx264: hardware is all there is. */
   private softwareEncoder = true;
   private ffmpegVersion?: string;
+  private versionRetry?: NodeJS.Timeout;
+  /** Tests shorten these. */
+  private versionTimeoutsMs = VERSION_TIMEOUTS_MS;
+  private versionRetryMs = VERSION_RETRY_MS;
   private capabilitiesProbe?: Promise<void>;
   private capabilityState: "pending" | "ready" | "failed" = "pending";
   private readonly pausedReleaseMs: number;
@@ -564,14 +573,7 @@ export class PlaybackManager {
 
   private async readCapabilities() {
     const stdout = await this.readFfmpegVersion();
-    if (stdout !== undefined) {
-      this.ffmpegVersion = stdout.split("\n")[0]?.replace(/^ffmpeg version\s*/i, "").split(" ")[0];
-      const major = Number(/version\s+n?(\d+)[.\s-]/.exec(stdout)?.[1]);
-      this.initialBurst = major >= 6;
-      if (!this.initialBurst) log("WARN", "FFmpeg is older than 6, start and seek will be slowed by the read rate limit", { major });
-      this.softwareEncoder = hasSoftwareEncoder(stdout);
-      if (!this.softwareEncoder) log("INFO", "This FFmpeg has no libx264, so a real transcode needs hardware encoding");
-    }
+    if (stdout !== undefined) this.applyFfmpegVersion(stdout);
     const device = process.env.VAAPI_DEVICE;
     if (device) await this.checkVaapi(device);
     // NVENC loads the driver's library at run time, so the LGPL build can carry it. It is the only
@@ -584,6 +586,41 @@ export class PlaybackManager {
     if (process.platform === "darwin" && process.env.VIDEOTOOLBOX !== "0" && !this.vaapiDevice) await this.checkVideotoolbox();
     // Media Foundation is Windows-only and never shares a machine with VAAPI.
     if (process.platform === "win32" && process.env.MEDIAFOUNDATION !== "0" && !this.vaapiDevice) await this.checkMediaFoundation();
+  }
+
+  private applyFfmpegVersion(stdout: string) {
+    this.ffmpegVersion = stdout.split("\n")[0]?.replace(/^ffmpeg version\s*/i, "").split(" ")[0];
+    const major = Number(/version\s+n?(\d+)[.\s-]/.exec(stdout)?.[1]);
+    this.initialBurst = major >= 6;
+    if (!this.initialBurst) log("WARN", "FFmpeg is older than 6, start and seek will be slowed by the read rate limit", { major });
+    this.softwareEncoder = hasSoftwareEncoder(stdout);
+    if (!this.softwareEncoder) log("INFO", "This FFmpeg has no libx264, so a real transcode needs hardware encoding");
+  }
+
+  /** Asks for the version again later, without holding anything up; see `VERSION_RETRY_MS`. */
+  private retryFfmpegVersion(attempt: number) {
+    const delays = this.versionRetryMs;
+    const delay = delays[Math.min(attempt, delays.length - 1)]!;
+    clearTimeout(this.versionRetry);
+    this.versionRetry = setTimeout(() => {
+      this.versionRetry = undefined;
+      if (mediaStopping()) return;
+      runMedia(ffmpegPath(), ["-version"], { timeout: this.versionTimeoutsMs.at(-1) }).then(async ({ stdout }) => {
+        if (mediaStopping()) return;
+        this.applyFfmpegVersion(stdout);
+        log("INFO", "FFmpeg version read on a later try", { version: this.ffmpegVersion ?? null, attempt: attempt + 1 });
+        // The encoder checks ran on the same slow start and may have timed out as well: a GPU
+        // that is there would otherwise stay unused until a restart.
+        const device = process.env.VAAPI_DEVICE;
+        if (device && !this.vaapiDevice) await this.checkVaapi(device);
+        if (process.platform !== "darwin" && process.env.NVENC !== "0" && !this.vaapiDevice && !this.nvenc) await this.checkNvenc();
+      }, (error: unknown) => {
+        // A missing binary does not appear later; only a slow or failing one is asked again.
+        if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return;
+        if (!mediaStopping()) this.retryFfmpegVersion(attempt + 1);
+      }).catch(() => undefined);
+    }, delay);
+    this.versionRetry.unref();
   }
 
   private capabilitiesReady() {
@@ -615,14 +652,17 @@ export class PlaybackManager {
    *  A missing binary fails at once, so the second attempt only costs time when it can still help. */
   private async readFfmpegVersion() {
     let reason = "";
-    for (const timeout of VERSION_TIMEOUTS_MS) {
+    for (const timeout of this.versionTimeoutsMs) {
       try {
         return (await runMedia(ffmpegPath(), ["-version"], { timeout })).stdout;
       } catch (error) {
-        reason = error instanceof Error ? error.message : String(error);
+        // A timeout reads like any other failure ("Command failed: ffmpeg -version"); say which.
+        const killed = (error as { killed?: boolean } | undefined)?.killed;
+        reason = `${error instanceof Error ? error.message.trim() : String(error)}${killed ? ` (no answer in ${timeout / 1000} s)` : ""}`;
       }
     }
     log("WARN", "FFmpeg version could not be determined, start and seek will be slowed by the read rate limit", { reason });
+    if (!mediaStopping()) this.retryFfmpegVersion(0);
     return undefined;
   }
 
