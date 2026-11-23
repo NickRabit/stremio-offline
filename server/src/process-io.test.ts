@@ -15,7 +15,8 @@ test("parseProcIo takes the block-layer bytes, not the character counts", () => 
 test("parseCgroup2IoStat adds up every device", () => {
   const text = "8:0 rbytes=100 wbytes=200 rios=1 wios=2 dbytes=0 dios=0\n253:1 rbytes=5 wbytes=7 rios=1 wios=1\n";
   assert.deepEqual(parseCgroup2IoStat(text), { readBytes: 105, writeBytes: 207 });
-  assert.equal(parseCgroup2IoStat(""), undefined);
+  assert.deepEqual(parseCgroup2IoStat(""), { readBytes: 0, writeBytes: 0 }, "no disk touched yet");
+  assert.equal(parseCgroup2IoStat("8:0 rios=1\n"), undefined);
 });
 
 test("parseCgroup1Blkio skips the Total line", () => {
@@ -45,6 +46,11 @@ test("ioDiagnostics reads the process, its running children and the container", 
   assert.deepEqual(io.children, { count: 2, readBytes: 20, writeBytes: 320 });
   assert.deepEqual(io.container, { readBytes: 1, writeBytes: 5000, source: "cgroup1" });
 
+  // A throttle file of zeros falls through to the other v1 file.
+  await writeFile(path.join(cgroup, "blkio", "blkio.throttle.io_service_bytes"), "8:0 Read 0\n8:0 Write 0\nTotal 0\n");
+  await writeFile(path.join(cgroup, "blkio", "blkio.io_service_bytes"), "8:0 Read 3\n8:0 Write 40\n");
+  assert.deepEqual((await ioDiagnostics({ proc, cgroup, pid: 100 })).container, { readBytes: 3, writeBytes: 40, source: "cgroup1" });
+
   await writeFile(path.join(cgroup, "io.stat"), "8:0 rbytes=2 wbytes=9\n");
   assert.deepEqual((await ioDiagnostics({ proc, cgroup, pid: 100 })).container, { readBytes: 2, writeBytes: 9, source: "cgroup2" });
 });
@@ -63,7 +69,8 @@ test("EventLoopDelay reports a blocked loop and starts over on reset", async () 
     while (Date.now() < until) { /* hold the loop */ }
     await new Promise((resolve) => setTimeout(resolve, 60));
     const before = delay.snapshot();
-    assert.ok(before.maxMs >= 80, `max ${before.maxMs} ms`);
+    assert.ok(before.maxMs >= 60, `max ${before.maxMs} ms`);
+    assert.ok(before.p50Ms < 15, `an idle median reads near zero, not the sampling interval: ${before.p50Ms}`);
     delay.reset();
     const after = delay.snapshot();
     assert.ok(after.maxMs < before.maxMs);

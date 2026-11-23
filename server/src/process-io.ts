@@ -8,11 +8,16 @@ export interface IoCounters {
 }
 
 export interface IoDiagnostics {
-  /** The server process alone (Linux `/proc/self/io`): what reached the storage layer. */
+  /** The server process (Linux `/proc/self/io`): what reached the storage layer. A finished
+   *  FFmpeg run is added here when the server reaps it, so `process` + `children` is the total
+   *  that only grows, and the figure to compare between two reads. */
   process?: IoCounters & { writeCalls: number };
-  /** FFmpeg and other children still running; a finished child's bytes are not in here. */
+  /** FFmpeg and other children still running; a finished run moves over to `process`. */
   children?: IoCounters & { count: number };
-  /** The whole container, finished FFmpeg runs included (cgroup v2 `io.stat`, v1 `blkio`). */
+  /** The whole container, summed over its devices (cgroup v2 `io.stat`, v1 `blkio`). On cgroup
+   *  v1 (Synology DSM) buffered writes are charged to the root group when they reach the disk,
+   *  so this undercounts there; on a stacked volume (RAID, LVM) a write may be counted once per
+   *  layer. A cross-check, not the main figure. */
   container?: IoCounters & { source: "cgroup2" | "cgroup1" };
 }
 
@@ -42,7 +47,8 @@ export function parseProcIo(text: string): (IoCounters & { writeCalls: number })
 export function parseCgroup2IoStat(text: string): IoCounters | undefined {
   let readBytes = 0;
   let writeBytes = 0;
-  let seen = false;
+  // An empty file is a container that has not touched a disk yet: zero, not unknown.
+  let seen = text.trim() === "";
   for (const line of text.split("\n")) {
     const read = /\brbytes=(\d+)/.exec(line);
     const write = /\bwbytes=(\d+)/.exec(line);
@@ -117,18 +123,22 @@ export async function ioDiagnostics(options: { proc?: string; cgroup?: string; p
     for (const file of ["blkio/blkio.throttle.io_service_bytes", "blkio/blkio.io_service_bytes"]) {
       const text = await readText(`${cgroup}/${file}`);
       const container1 = text === undefined ? undefined : parseCgroup1Blkio(text);
-      if (container1) { result.container = { ...container1, source: "cgroup1" }; break; }
+      // The throttle file lists the devices with zeros when the counting happens in the other.
+      if (container1 && (container1.readBytes || container1.writeBytes)) { result.container = { ...container1, source: "cgroup1" }; break; }
+      if (container1) result.container ??= { ...container1, source: "cgroup1" };
     }
   }
   return result;
 }
 
-const toMs = (nanoseconds: number) => Math.round(nanoseconds / 1e5) / 10;
+const RESOLUTION_MS = 20;
+/** The histogram counts its own sampling interval as delay; an idle server reads 0, not 20. */
+const toMs = (nanoseconds: number) => Math.max(0, Math.round(nanoseconds / 1e5) / 10 - RESOLUTION_MS);
 
 /** How late the server answers timers: a long wait means something held the one JavaScript
  *  thread (a big sort, a synchronous read) and every request waited with it. */
 export class EventLoopDelay {
-  private histogram = monitorEventLoopDelay({ resolution: 20 });
+  private histogram = monitorEventLoopDelay({ resolution: RESOLUTION_MS });
   private since = new Date();
 
   constructor() {
