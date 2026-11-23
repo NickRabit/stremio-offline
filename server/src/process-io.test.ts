@@ -3,12 +3,13 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { EventLoopDelay, ioDiagnostics, parseCgroup1Blkio, parseCgroup2IoStat, parseProcIo } from "./process-io.js";
+import { flushLog, initLogger, readLog } from "./logger.js";
+import { EventLoopDelay, toMs, ioDiagnostics, parseCgroup1Blkio, parseCgroup2IoStat, parseProcIo } from "./process-io.js";
 
 const procIo = (write: number, read = 10) => `rchar: 999\nwchar: 888\nsyscr: 5\nsyscw: 7\nread_bytes: ${read}\nwrite_bytes: ${write}\ncancelled_write_bytes: 0\n`;
 
 test("parseProcIo takes the block-layer bytes, not the character counts", () => {
-  assert.deepEqual(parseProcIo(procIo(4096, 512)), { readBytes: 512, writeBytes: 4096, writeCalls: 7 });
+  assert.deepEqual(parseProcIo(procIo(4096, 512)), { readBytes: 512, writeBytes: 4096 });
   assert.equal(parseProcIo("rchar: 1\n"), undefined);
 });
 
@@ -42,7 +43,7 @@ test("ioDiagnostics reads the process, its running children and the container", 
   await writeFile(path.join(cgroup, "blkio", "blkio.throttle.io_service_bytes"), "8:0 Read 1\n8:0 Write 5000\n8:0 Total 5001\n");
 
   const io = await ioDiagnostics({ proc, cgroup, pid: 100 });
-  assert.deepEqual(io.process, { readBytes: 10, writeBytes: 1000, writeCalls: 7 });
+  assert.deepEqual(io.process, { readBytes: 10, writeBytes: 1000 });
   assert.deepEqual(io.children, { count: 2, readBytes: 20, writeBytes: 320 });
   assert.deepEqual(io.container, { readBytes: 1, writeBytes: 5000, source: "cgroup1" });
 
@@ -78,4 +79,40 @@ test("EventLoopDelay reports a blocked loop and starts over on reset", async () 
   } finally {
     delay.stop();
   }
+});
+
+test("a stall is logged at once, and the ones inside the quiet time in one line when it ends", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "process-io-log-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const previous = process.env.LOG_STDOUT;
+  process.env.LOG_STDOUT = "0";
+  t.after(() => { if (previous === undefined) delete process.env.LOG_STDOUT; else process.env.LOG_STDOUT = previous; });
+  await initLogger(dir);
+  const delay = new EventLoopDelay({ logStallsOverMs: 250, quietMs: 2_500 });
+  t.after(() => delay.stop());
+  const hold = (ms: number) => { const until = Date.now() + ms; while (Date.now() < until) { /* hold the thread */ } };
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  await wait(250);
+  hold(400);
+  await wait(250);
+  const before = Date.now();
+  hold(600);
+  await wait(250);
+  await flushLog();
+  const blocked = () => readLog({}).then((text) => text.split("\n").filter((line) => line.includes("The server was blocked")));
+  assert.equal((await blocked()).length, 1, "the second stall waits for the quiet time to end");
+  await wait(2_200);
+  await flushLog();
+  const lines = await blocked();
+  assert.equal(lines.length, 2, lines.join("\n"));
+  assert.match(lines[0]!, /"ms":(2\d\d|3\d\d|4\d\d)\}/);
+  assert.match(lines[1]!, /again \{"times":1,"longestMs":(4\d\d|5\d\d|6\d\d),"longestAt":"[^"]+"\}/);
+  const at = Date.parse(/"longestAt":"([^"]+)"/.exec(lines[1]!)![1]!);
+  assert.ok(at >= before && at <= before + 900, "the summary names when the longest stall happened, not when it was written");
+});
+
+test("figures are rounded to a tenth of a millisecond, less the sampling interval", () => {
+  assert.equal(toMs(20_345_678), 0.3);
+  assert.equal(toMs(1_073_210_000), 1053.2);
+  assert.equal(toMs(5_000_000), 0);
 });

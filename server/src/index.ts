@@ -3210,7 +3210,7 @@ const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }
 };
-registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR, eventLoop: new EventLoopDelay() });
+registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR, eventLoop: new EventLoopDelay({ logStallsOverMs: 500 }) });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, invalidateLibraryMeta, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache, publicAddonView });
 const introSegments = new IntroSegmentsCache();
 registerIntroSegmentRoutes(app, { ...routeContext, introSegments });

@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
-import { monitorEventLoopDelay } from "node:perf_hooks";
+import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { log } from "./logger.js";
 
 /** Bytes read and written since a counter started, as the kernel accounts them. */
 export interface IoCounters {
@@ -11,7 +12,7 @@ export interface IoDiagnostics {
   /** The server process (Linux `/proc/self/io`): what reached the storage layer. A finished
    *  FFmpeg run is added here when the server reaps it, so `process` + `children` is the total
    *  that only grows, and the figure to compare between two reads. */
-  process?: IoCounters & { writeCalls: number };
+  process?: IoCounters;
   /** FFmpeg and other children still running; a finished run moves over to `process`. */
   children?: IoCounters & { count: number };
   /** The whole container, summed over its devices (cgroup v2 `io.stat`, v1 `blkio`). On cgroup
@@ -31,7 +32,7 @@ export interface EventLoopDiagnostics {
 
 /** `/proc/<pid>/io`. `write_bytes` is what the process handed to the block layer, which is the
  *  number a NAS disk cares about; `wchar` would also count sockets and pipes. */
-export function parseProcIo(text: string): (IoCounters & { writeCalls: number }) | undefined {
+export function parseProcIo(text: string): IoCounters | undefined {
   const fields = new Map<string, number>();
   for (const line of text.split("\n")) {
     const match = /^(\w+):\s*(\d+)$/.exec(line.trim());
@@ -40,7 +41,9 @@ export function parseProcIo(text: string): (IoCounters & { writeCalls: number })
   const readBytes = fields.get("read_bytes");
   const writeBytes = fields.get("write_bytes");
   if (readBytes === undefined || writeBytes === undefined) return undefined;
-  return { readBytes, writeBytes, writeCalls: fields.get("syscw") ?? 0 };
+  // `syscw` is left out on purpose: it counts every write call, a socket's too, so on a server
+  // that streams video it reads as a flood of small disk writes that never happened.
+  return { readBytes, writeBytes };
 }
 
 /** cgroup v2 `io.stat`: one line per device, `rbytes=` and `wbytes=` among the keys. */
@@ -133,16 +136,59 @@ export async function ioDiagnostics(options: { proc?: string; cgroup?: string; p
 
 const RESOLUTION_MS = 20;
 /** The histogram counts its own sampling interval as delay; an idle server reads 0, not 20. */
-const toMs = (nanoseconds: number) => Math.max(0, Math.round(nanoseconds / 1e5) / 10 - RESOLUTION_MS);
+export const toMs = (nanoseconds: number) => Math.max(0, Math.round(nanoseconds / 1e5 - RESOLUTION_MS * 10) / 10);
+
+/** How often the stall watch looks at the clock, and how seldom it may write to the log: a NAS
+ *  that keeps stalling must not also keep writing the log. Stalls inside the quiet time are
+ *  counted and reported with the next line. */
+const STALL_TICK_MS = 100;
+const STALL_LOG_QUIET_MS = 10_000;
 
 /** How late the server answers timers: a long wait means something held the one JavaScript
  *  thread (a big sort, a synchronous read) and every request waited with it. */
 export class EventLoopDelay {
   private histogram = monitorEventLoopDelay({ resolution: RESOLUTION_MS });
   private since = new Date();
+  private watch?: NodeJS.Timeout;
 
-  constructor() {
+  /** `logStallsOverMs` writes a WARN line, with its time, whenever the thread was held about
+   *  that long: the lines around it in the log tell what the server was doing. At most one line
+   *  per quiet time; stalls inside it are summed up in one line as soon as it ends, with the time
+   *  of the longest. A paused container or a NAS that gave the process no CPU reads the same as
+   *  blocked JavaScript. Only the server's own monitor sets it. */
+  constructor(options: { logStallsOverMs?: number; quietMs?: number } = {}) {
     this.histogram.enable();
+    const threshold = options.logStallsOverMs;
+    if (!threshold) return;
+    const quietMs = options.quietMs ?? STALL_LOG_QUIET_MS;
+    let last = performance.now();
+    let quietUntil = 0;
+    let held = 0;
+    let longest = 0;
+    let longestAt = "";
+    this.watch = setInterval(() => {
+      const at = performance.now();
+      // A stall that began partway through a tick is measured up to one tick short, so the
+      // line stands for "about the threshold or more", never for a stall that was missed.
+      const stalled = at - last - STALL_TICK_MS;
+      last = at;
+      if (stalled >= threshold - STALL_TICK_MS) {
+        if (at >= quietUntil && !held) {
+          log("WARN", "The server was blocked or not scheduled", { ms: Math.round(stalled) });
+          quietUntil = at + quietMs;
+          return;
+        }
+        held += 1;
+        if (stalled > longest) { longest = stalled; longestAt = new Date().toISOString(); }
+      }
+      if (held && at >= quietUntil) {
+        log("WARN", "The server was blocked or not scheduled again", { times: held, longestMs: Math.round(longest), longestAt });
+        quietUntil = at + quietMs;
+        held = 0;
+        longest = 0;
+      }
+    }, STALL_TICK_MS);
+    this.watch.unref();
   }
 
   snapshot(): EventLoopDiagnostics {
@@ -163,5 +209,6 @@ export class EventLoopDelay {
 
   stop(): void {
     this.histogram.disable();
+    clearInterval(this.watch);
   }
 }
