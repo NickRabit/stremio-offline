@@ -24,6 +24,7 @@ import { mediaResources } from "../media-resources.js";
 import { outbound } from "../outbound.js";
 import { configureSecureMode } from "../secure.js";
 import { setFetchTransport } from "../security.js";
+import { CatalogPageCache } from "../catalog-page-cache.js";
 import { clearTitleExtrasCache } from "../title-extras.js";
 import { clearTmdbCache, tmdbMeta } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
@@ -75,6 +76,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   tmdbApiKey?: string;
   externalIds?: ExternalIdStore;
   imageProxy?: ImageProxy;
+  catalogPages?: CatalogPageCache;
   prefs?: Partial<UserPrefs>;
   profiles?: readonly StoredSourceProfile[];
   remoteLibraries?: ReturnType<Store["remoteLibraries"]>;
@@ -104,6 +106,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     stopUserSessions: async () => undefined,
+    ...(options.catalogPages ? { catalogPages: options.catalogPages } : {}),
     requireAccess: options.access ?? (() => undefined),
     stopContentAccess: async () => undefined,
     tmdbProvider: () => undefined,
@@ -2582,4 +2585,75 @@ test("an administrator's own stored order is not applied to what they are shown"
     const items = await (await api(harness.base, "/api/streams/movie/tt1")).json() as Array<{ addonKey: string }>;
     assert.deepEqual(items.map((item) => item.addonKey), ["first", "second"]);
   });
+});
+
+test("GET /api/catalog answers a page it already fetched from memory, but never a search or a failure", async (t) => {
+  const records = [addon("pages", [{ type: "movie", id: "top", extra: [{ name: "skip" }, { name: "search" }] }])];
+  const harness = await mount(records);
+  t.after(harness.close);
+  const asked: string[] = [];
+  let failNext = false;
+  let empty = false;
+  await withStubbedAddons((raw) => {
+    asked.push(new URL(raw).pathname);
+    if (failNext) { failNext = false; return new Response("down", { status: 503 }); }
+    if (empty) return json({ metas: [] });
+    return json({ metas: [{ id: "tt1", type: "movie", name: "Dune" }] });
+  }, async () => {
+    const page = async (query: string) => api(harness.base, `/api/catalog?addon=pages&type=movie&id=top${query}`);
+    assert.equal((await page("")).status, 200);
+    assert.equal((await page("&skip=100")).status, 200);
+    const back = await page("");
+    assert.equal(back.status, 200);
+    assert.deepEqual((await back.json() as Array<{ id: string }>).map((item) => item.id), ["tt1"]);
+    assert.equal(asked.length, 2, "paging back to the first page asks the addon nothing");
+
+    await page("&search=dune");
+    await page("&search=dune");
+    assert.equal(asked.length, 4, "a search is asked every time");
+
+    failNext = true;
+    assert.notEqual((await page("&skip=200")).status, 200);
+    assert.equal((await page("&skip=200")).status, 200, "a failure is not remembered");
+    assert.equal(asked.length, 6);
+
+    empty = true;
+    await page("&skip=300");
+    empty = false;
+    await page("&skip=300");
+    assert.equal(asked.length, 8, "an empty page is asked again");
+  });
+});
+
+test("GET /api/catalog does not keep a page it could not read through", async (t) => {
+  const records = [addon("pages", [{ type: "movie", id: "top" }])];
+  const harness = await mount(records);
+  t.after(harness.close);
+  let broken = true;
+  await withStubbedAddons(() => {
+    if (broken) { broken = false; return json({ metas: [null] }); }
+    return json({ metas: [{ id: "tt1", type: "movie", name: "Dune" }] });
+  }, async () => {
+    const first = await api(harness.base, "/api/catalog?addon=pages&type=movie&id=top");
+    assert.notEqual(first.status, 200, "a malformed answer fails");
+    const second = await api(harness.base, "/api/catalog?addon=pages&type=movie&id=top");
+    assert.equal(second.status, 200, "the next request asks the addon again and gets the good page");
+    assert.deepEqual((await second.json() as Array<{ id: string }>).map((item) => item.id), ["tt1"]);
+  });
+});
+
+test("GET /api/catalog still checks access when the page comes from memory", async (t) => {
+  const records = [addon("private", [{ type: "movie", id: "top" }], { allowedUsers: [] })];
+  // One cache for both, as in the server: the administrator's page is in memory when the user asks.
+  const catalogPages = new CatalogPageCache();
+  const admin = await mount(records, null, { catalogPages });
+  t.after(admin.close);
+  await withStubbedAddons(() => json({ metas: [{ id: "tt1", type: "movie", name: "Dune" }] }), async () => {
+    assert.equal((await api(admin.base, "/api/catalog?addon=private&type=movie&id=top")).status, 200);
+  });
+  assert.equal(catalogPages.size, 1);
+  const user = await mount(records, null, { viewer: alice, catalogPages });
+  t.after(user.close);
+  const refused = await api(user.base, "/api/catalog?addon=private&type=movie&id=top");
+  assert.equal(refused.status, 400, "a user the addon is not shared with is refused, cached page or not");
 });
