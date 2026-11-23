@@ -139,7 +139,7 @@ test("a segmented plan is persisted before the part file is allocated", async ()
   }
 });
 
-test("a full disk during a segmented download pauses for storage even while the source goes quiet", async () => {
+async function assertSegmentStoragePause(failure: "ENOSPC" | "zero bytes") {
   const GiB = 1024 ** 3;
   // The source sends a little of every segment and then nothing: a write error that waited for
   // the next network chunk would only surface when the stall watchdog fires, and a stall is
@@ -160,8 +160,9 @@ test("a full disk during a segmented download pauses for storage even while the 
   const original = proto.write;
   proto.write = function (this: unknown, ...args: unknown[]) {
     // Only the positioned writes of a segment fail; anything else the queue writes goes through.
-    if (typeof args[3] === "number") return Promise.reject(Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }));
-    return original.apply(this, args);
+    if (typeof args[3] !== "number") return original.apply(this, args);
+    if (failure === "zero bytes") return Promise.resolve({ bytesWritten: 0 });
+    return Promise.reject(Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }));
   };
   const { directory, queue } = await tempQueue({
     segments: () => 2,
@@ -175,7 +176,8 @@ test("a full disk during a segmented download pauses for storage even while the 
     await waitFor(queue, () => queue.haltInfo()?.reason === "storage" || queue.list()[0].status === "failed", 10_000);
     const job = queue.list()[0];
     assert.equal(queue.haltInfo()?.reason, "storage", `${job.status} ${job.error ?? ""} after ${job.retryCount} retries`);
-    assert.ok(job.received < SEGMENTED_TOTAL);
+    assert.equal(job.retryCount ?? 0, 0);
+    assert.equal(job.received, 0);
     assert.equal(job.status, "paused");
     assert.equal(job.pauseReason, "storage");
   } finally {
@@ -183,4 +185,10 @@ test("a full disk during a segmented download pauses for storage even while the 
     await queue.stop(); server.closeAllConnections(); server.close();
     await rm(directory, { recursive: true, force: true });
   }
-});
+}
+
+test("a full disk during a segmented download pauses for storage even while the source goes quiet", () =>
+  assertSegmentStoragePause("ENOSPC"));
+
+test("a zero-byte segment write pauses for storage even while the source goes quiet", () =>
+  assertSegmentStoragePause("zero bytes"));

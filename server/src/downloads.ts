@@ -3819,7 +3819,7 @@ export class DownloadQueue {
       let done = 0;
       while (done < block.length) {
         const { bytesWritten } = await handle.write(block, done, block.length - done, at + done);
-        if (bytesWritten <= 0) throw new Error("The disk accepted no bytes.");
+        if (bytesWritten <= 0) throw new StorageError("The disk accepted no bytes.");
         done += bytesWritten;
       }
     };
