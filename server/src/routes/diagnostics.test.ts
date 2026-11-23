@@ -240,3 +240,13 @@ test("POST /api/client-log/bundle allows six bundles an hour per account", async
   assert.equal((await refused.json() as { messageKey?: string }).messageKey, "err.clientLogTooMany");
   assert.equal((await (await api(harness.base, "/api/client-logs")).json() as unknown[]).length, 6, "the seventh is not stored");
 });
+
+test("GET /api/diagnostics reports the event-loop delay and resets it on request", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const body = await (await api(harness.base, "/api/diagnostics?reset=1")).json() as { eventLoop: { since: string; p99Ms: number; maxMs: number }; io: object };
+  assert.equal(typeof body.eventLoop.maxMs, "number");
+  assert.equal(typeof body.io, "object");
+  const next = await (await api(harness.base, "/api/diagnostics")).json() as { eventLoop: { since: string } };
+  assert.ok(Date.parse(next.eventLoop.since) >= Date.parse(body.eventLoop.since), "the window restarted at the first read");
+});
