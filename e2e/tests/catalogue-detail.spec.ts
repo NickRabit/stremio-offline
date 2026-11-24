@@ -40,6 +40,37 @@ test("a show played from the full detail carries its own episode and plays the n
   await expect(main.locator(".episode-current")).toContainText("Druhý díl");
 });
 
+test("the player's save arrow opens the destination dialog above the playing film", async ({ page }) => {
+  await openCatalogue(page, /Filmy/);
+  await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await info(page).click();
+  const main = page.locator("main.view-title-detail");
+  await main.getByRole("button", { name: "Přehrát", exact: true }).click();
+  const player = page.locator(".player-overlay");
+  await expect(player).toBeVisible();
+  if (!await player.locator("#player-settings").isVisible()) await player.locator(".player-settings-toggle").click();
+
+  await player.locator("#player-settings").screenshot({ path: test.info().outputPath("player-save-split.png") });
+  const posts: string[] = [];
+  page.on("request", (request) => { if (request.method() === "POST" && new URL(request.url()).pathname === "/api/downloads") posts.push(request.url()); });
+  await player.locator(".player-save-split").getByRole("button", { name: "Uložit jinam…" }).click();
+  const dialog = page.locator('[role="dialog"][aria-labelledby="bulk-dialog-title"]');
+  await expect(dialog).toBeVisible();
+  // The dialog is what a click in its middle reaches, not the player drawn behind it.
+  const topmost = await dialog.locator(".bulk-card").evaluate((card) => {
+    const box = card.getBoundingClientRect();
+    return card.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+  });
+  expect(topmost).toBe(true);
+  await page.screenshot({ path: test.info().outputPath("player-save-dialog.png") });
+
+  // Keys typed in the dialog belong to it: Escape closes the dialog and leaves the film playing.
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(player).toBeVisible();
+  expect(posts).toEqual([]);
+});
+
 test("the next episode's sources are read again when the episode ran longer than they last", async ({ page }) => {
   // The server forgets a listed source after 30 minutes, about one episode. A list read when the
   // episode started is no longer playable when it ends, so the player has to ask again before it

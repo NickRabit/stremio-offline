@@ -672,6 +672,105 @@ describe("Player save actions", () => {
     expect(action("To device")).toBeNull();
   });
 
+  it("splits the library save into queue and destination halves", async () => {
+    const onDownload = vi.fn(async () => true);
+    const onSaveElsewhere = vi.fn();
+    await render({ stream: addonRow(), onDownload, onSaveElsewhere });
+    await openSettings();
+
+    const split = host.querySelector(".player-save-split");
+    expect(split).not.toBeNull();
+    const main = split!.querySelector<HTMLButtonElement>("button.player-action");
+    const toggle = split!.querySelector<HTMLButtonElement>("button.split-button-toggle");
+    expect(main?.textContent).toContain("To library");
+    expect(toggle?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(toggle?.getAttribute("aria-label")).toBe("Save to another place…");
+
+    await click(toggle!);
+    expect(onSaveElsewhere).toHaveBeenCalledTimes(1);
+    expect(onDownload).not.toHaveBeenCalled();
+    await click(main!);
+    expect(onDownload).toHaveBeenCalledTimes(1);
+    expect(onSaveElsewhere).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the single library button without a destination handler", async () => {
+    await render({ stream: addonRow() });
+    await openSettings();
+
+    expect(host.querySelector(".player-save-split")).toBeNull();
+    expect(host.querySelector(".split-button-toggle")).toBeNull();
+    expect(action("To library")).not.toBeNull();
+  });
+
+  it("keeps the child account's library action unsplit", async () => {
+    await render({ stream: addonRow(), onSaveElsewhere: vi.fn() }, true);
+    await openSettings();
+
+    expect(host.querySelector(".player-save-split")).toBeNull();
+    expect(host.querySelector(".split-button-toggle")).toBeNull();
+  });
+
+  it("leaves player fullscreen before opening the destination dialog", async () => {
+    const calls: string[] = [];
+    const onSaveElsewhere = vi.fn(() => { calls.push("dialog"); });
+    await render({ stream: addonRow(), onSaveElsewhere });
+    await openSettings();
+    const fullscreenDescriptor = Object.getOwnPropertyDescriptor(document, "fullscreenElement");
+    const exitDescriptor = Object.getOwnPropertyDescriptor(document, "exitFullscreen");
+    try {
+      Object.defineProperty(document, "fullscreenElement", {
+        configurable: true,
+        get: () => host.querySelector(".player-overlay"),
+      });
+      Object.defineProperty(document, "exitFullscreen", {
+        configurable: true,
+        value: vi.fn(async () => { calls.push("fullscreen"); }),
+      });
+
+      await click(host.querySelector(".split-button-toggle")!);
+
+      expect(calls).toEqual(["fullscreen", "dialog"]);
+      expect(onSaveElsewhere).toHaveBeenCalledTimes(1);
+    } finally {
+      if (fullscreenDescriptor) Object.defineProperty(document, "fullscreenElement", fullscreenDescriptor);
+      else Reflect.deleteProperty(document, "fullscreenElement");
+      if (exitDescriptor) Object.defineProperty(document, "exitFullscreen", exitDescriptor);
+      else Reflect.deleteProperty(document, "exitFullscreen");
+    }
+  });
+
+  it("leaves playback shortcuts to a modal opened outside the player", async () => {
+    const value = await render({ stream: addonRow() });
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockClear();
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockClear();
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    const ok = document.createElement("button");
+    ok.textContent = "ok";
+    dialog.appendChild(ok);
+    document.body.appendChild(dialog);
+    try {
+      await act(async () => {
+        ok.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+        ok.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      expect(play).not.toHaveBeenCalled();
+      expect(pause).not.toHaveBeenCalled();
+      expect(value.onClose).not.toHaveBeenCalled();
+
+      await act(async () => {
+        document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      expect(value.onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      dialog.remove();
+      play.mockRestore();
+      pause.mockRestore();
+    }
+  });
+
   it("offers the library save for a media server's version only where the server proved the right", async () => {
     const proved = await render({ stream: remoteVersion({ capabilities: rights({ downloadToLibrary: true }) }) });
     await openSettings();

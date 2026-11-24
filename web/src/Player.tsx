@@ -1,7 +1,7 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
 import type Hls from "hls.js";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
+import { AudioLines, Captions, CaptionsOff, Check, ChevronDown, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, guardChildRequest, subtitleUrl } from "./api";
 import { useChildMode } from "./child-mode";
 import { hlsIfLoaded, loadHls } from "./hls-loader";
@@ -44,7 +44,7 @@ export interface PlayerSources {
   onSwitch: (stream: Stream, positionSeconds: number) => Promise<void> | void;
 }
 
-interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void; upNextAt?: UpNextAt; skipSegmentsAuto?: boolean; shuffle?: boolean;
+interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onSaveElsewhere?: () => void; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void; upNextAt?: UpNextAt; skipSegmentsAuto?: boolean; shuffle?: boolean;
   /** The catalogue title on screen (`series:tt…:1:2`) when the progress key names a library file instead. */
   catalogueKey?: string;
   /** The playing title's sources; absent for a place that offers none at all. */
@@ -281,7 +281,7 @@ const SKIP_KEY: Record<SegmentKind, Key> = {
   outro: "player.skipOutro",
 };
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, shuffle = false, catalogueKey }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onSaveElsewhere, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, shuffle = false, catalogueKey }: Props) {
   const { child } = useChildMode();
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
@@ -1795,6 +1795,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (target instanceof Element && !overlayRef.current?.contains(target) && target.closest('[aria-modal="true"]')) return;
       keyboardControlsRef.current = true;
       if (event.target instanceof HTMLSelectElement) return;
       if (event.target instanceof HTMLInputElement && event.target.type !== "range") return;
@@ -1821,6 +1823,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   }, [open, time, duration, browserFullscreen, settingsOpen]);
 
   if (!open) return null;
+  const toLibraryAction = <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title={t("save.toLibraryHint")} aria-label={t("save.toLibraryHint")}>
+    {downloadState === "done" ? <><Check /> <span>{t("save.queued")}</span></> : <><HardDrive /> <span>{downloadState === "busy" ? t("save.adding") : t("save.toLibrary")}</span></>}
+  </button>;
   const position = scrub ?? time;
   const seekable = duration || Math.max(time, 1);
   const badges = playingBadges(session?.playing);
@@ -2054,9 +2059,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         </button>)}
       </div>}
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}
-      {!isLocal && canSaveToLibrary && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title={t("save.toLibraryHint")} aria-label={t("save.toLibraryHint")}>
-        {downloadState === "done" ? <><Check /> <span>{t("save.queued")}</span></> : <><HardDrive /> <span>{downloadState === "busy" ? t("save.adding") : t("save.toLibrary")}</span></>}
-      </button>}
+      {!isLocal && canSaveToLibrary && (onSaveElsewhere ? <div className="split-button player-save-split">
+        {toLibraryAction}
+        <button type="button" className="player-action split-button-toggle" disabled={downloadState === "busy"} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={async () => {
+          if (playerIsFullscreen(overlayRef.current)) await exitPlayerFullscreen();
+          onSaveElsewhere();
+        }}><ChevronDown /></button>
+      </div> : toLibraryAction)}
       {canSaveToDevice && <button className="player-action" disabled={deviceDownloadBusy} onClick={() => void downloadToDevice()} title={t("save.toDeviceHint")} aria-label={t("save.toDeviceHint")}>
         <Download /> <span>{deviceDownloadBusy ? t("save.preparing") : t("save.toDevice")}</span>
       </button>}

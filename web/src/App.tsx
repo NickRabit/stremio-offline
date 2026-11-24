@@ -2694,6 +2694,9 @@ export function App() {
       : { kind: "movie", title: baseDownloadTitle, ...(movieYear ? { year: movieYear } : {}), id: selected?.id, metaType: selected?.type, ...art };
   };
   const canPlay = catalogPlaybackChoice(selectedStream, sourceRows) !== null;
+  const canOpenSingleDownload = Boolean(selected && selectedStream
+    && (selected.type === "movie" || selected.type === "series")
+    && (selected.type !== "series" || (selectedVideo?.id != null && String(selectedVideo.id).trim() !== "")));
   const canSaveToDevice = Boolean(selectedStream?.playable);
   /** When the picked source is a library copy, its path drives Play, To device and Show in library. */
   const selectedLocalPath = selectedStream && isLocalStream(selectedStream) ? selectedStream.localPath : undefined;
@@ -4255,6 +4258,7 @@ export function App() {
       fromBeginning={localStream ? localFromBeginning : detailPlaying?.fromBeginning}
       onToggleFavorite={localStream?.localPath || detailPlaying || (playerSubject?.panel && selected) ? () => void togglePlayerFavorite() : undefined}
       onDownload={detailPlaying ? () => queueCatalogueStream(detailPlaying.target, detailPlaying.stream) : enqueue}
+      onSaveElsewhere={detailPlaying ? () => openCatalogueDownload(detailPlaying.target, detailPlaying.stream, true) : canOpenSingleDownload ? () => { openSingleDownload(); } : undefined}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : detailPlaying ? downloadCatalogueStream(detailPlaying.target, detailPlaying.stream) : downloadStreamToDevice()}
       // The title's sources are offered on every play, a file with no catalogue identity
       // included: its own row leads, and the groups of whatever title it is bound to follow.
@@ -4297,6 +4301,7 @@ export function App() {
         openAlternativeSave({ stream: alternative.stream, title: alternative.title, media: alternative.media, kind: alternative.kind });
         return false;
       }}
+      onSaveElsewhere={() => openAlternativeSave({ stream: alternative.stream, title: alternative.title, media: alternative.media, kind: alternative.kind, choose: true })}
       onDeviceDownload={async () => {
         // The device action is offered for this row wherever its own source allows it -- a copy of
         // another media server included, whose bytes the server fetches through its scoped
