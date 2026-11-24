@@ -40,7 +40,7 @@ describe("save split wiring", () => {
   it("hands the selected source to the rules as the exact first choice", () => {
     const single = between(app, "const openSingleDownload =", "const primarySave =");
     expect(single).toContain("exactSource: { stream: selectedStream");
-    expect(single).toContain("preferred: pickedRef.current");
+    expect(single).toContain("preferred: playing || pickedRef.current");
 
     const catalogue = between(app, "const openCatalogueDownload =", "const queueCatalogueStream =");
     expect(catalogue).toContain("exactSource: { stream, label: streamLabel(stream), preferred }");
@@ -56,6 +56,15 @@ describe("save split wiring", () => {
     );
     expect(compact(app)).toContain(
       "onCatalogueDownload={(stream,detail)=>openCatalogueDownload(detail,stream,false)}",
+    );
+  });
+
+  it("offers the player's arrow only where the dialog can name the title, with the playing source first", () => {
+    expect(compact(app)).toContain(
+      "onSaveElsewhere={detailPlaying?catalogueSaveNamesTitle(detailPlaying.target)?()=>openCatalogueDownload(detailPlaying.target,detailPlaying.stream,true):undefined:canOpenSingleDownload?()=>{openSingleDownload(true);}:undefined}",
+    );
+    expect(compact(between(app, "{alternativeSave && <SaveTargetDialog", "onSubmit={submitAlternativeSave}"))).toContain(
+      "{...(alternativeSave.season!==undefined?{season:alternativeSave.season}:{})}",
     );
   });
 });

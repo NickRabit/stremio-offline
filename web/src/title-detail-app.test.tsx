@@ -906,6 +906,11 @@ describe("title detail from the catalogue", () => {
     await until(() => downloadPosts.length === 1);
     expect(downloadPosts[0]).toEqual(expect.objectContaining({ sourceId: "episode-2" }));
     expect(downloadPosts[0]!.media).toMatchObject({ kind: "episode", season: 1, episode: 2 });
+    const downloadsBeforeToggle = downloadPosts.length;
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-save-split .split-button-toggle")!.click(); });
+    await until(() => host.querySelector('[role="dialog"][aria-labelledby="bulk-dialog-title"]') !== null);
+    expect(host.querySelector(".player-overlay")).not.toBeNull();
+    expect(downloadPosts).toHaveLength(downloadsBeforeToggle);
 
     const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
     await act(async () => {

@@ -15,11 +15,14 @@ export interface AlternativeSave {
   /** A native copy whose server projected no destination: the viewer picks one themselves, and the
    *  server re-resolves and re-admits whatever is picked. */
   ruleUnavailable: boolean;
+  /** An episode's season, so a structured destination shows the season folder the server adds. */
+  season?: number;
 }
 
 /** The copy one row is saved as: always the exact source that was clicked, with the destination
  *  only that source projects -- never another version's, and never an invented one. */
 export function alternativeSaveRequest(title: string, stream: Stream, media: Record<string, unknown>, kind: "movie" | "series"): AlternativeSave {
   const rule = stream.remoteItem ? sourceTargetRule(stream) : undefined;
-  return { title, kind, stream, media, ...(rule ? { rule } : {}), ruleUnavailable: isRemoteStream(stream) && rule === undefined };
+  const season = kind === "series" && typeof media.season === "number" ? media.season : undefined;
+  return { title, kind, stream, media, ...(rule ? { rule } : {}), ruleUnavailable: isRemoteStream(stream) && rule === undefined, ...(season !== undefined ? { season } : {}) };
 }

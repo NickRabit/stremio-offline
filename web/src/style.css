@@ -874,6 +874,9 @@ html.dialog-locked,html.dialog-locked body{overflow:hidden;overscroll-behavior:n
 .player-settings .track-picker select{flex:1;min-width:0;max-width:none;min-height:44px;font-size:12px}
 .player-settings .codec-badge{margin:0}
 .player-settings .player-action{justify-content:flex-start;gap:10px}
+.player-settings .player-save-split{width:100%;min-width:0}
+.player-settings .player-save-split>button{white-space:nowrap}
+@media(max-width:700px){.player-settings .player-save-split>button:first-child>svg{display:block}}
 /* The player's source list is the detail dialog's own row template. The panel's button shape
    (inline-flex, centred, fixed width) would flatten it, so the row is restored to its grid and
    carries the panel's dark surface. The list scrolls inside the panel, which keeps its heading. */
