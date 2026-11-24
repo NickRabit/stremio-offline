@@ -40,18 +40,23 @@ test("a show played from the full detail carries its own episode and plays the n
   await expect(main.locator(".episode-current")).toContainText("Druhý díl");
 });
 
-test("the player's save arrow opens the destination dialog above the playing film", async ({ page }) => {
-  await openCatalogue(page, /Filmy/);
-  await page.getByRole("button", { name: /Zkušební film/ }).click();
+test("the player's save arrow opens the destination dialog above the playing episode", async ({ page }) => {
+  await openCatalogue(page, /Seriály/);
+  await page.getByRole("button", { name: /Zkušební seriál/ }).click();
+  await page.locator(".detail-panel").getByRole("button", { name: /První díl/ }).click();
+  // The addon's own row: a library copy plays as a file, which has no library save at all.
+  await page.locator(".detail-panel .stream-list").getByRole("button", { name: /E2E 1080p/ }).click();
   await info(page).click();
   const main = page.locator("main.view-title-detail");
   await main.getByRole("button", { name: "Přehrát", exact: true }).click();
   const player = page.locator(".player-overlay");
-  await expect(player).toBeVisible();
-  // The session settles first and the film is held, so the controls stay on screen for the clicks.
-  const video = player.locator("video");
-  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.readyState)).toBeGreaterThan(0);
-  await video.evaluate((element: HTMLVideoElement) => element.pause());
+  await expect(player.locator(".player-head strong")).toHaveText("Zkušební seriál · 01×01");
+  // The sample is a few seconds long: slowed down and held, it stays on screen with its controls.
+  await player.locator("video").evaluate((video: HTMLVideoElement) => {
+    video.defaultPlaybackRate = 0.1;
+    video.playbackRate = 0.1;
+    video.pause();
+  });
   await player.dispatchEvent("pointermove");
   if (!await player.locator("#player-settings").isVisible()) await player.locator(".player-settings-toggle").dispatchEvent("click");
   await expect(player.locator("#player-settings")).toBeVisible();
@@ -70,7 +75,7 @@ test("the player's save arrow opens the destination dialog above the playing fil
   expect(topmost).toBe(true);
   await page.screenshot({ path: test.info().outputPath("player-save-dialog.png") });
 
-  // Keys typed in the dialog belong to it: Escape closes the dialog and leaves the film playing.
+  // Keys typed in the dialog belong to it: Escape closes the dialog and leaves the player open.
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(player).toBeVisible();
