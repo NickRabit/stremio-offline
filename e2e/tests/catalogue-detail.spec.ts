@@ -48,7 +48,13 @@ test("the player's save arrow opens the destination dialog above the playing fil
   await main.getByRole("button", { name: "Přehrát", exact: true }).click();
   const player = page.locator(".player-overlay");
   await expect(player).toBeVisible();
-  if (!await player.locator("#player-settings").isVisible()) await player.locator(".player-settings-toggle").click();
+  // The session settles first and the film is held, so the controls stay on screen for the clicks.
+  const video = player.locator("video");
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.readyState)).toBeGreaterThan(0);
+  await video.evaluate((element: HTMLVideoElement) => element.pause());
+  await player.dispatchEvent("pointermove");
+  if (!await player.locator("#player-settings").isVisible()) await player.locator(".player-settings-toggle").dispatchEvent("click");
+  await expect(player.locator("#player-settings")).toBeVisible();
 
   await player.locator("#player-settings").screenshot({ path: test.info().outputPath("player-save-split.png") });
   const posts: string[] = [];
