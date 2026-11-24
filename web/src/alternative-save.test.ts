@@ -38,4 +38,10 @@ describe("alternativeSaveRequest", () => {
     expect(request.ruleUnavailable).toBe(false);
     expect(request.kind).toBe("movie");
   });
+
+  it("carries an episode's season for the season folder of a structured destination", () => {
+    const row = stream({ addonKey: "alpha" });
+    expect(alternativeSaveRequest("Show", row, { kind: "episode", title: "Show", season: 2, episode: 3 }, "series").season).toBe(2);
+    expect(alternativeSaveRequest("One", row, media, "movie").season).toBeUndefined();
+  });
 });

@@ -46,7 +46,8 @@ import { freshPrefetch, NEXT_PREFETCH_FRESH_MS } from "./next-prefetch";
 import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
 import { panelProgressAddonKey } from "./player-progress";
-import { alternativeSaveRequest } from "./alternative-save";
+import { alternativeSaveRequest, type AlternativeSave } from "./alternative-save";
+import { catalogueSaveNamesTitle } from "./catalogue-save";
 import { sourceIdentity } from "./library-detail-sources";
 import { parseSearchScope } from "./search-scope";
 import { SearchScopeOptions } from "./SearchScopeOptions";
@@ -911,7 +912,7 @@ export function App() {
   if (alternativeScopeRef.current.key !== alternativeScope) {
     alternativeScopeRef.current = { key: alternativeScope, generation: alternativeScopeRef.current.generation + 1 };
   }
-  const [alternativeSave, setAlternativeSave] = useState<{ title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; rule?: AddonDownloadSettings; ruleUnavailable?: boolean } | null>(null);
+  const [alternativeSave, setAlternativeSave] = useState<AlternativeSave | null>(null);
   const defaultStreamSort = useMemo(() => resolveStreamSort(settings.streamSort, sourceProfiles), [settings.streamSort, sourceProfiles]);
   const defaultRuleId = sortRuleId(defaultStreamSort);
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamOrder>("recommended");
@@ -2738,7 +2739,9 @@ export function App() {
       await loadDownloads(); return true;
     } catch (e) { fail(e); return false; }
   };
-  const openSingleDownload = () => {
+  /** `playing` comes from the player: the row on screen is what the viewer means, whatever the
+   *  dialog remembers from an earlier save. */
+  const openSingleDownload = (playing = false) => {
     if (!selected || !selectedStream || (selected.type !== "movie" && selected.type !== "series")) return false;
     if (selected.type === "series" && (!selectedVideo || selectedVideo.id == null || String(selectedVideo.id).trim() === "")) return false;
     const episodeId = selectedVideo
@@ -2762,7 +2765,7 @@ export function App() {
         ? { id: selected.id }
         : { id: episodeId!, season: selectedVideo!.season, episode: selectedVideo!.episode, title: selectedVideo!.title || selectedVideo!.name }],
       media: selectedMedia(),
-      exactSource: { stream: selectedStream, label: streamLabel(selectedStream), preferred: pickedRef.current },
+      exactSource: { stream: selectedStream, label: streamLabel(selectedStream), preferred: playing || pickedRef.current },
       detail,
     });
     return true;
@@ -3289,7 +3292,7 @@ export function App() {
         ...(detail.season != null ? { season: detail.season } : {}), ...(detail.episode != null ? { episode: detail.episode } : {}) };
   };
   const openCatalogueDownload = (detail: CatalogueDetailTarget, stream: Stream, preferred: boolean) => {
-    if (detail.type === "series" && (!detail.videoId || detail.season == null || detail.episode == null)) return;
+    if (!catalogueSaveNamesTitle(detail)) return;
     const media = { ...catalogueMedia(detail), ...(detail.poster ? { poster: detail.poster } : {}) };
     setBulkDownload({
       label: detail.episodeTitle ? `${detail.name} · ${detail.episodeTitle}` : detail.name,
@@ -4258,7 +4261,9 @@ export function App() {
       fromBeginning={localStream ? localFromBeginning : detailPlaying?.fromBeginning}
       onToggleFavorite={localStream?.localPath || detailPlaying || (playerSubject?.panel && selected) ? () => void togglePlayerFavorite() : undefined}
       onDownload={detailPlaying ? () => queueCatalogueStream(detailPlaying.target, detailPlaying.stream) : enqueue}
-      onSaveElsewhere={detailPlaying ? () => openCatalogueDownload(detailPlaying.target, detailPlaying.stream, true) : canOpenSingleDownload ? () => { openSingleDownload(); } : undefined}
+      onSaveElsewhere={detailPlaying
+        ? catalogueSaveNamesTitle(detailPlaying.target) ? () => openCatalogueDownload(detailPlaying.target, detailPlaying.stream, true) : undefined
+        : canOpenSingleDownload ? () => { openSingleDownload(true); } : undefined}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : detailPlaying ? downloadCatalogueStream(detailPlaying.target, detailPlaying.stream) : downloadStreamToDevice()}
       // The title's sources are offered on every play, a file with no catalogue identity
       // included: its own row leads, and the groups of whatever title it is bound to follow.
@@ -4338,6 +4343,7 @@ export function App() {
     {alternativeSave && <SaveTargetDialog
       label={alternativeSave.title} kind={alternativeSave.kind} title={alternativeSave.title}
       libraries={libraries}
+      {...(alternativeSave.season !== undefined ? { season: alternativeSave.season } : {})}
       rule={alternativeSave.rule ?? addons.find((addon) => addon.key === alternativeSave.stream.addonKey)?.downloadSettings}
       ruleUnavailable={alternativeSave.ruleUnavailable ?? false}
       onClose={() => setAlternativeSave(null)} onSubmit={submitAlternativeSave}/>}

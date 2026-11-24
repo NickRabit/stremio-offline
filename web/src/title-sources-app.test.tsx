@@ -65,6 +65,7 @@ let playbackStarts: Array<Record<string, unknown>>;
 let requestCounts: Map<string, number>;
 let gates: Map<string, Promise<void>>;
 let gateReleases: Array<() => void>;
+let sourceProfiles: unknown[];
 
 const hold = (pathAndQuery: string) => {
   const key = requestKey(pathAndQuery);
@@ -106,6 +107,7 @@ beforeEach(() => {
   requestCounts = new Map();
   gates = new Map();
   gateReleases = [];
+  sourceProfiles = [];
   vi.stubGlobal("matchMedia", () => ({
     matches: false, media: "", onchange: null,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -161,7 +163,7 @@ beforeEach(() => {
     if (path === "/api/follows/new-episodes") return json({ items: [] });
     if (path === "/api/search/state") return json({ saveHistory: false, liveSearch: false, defaultOrder: "source", recent: [] });
     if (path === "/api/search/preferences") return json({ liveSearch: false });
-    if (path === "/api/source-profiles") return json({ profiles: [] });
+    if (path === "/api/source-profiles") return json({ profiles: sourceProfiles });
     if (path === "/api/watchlist") return json([]);
     if (path === "/api/progress") return json([]);
     if (path === "/api/remote-libraries") return json({ libraries: [] });
@@ -400,5 +402,40 @@ describe("selected title sources", () => {
       && url.searchParams.get("addon") === "alpha");
     expect(alphaEpisodeTwo).toHaveLength(2);
     expect(playbackStarts[1]).toEqual(expect.objectContaining({ sourceId: "alpha-episode-2" }));
+  });
+
+  it("preselects the playing source in the player's save dialog after moving to the next episode", async () => {
+    catalogItems = [show];
+    streamSourcesReply = () => json([{ key: "alpha", name: "Alpha" }]);
+    addonStreamReply = (url) => {
+      const id = decodeURIComponent(url.pathname.slice("/api/streams/series/".length));
+      return json([seriesRow(id.endsWith(":2") ? 2 : 1, "alpha")]);
+    };
+    // An earlier save chose a rules profile; the player's arrow must not fall back to it.
+    sourceProfiles = [{
+      id: "balanced", nameKey: "rules.preset.balanced", template: "rules", revision: 1, operations: ["downloadToLibrary"],
+      policy: {
+        schemaVersion: 1, scope: { mode: "allAvailable" },
+        constraints: { sourceKinds: ["http"], audio: { mode: "preferred", preferred: { preference: "audio" } }, subtitles: { mode: "optional", preferred: { preference: "subtitle" } } },
+        criteria: [{ kind: "providerOrder", from: "viewer" }],
+        nextEpisode: "profile", existingLocalCopy: "meetsRequirements",
+      },
+    }];
+    localStorage.setItem("stremio-offline-single-download-choice", "balanced");
+
+    await openCatalog();
+    await playEpisode(1);
+    await act(async () => { host.querySelector<HTMLButtonElement>(".next-episode")!.click(); });
+    await until(() => playbackStarts.length === 2, "episode 2 playback");
+    expect(playbackStarts[1]).toEqual(expect.objectContaining({ sourceId: "alpha-episode-2" }));
+
+    if (!host.querySelector("#player-settings")) {
+      await act(async () => { host.querySelector<HTMLButtonElement>(".player-settings-toggle")!.click(); });
+    }
+    await act(async () => { host.querySelector<HTMLButtonElement>(".player-save-split .split-button-toggle")!.click(); });
+    await until(() => host.querySelector('input[name="download-rules"]') !== null, "save dialog rules");
+    await until(() => host.querySelector<HTMLInputElement>('input[name="download-rules"]:checked') !== null, "a checked rule");
+    expect(host.querySelector<HTMLInputElement>('input[name="download-rules"]:checked')!.value).toBe("exact-source");
+    expect(host.querySelector(".bulk-card")?.textContent).toContain("Alpha episode 2");
   });
 });
