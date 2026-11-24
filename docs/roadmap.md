@@ -9,7 +9,7 @@ needs VAAPI. See [Hardware acceleration](hardware-acceleration.md) for the setup
 
 ## Direction and delivery order
 
-Rechecked against `origin/main` at `b2d225e0` (0.7.95) on 2026-11-12.
+Rechecked against `origin/main` at `a5d0c601` (0.7.160) on 2026-11-24.
 The delivery order was set by the owner on 2026-10-30; shipped work has been
 removed from the remaining priorities without changing their relative order.
 The rows marked **Proposed** come from a comparison with Plex, Jellyfin, Emby,
@@ -193,31 +193,13 @@ faster, safer and more automatic.
 
 ### Family home and kids mode
 
-Add a deliberately simple child-facing mode on top of the existing account and
-library permissions:
-
-- large, obvious tiles and touch targets with very little text;
-- **Continue watching**, favourite shows and recently added episodes first;
-- hide administration, diagnostics, addon management and destructive library
-  actions;
-- allow a parent to choose which libraries and addons are visible and require a
-  parent-authenticated account switch to leave the child-facing UI; a PIN is
-  optional convenience only after its server-side policy is designed;
-- make repeated taps harmless and always show immediate feedback for actions
-  that take noticeable time.
-
-Switching between accounts on a signed-in device, with a PIN where the
-administrator wants one, shipped in 0.7.104: see
-[Switching profiles](users.md#switching-profiles). Kids mode builds on it.
-
-The design contract is [kids-mode-spec.md](kids-mode-spec.md). The MVP uses a
-dedicated restricted child account, with enforcement on the
-server as well as a simplified interface. Hiding buttons in an adult session is
-not a parental boundary. See [Family home and kids mode](roadmap-delivery-spec.md#family-home-and-kids-mode).
-
-The practical UX target is intentionally strict: a child who already knows the
-app should be able to open it, find a favourite show and start the intended
-episode without adult help, documentation or recovery through browser controls.
+Shipped in 0.7.108 on top of profile switching (0.7.104): a child account is a
+flag on an ordinary account, enforced by a second server allow-list, with its
+own small app on the web, the desktop apps and Android TV. See
+[Child accounts](users.md#child-accounts) and the
+[specification](kids-mode-spec.md). Still open, under
+[Access and multi-instance](#access-and-multi-instance): age-aware filtering and
+locking a device into the child profile.
 
 ### Home screen
 
@@ -231,15 +213,13 @@ from the addons it may use. **Continue watching** is also one section in the
 navigation, like Favourites: the merged Home row paged past its bound and
 filtered by card kind, with the library shelf and the catalogue's own Continue
 watching entry gone. The new episodes of followed series sit at the top of the
-planner's Overview tab. What is left:
+planner's Overview tab. The instance's **Show on Home** switches and catalogue
+selection stay the default every account starts from. The child-facing Home
+shipped with kids mode. What is left:
 
-- the instance's **Show on Home** switches and catalogue selection stay the
-  default every account starts from;
 - consider a one-tap action for a missing next episode and a Home view of
   today's releases. Following already has its own release calendar, so this is
-  a Home convenience rather than missing calendar infrastructure;
-- the much smaller child-facing variant, with server-side enforcement. See the
-  [home contract](roadmap-delivery-spec.md#family-home-and-kids-mode).
+  a Home convenience rather than missing calendar infrastructure.
 
 ### Richer title detail
 
@@ -582,9 +562,9 @@ None of them exists in the code today unless the item says so.
   offset, and keep the manual adjustment as the override.
 - **Subtitle styling** (Nuvio, Stremio): size, colour, background, outline and
   vertical position per account, with an optional separate style for HDR and
-  Dolby Vision, where white text is blinding. Android TV has a basic size
-  setting in the tracks panel; extend it and give the web player the same
-  choices. Fuller ASS/SSA rendering belongs here too.
+  Dolby Vision, where white text is blinding. Neither client has a setting
+  today: Android TV draws subtitles at a fixed 4.5 % of the screen height
+  (`PlayerSubtitleOverlay.kt`), and the web player uses its own fixed style. Fuller ASS/SSA rendering belongs here too.
 
 ### Night audio on the television
 
@@ -976,20 +956,22 @@ The active verification block covers production-path Jellyfin/Emby playback and
 large-library behavior under latency, interruption and restoration. Keep measured
 real-provider results separate from simulated transport and browser results.
 The [request audit](media-server-request-audit.md) records measured navigation
-costs and the next optimization: scoped raw metadata reuse for concurrent detail
-reads and locally stored progress, preserving fresh access checks.
+costs. Its first recommendation has shipped: ordinary detail and version reads
+are shared for thirty seconds, while matches, revalidation and download proofs
+still read fresh (`METADATA_TTL_MS` in `server/src/media-server-manager.ts`).
 
-Recorded follow-ups, not part of this verification block (season and
-whole-series copying shipped in 0.7.0; see [Done](#done)):
+Shipped since this list was written: season and whole-series copying (0.7.0;
+see [Done](#done)) and one source chooser inside the web/desktop player, with
+local, Jellyfin/Emby and addon rows (`web/src/library-sources.ts`).
+
+Recorded follow-ups, not part of this verification block:
 
 - Copying a hand-picked selection of remote items that is not one season or
   one show, and bounding the upstream transfers of a large batch.
 - App-local manual catalogue matching for unidentified remote items, without
   changing the provider metadata; use the match for enrichment and addon sources.
-- A playback-source chooser inside the web/desktop video player with TV parity:
-  local, Jellyfin/Emby and addon rows, current-source selection and safe switching.
-  Keep this distinct from the title-detail chooser. Refine the interaction when
-  the user supplies the next requirement.
+- Reading Jellyfin/Emby `People`, and marking titles held on a media server as
+  owned in a person's filmography (today only local libraries are marked).
 
 ### Unified source selection and administrator-managed profiles
 
@@ -1039,7 +1021,9 @@ remains the rule; the cookie is only `Secure` when the server sees HTTPS.
 
 ### Packaging
 
-- One-compose install path for people who will not read the Synology chapter.
+- The one-compose install path exists: `compose.pull.yml` pulls the GHCR image
+  and is uploaded to Container Manager as it is ([README](../README.md)).
+  Nothing is open here.
 
 ### Tests
 
