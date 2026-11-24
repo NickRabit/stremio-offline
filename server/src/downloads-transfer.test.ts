@@ -310,6 +310,44 @@ test("ENOSPC pauses the queue and leaves later jobs untouched", async () => {
   }
 });
 
+test("a single-stream download counts only bytes the disk has written", async () => {
+  const size = 64 * 1024;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    res.end(Buffer.alloc(size, 7));
+  });
+  const entered = deferred();
+  const disk = deferred();
+  const { directory, queue, downloads } = await tempQueue({
+    createWriteStream: (file, options) => {
+      const real = createWriteStream(file, options);
+      let first = true;
+      return new Writable({
+        write(chunk, _encoding, callback) {
+          const hold = first ? disk.promise : Promise.resolve();
+          if (first) { first = false; entered.release(); }
+          void hold.then(() => real.write(chunk, callback));
+        },
+        final(callback) { real.end(callback); },
+      });
+    },
+  });
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await entered.promise;
+    assert.equal(queue.get(job.id)?.received, 0, "a chunk still on its way to the disk must not count as received");
+    disk.release();
+    await waitFor(queue, () => queue.get(job.id)?.status === "completed" || queue.get(job.id)?.status === "failed");
+    assert.equal(queue.get(job.id)?.status, "completed", queue.get(job.id)?.error);
+    assert.equal(queue.get(job.id)?.received, size);
+    assert.equal((await stat(queuedFile(downloads, queue.get(job.id)!.target))).size, size);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("the queue resumes by itself once free space returns", async () => {
   const size = 4096;
   let failWrite = true;

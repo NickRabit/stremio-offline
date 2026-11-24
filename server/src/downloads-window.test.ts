@@ -55,7 +55,7 @@ test("a single-stream transfer paused by the window resumes by Range", async () 
     assert.ok(paused.received > 0);
     const partialSize = (await stat(partial)).size;
     assert.ok(partialSize > 0, "bytes already written stay in the part file");
-    assert.ok(paused.received >= partialSize);
+    assert.equal(paused.received, partialSize, "received is what the part file holds");
 
     const before = requests().length;
     clock.value = windowAt(1);

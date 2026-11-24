@@ -7,6 +7,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { SegmentWriter } from "./segment-writer.js";
+import { countWritten } from "./written-bytes.js";
 import { addonAllowed } from "./addons.js";
 import { addonIdentity, isAddonIdentity } from "./addon-identity.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
@@ -4369,11 +4370,16 @@ export class DownloadQueue {
           // revocation that lands mid-transfer stops the bytes rather than finishing the file.
           if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
           await this.rate.take(chunk.byteLength, controller.signal);
-          note(chunk.byteLength);
           output.enqueue(chunk);
         } });
         try {
-          await pipeline(Readable.fromWeb(response.body.pipeThrough(monitor) as never), this.createWriteStream(partial, { flags: resumed ? "a" : "w" }), { signal: controller.signal });
+          // Counted once written: a pause measures the part file, and `received` must not promise more.
+          const sink = countWritten(this.createWriteStream(partial, { flags: resumed ? "a" : "w" }), note);
+          await pipeline(Readable.fromWeb(response.body.pipeThrough(monitor) as never), sink, { signal: controller.signal });
+        } catch (error) {
+          // A write that was out when the transfer stopped may still have landed.
+          job.received = await stat(partial).then((file) => file.size, () => job.received);
+          throw error;
         } finally { guard?.(); }
         clearInterval(inactivity); inactivity = undefined;
         const handle = await open(partial, "r+");
