@@ -31,7 +31,7 @@ export interface Addon {
   essential?: boolean;
   configurable?: boolean; downloadSettings?: AddonDownloadSettings; manifest: { id: string; name: string; version: string; description?: string; logo?: string; resources?: Array<string | { name: string }>; catalogs?: Array<{ id: string; type: string; name?: string }>; behaviorHints?: { p2p?: boolean } };
 }
-export interface Catalog { addonKey: string; addonName: string; type: string; id: string; name?: string; extra?: Array<{ name: string; isRequired?: boolean; options?: string[] }> }
+export interface Catalog { addonKey: string; addonName: string; type: string; id: string; name?: string; extra?: Array<{ name: string; isRequired?: boolean; options?: string[] }>; extraRequired?: string[]; extraSupported?: string[] }
 export interface SearchableCatalog { addonKey: string; addonName: string; globalSearch: boolean; type: string; id: string; name: string }
 export interface Meta {
   id: string; type: string; name: string; poster?: string; background?: string; description?: string; releaseInfo?: string;
@@ -872,6 +872,14 @@ export interface DownloadsViewPrefs {
   sort: DownloadSort; direction: LibraryOrder; status: DownloadStatusFilter;
   dateField: DownloadDateField; pageSize: DownloadPageSize;
 }
+export interface CatalogRef { addonKey: string; type: string; id: string }
+export type RecentCatalogCount = 0 | 3 | 5 | 8;
+export interface CatalogViewPrefs {
+  recentCount: RecentCatalogCount;
+  recent: CatalogRef[];
+  hiddenAddons: string[];
+  last: (CatalogRef & { genre: string }) | null;
+}
 export type SearchOrder = "source" | "titleMatch";
 /** Per-account search history and preferences; `recent` is empty while saving is off. */
 export interface SearchState {
@@ -886,6 +894,7 @@ export interface UserViews {
   libraries: Record<string, LibraryViewPrefs>;
   extras: Partial<Record<ExtraView, LibraryViewPrefs>>;
   downloads: DownloadsViewPrefs;
+  catalog: CatalogViewPrefs;
 }
 /** `pending` marks the row a finished episode left behind: the next episode of the show,
  *  not yet started. It carries no position and draws no progress bar. */
