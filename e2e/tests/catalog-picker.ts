@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
-const catalogName = /^(Procházet katalog|Browse catalog)$/;
+const catalogName = /^(Procházet katalog|Browse catalog):/;
 const scopeName = /^(Kde hledat|Where to search):/;
 const typeGroupName = /^(Typ|Type)$/;
 const movieName = /^(Filmy|Movies)$/;

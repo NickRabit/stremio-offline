@@ -2801,7 +2801,7 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 }
 
 @media(max-width:980px) and (max-height:500px) and (orientation:landscape){
-  main.view-catalog .filterbar{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,.65fr) minmax(0,.55fr) 40px 36px;grid-template-areas:"type catalog genre sort shape expand";gap:7px}
+  main.view-catalog .filterbar{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,.65fr) minmax(0,.55fr) 40px;grid-template-areas:"type catalog genre sort shape";gap:7px}
   main.view-catalog .filterbar>.catalog-type-switch{grid-area:type}
   main.view-catalog .filterbar>.catalog-trigger{grid-area:catalog;min-width:0}
   main.view-catalog .filterbar>.genre-trigger{grid-area:genre;min-width:0}

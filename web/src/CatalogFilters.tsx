@@ -76,7 +76,7 @@ export function CatalogFilters({
       })}
     </div>
     <button type="button" className={`catalog-trigger${compact ? " compact" : ""}`}
-      aria-haspopup="dialog" aria-label={t("catalog.browse")} aria-expanded={picker === "catalog"}
+      aria-haspopup="dialog" aria-label={`${t("catalog.browse")}: ${current.name || current.id}`} aria-expanded={picker === "catalog"}
       onClick={() => setPicker("catalog")}>
       <AddonLogo addonKey={current.addonKey} name={current.addonName} src={logos[current.addonKey]}/>
       <span className="catalog-trigger-copy">

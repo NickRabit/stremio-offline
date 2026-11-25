@@ -283,7 +283,7 @@ const clickLabeledButton = async (label: string) => {
 };
 
 const chooseCatalog = async (name: string) => {
-  await clickLabeledButton(t("catalog.browse"));
+  await act(async () => { host.querySelector<HTMLButtonElement>("button.catalog-trigger")!.click(); }); await flush();
   await choosePickerOption(name);
 };
 
@@ -316,7 +316,7 @@ describe("catalogue and search loading in App", () => {
     await openCatalog();
     await until(() => matchingRequests("/api/catalog").some((request) =>
       new URLSearchParams(request.query).get("id") === "popular"), "restored catalogue request");
-    expect(host.querySelector(`button[aria-label="${t("catalog.browse")}"]`)?.textContent).toContain("Popular");
+    expect(host.querySelector("button.catalog-trigger")?.textContent).toContain("Popular");
   });
 
   it("ignores a stored last catalog that the account cannot browse", async () => {
