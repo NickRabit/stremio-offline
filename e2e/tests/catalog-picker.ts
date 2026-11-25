@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 const catalogName = /^(Procházet katalog|Browse catalog)$/;
-const scopeName = /^(Kde hledat|Where to search)$/;
+const scopeName = /^(Kde hledat|Where to search):/;
 const typeGroupName = /^(Typ|Type)$/;
 const movieName = /^(Filmy|Movies)$/;
 const seriesName = /^(Seriály|Series)$/;
@@ -65,7 +65,8 @@ export async function catalogRowLabels(page: Page): Promise<string[]> {
     const head = heads.nth(index);
     if (await head.getAttribute("aria-expanded") !== "true") await head.click();
   }
-  return dialog.getByRole("option").allTextContents();
+  // The recent chips are options too; only the rows of the addon groups list catalogs.
+  return dialog.locator(".picker-group [role=option]").allTextContents();
 }
 
 /** Chooses a search scope row matching `name` in the scope picker (catalog page or Search Everywhere). */

@@ -30,8 +30,8 @@ test("global search setting remains readable and touchable", async ({ page }, te
   await card.getByRole("button", { name: "Upravit doplněk" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Upravit doplněk" });
-  const setting = dialog.locator(".library-check", { hasText: "Zahrnout do hledání ve všech doplňcích" });
-  const toggle = setting.getByRole("checkbox", { name: "Zahrnout do hledání ve všech doplňcích" });
+  const setting = dialog.locator(".library-check", { hasText: "Zahrnout do společného hledání" });
+  const toggle = setting.getByRole("checkbox", { name: "Zahrnout do společného hledání" });
   await expect(setting).toBeVisible();
   await expect(toggle).toBeChecked();
   const viewport = page.viewportSize()!;

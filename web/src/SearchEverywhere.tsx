@@ -579,7 +579,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
       </div>
       {search.library && <button type="button" className="search-library-chip" aria-label={t("searchAll.libraryClear")} onClick={() => search.clearLibrary()}>{t("searchAll.libraryChip", { title: search.library.title })}</button>}
       {catalogOnly && <label><span>{t("catalog.searchScope")}</span>
-        <button type="button" className="scope-trigger" aria-haspopup="dialog" aria-label={t("catalog.searchScope")} onClick={() => setScopeOpen(true)}>
+        <button type="button" className="scope-trigger" aria-haspopup="dialog" aria-label={`${t("catalog.searchScope")}: ${scopeLabel}`} onClick={() => setScopeOpen(true)}>
           {scopeAddon && <AddonLogo addonKey={scopeAddon.addonKey} name={scopeAddon.addonName}/>}
           <span>{scopeLabel}</span>
         </button>

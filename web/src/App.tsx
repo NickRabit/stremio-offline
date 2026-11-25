@@ -3936,7 +3936,7 @@ export function App() {
 
             </div>
             <button type="button" className="scope-trigger" aria-haspopup="dialog"
-              aria-label={t("catalog.searchScope")} aria-expanded={scopePickerOpen}
+              aria-label={`${t("catalog.searchScope")}: ${scopeLabel}`} aria-expanded={scopePickerOpen}
               onClick={() => setScopePickerOpen(true)}>
               {scopedCatalog || scopeAddon
                 ? <AddonLogo addonKey={(scopedCatalog ?? scopeAddon)!.addonKey}

@@ -80,7 +80,7 @@ test.describe("layout invariants", () => {
     expect(await smallFields(page), "Library").toEqual([]);
 
     await openView(page, "Stahování");
-    await page.getByText("Filtry a řazení", { exact: true }).click();
+    await page.getByText(/^Filtry a řazení/).first().click();
     await expect(page.getByLabel("Hledat název nebo cestu")).toBeVisible();
     expect(await smallFields(page), "Downloads filters").toEqual([]);
 

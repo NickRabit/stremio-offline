@@ -306,7 +306,7 @@ describe("SearchEverywhere", () => {
 
     const trigger = host.querySelector<HTMLButtonElement>("button.scope-trigger")!;
     expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
-    expect(trigger.getAttribute("aria-label")).toBe("Where to search");
+    expect(trigger.getAttribute("aria-label")).toBe("Where to search: Shared search");
     expect(trigger.textContent).toContain("Shared search");
     await act(async () => { trigger.click(); });
     const dialog = host.querySelector<HTMLElement>("[role='dialog']")!;

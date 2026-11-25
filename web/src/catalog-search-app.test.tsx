@@ -288,7 +288,7 @@ const chooseCatalog = async (name: string) => {
 };
 
 const chooseScope = async (name: string) => {
-  await clickLabeledButton(t("catalog.searchScope"));
+  await act(async () => { host.querySelector<HTMLButtonElement>("button.scope-trigger")!.click(); }); await flush();
   await choosePickerOption(name);
 };
 
@@ -463,7 +463,7 @@ describe("catalogue and search loading in App", () => {
     sessionPollReply = () => poll.promise;
 
     await openCatalog();
-    await until(() => host.querySelector(`button[aria-label="${t("catalog.searchScope")}"]`) !== null, "search scope button");
+    await until(() => host.querySelector("button.scope-trigger") !== null, "search scope button");
     await chooseScope("Top");
     await submitSearch("Needle");
     await until(() => matchingRequests("/api/search/catalog", "POST").length === 1, "session search start");
