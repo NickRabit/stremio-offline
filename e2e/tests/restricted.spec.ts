@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { catalogTrigger, chooseCatalog } from "./catalog-picker";
 
 const signIn = async (page: import("@playwright/test").Page) => {
   await page.goto("/");
@@ -70,12 +71,8 @@ test.describe("restricted mode", () => {
     await expect(page.locator(".addon-form")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Catalog", exact: true }).click();
-    const catalog = page.getByRole("combobox", { name: "Browse catalog" });
-    await expect(catalog).toBeVisible();
-    const labels = await catalog.locator("option").allTextContents();
-    const movies = labels.find((text) => /Filmy/.test(text));
-    expect(movies).toBeTruthy();
-    await catalog.selectOption({ label: movies! });
+    await expect(catalogTrigger(page)).toBeVisible();
+    await chooseCatalog(page, /Filmy/, "movie");
     await expect(page.getByRole("button", { name: /Zkušební film/ })).toBeVisible();
     await page.getByRole("button", { name: /Zkušební film/ }).click();
 

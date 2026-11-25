@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { chooseCatalog } from "./catalog-picker";
 import { addonManifest, appUrl } from "../../playwright.config";
 
 /** Everything the page may load in secure mode comes from this instance. */
@@ -7,8 +8,7 @@ const sameOrigin = (url: string) => url.startsWith(appUrl) || url.startsWith("da
 const openMovie = async (page: Page) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const labels = await page.getByRole("combobox", { name: "Procházet katalog" }).locator("option").allTextContents();
-  await page.getByRole("combobox", { name: "Procházet katalog" }).selectOption({ label: labels.find((text) => /Filmy/.test(text))! });
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await expect(page.locator(".detail-panel").getByRole("heading", { name: "Zkušební film" })).toBeVisible();
 };

@@ -1,16 +1,17 @@
 import { expect, test } from "@playwright/test";
+import { chooseScope, scopeTrigger } from "../catalog-picker";
 import { goToView } from "../nav";
 
 test("catalogue search controls fit every supported viewport", async ({ page }) => {
   await page.goto("/");
-  const scope = page.getByRole("combobox", { name: "Kde hledat" });
-  await scope.selectOption((await scope.locator("option").filter({ hasText: "Seriály" }).first().getAttribute("value"))!);
+  await chooseScope(page, /Seriály/, "series");
   await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
   await page.getByRole("button", { name: "Vyhledat" }).click();
 
   await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Typ" })).toBeDisabled();
   const viewport = page.viewportSize()!;
+  const scope = scopeTrigger(page);
   for (const control of [scope, page.getByRole("button", { name: "Vyhledat" }), page.getByRole("combobox", { name: "Typ" })]) {
     const box = await control.boundingBox();
     expect(box).toBeTruthy();

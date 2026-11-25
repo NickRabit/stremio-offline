@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { chooseCatalog } from "../catalog-picker";
 import { pickAddonStream } from "../catalog-sources";
 
 /** Walking into the title's own folder and keeping "a folder for each title" used to promise
@@ -17,8 +18,7 @@ test("the save preview does not repeat the title folder that was picked", async 
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const options = await page.getByRole("combobox", { name: "Procházet katalog" }).locator("option").allTextContents();
-  await page.getByRole("combobox", { name: "Procházet katalog" }).selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   // The library journeys leave this film in the library, and its local copy leads the list.
   await pickAddonStream(page);

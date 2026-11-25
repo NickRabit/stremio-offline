@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { chooseCatalog } from "../catalog-picker";
 import { goToView } from "../nav";
 
 // Baselines catch what the invariants cannot measure: spacing, overlap, truncation,
@@ -27,9 +28,7 @@ const openView = async (page: Page, name: string) => {
 
 const openCatalog = async (page: Page, pattern: RegExp) => {
   await openView(page, "Katalog");
-  const select = page.getByRole("combobox", { name: "Procházet katalog" });
-  const labels = await select.locator("option").allTextContents();
-  await select.selectOption({ label: labels.find((text) => pattern.test(text))! });
+  await chooseCatalog(page, pattern, /seri/i.test(pattern.source) ? "series" : "movie");
   await settle(page);
 };
 

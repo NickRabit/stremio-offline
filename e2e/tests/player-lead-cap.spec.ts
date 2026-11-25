@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { chooseCatalog } from "./catalog-picker";
 
 const addonUrl = `http://127.0.0.1:${process.env.LEADCAP_ADDON_PORT ?? "8198"}`;
 
@@ -18,10 +19,7 @@ test("a paused conversion resumes and a near-edge seek wakes it", async ({ page 
   await form.getByRole("button", { name: "Sign in" }).click();
 
   await page.getByRole("button", { name: "Catalog", exact: true }).click();
-  const catalog = page.getByRole("combobox", { name: "Browse catalog" });
-  const movies = (await catalog.locator("option").allTextContents()).find((text) => /Filmy/.test(text));
-  expect(movies).toBeTruthy();
-  await catalog.selectOption({ label: movies! });
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
 
   const detail = page.locator(".detail-panel");

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { catalogRowLabels, catalogTrigger, chooseCatalog, openCatalogPicker } from "../catalog-picker";
 
 test("description survives source loading and remains expandable", async ({ page }, testInfo) => {
   const description = "A long description that must remain readable without displacing the source controls. ".repeat(25);
@@ -14,10 +15,8 @@ test("description survives source loading and remains expandable", async ({ page
     await route.fulfill({ response });
   });
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await expect(catalog).toBeVisible();
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await expect(catalogTrigger(page)).toBeVisible();
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   const preview = page.locator(".description-preview");
   await expect(preview).toHaveText(description.trim());
@@ -62,10 +61,11 @@ test("desktop episode and source lists use the available detail height", async (
     });
   });
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await expect(catalog.locator("option").filter({ hasText: /Seriály/ })).toHaveCount(1);
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Seriály/.test(text))! });
+  const dialog = await openCatalogPicker(page);
+  expect((await catalogRowLabels(page)).filter((text) => /Seriály/.test(text))).toHaveLength(1);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await chooseCatalog(page, /Seriály/, "series");
   const series = page.getByRole("button", { name: /Zkušební seriál/ });
   await expect(series).toBeVisible();
   await series.click();
@@ -80,8 +80,7 @@ test("desktop episode and source lists use the available detail height", async (
   const episodeBox = await episodes.boundingBox();
   expect(detailBox!.y + detailBox!.height - (episodeBox!.y + episodeBox!.height)).toBeLessThan(24);
 
-  const movieCatalog = options.find((text) => /Filmy/.test(text))!;
-  await catalog.selectOption({ label: movieCatalog });
+  await chooseCatalog(page, /Filmy/, "movie");
   const movie = page.getByRole("button", { name: /Zkušební film/ });
   await expect(movie).toBeVisible();
   await movie.click();
@@ -96,10 +95,11 @@ test("desktop episode and source lists use the available detail height", async (
 test("mobile source view returns to the episode picker", async ({ page }, testInfo) => {
   test.skip(!["mobile", "mobile-landscape"].includes(testInfo.project.name), "phone detail navigation");
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await expect(catalog.locator("option").filter({ hasText: /Seriály/ })).toHaveCount(1);
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Seriály/.test(text))! });
+  const dialog = await openCatalogPicker(page);
+  expect((await catalogRowLabels(page)).filter((text) => /Seriály/.test(text))).toHaveLength(1);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await chooseCatalog(page, /Seriály/, "series");
   await page.getByRole("button", { name: /Zkušební seriál/ }).click();
 
   const detail = page.locator(".detail-panel");
@@ -126,10 +126,8 @@ test("phone source scrolling hides metadata and restores it on an intentional pu
   // count below is the mocked addon answer alone.
   await page.route("**/api/local-streams/**", (route) => route.fulfill({ json: [] }));
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await expect(catalog).toBeVisible();
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await expect(catalogTrigger(page)).toBeVisible();
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   const list = page.locator(".stream-list");
   await expect(list.locator("button")).toHaveCount(40);
@@ -149,10 +147,8 @@ test("phone catalog header returns by its button or at the top of the list", asy
     await route.fulfill({ json: Array.from({ length: 60 }, (_, i) => ({ ...items[0], id: `catalog-${i}`, name: `Title ${i}` })) });
   });
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await expect(catalog).toBeVisible();
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await expect(catalogTrigger(page)).toBeVisible();
+  await chooseCatalog(page, /Filmy/, "movie");
   const list = page.locator(".poster-grid");
   await expect(list.locator(".poster-card")).toHaveCount(60);
   await list.evaluate((element) => { element.scrollTop = 500; });
@@ -195,10 +191,8 @@ test("phone catalog keeps the selected title in place after rotating during play
     await route.fulfill({ json: { id, type: "movie", name: `Title ${index}`, description: "Rotation test title" } });
   });
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await expect(catalog).toBeVisible();
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await expect(catalogTrigger(page)).toBeVisible();
+  await chooseCatalog(page, /Filmy/, "movie");
 
   const list = page.locator(".poster-grid");
   const title = list.getByRole("button", { name: /Title 35/ });
