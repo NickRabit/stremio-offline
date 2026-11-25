@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-const COLORS = ["#b84c3a", "#3d6f8e", "#5f6e3d", "#795185", "#966a38", "#3e7c70", "#6d587c", "#4f6575"];
+// Each keeps at least 6:1 against the light initials, whatever key an addon happens to get.
+const COLORS = ["#9a3f30", "#35617c", "#546136", "#754e81", "#79552d", "#32655b", "#695578", "#4b5f6f"];
 
 const initials = (name: string): string =>
   name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((word) => [...word][0] ?? "").join("").toLocaleUpperCase();
