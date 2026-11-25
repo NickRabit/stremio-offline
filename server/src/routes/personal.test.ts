@@ -1273,6 +1273,7 @@ test("GET /api/progress drops the rows whose library the caller has lost", async
 });
 
 const defaultDownloads = { sort: "order", direction: "asc", status: "", dateField: "createdAt", pageSize: 20 };
+const defaultCatalog = { recentCount: 3, recent: [], hiddenAddons: [], last: null };
 
 test("GET /api/views answers each caller with their own browsing chrome", async (t) => {
   const harness = await mount();
@@ -1286,6 +1287,7 @@ test("GET /api/views answers each caller with their own browsing chrome", async 
     libraries: { lib_0000000a: { sort: "size", order: "desc", favoritesOnly: true, view: "list" } },
     extras: {},
     downloads: defaultDownloads,
+    catalog: defaultCatalog,
   });
 
   const alice = await (await api(harness.base, "/api/views", { user: ALICE })).json() as {
@@ -1293,9 +1295,10 @@ test("GET /api/views answers each caller with their own browsing chrome", async 
   };
   assert.deepEqual(alice.libraries, { lib_0000000a: { sort: "size", order: "desc", favoritesOnly: true, view: "list" } });
 
-  const bob = await (await api(harness.base, "/api/views", { user: BOB })).json() as { libraries: unknown; downloads: unknown };
+  const bob = await (await api(harness.base, "/api/views", { user: BOB })).json() as { libraries: unknown; downloads: unknown; catalog: unknown };
   assert.deepEqual(bob.libraries, {}, "Alice's library is not Bob's");
   assert.deepEqual(bob.downloads, defaultDownloads);
+  assert.deepEqual(bob.catalog, defaultCatalog);
   assert.deepEqual(harness.data(BOB).views, undefined, "nothing is written to an account that never asked");
 });
 
@@ -1309,6 +1312,7 @@ test("PATCH /api/views keeps one account's queue chrome out of another's", async
     libraries: {},
     extras: {},
     downloads: { ...defaultDownloads, sort: "titleSort", pageSize: 50 },
+    catalog: defaultCatalog,
   });
 
   const alice = await api(harness.base, "/api/views", { user: ALICE });
@@ -1335,8 +1339,60 @@ test("PATCH /api/views stores nothing but the fields it knows", async (t) => {
   const response = await api(harness.base, "/api/views", { method: "PATCH", user: ALICE, body: { query: "foo", from: "2026-01-01" } });
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { libraries: {}, extras: {}, downloads: defaultDownloads });
-  assert.deepEqual(harness.data(ALICE).views, { libraries: {}, extras: {}, downloads: defaultDownloads });
+  assert.deepEqual(await response.json(), { libraries: {}, extras: {}, downloads: defaultDownloads, catalog: defaultCatalog });
+  assert.deepEqual(harness.data(ALICE).views, undefined, "a no-op patch does not write the store");
+});
+
+test("PATCH /api/views keeps one account's catalog prefs out of another's", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const patched = await api(harness.base, "/api/views", {
+    method: "PATCH", user: ALICE,
+    body: { catalog: { hiddenAddons: ["cine"] } },
+  });
+  assert.equal(patched.status, 200);
+  assert.deepEqual((await patched.json() as { catalog: unknown }).catalog, { ...defaultCatalog, hiddenAddons: ["cine"] });
+
+  const bob = await (await api(harness.base, "/api/views", { user: BOB })).json() as { catalog: unknown };
+  assert.deepEqual(bob.catalog, defaultCatalog);
+  assert.deepEqual(harness.data(BOB).views, undefined);
+});
+
+test("an identical second catalog PATCH does not write the store", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const body = { catalog: { hiddenAddons: ["cine"] } };
+
+  const first = await api(harness.base, "/api/views", { method: "PATCH", user: ALICE, body });
+  assert.equal(first.status, 200);
+  const stored = harness.data(ALICE).views;
+
+  const second = await api(harness.base, "/api/views", { method: "PATCH", user: ALICE, body });
+  assert.equal(second.status, 200);
+  assert.deepEqual(await second.json(), await first.json());
+  assert.equal(harness.data(ALICE).views, stored, "the stored views object is left in place");
+});
+
+test("a bad catalog PATCH answers 400 and leaves the stored views unchanged", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const saved = await api(harness.base, "/api/views", {
+    method: "PATCH", user: ALICE,
+    body: { catalog: { hiddenAddons: ["cine"] } },
+  });
+  assert.equal(saved.status, 200);
+  const stored = harness.data(ALICE).views;
+
+  const bad = await api(harness.base, "/api/views", {
+    method: "PATCH", user: ALICE,
+    body: { catalog: { recentCount: 4 } },
+  });
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json() as { messageKey?: string }).messageKey, "err.invalidRequest");
+  assert.equal(harness.data(ALICE).views, stored);
+  assert.deepEqual((harness.data(ALICE).views as { catalog: unknown }).catalog, { ...defaultCatalog, hiddenAddons: ["cine"] });
 });
 
 const defaultSearch = { saveHistory: true, liveSearch: true, defaultOrder: "source", recent: [] };

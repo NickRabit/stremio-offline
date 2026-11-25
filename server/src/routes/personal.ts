@@ -390,7 +390,12 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // Patched inside the mutator, against the views as they are when this write's turn comes:
     // two quick changes (a sort, then a filter) both land instead of the second undoing the first.
     let next = parseViews(undefined);
-    await updateData(req, (data) => { next = applyPatch(parseViews(data.views), req.body); data.views = next; });
+    const unchanged = (before: UserData, after: UserData) =>
+      JSON.stringify(parseViews(before.views)) === JSON.stringify(parseViews(after.views));
+    await updateDataUnlessUnchanged(req, (data) => {
+      next = applyPatch(parseViews(data.views), req.body);
+      data.views = next;
+    }, unchanged);
     res.json(next);
   }));
 
