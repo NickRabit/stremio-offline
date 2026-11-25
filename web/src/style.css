@@ -2884,3 +2884,5 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
    and the body, which hides its overflow, can no longer be scrolled at all. */
 .picker-body.picker-body-rail{grid-template-rows:minmax(0,1fr)}
 .picker-body-rail>.picker-rail,.picker-body-rail>.picker-main{min-height:0}
+/* Scrolled to on open; the sticky search field would otherwise cover the head. */
+.picker-body-rail .picker-group-head{scroll-margin-top:60px}

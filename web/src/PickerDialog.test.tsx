@@ -106,4 +106,16 @@ describe("PickerDialog", () => {
     expect([...host.querySelectorAll<HTMLButtonElement>(".picker-rail > button")].map((button) => button.textContent))
       .toEqual(["Alpha addon", "Beta addon"]);
   });
+
+  it("opens scrolled to the current group", async () => {
+    const scrolled: string[] = [];
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this.textContent ?? ""); };
+    try {
+      await act(async () => { root.render(<Harness narrow={false} rail openGroup="beta"/>); });
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+    expect(scrolled.some((text) => text.includes("Beta addon"))).toBe(true);
+  });
 });

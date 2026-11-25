@@ -113,6 +113,11 @@ export function PickerDialog(props: PickerDialogProps): JSX.Element {
     setOpenGroups(new Set(openGroup ? [openGroup] : []));
   }, [openGroup]);
 
+  // Opens on the current group, not on whichever addon happens to come first.
+  useEffect(() => {
+    if (openGroup) groupHeaders.current.get(openGroup)?.scrollIntoView?.({ block: "start" });
+  }, []);
+
   useEffect(() => {
     if (previousQuery.current !== query) setActiveIndex(0);
     previousQuery.current = query;
