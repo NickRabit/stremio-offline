@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { prefsFor, scopeOf, withLibrary } from "./views";
-import type { UserViews } from "./types";
+import { defaultCatalogView, emptyViews, prefsFor, pushRecentCatalog, scopeOf, withCatalog, withLibrary } from "./views";
+import type { CatalogRef, UserViews } from "./types";
 
 const empty = (over: Partial<UserViews> = {}): UserViews =>
-  ({ libraries: {}, extras: {}, downloads: { sort: "order", direction: "asc", status: "", dateField: "createdAt", pageSize: 20 }, ...over });
+  ({ ...emptyViews(), ...over });
+
+const ref = (id: string, addonKey = "cine", type = "movie"): CatalogRef => ({ addonKey, type, id });
 
 describe("scopeOf", () => {
   it("reads an empty path as the only library there is", () => {
@@ -53,5 +55,43 @@ describe("withLibrary", () => {
     const next = withLibrary(views, "lib_aaaaaaaa", { sort: "size", order: "desc", favoritesOnly: false, view: "grid" });
     expect(next.libraries["lib_bbbbbbbb"]).toBe(views.libraries["lib_bbbbbbbb"]);
     expect(next.libraries["lib_aaaaaaaa"]).toEqual({ sort: "size", order: "desc", favoritesOnly: false, view: "grid" });
+  });
+});
+
+describe("pushRecentCatalog", () => {
+  it("puts the ref first, drops a duplicate, and cuts to the count", () => {
+    expect(pushRecentCatalog([ref("tt2"), ref("tt3")], ref("tt1"), 3)).toEqual([ref("tt1"), ref("tt2"), ref("tt3")]);
+    expect(pushRecentCatalog([ref("tt1"), ref("tt2")], ref("tt2"), 3)).toEqual([ref("tt2"), ref("tt1")]);
+    expect(pushRecentCatalog([ref("tt1"), ref("tt2"), ref("tt3")], ref("tt4"), 3)).toEqual([ref("tt4"), ref("tt1"), ref("tt2")]);
+  });
+
+  it("returns an empty list when the count is zero", () => {
+    expect(pushRecentCatalog([ref("tt1")], ref("tt2"), 0)).toEqual([]);
+  });
+});
+
+describe("withCatalog", () => {
+  it("replaces only the fields given and cuts recent to recentCount", () => {
+    const views = withCatalog(emptyViews(), {
+      recentCount: 5,
+      recent: [ref("tt1"), ref("tt2")],
+      hiddenAddons: ["cine"],
+      last: { ...ref("tt1"), genre: "Action" },
+    });
+    const next = withCatalog(views, { hiddenAddons: ["other"], recentCount: 3, recent: [ref("tt1"), ref("tt2"), ref("tt3"), ref("tt4")] });
+    expect(next.catalog.hiddenAddons).toEqual(["other"]);
+    expect(next.catalog.recentCount).toBe(3);
+    expect(next.catalog.recent).toEqual([ref("tt1"), ref("tt2"), ref("tt3")]);
+    expect(next.catalog.last).toEqual({ ...ref("tt1"), genre: "Action" });
+    expect(next.libraries).toEqual(views.libraries);
+  });
+
+  it("empties recent when recentCount is 0", () => {
+    const views = withCatalog(emptyViews(), { recentCount: 5, recent: [ref("tt1")] });
+    expect(withCatalog(views, { recentCount: 0 }).catalog).toEqual({
+      ...defaultCatalogView(),
+      recentCount: 0,
+      recent: [],
+    });
   });
 });
