@@ -65,9 +65,10 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, onBucke
   const recent = useMemo(() => recentCatalogs(catalogs, prefs.recent, prefs.recentCount),
     [catalogs, prefs.recent, prefs.recentCount]);
   const hiddenPresent = new Set(catalogs.map((catalog) => catalog.addonKey).filter((key) => prefs.hiddenAddons.includes(key)));
-  const count = groups.reduce((total, group) => total + group.countInBucket, 0);
+  const count = useMemo(() => catalogGroups(catalogs, { bucket: currentBucket, query: "", hiddenAddons: prefs.hiddenAddons, includeHidden: false })
+    .reduce((total, group) => total + group.countInBucket, 0), [catalogs, currentBucket, prefs.hiddenAddons]);
 
-  const chips = recent.length ? {
+  const chips = recent.length && !query.trim() ? {
     title: t("picker.recent"),
     options: recent.map((catalog): PickerOption => {
       const ref = refOf(catalog);

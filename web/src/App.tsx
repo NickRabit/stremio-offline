@@ -40,7 +40,6 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { runtimeLabel } from "./runtime-format";
-import { catalogTypeTag } from "./catalog-labels";
 import { addonNotices, canQueue, catalogAddonCounts, catalogPlaybackChoice, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder, pendingAcrossSettle } from "./streams";
 import { freshPrefetch, NEXT_PREFETCH_FRESH_MS } from "./next-prefetch";
 import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
@@ -50,13 +49,12 @@ import { alternativeSaveRequest, type AlternativeSave } from "./alternative-save
 import { catalogueSaveNamesTitle } from "./catalogue-save";
 import { sourceIdentity } from "./library-detail-sources";
 import { parseSearchScope } from "./search-scope";
-import { SearchScopeOptions } from "./SearchScopeOptions";
 import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-search";
 import { rankByTitle } from "./title-match";
 import { CandidatePool, suggest, type Suggestion } from "./search-suggestions";
 import { galleryPayload, gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import { resumeVideo, type ResumeTarget } from "./resume-target";
-import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } from "./views";
+import { emptyViews, prefsFor, pushRecentCatalog, scopeOf, withCatalog, withDownloads, withExtra, withLibrary } from "./views";
 import { ArtworkProximity } from "./artwork-proximity";
 import { Empty, Nav, Onboarding } from "./app-chrome";
 import { FavoritesView } from "./FavoritesView";
@@ -92,8 +90,23 @@ import { toCssPx, useUiScale } from "./ui-scale";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
-import type { Addon, Avatar, BuildInfo, BrowseItem, BrowseLibrary, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, Avatar, BuildInfo, BrowseItem, BrowseLibrary, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, CatalogViewPrefs, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 import type { DownloadDrainView, DownloadWindowState } from "../../server/src/api-types";
+import { AddonLogo } from "./AddonLogo";
+import { CatalogFilters, consumePickerFocusReturn } from "./CatalogFilters";
+import { ScopePicker } from "./ScopePicker";
+import {
+  effectiveGenre,
+  fallbackForBucket,
+  genreOptions as catalogGenreOptions,
+  isBrowsable,
+  needsSearch,
+  refOf,
+  sameRef,
+  scopeCatalogValue,
+  type CatalogRef,
+  type TypeBucket,
+} from "./catalog-picker-model";
 
 export const queueDrainNotice = (
   drain: DownloadDrainView | null,
@@ -165,6 +178,8 @@ const abortedRequest = (error: unknown) => error instanceof DOMException && erro
 
 /** Addons name types freely; only the two we filter by have a translation. */
 const typeLabel = (type: string) => type === "movie" ? t("catalog.movies") : type === "series" ? t("catalog.series") : type;
+const touchDevice = () => (typeof navigator !== "undefined" && navigator.maxTouchPoints > 0)
+  || (typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches);
 /** A video entry may carry nothing but its place in the show; the episode list names it by that. */
 const episodeLabel = (video: Video) => video.title || video.name
   || (video.season != null || video.episode != null
@@ -289,6 +304,7 @@ export function App() {
   }
   type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
+  const [typeNote, setTypeNote] = useState<{ text: string; undo: { catalog: string; genre: string; sort: string } } | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
   /** The next episode of what the shared detail is playing, read while this one runs. */
   const detailNextPrefetchRef = useRef<{ id: string; at: number; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
@@ -373,6 +389,11 @@ export function App() {
   const refreshLibraries = () => api.libraries().then(setLibraries).catch(() => undefined);
   const libraryIds = useMemo(() => libraries.map((library) => library.id), [libraries]);
   const [views, setViews] = useState<UserViews>(() => emptyViews());
+  const viewsRef = useRef(views);
+  viewsRef.current = views;
+  const selectedCatalogChosen = useRef(false);
+  const catalogRestoreDone = useRef(false);
+  const scopePickerClosedAt = useRef(Number.NEGATIVE_INFINITY);
   /** Set once the stored views and the library list are both in, before the first listing. */
   const [viewsReady, setViewsReady] = useState(false);
   const [browseApplied, setBrowseApplied] = useState(false);
@@ -918,6 +939,9 @@ export function App() {
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamOrder>("recommended");
   useEffect(() => { setStreamSort(defaultStreamSort); }, [defaultStreamSort]);
   const [submittedQuery, setSubmittedQuery] = useState(""); const [searchScopeValue, setSearchScopeValue] = useState(""); const [searchable, setSearchable] = useState<SearchableCatalog[]>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default"); const [searchSort, setSearchSort] = useState("default");
+  const [scopePickerOpen, setScopePickerOpen] = useState(false);
+  const [searchPromptCatalog, setSearchPromptCatalog] = useState("");
+  const catalogSearchInput = useRef<HTMLInputElement>(null);
   const [personLayer, setPersonLayer] = useState<PersonLayer | null>(null);
   const personPageSnapshot = useRef<ScrollSnapshot | null>(null);
   const pendingPersonPageRestore = useRef(false);
@@ -966,27 +990,36 @@ export function App() {
   const searchScope = parseSearchScope(searchScopeValue);
   const scopedCatalog = searchScope.catalogId ? searchable.find((item) => item.addonKey === searchScope.addonKey && item.type === searchScope.catalogType && item.id === searchScope.catalogId) : undefined;
   const effectiveTypeFilter = searchScope.catalogType ?? typeFilter;
-  /** Picking one catalogue to search in also points the browse picker at it, so the
-   *  catalogue stays on screen once the search is cleared. The wider scopes -- one
-   *  addon, or all of them -- have nothing to point at and leave it alone. */
-  const pickSearchScope = (value: string) => {
-    setSearchScopeValue(value);
-    const picked = parseSearchScope(value);
-    if (picked.catalogId) setSelectedCatalog(`${picked.addonKey}:${picked.catalogType}:${picked.catalogId}`);
-  };
+  const scopeAddon = searchScope.catalogId ? undefined : searchable.find((item) => item.addonKey === searchScope.addonKey);
+  const scopeFilter = effectiveTypeFilter === "movie" || effectiveTypeFilter === "series" ? effectiveTypeFilter : "";
   const pickedRef = useRef(false); /** The viewer chose the playing source by hand, so the next episode stays with its provider. */ const viewerChoseSourceRef = useRef(false);
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
   const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null); const sourceListRef = useRef<HTMLDivElement>(null);
   const playerOpenRef = useRef(false);
   const currentCatalog = catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
-  const genreOptions = currentCatalog?.extra?.find((extra) => extra.name === "genre")?.options ?? [];
-  // Switching catalogues drops a genre the new catalogue does not know.
-  const activeGenre = genreOptions.includes(genre) ? genre : "";
+  const genreOptions = currentCatalog ? catalogGenreOptions(currentCatalog) : [];
+  const activeGenre = currentCatalog ? effectiveGenre(currentCatalog, genre) : "";
+  const logos = useMemo(() => Object.fromEntries(addons.map((addon) => [addon.key, addon.manifest.logo])),
+    [addons]);
+  const scopeLabel = scopedCatalog
+    ? `${scopedCatalog.name} · ${typeLabel(scopedCatalog.type)}`
+    : scopeAddon ? scopeAddon.addonName : t("search.shared");
+  useEffect(() => {
+    if (catalogRestoreDone.current || !catalogsKnown || !viewsReady) return;
+    catalogRestoreDone.current = true;
+    if (selectedCatalogChosen.current) return;
+    const last = views.catalog.last;
+    if (!last) return;
+    const catalog = catalogs.find((item) => sameRef(refOf(item), last));
+    if (!catalog || !isBrowsable(catalog)) return;
+    setSelectedCatalog(`${catalog.addonKey}:${catalog.type}:${catalog.id}`);
+    setGenre(last.genre);
+  }, [catalogs, catalogsKnown, viewsReady, views.catalog.last]);
   const panelAddonKey = (streamAddonKey?: string) => panelProgressAddonKey({
     searching: Boolean(submittedQuery), scopeAddonKey: searchScope.addonKey,
     catalogAddonKey: currentCatalog?.addonKey, streamAddonKey,
   });
-  const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
+  const searchRequired = Boolean(currentCatalog && needsSearch(currentCatalog));
   const downloadTitleLanguage = settings.downloadTitleLanguage === "ui" ? settings.uiLanguage : settings.downloadTitleLanguage;
   const baseDownloadTitle = selectedDownloadTitle || selected?.name || "Video";
   const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${baseDownloadTitle} · ${episodeLabel(selectedVideo)}` : baseDownloadTitle;
@@ -1103,25 +1136,39 @@ export function App() {
     const settled = window.setTimeout(unfoldIfFits, 450);
     return () => { observer.disconnect(); window.clearTimeout(settled); };
   }, [view, libraryCompact, catalogCompact, items, browse]);
+  useEffect(() => { if (catalogCompact) setTypeNote(null); }, [catalogCompact]);
   /** Writes wait for the hand to stop: one PATCH per gesture, not per click of a shape
    *  someone is flipping through. The latest patch wins, and nothing here runs on its own --
    *  a stored view is only ever written by the control somebody just touched. */
-  const pendingViews = useRef<Partial<UserViews>>({});
+  type ViewsPatch = Partial<Omit<UserViews, "catalog">> & { catalog?: Partial<CatalogViewPrefs> };
+  const pendingViews = useRef<ViewsPatch>({});
   const viewsTimer = useRef(0);
-  const queueViews = (patch: Partial<UserViews>) => {
+  const queueViews = (patch: ViewsPatch) => {
     const pending = pendingViews.current;
+    const catalog = patch.catalog ? { ...pending.catalog, ...patch.catalog } : pending.catalog;
     pendingViews.current = {
       ...pending, ...patch,
       libraries: { ...pending.libraries, ...patch.libraries },
       extras: { ...pending.extras, ...patch.extras },
+      ...(catalog ? { catalog } : {}),
       downloads: patch.downloads ?? pending.downloads,
     };
     window.clearTimeout(viewsTimer.current);
     viewsTimer.current = window.setTimeout(() => {
       const body = pendingViews.current;
       pendingViews.current = {};
-      api.updateViews(body).then(setViews).catch(fail);
+      api.updateViews(body as Partial<UserViews>).then((next) => { viewsRef.current = next; setViews(next); }).catch(fail);
     }, 300);
+  };
+  const persistCatalogPrefs = (patch: Partial<CatalogViewPrefs>) => {
+    const current = viewsRef.current;
+    const unchanged = Object.entries(patch).every(([key, value]) =>
+      sameJson(current.catalog[key as keyof CatalogViewPrefs], value));
+    if (unchanged) return;
+    const next = withCatalog(current, patch);
+    viewsRef.current = next;
+    setViews(next);
+    queueViews({ catalog: patch });
   };
   const persistLibraryPrefs = (next: Partial<LibraryViewPrefs>) => {
     const scope = scopeOf(browsePath, libraryIds);
@@ -1145,6 +1192,81 @@ export function App() {
     setViews((current) => withLibrary(current, libraryId, prefs));
     queueViews({ libraries: { [libraryId]: prefs } });
   };
+  const rememberRecentCatalog = (ref: CatalogRef) => {
+    const current = viewsRef.current.catalog;
+    if (current.recentCount <= 0) return;
+    const recent = pushRecentCatalog(current.recent, ref, current.recentCount);
+    if (!sameJson(recent, current.recent)) persistCatalogPrefs({ recent });
+  };
+  const rememberLastCatalog = (ref: CatalogRef, nextGenre = genre) => {
+    persistCatalogPrefs({ last: { ...ref, genre: nextGenre } });
+  };
+  const selectCatalog = (ref: CatalogRef, searchHandoff = false) => {
+    const catalog = catalogs.find((item) => sameRef(refOf(item), ref));
+    if (!catalog) return;
+    selectedCatalogChosen.current = true;
+    setSelectedCatalog(`${ref.addonKey}:${ref.type}:${ref.id}`);
+    setTypeNote(null);
+    setSearchPromptCatalog("");
+    rememberRecentCatalog(ref);
+    rememberLastCatalog(ref);
+    if (!searchHandoff || !needsSearch(catalog) || !searchable.some((item) => sameRef(refOf(item), ref))) return;
+    setSearchScopeValue(scopeCatalogValue(ref));
+    setSearchPromptCatalog(catalog.name || catalog.id);
+    if (!touchDevice()) {
+      window.requestAnimationFrame(() => catalogSearchInput.current?.focus({ preventScroll: true }));
+    }
+  };
+  const pickSearchScope = (value: string) => {
+    setSearchScopeValue(value);
+    const picked = parseSearchScope(value);
+    if (!picked.catalogId) return;
+    const ref = { addonKey: picked.addonKey!, type: picked.catalogType!, id: picked.catalogId };
+    if (searchable.some((item) => sameRef(refOf(item), ref))) selectCatalog(ref);
+  };
+  const pickCatalog = (ref: CatalogRef) => selectCatalog(ref, true);
+  const pickBucket = (bucket: TypeBucket) => {
+    if (!currentCatalog) return;
+    const fallback = fallbackForBucket(catalogs, refOf(currentCatalog), bucket, views.catalog.hiddenAddons);
+    if (!fallback) return;
+    const next = catalogs.find((catalog) => sameRef(refOf(catalog), fallback.ref));
+    if (!next) return;
+    const undo = { catalog: selectedCatalog, genre, sort };
+    const from = currentCatalog.name || currentCatalog.id;
+    const to = next.name || next.id;
+    selectCatalog(fallback.ref);
+    if (!fallback.sameId) {
+      const key = bucket === "movie" ? "catalog.noMovies" : bucket === "series" ? "catalog.noSeries" : "catalog.noOther";
+      setTypeNote({ text: t(key, { from, to }), undo });
+    }
+  };
+  const pickGenre = (next: string) => {
+    setTypeNote(null);
+    setGenre(next);
+    if (currentCatalog) rememberLastCatalog(refOf(currentCatalog), next);
+  };
+  const undoTypeSwitch = () => {
+    if (!typeNote) return;
+    const catalog = catalogs.find((item) => `${item.addonKey}:${item.type}:${item.id}` === typeNote.undo.catalog);
+    setTypeNote(null);
+    if (!catalog) return;
+    selectedCatalogChosen.current = true;
+    setSelectedCatalog(typeNote.undo.catalog);
+    setGenre(typeNote.undo.genre);
+    setSort(typeNote.undo.sort);
+    setSearchPromptCatalog("");
+    const ref = refOf(catalog);
+    rememberRecentCatalog(ref);
+    persistCatalogPrefs({ last: { ...ref, genre: typeNote.undo.genre } });
+  };
+  const closeScopePicker = () => {
+    scopePickerClosedAt.current = performance.now();
+    setScopePickerOpen(false);
+  };
+  const sortLabel = sort === "default" ? ""
+    : sort === "titleMatch" ? t("catalog.sortTitleMatch")
+      : sort === "name" ? t("catalog.sortName")
+        : sort === "year" ? t("catalog.sortYear") : "";
 
   const openPlayer = (anchor: PlaybackAnchor | undefined, subject: PlayerSubject) => {
     if (!playerOpenRef.current) scrollByView.current[view] = viewScrollTop();
@@ -1253,11 +1375,15 @@ export function App() {
     setRemoteLoading(0);
     setRemoteDiscoveryError("");
     setCatalogCompact(false);
+    setTypeNote(null);
+    setSearchPromptCatalog("");
+    setScopePickerOpen(false);
     const firstCatalog = (pick && catalogs.find((catalog) => catalog.addonKey === pick.addonKey && catalog.type === pick.type && catalog.id === pick.id)) ?? catalogs[0];
     scrollByView.current.catalog = 0;
     setView("catalog");
     setSearch(""); setSubmittedQuery(""); setSearchScopeValue(""); setTypeFilter(""); setGenre(""); setSort("default"); setSearchSort("default");
     setSelectedCatalog(firstCatalog ? `${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}` : "");
+    if (pick) selectedCatalogChosen.current = true;
     setSelected(null); setSelectedVideo(null); resetTitleSources(); setSelectedStream(null);
     setGalleryIndex(null);
     setStreamAddon(""); setStreamLanguage(""); setStreamSort(defaultStreamSort);
@@ -1359,7 +1485,8 @@ export function App() {
       return [] as Catalog[];
     }
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs); setCatalogsKnown(true);
-    if ((selectFirst || !selectedCatalog) && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
+    const firstCatalog = nextCatalogs.find(isBrowsable) ?? nextCatalogs[0];
+    if ((selectFirst || !selectedCatalog) && firstCatalog) setSelectedCatalog(`${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}`);
     return nextCatalogs;
   };
   const downloadsSeen = useRef(false);
@@ -1528,6 +1655,7 @@ export function App() {
         } catch { /* keep the keys and try again next visit */ }
       }
     }
+    viewsRef.current = next;
     setViews(next);
     setViewsReady(true);
   };
@@ -2221,12 +2349,14 @@ export function App() {
   useEffect(() => () => live.cancel(), []);
   const submitSearch = (event?: FormEvent) => {
     event?.preventDefault(); live.cancel(); setSuggestOpen(false);
+    setTypeNote(null);
     const query = search.trim();
     if (query) actOnSearch(query);
     setSubmittedQuery(query);
   };
   const chooseSuggestion = (suggestion: Suggestion) => {
     setSearch(suggestion.text); live.cancel(); setSuggestOpen(false); setActiveSuggestion(-1);
+    setTypeNote(null);
     actOnSearch(suggestion.text);
     setSubmittedQuery(suggestion.text);
   };
@@ -2366,6 +2496,24 @@ export function App() {
     return list;
   }, [items, sort, searchSort, submittedQuery, settings.mergeByName]);
   const activeSort = submittedQuery ? searchSort : sort;
+  const expandCatalogToolbar = (button: HTMLButtonElement) => {
+    holdHeaderOpen();
+    setCatalogCompact(false);
+    if (touchDevice()) return;
+    const bar = button.closest(".catalog-view")?.querySelector(".searchbar");
+    const focus = () => {
+      quietFocus.current = true;
+      bar?.querySelector<HTMLInputElement>(".search-input input")?.focus();
+      quietFocus.current = false;
+    };
+    const onEnd = (ended: Event) => {
+      if ((ended as TransitionEvent).propertyName !== "max-height") return;
+      bar?.removeEventListener("transitionend", onEnd);
+      focus();
+    };
+    bar?.addEventListener("transitionend", onEnd);
+    window.setTimeout(() => { bar?.removeEventListener("transitionend", onEnd); focus(); }, 400);
+  };
   const suggestions = suggestOpen && view === "catalog"
     ? suggest({ draft: search, recent: searchState?.saveHistory ? searchState.recent : [], candidates: pool.list(), addonKey: searchScope.addonKey, type: effectiveTypeFilter || undefined })
     : [];
@@ -3749,7 +3897,13 @@ export function App() {
         onReveal={revealInLibrary} onForgotten={refreshPersonal} onError={fail}
         {...(buildInfo?.searchEverywhere ? { onOpenSearch: () => openSearch() } : {})}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
-        if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
+        const target = event.target as HTMLElement;
+        if (target.closest(".catalog-trigger,.genre-trigger") && consumePickerFocusReturn()) return;
+        if (target.closest(".scope-trigger") && performance.now() - scopePickerClosedAt.current <= 400) {
+          scopePickerClosedAt.current = Number.NEGATIVE_INFINITY;
+          return;
+        }
+        if (target.closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
         {!catalogs.length && !catalogsKnown ? <div className="loading" role="status">{t("common.loading")}</div> : !catalogs.length ? (restricted || session!.role !== "admin"
           // An ordinary account seeing no catalogue has not been granted an addon, and
@@ -3759,7 +3913,7 @@ export function App() {
           {/* The head sits on the same columns as the panels below it: search spans both, so it ends
               with the sources panel, and the filters keep to the first, so they end with the results. */}
           <div className="catalog-head"><div className={`fold${catalogCompact ? " closed" : ""}${suggestions.length ? " suggesting" : ""}`}><form className="searchbar" onSubmit={submitSearch}>
-            <div className="search-input"><Search/><input value={search} role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls="search-suggestions" aria-activedescendant={activeOption >= 0 ? `search-suggestion-${activeOption}` : undefined}
+            <div className="search-input"><Search/><input ref={catalogSearchInput} value={search} role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls="search-suggestions" aria-activedescendant={activeOption >= 0 ? `search-suggestion-${activeOption}` : undefined}
               onChange={(e) => { setSearch(e.target.value); setSuggestOpen(true); setActiveSuggestion(-1); if (liveSearchOn) live.update(e.target.value, submittedQuery); }}
               onCompositionStart={() => live.compositionStart()} onCompositionEnd={(e) => { if (liveSearchOn) live.compositionEnd(e.currentTarget.value, submittedQuery); }}
               onFocus={() => { if (!quietFocus.current) setSuggestOpen(true); void loadSearchState(); }} onBlur={() => setSuggestOpen(false)}
@@ -3776,12 +3930,20 @@ export function App() {
                 // Shift+Delete removes the highlighted recent search, as browsers do in their own lists.
                 else if (e.key === "Delete" && e.shiftKey && suggestions[activeOption]?.kind === "recent") { e.preventDefault(); forgetSearch(suggestions[activeOption].text); }
                 else if (e.key === "Escape" && suggestions.length) { e.preventDefault(); setSuggestOpen(false); setActiveSuggestion(-1); }
-              }} placeholder={t("catalog.searchPlaceholder")}/>
+              }} placeholder={searchPromptCatalog
+                ? t("catalog.needQueryIn", { catalog: searchPromptCatalog })
+                : t("catalog.searchPlaceholder")}/>
 
             </div>
-            <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => pickSearchScope(e.target.value)}>
-              <SearchScopeOptions searchable={searchable}/>
-            </select></label>
+            <button type="button" className="scope-trigger" aria-haspopup="dialog"
+              aria-label={t("catalog.searchScope")} aria-expanded={scopePickerOpen}
+              onClick={() => setScopePickerOpen(true)}>
+              {scopedCatalog || scopeAddon
+                ? <AddonLogo addonKey={(scopedCatalog ?? scopeAddon)!.addonKey}
+                  name={(scopedCatalog ?? scopeAddon)!.addonName} src={logos[(scopedCatalog ?? scopeAddon)!.addonKey]}/>
+                : <Search className="scope-shared-mark"/>}
+              <span className="scope-trigger-label">{scopeLabel}</span>
+            </button>
             <button className="primary"><Search/> {t("catalog.search")}</button>
             {submittedQuery && <button type="button" onClick={() => { live.cancel(); setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}
             {/* Under the whole bar, not the field: on a narrow screen the scope and the Search
@@ -3794,47 +3956,41 @@ export function App() {
                   {suggestion.kind === "recent" && <button type="button" className="forget-recent" tabIndex={-1} aria-label={t("catalog.forgetRecent")} title={t("catalog.forgetRecent")}
                     onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); forgetSearch(suggestion.text); }}><X/></button>}</li>)}</ul>}
           </form></div>
+          {scopePickerOpen && <ScopePicker searchable={searchable} value={searchScopeValue} type={scopeFilter} logos={logos}
+            onPick={(value) => { closeScopePicker(); pickSearchScope(value); }}
+            onClose={closeScopePicker}/>}
           <div className="filter-slot"><div className="filterbar">
             {submittedQuery
               ? <>
                   <span className="scope-badge">{t("catalog.searchedCatalogs", { count: sourceCount })} {scopedCatalog ? t("catalog.inCatalog", { addon: scopedCatalog.addonName, catalog: scopedCatalog.name }) : searchScope.addonKey ? t("catalog.inAddon", { addon: searchable.find((item) => item.addonKey === searchScope.addonKey)?.addonName ?? "" }) : t("catalog.inAllAddons")}</span>
-                  <label><span>{t("catalog.type")}</span><select aria-label={t("catalog.type")} value={effectiveTypeFilter} disabled={Boolean(searchScope.catalogType)} onChange={(e) => setTypeFilter(e.target.value)}>
-                    {searchScope.catalogType
-                      ? <option value={searchScope.catalogType}>{typeLabel(searchScope.catalogType)}</option>
-                      : <><option value="">{t("common.all")}</option><option value="movie">{t("catalog.movies")}</option><option value="series">{t("catalog.series")}</option></>}
-                  </select></label>
+                  <div className="results-filter" role="group" aria-label={t("catalog.resultsFilter")}>
+                    <span>{t("catalog.resultsFilter")}</span>
+                    {[
+                      { value: "", label: t("common.all") },
+                      { value: "movie", label: t("catalog.movies") },
+                      { value: "series", label: t("catalog.series") },
+                    ].map((item) => <button key={item.value} type="button"
+                      aria-pressed={searchScope.catalogType ? searchScope.catalogType === item.value : typeFilter === item.value}
+                      disabled={Boolean(searchScope.catalogType) && searchScope.catalogType !== item.value}
+                      onClick={() => { setTypeNote(null); setTypeFilter(item.value); }}>{item.label}</button>)}
+                    {searchScope.catalogType && <small>{t("catalog.typeLocked")}</small>}
+                  </div>
                 </>
-              : <>
-                  <label className="catalog-filter"><span>{t("catalog.browse")}</span><select className="catalog-select" aria-label={t("catalog.browse")} value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
-                    {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalogTypeTag(catalog.type)})</option>)}
-                  </select></label>
-                  {genreOptions.length > 0 && <label><span>{t("catalog.genre")}</span><select aria-label={t("catalog.genre")} value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">{t("catalog.allGenres")}</option>{genreOptions.map((option) => <option key={option} value={option}>{genreLabel(option)}</option>)}</select></label>}
-                </>}
-            <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={activeSort} onChange={(e) => (submittedQuery ? setSearchSort(e.target.value) : setSort(e.target.value))}><option value="default">{t("catalog.sortAddon")}</option>{submittedQuery && <option value="titleMatch">{t("catalog.sortTitleMatch")}</option>}<option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
+              : currentCatalog && <CatalogFilters catalogs={catalogs} current={currentCatalog} genre={genre}
+                prefs={views.catalog} logos={logos} compact={catalogCompact} sortLabel={sortLabel}
+                onPickCatalog={pickCatalog} onBucket={pickBucket} onGenre={pickGenre} onPrefs={persistCatalogPrefs}/>}
+            <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={activeSort} onChange={(e) => {
+              setTypeNote(null);
+              if (submittedQuery) setSearchSort(e.target.value);
+              else setSort(e.target.value);
+            }}><option value="default">{t("catalog.sortAddon")}</option>{submittedQuery && <option value="titleMatch">{t("catalog.sortTitleMatch")}</option>}<option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
             {activeSort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}
             {!child && <button className="shape-toggle" title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
-            {/* The one control the collapsed header keeps: it unfolds the search block and hands over the caret. */}
-            <button className="header-expand" title={t("catalog.showTools")} aria-label={t("catalog.showTools")} aria-expanded={!catalogCompact} onClick={(event) => {
-              holdHeaderOpen();
-              setCatalogCompact(false);
-              // A folded box cannot take focus, so the caret waits for the fold itself to finish
-              // rather than for a guessed number of milliseconds. The timer is the way out when
-              // there is no transition to wait for, as with reduced motion.
-              const bar = event.currentTarget.closest(".catalog-view")?.querySelector(".searchbar");
-              const focus = () => {
-                // The caret is handed over for typing; the list of past searches waits for a keystroke.
-                quietFocus.current = true;
-                bar?.querySelector<HTMLInputElement>(".search-input input")?.focus();
-                quietFocus.current = false;
-              };
-              const onEnd = (ended: Event) => {
-                if ((ended as TransitionEvent).propertyName !== "max-height") return;
-                bar?.removeEventListener("transitionend", onEnd);
-                focus();
-              };
-              bar?.addEventListener("transitionend", onEnd);
-              window.setTimeout(() => { bar?.removeEventListener("transitionend", onEnd); focus(); }, 400);
-            }}><SlidersHorizontal/></button>
+            <button className="header-expand" title={t("catalog.showTools")} aria-label={t("catalog.showTools")}
+              aria-expanded={!catalogCompact} onClick={(event) => expandCatalogToolbar(event.currentTarget)}><SlidersHorizontal/></button>
+            {catalogCompact && submittedQuery && <button type="button" className="search-summary"
+              onClick={(event) => expandCatalogToolbar(event.currentTarget)}>„{submittedQuery}“ · {scopeLabel}</button>}
+            {typeNote && <div className="catalog-note" role="status">{typeNote.text} <button type="button" onClick={undoTypeSwitch}>{t("catalog.undo")}</button></div>}
           </div></div></div>
           <div className="catalog-layout"><section className={`panel result-panel${staleGrid ? " refreshing" : ""}`}><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t(hasMore ? "catalog.itemCountMore" : "catalog.itemCount", { count: visibleItems.length })}</span></div>
             {personNameSearch && !buildInfo?.searchEverywhere && <p className="person-name-search" role="note">{t("person.nameSearch")}</p>}
