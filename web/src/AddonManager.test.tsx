@@ -175,9 +175,42 @@ it("Cinemeta cannot be switched off, demoted to sources, or removed", async () =
   await render([addon({ role: "both", essential: true, manifest: { ...addon().manifest, resources: ["catalog", "stream"] } })]);
   expect(host.querySelector<HTMLInputElement>(".addon-card input")!.disabled).toBe(true);
   await openEditor();
-  const roles = [...host.querySelectorAll<HTMLOptionElement>(".addon-edit-card option")].map((option) => option.value);
-  expect(roles).not.toContain("source");
+  const roles = [...host.querySelectorAll<HTMLButtonElement>(".addon-edit-card .addon-role-switch button")].map((item) => item.textContent);
+  expect(roles).not.toContain("Sources only");
   expect(button("Remove addon")).toBeUndefined();
+});
+
+it("the role switch sets the role of an addon being added", async () => {
+  await render([]);
+  const form = host.querySelector("form.addon-form")!;
+  const catalog = [...form.querySelectorAll<HTMLButtonElement>(".addon-role-switch button")].find((item) => item.textContent === "Catalog only")!;
+  await act(async () => { catalog.click(); });
+  expect(catalog.getAttribute("aria-pressed")).toBe("true");
+  const url = form.querySelector<HTMLInputElement>("input")!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(url, "https://addon.test/manifest.json");
+    url.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  fetchMock.mockResolvedValue(json(addon()));
+  await act(async () => { form.querySelector<HTMLButtonElement>("button.primary")!.click(); });
+  await act(async () => { await Promise.resolve(); });
+  const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+  expect(JSON.parse(post[1].body as string)).toEqual({ url: "https://addon.test/manifest.json", role: "catalog" });
+});
+
+it("the role switch sets the role in the edit dialog", async () => {
+  await render([addon()]);
+  await openEditor();
+  const catalog = [...host.querySelectorAll<HTMLButtonElement>(".addon-edit-card .addon-role-switch button")]
+    .find((item) => item.textContent === "Catalog only")!;
+  await act(async () => { catalog.click(); });
+  fetchMock.mockResolvedValue(json(addon()));
+  await act(async () => { button("Save changes")!.click(); });
+  await act(async () => { await Promise.resolve(); });
+  const patches = fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH");
+  expect(patches).toHaveLength(1);
+  expect(JSON.parse(patches[0][1].body as string).role).toBe("catalog");
 });
 
 it("the filter only appears once the list is long enough to need it", async () => {

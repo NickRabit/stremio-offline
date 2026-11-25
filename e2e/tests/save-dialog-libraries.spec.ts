@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { chooseCatalog } from "./catalog-picker";
 import { pickAddonStream } from "./catalog-sources";
 
 // The library list is read once at sign-in, and on a slow or resumed phone connection that read
@@ -14,8 +15,7 @@ test("the save dialog offers the libraries even when the first library list fail
 
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await pickAddonStream(page);
   expect(failed, "the first library list was refused").toBe(true);

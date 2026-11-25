@@ -9,6 +9,7 @@ import {
   type Job,
   type Profile,
 } from "./source-selection-journey";
+import { chooseCatalog } from "./catalog-picker";
 
 const SERIES_ID = "tt-e2e-series";
 const SERIES_NAME = "Zkušební seriál";
@@ -59,9 +60,7 @@ const queueEpisode = async (request: APIRequestContext, profile: Profile, title:
 const openSeries = async (page: Page): Promise<Locator> => {
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const select = page.getByRole("combobox", { name: "Procházet katalog" });
-  const labels = await select.locator("option").allTextContents();
-  await select.selectOption({ label: labels.find((text) => /Seriály/.test(text))! });
+  await chooseCatalog(page, /Seriály/, "series");
   await page.getByRole("button", { name: new RegExp(SERIES_NAME) }).click();
   return page.locator(".detail-panel");
 };

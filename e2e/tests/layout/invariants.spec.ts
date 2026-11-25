@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { chooseCatalog } from "../catalog-picker";
 import { goToView, menuItem } from "../nav";
 
 // Assertions that hold in every viewport, checked without stored baselines. They
@@ -20,9 +21,7 @@ const openView = async (page: Page, name: string) => {
 
 const openSeries = async (page: Page) => {
   await openView(page, "Katalog");
-  const select = page.getByRole("combobox", { name: "Procházet katalog" });
-  const labels = await select.locator("option").allTextContents();
-  await select.selectOption({ label: labels.find((text) => /Seriály/.test(text))! });
+  await chooseCatalog(page, /Seriály/, "series");
   await page.getByRole("button", { name: /Zkušební seriál/ }).click();
   return page.locator(".detail-panel");
 };

@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
+import { chooseCatalog } from "./catalog-picker";
 import { pickAddonStream } from "./catalog-sources";
 
 const control = (request: APIRequestContext, mode: string) => request.get(new URL(`/proxy-control?mode=${mode}`, addonManifest).href);
@@ -173,9 +174,7 @@ test("browser playback renders from the server and never requests provider media
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  const option = await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value");
-  await catalog.selectOption(option!);
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();

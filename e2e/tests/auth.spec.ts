@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { catalogTrigger } from "./catalog-picker";
 
 test.describe("auth", () => {
   test("a request without a session is refused, not answered", async ({ request }) => {
@@ -35,6 +36,6 @@ test.describe("auth", () => {
     await form.getByRole("button", { name: "Přihlásit se" }).click();
 
     // Short screens hide the catalog heading, so look for the catalog itself.
-    await expect(page.getByRole("combobox", { name: "Procházet katalog" })).toBeVisible();
+    await expect(catalogTrigger(page)).toBeVisible();
   });
 });

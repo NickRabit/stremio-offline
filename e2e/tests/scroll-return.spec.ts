@@ -1,5 +1,6 @@
 import { expect, test, type Locator } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
+import { catalogTrigger, chooseCatalog } from "./catalog-picker";
 import { goToView } from "./nav";
 
 // The Library entry always starts over, and the player gives the list back where it was left.
@@ -50,10 +51,8 @@ test("closing the player gives the catalogue grid back at the title that was pla
     await route.fulfill({ json: { id, type: "movie", name: `Scroll ${id.split("-").pop()}`, description: "Scroll return title" } });
   });
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await expect(catalog).toBeVisible();
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await expect(catalogTrigger(page)).toBeVisible();
+  await chooseCatalog(page, /Filmy/, "movie");
 
   const grid = page.locator(".poster-grid");
   await expect(grid.locator(".poster-card")).toHaveCount(80);
@@ -98,10 +97,8 @@ test.describe("a source switch", () => {
       await route.fulfill({ json: { id, type: "movie", name: `Switch ${id.split("-").pop()}`, description: "Source switch title" } });
     });
     await page.goto("/");
-    const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-    await expect(catalog).toBeVisible();
-    const options = await catalog.locator("option").allTextContents();
-    await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+    await expect(catalogTrigger(page)).toBeVisible();
+    await chooseCatalog(page, /Filmy/, "movie");
 
     const grid = page.locator(".poster-grid");
     await expect(grid.locator(".poster-card")).toHaveCount(80);

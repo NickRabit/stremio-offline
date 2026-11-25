@@ -294,31 +294,47 @@ describe("SearchEverywhere", () => {
     expect(onRecord).toHaveBeenCalledWith("gamma");
   });
 
-  it("offers the Catalog scope only for the Catalog filter", async () => {
+  it("opens the scope picker from the catalog filter and locks the type to the chosen catalog", async () => {
     const searchable: SearchableCatalog[] = [
       { addonKey: "addon-a", addonName: "Addon A", globalSearch: false, type: "movie", id: "films", name: "Films" },
       { addonKey: "addon-a", addonName: "Addon A", globalSearch: false, type: "series", id: "shows", name: "Shows" },
     ];
     const setScope = vi.fn();
+    const setKind = vi.fn();
     const setSources = vi.fn();
-    await render(controller({ sources: ["catalog"], setScope, setSources }), { searchable });
+    await render(controller({ sources: ["catalog"], setScope, setKind, setSources }), { searchable });
 
-    const select = host.querySelector<HTMLSelectElement>("select[aria-label='Where to search']")!;
-    expect(select).not.toBeNull();
-    expect([...select.querySelectorAll("option")].map((option) => option.value)).toEqual([
-      "",
-      "addon:addon-a",
-      "catalog:addon-a:movie:films",
-      "catalog:addon-a:series:shows",
-    ]);
-    await act(async () => {
-      select.value = "catalog:addon-a:movie:films";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    const trigger = host.querySelector<HTMLButtonElement>("button.scope-trigger")!;
+    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(trigger.getAttribute("aria-label")).toBe("Where to search");
+    expect(trigger.textContent).toContain("Shared search");
+    await act(async () => { trigger.click(); });
+    const dialog = host.querySelector<HTMLElement>("[role='dialog']")!;
+    const films = [...dialog.querySelectorAll<HTMLButtonElement>("[role='option']")].find((option) => option.textContent?.includes("Films"))!;
+    await act(async () => { films.click(); });
     expect(setScope).toHaveBeenCalledWith({ addonKey: "addon-a", catalogType: "movie", catalogId: "films" });
+    expect(setKind).toHaveBeenCalledWith("movie");
+    expect(host.querySelector("[role='dialog']")).toBeNull();
+
+    await render(controller({
+      sources: ["catalog"],
+      scope: { addonKey: "addon-a", catalogType: "movie", catalogId: "films" },
+      kind: "movie",
+      setScope,
+      setKind,
+      setSources,
+    }), { searchable });
+    expect(host.querySelector("button.scope-trigger")?.textContent).toContain("Films · movie");
+    const typeButtons = [...host.querySelectorAll<HTMLButtonElement>("[aria-label='Type'] button")];
+    expect(typeButtons.map((button) => [button.textContent, button.disabled])).toEqual([
+      ["All", true],
+      ["Movies", false],
+      ["Series", true],
+    ]);
+    expect(host.textContent).toContain("the catalog sets the type");
 
     await render(controller({ sources: ["local"], setScope, setSources }), { searchable });
-    expect(host.querySelector("select[aria-label='Where to search']")).toBeNull();
+    expect(host.querySelector("button.scope-trigger")).toBeNull();
     const libraries = sourceButtons().find((button) => button.textContent === "Libraries")!;
     await act(async () => { libraries.click(); });
     expect(setSources).toHaveBeenCalledWith(["local", "remote"]);

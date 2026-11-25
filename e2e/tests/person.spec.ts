@@ -1,11 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
+import { chooseCatalog } from "./catalog-picker";
 
 const openCatalogue = async (page: Page) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const select = page.getByRole("combobox", { name: "Procházet katalog" });
-  const labels = await select.locator("option").allTextContents();
-  await select.selectOption({ label: labels.find((text) => /Filmy/.test(text))! });
+  await chooseCatalog(page, /Filmy/, "movie");
 };
 
 const stubPerson = async (page: Page) => {

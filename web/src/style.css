@@ -2872,3 +2872,10 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
   .picker-card .dialog-foot .identify-hint{display:none}
   .picker-card .picker-foot-actions>button{min-height:34px}
 }
+.search-filters .scope-trigger{display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:min(calc(28vw / var(--ui-scale, 1)),320px);text-align:left;vertical-align:middle}
+.search-filters .scope-trigger>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search-filters .scope-trigger{min-height:44px}
+@media(min-width:701px) and (min-height:501px){.search-filters .scope-trigger{min-height:31px;padding:0 12px;font-size:11px}}
+.addon-role-switch{flex-wrap:wrap}
+.addon-form .addon-role-switch,.manifest-field .addon-role-switch{width:100%}
+.addon-role-switch button{flex:1 1 auto;min-width:0;padding:0 8px;white-space:normal;line-height:1.2}

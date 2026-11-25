@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { catalogTrigger, chooseCatalog } from "./catalog-picker";
 
 // A rotation collapses the scrollable range, and the browser clamps the offset to the new
 // maximum -- which loses the position for good, because rotating back cannot undo a clamp.
@@ -23,10 +24,8 @@ test("a rotation keeps the catalogue looking at the same title", async ({ page }
   });
   await page.setViewportSize(PORTRAIT);
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await expect(catalog).toBeVisible();
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await expect(catalogTrigger(page)).toBeVisible();
+  await chooseCatalog(page, /Filmy/, "movie");
   const grid = page.locator(".poster-grid");
   await expect(grid.locator(".poster-card").first()).toBeVisible();
 
@@ -98,10 +97,8 @@ test("a toolbar sliding away does not haul a gliding list back", async ({ page }
   });
   await page.setViewportSize(PORTRAIT);
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await expect(catalog).toBeVisible();
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await expect(catalogTrigger(page)).toBeVisible();
+  await chooseCatalog(page, /Filmy/, "movie");
   const grid = page.locator(".poster-grid");
   await expect(grid.locator(".poster-card").first()).toBeVisible();
 
@@ -128,10 +125,8 @@ test("a rotation does not fetch a page nobody scrolled for", async ({ page }) =>
   });
   await page.setViewportSize(PORTRAIT);
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await expect(catalog).toBeVisible();
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await expect(catalogTrigger(page)).toBeVisible();
+  await chooseCatalog(page, /Filmy/, "movie");
   const grid = page.locator(".poster-grid");
   await expect(grid.locator(".poster-card").first()).toBeVisible();
   await grid.evaluate((element) => { element.scrollTop = element.scrollHeight * 0.4; });

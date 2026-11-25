@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
+import { chooseCatalog } from "./catalog-picker";
 import { pickAddonStream } from "./catalog-sources";
 
 test("embedded subtitle URLs load directly and a subtitle error never stops the video", async ({ page, request }) => {
@@ -29,8 +30,7 @@ test("embedded subtitle URLs load directly and a subtitle error never stops the 
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
