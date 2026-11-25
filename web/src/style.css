@@ -2853,3 +2853,22 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .picker-edit-body label.picker-addon-row .picker-addon-copy{display:grid;min-width:0;flex:1}
 .picker-edit-body label.picker-addon-row .picker-addon-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .picker-edit-section>button{justify-self:start;min-height:36px;padding:6px 14px;font-size:12px}
+@media(max-width:700px),(max-height:500px){
+  .picker-card .dialog-foot{gap:6px;padding-top:8px}
+  .picker-card .dialog-foot .identify-hint{font-size:11px;margin:0}
+  .picker-foot-actions{flex-wrap:nowrap}
+  .picker-foot-actions>button{flex:1 1 0;min-width:0;min-height:40px;padding:6px 10px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+}
+/* A phone held sideways has ~375px of height: head on one line, no footer hint. */
+@media(max-height:500px) and (orientation:landscape){
+  .picker-card .picker-head{padding:8px 14px 6px}
+  .picker-card .picker-head>div{display:flex;align-items:center;gap:14px;min-width:0}
+  .picker-card .picker-head h2{font-size:16px;margin:0;white-space:nowrap}
+  .picker-card .picker-subtitle{display:none}
+  .picker-card .picker-header-extra{margin:0}
+  .picker-card .picker-header-extra button{min-height:30px;padding:3px 12px}
+  .picker-card .picker-search input{min-height:36px;padding-top:6px;padding-bottom:6px}
+  .picker-card .dialog-foot{padding:6px 14px max(6px,env(safe-area-inset-bottom,0px))}
+  .picker-card .dialog-foot .identify-hint{display:none}
+  .picker-card .picker-foot-actions>button{min-height:34px}
+}
