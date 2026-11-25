@@ -87,8 +87,8 @@ export function CatalogFilters({
     <button type="button" className={`genre-trigger${effective && !paused ? " active" : ""}${paused ? " genre-paused" : ""}`}
       aria-haspopup="dialog" aria-label={t("catalog.genre")} aria-expanded={picker === "genre"}
       disabled={!options.length} onClick={() => setPicker("genre")}>
+      <small>{paused ? t("catalog.genrePaused", { genre: genreLabel(genre) }) : t("catalog.genre")}</small>
       <span>{options.length ? (paused || !effective ? t("catalog.allGenres") : genreLabel(effective)) : t("catalog.genreNone")}</span>
-      {paused && <small>{t("catalog.genrePaused", { genre: genreLabel(genre) })}</small>}
     </button>
     {picker === "catalog" && <CatalogPicker catalogs={catalogs} current={refOf(current)} prefs={prefs} logos={logos}
       onPick={(ref) => { closePicker(); onPickCatalog(ref); }}

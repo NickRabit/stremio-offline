@@ -2826,3 +2826,21 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
   .catalog-view.catalog-compact .filterbar>.shape-toggle{grid-area:shape}
   .catalog-view.catalog-compact .filterbar>.header-expand{grid-area:expand;display:inline-flex}
 }
+
+/* Catalogue toolbar, reviewer's layout fixes: the old phone rules outrank the new ones. */
+.genre-trigger{align-items:flex-start}
+.genre-trigger>small{color:var(--muted)}
+.genre-trigger.genre-paused>small{color:#e9b560}
+@media(min-width:701px) and (min-height:501px){
+  .picker-card{height:min(100%,680px)}
+}
+@media(max-width:700px){
+  main.view-catalog .searchbar>.search-input{grid-column:1;grid-row:1}
+  main.view-catalog .searchbar>.scope-trigger{grid-column:2;grid-row:1;max-width:42vw;min-height:44px}
+  main.view-catalog .filterbar{grid-template-columns:auto minmax(0,1fr) minmax(0,1fr) 44px;grid-template-areas:"type catalog catalog catalog" "genre genre sort shape" "note note note note"}
+  main.view-catalog .filterbar>.catalog-type-switch{display:inline-flex;width:auto}
+  main.view-catalog .filterbar>.catalog-type-switch button{padding:0 9px;font-size:11px}
+  main.view-catalog .filterbar>label>span{display:none}
+  main.view-catalog .filterbar:has(.results-filter)>label{grid-column:1/4}
+  main.view-catalog .filterbar:has(.results-filter)>.shape-toggle,main.view-catalog .filterbar:has(.results-filter)>.header-expand{grid-column:4}
+}

@@ -109,7 +109,7 @@ describe("CatalogFilters", () => {
     await render({ current: catalogs.find((item) => item.id === "m-4k")! });
     const genre = button(t("catalog.genre"))!;
     expect(genre.disabled).toBe(true);
-    expect(genre.textContent).toBe(t("catalog.genreNone"));
+    expect(genre.textContent).toContain(t("catalog.genreNone"));
   });
 
   it("shows a paused sticky genre and picks a replacement", async () => {
