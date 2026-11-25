@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { useChildMode } from "./child-mode";
 import { ShapeToggle } from "./app-chrome";
@@ -582,6 +582,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
         <button type="button" className="scope-trigger" aria-haspopup="dialog" aria-label={`${t("catalog.searchScope")}: ${scopeLabel}`} onClick={() => setScopeOpen(true)}>
           {scopeAddon && <AddonLogo addonKey={scopeAddon.addonKey} name={scopeAddon.addonName}/>}
           <span>{scopeLabel}</span>
+          <ChevronDown className="scope-chevron"/>
         </button>
       </label>}
       {catalogOnly && scopeOpen && <ScopePicker searchable={searchable} value={scopeValue}

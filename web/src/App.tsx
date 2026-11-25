@@ -3897,14 +3897,15 @@ export function App() {
                 : t("catalog.searchPlaceholder")}/>
 
             </div>
-            <button type="button" className="scope-trigger" aria-haspopup="dialog"
-              aria-label={`${t("catalog.searchScope")}: ${scopeLabel}`} aria-expanded={scopePickerOpen}
+            <button type="button" className="scope-trigger" aria-haspopup="dialog" aria-expanded={scopePickerOpen}
               onClick={() => setScopePickerOpen(true)}>
               {scopedCatalog || scopeAddon
                 ? <AddonLogo addonKey={(scopedCatalog ?? scopeAddon)!.addonKey}
                   name={(scopedCatalog ?? scopeAddon)!.addonName} src={logos[(scopedCatalog ?? scopeAddon)!.addonKey]}/>
                 : <Search className="scope-shared-mark"/>}
-              <span className="scope-trigger-label">{scopeLabel}</span>
+              <span className="scope-trigger-copy"><small>{t("search.scopeTitle")}</small>
+                <span className="scope-trigger-label">{scopeLabel}</span></span>
+              <ChevronDown className="scope-chevron"/>
             </button>
             <button className="primary"><Search/> {t("catalog.search")}</button>
             {submittedQuery && <button type="button" onClick={() => { live.cancel(); setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}

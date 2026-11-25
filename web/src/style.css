@@ -2886,3 +2886,9 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .picker-body-rail>.picker-rail,.picker-body-rail>.picker-main{min-height:0}
 /* Scrolled to on open; the sticky search field would otherwise cover the head. */
 .picker-body-rail .picker-group-head{scroll-margin-top:60px}
+/* The scope reads as a choice: a caption above the value and a chevron. */
+.scope-trigger{gap:8px}
+.scope-trigger-copy{display:grid;min-width:0;line-height:1.15;text-align:left}
+.scope-trigger-copy>small{color:var(--muted);font-size:9.5px;font-weight:600}
+.scope-trigger-copy>.scope-trigger-label{font-size:12px}
+.scope-chevron{flex:0 0 auto;width:15px;height:15px;color:var(--muted);margin-left:auto}
