@@ -14,6 +14,7 @@ import { normalizeLanguage } from "../language.js";
 import type { Viewer } from "../libraries.js";
 import { sourcePace } from "../conversion-pace.js";
 import { log } from "../logger.js";
+import { patchedRange, SeekIndexPatches, type PatchedFile } from "../matroska-seek-index.js";
 import { mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
 import { isRemoteMediaStream } from "../media-server-reference.js";
 import type { MediaServerPlaybackGuard } from "../media-server-playback.js";
@@ -229,7 +230,31 @@ const stillReading = async (res: express.Response): Promise<boolean> => {
   return !res.destroyed;
 };
 
+/** A library file served with its head patched, answering HEAD and a single byte range. */
+async function sendPatched(req: express.Request, res: express.Response, target: string, file: PatchedFile) {
+  const { size, mtime, patch } = file;
+  res.setHeader("accept-ranges", "bytes");
+  res.setHeader("last-modified", mtime.toUTCString());
+  res.type(path.extname(target));
+  let start = 0;
+  let end = size - 1;
+  const ranges = req.headers.range ? req.range(size, { combine: true }) : undefined;
+  if (ranges === -1) {
+    res.setHeader("content-range", `bytes */${size}`);
+    return void res.status(416).end();
+  }
+  if (Array.isArray(ranges) && ranges.type === "bytes" && ranges.length === 1) {
+    ({ start, end } = ranges[0]);
+    res.status(206).setHeader("content-range", `bytes ${start}-${end}/${size}`);
+  }
+  res.setHeader("content-length", String(end - start + 1));
+  if (req.method === "HEAD") return void res.end();
+  try { await pipeline(Readable.from(patchedRange(target, start, end, patch, MEDIA_READ_BUFFER)), res); }
+  catch { if (!res.headersSent) res.status(404).end(); else res.destroy(); }
+}
+
 export function registerPlaybackRoutes(app: express.Application, deps: PlaybackDeps): void {
+  const seekIndexPatches = new SeekIndexPatches();
   const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, mediaSources, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, requireAccess, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
 
   /** The synchronous local guard on a playback session's own resource: a remote original whose
@@ -681,6 +706,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       // path was resolved for a session before the resource the read follows existed.
       const target = await libraryTarget(relative, currentUser(req));
       countBytes(res, { source: "library", provider: "knihovna", title: path.basename(relative), kind: "other" }, ownerNow);
+      const patched = path.basename(target).startsWith(".") ? undefined : await seekIndexPatches.patched(target).catch(() => undefined);
+      if (patched) return void await sendPatched(req, res, target, patched);
       const options: BufferedSendFileOptions = { root: path.dirname(target), acceptRanges: true, dotfiles: "deny", highWaterMark: MEDIA_READ_BUFFER };
       return void res.sendFile(path.basename(target), options, (error) => {
         if (error && !res.headersSent) res.status(404).end();

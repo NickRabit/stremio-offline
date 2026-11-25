@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
@@ -588,6 +588,60 @@ test("a ranged local media read returns the requested bytes", async (t) => {
   assert.equal(response.status, 206);
   assert.equal(response.headers.get("content-range"), `bytes ${start}-${end}/${size}`);
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), file.subarray(start, end + 1));
+});
+
+test("a local MKV whose Cues the TV player cannot reach is served with them pointed to", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "routes-playback-mkv-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const fixtures = path.join(import.meta.dirname, "..", "..", "test-fixtures", "matroska");
+  const target = path.join(directory, "Zootropolis 2.mkv");
+  await copyFile(path.join(fixtures, "cues-behind-second-seekhead.mkv"), target);
+  const original = await readFile(target);
+  const expected = await readFile(path.join(fixtures, "cues-behind-second-seekhead.served.mkv"));
+  const harness = await mount();
+  t.after(harness.close);
+  const resourceId = registry.mediaStream({ url: `file://${target}` } as StreamItem, ADA).resourceId;
+  const get = (range?: string) => fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", ...(range ? { range } : {}) } });
+
+  const whole = await get();
+  assert.equal(whole.status, 200);
+  assert.equal(whole.headers.get("accept-ranges"), "bytes");
+  assert.equal(whole.headers.get("content-type"), "video/x-matroska");
+  assert.deepEqual(Buffer.from(await whole.arrayBuffer()), expected);
+
+  // The player reads the head in pieces and jumps to the Cues at the end.
+  for (const [start, end] of [[0, 99], [90, 130], [100, 199], [150, 4000], [5000, expected.length - 1]]) {
+    const part = await get(`bytes=${start}-${end}`);
+    assert.equal(part.status, 206, `bytes ${start}-${end}`);
+    assert.equal(part.headers.get("content-range"), `bytes ${start}-${end}/${expected.length}`);
+    assert.deepEqual(Buffer.from(await part.arrayBuffer()), expected.subarray(start, end + 1), `bytes ${start}-${end}`);
+  }
+  const open = await get("bytes=80-");
+  assert.deepEqual(Buffer.from(await open.arrayBuffer()), expected.subarray(80));
+  const suffix = await get("bytes=-100");
+  assert.deepEqual(Buffer.from(await suffix.arrayBuffer()), expected.subarray(-100));
+  const outside = await get(`bytes=${expected.length + 10}-`);
+  assert.equal(outside.status, 416);
+  assert.equal(outside.headers.get("content-range"), `bytes */${expected.length}`);
+  await outside.arrayBuffer();
+
+  const head = await fetch(`${harness.base}/api/media/${resourceId}`, { method: "HEAD", headers: { "x-user": "ada", range: "bytes=0-99" } });
+  assert.equal(head.status, 206);
+  assert.equal(head.headers.get("content-length"), "100");
+
+  assert.deepEqual(await readFile(target), original, "the file on disk is never written");
+});
+
+test("a local MKV the player can already seek in is served as it is", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "routes-playback-mkv-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const target = path.join(directory, "film.mkv");
+  await copyFile(path.join(import.meta.dirname, "..", "..", "test-fixtures", "matroska", "cues-pointed.mkv"), target);
+  const harness = await mount();
+  t.after(harness.close);
+  const resourceId = registry.mediaStream({ url: `file://${target}` } as StreamItem, ADA).resourceId;
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada" } });
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), await readFile(target));
 });
 
 /** A media-server original that answers ranges the way Jellyfin does, counting every open. */
