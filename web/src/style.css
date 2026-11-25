@@ -2879,3 +2879,8 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .addon-role-switch{flex-wrap:wrap}
 .addon-form .addon-role-switch,.manifest-field .addon-role-switch{width:100%}
 .addon-role-switch button{flex:1 1 auto;min-width:0;padding:0 8px;white-space:normal;line-height:1.2}
+@media(max-width:700px){
+  .search-filters>label:has(>.scope-trigger){flex:1 1 100%;display:flex;align-items:center;gap:8px;min-width:0}
+  .search-filters>label:has(>.scope-trigger)>span{flex:0 0 auto}
+  .search-filters .scope-trigger{flex:1 1 auto;max-width:none;width:auto}
+}
