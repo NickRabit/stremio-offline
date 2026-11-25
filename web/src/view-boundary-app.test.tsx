@@ -6,7 +6,7 @@ import { en } from "./i18n/en";
 import type { Catalog, Meta, Settings } from "./types";
 import { emptyViews } from "./views";
 
-const crash = vi.hoisted(() => ({ home: false, genre: false }));
+const crash = vi.hoisted(() => ({ home: false, filters: false }));
 
 vi.mock("./Home", () => ({
   Home: () => {
@@ -15,13 +15,13 @@ vi.mock("./Home", () => ({
   },
 }));
 
-vi.mock("./genres", async () => {
-  const actual = await vi.importActual<typeof import("./genres")>("./genres");
+vi.mock("./CatalogFilters", async () => {
+  const actual = await vi.importActual<typeof import("./CatalogFilters")>("./CatalogFilters");
   return {
     ...actual,
-    genreLabel: (genre: string) => {
-      if (crash.genre) throw new Error("genre label crashed");
-      return actual.genreLabel(genre);
+    CatalogFilters: (props: Parameters<typeof actual.CatalogFilters>[0]) => {
+      if (crash.filters) throw new Error("catalogue filters crashed");
+      return actual.CatalogFilters(props);
     },
   };
 });
@@ -69,7 +69,7 @@ beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
   crash.home = false;
-  crash.genre = false;
+  crash.filters = false;
   settings.startView = "catalog";
   consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
   vi.stubGlobal("matchMedia", () => ({
@@ -159,7 +159,7 @@ describe("view boundaries in App", () => {
   // The catalogue is written inline in App, so its elements are built while App renders; the
   // boundary has to build them itself to catch an error thrown there.
   it("keeps the sidebar when an expression inside the inline catalogue throws", async () => {
-    crash.genre = true;
+    crash.filters = true;
     await act(async () => { root.render(<App/>); });
     await until(() => host.querySelector("main [role=alert]") !== null, "catalogue alert");
 

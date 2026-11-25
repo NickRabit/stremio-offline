@@ -36,9 +36,7 @@
   .catalog-view .fold.closed>*,.browse-bar .fold.closed>*{padding-top:0;padding-bottom:0;border-top-width:0;border-bottom-width:0;row-gap:0}
   /* Collapsed, the filter bar is the one row that stays: which catalogue this is, and the way back to search. */
   .catalog-view.catalog-compact .filterbar{grid-template-columns:minmax(0,1fr) auto auto}
-  .catalog-view.catalog-compact .filterbar>label:not(.catalog-filter),.catalog-view.catalog-compact .filterbar>.filter-note,.catalog-view.catalog-compact .filterbar>.scope-badge,.catalog-view.catalog-compact .filterbar>button:not(.header-expand):not(.shape-toggle){display:none}
-  .catalog-view.catalog-compact .filterbar>label.catalog-filter{grid-column:auto}
-  .catalog-view.catalog-compact .filterbar>label.catalog-filter>span{display:none}
+  .catalog-view.catalog-compact .filterbar>label,.catalog-view.catalog-compact .filterbar>.catalog-type-switch,.catalog-view.catalog-compact .filterbar>.genre-trigger,.catalog-view.catalog-compact .filterbar>.filter-note,.catalog-view.catalog-compact .filterbar>.scope-badge,.catalog-view.catalog-compact .filterbar>.results-filter,.catalog-view.catalog-compact .filterbar>.catalog-note{display:none}
   .catalog-view.catalog-compact .header-expand{display:inline-flex}
   /* The tools stop being a row of their own: what folds away takes a full row under the
      breadcrumbs, and what stays sits beside them. */
@@ -2731,4 +2729,100 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 }
 @media(prefers-reduced-motion:reduce){
   .picker-chevron{transition:none}
+}
+
+/* Catalogue toolbar: type, catalog, genre, result filter and scope controls. */
+.catalog-type-switch{display:inline-flex;align-items:stretch;min-width:0;padding:0;border-bottom:1px solid var(--line)}
+.catalog-type-switch button{min-width:0;height:34px;min-height:34px;padding:0 10px;border:0;border-radius:0;background:transparent;box-shadow:inset 0 -2px transparent;color:var(--muted);font-size:11px;white-space:nowrap}
+.catalog-type-switch button[aria-pressed="true"]{box-shadow:inset 0 -2px var(--accent);color:var(--text)}
+.catalog-trigger{min-width:0;height:34px;min-height:34px;padding:4px 9px;justify-content:flex-start;text-align:left}
+.catalog-trigger-copy{display:grid;min-width:0;line-height:1.15}
+.catalog-trigger-copy strong,.catalog-trigger-copy small{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.catalog-trigger-copy strong{font-size:11px}
+.catalog-trigger-copy small{color:var(--muted);font-size:9px;font-weight:500}
+.genre-trigger{min-width:0;height:34px;min-height:34px;padding:4px 10px;flex-direction:column;gap:0;text-align:left}
+.genre-trigger>span,.genre-trigger>small{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.genre-trigger>span{font-size:11px}
+.genre-trigger>small{font-size:9px;font-weight:500}
+.genre-trigger.active{border-color:#ff5b385e;box-shadow:inset 0 -2px var(--accent)}
+.genre-trigger.genre-paused{color:#e9b560;border-color:#e9b56048;background:#e9b56010}
+.results-filter{display:flex;flex-wrap:wrap;align-items:center;gap:5px;min-width:0}
+.results-filter>span{color:var(--muted);font-size:10px;white-space:nowrap}
+.results-filter>button{min-height:30px;padding:4px 10px;border-radius:99px;font-size:10px}
+.results-filter>button[aria-pressed="true"]{border-color:transparent;background:var(--accent);color:#160b08;box-shadow:none}
+.results-filter>small{color:#e9b560;font-size:9px}
+.scope-trigger{min-width:0;max-width:320px;height:42px;padding:5px 10px;justify-content:flex-start;text-align:left}
+.scope-trigger-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+.scope-shared-mark{flex:0 0 auto;width:17px;height:17px;color:var(--muted)}
+.catalog-note{display:flex;flex:1 0 100%;align-items:center;gap:8px;min-width:0;padding:7px 10px;border:1px solid #e9b56042;border-radius:8px;background:#e9b56010;color:#e9b560;font-size:10px}
+.catalog-note>button{padding:0;border:0;background:transparent;color:#e9b560;font-size:10px;text-decoration:underline}
+.search-summary{min-width:0;min-height:42px;justify-content:flex-start;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+@media(min-width:701px) and (min-height:501px){
+  .catalog-head>.filter-slot{inline-size:min(100%,480px)}
+  .catalog-view .filterbar{flex-wrap:wrap;gap:8px 10px;margin-top:-5px}
+  .catalog-view .filterbar>.catalog-type-switch,.catalog-view .filterbar>.catalog-trigger{height:35px;min-height:35px}
+  .catalog-view .filterbar>.catalog-trigger{flex:1 1 220px}
+  .catalog-view .filterbar>.genre-trigger{flex:0 1 180px}
+  .catalog-view .filterbar>label{flex:0 0 auto}
+  .catalog-view .filterbar select{height:35px;min-height:35px}
+  .catalog-view .filterbar .shape-toggle,.catalog-view .filterbar .header-expand{height:35px;min-height:35px;padding:0 10px}
+  .catalog-view .filterbar .catalog-note{flex-basis:100%}
+}
+@media(min-width:1000px) and (min-height:501px){
+  .catalog-view{--catalog-cols:minmax(450px,.95fr) minmax(440px,1.2fr)}
+}
+
+@media(max-width:700px){
+  main.view-catalog .searchbar{grid-template-columns:minmax(0,1fr) auto;gap:8px}
+  main.view-catalog .search-input{grid-column:1;grid-row:1}
+  main.view-catalog .scope-trigger{grid-column:2;grid-row:1;max-width:40%;min-width:0;width:auto;min-height:44px;padding:5px 8px}
+  main.view-catalog .searchbar>.primary{grid-column:1/-1;grid-row:2;width:100%}
+  main.view-catalog .searchbar>button:not(.primary):not(.scope-trigger){grid-column:2;grid-row:2;min-height:44px}
+  main.view-catalog .searchbar:has(>button:not(.primary):not(.scope-trigger))>.primary{grid-column:1;width:auto}
+  main.view-catalog .filterbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 44px;grid-template-areas:"type catalog catalog" "genre sort shape" "note note note";align-items:stretch;gap:9px 10px}
+  main.view-catalog .filterbar>.catalog-type-switch{grid-area:type;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%}
+  main.view-catalog .filterbar>.catalog-type-switch button{height:42px;min-height:42px;padding:0 5px;font-size:10px}
+  main.view-catalog .filterbar>.catalog-trigger{grid-area:catalog;min-height:42px;height:42px}
+  main.view-catalog .filterbar>.catalog-trigger .catalog-trigger-copy strong{font-size:12px}
+  main.view-catalog .filterbar>.genre-trigger{grid-area:genre;min-height:42px;height:42px}
+  main.view-catalog .filterbar>label{grid-area:sort;display:grid;align-items:stretch;gap:4px}
+  main.view-catalog .filterbar>label>span{font-size:9px}
+  main.view-catalog .filterbar select{min-height:42px;height:42px}
+  main.view-catalog .filterbar>.shape-toggle{grid-area:shape;min-height:42px;height:42px;width:44px;padding:0}
+  main.view-catalog .filterbar>.header-expand{grid-area:shape;min-height:42px;height:42px;width:44px;padding:0}
+  main.view-catalog .filterbar>.catalog-note{grid-area:note}
+  main.view-catalog .filterbar>.scope-badge{grid-column:1/-1;grid-row:1}
+  main.view-catalog .filterbar>.results-filter{grid-column:1/-1;grid-row:2}
+  main.view-catalog .filterbar>.results-filter>button{min-height:42px;flex:1 1 auto}
+  main.view-catalog .filterbar:has(.results-filter)>label{grid-column:1/3;grid-row:3}
+  main.view-catalog .filterbar:has(.results-filter)>.shape-toggle{grid-column:3;grid-row:3}
+  main.view-catalog .filterbar:has(.results-filter)>.header-expand{grid-column:3;grid-row:3}
+  .catalog-view.catalog-compact .filterbar{grid-template-columns:minmax(0,1fr) 44px 44px;grid-template-areas:"summary shape expand";margin-top:0}
+  .catalog-view.catalog-compact .filterbar>.catalog-trigger,.catalog-view.catalog-compact .filterbar>.search-summary{grid-area:summary;min-width:0;max-width:none;width:100%}
+  .catalog-view.catalog-compact .filterbar>.shape-toggle{grid-area:shape}
+  .catalog-view.catalog-compact .filterbar>.header-expand{grid-area:expand;display:inline-flex}
+}
+
+@media(max-width:980px) and (max-height:500px) and (orientation:landscape){
+  main.view-catalog .filterbar{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,.65fr) minmax(0,.55fr) 40px 36px;grid-template-areas:"type catalog genre sort shape expand";gap:7px}
+  main.view-catalog .filterbar>.catalog-type-switch{grid-area:type}
+  main.view-catalog .filterbar>.catalog-trigger{grid-area:catalog;min-width:0}
+  main.view-catalog .filterbar>.genre-trigger{grid-area:genre;min-width:0}
+  main.view-catalog .filterbar>label{grid-area:sort}
+  main.view-catalog .filterbar>.shape-toggle{grid-area:shape}
+  main.view-catalog .filterbar>.header-expand{grid-area:expand}
+  main.view-catalog .filterbar>.catalog-type-switch button,
+  main.view-catalog .filterbar>.catalog-trigger,
+  main.view-catalog .filterbar>.genre-trigger,
+  main.view-catalog .filterbar select,
+  main.view-catalog .filterbar>.shape-toggle,
+  main.view-catalog .filterbar>.header-expand{height:34px;min-height:34px}
+  main.view-catalog .filterbar>.catalog-trigger{padding:3px 8px}
+  main.view-catalog .filterbar>.results-filter{grid-column:1/4;grid-row:1}
+  main.view-catalog .filterbar:has(.results-filter)>label{grid-column:4;grid-row:1;grid-area:auto}
+  .catalog-view.catalog-compact .filterbar{grid-template-columns:minmax(0,1fr) 44px 36px;grid-template-areas:"summary shape expand"}
+  .catalog-view.catalog-compact .filterbar>.catalog-trigger,.catalog-view.catalog-compact .filterbar>.search-summary{grid-area:summary;width:100%;max-width:none}
+  .catalog-view.catalog-compact .filterbar>.shape-toggle{grid-area:shape}
+  .catalog-view.catalog-compact .filterbar>.header-expand{grid-area:expand;display:inline-flex}
 }
