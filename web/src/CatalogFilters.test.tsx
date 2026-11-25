@@ -56,7 +56,7 @@ const render = async (overrides: Partial<CatalogFiltersProps> = {}) => {
 
 const button = (label: string) =>
   [...host.querySelectorAll<HTMLButtonElement>("button")]
-    .find((node) => node.getAttribute("aria-label") === label || node.getAttribute("aria-label")?.startsWith(`${label}: `));
+    .find((node) => node.getAttribute("aria-label") === label || (node.textContent ?? "").startsWith(label));
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

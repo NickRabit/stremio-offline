@@ -76,8 +76,9 @@ export function CatalogFilters({
       })}
     </div>
     <button type="button" className={`catalog-trigger${compact ? " compact" : ""}`}
-      aria-haspopup="dialog" aria-label={`${t("catalog.browse")}: ${current.name || current.id}`} aria-expanded={picker === "catalog"}
+      aria-haspopup="dialog" aria-expanded={picker === "catalog"}
       onClick={() => setPicker("catalog")}>
+      <span className="visually-hidden">{t("catalog.browse")}: </span>
       <AddonLogo addonKey={current.addonKey} name={current.addonName} src={logos[current.addonKey]}/>
       <span className="catalog-trigger-copy">
         <strong>{current.name || current.id}</strong>
@@ -85,8 +86,9 @@ export function CatalogFilters({
       </span>
     </button>
     <button type="button" className={`genre-trigger${effective && !paused ? " active" : ""}${paused ? " genre-paused" : ""}`}
-      aria-haspopup="dialog" aria-label={t("catalog.genre")} aria-expanded={picker === "genre"}
+      aria-haspopup="dialog" aria-expanded={picker === "genre"}
       disabled={!options.length} onClick={() => setPicker("genre")}>
+      {paused && <span className="visually-hidden">{t("catalog.genre")}: </span>}
       <small>{paused ? t("catalog.genrePaused", { genre: genreLabel(genre) }) : t("catalog.genre")}</small>
       <span>{options.length ? (paused || !effective ? t("catalog.allGenres") : genreLabel(effective)) : t("catalog.genreNone")}</span>
     </button>
