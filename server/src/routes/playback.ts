@@ -1,6 +1,6 @@
 import type express from "express";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -233,6 +233,9 @@ const stillReading = async (res: express.Response): Promise<boolean> => {
 /** A library file served with its head patched, answering HEAD and a single byte range. */
 async function sendPatched(req: express.Request, res: express.Response, target: string, file: PatchedFile) {
   const { size, mtime, patch } = file;
+  // Opened before anything is answered, so a file gone since the check still gets a 404.
+  const handle = req.method === "HEAD" ? undefined : await open(target, "r").catch(() => null);
+  if (handle === null) return void res.status(404).end();
   res.setHeader("accept-ranges", "bytes");
   res.setHeader("last-modified", mtime.toUTCString());
   res.type(path.extname(target));
@@ -240,6 +243,7 @@ async function sendPatched(req: express.Request, res: express.Response, target: 
   let end = size - 1;
   const ranges = req.headers.range ? req.range(size, { combine: true }) : undefined;
   if (ranges === -1) {
+    await handle?.close();
     res.setHeader("content-range", `bytes */${size}`);
     return void res.status(416).end();
   }
@@ -248,9 +252,11 @@ async function sendPatched(req: express.Request, res: express.Response, target: 
     res.status(206).setHeader("content-range", `bytes ${start}-${end}/${size}`);
   }
   res.setHeader("content-length", String(end - start + 1));
-  if (req.method === "HEAD") return void res.end();
-  try { await pipeline(Readable.from(patchedRange(target, start, end, patch, MEDIA_READ_BUFFER)), res); }
-  catch { if (!res.headersSent) res.status(404).end(); else res.destroy(); }
+  if (!handle) return void res.end();
+  try { await pipeline(Readable.from(patchedRange(handle, start, end, patch, MEDIA_READ_BUFFER)), res); }
+  catch { res.destroy(); }
+  // A reader that stopped before the range began never ran the generator that closes it.
+  finally { await handle.close().catch(() => undefined); }
 }
 
 export function registerPlaybackRoutes(app: express.Application, deps: PlaybackDeps): void {

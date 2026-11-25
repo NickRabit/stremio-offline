@@ -1,4 +1,3 @@
-import { createReadStream } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import path from "node:path";
 import { log } from "./logger.js";
@@ -131,13 +130,14 @@ const cuesSeekHead = (cues: number, sizeWidth: number) => {
   return element(ID_SEEK_HEAD, seek, sizeWidth);
 };
 
-/** A Void exactly `length` bytes long (at least two). */
-const voidOf = (length: number) => {
+/** The header of a Void exactly `length` bytes long (at least two). Its content is whatever the
+ *  file already holds there: a Void's bytes mean nothing, so a large one is never copied. */
+const voidHeader = (length: number) => {
   for (let width = 1; width <= 8; width += 1) {
     const content = length - 1 - width;
-    if (content >= 0 && content < 2 ** (7 * width) - 1) return element(ID_VOID, Buffer.alloc(content), width);
+    if (content >= 0 && content < 2 ** (7 * width) - 1) return Buffer.concat([idBytes(ID_VOID), vint(content, width)]);
   }
-  throw new Error("A Void cannot be that long.");
+  return undefined;
 };
 
 /** The bytes to serve in place of a Void so the player finds the Cues; nothing when it can
@@ -186,10 +186,10 @@ export async function cuesPointerPatch(read: ByteReader, size: number): Promise<
   const room = voids.find((item) => item.length >= shortest);
   if (!room) return undefined;
   const rest = room.length - shortest;
-  const bytes = rest === 1
-    ? cuesSeekHead(cues, 2)
-    : rest === 0 ? cuesSeekHead(cues, 1) : Buffer.concat([cuesSeekHead(cues, 1), voidOf(rest)]);
-  return { offset: room.start, bytes, cues };
+  if (rest <= 1) return { offset: room.start, bytes: cuesSeekHead(cues, 1 + rest), cues };
+  const filler = voidHeader(rest);
+  if (!filler) return undefined;
+  return { offset: room.start, bytes: Buffer.concat([cuesSeekHead(cues, 1), filler]), cues };
 }
 
 /** Lays the patch over `chunk`, which holds the file's bytes from `chunkStart`. */
@@ -210,7 +210,7 @@ const fileReader = (handle: Awaited<ReturnType<typeof open>>, size: number): Byt
 };
 
 /** Library files whose Cues the player cannot reach, remembered per file version so each is
- *  read only once. A file that needs nothing is remembered too. */
+ *  read only once. A file that needs nothing is remembered too; a read that failed is not. */
 export class SeekIndexPatches {
   private readonly known = new Map<string, Promise<HeadPatch | undefined>>();
 
@@ -222,7 +222,11 @@ export class SeekIndexPatches {
     const key = `${file}\0${info.size}\0${info.mtimeMs}\0${info.ino}`;
     let pending = this.known.get(key);
     if (!pending) {
-      pending = this.inspect(file, info.size).catch(() => undefined);
+      const inspecting = this.inspect(file, info.size).catch(() => {
+        if (this.known.get(key) === inspecting) this.known.delete(key);
+        return undefined;
+      });
+      pending = inspecting;
       if (this.known.size >= this.limit) this.known.delete(this.known.keys().next().value!);
       this.known.set(key, pending);
     }
@@ -240,21 +244,28 @@ export class SeekIndexPatches {
   }
 }
 
-/** The file's bytes `start`..`end` (inclusive) with the patch laid over them. */
-export async function* patchedRange(file: string, start: number, end: number, patch: HeadPatch, highWaterMark: number) {
-  let position = start;
-  const patchEnd = patch.offset + patch.bytes.length;
-  if (position < patchEnd) {
-    const until = Math.min(end + 1, patchEnd);
-    const handle = await open(file, "r");
-    let head: Buffer;
-    try {
-      head = Buffer.alloc(until - position);
+export type OpenFile = Awaited<ReturnType<typeof open>>;
+
+/** The bytes `start`..`end` (inclusive) of an open file with the patch laid over them. The
+ *  handle is closed when the range ends or its reader stops early. */
+export async function* patchedRange(handle: OpenFile, start: number, end: number, patch: HeadPatch, highWaterMark: number) {
+  let streaming = false;
+  try {
+    let position = start;
+    const patchEnd = patch.offset + patch.bytes.length;
+    if (position < patchEnd) {
+      const until = Math.min(end + 1, patchEnd);
+      const head = Buffer.alloc(until - position);
       const { bytesRead } = await handle.read(head, 0, head.length, position);
       if (bytesRead !== head.length) throw new Error("The file is shorter than it was.");
-    } finally { await handle.close(); }
-    yield applyPatch(head, position, patch);
-    position = until;
+      yield applyPatch(head, position, patch);
+      position = until;
+    }
+    if (position <= end) {
+      streaming = true;
+      yield* handle.createReadStream({ start: position, end, highWaterMark, autoClose: true });
+    }
+  } finally {
+    if (!streaming) await handle.close();
   }
-  if (position <= end) yield* createReadStream(file, { start: position, end, highWaterMark });
 }
