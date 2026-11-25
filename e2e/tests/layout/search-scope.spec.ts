@@ -5,15 +5,20 @@ import { goToView } from "../nav";
 test("catalogue search controls fit every supported viewport", async ({ page }) => {
   await page.goto("/");
   await chooseScope(page, /Seriály/, "series");
-  await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
-  await page.getByRole("button", { name: "Vyhledat" }).click();
+  const field = page.getByPlaceholder("Hledat v: E2E doplněk · Seriály…");
+  await field.fill("Zkušební");
+  await field.press("Enter");
 
   await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
   const results = page.getByRole("group", { name: "Ve výsledcích" });
   await expect(results.getByRole("button", { name: "Filmy" })).toBeDisabled();
   const viewport = page.viewportSize()!;
   const scope = scopeTrigger(page);
-  for (const control of [scope, page.getByRole("button", { name: "Vyhledat" }), results]) {
+  // A phone submits from its keyboard and keeps the row for results; wider screens keep the button.
+  const submit = page.getByRole("button", { name: "Vyhledat" });
+  if (viewport.width <= 700) await expect(submit).toBeHidden();
+  const cancel = page.getByRole("button", { name: "Zrušit" });
+  for (const control of [scope, ...(viewport.width <= 700 ? [] : [submit]), cancel, results]) {
     const box = await control.boundingBox();
     expect(box).toBeTruthy();
     expect(box!.x).toBeGreaterThanOrEqual(-1);

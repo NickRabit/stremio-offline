@@ -82,6 +82,17 @@ describe("PickerDialog", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("opens the first group on a narrow screen when the current one is not listed, until folded", async () => {
+    stubMedia(true);
+    await act(async () => { root.render(<Harness narrow accordion openGroup="elsewhere"/>); });
+    expect(optionLabels()).toEqual(["Alpha"]);
+    const alpha = [...host.querySelectorAll<HTMLButtonElement>(".picker-accordion-head")]
+      .find((button) => button.textContent?.includes("Alpha addon"))!;
+    expect(alpha.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => { alpha.click(); });
+    expect(optionLabels()).toEqual([]);
+  });
+
   it("folds groups on a narrow screen until opened and shows every match while searching", async () => {
     stubMedia(true);
     await act(async () => { root.render(<Harness narrow accordion openGroup="alpha"/>); });
@@ -107,7 +118,7 @@ describe("PickerDialog", () => {
       .toEqual(["Alpha addon", "Beta addon"]);
   });
 
-  it("opens scrolled to the current group", async () => {
+  it("opens at the top, so the recent chips stay in view, and marks the current group in the rail", async () => {
     const scrolled: string[] = [];
     const original = HTMLElement.prototype.scrollIntoView;
     HTMLElement.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this.textContent ?? ""); };
@@ -116,6 +127,7 @@ describe("PickerDialog", () => {
     } finally {
       HTMLElement.prototype.scrollIntoView = original;
     }
-    expect(scrolled.some((text) => text.includes("Beta addon"))).toBe(true);
+    expect(scrolled.some((text) => text.includes("addon"))).toBe(false);
+    expect(host.querySelector(".picker-rail [aria-current]")?.textContent).toContain("Beta addon");
   });
 });

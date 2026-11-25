@@ -22,7 +22,7 @@ export const emptyViews = (): UserViews =>
   ({ libraries: {}, extras: {}, downloads: defaultDownloadsView(), catalog: defaultCatalogView() });
 
 export const sameCatalogRef = (a: CatalogRef, b: CatalogRef): boolean =>
-  a.addonKey === b.addonKey && a.type === b.type && a.id === b.id;
+  a.addonKey === b.addonKey && a.type === b.type && a.id === b.id && a.combined === b.combined;
 
 export function pushRecentCatalog(recent: CatalogRef[], ref: CatalogRef, count: RecentCatalogCount): CatalogRef[] {
   if (count === 0) return [];

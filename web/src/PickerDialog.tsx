@@ -113,11 +113,6 @@ export function PickerDialog(props: PickerDialogProps): JSX.Element {
     setOpenGroups(new Set(openGroup ? [openGroup] : []));
   }, [openGroup]);
 
-  // Opens on the current group, not on whichever addon happens to come first.
-  useEffect(() => {
-    if (openGroup) groupHeaders.current.get(openGroup)?.scrollIntoView?.({ block: "start" });
-  }, []);
-
   useEffect(() => {
     if (previousQuery.current !== query) setActiveIndex(0);
     previousQuery.current = query;
@@ -125,7 +120,12 @@ export function PickerDialog(props: PickerDialogProps): JSX.Element {
 
   const accordionActive = Boolean(accordion && layout.narrow && !query.trim());
   const showRail = Boolean(rail && !layout.narrow && !query.trim() && groups.length);
-  const open = (group: PickerGroup) => !accordionActive || openGroups.has(group.key);
+  // A list without the current group (another type tab) opens its first group rather than
+  // showing nothing but closed heads, until the viewer folds or unfolds one themselves.
+  const [toggled, setToggled] = useState(false);
+  const leadOpen = !toggled && !groups.some((group) => openGroups.has(group.key)) ? groups[0]?.key : undefined;
+  const isOpen = (key: string) => openGroups.has(key) || key === leadOpen;
+  const open = (group: PickerGroup) => !accordionActive || isOpen(group.key);
 
   const visible = useMemo(() => [
     ...(chips?.options ?? []).map((option) => ({ id: optionId(idPrefix, "chip", option.key), option })),
@@ -133,13 +133,27 @@ export function PickerDialog(props: PickerDialogProps): JSX.Element {
     ...groups.flatMap((group) => open(group)
       ? group.options.map((option) => ({ id: optionId(idPrefix, group.key, option.key), option }))
       : []),
-  ], [accordion, chips?.options, groups, idPrefix, leading, openGroups, query, layout.narrow]);
+  ], [accordion, chips?.options, groups, idPrefix, leading, openGroups, toggled, query, layout.narrow]);
 
   const active = visible[activeIndex];
 
   useEffect(() => {
     if (active) document.getElementById(active.id)?.scrollIntoView?.({ block: "nearest" });
   }, [active?.id]);
+
+  // Reopened on an addon further down, the list scrolls to it; one already in view, as the first
+  // addon is, stays put so the recent chips above it remain visible. After the effect above, which
+  // would otherwise scroll back to the first chip.
+  useEffect(() => {
+    const head = openGroup ? groupHeaders.current.get(openGroup) : undefined;
+    if (!head) return;
+    let box = head.parentElement;
+    while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+    if (!box) return;
+    const room = box.getBoundingClientRect();
+    const top = head.getBoundingClientRect().top;
+    if (top < room.top || top + head.offsetHeight * 3 > room.bottom) head.scrollIntoView?.({ block: "start" });
+  }, []);
 
   const move = (delta: number) => {
     if (!visible.length) return;
@@ -153,7 +167,7 @@ export function PickerDialog(props: PickerDialogProps): JSX.Element {
   };
 
   const option = (item: PickerOption, id: string, chip = false) =>
-    <button key={id} id={id} type="button" role="option" aria-selected={Boolean(item.selected)}
+    <button key={id} id={id} type="button" role="option" tabIndex={searchPlaceholder ? -1 : undefined} aria-selected={Boolean(item.selected)}
       className={`picker-option${chip ? " picker-chip" : ""}${item.muted ? " picker-muted" : ""}${item.selected ? " picker-selected" : ""}`}
       data-active={id === active?.id || undefined} onClick={() => choose(item)}>
       {item.icon && <span className="picker-option-icon">{item.icon}</span>}
@@ -179,12 +193,13 @@ export function PickerDialog(props: PickerDialogProps): JSX.Element {
     };
     return accordionActive
       ? <button ref={setHead} type="button" className="picker-group-head picker-accordion-head"
-        aria-expanded={openGroups.has(group.key)} onClick={() => setOpenGroups((current) => {
+        aria-expanded={isOpen(group.key)} onClick={() => { setToggled(true); setOpenGroups((current) => {
           const next = new Set(current);
+          if (group.key === leadOpen) next.add(group.key);
           if (next.has(group.key)) next.delete(group.key);
           else next.add(group.key);
           return next;
-        })}>{content}</button>
+        }); }}>{content}</button>
       : <div ref={setHead} className="picker-group-head">{content}</div>;
   };
 
@@ -197,13 +212,16 @@ export function PickerDialog(props: PickerDialogProps): JSX.Element {
         <div>
           <h2>{label}</h2>
           {subtitle && <p className="picker-subtitle">{subtitle}</p>}
-          {headerExtra && <div className="picker-header-extra">{headerExtra}</div>}
+          {/* A type tab narrows the list; typing should go on filtering it without a click back. */}
+          {headerExtra && <div className="picker-header-extra" onClick={() => search.current?.focus()}>{headerExtra}</div>}
         </div>
         <button type="button" className="icon-button" aria-label={t("common.close")} onClick={onClose}><X/></button>
       </div>
       <div className={`dialog-body picker-body${showRail ? " picker-body-rail" : ""}`}>
         {showRail && <nav className="picker-rail" aria-label={label}>
-          {groups.map((group) => <button key={group.key} type="button" className={group.muted ? "picker-muted" : undefined}
+          {groups.map((group) => <button key={group.key} type="button"
+            className={[group.muted && "picker-muted", group.key === openGroup && "active"].filter(Boolean).join(" ") || undefined}
+            aria-current={group.key === openGroup || undefined}
             onClick={() => groupHeaders.current.get(group.key)?.scrollIntoView?.({ block: "start" })}>
             {group.icon && <span className="picker-group-icon">{group.icon}</span>}
             <span>{group.title}</span>

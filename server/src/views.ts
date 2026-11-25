@@ -26,7 +26,7 @@ export interface DownloadsViewPrefs {
   pageSize: DownloadPageSize;
 }
 
-export interface CatalogRef { addonKey: string; type: string; id: string }
+export interface CatalogRef { addonKey: string; type: string; id: string; combined?: true }
 export type RecentCatalogCount = 0 | 3 | 5 | 8;
 export interface CatalogViewPrefs {
   recentCount: RecentCatalogCount;
@@ -133,12 +133,12 @@ const requiredPageSize = (value: unknown): DownloadPageSize => {
 const isCatalogField = (value: unknown, emptyOk = false): value is string =>
   typeof value === "string" && value.length <= CATALOG_FIELD_MAX && (emptyOk || value.length > 0);
 
-const catalogRefKey = (ref: CatalogRef): string => `${ref.addonKey}\0${ref.type}\0${ref.id}`;
+const catalogRefKey = (ref: CatalogRef): string => `${Boolean(ref.combined)}\0${ref.addonKey}\0${ref.type}\0${ref.id}`;
 
 const parseCatalogRef = (value: unknown): CatalogRef | undefined => {
   const source = asRecord(value);
   if (!isCatalogField(source.addonKey) || !isCatalogField(source.type) || !isCatalogField(source.id)) return undefined;
-  return { addonKey: source.addonKey, type: source.type, id: source.id };
+  return { addonKey: source.addonKey, type: source.type, id: source.id, ...(source.combined === true ? { combined: true } : {}) };
 };
 
 const parseCatalogLast = (value: unknown): CatalogViewPrefs["last"] => {

@@ -1,7 +1,10 @@
 import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { AddonLogo } from "./AddonLogo";
 import { CatalogPicker } from "./CatalogPicker";
 import {
+  browseMembers,
+  browseBucket,
   bucketsPresent,
   effectiveGenre,
   fallbackForBucket,
@@ -9,18 +12,18 @@ import {
   genrePaused,
   genreRequired,
   refOf,
-  typeBucket,
   type CatalogRef,
+  type BrowseCatalog,
   type TypeBucket,
 } from "./catalog-picker-model";
 import { GenrePicker } from "./GenrePicker";
 import { genreLabel } from "./genres";
 import { t, useI18n } from "./i18n";
-import type { Catalog, CatalogViewPrefs } from "./types";
+import type { CatalogViewPrefs } from "./types";
 
 export interface CatalogFiltersProps {
-  catalogs: Catalog[];
-  current: Catalog;
+  catalogs: BrowseCatalog[];
+  current: BrowseCatalog;
   genre: string;
   prefs: CatalogViewPrefs;
   logos: Record<string, string | undefined>;
@@ -45,7 +48,7 @@ const typeLabel = (type: string): string =>
   type === "movie" ? t("catalog.movies") : type === "series" ? t("catalog.series") : type;
 
 const bucketLabel = (bucket: TypeBucket): string =>
-  bucket === "movie" ? t("catalog.movies") : bucket === "series" ? t("catalog.series") : t("catalog.typeOther");
+  bucket === "all" ? t("common.all") : bucket === "movie" ? t("catalog.movies") : bucket === "series" ? t("catalog.series") : t("catalog.typeOther");
 
 export function CatalogFilters({
   catalogs, current, genre, prefs, logos, compact, sortLabel, onPickCatalog, onGenre, onPrefs,
@@ -62,7 +65,7 @@ export function CatalogFilters({
     setPickerBucket(bucket);
     setPicker("catalog");
   };
-  const currentBucket = typeBucket(current.type);
+  const currentBucket = browseBucket(current);
   const options = genreOptions(current);
   const effective = effectiveGenre(current, genre);
   const paused = genrePaused(current, genre);
@@ -70,14 +73,15 @@ export function CatalogFilters({
     pickerClosedAt = performance.now();
     setPicker(null);
   };
-  const summary = [typeLabel(current.type), effective ? genreLabel(effective) : "", sortLabel].filter(Boolean).join(" · ");
+  const summary = [current[browseMembers] ? t("catalog.moviesAndSeries") : typeLabel(current.type), effective ? genreLabel(effective) : "", sortLabel].filter(Boolean).join(" · ");
   const addonLine = `${current.addonName}${currentBucket === "other" ? ` · ${current.type}` : ""}`;
 
   return <>
     <div className="catalog-type-switch" role="group" aria-label={t("catalog.type")}>
       {bucketsPresent(catalogs).map((bucket) => {
         const pressed = bucket === currentBucket;
-        return <button key={bucket} type="button" aria-pressed={pressed} onClick={() => switchBucket(bucket)}>
+        return <button key={bucket} type="button" aria-pressed={pressed} onClick={() => switchBucket(bucket)}
+          title={bucket === "all" ? t("catalog.moviesAndSeries") : undefined}>
           {bucketLabel(bucket)}
         </button>;
       })}
@@ -91,13 +95,15 @@ export function CatalogFilters({
         <strong>{current.name || current.id}</strong>
         <small>{compact ? summary : addonLine}</small>
       </span>
+      <ChevronDown className="scope-chevron" aria-hidden="true"/>
     </button>
     <button type="button" className={`genre-trigger${effective && !paused ? " active" : ""}${paused ? " genre-paused" : ""}`}
       aria-haspopup="dialog" aria-expanded={picker === "genre"}
       disabled={!options.length} onClick={() => setPicker("genre")}>
       {paused && <span className="visually-hidden">{t("catalog.genre")}: </span>}
-      <small>{paused ? t("catalog.genrePaused", { genre: genreLabel(genre) }) : t("catalog.genre")}</small>
+      <small>{paused ? t("catalog.genrePaused", { genre: genreLabel(genre) }) : options.length && options.every((option) => /^\d{4}$/.test(option)) ? t("catalog.genreYear") : t("catalog.genre")}</small>
       <span>{options.length ? (paused || !effective ? t("catalog.allGenres") : genreLabel(effective)) : t("catalog.genreNone")}</span>
+      {options.length > 0 && <ChevronDown className="genre-chevron" aria-hidden="true"/>}
     </button>
     {picker === "catalog" && <CatalogPicker catalogs={catalogs} current={refOf(current)} prefs={prefs} logos={logos}
       onPick={(ref) => { closePicker(); onPickCatalog(ref); }}

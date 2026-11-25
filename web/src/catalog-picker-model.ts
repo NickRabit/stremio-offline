@@ -1,23 +1,25 @@
 import { catalogTypeTag } from "./catalog-labels";
-import type { Catalog, SearchableCatalog } from "./types";
-
-export interface CatalogRef { addonKey: string; type: string; id: string }
-export type TypeBucket = "movie" | "series" | "other";
-export const BUCKETS: readonly TypeBucket[] = ["movie", "series", "other"];
+import type { Catalog, CatalogRef, SearchableCatalog } from "./types";
+export type { CatalogRef } from "./types";
+export const browseMembers = Symbol("browseMembers");
+export type BrowseCatalog = Catalog & { [browseMembers]?: Catalog[] };
+export type TypeBucket = "all" | "movie" | "series" | "other";
+export const BUCKETS: readonly TypeBucket[] = ["all", "movie", "series", "other"];
 
 type PickerCatalog = Catalog & { extraRequired?: unknown };
 
 export const typeBucket = (type: string): TypeBucket =>
   type === "movie" || type === "series" ? type : "other";
 
-export const catalogRefKey = (ref: CatalogRef): string => `${ref.addonKey}:${ref.type}:${ref.id}`;
-export const refOf = (catalog: Catalog): CatalogRef => ({
+export const catalogRefKey = (ref: CatalogRef): string => JSON.stringify([ref.addonKey, ref.type, ref.id, Boolean(ref.combined)]);
+export const refOf = (catalog: BrowseCatalog): CatalogRef => ({
   addonKey: catalog.addonKey,
   type: catalog.type,
   id: catalog.id,
+  ...(catalog[browseMembers] ? { combined: true as const } : {}),
 });
 export const sameRef = (a: CatalogRef, b: CatalogRef): boolean =>
-  a.addonKey === b.addonKey && a.type === b.type && a.id === b.id;
+  a.addonKey === b.addonKey && a.type === b.type && a.id === b.id && a.combined === b.combined;
 
 export function foldText(text: string): string {
   return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -73,10 +75,62 @@ export function genrePaused(catalog: Catalog, chosen: string): boolean {
   return Boolean(chosen) && !genreRequired(catalog) && !genreOptions(catalog).includes(chosen);
 }
 
-export interface CatalogRow { ref: CatalogRef; name: string; otherType: boolean; needsSearch: boolean }
+/** Keep manifest resources for individual types, and project their movie/series pairs into the All tab. */
+export function browseCatalogs(raw: Catalog[]): BrowseCatalog[] {
+  const eligible = raw.filter((c) => typeBucket(c.type) !== "other" && isBrowsable(c) && !needsSearch(c));
+  if (!eligible.some((c) => c.type === "movie") || !eligible.some((c) => c.type === "series")) return raw;
+  const groupsBy = (field: "name" | "id") => {
+    const groups = new Map<string, Catalog[]>();
+    for (const catalog of eligible) {
+      const key = JSON.stringify([catalog.addonKey, catalog[field]]);
+      const group = groups.get(key);
+      if (group) group.push(catalog);
+      else groups.set(key, [catalog]);
+    }
+    return groups;
+  };
+  const byId = groupsBy("id");
+  const byName = groupsBy("name");
+  const consumed = new Set<Catalog>();
+  const combined: BrowseCatalog[] = [];
+  for (const group of byId.values()) {
+    const first = group[0]!;
+    if (consumed.has(first)) continue;
+    let members = group;
+    if (group.length === 1 && first.name) {
+      const named = byName.get(JSON.stringify([first.addonKey, first.name]))!;
+      if (named.length === 2 && named[0]!.type !== named[1]!.type &&
+        named.every((catalog) => byId.get(JSON.stringify([catalog.addonKey, catalog.id]))!.length === 1)) {
+        members = named;
+      }
+    }
+    members.forEach((catalog) => consumed.add(catalog));
+    const primary = members.find((catalog) => catalog.type === "movie") ?? first;
+    const options = [...new Set(members.flatMap(genreOptions))];
+    combined.push({ ...primary, [browseMembers]: members, extraRequired: [], extra: [{ name: "genre", options }] });
+  }
+  return [...combined, ...raw];
+}
+
+export const browseBucket = (c: BrowseCatalog): TypeBucket => c[browseMembers] ? "all" : typeBucket(c.type);
+
+/** One catalogue in another type: the same id of one addon, or a mixed entry and one of its types. */
+export function samePair(a: BrowseCatalog, b: BrowseCatalog): boolean {
+  if (a.addonKey !== b.addonKey) return false;
+  const ids = (c: BrowseCatalog) => (c[browseMembers] ?? [c]).map((member) => member.id);
+  return ids(a).some((id) => ids(b).includes(id));
+}
+
+/** The All tab also offers the search-only movie and series catalogues, which have no mixed form. */
+const fitsBucket = (catalog: BrowseCatalog, bucket: TypeBucket): boolean =>
+  browseBucket(catalog) === bucket
+  || (bucket === "all" && !catalog[browseMembers] && typeBucket(catalog.type) !== "other" && needsSearch(catalog));
+
+/** `onlyType` marks a row of the All tab that exists in one type only. */
+export interface CatalogRow { ref: CatalogRef; name: string; otherType: boolean; needsSearch: boolean; onlyType?: string }
 export interface CatalogGroup { addonKey: string; addonName: string; hidden: boolean; rows: CatalogRow[]; notBrowsable: number; countInBucket: number }
 
-export function catalogGroups(catalogs: Catalog[], options: {
+export function catalogGroups(catalogs: BrowseCatalog[], options: {
   bucket: TypeBucket;
   query: string;
   hiddenAddons: readonly string[];
@@ -84,8 +138,12 @@ export function catalogGroups(catalogs: Catalog[], options: {
 }): CatalogGroup[] {
   const hidden = new Set(options.hiddenAddons);
   const queryPresent = options.query.trim().length > 0;
-  const grouped = new Map<string, Catalog[]>();
+  const grouped = new Map<string, BrowseCatalog[]>();
   for (const catalog of catalogs) {
+    const plainInAll = !catalog[browseMembers] && !(typeBucket(catalog.type) !== "other" && needsSearch(catalog))
+      // A search from the All tab still reaches anime, TV and the other kinds All does not mix.
+      && !(queryPresent && typeBucket(catalog.type) === "other");
+    if (options.bucket === "all" ? plainInAll : catalog[browseMembers]) continue;
     const group = grouped.get(catalog.addonKey);
     if (group) group.push(catalog);
     else grouped.set(catalog.addonKey, [catalog]);
@@ -96,7 +154,7 @@ export function catalogGroups(catalogs: Catalog[], options: {
     const addonHidden = hidden.has(addonKey);
     if (addonHidden && !options.includeHidden && !queryPresent) continue;
     const addonName = addonCatalogs[0]!.addonName;
-    const variants = new Map<string, Catalog[]>();
+    const variants = new Map<string, BrowseCatalog[]>();
     for (const catalog of addonCatalogs) {
       const groupKey = JSON.stringify([catalog.id, typeBucket(catalog.type) === "other" ? catalog.type : null]);
       const idGroup = variants.get(groupKey);
@@ -114,18 +172,34 @@ export function catalogGroups(catalogs: Catalog[], options: {
         continue;
       }
       const candidates = browsable.filter((item) => matchesQuery(
-        `${addonName} ${item.name ?? item.id} ${item.type} ${catalogTypeTag(item.type)}`, options.query));
+        `${addonName} ${item.name ?? item.id} ${(item[browseMembers] ?? [item]).map((v) => v.type + " " + catalogTypeTag(v.type)).join(" ")}`, options.query));
       if (!candidates.length) continue;
-      const inBucket = candidates.find((catalog) => typeBucket(catalog.type) === options.bucket);
-      const catalog = inBucket ?? candidates[0]!;
-      const row: CatalogRow = {
-        ref: refOf(catalog),
-        name: catalog.name ?? catalog.id,
-        otherType: !inBucket,
-        needsSearch: needsSearch(catalog),
-      };
-      if (!row.otherType) countInBucket += 1;
-      matching.push(row);
+      const inBucket = candidates.find((catalog) => fitsBucket(catalog, options.bucket));
+      if (inBucket) {
+        let catalog = inBucket;
+        if (catalog[browseMembers] && !matchesQuery(`${addonName} ${catalog.name ?? catalog.id}`, options.query)) {
+          const matchingMembers = catalog[browseMembers].filter((member) => matchesQuery(
+            `${addonName} ${member.name ?? member.id} ${member.type} ${catalogTypeTag(member.type)}`, options.query));
+          if (matchingMembers.length === 1) catalog = matchingMembers[0]!;
+        }
+        const members = catalog[browseMembers];
+        countInBucket += 1;
+        matching.push({
+          ref: refOf(catalog),
+          name: catalog.name ?? catalog.id,
+          otherType: false,
+          needsSearch: needsSearch(catalog),
+          ...(members?.length === 1 ? { onlyType: members[0]!.type } : {}),
+        });
+        continue;
+      }
+      // Another type only while searching: browsing a tab lists that tab, and a search finds
+      // every type, each variant on its own row so none of them is left unreachable.
+      if (!queryPresent) continue;
+      for (const catalog of candidates) {
+        if (catalog[browseMembers]) continue;
+        matching.push({ ref: refOf(catalog), name: catalog.name ?? catalog.id, otherType: true, needsSearch: needsSearch(catalog) });
+      }
     }
     const rows = [
       ...matching.filter((row) => !row.otherType),
@@ -137,15 +211,19 @@ export function catalogGroups(catalogs: Catalog[], options: {
   return groups;
 }
 
-export function bucketsPresent(catalogs: Catalog[]): TypeBucket[] {
-  const present = new Set(catalogs.filter(isBrowsable).map((catalog) => typeBucket(catalog.type)));
+export function bucketsPresent(catalogs: BrowseCatalog[]): TypeBucket[] {
+  const present = new Set(catalogs.filter(isBrowsable).map(browseBucket));
   return BUCKETS.filter((bucket) => present.has(bucket));
 }
 
-export function fallbackForBucket(catalogs: Catalog[], current: CatalogRef, bucket: TypeBucket, hiddenAddons: readonly string[]): { ref: CatalogRef; sameId: boolean } | null {
+export function fallbackForBucket(catalogs: BrowseCatalog[], current: CatalogRef, bucket: TypeBucket, hiddenAddons: readonly string[]): { ref: CatalogRef; sameId: boolean } | null {
+  const combined = catalogs.find((c) => c[browseMembers]?.some((member) => member.addonKey === current.addonKey && member.type === current.type && member.id === current.id));
+  if (bucket === "all" && combined) return { ref: refOf(combined), sameId: true };
+  const member = current.combined && combined?.[browseMembers]?.find((c) => c.type === bucket);
+  if (member) return { ref: refOf(member), sameId: true };
   const sameId = catalogs.find((catalog) =>
     catalog.addonKey === current.addonKey && catalog.id === current.id
-    && typeBucket(catalog.type) === bucket && isBrowsable(catalog));
+    && browseBucket(catalog) === bucket && isBrowsable(catalog));
   if (sameId) return { ref: refOf(sameId), sameId: true };
 
   const hidden = new Set(hiddenAddons);
@@ -154,18 +232,20 @@ export function fallbackForBucket(catalogs: Catalog[], current: CatalogRef, buck
     ...catalogs.filter((catalog) => catalog.addonKey !== current.addonKey),
   ];
   const fallback = ordered.find((catalog) =>
-    !hidden.has(catalog.addonKey) && typeBucket(catalog.type) === bucket
+    !hidden.has(catalog.addonKey) && browseBucket(catalog) === bucket
     && isBrowsable(catalog) && !needsSearch(catalog));
   return fallback ? { ref: refOf(fallback), sameId: false } : null;
 }
 
-export function recentCatalogs(catalogs: Catalog[], recent: readonly CatalogRef[], limit: number): Catalog[] {
+export function recentCatalogs(catalogs: BrowseCatalog[], recent: readonly CatalogRef[], limit: number): BrowseCatalog[] {
   if (limit <= 0) return [];
   const found = recent.flatMap((ref) => {
     const catalog = catalogs.find((candidate) => sameRef(refOf(candidate), ref));
     return catalog && isBrowsable(catalog) ? [catalog] : [];
   });
-  return found.slice(0, limit);
+  // One list in several types is one chip, in the type used last.
+  const unique = found.filter((catalog, index) => !found.slice(0, index).some((earlier) => samePair(earlier, catalog)));
+  return unique.slice(0, limit);
 }
 
 export interface ScopeRow { value: string; name: string; type: string }

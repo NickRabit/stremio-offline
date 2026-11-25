@@ -98,7 +98,7 @@ test.describe("catalog", () => {
   test("searches inside one selected catalogue", async ({ page }) => {
     await page.goto("/");
     await chooseScope(page, /Seriály/, "series");
-    await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
+    await page.getByPlaceholder("Hledat v: E2E doplněk · Seriály…").fill("Zkušební");
     await page.getByRole("button", { name: "Vyhledat" }).click();
 
     await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
@@ -125,7 +125,7 @@ test.describe("catalog", () => {
     // again for the picker that followed it.
     expect(requests.filter((url) => url.includes("e2e-series"))).toHaveLength(1);
 
-    await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
+    await page.getByPlaceholder("Hledat v: E2E doplněk · Seriály…").fill("Zkušební");
     await page.getByRole("button", { name: "Vyhledat" }).click();
     await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
 

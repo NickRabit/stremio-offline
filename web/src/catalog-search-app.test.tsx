@@ -304,7 +304,7 @@ const sessionDeletes = () => requests.filter((request) =>
   request.method === "DELETE" && /^\/api\/search\/catalog\/[^/]+$/.test(request.pathname));
 
 describe("catalogue and search loading in App", () => {
-  it("restores the last browsable catalog from account preferences", async () => {
+  it("opens on the default catalogue even when an older build stored the last one", async () => {
     storedViews = {
       ...emptyViews(),
       catalog: {
@@ -314,9 +314,9 @@ describe("catalogue and search loading in App", () => {
     };
 
     await openCatalog();
-    await until(() => matchingRequests("/api/catalog").some((request) =>
-      new URLSearchParams(request.query).get("id") === "popular"), "restored catalogue request");
-    expect(host.querySelector("button.catalog-trigger")?.textContent).toContain("Popular");
+    await flush();
+    expect(matchingRequests("/api/catalog").map((request) =>
+      new URLSearchParams(request.query).get("id"))).toEqual(["top"]);
   });
 
   it("ignores a stored last catalog that the account cannot browse", async () => {
@@ -340,12 +340,9 @@ describe("catalogue and search loading in App", () => {
     await chooseCatalog("Popular");
     await act(async () => { await new Promise((done) => setTimeout(done, 350)); });
     await until(() => matchingRequests("/api/views", "PATCH").length === 1, "catalog preference write");
-    expect(matchingRequests("/api/views", "PATCH")[0]!.body).toMatchObject({
-      catalog: {
-        recent: [{ addonKey: "beta", type: "series", id: "popular" }],
-        last: { addonKey: "beta", type: "series", id: "popular", genre: "" },
-      },
-    });
+    const body = matchingRequests("/api/views", "PATCH")[0]!.body as { catalog: Record<string, unknown> };
+    expect(body).toMatchObject({ catalog: { recent: [{ addonKey: "beta", type: "series", id: "popular" }] } });
+    expect(body.catalog).not.toHaveProperty("last");
 
     await chooseCatalog("Popular");
     await act(async () => { await new Promise((done) => setTimeout(done, 350)); });

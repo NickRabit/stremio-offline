@@ -2,13 +2,17 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { AddonLogo } from "./AddonLogo";
 import {
+  browseMembers,
+  browseBucket,
   bucketsPresent,
   catalogGroups,
+  catalogRefKey,
   recentCatalogs,
   refOf,
   sameRef,
   typeBucket,
   type CatalogRef,
+  type BrowseCatalog,
   type TypeBucket,
 } from "./catalog-picker-model";
 import { catalogTypeTag } from "./catalog-labels";
@@ -16,11 +20,10 @@ import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { t, useI18n } from "./i18n";
 import { PickerDialog, type PickerOption } from "./PickerDialog";
-import type { Catalog } from "./types";
 
 export interface CatalogPickerPrefs { recentCount: 0 | 3 | 5 | 8; recent: CatalogRef[]; hiddenAddons: string[] }
 export interface CatalogPickerProps {
-  catalogs: Catalog[];
+  catalogs: BrowseCatalog[];
   current: CatalogRef;
   prefs: CatalogPickerPrefs;
   logos?: Record<string, string | undefined>;
@@ -42,19 +45,17 @@ const wideFinePointer = (): boolean => {
 };
 
 const bucketLabel = (bucket: TypeBucket): string =>
-  bucket === "movie" ? t("catalog.movies") : bucket === "series" ? t("catalog.series") : t("catalog.typeOther");
+  bucket === "all" ? t("common.all") : bucket === "movie" ? t("catalog.movies") : bucket === "series" ? t("catalog.series") : t("catalog.typeOther");
 
-const otherTypeTag = (type: string): ReactNode => {
-  const label = type === "movie" ? t("picker.onlyMovies") : type === "series" ? t("picker.onlySeries") : type;
-  return <span className="picker-tag picker-tag-type">{label}</span>;
-};
+const onlyTypeTag = (type: string): ReactNode =>
+  <span className="picker-tag picker-tag-type">{type === "movie" ? t("picker.onlyMovies") : t("picker.onlySeries")}</span>;
 
 export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initialBucket, onPrefs, onClose }: CatalogPickerProps) {
   useI18n();
   const [query, setQuery] = useState("");
   const [includeHidden, setIncludeHidden] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [currentBucket, setBucket] = useState<TypeBucket>(initialBucket ?? typeBucket(current.type));
+  const [currentBucket, setBucket] = useState<TypeBucket>(initialBucket ?? (current.combined ? "all" : typeBucket(current.type)));
   const present = bucketsPresent(catalogs);
   const groups = useMemo(() => catalogGroups(catalogs, {
     bucket: currentBucket,
@@ -74,10 +75,11 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
     options: recent.map((catalog): PickerOption => {
       const ref = refOf(catalog);
       return {
-        key: `${ref.addonKey}:${ref.type}:${ref.id}`,
+        key: catalogRefKey(ref),
         label: catalog.name ?? catalog.id,
+        sublabel: catalog.addonName,
         selected: sameRef(ref, current),
-        tags: typeBucket(catalog.type) !== currentBucket ? <span className="picker-tag picker-tag-type">{catalogTypeTag(catalog.type)}</span> : undefined,
+        tags: browseBucket(catalog) !== currentBucket ? <span className="picker-tag picker-tag-type">{catalog[browseMembers] ? t("catalog.moviesAndSeries") : catalogTypeTag(catalog.type)}</span> : undefined,
         onChoose: () => onPick(ref),
       };
     }),
@@ -91,14 +93,13 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
     count: groupCount(group),
     note: group.notBrowsable > 0 ? t("picker.notBrowsable", { count: group.notBrowsable }) : undefined,
     options: group.rows.map((row): PickerOption => ({
-      key: `${row.ref.addonKey}:${row.ref.type}:${row.ref.id}`,
+      key: catalogRefKey(row.ref),
       label: row.name,
       selected: sameRef(row.ref, current),
       muted: row.otherType,
-      tags: row.otherType || typeBucket(row.ref.type) === "other" || row.needsSearch ? <>
-        {(row.otherType || typeBucket(row.ref.type) === "other") && (filtering
-          ? <span className="picker-tag picker-tag-type">{catalogTypeTag(row.ref.type)}</span>
-          : otherTypeTag(row.ref.type))}
+      tags: row.otherType || row.onlyType || typeBucket(row.ref.type) === "other" || row.needsSearch ? <>
+        {(row.otherType || typeBucket(row.ref.type) === "other") && <span className="picker-tag picker-tag-type">{catalogTypeTag(row.ref.type)}</span>}
+        {row.onlyType && onlyTypeTag(row.onlyType)}
         {row.needsSearch && <span className="picker-tag picker-tag-search">{t("picker.needsSearch")}</span>}
       </> : undefined,
       onChoose: () => onPick(row.ref),
@@ -115,16 +116,16 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
     })}
   </div>;
 
-  return <PickerDialog label={t("catalog.pickerTitle")} subtitle={filtering ? `${t("catalog.results")} · ${count}` : t("catalog.pickerCount", { count })}
+  return <PickerDialog label={t("catalog.pickerTitle")} subtitle={filtering ? `${t("catalog.results")} · ${count}` : t(currentBucket === "all" ? "catalog.pickerCountAll" : "catalog.pickerCount", { count })}
     searchPlaceholder={t("picker.searchCatalog")} query={query} onQuery={setQuery}
     headerExtra={segments} chips={chips} groups={pickerGroups} rail accordion openGroup={current.addonKey}
     empty={<><p>{t("picker.noMatch", { query })}</p><p>{t("picker.noMatchHint")}</p></>}
     footer={<>
-      <p className="identify-hint">{t("picker.otherTypeHint")}</p>
+      {groups.some((group) => group.rows.some((row) => row.otherType)) && <p className="identify-hint">{t("picker.otherTypeHint")}</p>}
       <div className="picker-foot-actions">
         {wideFinePointer() && <span className="picker-keys">{t("picker.keys")}</span>}
         {!query.trim() && hiddenPresent.size > 0 && <button type="button" aria-pressed={includeHidden}
-          onClick={() => setIncludeHidden((shown) => !shown)}>{t("picker.showHidden", { count: hiddenPresent.size })}</button>}
+          onClick={() => setIncludeHidden((shown) => !shown)}>{includeHidden ? t("picker.hideHidden") : t("picker.showHidden", { count: hiddenPresent.size })}</button>}
         <button type="button" onClick={() => setEditing(true)}>{t("picker.edit")}</button>
       </div>
     </>}
@@ -132,7 +133,7 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
 }
 
 function CatalogPickerEdit({ catalogs, prefs, onPrefs, onDone, onClose }: {
-  catalogs: Catalog[];
+  catalogs: BrowseCatalog[];
   prefs: CatalogPickerPrefs;
   onPrefs: (patch: Partial<CatalogPickerPrefs>) => void;
   onDone: () => void;
@@ -142,13 +143,14 @@ function CatalogPickerEdit({ catalogs, prefs, onPrefs, onDone, onClose }: {
   const dialog = useRef<HTMLDivElement>(null);
   useDialogFocus(dialog);
   useDialogViewport(dialog);
+  // Esc leaves the editor for the list it was opened from; the close button and the backdrop close.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.isComposing) onClose();
+      if (event.key === "Escape" && !event.isComposing) onDone();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onDone]);
   const addons = useMemo(() => {
     const grouped = new Map<string, { name: string; ids: Set<string> }>();
     for (const catalog of catalogs) {

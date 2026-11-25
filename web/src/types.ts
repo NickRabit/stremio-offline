@@ -872,7 +872,7 @@ export interface DownloadsViewPrefs {
   sort: DownloadSort; direction: LibraryOrder; status: DownloadStatusFilter;
   dateField: DownloadDateField; pageSize: DownloadPageSize;
 }
-export interface CatalogRef { addonKey: string; type: string; id: string }
+export interface CatalogRef { addonKey: string; type: string; id: string; combined?: true }
 export type RecentCatalogCount = 0 | 3 | 5 | 8;
 export interface CatalogViewPrefs {
   recentCount: RecentCatalogCount;

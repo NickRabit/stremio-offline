@@ -2647,11 +2647,11 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .picker-header-extra{margin-top:10px}
 .picker-body{display:block;padding:0 22px 16px;overflow:auto}
 .picker-body-rail{display:grid;grid-template-columns:200px minmax(0,1fr);gap:0;padding:0;overflow:hidden}
-.picker-main{display:grid;gap:10px;min-width:0;min-height:0}
+.picker-main{display:grid;align-content:start;gap:10px;min-width:0;min-height:0}
 .picker-body-rail .picker-main{padding:0 22px 16px;overflow:auto}
 .picker-rail{display:flex;flex-direction:column;gap:4px;min-height:0;padding:0 12px 16px 0;overflow:auto;border-right:1px solid var(--line)}
 .picker-rail>button{display:grid;grid-template-columns:22px minmax(0,1fr) auto;align-items:center;gap:8px;width:100%;min-height:38px;padding:6px 8px;border:0;background:transparent;text-align:left;font-size:12px;color:var(--text)}
-.picker-rail>button:hover{background:var(--panel2)}
+.picker-rail>button:hover{background:var(--panel2)}.picker-rail>button.active{background:var(--panel2);box-shadow:inset 3px 0 var(--accent);color:var(--text)}
 .picker-rail>button>span:nth-child(2){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .picker-search{margin:0 0 2px}
 .picker-list{display:grid;gap:12px;min-width:0}
@@ -2674,6 +2674,8 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .picker-chip{display:flex;flex:0 0 auto;width:auto;max-width:230px;min-height:36px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:var(--panel2)}
 .picker-chip .picker-option-copy{display:block;min-width:0}
 .picker-chip .picker-option-label{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.picker-chip:has(.picker-option-sublabel){min-height:40px;padding:3px 12px;border-radius:12px}
+.picker-chip .picker-option-sublabel{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:1.2;text-align:left}
 .picker-chip.picker-selected{border-color:var(--accent);background:#ff5b3820}
 .picker-chip .picker-option-check{flex:0 0 auto}
 .picker-leading{display:grid;gap:2px}
@@ -2836,7 +2838,7 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
   main.view-catalog .searchbar>button.scope-trigger{grid-column:2;grid-row:1;max-width:42vw;min-height:44px}
   main.view-catalog .filterbar{grid-template-columns:auto minmax(0,1fr) minmax(0,1fr) 44px;grid-template-areas:"type catalog catalog catalog" "genre sort sort shape" "note note note note"}
   main.view-catalog .filterbar>.catalog-type-switch{display:inline-flex;width:auto}
-  main.view-catalog .filterbar>.catalog-type-switch button{padding:0 9px;font-size:11px}
+  main.view-catalog .filterbar>.catalog-type-switch button{min-width:44px;padding:0 9px;font-size:11px}
   main.view-catalog .filterbar>label>span{display:none}
   main.view-catalog .filterbar:has(.results-filter)>label{grid-column:1/4}
   main.view-catalog .filterbar:has(.results-filter)>.shape-toggle,main.view-catalog .filterbar:has(.results-filter)>.header-expand{grid-column:4}
@@ -2886,7 +2888,7 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .picker-body.picker-body-rail{grid-template-rows:minmax(0,1fr)}
 .picker-body-rail>.picker-rail,.picker-body-rail>.picker-main{min-height:0}
 /* Scrolled to on open; the sticky search field would otherwise cover the head. */
-.picker-body-rail .picker-group-head{scroll-margin-top:60px}
+.picker-group-head{scroll-margin-top:60px}
 /* The scope reads as a choice: a caption above the value and a chevron. */
 .scope-trigger{gap:8px}
 .scope-trigger-copy{display:grid;min-width:0;line-height:1.15;text-align:left}
@@ -2894,3 +2896,22 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .scope-trigger-copy>.scope-trigger-label{font-size:12px}
 .scope-chevron{flex:0 0 auto;width:15px;height:15px;color:var(--muted);margin-left:auto}
 @media(max-width:700px){main.view-catalog .scope-trigger .scope-shared-mark{display:none}}
+
+@media(max-width:440px) and (orientation:portrait){
+  main.view-catalog .catalog-view:not(.catalog-compact) .filterbar:has(.catalog-type-switch button:nth-child(4)){
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr) 44px;
+    grid-template-areas:"type type type" "catalog catalog catalog" "genre sort shape" "note note note";
+  }
+  main.view-catalog .catalog-type-switch:has(button:nth-child(4)) button{flex:1;min-height:44px}
+}
+
+/* Every picker trigger carries the same chevron, so all of them read as a choice. */
+.genre-trigger:has(.genre-chevron){position:relative;padding-right:26px}
+.genre-chevron{position:absolute;right:8px;top:50%;width:15px;height:15px;transform:translateY(-50%);color:var(--muted)}
+.catalog-trigger .scope-chevron{margin-left:auto}
+@media(max-width:700px){
+  /* The keyboard's Search key submits; the button only took a row from the results. */
+  main.view-catalog .searchbar>.primary{display:none}
+  main.view-catalog .searchbar>button.search-cancel.search-cancel{grid-column:1;grid-row:1;justify-self:end;align-self:center;z-index:1;width:40px;min-width:40px;height:40px;min-height:40px;padding:0;margin-right:2px;border:0;background:transparent;box-shadow:none;font-size:0;color:var(--muted)}
+  main.view-catalog .searchbar:has(>.search-cancel) .search-input input{padding-right:42px}
+}

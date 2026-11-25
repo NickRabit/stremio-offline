@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   bucketsPresent,
+  browseCatalogs,
   catalogGroups,
+  samePair,
   effectiveGenre,
   fallbackForBucket,
   foldText,
@@ -53,15 +55,57 @@ describe("catalogGroups", () => {
     catalog("hidden", "Hidden addon", "movie", "secret", "Secret"),
   ];
 
-  it("merges shared ids, omits unbrowsable catalogs and orders other types last", () => {
+  it("merges shared ids, omits unbrowsable catalogs and lists only the tab's type while browsing", () => {
     const groups = catalogGroups(catalogs, { bucket: "movie", query: "", hiddenAddons: [], includeHidden: false });
     const cinemeta = groups.find((group) => group.addonKey === "cinemeta")!;
     expect(cinemeta.rows.map((row) => [row.name, row.ref.type, row.otherType])).toEqual([
       ["Top", "movie", false],
-      ["Fresh", "series", true],
     ]);
     expect(cinemeta.notBrowsable).toBe(1);
     expect(cinemeta.countInBucket).toBe(1);
+  });
+
+  it("finds other types while searching, last and one row per type", () => {
+    const groups = catalogGroups(catalogs, { bucket: "movie", query: "fresh", hiddenAddons: [], includeHidden: false });
+    const cinemeta = groups.find((group) => group.addonKey === "cinemeta")!;
+    expect(cinemeta.rows.map((row) => [row.name, row.ref.type, row.otherType])).toEqual([
+      ["Fresh", "series", true],
+    ]);
+    const paired = [catalog("a", "A", "movie", "nf", "Netflix"), catalog("a", "A", "series", "nf", "Netflix"), catalog("a", "A", "anime", "an", "Anime")];
+    const other = catalogGroups(paired, { bucket: "other", query: "netf", hiddenAddons: [], includeHidden: false });
+    expect(other[0]?.rows.map((row) => row.ref.type)).toEqual(["movie", "series"]);
+  });
+
+  it("drops an addon with nothing of the tab's type while browsing", () => {
+    const paired = [catalog("a", "A", "movie", "nf", "Netflix"), catalog("b", "B", "anime", "an", "Anime")];
+    expect(catalogGroups(paired, { bucket: "other", query: "", hiddenAddons: [], includeHidden: false })
+      .map((group) => group.addonKey)).toEqual(["b"]);
+  });
+
+  it("finds the kinds All does not mix when searching from the All tab", () => {
+    const mixed = browseCatalogs([catalog("a", "A", "movie", "nf", "Netflix"), catalog("a", "A", "series", "nf", "Netflix"), catalog("k", "Kitsu", "anime", "trend", "Trending anime")]);
+    expect(catalogGroups(mixed, { bucket: "all", query: "", hiddenAddons: [], includeHidden: false }).map((group) => group.addonKey)).toEqual(["a"]);
+    const found = catalogGroups(mixed, { bucket: "all", query: "anime", hiddenAddons: [], includeHidden: false });
+    expect(found.map((group) => [group.addonKey, group.rows.map((row) => [row.ref.type, row.otherType])])).toEqual([["k", [["anime", true]]]]);
+  });
+
+  it("keeps one recent chip per list across its types, in the type used last", () => {
+    const raw = [catalog("a", "A", "movie", "nf", "Netflix"), catalog("a", "A", "series", "nf", "Netflix"), catalog("a", "A", "movie", "box", "Box office")];
+    const mixed = browseCatalogs(raw);
+    const recent = [
+      { addonKey: "a", type: "series", id: "nf" },
+      { addonKey: "a", type: "movie", id: "nf", combined: true as const },
+      { addonKey: "a", type: "movie", id: "nf" },
+      { addonKey: "a", type: "movie", id: "box" },
+    ];
+    expect(recentCatalogs(mixed, recent, 3).map((item) => [item.id, item.type, Boolean(refOf(item).combined)]))
+      .toEqual([["nf", "series", false], ["box", "movie", false]]);
+  });
+
+  it("marks a single-type catalogue in the All tab", () => {
+    const mixed = browseCatalogs([catalog("a", "A", "movie", "nf", "Netflix"), catalog("a", "A", "series", "nf", "Netflix"), catalog("a", "A", "movie", "box", "Box office")]);
+    const rows = catalogGroups(mixed, { bucket: "all", query: "", hiddenAddons: [], includeHidden: false })[0]!.rows;
+    expect(rows.map((row) => [row.name, row.onlyType])).toEqual([["Netflix", undefined], ["Box office", "movie"]]);
   });
 
   it("keeps distinct custom types sharing a catalog id selectable", () => {
@@ -81,6 +125,17 @@ describe("catalogGroups", () => {
     const found = catalogGroups(catalogs, { bucket: "movie", query: "secret", hiddenAddons: ["hidden"], includeHidden: false });
     expect(found).toHaveLength(1);
     expect(found[0]?.hidden).toBe(true);
+  });
+});
+
+describe("samePair", () => {
+  it("links one catalogue across its types and the mixed entry, never two catalogues", () => {
+    const raw = [catalog("a", "A", "movie", "nf", "Netflix"), catalog("a", "A", "series", "nf", "Netflix"), catalog("a", "A", "movie", "box", "Box office")];
+    const [mixed] = browseCatalogs(raw);
+    expect(samePair(raw[0]!, raw[1]!)).toBe(true);
+    expect(samePair(mixed!, raw[1]!)).toBe(true);
+    expect(samePair(raw[0]!, raw[2]!)).toBe(false);
+    expect(samePair(raw[0]!, catalog("b", "B", "movie", "nf", "Netflix"))).toBe(false);
   });
 });
 

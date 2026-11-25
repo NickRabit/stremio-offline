@@ -65,7 +65,7 @@ afterEach(() => {
 });
 
 describe("CatalogPicker", () => {
-  it("searches catalogs and picks a greyed row from another type", async () => {
+  it("searches catalogs and picks a greyed row of another type found by the search", async () => {
     const handlers = pickHandlers();
     await act(async () => {
       root.render(<CatalogPicker catalogs={catalogs} current={current} prefs={prefs} {...handlers}/>);
@@ -73,7 +73,7 @@ describe("CatalogPicker", () => {
     await typeSearch("netf");
     expect([...host.querySelectorAll(".picker-group .picker-option-label")].map((node) => node.textContent)).toEqual(["Netflix"]);
 
-    await typeSearch("");
+    await typeSearch("series only");
     const greyRow = [...host.querySelectorAll<HTMLButtonElement>(".picker-option.picker-muted")]
       .find((button) => button.textContent?.includes("Series only"))!;
     await act(async () => { greyRow.click(); });

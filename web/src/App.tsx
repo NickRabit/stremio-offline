@@ -94,13 +94,18 @@ import type { Addon, Avatar, BuildInfo, BrowseItem, BrowseLibrary, DeviceTransfe
 import type { DownloadDrainView, DownloadWindowState } from "../../server/src/api-types";
 import { AddonLogo } from "./AddonLogo";
 import { CatalogFilters, consumePickerFocusReturn } from "./CatalogFilters";
+import { catalogTypeTag } from "./catalog-labels";
 import { ScopePicker } from "./ScopePicker";
 import {
+  browseMembers,
+  browseCatalogs,
+  catalogRefKey,
+  type BrowseCatalog,
   effectiveGenre,
   genreOptions as catalogGenreOptions,
+  samePair,
   isBrowsable,
   needsSearch,
-  requiredExtras,
   refOf,
   sameRef,
   scopeCatalogValue,
@@ -202,7 +207,7 @@ const orderedVideos = (videos: Video[]) => videos.map((video, index) => ({ video
 export function App() {
   useUiScale();
   const { t } = useI18n();
-  const [view, setViewState] = useState<View>(() => rememberedStartView()); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
+  const [view, setViewState] = useState<View>(() => rememberedStartView()); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<BrowseCatalog[]>([]);
   const firstView = useRef<View>(view);
   const initialViewResolved = useRef(false);
   // The Library is this visit's first page: start its chunk during this render, alongside
@@ -389,8 +394,6 @@ export function App() {
   const [views, setViews] = useState<UserViews>(() => emptyViews());
   const viewsRef = useRef(views);
   viewsRef.current = views;
-  const selectedCatalogChosen = useRef(false);
-  const catalogRestoreDone = useRef(false);
   const scopePickerClosedAt = useRef(Number.NEGATIVE_INFINITY);
   /** Set once the stored views and the library list are both in, before the first listing. */
   const [viewsReady, setViewsReady] = useState(false);
@@ -994,7 +997,7 @@ export function App() {
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
   const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null); const sourceListRef = useRef<HTMLDivElement>(null);
   const playerOpenRef = useRef(false);
-  const currentCatalog = catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
+  const currentCatalog = catalogs.find((catalog) => catalogRefKey(refOf(catalog)) === selectedCatalog) ?? catalogs[0];
   const genreOptions = currentCatalog ? catalogGenreOptions(currentCatalog) : [];
   const activeGenre = currentCatalog ? effectiveGenre(currentCatalog, genre) : "";
   const logos = useMemo(() => Object.fromEntries(addons.map((addon) => [addon.key, addon.manifest.logo])),
@@ -1002,21 +1005,6 @@ export function App() {
   const scopeLabel = scopedCatalog
     ? `${scopedCatalog.name} · ${typeLabel(scopedCatalog.type)}`
     : scopeAddon ? scopeAddon.addonName : t("search.shared");
-  useEffect(() => {
-    if (catalogRestoreDone.current || !catalogsKnown || !viewsReady) return;
-    catalogRestoreDone.current = true;
-    if (selectedCatalogChosen.current) return;
-    const last = views.catalog.last;
-    if (!last) return;
-    const catalog = catalogs.find((item) => sameRef(refOf(item), last));
-    if (!catalog || !isBrowsable(catalog)) return;
-    setSelectedCatalog(`${catalog.addonKey}:${catalog.type}:${catalog.id}`);
-    setGenre(last.genre);
-    if (needsSearch(catalog) && requiredExtras(catalog).every((extra) => extra === "search")) {
-      setSearchScopeValue(scopeCatalogValue(last));
-      setSearchPromptCatalog(catalog.name || catalog.id);
-    }
-  }, [catalogs, catalogsKnown, viewsReady, views.catalog.last]);
   const panelAddonKey = (streamAddonKey?: string) => panelProgressAddonKey({
     searching: Boolean(submittedQuery), scopeAddonKey: searchScope.addonKey,
     catalogAddonKey: currentCatalog?.addonKey, streamAddonKey,
@@ -1199,17 +1187,16 @@ export function App() {
     const recent = pushRecentCatalog(current.recent, ref, current.recentCount);
     if (!sameJson(recent, current.recent)) persistCatalogPrefs({ recent });
   };
-  const rememberLastCatalog = (ref: CatalogRef, nextGenre = genre) => {
-    persistCatalogPrefs({ last: { ...ref, genre: nextGenre } });
-  };
   const selectCatalog = (ref: CatalogRef, searchHandoff = false) => {
     const catalog = catalogs.find((item) => sameRef(refOf(item), ref));
     if (!catalog) return;
-    selectedCatalogChosen.current = true;
-    setSelectedCatalog(`${ref.addonKey}:${ref.type}:${ref.id}`);
+    setSelectedCatalog(catalogRefKey(ref));
     setSearchPromptCatalog("");
+    // A genre carries over to the same catalogue in another type, where it may wait as paused;
+    // another catalogue without it starts unfiltered rather than reviving it later.
+    const keepGenre = !genre || catalogGenreOptions(catalog).includes(genre) || Boolean(currentCatalog && samePair(currentCatalog, catalog));
+    if (!keepGenre) setGenre("");
     rememberRecentCatalog(ref);
-    rememberLastCatalog(ref);
     if (!searchHandoff || !needsSearch(catalog) || !searchable.some((item) => sameRef(refOf(item), ref))) return;
     setSearchScopeValue(scopeCatalogValue(ref));
     setSearchPromptCatalog(catalog.name || catalog.id);
@@ -1220,6 +1207,8 @@ export function App() {
   const pickSearchScope = (value: string) => {
     setSearchPromptCatalog("");
     setSearchScopeValue(value);
+    // The scope is chosen in order to type; a phone keeps its keyboard closed until the field is tapped.
+    if (!touchDevice()) window.requestAnimationFrame(() => catalogSearchInput.current?.focus({ preventScroll: true }));
     const picked = parseSearchScope(value);
     if (!picked.catalogId) return;
     const ref = { addonKey: picked.addonKey!, type: picked.catalogType!, id: picked.catalogId };
@@ -1228,7 +1217,6 @@ export function App() {
   const pickCatalog = (ref: CatalogRef) => selectCatalog(ref, true);
   const pickGenre = (next: string) => {
     setGenre(next);
-    if (currentCatalog) rememberLastCatalog(refOf(currentCatalog), next);
   };
   const closeScopePicker = () => {
     scopePickerClosedAt.current = performance.now();
@@ -1348,12 +1336,11 @@ export function App() {
     setCatalogCompact(false);
     setSearchPromptCatalog("");
     setScopePickerOpen(false);
-    const firstCatalog = (pick && catalogs.find((catalog) => catalog.addonKey === pick.addonKey && catalog.type === pick.type && catalog.id === pick.id)) ?? catalogs[0];
+    const firstCatalog = (pick && catalogs.find((catalog) => !catalog[browseMembers] && catalog.addonKey === pick.addonKey && catalog.type === pick.type && catalog.id === pick.id)) ?? catalogs[0];
     scrollByView.current.catalog = 0;
     setView("catalog");
     setSearch(""); setSubmittedQuery(""); setSearchScopeValue(""); setTypeFilter(""); setGenre(""); setSort("default"); setSearchSort("default");
-    setSelectedCatalog(firstCatalog ? `${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}` : "");
-    if (pick) selectedCatalogChosen.current = true;
+    setSelectedCatalog(firstCatalog ? catalogRefKey(refOf(firstCatalog)) : "");
     setSelected(null); setSelectedVideo(null); resetTitleSources(); setSelectedStream(null);
     setGalleryIndex(null);
     setStreamAddon(""); setStreamLanguage(""); setStreamSort(defaultStreamSort);
@@ -1454,9 +1441,11 @@ export function App() {
       setCatalogsKnown(true);
       return [] as Catalog[];
     }
-    const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs); setCatalogsKnown(true);
+    const [nextAddons, manifestCatalogs] = await Promise.all([api.addons(), api.catalogs()]);
+    const nextCatalogs = browseCatalogs(manifestCatalogs);
+    setAddons(nextAddons); setCatalogs(nextCatalogs); setCatalogsKnown(true);
     const firstCatalog = nextCatalogs.find(isBrowsable) ?? nextCatalogs[0];
-    if ((selectFirst || !selectedCatalog) && firstCatalog) setSelectedCatalog(`${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}`);
+    if ((selectFirst || !selectedCatalog) && firstCatalog) setSelectedCatalog(catalogRefKey(refOf(firstCatalog)));
     return nextCatalogs;
   };
   const downloadsSeen = useRef(false);
@@ -3866,7 +3855,9 @@ export function App() {
         {...(buildInfo?.searchEverywhere ? { onOpenSearch: () => openSearch() } : {})}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         const target = event.target as HTMLElement;
-        if (target.closest(".catalog-trigger,.genre-trigger") && consumePickerFocusReturn()) return;
+        // A picker trigger opens its dialog anyway; unfolding the bar under the tap would move the
+        // button away before the click lands, and the first tap on a touch screen would be lost.
+        if (target.closest(".catalog-trigger,.genre-trigger")) { consumePickerFocusReturn(); return; }
         if (target.closest(".scope-trigger") && performance.now() - scopePickerClosedAt.current <= 400) {
           scopePickerClosedAt.current = Number.NEGATIVE_INFINITY;
           return;
@@ -3898,9 +3889,10 @@ export function App() {
                 // Shift+Delete removes the highlighted recent search, as browsers do in their own lists.
                 else if (e.key === "Delete" && e.shiftKey && suggestions[activeOption]?.kind === "recent") { e.preventDefault(); forgetSearch(suggestions[activeOption].text); }
                 else if (e.key === "Escape" && suggestions.length) { e.preventDefault(); setSuggestOpen(false); setActiveSuggestion(-1); }
-              }} placeholder={searchPromptCatalog
+              }} enterKeyHint="search" placeholder={searchPromptCatalog
                 ? t("catalog.needQueryIn", { catalog: searchPromptCatalog })
-                : t("catalog.searchPlaceholder")}/>
+                : scopedCatalog || scopeAddon ? t("catalog.searchPlaceholderIn", { target: scopedCatalog ? `${scopedCatalog.addonName} · ${scopedCatalog.name}` : scopeAddon!.addonName })
+                  : t("catalog.searchPlaceholder")}/>
 
             </div>
             <button type="button" className="scope-trigger" aria-haspopup="dialog" aria-expanded={scopePickerOpen}
@@ -3914,7 +3906,7 @@ export function App() {
               <ChevronDown className="scope-chevron"/>
             </button>
             <button className="primary"><Search/> {t("catalog.search")}</button>
-            {submittedQuery && <button type="button" onClick={() => { live.cancel(); setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}
+            {submittedQuery && <button type="button" className="search-cancel" onClick={() => { live.cancel(); setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}
             {/* Under the whole bar, not the field: on a narrow screen the scope and the Search
                 button wrap below the field, and a list hanging from it would cover them. */}
             {suggestions.length > 0 && <ul id="search-suggestions" role="listbox" aria-label={t("catalog.suggestions")} className="search-suggestions">{suggestions.map((suggestion, index) =>
@@ -3973,7 +3965,8 @@ export function App() {
                 const klic = `${item.type || "movie"}:${item.id}`;
                 const postup = catalogProgress(item);
                 const vSeznamu = inWatchlist(item.type, item.id);
-                const metadata = [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
+                const mixedType = !submittedQuery && currentCatalog?.[browseMembers] ? catalogTypeTag(item.type) : null;
+                const metadata = [item.releaseInfo || item.year, mixedType, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
                 return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""} ${menuFor === klic ? "menu-open" : ""}`} aria-haspopup="menu" aria-expanded={menuFor === klic} onClick={() => { if (submittedQuery) actOnSearch(submittedQuery); void openMeta(item); }}
                   // The tile is the button, so its menu cannot be one; the keyboard opens it the way a desktop opens any context menu.
                   onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); setMenuFor(menuFor === klic ? null : klic); } }}>
