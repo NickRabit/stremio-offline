@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { copyFile, mkdir, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { chooseCatalog } from "../catalog-picker";
 import { fixtureLibraryTitles } from "../fixture-library";
 
 /**
@@ -28,9 +29,7 @@ test("the screens are taken against the fixture titles", async ({ page, request 
   if (downloaded) {
     await page.goto("/");
     await page.getByRole("button", { name: "Katalog", exact: true }).click();
-    const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-    const movies = await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value");
-    await catalog.selectOption(movies!);
+    await chooseCatalog(page, /Filmy/, "movie");
     await page.getByRole("button", { name: /Zkušební film/ }).click();
     const detail = page.locator(".detail-panel");
     await detail.locator(".stream-list button").first().click();

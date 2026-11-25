@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { chooseCatalog } from "./catalog-picker";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { cleanupJourney, E2E_LIBRARY, profileByNameKey, resetFixture, type Job } from "./source-selection-journey";
@@ -30,9 +31,7 @@ const listFollows = async (request: APIRequestContext): Promise<Follow[]> =>
 const openCatalog = async (page: Page, label: RegExp) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const select = page.getByRole("combobox", { name: "Procházet katalog" });
-  const labels = await select.locator("option").allTextContents();
-  await select.selectOption({ label: labels.find((text) => label.test(text))! });
+  await chooseCatalog(page, label, /seri/i.test(label.source) ? "series" : "movie");
 };
 
 const openSeries = async (page: Page): Promise<Locator> => {

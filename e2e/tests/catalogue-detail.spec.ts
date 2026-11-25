@@ -1,12 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
+import { chooseCatalog } from "./catalog-picker";
 
 /** The catalogue opened the way a person opens it: the view, then the listing to browse. */
 const openCatalogue = async (page: Page, label: RegExp) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const select = page.getByRole("combobox", { name: "Procházet katalog" });
-  const labels = await select.locator("option").allTextContents();
-  await select.selectOption({ label: labels.find((text) => label.test(text))! });
+  await chooseCatalog(page, label, /seri/i.test(label.source) ? "series" : "movie");
 };
 
 /** The one way into the full detail, whichever of its two homes is on screen. */

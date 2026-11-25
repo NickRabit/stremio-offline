@@ -1,4 +1,6 @@
-import type { DownloadsViewPrefs, ExtraView, LibraryViewPrefs, UserViews } from "./types";
+import type {
+  CatalogRef, CatalogViewPrefs, DownloadsViewPrefs, ExtraView, LibraryViewPrefs, RecentCatalogCount, UserViews,
+} from "./types";
 
 /** One stored bucket a browse path can name, or nothing to store under. */
 export type ViewScope =
@@ -13,9 +15,49 @@ export const defaultLibraryView = (): LibraryViewPrefs =>
   ({ sort: "name", order: "asc", favoritesOnly: false, view: "grid" });
 export const defaultDownloadsView = (): DownloadsViewPrefs =>
   ({ sort: "order", direction: "asc", status: "", dateField: "createdAt", pageSize: 20 });
+export const defaultCatalogView = (): CatalogViewPrefs =>
+  ({ recentCount: 3, recent: [], hiddenAddons: [], last: null });
 
 export const emptyViews = (): UserViews =>
-  ({ libraries: {}, extras: {}, downloads: defaultDownloadsView() });
+  ({ libraries: {}, extras: {}, downloads: defaultDownloadsView(), catalog: defaultCatalogView() });
+
+export const sameCatalogRef = (a: CatalogRef, b: CatalogRef): boolean =>
+  a.addonKey === b.addonKey && a.type === b.type && a.id === b.id && a.combined === b.combined;
+
+export function pushRecentCatalog(recent: CatalogRef[], ref: CatalogRef, count: RecentCatalogCount): CatalogRef[] {
+  if (count === 0) return [];
+  return [ref, ...recent.filter((item) => !sameCatalogRef(item, ref))].slice(0, count);
+}
+
+const cutRecent = (refs: CatalogRef[], count: RecentCatalogCount): CatalogRef[] => {
+  if (count === 0) return [];
+  const out: CatalogRef[] = [];
+  for (const item of refs) {
+    if (out.some((other) => sameCatalogRef(item, other))) continue;
+    out.push(item);
+    if (out.length >= count) break;
+  }
+  return out;
+};
+
+export const withCatalog = (views: UserViews, patch: Partial<CatalogViewPrefs>): UserViews => {
+  const recentCount = patch.recentCount ?? views.catalog.recentCount;
+  const last = patch.last !== undefined ? patch.last : views.catalog.last;
+  const hiddenAddons: string[] = [];
+  for (const item of patch.hiddenAddons ?? views.catalog.hiddenAddons) {
+    if (hiddenAddons.includes(item)) continue;
+    hiddenAddons.push(item);
+  }
+  return {
+    ...views,
+    catalog: {
+      recentCount,
+      recent: cutRecent(patch.recent ?? views.catalog.recent, recentCount),
+      hiddenAddons,
+      last: last === null ? null : { ...last },
+    },
+  };
+};
 
 /** A library list is not a bucket. A single-library install speaks relative
  *  paths (`Films`, not `lib_xxxxxxxx/Films`); those still belong to that library. */

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { App } from "./App";
-import { setLocale } from "./i18n";
+import { setLocale, t } from "./i18n";
 import type {
   Catalog,
   CatalogSearchSnapshot,
@@ -10,6 +10,7 @@ import type {
   SearchState,
   Settings,
   SearchableCatalog,
+  UserViews,
 } from "./types";
 import { emptyViews } from "./views";
 
@@ -79,6 +80,7 @@ let legacySearchReply: Reply;
 let sessionStartReply: Reply;
 let sessionPollReply: Reply;
 let historyReply: Reply;
+let storedViews: UserViews;
 
 const deferred = <T,>(fallback: T): Deferred<T> => {
   let settled = false;
@@ -115,6 +117,7 @@ beforeEach(() => {
   sessionStartReply = () => json({}, 404);
   sessionPollReply = () => json({ changed: false, revision: 1 });
   historyReply = () => json({});
+  storedViews = emptyViews();
   vi.stubGlobal("matchMedia", () => ({
     matches: false, media: "", onchange: null,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -167,7 +170,16 @@ beforeEach(() => {
     if (url.pathname === "/api/search/history" && method === "POST") return historyReply(request);
     if (url.pathname === "/api/settings") return json(settings);
     if (url.pathname === "/api/libraries") return json([]);
-    if (url.pathname === "/api/views") return json(emptyViews());
+    if (url.pathname === "/api/views" && method === "PATCH") {
+      const patch = body as Partial<UserViews>;
+      storedViews = {
+        ...storedViews,
+        ...patch,
+        catalog: { ...storedViews.catalog, ...patch.catalog },
+      };
+      return json(storedViews);
+    }
+    if (url.pathname === "/api/views") return json(storedViews);
     if (url.pathname === "/api/languages") return json([]);
     if (url.pathname === "/api/downloads") return json({ jobs: [], halt: null, deviceTransfers: [] });
     if (url.pathname === "/api/follows") return json({ follows: [] });
@@ -232,15 +244,6 @@ const openCatalog = async () => {
   await flush();
 };
 
-const setSelect = async (label: string, value: string) => {
-  const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`);
-  expect(select, `select ${label}`).toBeTruthy();
-  await act(async () => {
-    select!.value = value;
-    select!.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-};
-
 const typeInto = async (input: HTMLInputElement, value: string) => {
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
@@ -264,6 +267,31 @@ const clickButtonText = async (text: string, scope: ParentNode = host) => {
   await act(async () => { button!.click(); });
 };
 
+const choosePickerOption = async (text: string) => {
+  const option = [...host.querySelectorAll<HTMLButtonElement>(".picker-option")]
+    .find((node) => node.textContent?.includes(text));
+  expect(option, `picker option ${text}`).toBeTruthy();
+  await act(async () => { option!.click(); });
+  await flush();
+};
+
+const clickLabeledButton = async (label: string) => {
+  const button = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  expect(button, `button ${label}`).toBeTruthy();
+  await act(async () => { button!.click(); });
+  await flush();
+};
+
+const chooseCatalog = async (name: string) => {
+  await act(async () => { host.querySelector<HTMLButtonElement>("button.catalog-trigger")!.click(); }); await flush();
+  await choosePickerOption(name);
+};
+
+const chooseScope = async (name: string) => {
+  await act(async () => { host.querySelector<HTMLButtonElement>("button.scope-trigger")!.click(); }); await flush();
+  await choosePickerOption(name);
+};
+
 const gridNames = () =>
   [...host.querySelectorAll<HTMLElement>("main.view-catalog .poster-card strong")]
     .map((node) => node.textContent ?? "");
@@ -276,6 +304,51 @@ const sessionDeletes = () => requests.filter((request) =>
   request.method === "DELETE" && /^\/api\/search\/catalog\/[^/]+$/.test(request.pathname));
 
 describe("catalogue and search loading in App", () => {
+  it("opens on the default catalogue even when an older build stored the last one", async () => {
+    storedViews = {
+      ...emptyViews(),
+      catalog: {
+        ...emptyViews().catalog,
+        last: { addonKey: "beta", type: "series", id: "popular", genre: "" },
+      },
+    };
+
+    await openCatalog();
+    await flush();
+    expect(matchingRequests("/api/catalog").map((request) =>
+      new URLSearchParams(request.query).get("id"))).toEqual(["top"]);
+  });
+
+  it("ignores a stored last catalog that the account cannot browse", async () => {
+    storedViews = {
+      ...emptyViews(),
+      catalog: {
+        ...emptyViews().catalog,
+        last: { addonKey: "ghost", type: "movie", id: "missing", genre: "" },
+      },
+    };
+
+    await openCatalog();
+    await flush();
+    expect(matchingRequests("/api/catalog").map((request) =>
+      new URLSearchParams(request.query).get("id"))).toEqual(["top"]);
+    expect(host.textContent).not.toContain("ghost");
+  });
+
+  it("stores a catalog choice once and does not rewrite identical preferences", async () => {
+    await openCatalog();
+    await chooseCatalog("Popular");
+    await act(async () => { await new Promise((done) => setTimeout(done, 350)); });
+    await until(() => matchingRequests("/api/views", "PATCH").length === 1, "catalog preference write");
+    const body = matchingRequests("/api/views", "PATCH")[0]!.body as { catalog: Record<string, unknown> };
+    expect(body).toMatchObject({ catalog: { recent: [{ addonKey: "beta", type: "series", id: "popular" }] } });
+    expect(body.catalog).not.toHaveProperty("last");
+
+    await chooseCatalog("Popular");
+    await act(async () => { await new Promise((done) => setTimeout(done, 350)); });
+    expect(matchingRequests("/api/views", "PATCH")).toHaveLength(1);
+  });
+
   it("merges a second catalogue page and stops paging when a page adds nothing", async () => {
     const first = deferred<Response>(json([]));
     const second = deferred<Response>(json([]));
@@ -313,7 +386,7 @@ describe("catalogue and search loading in App", () => {
     await openCatalog();
     await until(() => matchingRequests("/api/catalog").some((request) =>
       new URLSearchParams(request.query).get("id") === "top"), "catalogue A page");
-    await setSelect("Browse catalog", "beta:series:popular");
+    await chooseCatalog("Popular");
     await until(() => matchingRequests("/api/catalog").some((request) =>
       new URLSearchParams(request.query).get("id") === "popular"), "catalogue B page");
 
@@ -387,9 +460,8 @@ describe("catalogue and search loading in App", () => {
     sessionPollReply = () => poll.promise;
 
     await openCatalog();
-    await until(() => host.querySelector('select[aria-label="Where to search"] option[value="catalog:alpha:movie:top"]') !== null,
-      "search scope option");
-    await setSelect("Where to search", "catalog:alpha:movie:top");
+    await until(() => host.querySelector("button.scope-trigger") !== null, "search scope button");
+    await chooseScope("Top");
     await submitSearch("Needle");
     await until(() => matchingRequests("/api/search/catalog", "POST").length === 1, "session search start");
 
@@ -519,7 +591,9 @@ describe("catalogue and search loading in App", () => {
     secondSearch.resolve(json(searchResult([title("second", "Second result")])));
     await until(() => gridNames().join() === "Second result", "second query result");
 
-    await setSelect("Type", "movie");
+    const results = host.querySelector(".results-filter");
+    expect(results).toBeTruthy();
+    await clickButtonText(t("catalog.movies"), results!);
     await until(() => matchingRequests("/api/search").length === 3, "filtered search request");
     await flush();
     expect(gridNames()).toEqual([]);
@@ -533,7 +607,7 @@ describe("catalogue and search loading in App", () => {
     afterCancel.resolve(json([title("catalog-a", "Catalogue A again")]));
     await until(() => gridNames().join() === "Catalogue A again", "reloaded catalogue");
 
-    await setSelect("Browse catalog", "beta:series:popular");
+    await chooseCatalog("Popular");
     await until(() => catalogCalls === 3, "second catalogue request");
     await flush();
     expect(gridNames()).toEqual([]);

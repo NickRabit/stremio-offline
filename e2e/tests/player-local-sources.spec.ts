@@ -4,6 +4,7 @@ import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { addonManifest, appUrl } from "../../playwright.config";
+import { chooseCatalog } from "./catalog-picker";
 import { pickAddonStream } from "./catalog-sources";
 
 // A folder of its own: the binding is what these journeys switch sources under, and the layout
@@ -177,9 +178,7 @@ test.describe("the player's sources for a library file", () => {
   test("a catalogue play keeps switching both ways", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Katalog", exact: true }).click();
-    const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-    const labels = await catalog.locator("option").allTextContents();
-    await catalog.selectOption({ label: labels.find((text) => /Filmy/.test(text))! });
+    await chooseCatalog(page, /Filmy/, "movie");
     await page.getByRole("button", { name: /Zkušební film/ }).click();
     await pickAddonStream(page);
     await page.locator(".detail-panel").getByRole("button", { name: "Přehrát", exact: true }).click();
@@ -206,9 +205,7 @@ test.describe("the player's sources for a library file", () => {
     // The catalogue leaves a detail behind, and its title is not the file about to play.
     await page.goto("/");
     await page.getByRole("button", { name: "Katalog", exact: true }).click();
-    const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-    const labels = await catalog.locator("option").allTextContents();
-    await catalog.selectOption({ label: labels.find((text) => /Seriál/.test(text))! });
+    await chooseCatalog(page, /Seriál/, "series");
     await page.getByRole("button", { name: /Zkušební seriál/ }).first().click();
     await expect(page.locator(".detail-panel")).toContainText("Zkušební seriál");
 

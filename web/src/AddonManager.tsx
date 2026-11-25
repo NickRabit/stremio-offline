@@ -13,6 +13,18 @@ const ROLES: Addon["role"][] = ["both", "catalog", "source"];
 
 const roleLabel = (role: Addon["role"]) =>
   t(role === "catalog" ? "addons.roleCatalog" : role === "source" ? "addons.roleSource" : "addons.roleBoth");
+
+function RoleSwitch({ roles, current, busy, set }: {
+  roles: readonly Addon["role"][];
+  current: Addon["role"];
+  busy: boolean;
+  set: (role: Addon["role"]) => void;
+}) {
+  return <div className="library-shelf-segments addon-role-switch" role="group" aria-label={t("addons.role")}>
+    {roles.map((value) => <button key={value} type="button" aria-pressed={current === value}
+      className={current === value ? "active" : ""} disabled={busy} onClick={() => set(value)}>{roleLabel(value)}</button>)}
+  </div>;
+}
 const roleSummary = (role: Addon["role"]) =>
   t(role === "catalog" ? "addons.isCatalog" : role === "source" ? "addons.isSource" : "addons.isBoth");
 
@@ -93,9 +105,7 @@ export function AddonManager({ addons, libraries = [], restricted = false, admin
       <label><span>{t("addons.manifestUrl")}</span>
         <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…/manifest.json" required/></label>
       <label><span>{t("addons.role")}</span>
-        <select value={role} onChange={(event) => setRole(event.target.value as Addon["role"])}>
-          {ROLES.map((value) => <option key={value} value={value}>{roleLabel(value)}</option>)}
-        </select></label>
+        <RoleSwitch roles={ROLES} current={role} busy={busy} set={setRole}/></label>
       <button className="primary" disabled={busy}><Plus/> {t("common.add")}</button>
     </form>}
     {addons.length > 0 && <div className="addon-tools">
@@ -292,9 +302,8 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
             <input value={draft.url} disabled={busy || !loadedUrl} spellCheck={false} placeholder={t("common.loading")}
               aria-label={t("addons.manifestUrl")} onChange={(event) => update({ url: event.target.value })}/></label>
           <label className="manifest-field"><span>{t("addons.role")}</span>
-            <select value={draft.role} disabled={busy} aria-label={t("addons.role")} onChange={(event) => update({ role: event.target.value as Addon["role"] })}>
-              {ROLES.filter((value) => !(addon.essential && value === "source")).map((value) => <option key={value} value={value}>{roleLabel(value)}</option>)}
-            </select></label>
+            <RoleSwitch roles={ROLES.filter((value) => !(addon.essential && value === "source"))} current={draft.role} busy={busy}
+              set={(value) => update({ role: value })}/></label>
           {addon.configurable && <a className="addon-configure" href={configureUrl(loadedUrl)} target="_blank" rel="noreferrer noopener">
             <ExternalLink/> {t("addons.configure")}</a>}
         </section>

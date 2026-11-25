@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { useChildMode } from "./child-mode";
 import { ShapeToggle } from "./app-chrome";
 import { TileArt } from "./TileArt";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
+import { AddonLogo } from "./AddonLogo";
+import { catalogTypeTag } from "./catalog-labels";
 import { locale, t, type Key } from "./i18n";
 import { parseSearchScope } from "./search-scope";
 import { suggest, type Suggestion } from "./search-suggestions";
-import { SearchScopeOptions } from "./SearchScopeOptions";
+import { ScopePicker } from "./ScopePicker";
 import { Heading } from "./settings-ui";
 import { PersonFace } from "./TitleExtras";
 import type {
@@ -498,6 +500,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   };
 
   const catalogOnly = search.sources.length === 1 && search.sources[0] === "catalog";
+  const [scopeOpen, setScopeOpen] = useState(false);
   const scopeValue = search.scope?.catalogId && search.scope.catalogType
     ? `catalog:${search.scope.addonKey}:${search.scope.catalogType}:${search.scope.catalogId}`
     : search.scope?.addonKey ? `addon:${search.scope.addonKey}` : "";
@@ -508,6 +511,22 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
       ...(next.catalogType ? { catalogType: next.catalogType } : {}),
       ...(next.catalogId ? { catalogId: next.catalogId } : {}),
     } : null);
+  };
+  const scopeCatalog = search.scope?.catalogId && search.scope.catalogType
+    ? searchable.find((item) => item.addonKey === search.scope?.addonKey && item.type === search.scope.catalogType && item.id === search.scope.catalogId)
+    : undefined;
+  const scopeAddon = search.scope?.addonKey ? searchable.find((item) => item.addonKey === search.scope?.addonKey) : undefined;
+  const scopeLabel = !search.scope?.addonKey
+    ? t("search.shared")
+    : scopeCatalog
+      ? `${scopeCatalog.name} · ${catalogTypeTag(scopeCatalog.type)}`
+      : (scopeAddon?.addonName ?? t("search.shared"));
+  const lockedType = search.scope?.catalogType;
+  const pickScope = (value: string) => {
+    chooseScope(value);
+    const picked = parseSearchScope(value);
+    if (picked.catalogType === "movie" || picked.catalogType === "series") search.setKind(picked.catalogType);
+    setScopeOpen(false);
   };
 
   return <section className="search-everywhere" ref={root}>
@@ -560,10 +579,14 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
       </div>
       {search.library && <button type="button" className="search-library-chip" aria-label={t("searchAll.libraryClear")} onClick={() => search.clearLibrary()}>{t("searchAll.libraryChip", { title: search.library.title })}</button>}
       {catalogOnly && <label><span>{t("catalog.searchScope")}</span>
-        <select aria-label={t("catalog.searchScope")} value={scopeValue} onChange={(event) => chooseScope(event.target.value)}>
-          <SearchScopeOptions searchable={searchable}/>
-        </select>
+        <button type="button" className="scope-trigger" aria-haspopup="dialog" aria-label={`${t("catalog.searchScope")}: ${scopeLabel}`} onClick={() => setScopeOpen(true)}>
+          {scopeAddon && <AddonLogo addonKey={scopeAddon.addonKey} name={scopeAddon.addonName}/>}
+          <span>{scopeLabel}</span>
+          <ChevronDown className="scope-chevron"/>
+        </button>
       </label>}
+      {catalogOnly && scopeOpen && <ScopePicker searchable={searchable} value={scopeValue}
+        type={lockedType || search.kind === "all" ? "" : search.kind} onPick={pickScope} onClose={() => setScopeOpen(false)}/>}
       <div className="search-filter-group">
         <span aria-hidden="true">{t("catalog.type")}</span>
         <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
@@ -572,8 +595,10 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
             ["movie", "searchAll.kindMovies"],
             ["series", "searchAll.kindSeries"],
           ] as const).map(([value, key]) => <button key={value} type="button" className={search.kind === value ? "active" : ""} aria-pressed={search.kind === value}
+            disabled={Boolean(lockedType) && value !== lockedType}
             onClick={() => search.setKind(value)}>{t(key)}</button>)}
         </div>
+        {lockedType && <small className="filter-note">{t("catalog.typeLocked")}</small>}
       </div>
       {!child && <ShapeToggle shape={shape} onToggle={onToggleShape}/>}
     </div>

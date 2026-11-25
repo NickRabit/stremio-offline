@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { chooseCatalog } from "./catalog-picker";
 import { pickAddonStream } from "./catalog-sources";
 import { forgetFilm } from "./film-progress";
 import { goToView, menuItem } from "./nav";
@@ -59,9 +60,7 @@ test("Safari holds overlay fullscreen until the first touch after a rotation", a
   const attempts = () => page.evaluate(() => (window as typeof window & { fullscreenAttempts?: number }).fullscreenAttempts ?? 0);
   await page.setViewportSize({ width: 390, height: 664 });
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  const movieCatalog = await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value");
-  await catalog.selectOption(movieCatalog!);
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
@@ -88,9 +87,7 @@ test("Safari leaves the player alone where no element fullscreen exists", async 
   });
   await page.setViewportSize({ width: 390, height: 664 });
   await page.goto("/");
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  const movieCatalog = await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value");
-  await catalog.selectOption(movieCatalog!);
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();

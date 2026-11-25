@@ -1,12 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
+import { chooseCatalog } from "./catalog-picker";
 import { pickAddonStream } from "./catalog-sources";
 
 const openFirstEpisode = async (page: Page) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Seriály" }).first().getAttribute("value"))!);
+  await chooseCatalog(page, /Seriály/, "series");
   await page.getByRole("button", { name: /Zkušební seriál/ }).click();
 
   const detail = page.locator(".detail-panel");

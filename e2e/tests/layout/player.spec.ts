@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { addonManifest } from "../../../playwright.config";
+import { chooseCatalog } from "../catalog-picker";
 import { pickAddonStream } from "../catalog-sources";
 import { forgetFilm } from "../film-progress";
 
@@ -13,9 +14,7 @@ test("player keeps its picture stable and its overlay controls reachable", async
   await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  const option = await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value");
-  await catalog.selectOption(option!);
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
@@ -128,8 +127,7 @@ test("fill-screen toggle is presentation-only, reversible and resets when the pl
   await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await pickAddonStream(page);
   const play = page.getByRole("button", { name: "Přehrát", exact: true });
@@ -195,8 +193,7 @@ test("video clicks dismiss controls and settings; double-click toggles fullscree
   await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();

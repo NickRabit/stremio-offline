@@ -8,8 +8,9 @@ import {
   runCatalogSearch,
   type CatalogSearchCursor,
 } from "./catalog-search-session";
+import { browseMembers, catalogRefKey, effectiveGenre, genreOptions, refOf, type BrowseCatalog } from "./catalog-picker-model";
 import type { SearchScope } from "./search-scope";
-import type { Catalog, Meta } from "./types";
+import type { Meta } from "./types";
 
 const merge = (previous: Meta[], incoming: Meta[]) => {
   const seen = new Set(previous.map((item) => `${item.type}:${item.id}`));
@@ -24,7 +25,7 @@ interface CatalogLoaderOptions {
   typeFilter: string;
   effectiveTypeFilter: string;
   genre: string;
-  catalog: Catalog | undefined;
+  catalog: BrowseCatalog | undefined;
   resetKey: number;
   searchSessionEnabled: boolean;
   onFirstPageStart(): void;
@@ -60,7 +61,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
   optionsRef.current = options;
 
   const [items, setItems] = useState<Meta[]>([]);
-  const [skip, setSkip] = useState(0);
+  const browseOffsets = useRef(new Map<string, number | null>());
   const [cursor, setCursor] = useState("");
   const [hasMore, setHasMore] = useState(false);
   const [pageFailed, setPageFailed] = useState(false);
@@ -68,7 +69,6 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
   const [sourceCount, setSourceCount] = useState(0);
 
   const itemsRef = useRef<Meta[]>([]);
-  const skipRef = useRef(0);
   const cursorRef = useRef("");
   const loadingRef = useRef(false);
   const requestRef = useRef(0);
@@ -85,10 +85,6 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
   const updateItems = useCallback((next: Meta[]) => {
     itemsRef.current = next;
     setItems(next);
-  }, []);
-  const updateSkip = useCallback((next: number) => {
-    skipRef.current = next;
-    setSkip(next);
   }, []);
   const updateCursor = useCallback((next: string) => {
     cursorRef.current = next;
@@ -127,7 +123,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
     const stale = () => request !== requestRef.current;
     loadingRef.current = true;
     setPageFailed(false);
-    const from = reset ? 0 : skipRef.current;
+
 
     if (reset) {
       searchAbortRef.current?.abort();
@@ -217,15 +213,41 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
           }
         }
       } else {
-        const metas = await api.catalog(catalog!, "", from, current.genre);
+        const members = (catalog![browseMembers] ?? [catalog!]).filter((member) =>
+          !current.genre || genreOptions(member).includes(current.genre));
+        if (reset) browseOffsets.current.clear();
+        const pending = members.filter((member) => browseOffsets.current.get(member.type) !== null);
+        const pages = await Promise.allSettled(pending.map((member) => api.catalog(member, "",
+          browseOffsets.current.get(member.type) ?? 0, effectiveGenre(member, current.genre))));
         if (stale()) return;
-        optionsRef.current.onItems(metas, catalog!.addonKey);
-        const previous = itemsRef.current;
-        const next = reset ? metas : merge(previous, metas);
-        const gainedNothing = !reset && next.length === previous.length;
-        updateItems(next);
-        updateSkip(from + metas.length);
-        setHasMore(metas.length > 0 && !gainedNothing);
+        const previous = reset ? [] : itemsRef.current;
+        const seen = new Set(previous.map((item) => JSON.stringify([item.type, item.id])));
+        const fresh = pages.map((page, index) => {
+          if (page.status === "rejected") return [];
+          const member = pending[index]!;
+          const items = page.value.flatMap((meta) => {
+            const item = meta.type ? meta : { ...meta, type: member.type };
+            const key = JSON.stringify([item.type, item.id]);
+            if (seen.has(key)) return [];
+            seen.add(key);
+            return [item];
+          });
+          const offset = browseOffsets.current.get(member.type) ?? 0;
+          browseOffsets.current.set(member.type, items.length ? offset + page.value.length : null);
+          return items;
+        });
+        const appended: Meta[] = [];
+        for (let index = 0; fresh.some((page) => index < page.length); index++) {
+          for (const page of fresh) if (page[index]) appended.push(page[index]!);
+        }
+        updateItems([...previous, ...appended]);
+        optionsRef.current.onItems(appended, catalog!.addonKey);
+        setHasMore(members.some((member) => browseOffsets.current.get(member.type) !== null));
+        const failure = pages.find((page) => page.status === "rejected");
+        if (failure) {
+          setPageFailed(true);
+          optionsRef.current.onError(failure.reason);
+        }
       }
     } catch (error) {
       if ((error as { name?: unknown } | null)?.name === "AbortError") return;
@@ -244,7 +266,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
         setLoadingMore(false);
       }
     }
-  }, [deleteCatalogSearchSession, recordFirstPage, updateCursor, updateItems, updateSkip]);
+  }, [deleteCatalogSearchSession, recordFirstPage, updateCursor, updateItems]);
 
   const actOnSearch = useCallback((query: string) => {
     if (firstPageOkRef.current === query) optionsRef.current.onRecordSearch(query);
@@ -260,6 +282,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
   useEffect(() => () => stopSearch(), [stopSearch]);
 
   const reloadScope = options.query && options.scopeValue;
+  const browseKey = JSON.stringify(options.catalog?.[browseMembers]?.map((member) => [catalogRefKey(refOf(member)), effectiveGenre(member, options.genre), !options.genre || genreOptions(member).includes(options.genre)]));
   const catalogAddonKey = options.catalog?.addonKey;
   const catalogType = options.catalog?.type;
   const catalogId = options.catalog?.id;
@@ -288,7 +311,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
       updateItems([]);
       setSourceCount(0);
     }
-    updateSkip(0);
+    browseOffsets.current.clear();
     updateCursor("");
     setHasMore(false);
     void loadPage(true);
@@ -304,7 +327,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
     loadPage,
     updateCursor,
     updateItems,
-    updateSkip,
+    browseKey,
   ]);
 
   return {

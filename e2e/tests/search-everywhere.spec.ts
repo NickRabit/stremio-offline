@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
+import { catalogTrigger, scopeTrigger } from "./catalog-picker";
 
 const placeholder = "Hledat v katalozích a knihovnách…";
 
@@ -227,8 +228,8 @@ test.describe("compact navigation", () => {
 
   test("Catalog controls stay in place and the mobile navigation keeps five entries", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("combobox", { name: "Kde hledat" })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "Procházet katalog" })).toBeVisible();
+    await expect(scopeTrigger(page)).toBeVisible();
+    await expect(catalogTrigger(page)).toBeVisible();
     await expect(page.getByPlaceholder("Hledat ve všech doplňcích naráz…")).toBeVisible();
     await expect(page.locator("aside.sidebar nav button:visible")).toHaveCount(5);
   });

@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
+import { catalogTrigger, chooseCatalog, chooseScope } from "./catalog-picker";
 
 const delayCatalog = (request: APIRequestContext, catalog: string, ms: number) =>
   request.get(new URL(`/catalog-delay?catalog=${encodeURIComponent(catalog)}&ms=${ms}`, addonManifest).href);
@@ -7,16 +8,7 @@ const delayCatalog = (request: APIRequestContext, catalog: string, ms: number) =
 const openCatalog = async (page: Page, label: RegExp) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  await page.getByRole("combobox", { name: "Procházet katalog" }).selectOption({ label: await optionLabel(page, label) });
-};
-
-// The option text carries the addon name and the item count, so it is matched
-// loosely and the exact string is read back off the page.
-const optionLabel = async (page: Page, pattern: RegExp) => {
-  const labels = await page.getByRole("combobox", { name: "Procházet katalog" }).locator("option").allTextContents();
-  const found = labels.find((text) => pattern.test(text));
-  expect(found, `no catalog option matching ${pattern}`).toBeTruthy();
-  return found!;
+  await chooseCatalog(page, label, /seri/i.test(label.source) ? "series" : "movie");
 };
 
 test.describe("catalog", () => {
@@ -105,19 +97,18 @@ test.describe("catalog", () => {
 
   test("searches inside one selected catalogue", async ({ page }) => {
     await page.goto("/");
-    const scope = page.getByRole("combobox", { name: "Kde hledat" });
-    await scope.selectOption((await scope.locator("option").filter({ hasText: "Seriály" }).first().getAttribute("value"))!);
-    await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
+    await chooseScope(page, /Seriály/, "series");
+    await page.getByPlaceholder("Hledat v: E2E doplněk · Seriály…").fill("Zkušební");
     await page.getByRole("button", { name: "Vyhledat" }).click();
 
     await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Zkušební film/ })).toHaveCount(0);
     // The locked filter offers exactly the catalogue's own type, so it can never
     // claim a type the search is not using.
-    const type = page.getByRole("combobox", { name: "Typ" });
-    await expect(type).toBeDisabled();
-    await expect(type.locator("option")).toHaveCount(1);
-    await expect(type).toHaveValue("series");
+    const type = page.getByRole("group", { name: "Ve výsledcích" });
+    await expect(type.getByRole("button", { name: "Seriály" })).toHaveAttribute("aria-pressed", "true");
+    await expect(type.getByRole("button", { name: "Vše" })).toBeDisabled();
+    await expect(type.getByRole("button", { name: "Filmy" })).toBeDisabled();
   });
 
   test("a catalogue picked for searching is the one left on screen", async ({ page }) => {
@@ -125,22 +116,21 @@ test.describe("catalog", () => {
     const requests: string[] = [];
     page.on("request", (request) => { if (request.url().includes("/api/catalog?")) requests.push(request.url()); });
 
-    const scope = page.getByRole("combobox", { name: "Kde hledat" });
-    await scope.selectOption((await scope.locator("option").filter({ hasText: "Seriály" }).first().getAttribute("value"))!);
+    await chooseScope(page, /Seriály/, "series");
 
-    const browse = page.getByRole("combobox", { name: "Procházet katalog" });
-    await expect(browse).toHaveValue(/:series:e2e-series$/);
+    const browse = catalogTrigger(page);
+    await expect(browse).toContainText("Seriály");
     await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
     // The catalogue behind the scope is fetched once, not once for the scope and
     // again for the picker that followed it.
     expect(requests.filter((url) => url.includes("e2e-series"))).toHaveLength(1);
 
-    await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
+    await page.getByPlaceholder("Hledat v: E2E doplněk · Seriály…").fill("Zkušební");
     await page.getByRole("button", { name: "Vyhledat" }).click();
     await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
 
     await page.getByRole("button", { name: "Zrušit" }).click();
-    await expect(browse).toHaveValue(/:series:e2e-series$/);
+    await expect(browse).toContainText("Seriály");
     await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Zkušební film/ })).toHaveCount(0);
   });

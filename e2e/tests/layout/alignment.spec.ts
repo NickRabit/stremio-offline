@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { catalogTrigger, chooseCatalog } from "../catalog-picker";
 
 // The catalogue header used to size itself by the window while the panels below it sized
 // themselves by the space left over, so the two only lined up at one width by accident. These
@@ -8,7 +9,7 @@ const EDGE = 2;
 
 const openCatalog = async (page: Page) => {
   await page.goto("/");
-  await expect(page.getByRole("combobox", { name: "Procházet katalog" })).toBeVisible();
+  await expect(catalogTrigger(page)).toBeVisible();
   await page.waitForTimeout(150);
 };
 
@@ -50,19 +51,18 @@ test("the filter row ends with the results panel", async ({ page }) => {
   expect(Math.abs(lastControl! - results!), "last filter control against the results panel").toBeLessThanOrEqual(EDGE);
 });
 
-test("the filter row stays on one line without truncating a control", async ({ page }) => {
+test("the filter row keeps to two lines without truncating a control", async ({ page }) => {
   await openCatalog(page);
   const { filtersAreOneLine, filterHeight, tallestControl, clipped } = await edges(page);
   test.skip(!filtersAreOneLine, "narrow viewports stack the filters with their labels above");
-  expect(filterHeight, "filter controls wrapped onto another line").toBeLessThanOrEqual(tallestControl + 2);
+  // Type and catalogue on one line, genre, sort and tile shape on the next.
+  expect(filterHeight, "filter controls wrapped onto a third line").toBeLessThanOrEqual(tallestControl * 2 + 12);
   expect(clipped, "filter selects with their text cut off").toEqual([]);
 });
 
 test("the footer buttons fill their panel and keep their captions", async ({ page }) => {
   await openCatalog(page);
-  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
-  const options = await catalog.locator("option").allTextContents();
-  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await expect(page.locator(".source-footer .actions button").first()).toBeVisible();
 

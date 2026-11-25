@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { chooseCatalog } from "./catalog-picker";
 
 /** The fixture addon is not Cinemeta, so a real lookup answers null. What the browser does
  *  with an answer is the point here, so the answer is mocked at the network boundary. */
@@ -7,9 +8,7 @@ const EMBED = `https://www.youtube-nocookie.com/embed/${TRAILER.youtubeId}?autop
 const PILL = ".detail-panel .trailer-action";
 
 const pickCatalog = async (page: Page, pattern: RegExp) => {
-  const select = page.getByRole("combobox", { name: "Procházet katalog" });
-  const labels = await select.locator("option").allTextContents();
-  await select.selectOption({ label: labels.find((text) => pattern.test(text))! });
+  await chooseCatalog(page, pattern, /seri/i.test(pattern.source) ? "series" : "movie");
 };
 
 const openMovie = async (page: Page) => {

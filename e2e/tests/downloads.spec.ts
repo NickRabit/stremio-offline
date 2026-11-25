@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { chooseCatalog } from "./catalog-picker";
 
 // The layout seed repeats this queue, and it does so before it copies in the
 // files from `fixture-library.ts`. A download that landed after those files
@@ -12,8 +13,7 @@ test("queues a source and the job reaches the download list", async ({ page }) =
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
 
-  const options = await page.getByRole("combobox", { name: "Procházet katalog" }).locator("option").allTextContents();
-  await page.getByRole("combobox", { name: "Procházet katalog" }).selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await chooseCatalog(page, /Filmy/, "movie");
   await page.getByRole("button", { name: /Zkušební film/ }).click();
 
   const detail = page.locator(".detail-panel");
