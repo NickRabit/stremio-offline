@@ -2892,3 +2892,4 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .scope-trigger-copy>small{color:var(--muted);font-size:9.5px;font-weight:600}
 .scope-trigger-copy>.scope-trigger-label{font-size:12px}
 .scope-chevron{flex:0 0 auto;width:15px;height:15px;color:var(--muted);margin-left:auto}
+@media(max-width:700px){main.view-catalog .scope-trigger .scope-shared-mark{display:none}}
