@@ -132,7 +132,7 @@ test("a chunk is patched only where it overlaps the patch", () => {
   assert.deepEqual([...applyPatch(Buffer.alloc(4), 0, patch)], [0, 0, 0, 0]);
 });
 
-test("a file that could not be read is looked at again on the next request", { skip: process.getuid?.() === 0 ? "root reads a file without permissions" : false }, async (t) => {
+test("a file that could not be read is looked at again on the next request", { skip: process.platform === "win32" ? "chmod does not stop a read on Windows" : process.getuid?.() === 0 ? "root reads a file without permissions" : false }, async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "seek-index-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, "film.mkv");
