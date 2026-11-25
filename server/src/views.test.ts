@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { messageKeyOf } from "./errors.js";
 import {
-  applyPatch, defaultDownloadsView, defaultLibraryView, defaultResumeView, emptyViews, parseViews, type UserViews,
+  applyPatch, defaultCatalogView, defaultDownloadsView, defaultLibraryView, defaultResumeView, emptyViews, parseViews, type UserViews,
 } from "./views.js";
 
 const LIBRARY = "lib_0000000a";
@@ -38,14 +38,18 @@ test("the defaults differ per scope", () => {
   assert.deepEqual(defaultLibraryView(), { sort: "name", order: "asc", favoritesOnly: false, view: "grid" });
   assert.deepEqual(defaultResumeView(), { sort: "added", order: "desc", favoritesOnly: false, view: "grid" });
   assert.deepEqual(defaultDownloadsView(), { sort: "order", direction: "asc", status: "", dateField: "createdAt", pageSize: 20 });
-  assert.deepEqual(emptyViews(), { libraries: {}, extras: {}, downloads: defaultDownloadsView() });
+  assert.deepEqual(defaultCatalogView(), { recentCount: 3, recent: [], hiddenAddons: [], last: null });
+  assert.deepEqual(emptyViews(), { libraries: {}, extras: {}, downloads: defaultDownloadsView(), catalog: defaultCatalogView() });
 });
 
 const alice = (): UserViews => ({
   libraries: { [LIBRARY]: { sort: "size", order: "desc", favoritesOnly: true, view: "list" } },
   extras: {},
   downloads: defaultDownloadsView(),
+  catalog: defaultCatalogView(),
 });
+
+const ref = (id: string, addonKey = "cine", type = "movie") => ({ addonKey, type, id });
 
 test("applyPatch merges one library and leaves another alone", () => {
   const other = "lib_0000000b";
@@ -92,4 +96,92 @@ test("applyPatch folds an extra onto its own default", () => {
   const next = applyPatch(emptyViews(), { extras: { ":resume": { view: "list" } } });
   assert.deepEqual(next.extras[":resume"], { sort: "added", order: "desc", favoritesOnly: false, view: "list" });
   assert.deepEqual(next.extras[":favorites"], undefined);
+});
+
+test("parseViews defaults a missing or junk catalog", () => {
+  assert.deepEqual(parseViews(undefined).catalog, defaultCatalogView());
+  assert.deepEqual(parseViews({}).catalog, defaultCatalogView());
+  for (const catalog of [1, "x", [], null, { recentCount: 4, recent: "no", hiddenAddons: 7, last: 0 }]) {
+    assert.deepEqual(parseViews({ catalog }).catalog, defaultCatalogView());
+  }
+});
+
+test("parseViews drops invalid refs and duplicates and cuts to recentCount", () => {
+  const stored = parseViews({
+    catalog: {
+      recentCount: 3,
+      recent: [
+        ref("tt1"),
+        { addonKey: "cine", type: "movie", id: "" },
+        ref("tt1"),
+        ref("tt2"),
+        { addonKey: "", type: "movie", id: "tt3" },
+        ref("tt4"),
+        ref("tt5"),
+      ],
+      hiddenAddons: ["cine", "", "cine", "x".repeat(201), "other", 7, "third"],
+      last: { addonKey: "cine", type: "movie", id: "tt9" },
+    },
+  });
+  assert.deepEqual(stored.catalog.recent, [ref("tt1"), ref("tt2"), ref("tt4")]);
+  assert.deepEqual(stored.catalog.hiddenAddons, ["cine", "other", "third"]);
+  assert.equal(stored.catalog.last, null);
+});
+
+test("parseViews keeps a valid last and a zero recentCount empties recent", () => {
+  const stored = parseViews({
+    catalog: {
+      recentCount: 0,
+      recent: [ref("tt1"), ref("tt2")],
+      hiddenAddons: ["cine"],
+      last: { ...ref("tt1"), genre: "" },
+    },
+  });
+  assert.deepEqual(stored.catalog, {
+    recentCount: 0,
+    recent: [],
+    hiddenAddons: ["cine"],
+    last: { ...ref("tt1"), genre: "" },
+  });
+});
+
+test("applyPatch replaces only the catalog fields given", () => {
+  const before = applyPatch(alice(), {
+    catalog: { recentCount: 5, recent: [ref("tt1")], hiddenAddons: ["cine"], last: { ...ref("tt1"), genre: "Action" } },
+  });
+  const next = applyPatch(before, { catalog: { hiddenAddons: ["other"] } });
+  assert.equal(next.catalog.recentCount, 5);
+  assert.deepEqual(next.catalog.recent, [ref("tt1")]);
+  assert.deepEqual(next.catalog.hiddenAddons, ["other"]);
+  assert.deepEqual(next.catalog.last, { ...ref("tt1"), genre: "Action" });
+});
+
+test("applyPatch refuses a bad catalog field and stores nothing", () => {
+  const before = alice();
+  const refusals = [
+    { recentCount: 4 },
+    { recent: [{ addonKey: "cine", type: "movie", id: "" }] },
+    { recent: Array.from({ length: 9 }, (_, i) => ref(`tt${i}`)) },
+    { hiddenAddons: "cine" },
+  ];
+  for (const catalog of refusals) {
+    assert.throws(() => applyPatch(before, { catalog }),
+      (error: unknown) => messageKeyOf(error) === "err.invalidRequest");
+  }
+  assert.deepEqual(before, alice());
+});
+
+test("applyPatch empties recent when recentCount is 0", () => {
+  const before = applyPatch(alice(), { catalog: { recentCount: 5, recent: [ref("tt1"), ref("tt2")] } });
+  const next = applyPatch(before, { catalog: { recentCount: 0 } });
+  assert.deepEqual(next.catalog.recent, []);
+  assert.equal(next.catalog.recentCount, 0);
+});
+
+test("a catalog-only patch leaves libraries alone", () => {
+  const next = applyPatch(alice(), { catalog: { hiddenAddons: ["cine"] } });
+  assert.deepEqual(next.libraries, alice().libraries);
+  assert.deepEqual(next.downloads, alice().downloads);
+  assert.deepEqual(next.catalog.hiddenAddons, ["cine"]);
+  assert.equal(next.catalog.recentCount, 3);
 });
