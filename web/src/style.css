@@ -2844,3 +2844,12 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
   main.view-catalog .filterbar:has(.results-filter)>label{grid-column:1/4}
   main.view-catalog .filterbar:has(.results-filter)>.shape-toggle,main.view-catalog .filterbar:has(.results-filter)>.header-expand{grid-column:4}
 }
+/* The recent chips scroll sideways; without these the grid body grows to their width. */
+.picker-body{grid-template-columns:minmax(0,1fr)}
+.picker-body.picker-body-rail{grid-template-columns:200px minmax(0,1fr)}
+.picker-main,.picker-list,.picker-chips,.picker-group,.picker-chip-row{min-width:0;max-width:100%}
+.picker-search{position:sticky;top:0;z-index:3;background:var(--panel);padding-bottom:8px}
+.picker-edit-body label.picker-addon-row{display:flex;flex-direction:row;align-items:center;gap:10px;min-height:44px}
+.picker-edit-body label.picker-addon-row .picker-addon-copy{display:grid;min-width:0;flex:1}
+.picker-edit-body label.picker-addon-row .picker-addon-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.picker-edit-section>button{justify-self:start;min-height:36px;padding:6px 14px;font-size:12px}
