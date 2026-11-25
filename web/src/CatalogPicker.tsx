@@ -65,8 +65,9 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
   const recent = useMemo(() => recentCatalogs(catalogs, prefs.recent.filter((ref) => includeHidden || !prefs.hiddenAddons.includes(ref.addonKey)), prefs.recentCount),
     [catalogs, prefs.recent, prefs.recentCount, prefs.hiddenAddons, includeHidden]);
   const hiddenPresent = new Set(catalogs.map((catalog) => catalog.addonKey).filter((key) => prefs.hiddenAddons.includes(key)));
-  const count = useMemo(() => catalogGroups(catalogs, { bucket: currentBucket, query: "", hiddenAddons: prefs.hiddenAddons, includeHidden: false })
-    .reduce((total, group) => total + group.countInBucket, 0), [catalogs, currentBucket, prefs.hiddenAddons]);
+  const filtering = Boolean(query.trim());
+  const groupCount = (group: (typeof groups)[number]) => filtering ? group.rows.length : group.countInBucket;
+  const count = groups.reduce((total, group) => total + groupCount(group), 0);
 
   const chips = recent.length && !query.trim() ? {
     title: t("picker.recent"),
@@ -87,7 +88,7 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
     title: group.addonName,
     icon: <AddonLogo addonKey={group.addonKey} name={group.addonName} src={logos?.[group.addonKey]}/>,
     badge: group.hidden ? <span className="picker-badge">{t("picker.hiddenBadge")}</span> : undefined,
-    count: group.countInBucket,
+    count: groupCount(group),
     note: group.notBrowsable > 0 ? t("picker.notBrowsable", { count: group.notBrowsable }) : undefined,
     options: group.rows.map((row): PickerOption => ({
       key: `${row.ref.addonKey}:${row.ref.type}:${row.ref.id}`,
@@ -95,7 +96,9 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
       selected: sameRef(row.ref, current),
       muted: row.otherType,
       tags: row.otherType || typeBucket(row.ref.type) === "other" || row.needsSearch ? <>
-        {(row.otherType || typeBucket(row.ref.type) === "other") && otherTypeTag(row.ref.type)}
+        {(row.otherType || typeBucket(row.ref.type) === "other") && (filtering
+          ? <span className="picker-tag picker-tag-type">{catalogTypeTag(row.ref.type)}</span>
+          : otherTypeTag(row.ref.type))}
         {row.needsSearch && <span className="picker-tag picker-tag-search">{t("picker.needsSearch")}</span>}
       </> : undefined,
       onChoose: () => onPick(row.ref),
@@ -112,7 +115,7 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
     })}
   </div>;
 
-  return <PickerDialog label={t("catalog.pickerTitle")} subtitle={t("catalog.pickerCount", { count })}
+  return <PickerDialog label={t("catalog.pickerTitle")} subtitle={filtering ? `${t("catalog.results")} · ${count}` : t("catalog.pickerCount", { count })}
     searchPlaceholder={t("picker.searchCatalog")} query={query} onQuery={setQuery}
     headerExtra={segments} chips={chips} groups={pickerGroups} rail accordion openGroup={current.addonKey}
     empty={<><p>{t("picker.noMatch", { query })}</p><p>{t("picker.noMatchHint")}</p></>}
