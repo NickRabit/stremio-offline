@@ -1,3 +1,4 @@
+import { catalogTypeTag } from "./catalog-labels";
 import type { Catalog, SearchableCatalog } from "./types";
 
 export interface CatalogRef { addonKey: string; type: string; id: string }
@@ -82,7 +83,7 @@ export function catalogGroups(catalogs: Catalog[], options: {
   includeHidden: boolean;
 }): CatalogGroup[] {
   const hidden = new Set(options.hiddenAddons);
-  const queryPresent = options.query.length > 0;
+  const queryPresent = options.query.trim().length > 0;
   const grouped = new Map<string, Catalog[]>();
   for (const catalog of catalogs) {
     const group = grouped.get(catalog.addonKey);
@@ -95,24 +96,28 @@ export function catalogGroups(catalogs: Catalog[], options: {
     const addonHidden = hidden.has(addonKey);
     if (addonHidden && !options.includeHidden && !queryPresent) continue;
     const addonName = addonCatalogs[0]!.addonName;
-    const byId = new Map<string, Catalog[]>();
+    const variants = new Map<string, Catalog[]>();
     for (const catalog of addonCatalogs) {
-      const idGroup = byId.get(catalog.id);
+      const groupKey = JSON.stringify([catalog.id, typeBucket(catalog.type) === "other" ? catalog.type : null]);
+      const idGroup = variants.get(groupKey);
       if (idGroup) idGroup.push(catalog);
-      else byId.set(catalog.id, [catalog]);
+      else variants.set(groupKey, [catalog]);
     }
 
     const matching: CatalogRow[] = [];
     let notBrowsable = 0;
     let countInBucket = 0;
-    for (const idCatalogs of byId.values()) {
+    for (const idCatalogs of variants.values()) {
       const browsable = idCatalogs.filter(isBrowsable);
       if (!browsable.length) {
         notBrowsable += 1;
         continue;
       }
-      const inBucket = browsable.find((catalog) => typeBucket(catalog.type) === options.bucket);
-      const catalog = inBucket ?? browsable[0]!;
+      const candidates = browsable.filter((item) => matchesQuery(
+        `${addonName} ${item.name ?? item.id} ${item.type} ${catalogTypeTag(item.type)}`, options.query));
+      if (!candidates.length) continue;
+      const inBucket = candidates.find((catalog) => typeBucket(catalog.type) === options.bucket);
+      const catalog = inBucket ?? candidates[0]!;
       const row: CatalogRow = {
         ref: refOf(catalog),
         name: catalog.name ?? catalog.id,
@@ -120,7 +125,7 @@ export function catalogGroups(catalogs: Catalog[], options: {
         needsSearch: needsSearch(catalog),
       };
       if (!row.otherType) countInBucket += 1;
-      if (matchesQuery(`${addonName} ${row.name}`, options.query)) matching.push(row);
+      matching.push(row);
     }
     const rows = [
       ...matching.filter((row) => !row.otherType),
@@ -178,7 +183,7 @@ export function scopeGroups(searchable: SearchableCatalog[], options: { query: s
     const addonName = addonCatalogs[0]!.addonName;
     const rows = addonCatalogs
       .filter((catalog) => !options.type || catalog.type === options.type)
-      .filter((catalog) => matchesQuery(`${addonName} ${catalog.name}`, options.query))
+      .filter((catalog) => matchesQuery(`${addonName} ${catalog.name} ${catalog.type} ${catalogTypeTag(catalog.type)}`, options.query))
       .map((catalog) => ({
         value: scopeCatalogValue(catalog),
         name: catalog.name,

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AddonLogo } from "./AddonLogo";
 import { catalogTypeTag } from "./catalog-labels";
-import { scopeGroups } from "./catalog-picker-model";
+import { matchesQuery, scopeGroups } from "./catalog-picker-model";
 import { t, useI18n } from "./i18n";
 import { PickerDialog, type PickerOption } from "./PickerDialog";
 import { parseSearchScope } from "./search-scope";
@@ -38,7 +38,7 @@ export function ScopePicker({ searchable, value, type, logos, onPick, onClose }:
     badge: group.globalSearch ? undefined : <span className="picker-badge picker-tag-manual">{t("search.manualOnly")}</span>,
     count: group.rows.length,
     options: [
-      ...(!query.trim() ? [{
+      ...(matchesQuery(group.addonName, query) ? [{
         key: group.addonValue,
         label: t("search.wholeAddon"),
         selected: value === group.addonValue,

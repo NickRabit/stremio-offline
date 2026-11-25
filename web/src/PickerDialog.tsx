@@ -155,7 +155,7 @@ export function PickerDialog(props: PickerDialogProps): JSX.Element {
   const option = (item: PickerOption, id: string, chip = false) =>
     <button key={id} id={id} type="button" role="option" aria-selected={Boolean(item.selected)}
       className={`picker-option${chip ? " picker-chip" : ""}${item.muted ? " picker-muted" : ""}${item.selected ? " picker-selected" : ""}`}
-      onClick={() => choose(item)}>
+      data-active={id === active?.id || undefined} onClick={() => choose(item)}>
       {item.icon && <span className="picker-option-icon">{item.icon}</span>}
       <span className="picker-option-copy">
         <span className="picker-option-label">{item.label}</span>

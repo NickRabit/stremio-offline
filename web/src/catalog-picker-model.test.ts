@@ -64,6 +64,12 @@ describe("catalogGroups", () => {
     expect(cinemeta.countInBucket).toBe(1);
   });
 
+  it("keeps distinct custom types sharing a catalog id selectable", () => {
+    const catalogs = ["channel", "tv"].map((type) => catalog("live", "Live", type, "popular", "Popular"));
+    const groups = catalogGroups(catalogs, { bucket: "other", query: "", hiddenAddons: [], includeHidden: false });
+    expect(groups[0]?.rows.map((row) => row.ref.type)).toEqual(["channel", "tv"]);
+  });
+
   it("shows hidden addons for a query or when included, and preserves addon order", () => {
     const withoutHidden = catalogGroups(catalogs, { bucket: "movie", query: "", hiddenAddons: ["hidden"], includeHidden: false });
     expect(withoutHidden.map((group) => group.addonKey)).toEqual(["cinemeta", "archive"]);

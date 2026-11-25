@@ -586,7 +586,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
         </button>
       </label>}
       {catalogOnly && scopeOpen && <ScopePicker searchable={searchable} value={scopeValue}
-        type={search.kind === "all" ? "" : search.kind} onPick={pickScope} onClose={() => setScopeOpen(false)}/>}
+        type={lockedType || search.kind === "all" ? "" : search.kind} onPick={pickScope} onClose={() => setScopeOpen(false)}/>}
       <div className="search-filter-group">
         <span aria-hidden="true">{t("catalog.type")}</span>
         <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>

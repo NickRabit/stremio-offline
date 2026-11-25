@@ -100,6 +100,7 @@ import {
   genreOptions as catalogGenreOptions,
   isBrowsable,
   needsSearch,
+  requiredExtras,
   refOf,
   sameRef,
   scopeCatalogValue,
@@ -988,7 +989,7 @@ export function App() {
   const scopedCatalog = searchScope.catalogId ? searchable.find((item) => item.addonKey === searchScope.addonKey && item.type === searchScope.catalogType && item.id === searchScope.catalogId) : undefined;
   const effectiveTypeFilter = searchScope.catalogType ?? typeFilter;
   const scopeAddon = searchScope.catalogId ? undefined : searchable.find((item) => item.addonKey === searchScope.addonKey);
-  const scopeFilter = effectiveTypeFilter === "movie" || effectiveTypeFilter === "series" ? effectiveTypeFilter : "";
+  const scopeFilter = !searchScope.catalogType && (typeFilter === "movie" || typeFilter === "series") ? typeFilter : "";
   const pickedRef = useRef(false); /** The viewer chose the playing source by hand, so the next episode stays with its provider. */ const viewerChoseSourceRef = useRef(false);
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
   const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null); const sourceListRef = useRef<HTMLDivElement>(null);
@@ -1011,6 +1012,10 @@ export function App() {
     if (!catalog || !isBrowsable(catalog)) return;
     setSelectedCatalog(`${catalog.addonKey}:${catalog.type}:${catalog.id}`);
     setGenre(last.genre);
+    if (needsSearch(catalog) && requiredExtras(catalog).every((extra) => extra === "search")) {
+      setSearchScopeValue(scopeCatalogValue(last));
+      setSearchPromptCatalog(catalog.name || catalog.id);
+    }
   }, [catalogs, catalogsKnown, viewsReady, views.catalog.last]);
   const panelAddonKey = (streamAddonKey?: string) => panelProgressAddonKey({
     searching: Boolean(submittedQuery), scopeAddonKey: searchScope.addonKey,
@@ -1213,6 +1218,7 @@ export function App() {
     }
   };
   const pickSearchScope = (value: string) => {
+    setSearchPromptCatalog("");
     setSearchScopeValue(value);
     const picked = parseSearchScope(value);
     if (!picked.catalogId) return;

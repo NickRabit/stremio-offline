@@ -62,8 +62,8 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
     hiddenAddons: prefs.hiddenAddons,
     includeHidden,
   }), [catalogs, currentBucket, includeHidden, prefs.hiddenAddons, query]);
-  const recent = useMemo(() => recentCatalogs(catalogs, prefs.recent, prefs.recentCount),
-    [catalogs, prefs.recent, prefs.recentCount]);
+  const recent = useMemo(() => recentCatalogs(catalogs, prefs.recent.filter((ref) => includeHidden || !prefs.hiddenAddons.includes(ref.addonKey)), prefs.recentCount),
+    [catalogs, prefs.recent, prefs.recentCount, prefs.hiddenAddons, includeHidden]);
   const hiddenPresent = new Set(catalogs.map((catalog) => catalog.addonKey).filter((key) => prefs.hiddenAddons.includes(key)));
   const count = useMemo(() => catalogGroups(catalogs, { bucket: currentBucket, query: "", hiddenAddons: prefs.hiddenAddons, includeHidden: false })
     .reduce((total, group) => total + group.countInBucket, 0), [catalogs, currentBucket, prefs.hiddenAddons]);
@@ -94,10 +94,8 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
       label: row.name,
       selected: sameRef(row.ref, current),
       muted: row.otherType,
-      tags: row.otherType || row.needsSearch ? <>
-        {row.otherType && (currentBucket === "other"
-          ? <span className="picker-tag">{row.ref.type}</span>
-          : otherTypeTag(row.ref.type))}
+      tags: row.otherType || typeBucket(row.ref.type) === "other" || row.needsSearch ? <>
+        {(row.otherType || typeBucket(row.ref.type) === "other") && otherTypeTag(row.ref.type)}
         {row.needsSearch && <span className="picker-tag picker-tag-search">{t("picker.needsSearch")}</span>}
       </> : undefined,
       onChoose: () => onPick(row.ref),

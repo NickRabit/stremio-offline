@@ -21,7 +21,7 @@ export function GenrePicker({ catalogName, options, required, value, onPick, onC
     ? options.filter((option) => matchesQuery(genreLabel(option), query) || matchesQuery(option, query))
     : options, [options, query, searchable]);
   const rows: PickerOption[] = [
-    ...(!required ? [{
+    ...(!required && matchesQuery(t("catalog.allGenres"), query) ? [{
       key: "",
       label: t("catalog.allGenres"),
       selected: value === "",
@@ -41,6 +41,6 @@ export function GenrePicker({ catalogName, options, required, value, onPick, onC
     searchPlaceholder={searchable ? t("picker.searchGenre") : undefined}
     query={searchable ? query : ""} onQuery={setQuery} leading={rows} groups={[]}
     className="picker-card-narrow"
-    empty={<><p>{t("picker.noMatch", { query })}</p><p>{t("picker.noMatchHint")}</p></>}
+    empty={<><p>{t("picker.noMatch", { query })}</p></>}
     onClose={onClose}/>;
 }
