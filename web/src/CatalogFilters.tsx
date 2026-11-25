@@ -27,7 +27,6 @@ export interface CatalogFiltersProps {
   compact: boolean;
   sortLabel: string;
   onPickCatalog: (ref: CatalogRef) => void;
-  onBucket: (bucket: TypeBucket) => void;
   onGenre: (genre: string) => void;
   onPrefs: (patch: Partial<CatalogViewPrefs>) => void;
 }
@@ -49,10 +48,20 @@ const bucketLabel = (bucket: TypeBucket): string =>
   bucket === "movie" ? t("catalog.movies") : bucket === "series" ? t("catalog.series") : t("catalog.typeOther");
 
 export function CatalogFilters({
-  catalogs, current, genre, prefs, logos, compact, sortLabel, onPickCatalog, onBucket, onGenre, onPrefs,
+  catalogs, current, genre, prefs, logos, compact, sortLabel, onPickCatalog, onGenre, onPrefs,
 }: CatalogFiltersProps) {
   useI18n();
   const [picker, setPicker] = useState<OpenPicker | null>(null);
+  const [pickerBucket, setPickerBucket] = useState<TypeBucket | undefined>(undefined);
+  // The same catalogue in the other type is switched to at once; anything else is the
+  // viewer's choice, so the picker opens on that type instead of guessing a catalogue.
+  const switchBucket = (bucket: TypeBucket) => {
+    if (bucket === currentBucket) return;
+    const next = fallbackForBucket(catalogs, refOf(current), bucket, prefs.hiddenAddons);
+    if (next?.sameId) { onPickCatalog(next.ref); return; }
+    setPickerBucket(bucket);
+    setPicker("catalog");
+  };
   const currentBucket = typeBucket(current.type);
   const options = genreOptions(current);
   const effective = effectiveGenre(current, genre);
@@ -68,16 +77,14 @@ export function CatalogFilters({
     <div className="catalog-type-switch" role="group" aria-label={t("catalog.type")}>
       {bucketsPresent(catalogs).map((bucket) => {
         const pressed = bucket === currentBucket;
-        const available = fallbackForBucket(catalogs, refOf(current), bucket, prefs.hiddenAddons);
-        return <button key={bucket} type="button" aria-pressed={pressed}
-          disabled={!pressed && available === null} onClick={() => onBucket(bucket)}>
+        return <button key={bucket} type="button" aria-pressed={pressed} onClick={() => switchBucket(bucket)}>
           {bucketLabel(bucket)}
         </button>;
       })}
     </div>
     <button type="button" className={`catalog-trigger${compact ? " compact" : ""}`}
       aria-haspopup="dialog" aria-expanded={picker === "catalog"}
-      onClick={() => setPicker("catalog")}>
+      onClick={() => { setPickerBucket(undefined); setPicker("catalog"); }}>
       <span className="visually-hidden">{t("catalog.browse")}: </span>
       <AddonLogo addonKey={current.addonKey} name={current.addonName} src={logos[current.addonKey]}/>
       <span className="catalog-trigger-copy">
@@ -94,7 +101,7 @@ export function CatalogFilters({
     </button>
     {picker === "catalog" && <CatalogPicker catalogs={catalogs} current={refOf(current)} prefs={prefs} logos={logos}
       onPick={(ref) => { closePicker(); onPickCatalog(ref); }}
-      onBucket={onBucket}
+      initialBucket={pickerBucket}
       onPrefs={onPrefs}
       onClose={closePicker}/>}
     {picker === "genre" && <GenrePicker catalogName={current.name || current.id} options={options}

@@ -36,7 +36,6 @@ const current = { addonKey: "cinemeta", type: "movie", id: "top" };
 const prefs: CatalogPickerPrefs = { recentCount: 3, recent: [], hiddenAddons: [] };
 const pickHandlers = () => ({
   onPick: vi.fn(),
-  onBucket: vi.fn(),
   onPrefs: vi.fn(),
   onClose: vi.fn(),
 });
@@ -81,7 +80,7 @@ describe("CatalogPicker", () => {
     expect(handlers.onPick).toHaveBeenCalledWith({ addonKey: "cinemeta", type: "series", id: "series-only" });
   });
 
-  it("switches bucket without closing and disables a bucket with no non-search fallback", async () => {
+  it("switches the listed type without choosing a catalog", async () => {
     const handlers = pickHandlers();
     await act(async () => {
       root.render(<CatalogPicker catalogs={catalogs} current={current} prefs={prefs} {...handlers}/>);
@@ -89,18 +88,21 @@ describe("CatalogPicker", () => {
     const series = [...host.querySelectorAll<HTMLButtonElement>('.picker-segments button')]
       .find((button) => button.textContent === "Series")!;
     await act(async () => { series.click(); });
-    expect(handlers.onBucket).toHaveBeenCalledWith("series");
+    expect(handlers.onPick).not.toHaveBeenCalled();
+    expect(handlers.onClose).not.toHaveBeenCalled();
+    expect(series.getAttribute("aria-pressed")).toBe("true");
+    // The series-only catalogue is now a normal row, no longer greyed out as another type.
+    const seriesOnly = [...host.querySelectorAll<HTMLElement>(".picker-option")].find((node) => node.textContent?.includes("Series only"));
+    expect(seriesOnly?.classList.contains("picker-muted")).toBe(false);
+  });
 
-    const searchOnly = [
-      currentCatalog(),
-      catalog("search", "Search addon", "series", "search", "Search", [{ name: "search", isRequired: true }]),
-    ];
+  it("opens on the type it is given", async () => {
+    const handlers = pickHandlers();
     await act(async () => {
-      root.render(<CatalogPicker catalogs={searchOnly} current={current} prefs={prefs} {...handlers}/>);
+      root.render(<CatalogPicker catalogs={catalogs} current={current} prefs={prefs} initialBucket="series" {...handlers}/>);
     });
-    const disabled = [...host.querySelectorAll<HTMLButtonElement>('.picker-segments button')]
-      .find((button) => button.textContent === "Series")!;
-    expect(disabled.disabled).toBe(true);
+    const pressed = host.querySelector<HTMLButtonElement>('.picker-segments button[aria-pressed="true"]');
+    expect(pressed?.textContent).toBe("Series");
   });
 
   it("renders recent chips only while the preference allows them", async () => {

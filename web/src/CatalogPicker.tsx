@@ -4,7 +4,6 @@ import { AddonLogo } from "./AddonLogo";
 import {
   bucketsPresent,
   catalogGroups,
-  fallbackForBucket,
   recentCatalogs,
   refOf,
   sameRef,
@@ -26,7 +25,8 @@ export interface CatalogPickerProps {
   prefs: CatalogPickerPrefs;
   logos?: Record<string, string | undefined>;
   onPick: (ref: CatalogRef) => void;
-  onBucket: (bucket: TypeBucket) => void;
+  /** The type the list opens on; the switch inside only changes which list is shown. */
+  initialBucket?: TypeBucket;
   onPrefs: (patch: Partial<CatalogPickerPrefs>) => void;
   onClose: () => void;
 }
@@ -49,12 +49,12 @@ const otherTypeTag = (type: string): ReactNode => {
   return <span className="picker-tag picker-tag-type">{label}</span>;
 };
 
-export function CatalogPicker({ catalogs, current, prefs, logos, onPick, onBucket, onPrefs, onClose }: CatalogPickerProps) {
+export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initialBucket, onPrefs, onClose }: CatalogPickerProps) {
   useI18n();
   const [query, setQuery] = useState("");
   const [includeHidden, setIncludeHidden] = useState(false);
   const [editing, setEditing] = useState(false);
-  const currentBucket = typeBucket(current.type);
+  const [currentBucket, setBucket] = useState<TypeBucket>(initialBucket ?? typeBucket(current.type));
   const present = bucketsPresent(catalogs);
   const groups = useMemo(() => catalogGroups(catalogs, {
     bucket: currentBucket,
@@ -109,9 +109,8 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, onBucke
 
   const segments = <div className="library-shelf-segments picker-segments" role="group" aria-label={t("catalog.type")}>
     {present.map((bucket) => {
-      const disabled = bucket !== currentBucket && !fallbackForBucket(catalogs, current, bucket, prefs.hiddenAddons);
       return <button key={bucket} type="button" className={bucket === currentBucket ? "active" : undefined}
-        aria-pressed={bucket === currentBucket} disabled={disabled} onClick={() => onBucket(bucket)}>{bucketLabel(bucket)}</button>;
+        aria-pressed={bucket === currentBucket} onClick={() => setBucket(bucket)}>{bucketLabel(bucket)}</button>;
     })}
   </div>;
 

@@ -45,7 +45,6 @@ const render = async (overrides: Partial<CatalogFiltersProps> = {}) => {
     compact: false,
     sortLabel: "",
     onPickCatalog: vi.fn(),
-    onBucket: vi.fn(),
     onGenre: vi.fn(),
     onPrefs: vi.fn(),
     ...overrides,
@@ -90,8 +89,21 @@ describe("CatalogFilters", () => {
       t("catalog.movies"), t("catalog.series"), t("catalog.typeOther"),
     ]);
     expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
+    // Cinemeta "Top" exists as a series too: the switch goes straight there.
     await act(async () => { buttons[1]?.click(); });
-    expect(props.onBucket).toHaveBeenCalledWith("series");
+    expect(props.onPickCatalog).toHaveBeenCalledWith({ addonKey: "cinemeta", type: "series", id: "top" });
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("opens the picker on the other type instead of guessing a catalog", async () => {
+    const props = await render({ current: catalogs.find((item) => item.id === "m-4k")! });
+    const series = [...host.querySelectorAll<HTMLButtonElement>(".catalog-type-switch button")]
+      .find((node) => node.textContent === t("catalog.series"))!;
+    await act(async () => { series.click(); });
+    expect(props.onPickCatalog).not.toHaveBeenCalled();
+    const dialog = host.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.querySelector('.picker-segments button[aria-pressed="true"]')?.textContent).toBe(t("catalog.series"));
   });
 
   it("names the catalog trigger and summarises the compact state", async () => {

@@ -97,7 +97,6 @@ import { CatalogFilters, consumePickerFocusReturn } from "./CatalogFilters";
 import { ScopePicker } from "./ScopePicker";
 import {
   effectiveGenre,
-  fallbackForBucket,
   genreOptions as catalogGenreOptions,
   isBrowsable,
   needsSearch,
@@ -105,7 +104,6 @@ import {
   sameRef,
   scopeCatalogValue,
   type CatalogRef,
-  type TypeBucket,
 } from "./catalog-picker-model";
 
 export const queueDrainNotice = (
@@ -304,7 +302,6 @@ export function App() {
   }
   type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
-  const [typeNote, setTypeNote] = useState<{ text: string; undo: { catalog: string; genre: string; sort: string } } | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
   /** The next episode of what the shared detail is playing, read while this one runs. */
   const detailNextPrefetchRef = useRef<{ id: string; at: number; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
@@ -1136,7 +1133,6 @@ export function App() {
     const settled = window.setTimeout(unfoldIfFits, 450);
     return () => { observer.disconnect(); window.clearTimeout(settled); };
   }, [view, libraryCompact, catalogCompact, items, browse]);
-  useEffect(() => { if (catalogCompact) setTypeNote(null); }, [catalogCompact]);
   /** Writes wait for the hand to stop: one PATCH per gesture, not per click of a shape
    *  someone is flipping through. The latest patch wins, and nothing here runs on its own --
    *  a stored view is only ever written by the control somebody just touched. */
@@ -1206,7 +1202,6 @@ export function App() {
     if (!catalog) return;
     selectedCatalogChosen.current = true;
     setSelectedCatalog(`${ref.addonKey}:${ref.type}:${ref.id}`);
-    setTypeNote(null);
     setSearchPromptCatalog("");
     rememberRecentCatalog(ref);
     rememberLastCatalog(ref);
@@ -1225,39 +1220,9 @@ export function App() {
     if (searchable.some((item) => sameRef(refOf(item), ref))) selectCatalog(ref);
   };
   const pickCatalog = (ref: CatalogRef) => selectCatalog(ref, true);
-  const pickBucket = (bucket: TypeBucket) => {
-    if (!currentCatalog) return;
-    const fallback = fallbackForBucket(catalogs, refOf(currentCatalog), bucket, views.catalog.hiddenAddons);
-    if (!fallback) return;
-    const next = catalogs.find((catalog) => sameRef(refOf(catalog), fallback.ref));
-    if (!next) return;
-    const undo = { catalog: selectedCatalog, genre, sort };
-    const from = currentCatalog.name || currentCatalog.id;
-    const to = next.name || next.id;
-    selectCatalog(fallback.ref);
-    if (!fallback.sameId) {
-      const key = bucket === "movie" ? "catalog.noMovies" : bucket === "series" ? "catalog.noSeries" : "catalog.noOther";
-      setTypeNote({ text: t(key, { from, to }), undo });
-    }
-  };
   const pickGenre = (next: string) => {
-    setTypeNote(null);
     setGenre(next);
     if (currentCatalog) rememberLastCatalog(refOf(currentCatalog), next);
-  };
-  const undoTypeSwitch = () => {
-    if (!typeNote) return;
-    const catalog = catalogs.find((item) => `${item.addonKey}:${item.type}:${item.id}` === typeNote.undo.catalog);
-    setTypeNote(null);
-    if (!catalog) return;
-    selectedCatalogChosen.current = true;
-    setSelectedCatalog(typeNote.undo.catalog);
-    setGenre(typeNote.undo.genre);
-    setSort(typeNote.undo.sort);
-    setSearchPromptCatalog("");
-    const ref = refOf(catalog);
-    rememberRecentCatalog(ref);
-    persistCatalogPrefs({ last: { ...ref, genre: typeNote.undo.genre } });
   };
   const closeScopePicker = () => {
     scopePickerClosedAt.current = performance.now();
@@ -1375,7 +1340,6 @@ export function App() {
     setRemoteLoading(0);
     setRemoteDiscoveryError("");
     setCatalogCompact(false);
-    setTypeNote(null);
     setSearchPromptCatalog("");
     setScopePickerOpen(false);
     const firstCatalog = (pick && catalogs.find((catalog) => catalog.addonKey === pick.addonKey && catalog.type === pick.type && catalog.id === pick.id)) ?? catalogs[0];
@@ -2349,14 +2313,12 @@ export function App() {
   useEffect(() => () => live.cancel(), []);
   const submitSearch = (event?: FormEvent) => {
     event?.preventDefault(); live.cancel(); setSuggestOpen(false);
-    setTypeNote(null);
     const query = search.trim();
     if (query) actOnSearch(query);
     setSubmittedQuery(query);
   };
   const chooseSuggestion = (suggestion: Suggestion) => {
     setSearch(suggestion.text); live.cancel(); setSuggestOpen(false); setActiveSuggestion(-1);
-    setTypeNote(null);
     actOnSearch(suggestion.text);
     setSubmittedQuery(suggestion.text);
   };
@@ -3972,15 +3934,14 @@ export function App() {
                     ].map((item) => <button key={item.value} type="button"
                       aria-pressed={searchScope.catalogType ? searchScope.catalogType === item.value : typeFilter === item.value}
                       disabled={Boolean(searchScope.catalogType) && searchScope.catalogType !== item.value}
-                      onClick={() => { setTypeNote(null); setTypeFilter(item.value); }}>{item.label}</button>)}
+                      onClick={() => setTypeFilter(item.value)}>{item.label}</button>)}
                     {searchScope.catalogType && <small>{t("catalog.typeLocked")}</small>}
                   </div>
                 </>
               : currentCatalog && <CatalogFilters catalogs={catalogs} current={currentCatalog} genre={genre}
                 prefs={views.catalog} logos={logos} compact={catalogCompact} sortLabel={sortLabel}
-                onPickCatalog={pickCatalog} onBucket={pickBucket} onGenre={pickGenre} onPrefs={persistCatalogPrefs}/>}
+                onPickCatalog={pickCatalog} onGenre={pickGenre} onPrefs={persistCatalogPrefs}/>}
             <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={activeSort} onChange={(e) => {
-              setTypeNote(null);
               if (submittedQuery) setSearchSort(e.target.value);
               else setSort(e.target.value);
             }}><option value="default">{t("catalog.sortAddon")}</option>{submittedQuery && <option value="titleMatch">{t("catalog.sortTitleMatch")}</option>}<option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
@@ -3990,7 +3951,6 @@ export function App() {
               aria-expanded={!catalogCompact} onClick={(event) => expandCatalogToolbar(event.currentTarget)}><SlidersHorizontal/></button>
             {catalogCompact && submittedQuery && <button type="button" className="search-summary"
               onClick={(event) => expandCatalogToolbar(event.currentTarget)}>„{submittedQuery}“ · {scopeLabel}</button>}
-            {typeNote && <div className="catalog-note" role="status">{typeNote.text} <button type="button" onClick={undoTypeSwitch}>{t("catalog.undo")}</button></div>}
           </div></div></div>
           <div className="catalog-layout"><section className={`panel result-panel${staleGrid ? " refreshing" : ""}`}><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t(hasMore ? "catalog.itemCountMore" : "catalog.itemCount", { count: visibleItems.length })}</span></div>
             {personNameSearch && !buildInfo?.searchEverywhere && <p className="person-name-search" role="note">{t("person.nameSearch")}</p>}

@@ -2880,3 +2880,7 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
   .search-filters>label:has(>.scope-trigger)>span{flex:0 0 auto}
   .search-filters .scope-trigger{flex:1 1 auto;max-width:none;width:auto}
 }
+/* The rail and the list scroll on their own; without a bounded row the grid grows to its content
+   and the body, which hides its overflow, can no longer be scrolled at all. */
+.picker-body.picker-body-rail{grid-template-rows:minmax(0,1fr)}
+.picker-body-rail>.picker-rail,.picker-body-rail>.picker-main{min-height:0}
