@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type { StatsActivityPage, ActiveStream, StatsBucket, StatsSeries, StatsSummary } from "./types";
 import { FilterTabs } from "./FilterTabs";
@@ -315,7 +315,9 @@ function ActivityHistory({ hours, onError }: { hours: number; onError: (error: u
 export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
   const { t } = useI18n();
   const [hours, setHours] = useState(720);
-  const [summary, setSummary] = useState<StatsSummary | null>(null);
+  const [displayed, setDisplayed] = useState<{ hours: number; data: StatsSummary } | null>(null);
+  const displayedRef = useRef(displayed);
+  displayedRef.current = displayed;
   const [loading, setLoading] = useState(true);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [streams, setStreams] = useState<ActiveStream[]>([]);
@@ -339,14 +341,26 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
   }, []);
 
   useEffect(() => {
+    if (displayedRef.current?.hours === hours) {
+      setLoading(false);
+      return;
+    }
     let alive = true;
     setLoading(true);
     api.stats(hours)
-      .then((data) => { if (alive) setSummary(data); })
-      .catch((error) => { if (alive) onError(error); })
+      .then((data) => { if (alive) setDisplayed({ hours, data }); })
+      .catch((error) => {
+        if (!alive) return;
+        onError(error);
+        const shown = displayedRef.current;
+        if (shown) setHours(shown.hours);
+      })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [hours]);
+
+  const summary = displayed?.data ?? null;
+  const stale = Boolean(displayed && loading && displayed.hours !== hours);
 
   const toggle = (id: string) => setChosen((current) => {
     const next = new Set(current);
@@ -377,7 +391,7 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
         <h2>{t("stats.title")}</h2>
         <p>{summary?.since
           ? t("stats.lead", { since: new Date(summary.since).toLocaleDateString(localeTag()) })
-          : t("stats.leadEmpty")}</p>
+          : summary ? t("stats.leadEmpty") : "\u00a0"}</p>
       </div>
       <FilterTabs className="stats-periods" label={t("stats.periodGroup")} value={String(hours)} onChange={(value) => setHours(Number(value))}
         tabs={PERIODS.map((period) => ({ value: String(period.hours), label: t(period.key) }))}/>
@@ -385,7 +399,8 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
 
     <Live streams={streams} now={now}/>
 
-    {!summary ? <p className="stats-empty">{loading ? t("common.loading") : t("stats.loadFailed")}</p> : <>
+    {!summary ? <p className="stats-empty">{loading ? t("common.loading") : t("stats.loadFailed")}</p> : <div
+      className={stale ? "stats-body stats-stale" : "stats-body"} aria-busy={stale ? true : undefined}>
       <div className="stats-cards">
         <Card title={t("stats.card.hour")} window={summary.hour}/>
         <Card title={t("stats.card.day")} window={summary.day}/>
@@ -419,6 +434,6 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
         <Breakdown title={t("stats.byAddon")} kind="addon" items={summary.addons} chosen={chosen} onToggle={toggle} colors={colors} cap={VISIBLE_ROWS}/>
         <Breakdown title={t("stats.bySource")} kind="source" items={summary.sources} chosen={chosen} onToggle={toggle} colors={colors}/>
       </div>
-    </>}
+    </div>}
   </section>;
 }

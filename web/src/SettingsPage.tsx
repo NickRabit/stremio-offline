@@ -18,6 +18,7 @@ import { UserManager } from "./UserManager";
 import { resolveStreamSort } from "./streams";
 import { DOWNLOAD_SPEED_LIMITS } from "../../server/src/byte-rate";
 import { UI_SCALES, useUiScale, writeUiScale, type UiScale } from "./ui-scale";
+import { useRovingTabs } from "./use-roving-tabs";
 
 export function TmdbSettings({ configured, onSave, onError, restricted = false }: { configured: boolean; onSave: (patch: SettingsPatch) => Promise<void>; onError: (error: unknown) => void; restricted?: boolean }) {
   const [apiKey, setApiKey] = useState("");
@@ -210,6 +211,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
     setTab(next);
     try { sessionStorage.setItem(SETTINGS_TAB_KEY, next); } catch { /* private mode may refuse storage */ }
   };
+  const tabProps = useRovingTabs(visibleTabs, tab, selectTab);
   // The names come from the browser in the active language, so they need sorting there too.
   const languageOptions = languages
     .map((item) => ({ code: item.code, name: languageName(item.code) }))
@@ -255,7 +257,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
       <div className="filter-tabs settings-tabs" role="tablist" aria-label={t("settings.title")}>
         {visibleTabs.map((id) => <button key={id} type="button" role="tab" id={`settings-tab-${id}`} aria-selected={id === tab}
           aria-controls={SETTINGS_PANEL_ID} className={id === tab ? "active" : undefined}
-          onClick={() => selectTab(id)}>{t(SETTINGS_TAB_LABEL[id])}</button>)}
+          onClick={() => selectTab(id)} {...tabProps(id)}>{t(SETTINGS_TAB_LABEL[id])}</button>)}
       </div>
     </div>
     <div className="settings-grid" id={SETTINGS_PANEL_ID} role="tabpanel" aria-labelledby={`settings-tab-${tab}`}>

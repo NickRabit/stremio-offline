@@ -9,6 +9,7 @@ import { TileArt } from "./TileArt";
 import { ArtworkProximity, NearImage } from "./artwork-proximity";
 import { FilterTabs } from "./FilterTabs";
 import { languageName, localeTag, serverText, t, useI18n } from "./i18n";
+import { useRovingTabs } from "./use-roving-tabs";
 import type { ActivityItem, CalendarEpisodeState, CalendarItem, UndatedCalendarItem, FollowView, LibraryView, NewEpisode, TileShape } from "./types";
 
 interface FollowingPageProps {
@@ -66,28 +67,18 @@ export function FollowingPage({ follows, newEpisodes, canRetain = false, librari
   useI18n();
   const [tab, setTab] = useState<Tab>("overview");
   const [openId, setOpenId] = useState<string | null>(null);
-  const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
   const pageRef = useRef<HTMLElement>(null);
   const open = follows.find((follow) => follow.id === openId) ?? null;
-
-  const moveTab = (from: Tab, direction: 1 | -1) => {
-    const next = TABS[(TABS.indexOf(from) + direction + TABS.length) % TABS.length];
-    setTab(next);
-    tabRefs.current[next]?.focus();
-  };
+  const tabProps = useRovingTabs(TABS, tab, setTab);
 
   return <section className="following-page" ref={pageRef}>
     <ArtworkProximity scroller={pageRef}>
     <Heading eyebrow={t("following.eyebrow")} title={t("following.title")}/>
     <div className="filter-tabs following-tabs" role="tablist" aria-label={t("following.title")}>
       {TABS.map((name) => <button key={name} role="tab" type="button" id={`following-tab-${name}`} aria-selected={tab === name}
-        aria-controls={`following-panel-${name}`} tabIndex={tab === name ? 0 : -1} className={tab === name ? "active" : ""}
-        ref={(node) => { tabRefs.current[name] = node; }}
+        aria-controls={`following-panel-${name}`} className={tab === name ? "active" : ""}
         onClick={() => setTab(name)}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowRight") { event.preventDefault(); moveTab(name, 1); }
-          else if (event.key === "ArrowLeft") { event.preventDefault(); moveTab(name, -1); }
-        }}>{t(TAB_LABEL[name])}</button>)}
+        {...tabProps(name)}>{t(TAB_LABEL[name])}</button>)}
     </div>
     <div className="following-panel" role="tabpanel" id={`following-panel-${tab}`} aria-labelledby={`following-tab-${tab}`} tabIndex={0}>
       {tab === "overview" && <Overview follows={follows} newEpisodes={newEpisodes} shape={shape} onToggleShape={onToggleShape} onOpen={setOpenId} onOpenSeries={onOpenSeries}/>}
