@@ -539,7 +539,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     }
   };
   useEffect(() => { void loadLibraries(); }, []);
-  const remoteRootsPresent = !selected && !hideRoots && Boolean(libraries?.length || (libraries === null && placeholders > 0));
+  // Remembered roots hold their place until discovery answers; a failure with nothing known
+  // falls back to the bare error, as an account that never had roots sees it.
+  const holding = libraries === null && placeholders > 0 && !librariesError;
+  const remoteRootsPresent = !selected && !hideRoots && Boolean(libraries?.length || holding);
   useEffect(() => {
     onRootPresenceChange?.(remoteRootsPresent);
   }, [remoteRootsPresent, onRootPresenceChange]);
@@ -1403,7 +1406,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     return () => controller.abort();
   }, [playing?.stream.sourceId, playingIdentityKey]);
 
-  if (!librariesError && !targetError && !libraries?.length && !(libraries === null && placeholders > 0)) return null;
+  if (!librariesError && !targetError && !libraries?.length && !holding) return null;
 
   const shuffleActive = Boolean(
     shuffleRun
@@ -1925,8 +1928,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (element.scrollHeight - element.scrollTop - element.clientHeight <= Math.min(400, element.clientHeight || toCssPx(window.innerHeight) || 800)) autoLoadRef.current();
   };
 
-  const rootsVisible = !selected && !hideRoots && Boolean(libraries?.length || (libraries === null && placeholders > 0));
-  const placeholdersVisible = libraries === null && placeholders > 0;
+  const rootsVisible = !selected && !hideRoots && Boolean(libraries?.length || holding);
+  const placeholdersVisible = holding;
   const librariesAlert = librariesError ? <div className="remote-error" role="alert">
     <span>{t("mediaServer.loadFailed")} {librariesError}</span>
     <button type="button" onClick={() => void loadLibraries()}>{t("mediaServer.retry")}</button>
@@ -1934,7 +1937,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
 
   return <>
     {rootsVisible && (placeholdersVisible
-      ? <RemoteRootsPlaceholder count={librariesError ? 0 : placeholders}>{librariesAlert}</RemoteRootsPlaceholder>
+      ? <RemoteRootsPlaceholder count={placeholders}/>
       : libraries && <section className="panel browse-panel remote-libraries" ref={rootRef} aria-label={t("mediaServer.remoteTitle")}>
       {/* The remote roots are the same panel the local listing is, so the two blocks share their
           heading, borders and grid padding; only the label says which is which. */}

@@ -325,23 +325,21 @@ describe("RemoteLibraryBrowser remembered roots", () => {
     expect(onRootPresenceChange.mock.calls.map(([present]) => present)).not.toContain(false);
   });
 
-  it("drops the placeholders on a discovery failure and shows it inside the roots block", async () => {
+  it("falls back to the bare discovery error when nothing about the roots is known", async () => {
     localStorage.setItem("remote-roots:alice", "2");
     remoteLibrariesReply = () => Promise.resolve(json({ error: "offline" }, 500));
     const onRootPresenceChange = vi.fn();
 
     await render({ accountScope: "alice", onRootPresenceChange });
-    await untilBrowser(() => host.querySelector(".remote-libraries .remote-error") !== null);
+    await untilBrowser(() => host.querySelector(".remote-error") !== null);
 
-    const section = host.querySelector<HTMLElement>(".remote-libraries")!;
-    const alert = section.querySelector(".remote-error")!;
-    // Skeleton rows under an error would push the local folders down for nothing.
-    expect(section.querySelectorAll(".remote-root-placeholder")).toHaveLength(0);
-    expect(section.hasAttribute("aria-busy")).toBe(false);
-    expect(section.querySelector(".browse-head")!.nextElementSibling).toBe(alert);
-    expect(onRootPresenceChange).toHaveBeenCalledWith(true);
+    // An empty held block under the error would push the local folders down for nothing.
+    expect(host.querySelector(".remote-libraries")).toBeNull();
+    expect(host.querySelector(".remote-root-placeholder")).toBeNull();
+    expect(onRootPresenceChange).toHaveBeenLastCalledWith(false);
 
-    await click(alert.querySelector("button")!);
+    remoteLibrariesReply = () => Promise.resolve(json([]));
+    await click(host.querySelector<HTMLButtonElement>(".remote-error button")!);
     expect(calls.libraries).toHaveLength(2);
   });
 
