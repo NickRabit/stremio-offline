@@ -52,6 +52,8 @@ export interface CatalogLoader {
   pageFailed: boolean;
   sourceCount: number;
   loadPage(reset: boolean): Promise<void>;
+  /** Scrolling near the end asks for the next page, but never retries one that failed. */
+  autoLoadPage(): void;
   actOnSearch(query: string): void;
   clearPendingRecord(): void;
 }
@@ -63,8 +65,8 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
   const [items, setItems] = useState<Meta[]>([]);
   const browseOffsets = useRef(new Map<string, number | null>());
   const [cursor, setCursor] = useState("");
-  const [hasMore, setHasMore] = useState(false);
-  const [pageFailed, setPageFailed] = useState(false);
+  const [hasMore, setHasMoreState] = useState(false);
+  const [pageFailed, setPageFailedState] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [sourceCount, setSourceCount] = useState(0);
 
@@ -82,6 +84,17 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
   const firstPageOkRef = useRef<string | null>(null);
   const recordIntentRef = useRef<string | null>(null);
 
+  // Scroll events can arrive before the render that follows a page, so the automatic loader reads these.
+  const hasMoreRef = useRef(false);
+  const pageFailedRef = useRef(false);
+  const setHasMore = useCallback((next: boolean) => {
+    hasMoreRef.current = next;
+    setHasMoreState(next);
+  }, []);
+  const setPageFailed = useCallback((next: boolean) => {
+    pageFailedRef.current = next;
+    setPageFailedState(next);
+  }, []);
   const updateItems = useCallback((next: Meta[]) => {
     itemsRef.current = next;
     setItems(next);
@@ -266,7 +279,11 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
         setLoadingMore(false);
       }
     }
-  }, [deleteCatalogSearchSession, recordFirstPage, updateCursor, updateItems]);
+  }, [deleteCatalogSearchSession, recordFirstPage, setHasMore, setPageFailed, updateCursor, updateItems]);
+
+  const autoLoadPage = useCallback(() => {
+    if (hasMoreRef.current && !pageFailedRef.current) void loadPage(false);
+  }, [loadPage]);
 
   const actOnSearch = useCallback((query: string) => {
     if (firstPageOkRef.current === query) optionsRef.current.onRecordSearch(query);
@@ -325,6 +342,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
     catalogId,
     options.resetKey,
     loadPage,
+    setHasMore,
     updateCursor,
     updateItems,
     browseKey,
@@ -337,6 +355,7 @@ export function useCatalogLoader(options: CatalogLoaderOptions): CatalogLoader {
     pageFailed,
     sourceCount,
     loadPage,
+    autoLoadPage,
     actOnSearch,
     clearPendingRecord,
   };
