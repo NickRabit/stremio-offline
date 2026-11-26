@@ -1084,7 +1084,7 @@ export function App() {
     prefetchedEpisode, prefetchEpisode, subtitlesReady,
   } = useTitleSources({ setBusy, fail });
   const {
-    items, hasMore, loadingMore, pageFailed, sourceCount, loadPage, actOnSearch, clearPendingRecord,
+    items, hasMore, loadingMore, pageFailed, sourceCount, loadPage, autoLoadPage, actOnSearch, clearPendingRecord,
   } = useCatalogLoader({
     view,
     query: submittedQuery,
@@ -3935,8 +3935,8 @@ export function App() {
               compactOnScroll(event, catalogCompact, setCatalogCompact);
               scheduleViewAnchor();
               const grid = event.currentTarget;
-              if (hasMore && !pageFailed && !restoringScroll.current && !playerOpenRef.current &&
-                  grid.scrollHeight - grid.scrollTop - grid.clientHeight <= Math.min(400, grid.clientHeight)) void loadPage(false);
+              if (!restoringScroll.current && !playerOpenRef.current &&
+                  grid.scrollHeight - grid.scrollTop - grid.clientHeight <= Math.min(400, grid.clientHeight)) autoLoadPage();
             }}>
               <ArtworkProximity scroller={gridRef}>
               {visibleItems.map((item) => {
