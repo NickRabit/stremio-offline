@@ -34,15 +34,17 @@ The four primary viewport sweeps found no document-level horizontal overflow on 
 
 **Reproduce.** In Favourites, start with films under All and choose Series. In Continue watching, repeat with a mixed history. Check the cards immediately after the pressed state changes. On this deployment the old cards were briefly visible under the new label.
 
-**Implementation.** In [App.tsx](../web/src/App.tsx), both filter effects already clear the list. Their asynchronous loaders, `loadFavorites` and `loadResume`, apply results, totals and completion state without checking which filter or request still owns them. React runs the click-triggered effect before the browser paints, so the observed mismatch is most likely a late response of the previous filter landing under the new one, not a single stale render. Three consequences follow from the code:
+**What the walkthrough established.** The selected tab changed while the previous cards were still visible. Request timing was not recorded. A render during the filter change and a late response are two cases to test independently.
 
-- A late first page of the old filter replaces the new filter's cards.
-- A late second page of the old filter does worse: the list was cleared on the switch, so the append path falls through and the old page replaces the new list outright.
-- The `finally` block clears the busy flag for the older request as well, so the specific empty state (for example "no series") can flash while the newer request is still running.
+**Implementation.** In [App.tsx](../web/src/App.tsx), the filter effects clear the list after the new filter is committed. Both loaders write to the same list and total regardless of which filter issued the request. A late first page can replace the active list. A late second page can append films to an already populated series list, or repopulate a list that is still empty. Either request can overwrite the total and clear the busy flags while the active request is pending.
 
-Keep the filter identity with the displayed data, and guard first-page and load-more responses together with the busy flags. [RemoteLibraryBrowser.tsx](../web/src/RemoteLibraryBrowser.tsx) already does this for its library list with a request counter and an `AbortController`; reuse that pattern. Preserve the scroll position during a refresh of the same filter.
+Associate the displayed cards, total and loading state with their filter. Apply first-page and load-more completions only while their request still owns that state. Preserve scroll position on refreshes of the same filter. The remote library list uses a request counter and cancellation. See [RemoteLibraryBrowser.tsx](../web/src/RemoteLibraryBrowser.tsx).
 
-**Acceptance.** Delay a film response, switch to series, complete the series response first and release the film response. The selected filter, cards, count and load-more action must still refer to series, and the empty state must not appear while the series response is pending. Repeat for both screens and for an outstanding second page.
+**Acceptance.** Exercise each sequence in both Favourites and Continue watching.
+
+1. Let Films finish loading, then select Series and hold its response. As soon as Series is selected, only a loading state or cached series cards should be visible.
+2. With a film request outstanding, select Series. Complete the film request while Series is pending and verify the loading state persists. Repeat with the responses in reverse order and verify the late film response leaves the series cards and total intact.
+3. Load the first page of Films and hold its second page. Switch to Series, return a nonempty series page, then release the second film page. Verify the exact series cards, total and availability of Load more. Repeat with the film page arriving while Series is still pending.
 
 ### 2. Stabilize the library root while remote folders arrive
 
@@ -57,7 +59,7 @@ Keep the filter identity with the displayed data, and guard first-page and load-
 | Where | Measured button | Proposed change and acceptance |
 | --- | --- | --- |
 | Addon priority | 24 × 18 px at 390 × 844 | Start here because adjacent arrows do opposite things. Give each an independent target of at least 44 × 44 CSS px in touch layouts. Verify a tap near their common boundary invokes only the intended direction. See [AddonManager.tsx](../web/src/AddonManager.tsx). |
-| Catalogue source retry | 72 × 16 px at 320 × 568 | Give each failed group's retry a larger target within its own row. Keep retry scoped to that group and keep usable sources selectable. Check two failures alongside working sources at 320 px and in landscape. See [SourceChooser.tsx](../web/src/SourceChooser.tsx). |
+| Catalogue source retry | 72 × 16 px at 320 × 568 | Select a title directly in Catalogue. With two failed remote libraries and a working source, enlarge each retry target in its own alert. At 320 px and in landscape, verify that tapping it retries only that library and leaves the working source selectable. The catalogue renders these buttons beside the call to `retryRemoteLibrary(group.libraryId)` in [App.tsx](../web/src/App.tsx). |
 | Home catalogue heading | 156 × 14 px at 390 × 844 | Let the shelf heading's existing button use more of the row's vertical space. Aim for a 44 px touch target. Check the poster below and any adjacent shelf action remain separately reachable. See [HomeShelf.tsx](../web/src/HomeShelf.tsx). |
 | Download queue order | Not measured | The administrator's move-up and move-down arrows on queued jobs sit next to each other like the addon arrows and reorder immediately. The completed section hides them, so the walkthrough never reached them. Measure them on a queue with waiting jobs and treat them like the addon arrows. See [DownloadsPage.tsx](../web/src/DownloadsPage.tsx). |
 
@@ -73,9 +75,11 @@ These measurements describe button boxes in the responsive browser. The 44 px ta
 
 ### 5. Distinguish pending and empty statistics
 
-**Reproduce.** Enter Statistics on an account with history. During initial loading the lead says there is nothing to measure, then changes when the summary arrives. [Stats.tsx](../web/src/Stats.tsx) uses the empty lead both while the summary is null and when a loaded summary lacks a start date, while the body already says it is loading. The same lead also appears after a failed request. The loader already ignores stale responses; only the pending and failed states need their own wording.
+**Reproduce.** Enter Statistics on an account with history. During initial loading the lead says there is nothing to measure, then changes when the summary arrives. [Stats.tsx](../web/src/Stats.tsx) uses the empty lead both while the summary is null and when a loaded summary lacks a start date, while the body already says it is loading. The same lead appears after an initial request fails. On a period change, the loader retains the previous summary until the next request succeeds. A failed request can therefore leave a 30-day graph and breakdowns under a selected 7-day tab.
 
-**Acceptance.** Hold the summary response open. The page should communicate that data is loading. Resolve it with historical totals and check that the empty message never appeared. Resolve it with a genuinely empty summary in a second case and check that the empty explanation appears. Fail the request in a third case and check that the page does not claim there is nothing to measure.
+**Acceptance.** On first entry, hold the response and verify the loading state. Resolve it with historical data and check that the empty message never appears. Repeat with a genuinely empty summary and with a failed request. Only a successful empty response should show the empty explanation.
+
+Load 30 days of data, select 7 days, hold the new request, then fail it. Check both the pending and failed states. Any retained graph and breakdowns must visibly identify their 30-day period. If the page hides them instead, show the loading or error state for 7 days. After a successful 7-day request, the selected tab, graph and breakdowns must agree.
 
 ## Verification boundaries
 
