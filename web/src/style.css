@@ -454,7 +454,8 @@ main.view-catalog .catalog-layout{flex:1 1 auto;min-height:340px;height:auto}
   main.view-catalog .filterbar label{display:block;min-width:0}
   main.view-catalog .filterbar label>span{display:none}
   main.view-catalog .filterbar select{width:100%;max-width:none;min-height:34px;padding:5px 8px}
-  main.view-catalog .filterbar .scope-badge,main.view-catalog .filterbar .filter-note{display:none}
+  main.view-catalog .filterbar .scope-badge{display:none}
+  main.view-catalog .filterbar>.filter-note{grid-column:1/-1}
   main.view-catalog .catalog-layout{display:block;min-height:0;height:0;flex:1 1 auto}
   main.view-catalog .result-panel{height:100%;margin:0;padding:10px}
   main.view-catalog .poster-grid{gap:9px}
@@ -2746,7 +2747,7 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 
 @media(min-width:701px) and (min-height:501px){
   .catalog-view .filterbar{flex-wrap:wrap;gap:8px 10px;margin-top:-5px}
-  .catalog-view .filterbar>.catalog-type-switch,.catalog-view .filterbar>.catalog-trigger{height:35px;min-height:35px}
+  .catalog-view .filterbar>.catalog-trigger{height:35px;min-height:35px}
   .catalog-view .filterbar>.catalog-trigger{flex:1 1 220px}
   .catalog-view .filterbar>.genre-trigger{flex:0 1 180px}
   .catalog-view .filterbar>label{flex:0 0 auto}
