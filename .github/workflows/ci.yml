@@ -84,7 +84,19 @@ jobs:
       - run: npm run build -w @stremio-offline/source-selection
       - run: npx tsc -p desktop
       - run: npx tsc --noEmit -p server
+      - name: Disk diagnostics (temporary)
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled,AntivirusEnabled,OnAccessProtectionEnabled | Format-List
+          (Get-MpPreference).ExclusionPath
+          echo "TEMP=$env:TEMP RUNNER_TEMP=$env:RUNNER_TEMP"
+          node .github/diag/fsync.mjs
+          node .github/diag/fsync.mjs
       - run: npm run test -w server
+      - name: Disk diagnostics after the suite (temporary)
+        if: ${{ always() }}
+        run: node .github/diag/fsync.mjs
       - run: npm run test -w desktop
 
   # The Playwright container carries the browser and its system libraries, so the
