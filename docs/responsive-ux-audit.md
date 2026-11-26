@@ -23,7 +23,7 @@ The subject was the Czech web interface on the local Docker deployment, version 
 | Following | Right Arrow moved focus and selection from Overview to Calendar. The list and month modes and the month navigation have distinct labels. | Use this keyboard behavior as the reference for Settings. |
 | Downloads | Opened and closed the completed section. It exposed details, reveal-in-library and remove actions. On the 390 px phone its disclosure occupied 336 × 28 px across the row. | Lower priority than the small adjacent reorder arrows. If increasing row height, keep the whole heading clickable. |
 | Addons | Opened an installed addon's editor and dismissed it. At 390 px the card's two priority arrows measured 24 × 18 px apiece, directly next to each other. Reordering has an immediate effect. | Give adjacent arrows distinct touch targets and retain disabled end states. |
-| Settings | Opened all seven tabs at 320 px. Selecting Account scrolled the strip to reveal it. At 390 px the strip measured 355 px for 439 px of content. Right Arrow on Libraries left focus and selection there. | Keep horizontal reveal and align keyboard navigation with Following. |
+| Settings | Opened all seven administrator tabs at 320 px (other accounts see six, without Services). Selecting Account scrolled the strip to reveal it. At 390 px the strip measured 355 px for 439 px of content. Right Arrow on Libraries left focus and selection there. | Keep horizontal reveal and align keyboard navigation with Following. |
 | Statistics | Switched the reporting period and returned to 30 days. On entry the page briefly said there was nothing to measure while also showing a loading message. It then displayed historical totals. | Show the empty statement only after a successful empty response. |
 
 The four primary viewport sweeps found no document-level horizontal overflow on the sampled landing states. The Settings tab strip scrolls internally. Neither observation establishes that every dialog or every data-dependent row fits.
@@ -34,15 +34,21 @@ The four primary viewport sweeps found no document-level horizontal overflow on 
 
 **Reproduce.** In Favourites, start with films under All and choose Series. In Continue watching, repeat with a mixed history. Check the cards immediately after the pressed state changes. On this deployment the old cards were briefly visible under the new label.
 
-**Implementation.** In [App.tsx](../web/src/App.tsx), both filter effects already clear the list. Their asynchronous loaders apply results, totals and completion state without checking which filter or request still owns them. A late response overwriting a newer one is a risk identified in code. The live walkthrough established the brief mismatch only. Keep the filter identity with the displayed data, guard first-page and load-more responses, and preserve the scroll position during a refresh of the same filter.
+**Implementation.** In [App.tsx](../web/src/App.tsx), both filter effects already clear the list. Their asynchronous loaders, `loadFavorites` and `loadResume`, apply results, totals and completion state without checking which filter or request still owns them. React runs the click-triggered effect before the browser paints, so the observed mismatch is most likely a late response of the previous filter landing under the new one, not a single stale render. Three consequences follow from the code:
 
-**Acceptance.** Delay a film response, switch to series, complete the series response first and release the film response. The selected filter, cards, count and load-more action must still refer to series. Repeat for both screens and for an outstanding second page.
+- A late first page of the old filter replaces the new filter's cards.
+- A late second page of the old filter does worse: the list was cleared on the switch, so the append path falls through and the old page replaces the new list outright.
+- The `finally` block clears the busy flag for the older request as well, so the specific empty state (for example "no series") can flash while the newer request is still running.
+
+Keep the filter identity with the displayed data, and guard first-page and load-more responses together with the busy flags. [RemoteLibraryBrowser.tsx](../web/src/RemoteLibraryBrowser.tsx) already does this for its library list with a request counter and an `AbortController`; reuse that pattern. Preserve the scroll position during a refresh of the same filter.
+
+**Acceptance.** Delay a film response, switch to series, complete the series response first and release the film response. The selected filter, cards, count and load-more action must still refer to series, and the empty state must not appear while the series response is pending. Repeat for both screens and for an outstanding second page.
 
 ### 2. Stabilize the library root while remote folders arrive
 
 **Reproduce.** Open Library on a narrow phone with local folders and remote libraries configured. Local folders initially occupy the first rows. When the remote region arrives, those same folders move down. A user reaching for a local row can lose their place.
 
-**Implementation.** Review the root composition in [App.tsx](../web/src/App.tsx). One option is a stable local section followed by remote libraries and their loading status. If remote-first ordering is essential, retain enough previous root information to render a stable returning view. Avoid reserving a large empty area for accounts with only local libraries.
+**Implementation.** [App.tsx](../web/src/App.tsx) renders the remote browser before the local panel. The remote roots section, its loading and its error state live in [RemoteLibraryBrowser.tsx](../web/src/RemoteLibraryBrowser.tsx): the list starts empty and the section renders only once discovery fills it, with nothing holding its place. The lazy-loaded screen adds to the delay, and `style.css` sets `overflow-anchor: none` on the remote-roots page, so the browser cannot compensate for the shift. One option is a stable local section followed by remote libraries and their loading status. If remote-first ordering is essential, retain enough previous root information to render a stable returning view. Avoid reserving a large empty area for accounts with only local libraries.
 
 **Acceptance.** Delay remote discovery and record the top edge of the first local row before and after success and failure. It should stay in place while visible. A local folder should open while remote discovery is pending.
 
@@ -53,25 +59,26 @@ The four primary viewport sweeps found no document-level horizontal overflow on 
 | Addon priority | 24 × 18 px at 390 × 844 | Start here because adjacent arrows do opposite things. Give each an independent target of at least 44 × 44 CSS px in touch layouts. Verify a tap near their common boundary invokes only the intended direction. See [AddonManager.tsx](../web/src/AddonManager.tsx). |
 | Catalogue source retry | 72 × 16 px at 320 × 568 | Give each failed group's retry a larger target within its own row. Keep retry scoped to that group and keep usable sources selectable. Check two failures alongside working sources at 320 px and in landscape. See [SourceChooser.tsx](../web/src/SourceChooser.tsx). |
 | Home catalogue heading | 156 × 14 px at 390 × 844 | Let the shelf heading's existing button use more of the row's vertical space. Aim for a 44 px touch target. Check the poster below and any adjacent shelf action remain separately reachable. See [HomeShelf.tsx](../web/src/HomeShelf.tsx). |
+| Download queue order | Not measured | The administrator's move-up and move-down arrows on queued jobs sit next to each other like the addon arrows and reorder immediately. The completed section hides them, so the walkthrough never reached them. Measure them on a queue with waiting jobs and treat them like the addon arrows. See [DownloadsPage.tsx](../web/src/DownloadsPage.tsx). |
 
-These measurements describe button boxes in the responsive browser. The 44 px target is a proposed design criterion. Verify spacing and hit testing on a touch device before shipping.
+These measurements describe button boxes in the responsive browser. The 44 px target is not new: the stylesheet already gives the filter tabs `min-height: 44px` on narrow and touch screens, many controls use 44 px, and several `@media (pointer: coarse)` blocks enlarge controls for touch. Extend those rules rather than introducing a separate convention, and consider recording the target in [ui-conventions.md](ui-conventions.md). Verify spacing and hit testing on a touch device before shipping.
 
 ### 4. Give Settings the same keyboard interaction as Following
 
 **Reproduce.** Focus Libraries in Settings and press Right Arrow. The active tab stays on Libraries. In Following, the same key on Overview activates Calendar. Both controls expose a tablist and the same underlined styling.
 
-**Implementation.** Reuse the roving-focus interaction from [FollowingPage.tsx](../web/src/FollowingPage.tsx) in [SettingsPage.tsx](../web/src/SettingsPage.tsx). Operate on the tabs visible to the current account. Keep the selected tab in view as the strip scrolls.
+**Implementation.** [FollowingPage.tsx](../web/src/FollowingPage.tsx) moves focus and selection with Left and Right, wrapping at the ends, but has no Home or End. [SettingsPage.tsx](../web/src/SettingsPage.tsx) makes every tab a Tab stop, and the account editor in [UserManager.tsx](../web/src/UserManager.tsx) is a third tablist with the same gap. There is no shared tab component; `FilterTabs` is a button group, not a tablist. Extract one roving-focus handler with Left, Right, Home and End, and use it in all three places. Operate on the tabs visible to the current account. Keep the selected tab in view as the strip scrolls.
 
-**Acceptance.** Tab enters the selected tab once. Left and Right move selection, Home and End reach the visible ends, and Tab continues into the panel. On a 320 px screen, moving to Account reveals its label and focus indicator. Verify with the restricted set of tabs as well.
+**Acceptance.** Tab enters the selected tab once. Left and Right move selection, Home and End reach the visible ends, and Tab continues into the panel. On a 320 px screen, moving to Account reveals its label and focus indicator. Verify with the restricted set of tabs as well, and check that Following and the account editor gain Home and End without other changes.
 
 ### 5. Distinguish pending and empty statistics
 
-**Reproduce.** Enter Statistics on an account with history. During initial loading the lead says there is nothing to measure, then changes when the summary arrives. [Stats.tsx](../web/src/Stats.tsx) uses the empty lead both while the summary is null and when a loaded summary lacks a start date.
+**Reproduce.** Enter Statistics on an account with history. During initial loading the lead says there is nothing to measure, then changes when the summary arrives. [Stats.tsx](../web/src/Stats.tsx) uses the empty lead both while the summary is null and when a loaded summary lacks a start date, while the body already says it is loading. The same lead also appears after a failed request. The loader already ignores stale responses; only the pending and failed states need their own wording.
 
-**Acceptance.** Hold the summary response open. The page should communicate that data is loading. Resolve it with historical totals and check that the empty message never appeared. Resolve it with a genuinely empty summary in a second case and check that the empty explanation appears.
+**Acceptance.** Hold the summary response open. The page should communicate that data is loading. Resolve it with historical totals and check that the empty message never appeared. Resolve it with a genuinely empty summary in a second case and check that the empty explanation appears. Fail the request in a third case and check that the page does not claim there is nothing to measure.
 
 ## Verification boundaries
 
 The live audit covered Czech, administrator navigation, browser viewport resizing and keyboard interaction. It did not exercise physical touch accuracy, screen-reader speech, child or restricted accounts, TV remote navigation, or live download and account mutations. The main walkthrough used real local data. The player layout checks use the project's isolated fixture so playback activity stays outside household history.
 
-The three player journeys in [player.spec.ts](../e2e/tests/layout/player.spec.ts) passed on desktop, portrait phone and landscape phone (nine checks). They cover picture stability, overlay reachability, reversible fill-screen mode, dismissing controls and fullscreen interaction.
+The three player journeys in [player.spec.ts](../e2e/tests/layout/player.spec.ts) passed locally on desktop, portrait phone and landscape phone (nine checks). That is a hand-picked subset: CI runs the layout suite on seven viewport profiles, 21 player checks in all. They cover picture stability, overlay reachability, reversible fill-screen mode, dismissing controls and fullscreen interaction.
