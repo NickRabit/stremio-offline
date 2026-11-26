@@ -123,6 +123,61 @@ describe("SettingsPage tabs", () => {
     expect([...host.querySelectorAll('.section-filter [role="tab"]')].some((candidate) => candidate.textContent === "Services")).toBe(false);
   });
 
+  const settingsTabs = () => host.querySelectorAll<HTMLButtonElement>('.section-filter [role="tab"]');
+  const pressTab = async (target: HTMLButtonElement, key: string) => {
+    await act(async () => {
+      target.focus();
+      target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    });
+  };
+
+  it("moves an administrator along the tab strip with the arrow keys and End", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/media-servers/libraries")) return Promise.resolve(json({ libraries: [] }));
+      if (url.includes("/api/media-servers")) return Promise.resolve(json({ connections: [], keyConfigured: true }));
+      if (url.includes("/api/libraries")) return Promise.resolve(json([]));
+      if (url.includes("/api/users")) return Promise.resolve(json([]));
+      if (url.includes("/api/diagnostics")) return Promise.resolve(json({ error: "fail" }, 500));
+      return Promise.resolve(json({}));
+    }));
+
+    await render({}, false, "admin");
+    const tabs = settingsTabs();
+    expect([...tabs].filter((candidate) => candidate.tabIndex === 0)).toHaveLength(1);
+    expect(tabs[0].textContent).toBe("Libraries");
+    expect(tabs[0].tabIndex).toBe(0);
+
+    await pressTab(tabs[0], "ArrowRight");
+    expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(tabs[1]);
+    expect(tabs[1].tabIndex).toBe(0);
+    expect([...settingsTabs()].filter((candidate) => candidate.tabIndex === 0)).toHaveLength(1);
+    expect(sessionStorage.getItem("stremio-offline-settings-tab")).toBe("home");
+
+    await pressTab(tabs[1], "End");
+    const last = settingsTabs()[settingsTabs().length - 1];
+    expect(last.textContent).toBe("Account");
+    expect(last.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(last);
+    expect(sessionStorage.getItem("stremio-offline-settings-tab")).toBe("account");
+  });
+
+  it("ends on the last of the six tabs for an ordinary account", async () => {
+    await render();
+    const tabs = settingsTabs();
+    expect([...tabs].map((candidate) => candidate.textContent))
+      .toEqual(["Libraries", "Home", "Playback", "Sources", "Downloads", "Account"]);
+    expect([...tabs].filter((candidate) => candidate.tabIndex === 0)).toHaveLength(1);
+
+    await pressTab(tabs[0], "End");
+    const last = settingsTabs()[5];
+    expect(last.textContent).toBe("Account");
+    expect(last.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(last);
+    expect([...settingsTabs()].some((candidate) => candidate.textContent === "Services")).toBe(false);
+  });
+
   it("configures the download window for an administrator only", async () => {
     stubSourceProfiles();
     const { onSave } = await render({ serverTimeZone: "Europe/Prague" }, false, "admin");

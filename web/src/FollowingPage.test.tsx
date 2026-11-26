@@ -96,6 +96,26 @@ describe("FollowingPage", () => {
     expect(host.querySelector('[role="tabpanel"]')!.getAttribute("aria-labelledby")).toBe("following-tab-calendar");
   });
 
+  it("moves to the first and last tabs with Home and End", async () => {
+    await render([]);
+    const tabs = host.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    await act(async () => {
+      tabs[0].focus();
+      tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    });
+    expect(tabs[2].getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(tabs[2]);
+    expect(tabs[2].tabIndex).toBe(0);
+    expect([...tabs].filter((tab) => tab.tabIndex === 0)).toHaveLength(1);
+
+    await act(async () => {
+      tabs[2].dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    });
+    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(tabs[0]);
+    expect(tabs[0].tabIndex).toBe(0);
+  });
+
   it("puts a follow that needs attention first in the overview", async () => {
     await render([
       follow({ id: "b", name: "Beta" }),

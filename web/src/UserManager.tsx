@@ -4,6 +4,7 @@ import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { api } from "./api";
 import { t, localeTag, useI18n } from "./i18n";
+import { useRovingTabs } from "./use-roving-tabs";
 import { libraryTypeLabel } from "./LibraryManager";
 import { Avatar } from "./Avatar";
 import { AvatarPicker } from "./AvatarPicker";
@@ -373,6 +374,8 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
     ];
   // Promoting somebody while their addons are on screen must not leave the dialog empty.
   useEffect(() => { if (!tabs.some((entry) => entry.id === tab)) setTab("account"); }, [currentRole]);
+  const tabProps = useRovingTabs<"account" | "libraries" | "addons" | "downloads">(
+    tabs.map((entry) => entry.id), tab, setTab);
 
   /** The tab already names the pane, so repeating it inside is noise -- and on a phone held
    *  sideways it is noise that costs a row of the list. Kept for the one case with no strip. */
@@ -402,7 +405,8 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
       {tabs.length > 1 && <div className="filter-tabs user-edit-tabs" role="tablist" aria-label={t("users.editAccount")}>
         {tabs.map(({ id, label, count }) =>
           <button key={id} type="button" role="tab" id={`user-tab-${id}`} aria-controls={`user-pane-${id}`}
-            aria-selected={tab === id} className={tab === id ? "active" : undefined} onClick={() => setTab(id)}>
+            aria-selected={tab === id} className={tab === id ? "active" : undefined} onClick={() => setTab(id)}
+            {...tabProps(id)}>
             {label}{count === undefined ? null : <i>{count}</i>}
           </button>)}
       </div>}

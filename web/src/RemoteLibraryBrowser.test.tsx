@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { ChildModeProvider } from "./child-mode";
 import { clearRemoteMosaicCache } from "./remote-mosaic";
+import { rememberedRootCount, rememberRoots, resetRememberedRoots } from "./remote-roots-memory";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
 import { clearTitleExtras } from "./title-extras";
@@ -32,6 +33,7 @@ const deferred = <T,>() => {
 
 type Handler = (url: URL, init?: RequestInit) => Response | Promise<Response>;
 let libraries: RemoteLibrary[];
+let remoteLibrariesReply: Handler;
 let browse: Handler;
 let personal: Handler;
 let preview: Handler;
@@ -51,7 +53,7 @@ let playback: Handler;
 let shuffleStart: Handler;
 let shuffleNext: Handler;
 const shuffleCalls = { start: [] as URL[], starts: [] as Array<Record<string, unknown>>, next: [] as string[], deleted: [] as string[] };
-const calls = { browse: [] as URL[], personal: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[], title: [] as string[] };
+const calls = { libraries: [] as URL[], browse: [] as URL[], personal: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[], title: [] as string[] };
 const inspectedSources: string[] = [];
 const downloadCalls: Array<Record<string, unknown>> = [];
 const deviceCalls: Array<Record<string, unknown>> = [];
@@ -93,6 +95,8 @@ let host: HTMLDivElement;
 const saveElsewhere = () => host.querySelector<HTMLButtonElement>(".library-detail-actions .library-detail-save .split-button-toggle")!;
 
 beforeEach(() => {
+  resetRememberedRoots();
+  localStorage.clear();
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -115,13 +119,14 @@ beforeEach(() => {
   clearTitleExtras();
   clearRemoteMosaicCache();
   FakeIntersectionObserver.live = [];
-  calls.browse = []; calls.personal = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = []; calls.title = [];
+  calls.libraries = []; calls.browse = []; calls.personal = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = []; calls.title = [];
   downloadCalls.length = 0;
   deviceCalls.length = 0;
   librarySourceCalls.length = 0;
   playbackCalls.length = 0;
   addonCalls.sources = []; addonCalls.streams = []; addonCalls.subtitles = []; addonCalls.local = []; addonCalls.remote = []; addonCalls.progress = []; addonCalls.subtitleSignals = [];
   libraries = [library()];
+  remoteLibrariesReply = () => Promise.resolve(json({ libraries }));
   browse = () => json(page([]));
   personal = () => json({ items: [], total: 0 });
   preview = () => json({ posters: [] });
@@ -162,7 +167,10 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
-    if (path === "/api/remote-libraries") return Promise.resolve(json({ libraries }));
+    if (path === "/api/remote-libraries") {
+      calls.libraries.push(url);
+      return Promise.resolve(remoteLibrariesReply(url, init));
+    }
     if (path === "/api/remote-libraries/personal") { calls.personal.push(url); return Promise.resolve(personal(url, init)); }
     if (path === "/api/downloads" && init?.method === "POST") {
       downloadCalls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
@@ -277,6 +285,135 @@ const openRootLibrary = async (which = 0) => {
   await click(button);
   return { onOpenChange };
 };
+
+describe("RemoteLibraryBrowser remembered roots", () => {
+  it("holds the remote block open while discovery replaces placeholders with the real roots", async () => {
+    localStorage.setItem("remote-roots:alice", "2");
+    expect(rememberedRootCount("alice")).toBe(2);
+    const discovery = deferred<Response>();
+    remoteLibrariesReply = () => discovery.promise;
+    const onRootPresenceChange = vi.fn();
+
+    await render({ accountScope: "alice", onRootPresenceChange });
+
+    const pendingSection = host.querySelector<HTMLElement>(".remote-libraries")!;
+    expect(pendingSection).not.toBeNull();
+    expect(pendingSection.getAttribute("aria-busy")).toBe("true");
+    const placeholders = [...pendingSection.querySelectorAll<HTMLElement>(".remote-root-placeholder")];
+    expect(placeholders).toHaveLength(2);
+    expect(placeholders.every((placeholder) => placeholder.getAttribute("aria-hidden") === "true")).toBe(true);
+    expect(placeholders.every((placeholder) => placeholder.querySelector<HTMLButtonElement>(".library-open")?.disabled)).toBe(true);
+    expect(placeholders.every((placeholder) => placeholder.querySelector(".library-copy strong")?.textContent === "\u00a0")).toBe(true);
+    expect(placeholders.every((placeholder) => placeholder.querySelector(".library-copy small")?.textContent === "\u00a0")).toBe(true);
+    expect(onRootPresenceChange).toHaveBeenCalledWith(true);
+
+    await act(async () => {
+      discovery.resolve(json({ libraries: [
+        library({ id: "rlib_one", name: "One" }),
+        library({ id: "rlib_two", name: "Two" }),
+      ] }));
+      await discovery.promise;
+    });
+    await untilBrowser(() => host.querySelector(".remote-root-placeholder") === null);
+
+    const settledSection = host.querySelector<HTMLElement>(".remote-libraries")!;
+    expect(host.firstElementChild).toBe(settledSection);
+    expect(settledSection.getAttribute("aria-busy")).toBeNull();
+    expect(settledSection.querySelectorAll(".browse-item.library:not(.remote-root-placeholder)")).toHaveLength(2);
+    expect(settledSection.textContent).toContain("One");
+    expect(settledSection.textContent).toContain("Two");
+    expect(onRootPresenceChange.mock.calls.map(([present]) => present)).not.toContain(false);
+  });
+
+  it("falls back to the bare discovery error when nothing about the roots is known", async () => {
+    localStorage.setItem("remote-roots:alice", "2");
+    remoteLibrariesReply = () => Promise.resolve(json({ error: "offline" }, 500));
+    const onRootPresenceChange = vi.fn();
+
+    await render({ accountScope: "alice", onRootPresenceChange });
+    await untilBrowser(() => host.querySelector(".remote-error") !== null);
+
+    // An empty held block under the error would push the local folders down for nothing.
+    expect(host.querySelector(".remote-libraries")).toBeNull();
+    expect(host.querySelector(".remote-root-placeholder")).toBeNull();
+    expect(onRootPresenceChange).toHaveBeenLastCalledWith(false);
+
+    remoteLibrariesReply = () => Promise.resolve(json([]));
+    await click(host.querySelector<HTMLButtonElement>(".remote-error button")!);
+    expect(calls.libraries).toHaveLength(2);
+  });
+
+  it("reserves no remote space for an account without remembered roots", async () => {
+    const discovery = deferred<Response>();
+    remoteLibrariesReply = () => discovery.promise;
+    const onRootPresenceChange = vi.fn();
+
+    await render({ accountScope: "alice", onRootPresenceChange });
+
+    expect(host.querySelector(".remote-libraries")).toBeNull();
+    expect(onRootPresenceChange.mock.calls.map(([present]) => present)).not.toContain(true);
+
+    await act(async () => {
+      discovery.resolve(json({ libraries: [] }));
+      await discovery.promise;
+    });
+    await flush();
+    expect(localStorage.getItem("remote-roots:alice")).toBe("0");
+    expect(onRootPresenceChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("draws the remembered real roots immediately on a second mount", async () => {
+    const firstDiscovery = deferred<Response>();
+    remoteLibrariesReply = () => firstDiscovery.promise;
+    await render({ accountScope: "alice" });
+    await act(async () => {
+      firstDiscovery.resolve(json({ libraries: [
+        library({ id: "rlib_one", name: "First root" }),
+        library({ id: "rlib_two", name: "Second root" }),
+      ] }));
+      await firstDiscovery.promise;
+    });
+    await untilBrowser(() => host.textContent?.includes("First root") === true);
+
+    await act(async () => { root.render(null); });
+    const secondDiscovery = deferred<Response>();
+    remoteLibrariesReply = () => secondDiscovery.promise;
+    await render({ accountScope: "alice" });
+
+    expect(host.querySelector(".remote-root-placeholder")).toBeNull();
+    expect(host.querySelector(".remote-libraries")?.textContent).toContain("First root");
+    expect(host.querySelector(".remote-libraries")?.textContent).toContain("Second root");
+
+    await act(async () => {
+      secondDiscovery.resolve(json({ error: "offline" }, 500));
+      await secondDiscovery.promise;
+    });
+    await untilBrowser(() => host.querySelector(".remote-libraries .remote-error") !== null);
+    const section = host.querySelector<HTMLElement>(".remote-libraries")!;
+    expect(section.textContent).toContain("First root");
+    expect(section.textContent).toContain("Second root");
+    expect(section.querySelector(".browse-head")!.nextElementSibling).toBe(section.querySelector(".remote-error"));
+  });
+
+  it("never draws another account's remembered roots", async () => {
+    rememberRoots("alice", [library({ id: "rlib_alice", name: "Alice only" })]);
+    localStorage.setItem("remote-roots:bob", "1");
+    const discovery = deferred<Response>();
+    remoteLibrariesReply = () => discovery.promise;
+
+    await render({ accountScope: "bob" });
+
+    expect(host.querySelectorAll(".remote-root-placeholder")).toHaveLength(1);
+    expect(host.textContent).not.toContain("Alice only");
+
+    await act(async () => {
+      discovery.resolve(json({ libraries: [library({ id: "rlib_bob", name: "Bob only" })] }));
+      await discovery.promise;
+    });
+    await untilBrowser(() => host.textContent?.includes("Bob only") === true);
+    expect(host.textContent).not.toContain("Alice only");
+  });
+});
 
 describe("RemoteLibraryBrowser listing", () => {
   it("does not offer a child the library shape preference", async () => {

@@ -2933,3 +2933,26 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 @media(min-width:701px) and (min-height:501px){
   .section-filter>.shape-toggle,.search-filters .shape-toggle{width:35px;height:35px;min-height:35px;padding:0;justify-content:center}
 }
+
+/* Touch targets: on a phone or a coarse pointer a control a miss would turn into another action gets 44 px. */
+@media(max-width:700px),(pointer:coarse){
+  .addon-card .addon-order{gap:8px}
+  .addon-order button{display:inline-flex;align-items:center;justify-content:center;width:44px;min-width:44px;height:44px;min-height:44px;padding:0}
+  .addon-order svg{width:16px;height:16px}
+  .queue-actions .queue-priority,.queue-block-list .queue-actions .queue-priority{min-width:44px;min-height:44px}
+  .queue-actions .queue-priority+.queue-priority{margin-left:4px}
+  .queue-history-toggle{min-height:44px}
+  .home-catalog-link{min-height:44px;padding-right:8px}
+  .notice:has(>.link-button){display:flex;flex-wrap:wrap;align-items:center;column-gap:6px}
+  .notice>.link-button{display:inline-flex;align-items:center;min-height:44px;margin:-10px -4px -10px auto;padding:0 10px}
+}
+.stats-stale{opacity:.5;transition:opacity .15s}
+.stats-body{display:flex;flex-direction:column;gap:inherit}
+/* Held places for the remote roots the account had last time, until discovery answers. */
+.remote-root-placeholder .library-open{cursor:default}
+.remote-root-placeholder .library-open:disabled{opacity:1}
+.remote-root-placeholder .browse-art{background:var(--panel2)}
+.remote-root-placeholder .library-copy :is(strong,small){display:block;width:70%;border-radius:4px;background:#ffffff0d;color:transparent}
+.remote-root-placeholder .library-copy small{width:45%;margin-top:4px}
+@media(prefers-reduced-motion:no-preference){.remote-root-placeholder .browse-art{animation:remote-root-pulse 1.4s ease-in-out infinite}}
+@keyframes remote-root-pulse{50%{opacity:.55}}

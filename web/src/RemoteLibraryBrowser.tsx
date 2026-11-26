@@ -27,6 +27,8 @@ import type { CatalogueDetailTarget } from "./CatalogueTitleDetail";
 import { seriesEntry } from "./resume-target";
 import { remoteDetailArtwork } from "./remote-artwork";
 import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
+import { rememberedRootCount, rememberedRoots, rememberRoots } from "./remote-roots-memory";
+import { RemoteRootsPlaceholder } from "./RemoteRootsPlaceholder";
 import { pickTileArt } from "./tile-shape";
 import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
@@ -259,7 +261,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // picture that shape draws, so the other role is fetched when a tile actually asks for it.
   const tileShape = useRef(libraryTileShape);
   tileShape.current = libraryTileShape;
-  const [libraries, setLibraries] = useState<RemoteLibrary[] | null>(null);
+  const [libraries, setLibraries] = useState<RemoteLibrary[] | null>(() => rememberedRoots(accountScope));
+  const [placeholders] = useState(() => rememberedRoots(accountScope) ? 0 : rememberedRootCount(accountScope));
+  const onRootPresenceChangeRef = useRef(onRootPresenceChange);
+  onRootPresenceChangeRef.current = onRootPresenceChange;
   const [librariesError, setLibrariesError] = useState("");
   const [selected, setSelected] = useState<RemoteLibrary | null>(null);
   const [stack, setStack] = useState<RemoteItem[]>([]);
@@ -525,19 +530,23 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     try {
       const rows = await api.remoteLibraries({ signal: controller.signal });
       if (epoch !== librariesEpoch.current || controller.signal.aborted) return;
-      setLibraries([...rows].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id)));
+      const ordered = [...rows].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+      setLibraries(ordered);
+      rememberRoots(accountScope, ordered);
     } catch (error) {
       if (epoch !== librariesEpoch.current || controller.signal.aborted || aborted(error)) return;
       setLibrariesError(describeError(error));
     }
   };
   useEffect(() => { void loadLibraries(); }, []);
+  // Remembered roots hold their place until discovery answers; a failure with nothing known
+  // falls back to the bare error, as an account that never had roots sees it.
+  const holding = libraries === null && placeholders > 0 && !librariesError;
+  const remoteRootsPresent = !selected && !hideRoots && Boolean(libraries?.length || holding);
   useEffect(() => {
-    // The roots are what the page actually draws: a selected library and a hidden root block both
-    // leave the local panel on the ordinary, self-scrolling layout.
-    onRootPresenceChange?.(Boolean(libraries?.length) && !selected && !hideRoots);
-    return () => onRootPresenceChange?.(false);
-  }, [Boolean(libraries?.length), Boolean(selected), hideRoots, onRootPresenceChange]);
+    onRootPresenceChange?.(remoteRootsPresent);
+  }, [remoteRootsPresent, onRootPresenceChange]);
+  useEffect(() => () => onRootPresenceChangeRef.current?.(false), []);
   useEffect(() => {
     const wanted = selected ? pendingFocus.current : pendingRootFocus.current;
     const container = selected ? scrollRef.current : rootRef.current;
@@ -1397,7 +1406,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     return () => controller.abort();
   }, [playing?.stream.sourceId, playingIdentityKey]);
 
-  if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
+  if (!librariesError && !targetError && !libraries?.length && !holding) return null;
 
   const shuffleActive = Boolean(
     shuffleRun
@@ -1919,8 +1928,17 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (element.scrollHeight - element.scrollTop - element.clientHeight <= Math.min(400, element.clientHeight || toCssPx(window.innerHeight) || 800)) autoLoadRef.current();
   };
 
+  const rootsVisible = !selected && !hideRoots && Boolean(libraries?.length || holding);
+  const placeholdersVisible = holding;
+  const librariesAlert = librariesError ? <div className="remote-error" role="alert">
+    <span>{t("mediaServer.loadFailed")} {librariesError}</span>
+    <button type="button" onClick={() => void loadLibraries()}>{t("mediaServer.retry")}</button>
+  </div> : null;
+
   return <>
-    {!selected && !hideRoots && libraries && libraries.length > 0 && <section className="panel browse-panel remote-libraries" ref={rootRef} aria-label={t("mediaServer.remoteTitle")}>
+    {rootsVisible && (placeholdersVisible
+      ? <RemoteRootsPlaceholder count={placeholders}/>
+      : libraries && <section className="panel browse-panel remote-libraries" ref={rootRef} aria-label={t("mediaServer.remoteTitle")}>
       {/* The remote roots are the same panel the local listing is, so the two blocks share their
           heading, borders and grid padding; only the label says which is which. */}
       <div className="browse-head">
@@ -1930,6 +1948,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           </nav>
         </div>
       </div>
+      {librariesAlert}
       <div className="browse-scroll">
         <div className="browse-grid">
           {libraries.map((library) => {
@@ -1947,11 +1966,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           })}
         </div>
       </div>
-    </section>}
-    {librariesError && <div className="remote-error" role="alert">
-      <span>{t("mediaServer.loadFailed")} {librariesError}</span>
-      <button type="button" onClick={() => void loadLibraries()}>{t("mediaServer.retry")}</button>
-    </div>}
+    </section>)}
+    {!rootsVisible && librariesAlert}
     {targetError && <div className="remote-error" role="alert">
       <span>{targetError}</span>
       <button type="button" onClick={() => setTargetAttempt((value) => value + 1)}>{t("mediaServer.retry")}</button>

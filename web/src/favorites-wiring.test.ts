@@ -28,7 +28,7 @@ describe("one Favourites section in the shell", () => {
   });
 
   it("re-reads the Favourites list when the player closes", () => {
-    expect(app).toContain('if (view === "favorites") void loadFavorites(favoritesFilter, 0);');
+    expect(app).toContain('if (view === "favorites") void favoritesList.refresh();');
   });
 
   it("removed the catalogue's My list picker row", () => {

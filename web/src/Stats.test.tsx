@@ -3,7 +3,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { StatsPanel } from "./Stats";
 import type { StatsBucket, StatsBucketHost, StatsSummary } from "./types";
-import { setLocale } from "./i18n";
+import { localeTag, setLocale } from "./i18n";
+import { en } from "./i18n/en";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -212,4 +213,117 @@ it("labels a day bar with the server's day, whatever the viewer's time zone", as
   } finally {
     delete process.env.TZ;
   }
+});
+
+const lead = () => hostElement.querySelector(".stats-head p")!;
+const periodButton = (label: string) =>
+  [...hostElement.querySelectorAll<HTMLButtonElement>(".stats-periods button")].find((button) => button.textContent === label)!;
+const statsRequests = () => fetchMock.mock.calls.filter(([input]) => {
+  const url = String(input);
+  return url.includes("/api/stats") && !url.includes("/api/stats/activity") && !url.includes("/api/stats/streams");
+});
+const emptyActivity = { items: [], users: [], total: 0 };
+const reply = (input: RequestInfo | URL, summary: StatsSummary) => {
+  const url = String(input);
+  if (url.includes("/api/stats/activity")) return Promise.resolve(json(emptyActivity));
+  if (url.includes("/api/stats/streams")) return Promise.resolve(json([]));
+  return Promise.resolve(json(summary));
+};
+
+it("does not show the empty lead while the first summary is loading, then shows the date", async () => {
+  let release: ((value: Response) => void) | undefined;
+  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/stats/activity")) return Promise.resolve(json(emptyActivity));
+    if (url.includes("/api/stats/streams")) return Promise.resolve(json([]));
+    return new Promise<Response>((resolve) => { release = resolve; });
+  });
+  await act(async () => { root.render(<StatsPanel onError={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+  expect(lead().textContent).not.toContain(en["stats.leadEmpty"]);
+  expect(hostElement.textContent).not.toContain(en["stats.leadEmpty"]);
+
+  const since = "2026-01-15T00:00:00.000Z";
+  await act(async () => { release!(json({ ...data, since })); });
+  expect(lead().textContent).toContain(new Date(since).toLocaleDateString(localeTag()));
+  expect(hostElement.textContent).not.toContain(en["stats.leadEmpty"]);
+});
+
+it("shows the empty lead when a summary has no since", async () => {
+  await render();
+  expect(lead().textContent).toContain(en["stats.leadEmpty"]);
+});
+
+it("does not show the empty lead when the first request fails", async () => {
+  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/stats/activity")) return Promise.resolve(json(emptyActivity));
+    if (url.includes("/api/stats/streams")) return Promise.resolve(json([]));
+    return Promise.resolve(json({ error: "fail" }, 500));
+  });
+  await act(async () => { root.render(<StatsPanel onError={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+  expect(lead().textContent).not.toContain(en["stats.leadEmpty"]);
+  expect(hostElement.textContent).toContain(en["stats.loadFailed"]);
+});
+
+it("keeps the previous summary stale while another period loads, and reverts on failure", async () => {
+  const month: StatsSummary = { ...data, since: "2026-01-01T00:00:00.000Z", sources: [bucket("download", 30 * GB)] };
+  const onError = vi.fn();
+  let pending: { resolve: (value: Response) => void; reject: (error: Error) => void } | undefined;
+  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/stats/activity")) return Promise.resolve(json(emptyActivity));
+    if (url.includes("/api/stats/streams")) return Promise.resolve(json([]));
+    if (url.includes("hours=168") && !url.includes("/activity") && !url.includes("/streams")) {
+      return new Promise<Response>((resolve, reject) => { pending = { resolve, reject }; });
+    }
+    return Promise.resolve(json(month));
+  });
+  await act(async () => { root.render(<StatsPanel onError={onError}/>); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+  expect(periodButton("30 days").getAttribute("aria-pressed")).toBe("true");
+  const before = statsRequests().length;
+
+  await act(async () => { periodButton("7 days").click(); });
+  const stale = hostElement.querySelector(".stats-stale")!;
+  expect(stale).toBeTruthy();
+  expect(stale.getAttribute("aria-busy")).toBe("true");
+  expect(periodButton("7 days").getAttribute("aria-pressed")).toBe("true");
+  expect(hostElement.textContent).toContain("30.0 GB");
+
+  await act(async () => { pending!.resolve(json({ error: "fail" }, 500)); });
+  expect(onError).toHaveBeenCalledTimes(1);
+  expect(periodButton("30 days").getAttribute("aria-pressed")).toBe("true");
+  expect(hostElement.querySelector(".stats-stale")).toBeNull();
+  expect(statsRequests()).toHaveLength(before + 1);
+  // The history follows the period on screen, so neither the pending nor the reverted tab asks for it again.
+  const activity = fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("/api/stats/activity"));
+  expect(activity.every((url) => url.includes("hours=720"))).toBe(true);
+  expect(activity).toHaveLength(1);
+});
+
+it("shows the new period once its summary arrives", async () => {
+  const month: StatsSummary = { ...data, since: "2026-01-01T00:00:00.000Z", sources: [bucket("download", 30 * GB)] };
+  const week: StatsSummary = { ...data, since: "2026-09-01T00:00:00.000Z", sources: [bucket("download", 7 * GB)] };
+  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("hours=168") && !url.includes("/activity") && !url.includes("/streams")) return reply(input, week);
+    return reply(input, month);
+  });
+  await act(async () => { root.render(<StatsPanel onError={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+
+  await act(async () => { periodButton("7 days").click(); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+
+  expect(periodButton("7 days").getAttribute("aria-pressed")).toBe("true");
+  expect(hostElement.querySelector(".stats-stale")).toBeNull();
+  expect(lead().textContent).toContain(new Date(week.since!).toLocaleDateString(localeTag()));
+  expect(hostElement.textContent).toContain("7.0 GB");
+  expect(hostElement.textContent).not.toContain("30.0 GB");
 });
