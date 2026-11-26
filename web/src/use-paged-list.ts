@@ -69,6 +69,22 @@ export function usePagedList<T, F>(options: {
     if (!activeRef.current) return Promise.resolve();
     const generation = ++generationRef.current;
     loadMoreGenerationRef.current = null;
+    const shown = storedRef.current;
+    // A refresh re-reads as many cards as are on screen, so removing one does not cut the list
+    // back to its first page and throw the reader's scroll position away.
+    const target = keepItems && Object.is(shown.filter, wantedFilter) ? shown.items.length : 0;
+    const read = async (): Promise<Page<T>> => {
+      const first = await fetchPageRef.current(wantedFilter, 0);
+      const items = [...first.items];
+      let total = first.total;
+      while (items.length < target && items.length < total && generation === generationRef.current) {
+        const next = await fetchPageRef.current(wantedFilter, items.length);
+        if (!next.items.length) break;
+        items.push(...next.items);
+        total = next.total;
+      }
+      return { items, total };
+    };
     setStored((current) => ({
       filter: wantedFilter,
       items: keepItems && Object.is(current.filter, wantedFilter) ? current.items : [],
@@ -77,7 +93,7 @@ export function usePagedList<T, F>(options: {
       loadingMore: false,
       active: true,
     }));
-    return fetchPageRef.current(wantedFilter, 0).then(
+    return read().then(
       (page) => {
         if (!mountedRef.current || generation !== generationRef.current) return;
         setStored((current) => {

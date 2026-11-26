@@ -278,6 +278,15 @@ test.describe("layout invariants", () => {
       const [first, ...rest] = await response.json();
       return route.fulfill({ response, json: [first, { ...first, key: "e2e-second", manifest: { ...first.manifest, id: "e2e.second", name: "Second" } }, ...rest] });
     });
+    // Two paused copies of the finished job give the queue its order arrows.
+    await page.route("**/api/downloads", async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const response = await route.fetch();
+      const snapshot = await response.json();
+      const [job] = snapshot.jobs;
+      const paused = [0, 1].map((order) => ({ ...job, id: `e2e-paused-${order}`, title: `Paused ${order}`, status: "paused", order, completedAt: undefined }));
+      return route.fulfill({ response, json: { ...snapshot, jobs: [...paused, ...snapshot.jobs] } });
+    });
     await page.goto("/");
     test.skip(!(await page.evaluate(() => matchMedia("(max-width:700px),(pointer:coarse)").matches)), "only narrow or touch layouts");
     const minimum = 44;
@@ -300,6 +309,8 @@ test.describe("layout invariants", () => {
     const toggle = page.locator(".queue-history-toggle").first();
     await expect(toggle).toBeVisible();
     expect((await measure(".queue-history-toggle")).filter((entry) => entry.small), "finished downloads disclosure").toEqual([]);
+    await expect(page.locator(".queue-priority").first()).toBeVisible();
+    expect((await measure(".queue-priority")).filter((entry) => entry.small), "download queue order arrows").toEqual([]);
 
     await goToView(page, "Domů");
     const shelf = page.locator(".home-catalog-link").first();

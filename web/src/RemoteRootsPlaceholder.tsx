@@ -4,7 +4,7 @@ import { t, useI18n } from "./i18n";
 
 export function RemoteRootsPlaceholder({ count, children }: { count: number; children?: ReactNode }) {
   useI18n();
-  return <section className="panel browse-panel remote-libraries" aria-label={t("mediaServer.remoteTitle")} aria-busy="true">
+  return <section className="panel browse-panel remote-libraries" aria-label={t("mediaServer.remoteTitle")} aria-busy={count > 0 ? true : undefined}>
     <div className="browse-head">
       <div className="browse-bar">
         <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
@@ -13,7 +13,7 @@ export function RemoteRootsPlaceholder({ count, children }: { count: number; chi
       </div>
     </div>
     {children}
-    <div className="browse-scroll">
+    {count > 0 && <div className="browse-scroll">
       <div className="browse-grid">
         {Array.from({ length: count }, (_, index) => <article key={index} className="browse-item library remote-root-placeholder" aria-hidden="true">
           <button className="library-open" disabled>
@@ -23,6 +23,6 @@ export function RemoteRootsPlaceholder({ count, children }: { count: number; chi
           </button>
         </article>)}
       </div>
-    </div>
+    </div>}
   </section>;
 }

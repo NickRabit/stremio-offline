@@ -362,7 +362,7 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const rememberedLibraryRootCount = view === "library" ? rememberedRootCount(session?.username ?? "") : 0;
+  const rememberedLibraryRootCount = useMemo(() => view === "library" ? rememberedRootCount(session?.username ?? "") : 0, [view, session?.username]);
   const remoteRootsFallback = rememberedLibraryRootCount > 0 ? <RemoteRootsPlaceholder count={rememberedLibraryRootCount}/> : null;
   useLayoutEffect(() => {
     if (view === "library") setRemoteRootsPresent(rememberedLibraryRootCount > 0);

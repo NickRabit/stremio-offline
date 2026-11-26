@@ -45,9 +45,17 @@ export function useRovingTabs<K extends string>(
     nodes.current.get(next)?.focus();
   }, []);
 
-  const refFor = useCallback((id: K) => (node: HTMLElement | null) => {
-    if (node) nodes.current.set(id, node);
-    else nodes.current.delete(id);
+  const refs = useRef(new Map<K, (node: HTMLElement | null) => void>());
+  const refFor = useCallback((id: K) => {
+    let ref = refs.current.get(id);
+    if (!ref) {
+      ref = (node: HTMLElement | null) => {
+        if (node) nodes.current.set(id, node);
+        else nodes.current.delete(id);
+      };
+      refs.current.set(id, ref);
+    }
+    return ref;
   }, []);
 
   const active = ids.includes(selected) ? selected : ids[0];

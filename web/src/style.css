@@ -2939,7 +2939,7 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
   .addon-card .addon-order{gap:8px}
   .addon-order button{display:inline-flex;align-items:center;justify-content:center;width:44px;min-width:44px;height:44px;min-height:44px;padding:0}
   .addon-order svg{width:16px;height:16px}
-  .queue-actions .queue-priority{min-width:44px;min-height:44px}
+  .queue-actions .queue-priority,.queue-block-list .queue-actions .queue-priority{min-width:44px;min-height:44px}
   .queue-actions .queue-priority+.queue-priority{margin-left:4px}
   .queue-history-toggle{min-height:44px}
   .home-catalog-link{min-height:44px;padding-right:8px}

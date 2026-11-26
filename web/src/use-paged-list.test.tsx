@@ -169,6 +169,21 @@ describe("usePagedList", () => {
     expect(current.busy).toBe(false);
   });
 
+  it("re-reads as many cards as are shown when the same filter refreshes", async () => {
+    await mount();
+    await answer("A", 0, { items: ["a1", "a2"], total: 4 });
+    await act(async () => { void current.loadMore(); });
+    await answer("A", 2, { items: ["a3", "a4"], total: 4 });
+
+    await act(async () => { void current.refresh(); });
+    await answer("A", 0, { items: ["a1", "a3"], total: 3 });
+    expect(current.items).toEqual(["a1", "a2", "a3", "a4"]);
+    await answer("A", 2, { items: ["a4"], total: 3 });
+    expect(current.items).toEqual(["a1", "a3", "a4"]);
+    expect(current.total).toBe(3);
+    expect(current.busy).toBe(false);
+  });
+
   it("ignores a late failure from a superseded request", async () => {
     await mount();
     await setFilter("B");

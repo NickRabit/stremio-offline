@@ -1934,7 +1934,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
 
   return <>
     {rootsVisible && (placeholdersVisible
-      ? <RemoteRootsPlaceholder count={placeholders}>{librariesAlert}</RemoteRootsPlaceholder>
+      ? <RemoteRootsPlaceholder count={librariesError ? 0 : placeholders}>{librariesAlert}</RemoteRootsPlaceholder>
       : libraries && <section className="panel browse-panel remote-libraries" ref={rootRef} aria-label={t("mediaServer.remoteTitle")}>
       {/* The remote roots are the same panel the local listing is, so the two blocks share their
           heading, borders and grid padding; only the label says which is which. */}

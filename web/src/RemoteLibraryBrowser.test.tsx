@@ -325,7 +325,7 @@ describe("RemoteLibraryBrowser remembered roots", () => {
     expect(onRootPresenceChange.mock.calls.map(([present]) => present)).not.toContain(false);
   });
 
-  it("keeps placeholders and puts a discovery failure inside the held section", async () => {
+  it("drops the placeholders on a discovery failure and shows it inside the roots block", async () => {
     localStorage.setItem("remote-roots:alice", "2");
     remoteLibrariesReply = () => Promise.resolve(json({ error: "offline" }, 500));
     const onRootPresenceChange = vi.fn();
@@ -335,8 +335,9 @@ describe("RemoteLibraryBrowser remembered roots", () => {
 
     const section = host.querySelector<HTMLElement>(".remote-libraries")!;
     const alert = section.querySelector(".remote-error")!;
-    expect(section.querySelectorAll(".remote-root-placeholder")).toHaveLength(2);
-    expect(section.getAttribute("aria-busy")).toBe("true");
+    // Skeleton rows under an error would push the local folders down for nothing.
+    expect(section.querySelectorAll(".remote-root-placeholder")).toHaveLength(0);
+    expect(section.hasAttribute("aria-busy")).toBe(false);
     expect(section.querySelector(".browse-head")!.nextElementSibling).toBe(alert);
     expect(onRootPresenceChange).toHaveBeenCalledWith(true);
 

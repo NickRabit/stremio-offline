@@ -299,6 +299,10 @@ it("keeps the previous summary stale while another period loads, and reverts on 
   expect(periodButton("30 days").getAttribute("aria-pressed")).toBe("true");
   expect(hostElement.querySelector(".stats-stale")).toBeNull();
   expect(statsRequests()).toHaveLength(before + 1);
+  // The history follows the period on screen, so neither the pending nor the reverted tab asks for it again.
+  const activity = fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("/api/stats/activity"));
+  expect(activity.every((url) => url.includes("hours=720"))).toBe(true);
+  expect(activity).toHaveLength(1);
 });
 
 it("shows the new period once its summary arrives", async () => {

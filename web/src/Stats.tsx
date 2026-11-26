@@ -425,7 +425,7 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
           : <p className="stats-empty">{t("stats.noTraffic")}</p>}
       </section>
 
-      <ActivityHistory key={hours} hours={hours} onError={onError}/>
+      <ActivityHistory key={displayed!.hours} hours={displayed!.hours} onError={onError}/>
 
       <p className="stats-hint">{t("stats.hint")}</p>
 
