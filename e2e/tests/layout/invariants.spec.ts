@@ -270,6 +270,44 @@ test.describe("layout invariants", () => {
     expect(tooSmall, "controls below the 24px minimum on a touch screen").toEqual([]);
   });
 
+  // Where a miss runs the neighbouring action (the other priority arrow) or a tiny strip is the
+  // only way in (a shelf heading, the finished-downloads disclosure), touch layouts give 44px.
+  test("controls a miss would turn into another action get 44px on touch layouts", async ({ page }) => {
+    await page.route("**/api/addons", async (route) => {
+      const response = await route.fetch();
+      const [first, ...rest] = await response.json();
+      return route.fulfill({ response, json: [first, { ...first, key: "e2e-second", manifest: { ...first.manifest, id: "e2e.second", name: "Second" } }, ...rest] });
+    });
+    await page.goto("/");
+    test.skip(!(await page.evaluate(() => matchMedia("(max-width:700px),(pointer:coarse)").matches)), "only narrow or touch layouts");
+    const minimum = 44;
+    const measure = (selector: string) => page.evaluate(([css, size]) =>
+      [...document.querySelectorAll<HTMLElement>(css)]
+        .map((element) => ({ element, box: element.getBoundingClientRect() }))
+        .filter(({ box }) => box.width > 0 && box.height > 0)
+        .map(({ element, box }) => ({ label: element.getAttribute("aria-label") || element.textContent?.trim().slice(0, 20) || element.tagName, box: { x: box.x, y: box.y, width: box.width, height: box.height }, small: box.width < size || box.height < size })),
+    [selector, minimum] as const);
+
+    await goToView(page, "Doplňky");
+    await expect(page.locator(".addon-order button").first()).toBeVisible();
+    const arrows = await measure(".addon-card .addon-order button");
+    expect(arrows.length, "two addons show their priority arrows").toBeGreaterThanOrEqual(2);
+    expect(arrows.filter((arrow) => arrow.small), "addon priority arrows").toEqual([]);
+    const [up, down] = arrows;
+    expect(up!.box.x + up!.box.width, "the two arrows overlap").toBeLessThanOrEqual(down!.box.x + 0.5);
+
+    await goToView(page, "Stahování");
+    const toggle = page.locator(".queue-history-toggle").first();
+    await expect(toggle).toBeVisible();
+    expect((await measure(".queue-history-toggle")).filter((entry) => entry.small), "finished downloads disclosure").toEqual([]);
+
+    await goToView(page, "Domů");
+    const shelf = page.locator(".home-catalog-link").first();
+    if (await shelf.isVisible().catch(() => false)) {
+      expect((await measure(".home-catalog-link")).filter((entry) => entry.box.height < minimum), "Home shelf headings").toEqual([]);
+    }
+  });
+
   // Both dialogs keep their removal buttons behind a disclosure whose buttons do not
   // wrap, so a container narrower than they are pushes them straight off the card.
   // It guards the width, not the clipping that a scrolling dialog body can also cause:
