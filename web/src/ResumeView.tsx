@@ -1,5 +1,6 @@
 import { History } from "lucide-react";
 import { Empty, ShapeToggle } from "./app-chrome";
+import { FilterTabs } from "./FilterTabs";
 import { HomeCard, type HomeCardActions } from "./HomeCard";
 import { t } from "./i18n";
 import type { ResumeCard, ResumeFilter, TileShape } from "./types";
@@ -36,9 +37,8 @@ export function ResumeView({ filter, onFilter, items, busy, shape, onToggleShape
   return <div className="section-view">
     <div className="heading"><small>{t("home.eyebrow")}</small><h2>{t("resume.title")}</h2></div>
     <div className="filterbar section-filter">
-      <div className="library-shelf-segments" role="radiogroup" aria-label={t("resume.title")}>
-        {FILTERS.map((entry) => <button key={entry.value} type="button" className={filter === entry.value ? "active" : ""} aria-pressed={filter === entry.value} onClick={() => onFilter(entry.value)}>{t(entry.label)}</button>)}
-      </div>
+      <FilterTabs label={t("resume.title")} value={filter} onChange={onFilter}
+        tabs={FILTERS.map((entry) => ({ value: entry.value, label: t(entry.label) }))}/>
       <ShapeToggle shape={shape} onToggle={onToggleShape}/>
     </div>
     {busy && !items.length

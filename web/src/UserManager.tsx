@@ -399,7 +399,7 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
         <h2>{creating ? t("users.addAccount") : account.username}</h2>
         <button type="button" className="icon-button" aria-label={t("common.close")} disabled={busy} onClick={onClose}><X/></button>
       </div>
-      {tabs.length > 1 && <div className="user-edit-tabs" role="tablist" aria-label={t("users.editAccount")}>
+      {tabs.length > 1 && <div className="filter-tabs user-edit-tabs" role="tablist" aria-label={t("users.editAccount")}>
         {tabs.map(({ id, label, count }) =>
           <button key={id} type="button" role="tab" id={`user-tab-${id}`} aria-controls={`user-pane-${id}`}
             aria-selected={tab === id} className={tab === id ? "active" : undefined} onClick={() => setTab(id)}>

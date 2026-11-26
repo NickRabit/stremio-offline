@@ -94,6 +94,7 @@ import type { Addon, Avatar, BuildInfo, BrowseItem, BrowseLibrary, DeviceTransfe
 import type { DownloadDrainView, DownloadWindowState } from "../../server/src/api-types";
 import { AddonLogo } from "./AddonLogo";
 import { CatalogFilters, consumePickerFocusReturn } from "./CatalogFilters";
+import { FilterTabs } from "./FilterTabs";
 import { catalogTypeTag } from "./catalog-labels";
 import { ScopePicker } from "./ScopePicker";
 import {
@@ -3923,19 +3924,15 @@ export function App() {
           <div className="filter-slot"><div className="filterbar">
             {submittedQuery
               ? <>
-                  <span className="scope-badge">{t("catalog.searchedCatalogs", { count: sourceCount })} {scopedCatalog ? t("catalog.inCatalog", { addon: scopedCatalog.addonName, catalog: scopedCatalog.name }) : searchScope.addonKey ? t("catalog.inAddon", { addon: searchable.find((item) => item.addonKey === searchScope.addonKey)?.addonName ?? "" }) : t("catalog.inAllAddons")}</span>
-                  <div className="results-filter" role="group" aria-label={t("catalog.resultsFilter")}>
-                    <span>{t("catalog.resultsFilter")}</span>
-                    {[
+                  <FilterTabs className="catalog-type-switch results-filter" label={t("catalog.resultsFilter")}
+                    value={searchScope.catalogType || typeFilter} onChange={setTypeFilter}
+                    tabs={[
                       { value: "", label: t("common.all") },
                       { value: "movie", label: t("catalog.movies") },
                       { value: "series", label: t("catalog.series") },
-                    ].map((item) => <button key={item.value} type="button"
-                      aria-pressed={searchScope.catalogType ? searchScope.catalogType === item.value : typeFilter === item.value}
-                      disabled={Boolean(searchScope.catalogType) && searchScope.catalogType !== item.value}
-                      onClick={() => setTypeFilter(item.value)}>{item.label}</button>)}
-                    {searchScope.catalogType && <small>{t("catalog.typeLocked")}</small>}
-                  </div>
+                    ].map((tab) => ({ ...tab, disabled: Boolean(searchScope.catalogType) && searchScope.catalogType !== tab.value }))}/>
+                  <span className="scope-badge">{t("catalog.searchedCatalogs", { count: sourceCount })} {scopedCatalog ? t("catalog.inCatalog", { addon: scopedCatalog.addonName, catalog: scopedCatalog.name }) : searchScope.addonKey ? t("catalog.inAddon", { addon: searchable.find((item) => item.addonKey === searchScope.addonKey)?.addonName ?? "" }) : t("catalog.inAllAddons")}</span>
+                  {searchScope.catalogType && <small className="filter-note">{t("catalog.typeLocked")}</small>}
                 </>
               : currentCatalog && <CatalogFilters catalogs={catalogs} current={currentCatalog} genre={genre}
                 prefs={views.catalog} logos={logos} compact={catalogCompact} sortLabel={sortLabel}

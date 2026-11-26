@@ -18,6 +18,7 @@ import {
 import { catalogTypeTag } from "./catalog-labels";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
+import { FilterTabs } from "./FilterTabs";
 import { t, useI18n } from "./i18n";
 import { PickerDialog, type PickerOption } from "./PickerDialog";
 
@@ -109,12 +110,8 @@ export function CatalogPicker({ catalogs, current, prefs, logos, onPick, initial
   if (editing) return <CatalogPickerEdit catalogs={catalogs} prefs={prefs} onPrefs={onPrefs}
     onDone={() => setEditing(false)} onClose={onClose}/>;
 
-  const segments = <div className="library-shelf-segments picker-segments" role="group" aria-label={t("catalog.type")}>
-    {present.map((bucket) => {
-      return <button key={bucket} type="button" className={bucket === currentBucket ? "active" : undefined}
-        aria-pressed={bucket === currentBucket} onClick={() => setBucket(bucket)}>{bucketLabel(bucket)}</button>;
-    })}
-  </div>;
+  const segments = <FilterTabs className="picker-segments" label={t("catalog.type")} value={currentBucket} onChange={setBucket}
+    tabs={present.map((bucket) => ({ value: bucket, label: bucketLabel(bucket) }))}/>;
 
   return <PickerDialog label={t("catalog.pickerTitle")} subtitle={filtering ? `${t("catalog.results")} · ${count}` : t(currentBucket === "all" ? "catalog.pickerCountAll" : "catalog.pickerCount", { count })}
     searchPlaceholder={t("picker.searchCatalog")} query={query} onQuery={setQuery}
@@ -177,7 +174,7 @@ function CatalogPickerEdit({ catalogs, prefs, onPrefs, onDone, onClose }: {
       <div className="dialog-body picker-edit-body">
         <section className="picker-edit-section">
           <h3>{t("picker.recent")}</h3>
-          <div className="library-shelf-segments picker-segments" role="group" aria-label={t("picker.recent")}>
+          <div className="filter-tabs picker-segments" role="group" aria-label={t("picker.recent")}>
             {RECENT_COUNTS.map((count) => <button key={count} type="button" className={count === prefs.recentCount ? "active" : undefined}
               aria-pressed={count === prefs.recentCount} onClick={() => onPrefs({ recentCount: count })}>
               {count ? String(count) : t("picker.recentOff")}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ChevronLeft, Search } from "lucide-react";
 import { api, ApiError, describeError } from "./api";
 import { ShapeToggle } from "./app-chrome";
+import { FilterTabs } from "./FilterTabs";
 import { t, useI18n } from "./i18n";
 import { SearchTile } from "./SearchEverywhere";
 import { Heading, hideBroken } from "./settings-ui";
@@ -169,10 +170,8 @@ export function PersonView({ person, language, shape, initialScroll, fromTitle, 
       <div className="filterbar section-filter search-filters">
         <div className="search-filter-group">
           <span aria-hidden="true">{t("catalog.type")}</span>
-          <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
-            {KINDS.map(([value, key]) => <button key={value} type="button" className={kind === value ? "active" : ""} aria-pressed={kind === value}
-              onClick={() => setKind(value)}>{t(key)}</button>)}
-          </div>
+          <FilterTabs label={t("catalog.type")} value={kind} onChange={setKind}
+            tabs={KINDS.map(([value, key]) => ({ value, label: t(key) }))}/>
         </div>
         <ShapeToggle shape={shape} onToggle={onToggleShape}/>
       </div>

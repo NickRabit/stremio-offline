@@ -12,6 +12,11 @@ test("catalogue search controls fit every supported viewport", async ({ page }) 
   await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
   const results = page.getByRole("group", { name: "Ve výsledcích" });
   await expect(results.getByRole("button", { name: "Filmy" })).toBeDisabled();
+  await expect(page.getByText("typ určuje katalog", { exact: true })).toBeVisible();
+  const selected = results.getByRole("button", { name: "Seriály", pressed: true });
+  const selectedBox = (await selected.boundingBox())!;
+  const resultsBox = (await results.boundingBox())!;
+  expect(selectedBox.y + selectedBox.height).toBeLessThanOrEqual(resultsBox.y + resultsBox.height);
   const viewport = page.viewportSize()!;
   const scope = scopeTrigger(page);
   // A phone submits from its keyboard and keeps the row for results; wider screens keep the button.

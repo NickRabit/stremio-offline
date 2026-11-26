@@ -1,3 +1,6 @@
 /* A toast is transient feedback drawn over the page; whether one is up when the shot is taken
    depends on what the server finished just before, not on the layout under test. */
 .toast { visibility: hidden !important; }
+
+/* The fixture addon's generated key chooses a different initials colour on each installation. */
+.picker-addon-initials { background: #35617c !important; }
