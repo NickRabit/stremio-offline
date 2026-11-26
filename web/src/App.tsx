@@ -69,6 +69,7 @@ import { SearchEverywhere } from "./SearchEverywhere";
 import { PersonView } from "./PersonView";
 import { captureScroll, restoreScroll, snapshotScrollTop, type ScrollSnapshot } from "./scroll-snapshot";
 import { useSearchEverywhere } from "./useSearchEverywhere";
+import { usePagedList } from "./use-paged-list";
 import { useCatalogLoader } from "./use-catalog-loader";
 import { useLibraryBrowse } from "./use-library-browse";
 import { firstVisibleAnchor, useScrollMemory, type PlaybackAnchor } from "./use-scroll-memory";
@@ -90,7 +91,7 @@ import { toCssPx, useUiScale } from "./ui-scale";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
-import type { Addon, Avatar, BuildInfo, BrowseItem, BrowseLibrary, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, CatalogViewPrefs, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, Avatar, BuildInfo, BrowseItem, BrowseLibrary, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeFilter, SeriesBulkRequest, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, CatalogViewPrefs, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 import type { DownloadDrainView, DownloadWindowState } from "../../server/src/api-types";
 import { AddonLogo } from "./AddonLogo";
 import { CatalogFilters, consumePickerFocusReturn } from "./CatalogFilters";
@@ -379,16 +380,8 @@ export function App() {
   // first few frames. A failed answer reads as unrestricted, as it always has.
   const [buildKnown, setBuildKnown] = useState(false);
   const home = useHome({ active: view === "home" && buildKnown && !restricted, account: session?.username ?? null, admin: session?.role === "admin", playerOpen });
-  const [resumeCards, setResumeCards] = useState<ResumeCard[]>([]);
-  const [resumeCardsTotal, setResumeCardsTotal] = useState(0);
   const [resumeFilter, setResumeFilter] = useState<ResumeFilter>("all");
-  const [resumeBusy, setResumeBusy] = useState(false);
-  const [resumeLoadingMore, setResumeLoadingMore] = useState(false);
-  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
-  const [favoritesTotal, setFavoritesTotal] = useState(0);
   const [favoritesFilter, setFavoritesFilter] = useState<FavoriteFilter>("all");
-  const [favoritesBusy, setFavoritesBusy] = useState(false);
-  const [favoritesLoadingMore, setFavoritesLoadingMore] = useState(false);
   const [libraries, setLibraries] = useState<LibraryView[]>([]);
   const refreshLibraries = () => api.libraries().then(setLibraries).catch(() => undefined);
   const libraryIds = useMemo(() => libraries.map((library) => library.id), [libraries]);
@@ -656,15 +649,6 @@ export function App() {
     await openMeta({ id: entry.id, type: entry.type, name: entry.name, poster: entry.poster } as Meta);
   };
 
-  const loadFavorites = async (filter = favoritesFilter, skip = 0) => {
-    if (skip) setFavoritesLoadingMore(true); else setFavoritesBusy(true);
-    try {
-      const page = await api.favoritesList({ filter, skip, limit: 60 });
-      setFavorites((previous) => skip && previous.length ? [...previous, ...page.items] : page.items);
-      setFavoritesTotal(page.total);
-    } catch (error) { fail(error); }
-    finally { setFavoritesBusy(false); setFavoritesLoadingMore(false); }
-  };
   /** Takes one card off Favourites. A library card that folds in a catalogue star clears that
    *  star too, or the title would keep the card on the page. */
   const removeFavorite = async (item: FavoriteItem) => {
@@ -678,19 +662,9 @@ export function App() {
         await api.saveRemoteState(item.libraryId, item.itemId, { favorite: false });
       }
       setWatchlist(await api.watchlist());
-      await loadFavorites(favoritesFilter);
+      await favoritesList.refresh();
       notify(t("favorite.removed"));
     } catch (error) { fail(error); }
-  };
-  /** The one Continue watching list, the same first page Home draws, carried past its bound. */
-  const loadResume = async (filter = resumeFilter, skip = 0) => {
-    if (skip) setResumeLoadingMore(true); else setResumeBusy(true);
-    try {
-      const page = await api.resumeList({ filter, skip, limit: 60 });
-      setResumeCards((previous) => skip && previous.length ? [...previous, ...page.items] : page.items);
-      setResumeCardsTotal(page.total);
-    } catch (error) { fail(error); }
-    finally { setResumeBusy(false); setResumeLoadingMore(false); }
   };
   const openLocalSeriesAt = (
     seriesPath: string,
@@ -1066,6 +1040,18 @@ export function App() {
     // A failure with a reference stays long enough to copy the reference down.
     setError(describeError(value)); setTimeout(() => setError(""), value instanceof ApiError && value.reference ? 15000 : 6000);
   };
+  const favoritesList = usePagedList({
+    filter: favoritesFilter,
+    active: ready && view === "favorites",
+    fetchPage: (filter, skip) => api.favoritesList({ filter, skip, limit: 60 }),
+    onError: fail,
+  });
+  const resumeList = usePagedList({
+    filter: resumeFilter,
+    active: ready && view === "resume",
+    fetchPage: (filter, skip) => api.resumeList({ filter, skip, limit: 60 }),
+    onError: fail,
+  });
   const {
     browse, busy: browseBusy, load: loadBrowse, refresh: refreshBrowse, location: browseLocation,
   } = useLibraryBrowse({
@@ -1733,18 +1719,6 @@ export function App() {
       void loadFollows();
     }
   }, [ready, view]);
-  useEffect(() => {
-    if (!ready || view !== "favorites") return;
-    // The previous filter's cards and its own "load more" must not stay under the new one.
-    setFavorites([]); setFavoritesTotal(0);
-    void loadFavorites(favoritesFilter, 0);
-  }, [ready, view, favoritesFilter]);
-  useEffect(() => {
-    if (!ready || view !== "resume") return;
-    // The previous filter's cards and its own "load more" must not stay under the new one.
-    setResumeCards([]); setResumeCardsTotal(0);
-    void loadResume(resumeFilter, 0);
-  }, [ready, view, resumeFilter]);
   // The player's star writes the library favourite, which the view does not read: closing the
   // player re-reads the list, so a star removed there disappears from its card.
   const playerWasOpen = useRef(false);
@@ -1752,8 +1726,8 @@ export function App() {
     if (playerOpen) { playerWasOpen.current = true; return; }
     if (!playerWasOpen.current) return;
     playerWasOpen.current = false;
-    if (view === "favorites") void loadFavorites(favoritesFilter, 0);
-    if (view === "resume") void loadResume(resumeFilter, 0);
+    if (view === "favorites") void favoritesList.refresh();
+    if (view === "resume") void resumeList.refresh();
   }, [playerOpen]);
   // The follow of the title on screen. A slow answer for a title that is already gone is
   // dropped; a failure leaves the chip in the not-followed state and never blocks the detail.
@@ -3614,13 +3588,13 @@ export function App() {
       // won a merged group forgets the library files and catalogue rows behind it with it.
       void api.saveRemoteState(card.libraryId, card.itemId, { position: 0, duration: 0, final: true })
         .then(() => (card.forgetKeys?.length ? api.forgetManyProgress(card.forgetKeys) : Promise.resolve()))
-        .then(() => { void loadResume(resumeFilter, 0); home.refresh(["resume"]); refreshPersonal(); }, fail);
+        .then(() => { void resumeList.refresh(); home.refresh(["resume"]); refreshPersonal(); }, fail);
       return;
     }
     if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
     if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
     void api.forgetManyProgress(card.forgetKeys)
-      .then(() => { void loadResume(resumeFilter, 0); home.refresh(["resume"]); }, fail);
+      .then(() => { void resumeList.refresh(); home.refresh(["resume"]); }, fail);
   };
   const resumeActions: HomeCardActions = { play: homePlay, open: homeOpen, reveal: revealInLibrary, forget: forgetResume };
 
@@ -4327,18 +4301,18 @@ export function App() {
       {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={async () => { await refresh(); }} onNotify={notify} onError={fail}/>} 
       {view === "resume" && <ResumeView
         filter={resumeFilter} onFilter={setResumeFilter}
-        items={resumeCards} busy={resumeBusy} shape={settings.resumeTileShape} onToggleShape={() => void toggleShape("resumeTileShape")} actions={resumeActions}
-        hasMore={resumeCards.length < resumeCardsTotal} loadingMore={resumeLoadingMore}
-        onLoadMore={() => void loadResume(resumeFilter, resumeCards.length)}/>}
+        items={resumeList.items} busy={resumeList.busy} shape={settings.resumeTileShape} onToggleShape={() => void toggleShape("resumeTileShape")} actions={resumeActions}
+        hasMore={resumeList.hasMore} loadingMore={resumeList.loadingMore}
+        onLoadMore={() => void resumeList.loadMore()}/>}
       {view === "favorites" && <FavoritesView
         filter={favoritesFilter} onFilter={setFavoritesFilter}
-        items={favorites} busy={favoritesBusy} shape={settings.favoritesTileShape} onToggleShape={() => void toggleShape("favoritesTileShape")}
+        items={favoritesList.items} busy={favoritesList.busy} shape={settings.favoritesTileShape} onToggleShape={() => void toggleShape("favoritesTileShape")}
         onPlay={openFavorite} onOpenFolder={openFavorite} onOpenTitle={openFavoriteTitle}
         onOpenCatalog={(item: FavoriteCatalogItem) => openCatalogueDetail({ type: item.type, id: item.id, name: item.name, ...(item.poster ? { poster: item.poster } : {}) })}
         onOpenRemote={(item: FavoriteRemoteItem) => openRemoteCard(item)}
         onRemove={(item) => void removeFavorite(item)}
-        hasMore={favorites.length < favoritesTotal} loadingMore={favoritesLoadingMore}
-        onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>}
+        hasMore={favoritesList.hasMore} loadingMore={favoritesList.loadingMore}
+        onLoadMore={() => void favoritesList.loadMore()}/>}
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} queueWindow={queueWindow} speedLimitMbps={speedLimitMbps} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <LazyScreenBoundary><Suspense fallback={null}><StatsPanel.Screen key={statsReset} onError={fail}/></Suspense></LazyScreenBoundary>}
       {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} libraries={libraries} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
