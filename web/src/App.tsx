@@ -87,6 +87,8 @@ import { lazyScreen, LazyScreenBoundary } from "./lazy-screen";
 import { ViewBoundary } from "./view-boundary";
 import { rememberedStartView, rememberStartView, resolveStartView } from "./start-view";
 import { layoutKey, rememberedLayout, rememberLayout } from "./layout-memory";
+import { rememberedRootCount } from "./remote-roots-memory";
+import { RemoteRootsPlaceholder } from "./RemoteRootsPlaceholder";
 import { toCssPx, useUiScale } from "./ui-scale";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
@@ -360,6 +362,11 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const rememberedLibraryRootCount = view === "library" ? rememberedRootCount(session?.username ?? "") : 0;
+  const remoteRootsFallback = rememberedLibraryRootCount > 0 ? <RemoteRootsPlaceholder count={rememberedLibraryRootCount}/> : null;
+  useLayoutEffect(() => {
+    if (view === "library") setRemoteRootsPresent(rememberedLibraryRootCount > 0);
+  }, [view, session?.username, rememberedLibraryRootCount]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [switcherTarget, setSwitcherTarget] = useState<string | undefined>();
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
@@ -4024,7 +4031,7 @@ export function App() {
       {view === "library" && <section ref={libraryPageRef} hidden={catalogueDetail ? true : undefined} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
         <Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
-        <LazyScreenBoundary><Suspense fallback={null}><RemoteLibraryBrowser.Screen onRootPresenceChange={setRemoteRootsPresent} hideRoots={Boolean(browsePath) || Boolean(localDetail)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
+        <LazyScreenBoundary><Suspense fallback={remoteRootsFallback}><RemoteLibraryBrowser.Screen onRootPresenceChange={setRemoteRootsPresent} hideRoots={Boolean(browsePath) || Boolean(localDetail)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
           sourceProfiles={sourceProfiles} defaultSort={defaultStreamSort}
           libraryTileShape={settings.libraryTileShape} onToggleLibraryShape={() => void toggleShape("libraryTileShape")}
           views={views} onPersistPrefs={persistRemotePrefs}
