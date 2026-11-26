@@ -2343,8 +2343,7 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .search-filters{flex-wrap:wrap;align-items:center;gap:10px 22px;margin:0 0 14px}
 .search-filter-group{display:flex;align-items:center;gap:8px;min-width:0}
 .search-filter-group>span{font-size:10px;color:var(--muted);white-space:nowrap}
-.search-filters .library-shelf-segments{flex:0 1 auto}
-@media(min-width:701px) and (min-height:501px){.search-filters .library-shelf-segments button{min-height:31px;padding:0 12px;font-size:11px}}
+@media(min-width:701px) and (min-height:501px){.search-filters .filter-tabs button{height:35px;min-height:35px}}
 .search-filters .shape-toggle{margin-left:auto}
 .search-source-strip{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px 18px;margin-bottom:14px;padding:10px 13px;border:1px solid var(--line);border-radius:10px;background:#10151dcc}
 .search-source-summary{font-size:11px;color:var(--muted)}
@@ -2397,7 +2396,9 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
   .search-everywhere-form>.search-input,.search-everywhere-form>button:only-of-type{grid-column:1/-1}
   .search-filters .search-filter-group:first-child{flex:1 1 100%}
   .search-filters .search-filter-group+.search-filter-group{flex:1 1 0}
-  .search-filter-group .library-shelf-segments{flex:1 1 auto}
+  .search-filter-group .filter-tabs{flex:1 1 auto}
+  .search-filter-group>span{flex:0 0 52px}
+  .search-filter-group .filter-tabs button{flex:1 1 0;height:44px;min-height:44px;padding:0 6px}
   .search-source-strip{display:grid;gap:8px}
   .search-source-strip details{min-width:0;width:100%}
   .search-source-strip summary{text-align:left}
@@ -2735,9 +2736,10 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 }
 
 /* Catalogue toolbar: type, catalog, genre, result filter and scope controls. */
-.catalog-type-switch{display:inline-flex;align-items:stretch;min-width:0;padding:0;border-bottom:1px solid var(--line)}
-.catalog-type-switch button{min-width:0;height:34px;min-height:34px;padding:0 10px;border:0;border-radius:0;background:transparent;box-shadow:inset 0 -2px transparent;color:var(--muted);font-size:11px;white-space:nowrap}
-.catalog-type-switch button[aria-pressed="true"]{box-shadow:inset 0 -2px var(--accent);color:var(--text)}
+.filter-tabs{display:inline-flex;align-items:stretch;min-width:0;padding:0;border-bottom:1px solid var(--line)}
+.filter-tabs button{min-width:0;height:34px;min-height:34px;padding:0 10px;border:0;border-radius:0;background:transparent;box-shadow:inset 0 -2px transparent;color:var(--muted);font-size:11px;white-space:nowrap}
+.filter-tabs button[aria-pressed="true"]{box-shadow:inset 0 -2px var(--accent);color:var(--text)}
+.filter-tabs button:not(:disabled):hover{color:var(--text)}
 .catalog-trigger{min-width:0;height:34px;min-height:34px;padding:4px 9px;justify-content:flex-start;text-align:left}
 .catalog-trigger-copy{display:grid;min-width:0;line-height:1.15}
 .catalog-trigger-copy strong,.catalog-trigger-copy small{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2749,11 +2751,6 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .genre-trigger>small{font-size:9px;font-weight:500}
 .genre-trigger.active{border-color:#ff5b385e;box-shadow:inset 0 -2px var(--accent)}
 .genre-trigger.genre-paused{color:#e9b560;border-color:#e9b56048;background:#e9b56010}
-.results-filter{display:flex;flex-wrap:wrap;align-items:center;gap:5px;min-width:0}
-.results-filter>span{color:var(--muted);font-size:10px;white-space:nowrap}
-.results-filter>button{min-height:30px;padding:4px 10px;border-radius:99px;font-size:10px}
-.results-filter>button[aria-pressed="true"]{border-color:transparent;background:var(--accent);color:#160b08;box-shadow:none}
-.results-filter>small{color:#e9b560;font-size:9px}
 .scope-trigger{min-width:0;max-width:320px;height:42px;padding:5px 10px;justify-content:flex-start;text-align:left}
 .scope-trigger-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 .scope-shared-mark{flex:0 0 auto;width:17px;height:17px;color:var(--muted)}
@@ -2791,12 +2788,6 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
   main.view-catalog .filterbar>.shape-toggle{grid-area:shape;min-height:42px;height:42px;width:44px;padding:0}
   main.view-catalog .filterbar>.header-expand{grid-area:shape;min-height:42px;height:42px;width:44px;padding:0}
   main.view-catalog .filterbar>.catalog-note{grid-area:note}
-  main.view-catalog .filterbar>.scope-badge{grid-column:1/-1;grid-row:1}
-  main.view-catalog .filterbar>.results-filter{grid-column:1/-1;grid-row:2}
-  main.view-catalog .filterbar>.results-filter>button{min-height:42px;flex:1 1 auto}
-  main.view-catalog .filterbar:has(.results-filter)>label{grid-column:1/3;grid-row:3}
-  main.view-catalog .filterbar:has(.results-filter)>.shape-toggle{grid-column:3;grid-row:3}
-  main.view-catalog .filterbar:has(.results-filter)>.header-expand{grid-column:3;grid-row:3}
   .catalog-view.catalog-compact .filterbar{grid-template-columns:minmax(0,1fr) 44px 44px;grid-template-areas:"summary shape expand";margin-top:0}
   .catalog-view.catalog-compact .filterbar>.catalog-trigger,.catalog-view.catalog-compact .filterbar>.search-summary{grid-area:summary;min-width:0;max-width:none;width:100%}
   .catalog-view.catalog-compact .filterbar>.shape-toggle{grid-area:shape}
@@ -2818,8 +2809,7 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
   main.view-catalog .filterbar>.shape-toggle,
   main.view-catalog .filterbar>.header-expand{height:34px;min-height:34px}
   main.view-catalog .filterbar>.catalog-trigger{padding:3px 8px}
-  main.view-catalog .filterbar>.results-filter{grid-column:1/4;grid-row:1}
-  main.view-catalog .filterbar:has(.results-filter)>label{grid-column:4;grid-row:1;grid-area:auto}
+  main.view-catalog .filterbar:has(.results-filter)>label{grid-column:2/5;grid-row:1}
   .catalog-view.catalog-compact .filterbar{grid-template-columns:minmax(0,1fr) 44px 36px;grid-template-areas:"summary shape expand"}
   .catalog-view.catalog-compact .filterbar>.catalog-trigger,.catalog-view.catalog-compact .filterbar>.search-summary{grid-area:summary;width:100%;max-width:none}
   .catalog-view.catalog-compact .filterbar>.shape-toggle{grid-area:shape}
@@ -2840,8 +2830,9 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
   main.view-catalog .filterbar>.catalog-type-switch{display:inline-flex;width:auto}
   main.view-catalog .filterbar>.catalog-type-switch button{min-width:44px;padding:0 9px;font-size:11px}
   main.view-catalog .filterbar>label>span{display:none}
-  main.view-catalog .filterbar:has(.results-filter)>label{grid-column:1/4}
-  main.view-catalog .filterbar:has(.results-filter)>.shape-toggle,main.view-catalog .filterbar:has(.results-filter)>.header-expand{grid-column:4}
+  main.view-catalog .filterbar>.scope-badge{grid-area:catalog;align-self:center;justify-self:start;max-width:100%;border-radius:10px;line-height:1.3}
+  main.view-catalog .filterbar:has(.results-filter)>label{grid-area:auto;grid-column:1/4;grid-row:2}
+  main.view-catalog .filterbar:has(.results-filter)>.shape-toggle,main.view-catalog .filterbar:has(.results-filter)>.header-expand{grid-area:auto;grid-column:4;grid-row:2}
 }
 /* The recent chips scroll sideways; without these the grid body grows to their width. */
 .picker-body{grid-template-columns:minmax(0,1fr)}

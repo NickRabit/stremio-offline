@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { AddonLogo } from "./AddonLogo";
 import { CatalogPicker } from "./CatalogPicker";
+import { FilterTabs } from "./FilterTabs";
 import {
   browseMembers,
   browseBucket,
@@ -77,15 +78,10 @@ export function CatalogFilters({
   const addonLine = `${current.addonName}${currentBucket === "other" ? ` · ${current.type}` : ""}`;
 
   return <>
-    <div className="catalog-type-switch" role="group" aria-label={t("catalog.type")}>
-      {bucketsPresent(catalogs).map((bucket) => {
-        const pressed = bucket === currentBucket;
-        return <button key={bucket} type="button" aria-pressed={pressed} onClick={() => switchBucket(bucket)}
-          title={bucket === "all" ? t("catalog.moviesAndSeries") : undefined}>
-          {bucketLabel(bucket)}
-        </button>;
-      })}
-    </div>
+    <FilterTabs className="catalog-type-switch" label={t("catalog.type")} value={currentBucket} onChange={switchBucket}
+      tabs={bucketsPresent(catalogs).map((bucket) => ({
+        value: bucket, label: bucketLabel(bucket), title: bucket === "all" ? t("catalog.moviesAndSeries") : undefined,
+      }))}/>
     <button type="button" className={`catalog-trigger${compact ? " compact" : ""}`}
       aria-haspopup="dialog" aria-expanded={picker === "catalog"}
       onClick={() => { setPickerBucket(undefined); setPicker("catalog"); }}>

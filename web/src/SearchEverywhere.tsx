@@ -8,6 +8,7 @@ import { TileArt } from "./TileArt";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { AddonLogo } from "./AddonLogo";
+import { FilterTabs } from "./FilterTabs";
 import { catalogTypeTag } from "./catalog-labels";
 import { locale, t, type Key } from "./i18n";
 import { parseSearchScope } from "./search-scope";
@@ -569,13 +570,10 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
     <div className="filterbar section-filter search-filters">
       <div className="search-filter-group">
         <span aria-hidden="true">{t("searchAll.sourcesToggle")}</span>
-        <div className="library-shelf-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
-          {SOURCE_OPTIONS.map((option) => {
-            const active = sameSources(search.sources, option.sources);
-            return <button key={option.id} type="button" className={active ? "active" : ""} aria-pressed={active}
-              onClick={() => search.setSources(option.sources)}>{t(option.label)}</button>;
-          })}
-        </div>
+        <FilterTabs label={t("searchAll.sourcesToggle")}
+          value={SOURCE_OPTIONS.find((option) => sameSources(search.sources, option.sources))?.id ?? ""}
+          onChange={(id) => search.setSources(SOURCE_OPTIONS.find((option) => option.id === id)!.sources)}
+          tabs={SOURCE_OPTIONS.map((option) => ({ value: option.id, label: t(option.label) }))}/>
       </div>
       {search.library && <button type="button" className="search-library-chip" aria-label={t("searchAll.libraryClear")} onClick={() => search.clearLibrary()}>{t("searchAll.libraryChip", { title: search.library.title })}</button>}
       {catalogOnly && <label><span>{t("catalog.searchScope")}</span>
@@ -589,15 +587,12 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
         type={lockedType || search.kind === "all" ? "" : search.kind} onPick={pickScope} onClose={() => setScopeOpen(false)}/>}
       <div className="search-filter-group">
         <span aria-hidden="true">{t("catalog.type")}</span>
-        <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
-          {([
+        <FilterTabs label={t("catalog.type")} value={search.kind} onChange={search.setKind}
+          tabs={([
             ["all", "searchAll.kindAll"],
             ["movie", "searchAll.kindMovies"],
             ["series", "searchAll.kindSeries"],
-          ] as const).map(([value, key]) => <button key={value} type="button" className={search.kind === value ? "active" : ""} aria-pressed={search.kind === value}
-            disabled={Boolean(lockedType) && value !== lockedType}
-            onClick={() => search.setKind(value)}>{t(key)}</button>)}
-        </div>
+          ] as const).map(([value, key]) => ({ value, label: t(key), disabled: Boolean(lockedType) && value !== lockedType }))}/>
         {lockedType && <small className="filter-note">{t("catalog.typeLocked")}</small>}
       </div>
       {!child && <ShapeToggle shape={shape} onToggle={onToggleShape}/>}

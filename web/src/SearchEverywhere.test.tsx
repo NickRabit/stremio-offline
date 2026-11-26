@@ -121,7 +121,7 @@ const render = async (search: SearchEverywhereController, handlers: {
 };
 
 const sourceButtons = (): HTMLButtonElement[] =>
-  [...host.querySelectorAll<HTMLButtonElement>(".search-filters .library-shelf-segments")[0]!.querySelectorAll("button")];
+  [...host.querySelectorAll<HTMLButtonElement>(".search-filters .filter-tabs")[0]!.querySelectorAll("button")];
 
 const clickCard = async () => {
   const card = host.querySelector<HTMLButtonElement>("[data-search-card]")!;
@@ -166,7 +166,7 @@ describe("SearchEverywhere", () => {
       .find((button) => button.getAttribute("aria-label") === "Search all libraries");
     expect(chip?.textContent).toContain("TV test – filmy");
     const filters = host.querySelector(".search-filters")!;
-    expect(filters.innerHTML.indexOf("library-shelf-segments")).toBeLessThan(filters.innerHTML.indexOf("Search all libraries"));
+    expect(filters.innerHTML.indexOf("filter-tabs")).toBeLessThan(filters.innerHTML.indexOf("Search all libraries"));
     expect(host.querySelector(".search-return")).toBeNull();
     await act(async () => { chip!.click(); });
     expect(clearLibrary).toHaveBeenCalledOnce();
@@ -348,7 +348,9 @@ describe("SearchEverywhere", () => {
     expect(buttons.map((button) => button.textContent)).toEqual(["All", "Catalog", "Libraries"]);
     expect(buttons.map((button) => button.getAttribute("aria-pressed"))).toEqual(["false", "false", "true"]);
     await act(async () => { buttons[2]!.click(); });
-    expect(setSources).toHaveBeenCalledWith(["local", "remote"]);
+    expect(setSources).not.toHaveBeenCalled();
+    await act(async () => { buttons[0]!.click(); });
+    expect(setSources).toHaveBeenCalledWith([]);
   });
 
   it("drops the source strip once every source answered, and before any search", async () => {
