@@ -84,8 +84,17 @@ jobs:
       - run: npm run build -w @stremio-offline/source-selection
       - run: npx tsc -p desktop
       - run: npx tsc --noEmit -p server
+      # os.tmpdir() is %TEMP%, on C:, the runner's network-attached OS disk: an fsync takes
+      # ~3 ms there against ~0.3 ms on the local D:, and C: has stalled for minutes, which
+      # left every SQLite commit and server boot in the suite hanging (run 45797742850).
       - run: npm run test -w server
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
       - run: npm run test -w desktop
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
 
   # The Playwright container carries the browser and its system libraries, so the
   # same image is used locally when baselines are involved. See docs/testing.md.
