@@ -7,6 +7,7 @@ import { FollowDialog } from "./FollowDialog";
 import { Heading } from "./settings-ui";
 import { TileArt } from "./TileArt";
 import { ArtworkProximity, NearImage } from "./artwork-proximity";
+import { FilterTabs } from "./FilterTabs";
 import { languageName, localeTag, serverText, t, useI18n } from "./i18n";
 import type { ActivityItem, CalendarEpisodeState, CalendarItem, UndatedCalendarItem, FollowView, LibraryView, NewEpisode, TileShape } from "./types";
 
@@ -78,7 +79,7 @@ export function FollowingPage({ follows, newEpisodes, canRetain = false, librari
   return <section className="following-page" ref={pageRef}>
     <ArtworkProximity scroller={pageRef}>
     <Heading eyebrow={t("following.eyebrow")} title={t("following.title")}/>
-    <div className="following-tabs" role="tablist" aria-label={t("following.title")}>
+    <div className="filter-tabs following-tabs" role="tablist" aria-label={t("following.title")}>
       {TABS.map((name) => <button key={name} role="tab" type="button" id={`following-tab-${name}`} aria-selected={tab === name}
         aria-controls={`following-panel-${name}`} tabIndex={tab === name ? 0 : -1} className={tab === name ? "active" : ""}
         ref={(node) => { tabRefs.current[name] = node; }}
@@ -314,9 +315,8 @@ function CalendarTab({ onOpenSeries, onNotify }: { onOpenSeries: FollowingPagePr
   return <div className={`following-calendar-view ${mode}`}>
     <div className="following-cal-head">
       <h3 className="following-cal-title">{monthLabel}</h3>
-      <div className="following-cal-mode" role="group" aria-label={t("following.calendarMode")}>
-        {(["agenda", "month"] as const).map((value) => <button key={value} type="button" aria-pressed={mode === value} className={mode === value ? "active" : ""} onClick={() => chooseMode(value)}>{t(value === "agenda" ? "following.modeAgenda" : "following.modeMonth")}</button>)}
-      </div>
+      <FilterTabs className="following-cal-mode" label={t("following.calendarMode")} value={mode} onChange={chooseMode}
+        tabs={(["agenda", "month"] as const).map((value) => ({ value, label: t(value === "agenda" ? "following.modeAgenda" : "following.modeMonth") }))}/>
       <div className="following-cal-nav" role="group" aria-label={monthLabel}>
         <button type="button" aria-label={t("following.prevMonth")} onClick={() => goMonth(-1)}><ChevronLeft/></button>
         <button type="button" onClick={goToday}>{t("following.today")}</button>

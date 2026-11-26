@@ -245,9 +245,6 @@ main.view-catalog .catalog-layout{flex:1 1 auto;min-height:340px;height:auto}
 .stats-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
 .stats-head h2{margin:0 0 4px;font-size:20px}
 .stats-head p{margin:0;color:var(--muted);font-size:12px}
-.stats-periods{display:flex;gap:6px;flex-wrap:wrap}
-.stats-periods button{border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;white-space:nowrap}
-.stats-periods button.active{border-color:var(--accent);color:var(--text);background:var(--panel2)}
 .stats-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .stats-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:2px;min-width:0}
 .stats-card small{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
@@ -935,9 +932,6 @@ html.dialog-locked,html.dialog-locked body{overflow:hidden;overscroll-behavior:n
 .settings-page .support-link small{color:var(--muted)}
 .settings-page .support-link:hover{border-color:var(--accent)}
 /* The tab strip wraps instead of scrolling. At phone width the tabs sit two to a row. */
-.settings-page .section-filter .library-shelf-segments{flex:0 1 auto;flex-wrap:wrap;justify-content:flex-start}
-.settings-page .section-filter .library-shelf-segments button{flex:0 0 auto;padding:0 14px;overflow:visible;text-overflow:clip}
-@media(max-width:700px){.settings-page .section-filter .library-shelf-segments button{flex:1 1 calc(50% - 3px);min-width:0;padding:4px 10px;white-space:normal;line-height:1.2;overflow-wrap:anywhere}}
 .settings-page .settings-grid{grid-template-columns:minmax(0,1fr);gap:18px}
 .settings-page .settings-section{grid-column:1;padding:22px 24px}
 .settings-page .settings-section-head{margin-bottom:16px}
@@ -1509,11 +1503,9 @@ img.broken{visibility:hidden}
 .user-edit-card>.identify-head h2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* One pane at a time, so a section is the whole body rather than a stop on a long scroll:
    no rule above it, no rhythm to keep with the section that used to follow. */
-.user-edit-tabs{flex:0 0 auto;display:flex;gap:4px;min-width:0;padding:0 22px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.filter-tabs.user-edit-tabs{flex:0 0 auto;display:flex;gap:4px;min-width:0;max-width:none;padding:0 22px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
 .user-edit-tabs::-webkit-scrollbar{display:none}
-.user-edit-tabs button{flex:0 0 auto;display:flex;align-items:center;gap:7px;padding:10px 12px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-size:12px;font-weight:700}
-.user-edit-tabs button:hover{color:var(--text)}
-.user-edit-tabs button.active{color:var(--text);border-bottom-color:var(--accent)}
+.user-edit-tabs button{flex:0 0 auto;gap:7px}
 .user-edit-tabs button i{font-style:normal;font-size:10px;font-weight:800;padding:1px 6px;border-radius:99px;background:#1b222d;color:var(--muted)}
 .user-edit-tabs button.active i{background:#ff5b3826;color:var(--accent)}
 /* Content sits at the top of the pane. Letting the rows share the height instead spreads a
@@ -1569,8 +1561,8 @@ img.broken{visibility:hidden}
   .user-edit-card{height:100%;max-height:100%;border-radius:0}
   /* Four labels have to fit a phone's width, or the last one reads as cut off rather than
      as something to scroll to. */
-  .user-edit-tabs{padding:0 16px;gap:0}
-  .user-edit-tabs button{padding:10px 7px;gap:5px;font-size:11px}
+  .filter-tabs.user-edit-tabs{padding:0 16px;gap:0}
+  .filter-tabs.user-edit-tabs button{padding:0 7px;gap:5px}
   .user-edit-tabs button i{padding:1px 5px}
 }
 /* The password field and its button are one control in two parts, so they stay side by side
@@ -1807,11 +1799,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .following-page{max-width:1240px;display:flex;flex-direction:column;gap:16px}
 .following-page .heading{margin-bottom:0}
 /* A segmented control rather than page-sized tab headings: three short views of one thing. */
-.following-tabs{display:inline-flex;align-self:flex-start;gap:2px;padding:3px;border:1px solid var(--line);border-radius:11px;background:var(--panel);max-width:100%;overflow-x:auto;scrollbar-width:none}
-.following-tabs::-webkit-scrollbar{display:none}
-.following-tabs [role=tab]{flex:0 0 auto;border:0;border-radius:8px;background:transparent;color:var(--muted);padding:7px 16px;font-size:12px;font-weight:700;white-space:nowrap}
-.following-tabs [role=tab]:hover{color:var(--text)}
-.following-tabs [role=tab].active{background:var(--panel2);color:var(--text);box-shadow:0 1px 3px #0006}
+.following-tabs{align-self:flex-start}
 .following-panel{outline:none;min-width:0;container-type:inline-size;container-name:following}
 
 /* One pill per state, shared by the calendar, the day panel, the activity and the follow dialog.
@@ -1916,9 +1904,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 }
 
 .following-cal-head{flex-wrap:wrap}
-.following-cal-mode{display:inline-flex;gap:2px;padding:3px;margin-left:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
-.following-cal-mode button{height:30px;padding:0 12px;border:0;border-radius:7px;background:transparent;color:var(--muted);font-size:12px;font-weight:700}
-.following-cal-mode button.active{background:var(--panel2);color:var(--text)}
+.following-cal-mode{margin-left:auto}
 .following-cal-title{flex:1 1 auto}
 /* The list keeps one column at any width; the side panel belongs to the month. */
 .following-calendar-view.agenda{grid-template-columns:minmax(0,1fr)!important;grid-template-areas:"head" "month" "undated"!important}
@@ -1990,9 +1976,6 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .home-heading-copy{min-width:0}
 .home-heading-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
 .home-confirm-chip{min-height:44px;padding:0 14px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--accent2);font-size:12px;font-weight:700}
-.library-shelf-segments{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
-.library-shelf-segments button{min-height:44px;padding:0 14px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:12px;font-weight:700}
-.library-shelf-segments button.active{background:var(--panel2);color:var(--text);border-color:var(--accent)}
 /* The media shelves. Sizes and shape variants come from docs/home-prototype/home.css, which
    stays the visual reference for these rows. */
 .home-row .resume-strip{scroll-snap-type:x proximity;overscroll-behavior-x:contain;scroll-padding-inline:2px}
@@ -2125,9 +2108,9 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 /* The three filters and the shape switch share one row at any width: equal slots, no wrapping,
    a shorter pill on a phone. */
 .section-filter{display:flex;align-items:center;gap:10px}
-.section-filter .library-shelf-segments{flex:1 1 auto;flex-wrap:nowrap;min-width:0}
-.section-filter .library-shelf-segments button{flex:1 1 0;min-width:0;padding:0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-@media(min-width:701px){.section-filter .library-shelf-segments button{flex:0 0 auto;padding:0 14px}}
+.section-filter>.filter-tabs{flex:0 1 auto}
+.section-filter>.shape-toggle{margin-left:auto}
+@media(max-width:700px){.section-filter>.filter-tabs:not(.settings-tabs){flex:1 1 auto}.section-filter>.filter-tabs:not(.settings-tabs) button{flex:1 1 0;padding:0 6px}}
 /* Each page sets its own poster or landscape frame ratio. */
 .favorites-grid,.section-grid,.following-grid{margin-top:4px}
 .favorites-grid .browse-art,.section-grid .browse-art,.following-grid .browse-art{aspect-ratio:var(--section-tile-aspect,16/9)}
@@ -2736,9 +2719,12 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 }
 
 /* Catalogue toolbar: type, catalog, genre, result filter and scope controls. */
-.filter-tabs{display:inline-flex;align-items:stretch;min-width:0;padding:0;border-bottom:1px solid var(--line)}
-.filter-tabs button{min-width:0;height:34px;min-height:34px;padding:0 10px;border:0;border-radius:0;background:transparent;box-shadow:inset 0 -2px transparent;color:var(--muted);font-size:11px;white-space:nowrap}
-.filter-tabs button[aria-pressed="true"]{box-shadow:inset 0 -2px var(--accent);color:var(--text)}
+.filter-tabs{display:inline-flex;align-items:stretch;min-width:0;max-width:100%;padding:0;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.filter-tabs::-webkit-scrollbar{display:none}
+.filter-tabs button{flex:0 0 auto;min-width:0;height:35px;min-height:35px;padding:0 10px;border:0;border-radius:0;background:transparent;box-shadow:inset 0 -2px transparent;color:var(--muted);font-size:11px;white-space:nowrap}
+.filter-tabs button[aria-pressed="true"],.filter-tabs button[aria-selected="true"]{box-shadow:inset 0 -2px var(--accent);color:var(--text)}
+.filter-tabs button:focus-visible{outline-offset:-2px}
+@media(max-width:700px),(pointer:coarse){.filter-tabs button{height:auto;min-height:44px}}
 .filter-tabs button:not(:disabled):hover{color:var(--text)}
 .catalog-trigger{min-width:0;height:34px;min-height:34px;padding:4px 9px;justify-content:flex-start;text-align:left}
 .catalog-trigger-copy{display:grid;min-width:0;line-height:1.15}
@@ -2866,9 +2852,8 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .search-filters .scope-trigger>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .search-filters .scope-trigger{min-height:44px}
 @media(min-width:701px) and (min-height:501px){.search-filters .scope-trigger{min-height:31px;padding:0 12px;font-size:11px}}
-.addon-role-switch{flex-wrap:wrap}
 .addon-form .addon-role-switch,.manifest-field .addon-role-switch{width:100%}
-.addon-role-switch button{flex:1 1 auto;min-width:0;padding:0 8px;white-space:normal;line-height:1.2}
+.addon-role-switch button{flex:1 1 auto;height:auto;padding:4px 8px;white-space:normal;line-height:1.2}
 @media(max-width:700px){
   .search-filters>label:has(>.scope-trigger){flex:1 1 100%;display:flex;align-items:center;gap:8px;min-width:0}
   .search-filters>label:has(>.scope-trigger)>span{flex:0 0 auto}
@@ -2905,4 +2890,45 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
   main.view-catalog .searchbar>.primary{display:none}
   main.view-catalog .searchbar>button.search-cancel.search-cancel{grid-column:1;grid-row:1;justify-self:end;align-self:center;z-index:1;width:40px;min-width:40px;height:40px;min-height:40px;padding:0;margin-right:2px;border:0;background:transparent;box-shadow:none;font-size:0;color:var(--muted)}
   main.view-catalog .searchbar:has(>.search-cancel) .search-input input{padding-right:42px}
+}
+
+/* Catalogue toolbar alignment: view options (sorting, tile shape) always end at the bar's right
+   edge, in browsing and in search results alike; the tile toggle is a square like its neighbours. */
+@media(min-width:701px) and (min-height:501px){
+  .catalog-view .filterbar>label{margin-left:auto}
+  .catalog-view .filterbar>.shape-toggle,.catalog-view .filterbar>.header-expand{width:35px;padding:0;justify-content:center}
+  .catalog-view:not(.catalog-compact) .filterbar:has(>.results-filter){display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;grid-template-areas:"tabs badge sort shape";align-items:center;gap:8px 10px}
+  .catalog-view:not(.catalog-compact) .filterbar:has(>.results-filter)>.results-filter{grid-area:tabs}
+  .catalog-view:not(.catalog-compact) .filterbar:has(>.results-filter)>.scope-badge{grid-area:badge;justify-self:start;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .catalog-view:not(.catalog-compact) .filterbar:has(>.results-filter)>label{grid-area:sort;justify-self:end;margin-left:0}
+  .catalog-view:not(.catalog-compact) .filterbar:has(>.results-filter)>.shape-toggle{grid-area:shape}
+  .catalog-view:not(.catalog-compact) .filterbar:has(>.results-filter)>.filter-note{grid-column:1/-1}
+  /* Wide enough for one row: everything stays on it, the catalogue button giving way first. */
+  @container (min-width:820px){
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger){flex-wrap:nowrap}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger)>.catalog-trigger{flex:1 1 auto;min-width:0}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger)>.genre-trigger{flex:0 1 180px;min-width:120px}
+  }
+  /* Narrower bars (tablet, split view, a wide sidebar) browse on the phone's grid instead of wrapping one control per row. */
+  @container (max-width:819px){
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 35px;grid-template-areas:"type catalog catalog" "genre sort shape";align-items:center;gap:8px 10px}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger)>.catalog-type-switch{grid-area:type;justify-self:start}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger)>.catalog-trigger{grid-area:catalog}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger)>.genre-trigger{grid-area:genre;min-width:0}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger)>label{grid-area:sort;margin-left:0;min-width:0}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger)>label>span{display:none}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger) select{width:100%;min-width:0}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger)>.shape-toggle{grid-area:shape}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger)>.filter-note,.catalog-view:not(.catalog-compact) .filterbar:has(>.catalog-trigger)>.catalog-note{grid-column:1/-1}
+  }
+  /* Too narrow for one row: the badge drops under the tabs rather than squeezing to an ellipsis. */
+  @container (max-width:659px){
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.results-filter){grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"tabs sort shape" "badge badge badge"}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.results-filter)>label>span{display:none}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.results-filter)>label{justify-self:stretch;min-width:0}
+    .catalog-view:not(.catalog-compact) .filterbar:has(>.results-filter) select{width:100%;min-width:0}
+  }
+}
+@media(min-width:701px) and (min-height:501px){
+  .section-filter>.shape-toggle,.search-filters .shape-toggle{width:35px;height:35px;min-height:35px;padding:0;justify-content:center}
 }

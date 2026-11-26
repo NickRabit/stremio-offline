@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import type { StatsActivityPage, ActiveStream, StatsBucket, StatsSeries, StatsSummary } from "./types";
+import { FilterTabs } from "./FilterTabs";
 import { localeTag, serverText, t, useI18n } from "./i18n";
 
 const size = (value: number) => !value ? "0 B"
@@ -378,9 +379,8 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
           ? t("stats.lead", { since: new Date(summary.since).toLocaleDateString(localeTag()) })
           : t("stats.leadEmpty")}</p>
       </div>
-      <div className="stats-periods" role="group" aria-label={t("stats.periodGroup")}>
-        {PERIODS.map((period) => <button key={period.hours} className={period.hours === hours ? "active" : ""} onClick={() => setHours(period.hours)}>{t(period.key)}</button>)}
-      </div>
+      <FilterTabs className="stats-periods" label={t("stats.periodGroup")} value={String(hours)} onChange={(value) => setHours(Number(value))}
+        tabs={PERIODS.map((period) => ({ value: String(period.hours), label: t(period.key) }))}/>
     </div>
 
     <Live streams={streams} now={now}/>

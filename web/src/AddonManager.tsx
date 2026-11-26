@@ -5,6 +5,7 @@ import { api } from "./api";
 import { copyText } from "./clipboard";
 import { DownloadRuleEditor } from "./DownloadRuleEditor";
 import { Heading, hideBroken } from "./settings-ui";
+import { FilterTabs } from "./FilterTabs";
 import { t, useI18n } from "./i18n";
 import type { Addon, AddonDownloadSettings, LibraryView } from "./types";
 import { homeCatalogSelectionKey } from "../../server/src/home";
@@ -20,10 +21,8 @@ function RoleSwitch({ roles, current, busy, set }: {
   busy: boolean;
   set: (role: Addon["role"]) => void;
 }) {
-  return <div className="library-shelf-segments addon-role-switch" role="group" aria-label={t("addons.role")}>
-    {roles.map((value) => <button key={value} type="button" aria-pressed={current === value}
-      className={current === value ? "active" : ""} disabled={busy} onClick={() => set(value)}>{roleLabel(value)}</button>)}
-  </div>;
+  return <FilterTabs className="addon-role-switch" label={t("addons.role")} value={current} onChange={set}
+    tabs={roles.map((value) => ({ value, label: roleLabel(value), disabled: busy }))}/>;
 }
 const roleSummary = (role: Addon["role"]) =>
   t(role === "catalog" ? "addons.isCatalog" : role === "source" ? "addons.isSource" : "addons.isBoth");

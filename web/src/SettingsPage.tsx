@@ -202,6 +202,10 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
     }
     catch { return fallback; }
   });
+  // On a phone the tab row scrolls sideways; a tab restored from the session may sit off screen.
+  useEffect(() => {
+    document.getElementById(`settings-tab-${tab}`)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [tab]);
   const selectTab = (next: SettingsTab) => {
     setTab(next);
     try { sessionStorage.setItem(SETTINGS_TAB_KEY, next); } catch { /* private mode may refuse storage */ }
@@ -248,7 +252,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
   return <section className="settings-page"><div className="settings-title"><Heading eyebrow={t("settings.eyebrow")} title={t("settings.title")}/><span><Check/> {t("settings.autosave")}</span></div>
     {restricted && <p className="notice">{t("restricted.notice")}</p>}
     <div className="filterbar section-filter">
-      <div className="library-shelf-segments" role="tablist" aria-label={t("settings.title")}>
+      <div className="filter-tabs settings-tabs" role="tablist" aria-label={t("settings.title")}>
         {visibleTabs.map((id) => <button key={id} type="button" role="tab" id={`settings-tab-${id}`} aria-selected={id === tab}
           aria-controls={SETTINGS_PANEL_ID} className={id === tab ? "active" : undefined}
           onClick={() => selectTab(id)}>{t(SETTINGS_TAB_LABEL[id])}</button>)}

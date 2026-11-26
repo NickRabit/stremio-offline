@@ -44,7 +44,7 @@ const render = async (over: Overrides = {}) => {
   return props;
 };
 
-const chips = () => [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"] button')];
+const chips = () => [...host.querySelectorAll<HTMLButtonElement>('.filter-tabs button')];
 const cards = () => [...host.querySelectorAll<HTMLButtonElement>(".favorites-grid .browse-open")];
 const menus = () => [...host.querySelectorAll<HTMLButtonElement>(".favorites-grid .browse-menu")];
 const click = async (element: HTMLElement) => { await act(async () => { element.click(); await Promise.resolve(); }); };

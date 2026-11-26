@@ -1,6 +1,7 @@
 import { Film, FolderOpen, HardDrive, MoreVertical, Star, StarOff } from "lucide-react";
 import { useState, type JSX } from "react";
 import { Empty, ShapeToggle } from "./app-chrome";
+import { FilterTabs } from "./FilterTabs";
 import { t } from "./i18n";
 import { TileArt } from "./TileArt";
 import type { FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, TileShape } from "./types";
@@ -71,9 +72,8 @@ export function FavoritesView({ filter, onFilter, items, busy, shape, onToggleSh
   return <div className="favorites-view">
     <div className="heading"><small>{t("home.eyebrow")}</small><h2>{t("favorites.title")}</h2></div>
     <div className="filterbar section-filter">
-      <div className="library-shelf-segments" role="radiogroup" aria-label={t("favorites.title")}>
-        {FILTERS.map((entry) => <button key={entry.value} type="button" className={filter === entry.value ? "active" : ""} aria-pressed={filter === entry.value} onClick={() => onFilter(entry.value)}>{t(entry.label)}</button>)}
-      </div>
+      <FilterTabs label={t("favorites.title")} value={filter} onChange={onFilter}
+        tabs={FILTERS.map((entry) => ({ value: entry.value, label: t(entry.label) }))}/>
       <ShapeToggle shape={shape} onToggle={onToggleShape}/>
     </div>
     {busy && !items.length
