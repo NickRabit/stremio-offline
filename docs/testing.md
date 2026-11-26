@@ -424,9 +424,14 @@ Jobs:
 
 1. `check` -- type-check both workspaces, run the server suite and the web unit
    suite. Roughly one to two minutes.
-2. `e2e` (from phase 2) -- runs inside the Playwright container image, covering
+2. `windows` -- the server and desktop suites on `windows-latest`. Their
+   temporary files go to `runner.temp` on the local `D:` drive rather than the
+   default `%TEMP%` on `C:`, the network-attached OS disk whose flushes are ten
+   times slower and can stall for minutes; every SQLite database and
+   `spawnServer` data directory in the suite lives under `os.tmpdir()`.
+3. `e2e` (from phase 2) -- runs inside the Playwright container image, covering
    L2 and L3, sharded across the viewport matrix.
-3. On failure, the Playwright HTML report and any image diffs are uploaded as
+4. On failure, the Playwright HTML report and any image diffs are uploaded as
    build artifacts.
 
 Screenshot baselines are refreshed through a separate manually triggered
