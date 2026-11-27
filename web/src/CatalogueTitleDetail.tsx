@@ -404,7 +404,12 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   }, [target.resume, rows, ordered, firstPlayable, pendingProviders, onPlay, offline]);
   const resumeKey = target.resume?.stableKey;
   // Only for the episode Continue watching opened: another one picked here has its own position.
-  const offlineResumeRow = offline && target.resume && !offlineResumeDone && streamId === incomingId
+  // Compared as episodes, not stream ids: the card names season and number, and the addon's own
+  // video id the detail finds for them is a different string.
+  const onOpening = !pickedEpisode || (opening !== null && (pickedEpisode.id != null && opening.id != null
+    ? String(pickedEpisode.id) === String(opening.id)
+    : pickedEpisode.season === opening.season && pickedEpisode.episode === opening.episode));
+  const offlineResumeRow = offline && target.resume && !offlineResumeDone && onOpening
     && !(resumeKey && ordered?.some((stream) => stream.playable && stream.stableKey === resumeKey))
     ? ordered?.find((stream) => stream.playable && isLocalStream(stream)) : undefined;
   // The progress list may not hold the position yet; the card that asked to continue knows it.

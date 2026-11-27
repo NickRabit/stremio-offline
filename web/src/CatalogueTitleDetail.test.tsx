@@ -638,6 +638,21 @@ describe("CatalogueTitleDetail series", () => {
     expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "large" }), expect.objectContaining({ season: 1, episode: 1, videoId: "tt-series:1:1" }), false);
   });
 
+  it("offline, offers the local copy for an episode the addon names by its own id", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Show/S01E02.mkv", "S01E02.mkv")]);
+    streamReply = () => hung;
+    const own = videos.map((video) => ({ ...video, id: `kitsu:42:${video.episode}` }));
+    const { onPlay } = await render({
+      target: { type: "series", id: "tt-series", name: "A show", season: 1, episode: 2, initialMeta: series(own), resume: { stableKey: "addon:row", position: 600 } },
+      offline: true,
+    });
+    const offer = host.querySelector<HTMLButtonElement>(".offline-resume button")!;
+    expect(offer.textContent).toContain("10:00");
+    await click(offer);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Show/S01E02.mkv" }), expect.objectContaining({ season: 1, episode: 2 }), false, 600);
+  });
+
   it("offline, drops the local resume offer once another episode is picked", async () => {
     const hung = new Promise<Response>(() => undefined);
     localReply = () => json([local("Show/S01E02.mkv", "S01E02.mkv")]);
