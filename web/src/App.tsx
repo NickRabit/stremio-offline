@@ -2201,7 +2201,7 @@ export function App() {
       .catch(() => undefined);
     return () => controller.abort();
   }, [fileSubtitleKey]);
-  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor, fromBeginning = false, identity?: { type: "movie" | "series"; id: string }, session?: { key: string; panel?: boolean }, shufflePlay = false) => {
+  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor, fromBeginning = false, identity?: { type: "movie" | "series"; id: string }, session?: { key: string; panel?: boolean }, shufflePlay = false, startAt?: number) => {
     if (!shufflePlay) endShuffle();
     // A file of the library plays as itself: the catalogue identity of whatever was open before
     // never travels with it. A caller that already knows the binding hands it over; otherwise the
@@ -2219,7 +2219,7 @@ export function App() {
       // A play the catalogue detail started runs under that title; a file of the library runs
       // under itself, and the header keeps naming it however the sources are switched.
       setPlayerSubject({ title, ...(poster ? { poster } : {}), episode, path, ...(session ? { key: session.key, ...(session.panel ? { panel: true } : {}) } : {}) });
-      setStartAtSeconds(undefined);
+      setStartAtSeconds(startAt);
       setLocalPoster(poster);
       setLocalTitle(title);
       setLocalEpisode(episode);
@@ -3122,6 +3122,11 @@ export function App() {
     const entry = resume.find((candidate) => candidate.key === `${detailRead.target.type}:${catalogueStreamId(detailRead.target)}`);
     return entry ? { position: entry.position, duration: entry.duration, sourceKey: sourceIdentity(detailSource) } : undefined;
   }, [detailRead, detailSource, resume]);
+  /** Where Continue watching left the shared detail's title, whichever source it played from. */
+  const detailResumePosition = useMemo(() => {
+    if (!catalogueDetail?.resume) return undefined;
+    return resume.find((candidate) => candidate.key === `${catalogueDetail.type}:${catalogueStreamId(catalogueDetail)}`)?.position;
+  }, [catalogueDetail, resume]);
   /** The source the shared detail's title was last played from, so its row is preselected. */
   const detailResumeStableKey = useMemo(() => {
     if (!detailRead) return undefined;
@@ -3463,12 +3468,12 @@ export function App() {
   /** Plays the row the shared detail selected: a file the account owns plays as itself, and every
    *  other row travels under the detail's own title and episode. The browse panel's selection --
    *  the title it shows, the episode and source it picked -- is never moved by it. */
-  const playCatalogueDetail = (stream: Stream, target: CatalogueDetailTarget, fromBeginning: boolean) => {
+  const playCatalogueDetail = (stream: Stream, target: CatalogueDetailTarget, fromBeginning: boolean, startAt?: number) => {
     endShuffle();
     const anchor = { kind: "catalog" as const, key: `${target.type}:${target.id}` };
     if (isLocalStream(stream) && stream.localPath) {
       setDetailPlaying(null);
-      void playLocal(detailPlaybackTitle(target), stream.localPath, target.poster, target.season != null, anchor, fromBeginning);
+      void playLocal(detailPlaybackTitle(target), stream.localPath, target.poster, target.season != null, anchor, fromBeginning, undefined, undefined, false, startAt);
       return;
     }
     // A library file of the previous playback is not what is playing now, and its title, poster
@@ -3853,6 +3858,8 @@ export function App() {
             // and the way to say that episode is seen -- which is that position going away.
             {...(detailProgress ? { watched: true, watchedLabel: t("mediaServer.markWatched"), onToggleWatched: () => void clearDetailProgress() } : {})}
             onPlay={playCatalogueDetail}
+            offline={internet.status === "offline"}
+            {...(detailResumePosition !== undefined ? { resumePosition: detailResumePosition } : {})}
             onSaveToLibrary={(stream, effective) => void queueCatalogueStream(effective, stream)}
             onSaveElsewhere={(stream, effective) => openCatalogueDownload(effective, stream, detailSourcePicked)}
             {...(bulkDownloadAllowed ? { onBulkDownload: setSeriesBulk } : {})}

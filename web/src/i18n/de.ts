@@ -1598,6 +1598,8 @@ export const de: Catalog = {
   "err.tooManyRequests": "Zu viele Anfragen. Versuchen Sie es in {seconds} Sekunden erneut.",
   "err.hostUnavailable": "{host} antwortet nicht. Versuchen Sie es in {seconds} Sekunden erneut.",
   "err.offline": "Der Server hat gerade keine Internetverbindung. Nur lokale Dateien lassen sich abspielen.",
+  "detail.offlineResume": "Ab {time} mit der lokalen Kopie fortsetzen",
+  "detail.offlineResumeHint": "Ohne Internet lässt sich die zuletzt genutzte Quelle nicht fortsetzen. Die heruntergeladene Kopie kann eine andere Schnittfassung sein.",
   "err.searchInvalidRequest": "Die Suchanfrage ist ungültig.",
   "err.searchNotFound": "Diese Suche existiert nicht mehr. Bitte erneut suchen.",
   "err.searchRestartRequired": "Die Suche ist abgelaufen. Bitte erneut suchen.",

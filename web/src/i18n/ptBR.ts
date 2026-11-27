@@ -1598,6 +1598,8 @@ export const ptBR: Catalog = {
   "err.tooManyRequests": "Muitas solicitações. Tente novamente em {seconds} segundos.",
   "err.hostUnavailable": "{host} não está respondendo. Tente novamente em {seconds} segundos.",
   "err.offline": "O servidor está sem conexão com a internet agora. Só é possível reproduzir arquivos locais.",
+  "detail.offlineResume": "Continuar da cópia local em {time}",
+  "detail.offlineResumeHint": "Sem internet, a fonte que você assistia não pode continuar. A cópia baixada pode ser outra versão de montagem.",
   "err.searchInvalidRequest": "A solicitação de busca não é válida.",
   "err.searchNotFound": "Esta busca não existe mais. Busque novamente.",
   "err.searchRestartRequired": "A busca expirou. Busque novamente.",

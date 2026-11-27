@@ -107,3 +107,19 @@ test("a failed shared lookup is not kept for the next caller", async () => {
   await assert.rejects(cache.join("movie:tt1", () => Promise.reject(new Error("down"))));
   assert.equal(await cache.join("movie:tt1", () => Promise.resolve("up")), "up");
 });
+
+test("dropPartial forgets only the answers a provider failed to complete", () => {
+  const cache = createMetaCache<string>({ ttlMs: 60_000, failureTtlMs: 1_000, limit: 10 });
+  cache.set("full", "complete");
+  cache.set("partial", "half", true);
+  cache.fail("missing");
+  cache.dropPartial();
+  assert.deepEqual(cache.get("full"), { hit: true, value: "complete" });
+  assert.deepEqual(cache.get("partial"), { hit: false });
+  assert.deepEqual(cache.get("missing"), { hit: true, value: null });
+  // A complete answer later replaces the partial mark.
+  cache.set("partial", "half", true);
+  cache.set("partial", "whole");
+  cache.dropPartial();
+  assert.deepEqual(cache.get("partial"), { hit: true, value: "whole" });
+});

@@ -1600,6 +1600,8 @@ export const pl: Catalog = {
   "err.tooManyRequests": "Zbyt wiele żądań. Spróbuj ponownie za {seconds} s.",
   "err.hostUnavailable": "{host} nie odpowiada. Spróbuj ponownie za {seconds} s.",
   "err.offline": "Serwer nie ma teraz połączenia z internetem. Można odtwarzać tylko pliki lokalne.",
+  "detail.offlineResume": "Kontynuuj z lokalnej kopii od {time}",
+  "detail.offlineResumeHint": "Bez internetu nie da się wznowić źródła, z którego oglądano. Pobrana kopia może być inną wersją montażową.",
   "err.searchInvalidRequest": "Żądanie wyszukiwania jest nieprawidłowe.",
   "err.searchNotFound": "To wyszukiwanie już nie istnieje. Wyszukaj ponownie.",
   "err.searchRestartRequired": "Wyszukiwanie wygasło. Wyszukaj ponownie.",

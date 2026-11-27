@@ -1598,6 +1598,8 @@ export const fr: Catalog = {
   "err.tooManyRequests": "Trop de requêtes. Réessayez dans {seconds} s.",
   "err.hostUnavailable": "{host} ne répond pas. Réessayez dans {seconds} s.",
   "err.offline": "Le serveur n’a pas de connexion internet pour le moment. Seuls les fichiers locaux peuvent être lus.",
+  "detail.offlineResume": "Reprendre la copie locale à {time}",
+  "detail.offlineResumeHint": "Sans internet, la source que vous regardiez ne peut pas reprendre. La copie téléchargée peut être un autre montage.",
   "err.searchInvalidRequest": "La requête de recherche n'est pas valide.",
   "err.searchNotFound": "Cette recherche n'existe plus. Relancez la recherche.",
   "err.searchRestartRequired": "La recherche a expiré. Relancez la recherche.",

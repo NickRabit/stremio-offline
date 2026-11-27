@@ -1684,6 +1684,8 @@ export const en = {
   "err.pairBusy": "Too many devices are waiting. Try again later.",
   "err.hostUnavailable": "{host} is not answering. Try again in {seconds} s.",
   "err.offline": "The server has no internet connection right now. Only local files can be played.",
+  "detail.offlineResume": "Continue from the local copy at {time}",
+  "detail.offlineResumeHint": "Without the internet, the source you were watching cannot continue. The downloaded copy may be a different cut.",
   "err.searchInvalidRequest": "The search request is not valid.",
   "err.searchNotFound": "This search no longer exists. Search again.",
   "err.searchRestartRequired": "The search expired. Search again.",

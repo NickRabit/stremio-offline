@@ -1680,6 +1680,8 @@ export const cs: Catalog = {
   "err.pairBusy": "Na přihlášení čeká příliš mnoho zařízení. Zkuste to později.",
   "err.hostUnavailable": "{host} neodpovídá. Zkuste to za {seconds} s.",
   "err.offline": "Server teď nemá připojení k internetu. Přehrát jde jen místní soubory.",
+  "detail.offlineResume": "Pokračovat z místní kopie od {time}",
+  "detail.offlineResumeHint": "Bez internetu nejde pokračovat ze zdroje, ze kterého jste sledovali. Stažená kopie může být jiný střih.",
   "err.searchInvalidRequest": "Požadavek na hledání není platný.",
   "err.searchNotFound": "Toto hledání už neexistuje. Hledejte znovu.",
   "err.searchRestartRequired": "Hledání vypršelo. Hledejte znovu.",

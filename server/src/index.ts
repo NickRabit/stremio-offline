@@ -1098,9 +1098,9 @@ if (autoRefreshEnabled()) {
   }, AUTO_REFRESH_FIRST_MS).unref();
 }
 registerAddonsRoutes(app, { ...routeContext, storeRefreshed, publicAddonView });
-const tmdbProvider = (language: string): MetaProvider | undefined => {
+const tmdbProvider = (language: string, outcome?: { failed: boolean }): MetaProvider | undefined => {
   const apiKey = store.settings().tmdbApiKey;
-  return apiKey ? (type, id, signal) => tmdbMeta(type, id, { apiKey, language }, undefined, signal) : undefined;
+  return apiKey ? (type, id, signal) => tmdbMeta(type, id, { apiKey, language }, undefined, signal, outcome) : undefined;
 };
 /** The detail behind a binding: the same lookup, asking for the pictures as well. Only a
  *  title somebody just bound is read this way; the browsing paths leave the artwork to the
@@ -1306,6 +1306,7 @@ const metaCache = createMetaCache<MetaItem>({
   failureTtlMs: 30 * 60_000,
   limit: 500,
 });
+connectivity.onOnline(() => metaCache.dropPartial());
 /** A lookup with no request in hand -- the artwork queue, a backfill, a job that has just
  *  finished -- reads the language of the one account. A caller that knows which person is
  *  asking passes that person's language. */
@@ -1347,7 +1348,7 @@ async function lookupMeta(
   const outcome = { failed: false };
   const found = await metadata(
     sources, type, id, language,
-    opts.artwork ? tmdbArtworkProvider(language, outcome) : tmdbProvider(language),
+    opts.artwork ? tmdbArtworkProvider(language, outcome) : tmdbProvider(language, outcome),
     opts.interactive ?? opts.viewerKnown === true,
     opts.artwork === true,
     opts.signal,
@@ -1360,7 +1361,8 @@ async function lookupMeta(
   if (value && Object.keys(value).length > 0) {
     // Only the detail reading is kept: Home's enrichment would rewrite hundreds of rows on the NAS.
     const full = opts.artwork ? await staleMeta.keep(key, value, outcome.failed) : value;
-    metaCache.set(key, full);
+    // A partial answer is asked again once the internet is back.
+    metaCache.set(key, full, outcome.failed);
     return full;
   }
   if (opts.artwork && !opts.signal?.aborted && (outcome.failed || connectivity.state === "offline")) {

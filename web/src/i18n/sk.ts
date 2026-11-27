@@ -1600,6 +1600,8 @@ export const sk: Catalog = {
   "err.tooManyRequests": "Príliš veľa požiadaviek. Skúste to znova o {seconds} s.",
   "err.hostUnavailable": "{host} neodpovedá. Skúste to znova o {seconds} s.",
   "err.offline": "Server teraz nemá pripojenie k internetu. Prehrať sa dajú len miestne súbory.",
+  "detail.offlineResume": "Pokračovať z miestnej kópie od {time}",
+  "detail.offlineResumeHint": "Bez internetu sa nedá pokračovať zo zdroja, z ktorého ste pozerali. Stiahnutá kópia môže byť iný strih.",
   "err.searchInvalidRequest": "Požiadavka na vyhľadávanie nie je platná.",
   "err.searchNotFound": "Toto vyhľadávanie už neexistuje. Hľadajte znova.",
   "err.searchRestartRequired": "Vyhľadávanie vypršalo. Hľadajte znova.",

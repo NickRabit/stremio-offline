@@ -257,6 +257,42 @@ describe("CatalogueTitleDetail sources", () => {
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false);
   });
 
+  it("offline, offers the local copy at the saved position instead of waiting for the addon row", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => hung;
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "addon:row" } },
+      offline: true, resumePosition: 1930,
+    });
+    expect(onPlay).not.toHaveBeenCalled();
+    const offer = host.querySelector<HTMLButtonElement>(".offline-resume button")!;
+    expect(offer.textContent).toContain("32:10");
+    await click(offer);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false, 1930);
+    expect(host.querySelector(".offline-resume")).toBeNull();
+  });
+
+  it("offline, never swaps the watched addon row for the local copy on its own", async () => {
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => json({ error: "offline" }, 503);
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "addon:row" } },
+      offline: true, resumePosition: 60,
+    });
+    await flush();
+    expect(onPlay).not.toHaveBeenCalled();
+    expect(host.querySelector(".offline-resume button")).not.toBeNull();
+  });
+
+  it("online, shows no offline offer", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => hung;
+    await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "addon:row" } }, resumePosition: 60 });
+    expect(host.querySelector(".offline-resume")).toBeNull();
+  });
+
   it("does not resume an addon row before the addons answer", async () => {
     const hung = new Promise<Response>(() => undefined);
     localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
