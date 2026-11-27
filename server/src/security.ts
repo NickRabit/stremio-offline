@@ -74,13 +74,20 @@ let dnsLookup: DnsLookup = systemLookup;
  *  Pass nothing to restore the system resolver. Production never calls it. */
 export function setDnsLookup(lookup?: DnsLookup): void {
   dnsLookup = lookup ?? systemLookup;
+  homeAnswered.clear();
 }
 
 /** A name the home network answers for: one listed in ALLOW_ADDON_HOSTS, a single label, or a
  *  local suffix. ALLOW_PRIVATE_ADDONS=1 alone does not make a public name one. */
 const HOME_SUFFIXES = [".local", ".lan", ".home", ".internal", ".home.arpa", ".localdomain"];
+/** Names that answered with a home address while private addresses are allowed: an addon on the
+ *  owner's own domain behind split DNS. The router answers them without the internet. */
+const homeAnswered = new Set<string>();
+const answerAddresses = (address: string | LookupAddress[] | undefined): string[] =>
+  Array.isArray(address) ? address.map((answer) => answer.address) : address ? [address] : [];
 const homeNetworkName = (host: string): boolean =>
-  !host.includes(".")
+  homeAnswered.has(host)
+  || !host.includes(".")
   || HOME_SUFFIXES.some((suffix) => host.endsWith(suffix))
   || (process.env.ALLOW_ADDON_HOSTS ?? "").split(",").map((entry) => entry.trim().toLowerCase()).includes(host);
 
@@ -105,6 +112,10 @@ const checkedAndRecordedLookup: DnsLookup = (hostname, options, callback) => {
     if (error) {
       const code = (error as NodeJS.ErrnoException).code;
       connectivity.recordLookupFailure(hostname, code);
+    } else if (privateAddressAllowed(host) && answerAddresses(address).some((answer) => privateReason(answer))) {
+      // A home answer proves only that the router is up, never that the internet is.
+      homeAnswered.add(host);
+      connectivity.releaseLookup();
     } else {
       connectivity.recordLookupSuccess(hostname);
     }

@@ -115,6 +115,12 @@ export class Connectivity {
     this.resolverAnswered();
   }
 
+  /** A lookup that ended without saying anything about the internet (a home name answered by
+   *  the router) gives the request slot back. */
+  releaseLookup(): void {
+    this.requestProbeInFlight = false;
+  }
+
   recordLookupFailure(host: string, code: string | undefined): void {
     if (isAddress(host)) return;
     if (!code || !RESOLVER_DOWN.has(code)) {

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { fillMissingMeta } from "./addons.js";
 import type { AppDatabase } from "./storage/app-database.js";
 import type { MetaItem } from "./types.js";
 
@@ -31,6 +32,16 @@ export class StaleMetaStore {
     } catch {
       return null;
     }
+  }
+
+  /** Keeps a fresh detail reading for offline use and returns what the detail should show. A
+   *  partial reading (a provider failed) is completed from the kept copy first, so the copy never
+   *  loses a field, and the first usable reading is kept even when some provider failed. */
+  async keep(key: string, value: MetaItem, partial: boolean): Promise<MetaItem> {
+    const kept = partial ? await this.get(key).catch(() => null) : null;
+    const full = kept ? fillMissingMeta(value, kept) : value;
+    void this.remember(key, full).catch(() => undefined);
+    return full;
   }
 
   remember(key: string, value: MetaItem): Promise<void> {

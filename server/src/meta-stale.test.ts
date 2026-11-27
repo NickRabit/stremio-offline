@@ -99,3 +99,30 @@ test("a key the cap pruned is written again the next time it is remembered", asy
   await store.remember("k0", film("Kept in memory"));
   assert.ok(await database.get("SELECT key FROM meta_stale WHERE key = ?", ["k0"]));
 });
+
+test("a partial reading is completed from the kept copy and never strips it", async (t) => {
+  const store = new StaleMetaStore();
+  store.attachDatabase(await databaseFixture(t));
+  const full: MetaItem = { ...film("Film"), description: "Plot", cast: ["A", "B"] };
+  assert.deepEqual(await store.keep("movie:tt1", full, false), full);
+  await store.remember("movie:tt1", full);
+
+  const partial: MetaItem = { ...film("Film"), year: 1999 };
+  const shown = await store.keep("movie:tt1", partial, true);
+  assert.equal(shown.description, "Plot");
+  assert.deepEqual(shown.cast, ["A", "B"]);
+  assert.equal(shown.year, 1999);
+  await store.remember("movie:tt1", shown);
+  const kept = await store.get("movie:tt1");
+  assert.equal(kept?.description, "Plot");
+  assert.deepEqual(kept?.cast, ["A", "B"]);
+});
+
+test("the first usable reading is kept even when a provider failed", async (t) => {
+  const store = new StaleMetaStore();
+  store.attachDatabase(await databaseFixture(t));
+  const reading: MetaItem = { ...film("Film"), description: "Plot" };
+  assert.deepEqual(await store.keep("movie:tt1", reading, true), reading);
+  await store.remember("movie:tt1", reading);
+  assert.equal((await store.get("movie:tt1"))?.description, "Plot");
+});

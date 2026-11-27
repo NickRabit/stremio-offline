@@ -80,6 +80,23 @@ const movieDetail = {
   genres: [{ id: 12, name: "Dobrodružný" }, { id: 35, name: "Komedie" }],
 };
 
+test("a TMDB failure is marked on the outcome, an unknown title is not", async () => {
+  clearTmdbCache();
+  const failed = { failed: false };
+  assert.equal(await tmdbMeta("movie", "tt0090257", config, async () => new Response("down", { status: 503 }), undefined, failed), null);
+  assert.equal(failed.failed, true);
+
+  clearTmdbCache();
+  const thrown = { failed: false };
+  assert.equal(await tmdbMeta("movie", "tt0090257", config, async () => { throw new Error("ECONNRESET"); }, undefined, thrown), null);
+  assert.equal(thrown.failed, true);
+
+  clearTmdbCache();
+  const unknown = { failed: false };
+  assert.equal(await tmdbMeta("movie", "tt0090257", config, async () => json({ movie_results: [], tv_results: [] }), undefined, unknown), null);
+  assert.equal(unknown.failed, false);
+});
+
 test("a movie by IMDb id is resolved and mapped to Czech", async () => {
   clearTmdbCache();
   const calls: string[] = [];

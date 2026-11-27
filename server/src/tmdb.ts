@@ -639,6 +639,7 @@ async function resolveId(
   config: TmdbConfig,
   fetchImpl: FetchLike,
   signal?: AbortSignal,
+  outcome?: { failed: boolean },
 ): Promise<number | null> {
   throwIfCancelled(signal);
   const direct = /^tmdb:(\d+)$/.exec(id);
@@ -665,12 +666,14 @@ async function resolveId(
   } catch (error) {
     if (signal?.aborted) throw error;
     log("WARN", "TMDB id lookup failed", { operation: "find", type, id: imdb, reason: reasonOf(error, config.apiKey) });
+    if (outcome) outcome.failed = true;
     return null;
   }
   const { response } = reply;
   throwIfCancelled(signal);
   if (!response.ok) {
     log("WARN", "TMDB id lookup failed", { operation: "find", type, id: imdb, status: response.status });
+    if (outcome) outcome.failed = true;
     return null;
   }
 
@@ -682,6 +685,7 @@ async function resolveId(
   catch (error) {
     if (signal?.aborted) throw error;
     log("WARN", "TMDB answered with malformed JSON", { operation: "find", type, id: imdb, reason: reasonOf(error, config.apiKey) });
+    if (outcome) outcome.failed = true;
     return null;
   }
 
@@ -1025,11 +1029,12 @@ const toMetaItem = (type: string, id: string, detail: TmdbDetail, config: TmdbCo
 };
 
 /** Metadata for one title, or null when TMDB does not know it. Never throws for a
- *  missing title; a transport failure is logged and answered with null. */
-export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fetchImpl?: FetchLike, signal?: AbortSignal): Promise<MetaItem | null> {
+ *  missing title; a transport failure is logged, answered with null and marked on `outcome`,
+ *  so a caller can tell "TMDB does not know it" from "TMDB did not answer". */
+export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fetchImpl?: FetchLike, signal?: AbortSignal, outcome?: { failed: boolean }): Promise<MetaItem | null> {
   if (type !== "movie" && type !== "series") return null;
   throwIfCancelled(signal);
-  const tmdbId = await resolveId(type, id, config, fetchImpl ?? guardedFetch, signal);
+  const tmdbId = await resolveId(type, id, config, fetchImpl ?? guardedFetch, signal, outcome);
   if (tmdbId == null) return null;
 
   let reply: TmdbReply<TmdbDetail>;
@@ -1038,16 +1043,19 @@ export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fet
   } catch (error) {
     if (signal?.aborted) throw error;
     log("WARN", "TMDB request failed", { operation: "meta", type, id, reason: reasonOf(error, config.apiKey) });
+    if (outcome) outcome.failed = true;
     return null;
   }
   const { response } = reply;
   throwIfCancelled(signal);
   if (response.status === 401) {
     log("WARN", "TMDB request failed", { operation: "meta", type, id, status: response.status });
+    if (outcome) outcome.failed = true;
     return null;
   }
   if (!response.ok) {
     log("WARN", "TMDB request failed", { operation: "meta", type, id, status: response.status });
+    if (outcome) outcome.failed = true;
     return null;
   }
 
@@ -1060,6 +1068,7 @@ export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fet
   catch (error) {
     if (signal?.aborted) throw error;
     log("WARN", "TMDB answered with malformed JSON", { operation: "meta", type, id, reason: reasonOf(error, config.apiKey) });
+    if (outcome) outcome.failed = true;
     return null;
   }
 }

@@ -96,6 +96,39 @@ test("ALLOW_PRIVATE_ADDONS keeps outage detection for public names and lets home
   }
 });
 
+test("an addon on the owner's own domain keeps working offline, and its home answer proves nothing", async (t) => {
+  // Closed after each reply, so every request looks the name up again.
+  const server = await loopbackServer((_path, response) => { response.writeHead(200, { "content-type": "text/plain", connection: "close" }); response.end("ok"); });
+  t.after(server.close);
+  withEnv(t, "ALLOW_PRIVATE_ADDONS", "1");
+  resetConnectivityForTests();
+  const asked: string[] = [];
+  setDnsLookup((hostname, options, callback) => {
+    asked.push(hostname);
+    if (hostname === "addon.mydomain.test") {
+      if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]);
+      else callback(null, "127.0.0.1", 4);
+      return;
+    }
+    setTimeout(() => callback(Object.assign(new Error("temporary DNS failure"), { code: "EAI_AGAIN" })), 20);
+  });
+  try {
+    assert.equal((await safeFetch(`http://addon.mydomain.test:${server.port}/manifest.json`)).status, 200);
+    // The home answer must not become the host that cross-checks an outage.
+    await assert.rejects(safeFetch("https://one.test/"));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    asked.length = 0;
+    await assert.rejects(safeFetch("https://four.test/"), (error: unknown) => isOfflineError(error));
+    assert.deepEqual(asked, [], "the server is offline for public names");
+
+    assert.equal((await safeFetch(`http://addon.mydomain.test:${server.port}/manifest.json`)).status, 200);
+    assert.deepEqual(asked, ["addon.mydomain.test"]);
+  } finally {
+    setDnsLookup();
+    resetConnectivityForTests();
+  }
+});
+
 test("names that do not exist never switch the server offline", async () => {
   resetConnectivityForTests();
   setDnsLookup((hostname, _options, callback) => {

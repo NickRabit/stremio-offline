@@ -7,7 +7,7 @@ import path from "node:path";
 import { constants } from "node:fs";
 import { access, mkdir, readdir, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { addonAllowed, allowedAddons, fetchCatalogPage, fillMissingMeta, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, subtitles, type MetaProvider } from "./addons.js";
+import { addonAllowed, allowedAddons, fetchCatalogPage, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, subtitles, type MetaProvider } from "./addons.js";
 import { StreamListingCache } from "./stream-listing-cache.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { defaultDownloadLibrary, DownloadQueue, mayDownloadToLibrary, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
@@ -1104,9 +1104,9 @@ const tmdbProvider = (language: string): MetaProvider | undefined => {
 /** The detail behind a binding: the same lookup, asking for the pictures as well. Only a
  *  title somebody just bound is read this way; the browsing paths leave the artwork to the
  *  catalogue so a tile does not change its face when TMDB happens to know the title. */
-const tmdbArtworkProvider = (language: string): MetaProvider | undefined => {
+const tmdbArtworkProvider = (language: string, outcome?: { failed: boolean }): MetaProvider | undefined => {
   const apiKey = store.settings().tmdbApiKey;
-  return apiKey ? (type, id, signal) => tmdbMeta(type, id, { apiKey, language, artwork: true }, undefined, signal) : undefined;
+  return apiKey ? (type, id, signal) => tmdbMeta(type, id, { apiKey, language, artwork: true }, undefined, signal, outcome) : undefined;
 };
 const tmdbConfigOf = (language: string): TmdbConfig | undefined => {
   const apiKey = store.settings().tmdbApiKey;
@@ -1346,7 +1346,7 @@ async function lookupMeta(
   const outcome = { failed: false };
   const found = await metadata(
     sources, type, id, language,
-    opts.artwork ? tmdbArtworkProvider(language) : tmdbProvider(language),
+    opts.artwork ? tmdbArtworkProvider(language, outcome) : tmdbProvider(language),
     opts.interactive ?? opts.viewerKnown === true,
     opts.artwork === true,
     opts.signal,
@@ -1357,16 +1357,10 @@ async function lookupMeta(
   // Only a clean "nothing" is remembered, for half an hour: an addon that is down or slow
   // says nothing about the title, and the next reader asks again.
   if (value && Object.keys(value).length > 0) {
-    // A reading a provider failed to add to is partial: it never replaces the full copy kept for
-    // offline use, and that copy fills in what it misses.
-    if (opts.artwork && outcome.failed) {
-      const stale = await staleMeta.get(key).catch(() => null);
-      return stale ? fillMissingMeta(value, stale) : value;
-    }
-    metaCache.set(key, value);
     // Only the detail reading is kept: Home's enrichment would rewrite hundreds of rows on the NAS.
-    if (opts.artwork) void staleMeta.remember(key, value).catch(() => undefined);
-    return value;
+    const full = opts.artwork ? await staleMeta.keep(key, value, outcome.failed) : value;
+    metaCache.set(key, full);
+    return full;
   }
   if (opts.artwork && !opts.signal?.aborted && (outcome.failed || connectivity.state === "offline")) {
     const stale = await staleMeta.get(key).catch(() => null);
