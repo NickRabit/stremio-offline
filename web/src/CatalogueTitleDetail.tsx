@@ -39,7 +39,8 @@ export interface CatalogueDetailTarget {
   /** Opened from Continue watching: Play is pressed as soon as the rows arrive, on the row the
    *  title was last played from (`stableKey`) when it is still offered, else on the row Play
    *  offers. A title with nothing playable stays on screen. */
-  resume?: { stableKey?: string };
+  /** `position` is where the card that asked to continue says the title was left, in seconds. */
+  resume?: { stableKey?: string; position?: number };
 }
 
 /** The catalogue id a detail asks its own rows by: the exact video the catalogue lists wins, then
@@ -402,13 +403,16 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     if (pick) onPlay(pick, latest.current.effective, false);
   }, [target.resume, rows, ordered, firstPlayable, pendingProviders, onPlay, offline]);
   const resumeKey = target.resume?.stableKey;
-  const offlineResumeRow = offline && target.resume && !offlineResumeDone
+  // Only for the episode Continue watching opened: another one picked here has its own position.
+  const offlineResumeRow = offline && target.resume && !offlineResumeDone && streamId === incomingId
     && !(resumeKey && ordered?.some((stream) => stream.playable && stream.stableKey === resumeKey))
     ? ordered?.find((stream) => stream.playable && isLocalStream(stream)) : undefined;
+  // The progress list may not hold the position yet; the card that asked to continue knows it.
+  const resumeAt = resumePosition ?? target.resume?.position;
   const resumeFromLocal = (stream: Stream) => {
     resumed.current = true;
     setOfflineResumeDone(true);
-    onPlay(stream, latest.current.effective, false, resumePosition);
+    onPlay(stream, latest.current.effective, false, resumeAt);
   };
 
   // A listing's poster stands in when the title's own metadata has none that loads.
@@ -484,7 +488,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     {offlineResumeRow && <div className="offline-resume" role="status">
       <span>{t("detail.offlineResumeHint")}</span>
       <button type="button" className="primary" onClick={() => resumeFromLocal(offlineResumeRow)}>
-        {t("detail.offlineResume", { time: clockTime(resumePosition ?? 0) })}
+        {t("detail.offlineResume", { time: clockTime(resumeAt ?? 0) })}
       </button>
     </div>}
     {metaError && <div className="remote-error" role="alert">

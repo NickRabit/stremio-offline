@@ -1346,6 +1346,7 @@ async function lookupMeta(
   opts: { interactive?: boolean; artwork?: boolean; signal?: AbortSignal; viewerKnown: boolean },
 ) {
   const outcome = { failed: false };
+  const since = metaCache.generation;
   const found = await metadata(
     sources, type, id, language,
     opts.artwork ? tmdbArtworkProvider(language, outcome) : tmdbProvider(language, outcome),
@@ -1362,7 +1363,7 @@ async function lookupMeta(
     // Only the detail reading is kept: Home's enrichment would rewrite hundreds of rows on the NAS.
     const full = opts.artwork ? await staleMeta.keep(key, value, outcome.failed) : value;
     // A partial answer is asked again once the internet is back.
-    metaCache.set(key, full, outcome.failed);
+    metaCache.set(key, full, outcome.failed, since);
     return full;
   }
   if (opts.artwork && !opts.signal?.aborted && (outcome.failed || connectivity.state === "offline")) {

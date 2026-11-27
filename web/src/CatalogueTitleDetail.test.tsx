@@ -285,6 +285,20 @@ describe("CatalogueTitleDetail sources", () => {
     expect(host.querySelector(".offline-resume button")).not.toBeNull();
   });
 
+  it("offline, takes the position from the card when the progress list does not hold it", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => hung;
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "addon:row", position: 1930 } },
+      offline: true,
+    });
+    const offer = host.querySelector<HTMLButtonElement>(".offline-resume button")!;
+    expect(offer.textContent).toContain("32:10");
+    await click(offer);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false, 1930);
+  });
+
   it("online, shows no offline offer", async () => {
     const hung = new Promise<Response>(() => undefined);
     localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
@@ -622,6 +636,20 @@ describe("CatalogueTitleDetail series", () => {
     expect(calls.streams.at(-1)!.pathname).toBe("/api/streams/series/tt-series%3A1%3A1");
     await click(playButton());
     expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "large" }), expect.objectContaining({ season: 1, episode: 1, videoId: "tt-series:1:1" }), false);
+  });
+
+  it("offline, drops the local resume offer once another episode is picked", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Show/S01E02.mkv", "S01E02.mkv")]);
+    streamReply = () => hung;
+    await render({
+      target: { type: "series", id: "tt-series", name: "A show", season: 1, episode: 2, videoId: "tt-series:1:2", initialMeta: series(videos), resume: { stableKey: "addon:row", position: 600 } },
+      offline: true,
+    });
+    expect(host.querySelector(".offline-resume button")?.textContent).toContain("10:00");
+    await click(host.querySelector(".catalogue-episodes .episode-current button"));
+    await click(episodeRows()[0]!);
+    expect(host.querySelector(".offline-resume")).toBeNull();
   });
 
   it("follows the episode that is playing without overriding a later manual choice", async () => {

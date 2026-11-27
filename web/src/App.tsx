@@ -3053,7 +3053,7 @@ export function App() {
       return;
     }
     if (card.kind !== "resume-catalogue") return;
-    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(!autoplay || card.path || card.pending ? {} : { resume: { ...(resumeKeyOf(card.key) ? { stableKey: resumeKeyOf(card.key)! } : {}) } }),
+    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(!autoplay || card.path || card.pending ? {} : { resume: { ...(resumeKeyOf(card.key) ? { stableKey: resumeKeyOf(card.key)! } : {}), ...(card.progress ? { position: card.progress.position } : {}) } }),
       ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
   };
   const homeShowAll = (target: ShowAllTarget) => {
