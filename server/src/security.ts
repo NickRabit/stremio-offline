@@ -76,6 +76,14 @@ export function setDnsLookup(lookup?: DnsLookup): void {
   dnsLookup = lookup ?? systemLookup;
 }
 
+/** A name the home network answers for: one listed in ALLOW_ADDON_HOSTS, a single label, or a
+ *  local suffix. ALLOW_PRIVATE_ADDONS=1 alone does not make a public name one. */
+const HOME_SUFFIXES = [".local", ".lan", ".home", ".internal", ".home.arpa", ".localdomain"];
+const homeNetworkName = (host: string): boolean =>
+  !host.includes(".")
+  || HOME_SUFFIXES.some((suffix) => host.endsWith(suffix))
+  || (process.env.ALLOW_ADDON_HOSTS ?? "").split(",").map((entry) => entry.trim().toLowerCase()).includes(host);
+
 const checkedAndRecordedLookup: DnsLookup = (hostname, options, callback) => {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   const family = isIP(host);
@@ -84,8 +92,8 @@ const checkedAndRecordedLookup: DnsLookup = (hostname, options, callback) => {
     else callback(null, host, family);
     return;
   }
-  // A host allowed on the home network may still resolve without the internet.
-  if (privateAddressAllowed(host)) {
+  // A name of the home network may still resolve without the internet, and says nothing about it.
+  if (homeNetworkName(host)) {
     dnsLookup(hostname, options, callback);
     return;
   }

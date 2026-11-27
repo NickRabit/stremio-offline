@@ -7,7 +7,7 @@ import path from "node:path";
 import { constants } from "node:fs";
 import { access, mkdir, readdir, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { addonAllowed, allowedAddons, fetchCatalogPage, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, subtitles, type MetaProvider } from "./addons.js";
+import { addonAllowed, allowedAddons, fetchCatalogPage, fillMissingMeta, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, subtitles, type MetaProvider } from "./addons.js";
 import { StreamListingCache } from "./stream-listing-cache.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { defaultDownloadLibrary, DownloadQueue, mayDownloadToLibrary, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
@@ -1357,6 +1357,12 @@ async function lookupMeta(
   // Only a clean "nothing" is remembered, for half an hour: an addon that is down or slow
   // says nothing about the title, and the next reader asks again.
   if (value && Object.keys(value).length > 0) {
+    // A reading a provider failed to add to is partial: it never replaces the full copy kept for
+    // offline use, and that copy fills in what it misses.
+    if (opts.artwork && outcome.failed) {
+      const stale = await staleMeta.get(key).catch(() => null);
+      return stale ? fillMissingMeta(value, stale) : value;
+    }
     metaCache.set(key, value);
     // Only the detail reading is kept: Home's enrichment would rewrite hundreds of rows on the NAS.
     if (opts.artwork) void staleMeta.remember(key, value).catch(() => undefined);

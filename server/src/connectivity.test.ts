@@ -205,3 +205,36 @@ test("IP literals are never counted or refused", async () => {
   assert.equal(connectivity.admitLookup("93.184.216.34"), true);
   assert.equal(connectivity.admitLookup("[2001:db8::1]"), true);
 });
+
+test("a cross-check that fails after another lookup answered does not take the server offline", async () => {
+  const { connectivity } = clock();
+  let fail: (error: Error) => void = () => undefined;
+  connectivity.useResolver(() => new Promise((_resolve, reject) => { fail = reject; }));
+  connectivity.recordLookupSuccess("good.example");
+  connectivity.recordLookupFailure("addon.example", "EAI_AGAIN");
+  connectivity.recordLookupSuccess("other.example");
+  fail(down());
+  await settle();
+  assert.equal(connectivity.state, "online");
+});
+
+test("the outage dates from the first resolver failure, not from the cross-check", async () => {
+  const { connectivity, advance } = clock();
+  const began: number[] = [];
+  connectivity.onOnline((since) => began.push(since));
+  connectivity.useResolver(async (host) => { if (host === "good.example") return []; throw down(); });
+  connectivity.recordLookupSuccess("good.example");
+  connectivity.recordLookupFailure("first.example", "EAI_AGAIN");
+  await settle();
+  // good.example answered, so the streak is over; a new one starts here.
+  connectivity.useResolver(async () => { throw down(); });
+  advance(1_000);
+  connectivity.recordLookupFailure("second.example", "EAI_AGAIN");
+  advance(6_000);
+  connectivity.recordLookupFailure("third.example", "EAI_AGAIN");
+  await settle();
+  assert.equal(connectivity.state, "offline");
+  assert.equal(connectivity.offlineSince, new Date(2_000).toISOString());
+  connectivity.recordLookupSuccess("good.example");
+  assert.deepEqual(began, [2_000]);
+});

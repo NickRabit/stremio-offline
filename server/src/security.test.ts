@@ -3,7 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
 import { privateAddressRefusal, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, setDnsLookup, setFetchTransport, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
-import { OfflineError, resetConnectivityForTests } from "./connectivity.js";
+import { OfflineError, isOfflineError, resetConnectivityForTests } from "./connectivity.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { AddonRecord } from "./types.js";
 
@@ -67,6 +67,29 @@ test("a public host fails immediately once the resolver is known to be unreachab
     await assert.rejects(safeFetch("https://four.test/"), (error: unknown) => error instanceof OfflineError);
     assert.ok(performance.now() - started < 50, "the refused lookup did not reach the delayed resolver");
     assert.equal(calls, before);
+  } finally {
+    setDnsLookup();
+    resetConnectivityForTests();
+  }
+});
+
+test("ALLOW_PRIVATE_ADDONS keeps outage detection for public names and lets home names through", async (t) => {
+  withEnv(t, "ALLOW_PRIVATE_ADDONS", "1");
+  resetConnectivityForTests();
+  const asked: string[] = [];
+  setDnsLookup((hostname, _options, callback) => {
+    asked.push(hostname);
+    setTimeout(() => callback(Object.assign(new Error("temporary DNS failure"), { code: "EAI_AGAIN" })), 20);
+  });
+  try {
+    await assert.rejects(safeFetch("https://one.test/"));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    asked.length = 0;
+
+    await assert.rejects(safeFetch("https://four.test/"), (error: unknown) => isOfflineError(error));
+    assert.deepEqual(asked, [], "a public name is refused without asking the resolver");
+    await assert.rejects(safeFetch("https://nas.local/"), (error: unknown) => !isOfflineError(error));
+    assert.deepEqual(asked, ["nas.local"], "a home name still goes to the resolver");
   } finally {
     setDnsLookup();
     resetConnectivityForTests();

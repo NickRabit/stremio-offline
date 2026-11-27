@@ -232,6 +232,23 @@ describe("CatalogueTitleDetail sources", () => {
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false);
   });
 
+  it("keeps the local copy under Play when a better addon row answers late under a rule", async () => {
+    const late = deferred<Response>();
+    const meetingLocal = { ...local("Films/Film.mkv", "Film.mkv", 500), rules: { balanced: ruleVerdict([0, 1], "meets") } };
+    const betterAddon = { ...addon("a1", "1080p", 1_000), rules: { balanced: ruleVerdict([0, 0], "meets") } };
+    localReply = () => json([meetingLocal]);
+    streamReply = () => late.promise;
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() },
+      defaultSort: "rule:balanced",
+    });
+    expect(host.querySelector(".detail-tech")?.textContent).toContain("Film.mkv");
+    await act(async () => { late.resolve(json([betterAddon])); });
+    await flush();
+    await click(playButton());
+    expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false);
+  });
+
   it("resumes a local copy while an addon never settles", async () => {
     const hung = new Promise<Response>(() => undefined);
     localReply = () => json([{ ...local("Films/Film.mkv", "Film.mkv"), stableKey: "own:film" }]);

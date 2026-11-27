@@ -64,6 +64,11 @@ export class Connectivity {
   private lastBackgroundProbeAt = 0;
   private backgroundProbeInFlight = false;
   private lastConfirmAt = Number.NEGATIVE_INFINITY;
+  /** Bumped by every answer from the resolver: a check that started before one proves nothing. */
+  private answers = 0;
+  /** The first resolver failure of the current streak, while still online: the outage began
+   *  there, before the cross-check confirmed it. */
+  private firstDownAt: number | undefined;
   private resolver: Resolver | undefined;
   private listeners = new Set<(offlineSince: number) => void>();
 
@@ -118,6 +123,7 @@ export class Connectivity {
     }
     this.requestProbeInFlight = false;
     if (this.current === "offline") return;
+    this.firstDownAt ??= this.options.now();
     this.confirm(normalizedHost(host));
   }
 
@@ -156,6 +162,8 @@ export class Connectivity {
     this.lastBackgroundProbeAt = 0;
     this.backgroundProbeInFlight = false;
     this.lastConfirmAt = Number.NEGATIVE_INFINITY;
+    this.answers = 0;
+    this.firstDownAt = undefined;
   }
 
   /** One domain with broken DNS also fails as "resolver down"; only a host that should resolve
@@ -171,9 +179,11 @@ export class Connectivity {
     if (!target) return;
     this.lastConfirmAt = now;
     this.confirmInFlight = true;
+    const answersBefore = this.answers;
     void this.resolve(resolver, target).then((outcome) => {
       this.confirmInFlight = false;
-      if (outcome === "down") this.goOffline(target);
+      // A late "down" loses to any answer that arrived while it was waiting.
+      if (outcome === "down") { if (this.answers === answersBefore) this.goOffline(target); }
       else if (outcome === "resolved") this.recordLookupSuccess(target);
       else this.resolverAnswered();
     });
@@ -195,7 +205,7 @@ export class Connectivity {
     if (this.current === "offline") return;
     const now = this.options.now();
     this.current = "offline";
-    this.beganAt = now;
+    this.beganAt = Math.min(this.firstDownAt ?? now, now);
     this.proofHost = proofHost;
     this.lastRequestProbeAt = now;
     this.lastBackgroundProbeAt = now;
@@ -203,6 +213,8 @@ export class Connectivity {
   }
 
   private resolverAnswered(): void {
+    this.answers += 1;
+    this.firstDownAt = undefined;
     this.requestProbeInFlight = false;
     if (this.current === "online") return;
     const now = this.options.now();

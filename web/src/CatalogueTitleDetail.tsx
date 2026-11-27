@@ -485,6 +485,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       keepOrder
       {...(addonPriority ? { addonPriority } : {})}
       defaultSources={defaultRow ? [defaultRow] : []}
+      {...(heldStill && held ? { preferredSource: held } : {})}
       {...(seed ? { initialSource: seed } : {})}
       episodes={episodePicker}
       {...(waitingEpisode || pendingProviders > 0 ? { placeholder: null } : {})}
