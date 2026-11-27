@@ -59,8 +59,7 @@ test("a public host fails immediately once the resolver is known to be unreachab
     setTimeout(() => callback(Object.assign(new Error("temporary DNS failure"), { code: "EAI_AGAIN" })), 100);
   });
   try {
-    const failed = ["one.test", "two.test", "three.test"].map((host) => safeFetch(`https://${host}/`));
-    await Promise.all(failed.map((promise) => assert.rejects(promise)));
+    await assert.rejects(safeFetch("https://one.test/"));
     await new Promise((resolve) => setTimeout(resolve, 150));
     const before = calls;
 

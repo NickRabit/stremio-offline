@@ -6,16 +6,11 @@ export type InternetState = "online" | "offline";
 
 export interface ConnectivityOptions {
   now?: () => number;
-  /** Distinct hosts whose resolver must be unreachable inside `windowMs`, with no answer in
-   *  between, before the server declares itself offline. Default 2. */
-  hostsToTrip?: number;
-  /** Default 60_000. */
-  windowMs?: number;
   /** While offline, one request lookup is let through at most this often, and the background
    *  probe runs at most this often on its own clock. Default 15_000. */
   probeIntervalMs?: number;
-  /** A lone failure is cross-checked against the last host that resolved at most this often.
-   *  Default 30_000. */
+  /** Organic failures never take the server offline on their own: a cross-check against a host
+   *  that should resolve decides, at most this often. Default 5_000. */
   confirmIntervalMs?: number;
 }
 
@@ -61,9 +56,9 @@ export class Connectivity {
   private options: Required<ConnectivityOptions>;
   private current: InternetState = "online";
   private beganAt: number | undefined;
-  private failures = new Map<string, number>();
   private lastGoodHost: string | undefined;
-  private lastFailedHost: string | undefined;
+  private proofHost: string | undefined;
+  private confirmInFlight = false;
   private lastRequestProbeAt = 0;
   private requestProbeInFlight = false;
   private lastBackgroundProbeAt = 0;
@@ -79,10 +74,8 @@ export class Connectivity {
   private settings(options: ConnectivityOptions): Required<ConnectivityOptions> {
     return {
       now: options.now ?? Date.now,
-      hostsToTrip: Math.max(1, Math.trunc(options.hostsToTrip ?? 2)),
-      windowMs: Math.max(0, options.windowMs ?? 60_000),
       probeIntervalMs: Math.max(0, options.probeIntervalMs ?? 15_000),
-      confirmIntervalMs: Math.max(0, options.confirmIntervalMs ?? 30_000),
+      confirmIntervalMs: Math.max(0, options.confirmIntervalMs ?? 5_000),
     };
   }
 
@@ -123,33 +116,26 @@ export class Connectivity {
       this.resolverAnswered();
       return;
     }
-    const now = this.options.now();
-    const key = normalizedHost(host);
-    this.lastFailedHost = key;
     this.requestProbeInFlight = false;
     if (this.current === "offline") return;
-    for (const [failedHost, at] of this.failures) {
-      if (now - at >= this.options.windowMs) this.failures.delete(failedHost);
-    }
-    this.failures.set(key, now);
-    if (this.failures.size >= this.options.hostsToTrip) {
-      this.goOffline(now);
-      return;
-    }
-    this.confirm(key, now);
+    this.confirm(normalizedHost(host));
   }
 
-  /** Called by /api/status: while offline, re-resolves the last host that ever resolved (the
-   *  last failed one when none did) on its own clock. Never throws. */
+  /** Called by /api/status: while offline, re-resolves the host whose cross-check proved the
+   *  outage, on its own clock. Never throws. */
   probeIfDue(): void {
     const resolver = this.resolver;
-    const host = this.lastGoodHost ?? this.lastFailedHost;
+    const host = this.proofHost;
     if (this.current !== "offline" || !resolver || !host || this.backgroundProbeInFlight) return;
     const now = this.options.now();
     if (now - this.lastBackgroundProbeAt < this.options.probeIntervalMs) return;
     this.lastBackgroundProbeAt = now;
     this.backgroundProbeInFlight = true;
-    this.resolveAndRecord(resolver, host).finally(() => { this.backgroundProbeInFlight = false; });
+    void this.resolve(resolver, host).then((outcome) => {
+      this.backgroundProbeInFlight = false;
+      if (outcome === "resolved") this.recordLookupSuccess(host);
+      else if (outcome === "answered") this.resolverAnswered();
+    });
   }
 
   onOnline(listener: (offlineSince: number) => void): () => void {
@@ -162,9 +148,9 @@ export class Connectivity {
     this.options = this.settings(options);
     this.current = "online";
     this.beganAt = undefined;
-    this.failures.clear();
     this.lastGoodHost = undefined;
-    this.lastFailedHost = undefined;
+    this.proofHost = undefined;
+    this.confirmInFlight = false;
     this.lastRequestProbeAt = 0;
     this.requestProbeInFlight = false;
     this.lastBackgroundProbeAt = 0;
@@ -172,44 +158,51 @@ export class Connectivity {
     this.lastConfirmAt = Number.NEGATIVE_INFINITY;
   }
 
-  /** A single failing host may be one broken domain; another host the resolver should know tells. */
-  private confirm(failedHost: string, now: number): void {
+  /** One domain with broken DNS also fails as "resolver down"; only a host that should resolve
+   *  failing too proves the outage. */
+  private confirm(failedHost: string): void {
     const resolver = this.resolver;
-    const good = this.lastGoodHost && this.lastGoodHost !== failedHost
+    if (!resolver || this.confirmInFlight) return;
+    const now = this.options.now();
+    if (now - this.lastConfirmAt < this.options.confirmIntervalMs) return;
+    const target = this.lastGoodHost && this.lastGoodHost !== failedHost
       ? this.lastGoodHost
       : REFERENCE_HOSTS.find((host) => host !== failedHost);
-    if (!resolver || !good || this.failures.has(good)) return;
-    if (now - this.lastConfirmAt < this.options.confirmIntervalMs) return;
+    if (!target) return;
     this.lastConfirmAt = now;
-    void this.resolveAndRecord(resolver, good);
-  }
-
-  private resolveAndRecord(resolver: Resolver, host: string): Promise<void> {
-    let lookup: Promise<unknown>;
-    try {
-      lookup = resolver(host);
-    } catch (error) {
-      this.recordLookupFailure(host, codeOf(error));
-      return Promise.resolve();
-    }
-    return lookup.then(
-      () => { this.recordLookupSuccess(host); },
-      (error: unknown) => { this.recordLookupFailure(host, codeOf(error)); },
-    );
-  }
-
-  private goOffline(now: number): void {
-    this.current = "offline";
-    this.beganAt = now;
-    this.lastRequestProbeAt = now;
-    this.lastBackgroundProbeAt = now;
-    log("WARN", "The internet connection looks down, outbound requests fail fast", {
-      hosts: [...this.failures.keys()],
+    this.confirmInFlight = true;
+    void this.resolve(resolver, target).then((outcome) => {
+      this.confirmInFlight = false;
+      if (outcome === "down") this.goOffline(target);
+      else if (outcome === "resolved") this.recordLookupSuccess(target);
+      else this.resolverAnswered();
     });
   }
 
+  private resolve(resolver: Resolver, host: string): Promise<"resolved" | "answered" | "down"> {
+    const outcome = (error: unknown) => {
+      const code = codeOf(error);
+      return code && RESOLVER_DOWN.has(code) ? "down" as const : "answered" as const;
+    };
+    try {
+      return resolver(host).then(() => "resolved" as const, outcome);
+    } catch (error) {
+      return Promise.resolve(outcome(error));
+    }
+  }
+
+  private goOffline(proofHost: string): void {
+    if (this.current === "offline") return;
+    const now = this.options.now();
+    this.current = "offline";
+    this.beganAt = now;
+    this.proofHost = proofHost;
+    this.lastRequestProbeAt = now;
+    this.lastBackgroundProbeAt = now;
+    log("WARN", "The internet connection looks down, outbound requests fail fast", { checked: proofHost });
+  }
+
   private resolverAnswered(): void {
-    this.failures.clear();
     this.requestProbeInFlight = false;
     if (this.current === "online") return;
     const now = this.options.now();
