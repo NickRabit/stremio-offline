@@ -1155,6 +1155,29 @@ describe("RemoteLibraryBrowser automatic pagination and navigation", () => {
     expect([...host.querySelectorAll(".browse-panel .library-copy strong")].map((node) => node.textContent)).toEqual(["One", "Two"]);
   });
 
+  it("ignores an intersection entry the page that just landed has made stale", async () => {
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    browse = (url) => {
+      const cursor = url.searchParams.get("cursor");
+      if (cursor === "c1") return json(page([movie("m2", "Two")], { total: 3, cursor: "c2" }));
+      if (cursor === "c2") return json(page([movie("m3", "Three")], { total: 3 }));
+      return json(page([movie("m1", "One")], { total: 3, cursor: "c1" }));
+    };
+    await openRootLibrary();
+    await act(async () => { sentinels().at(-1)!.fire(); });
+    await flush();
+    expect(calls.browse).toHaveLength(2);
+    // The entry was computed while the sentinel sat at the end of the first page; the second page
+    // has since pushed it far below the pane.
+    const pane = host.querySelector<HTMLElement>(".browse-panel .browse-scroll")!;
+    const sentinel = host.querySelector<HTMLElement>(".browse-panel .load-more")!;
+    pane.getBoundingClientRect = () => ({ top: 0, bottom: 600, left: 0, right: 800, width: 800, height: 600, x: 0, y: 0, toJSON() {} });
+    sentinel.getBoundingClientRect = () => ({ top: 5000, bottom: 5040, left: 0, right: 800, width: 800, height: 40, x: 0, y: 5000, toJSON() {} });
+    await act(async () => { sentinels().at(-1)!.fire(); });
+    await flush();
+    expect(calls.browse).toHaveLength(2);
+  });
+
   it("holds a repeated nudge to one in-flight page and appends it when it lands", async () => {
     vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
     const held = deferred<Response>();

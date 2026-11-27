@@ -837,7 +837,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (!root || !target || typeof IntersectionObserver === "undefined") return;
     const margin = Math.min(400, root.clientHeight || toCssPx(window.innerHeight) || 800);
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) autoLoadRef.current();
+      // An entry is computed a frame before its callback runs, and a page that lands in between
+      // moves the sentinel down: only a sentinel that is still near the pane's end asks again.
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      if (target.getBoundingClientRect().top <= root.getBoundingClientRect().bottom + margin) autoLoadRef.current();
     }, { root, rootMargin: `0px 0px ${margin}px 0px` });
     observer.observe(target);
     return () => observer.disconnect();
