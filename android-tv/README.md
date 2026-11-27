@@ -42,7 +42,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ## Android TV emulator
 
 ```bash
-sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0" \
+sdkmanager "platform-tools" "platforms;android-37.2" "build-tools;37.0.0" \
   "system-images;android-34;android-tv;arm64-v8a"
 avdmanager create avd -n stremio-tv -k "system-images;android-34;android-tv;arm64-v8a" -d tv_1080p
 emulator -avd stremio-tv
